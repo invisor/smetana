@@ -286,7 +286,12 @@ pub const CAVEMAN_LEVELS: [&str; 7] =
     ["off", "lite", "full", "ultra", "wenyan-lite", "wenyan-full", "wenyan-ultra"];
 
 /// The first rung, and the shipped global answer.
-const CAVEMAN_OFF: &str = "off";
+///
+/// Public because `agents::prompt` is the one place that has to *recognise* it:
+/// `off` is the rung on which the prompt says nothing at all about caveman, and
+/// a prompt builder comparing against its own `"off"` would be a third copy of
+/// a word this ladder already keeps in two places.
+pub const CAVEMAN_OFF: &str = "off";
 
 /// The one word a project's own field has and the global one does not: "as in
 /// every other project". It is the project field's default, and it is a word

@@ -616,6 +616,7 @@ mod tests {
             },
             facts: None,
             languages: agents::Languages::default(),
+            caveman_level: String::new(),
             agent_prompt: String::new(),
         }
     }

@@ -100,6 +100,7 @@ impl Profile for Claude {
             launch.facts.as_deref(),
             text,
             &launch.languages,
+            &launch.caveman_level,
             &launch.agent_prompt,
         ) {
             cmd.arg(built);
@@ -622,6 +623,7 @@ mod tests {
             skills: skills(superpowers_installed),
             facts: None,
             languages: crate::agents::Languages::default(),
+            caveman_level: String::new(),
             agent_prompt: String::new(),
         }
     }

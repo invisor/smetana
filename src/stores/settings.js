@@ -40,23 +40,17 @@ import {
    so what the tab offers stays a subset of what Rust accepts. */
 import { NOTIFICATION_DEFAULTS, isSound } from '../sounds.js'
 import { isThreshold, reconcile } from '../components/settings/subscription.js'
-
-/* How compressed the caveman skill makes an agent's answers: the rungs, `off`
-   first. The same list as `CAVEMAN_LEVELS` in `settings/model.rs`, under the
-   obligation every doubled vocabulary here carries — what the front end offers
-   must stay a subset of what Rust accepts, or a choice reverts on the next save
-   with nothing on screen to say so. Written out here rather than imported
-   because the interface has no dictionary of these yet; when it grows one, it
-   owns the list and this store asks it, the way it asks `isThreshold` and
-   `isSound` above. */
-const CAVEMAN_LEVELS = ['off', 'lite', 'full', 'ultra', 'wenyan-lite', 'wenyan-full', 'wenyan-ultra']
-
-/* The one word a project's own level has and the global one does not: "as in
-   every other project". A word rather than a `null`, because `adopt()` in
-   `views/SettingsWindow.vue` skips a field that arrives null and the settings
-   window would go on showing the previous project's level — the trap the
-   subscription thresholds already walked into and answered the same way. */
-const CAVEMAN_INHERIT = 'inherit'
+/* Pure, no Vue and no DOM: the caveman ladder and the one extra word a project
+   has, `inherit`. Imported for the reason `isThreshold` above it is — the
+   Caveman group on the Agents tab owns that dictionary, since it is what a
+   `Dropdown` there draws, and a second list here would be a third copy of a
+   vocabulary Rust already holds the authority over. What the front end offers
+   has to stay a subset of `CAVEMAN_LEVELS` in `settings/model.rs`, or a choice
+   reverts on the next save with nothing on screen to say so. */
+import {
+  isLevel as isCavemanLevel,
+  isProjectLevel as isCavemanProjectLevel
+} from '../components/settings/caveman.js'
 
 /* The defaults mirror the ones in Rust. With no back end (a browser) or after
    a failed read, the app still has to open looking a known way. */
@@ -280,7 +274,8 @@ const defaults = () => ({
     runSettings: null,
     /* How compressed an agent's answers are in this project, or `inherit` for
        "as in every other project" — which is the default, and a word rather than
-       a null for the reason `CAVEMAN_INHERIT` above records. Beside
+       a null for the reason `CAVEMAN_INHERIT` in
+       `components/settings/caveman.js` records. Beside
        `runSettings` and for its reason: this and that one are the preferences
        among a project's remembered screen state. Listed here for the reason
        `runSettings` spells out — a key missing from this object is a key the
@@ -767,13 +762,10 @@ export function applyPatch(patch) {
      skipped rather than normalised, so a malformed event leaves the previous
      choice standing. The project's ladder is the global one plus `inherit`, and
      `inherit` has to pass: it is how somebody takes an override off again. */
-  if (CAVEMAN_LEVELS.includes(patch.cavemanLevel)) {
+  if (isCavemanLevel(patch.cavemanLevel)) {
     settings.caveman.level = patch.cavemanLevel
   }
-  if (
-    patch.cavemanProjectLevel === CAVEMAN_INHERIT ||
-    CAVEMAN_LEVELS.includes(patch.cavemanProjectLevel)
-  ) {
+  if (isCavemanProjectLevel(patch.cavemanProjectLevel)) {
     settings.project.caveman = patch.cavemanProjectLevel
   }
 }
@@ -850,7 +842,19 @@ export async function readSharedSettings() {
    appearance: their truth lives in the front end, and an answer from the disk
    is certainly the past (the move starts before the debounce manages to write
    the new list). Taking the list from there would bring back a project that was
-   just removed, or lose one that was just added. */
+   just removed, or lose one that was just added.
+
+   **Both branches announce**, and that is not housekeeping: `settings.project`
+   holds a field the settings window draws — `caveman`, the project's own level,
+   the first per-project field ever to cross that contract — and `announce()`
+   otherwise fires only on a hello and on an edit, never on a project being
+   switched. Without this, a settings window sitting open on the Agents tab
+   would re-read how caveman stands in the new project (`project:active` in
+   `stores/app.js` is announced on the switch) while the This project row two
+   lines below went on showing the level of the project somebody had just left:
+   two halves of one group describing two different projects, with nothing on
+   screen to say which. Announcing costs one event on a switch, and only when
+   there is a window to hear it. */
 export async function loadProjectLayout(project) {
   /* No projects are left. There is nowhere for a layout to come from, and
      settings_load with no argument would answer about the active project from
@@ -858,6 +862,11 @@ export async function loadProjectLayout(project) {
      defaults. */
   if (!project) {
     Object.assign(settings.project, defaults().project)
+    /* Guarded by `bridged` in both branches, the way nothing else here has to
+       be: this is the one announcement made outside the bridge's own listeners,
+       so with no settings window ever opened there is no `emit` to reject and
+       no line in the console for a window that does not exist. */
+    if (bridged) announce()
     return
   }
   try {
@@ -866,4 +875,8 @@ export async function loadProjectLayout(project) {
   } catch (err) {
     console.error('[settings] reading the project layout failed:', err)
   }
+  /* Outside the `try`, so a failed read announces too: the section was left
+     standing on the previous project's values, and the window has to be told
+     what is actually drawn rather than what was hoped for. */
+  if (bridged) announce()
 }
