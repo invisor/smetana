@@ -662,6 +662,19 @@ platform in `procs.rs` (macOS `proc_pidinfo`, Linux `/proc/<pid>/stat` against `
 through a crate, since `libc` is already here for `killpg`; a platform that cannot answer keeps no
 registry at all, because a record nobody could ever show stale is worse than none.
 
+A batch's `group.command` is **waited for rather than read once**, and that is smetana-6nr0 rather
+than caution. The terminal worker answers with the pid the moment the fork is done, and between the
+fork and the exec the kernel names the child after the process that forked it — so every
+`group.command` this app had ever written said `app`, the app's own name, against a pid `ps` showed
+as `claude` with a start time matching to the microsecond. That is the inversion the hazard entry
+describes as hypothetical: the lock rule compares the recorded name with what stands under the pid
+now and reads a difference as a reused pid, so a live batch read as dead and Phase R would break the
+lock off a lead mid-merge. `procs::spawned` therefore refuses any name it cannot tell from this
+process's own and `recovery::group` asks again for up to a second — the window measured 160–675 µs —
+and **writes nothing at all if the name never becomes the process's own**. That direction is the
+whole point: both skills read a missing `group` as "leave the lock alone" and a wrong one as "break
+it", so an absence costs a recovery and a lie costs two runs on one branch.
+
 At start-up the run worker sweeps every project the settings file lists as open, before it serves its
 first request — one writer, so the read-modify-write is safe, and no batch can go out beside a sweep
 about to hang up a leftover agent in the same worktree. For a record whose writer is provably dead it

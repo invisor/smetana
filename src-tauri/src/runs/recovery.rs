@@ -44,6 +44,15 @@ use super::registry::{self, Batch, Liveness, Orphan, Proc, Record, Registry};
 const GRACE: Duration = Duration::from_millis(1200);
 const POLL: Duration = Duration::from_millis(50);
 
+/// How long a just-started process is given to become itself, and how often it
+/// is asked — see `group`, which is the only caller and carries the reasoning.
+/// The window measured on this machine was 160–675 µs, so a second is three
+/// orders of magnitude of headroom for a slower machine loading a much larger
+/// binary, and it is only ever paid in full by a process that never does become
+/// distinguishable, which is not a batch anybody is waiting on twice.
+const EXEC: Duration = Duration::from_secs(1);
+const EXEC_POLL: Duration = Duration::from_millis(1);
+
 /// Names temp files apart — see `write`.
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -113,8 +122,31 @@ pub fn forget_run(root: &Path, token: u64) {
 /// at the far end — the stranger's own stamp is what gets written, so the next
 /// start compares like with like and signals it only if that very process is
 /// still there, which by then means the agent's pid was never reused at all.
-pub fn group(pid: u32) -> Option<Proc> {
-    procs::snapshot(pid as i32)
+///
+/// The waiting is the second window, and unlike the first one it is certain
+/// rather than unlucky: the terminal worker answers with the pid as soon as the
+/// fork is done, and until the exec lands the kernel names that pid after the
+/// process that forked it — this app (smetana-6nr0). `procs::spawned` carries
+/// what was measured and why the name is what is waited on; this is only the
+/// bound. It is asked again rather than slept through once because the wait is
+/// normally a single poll, and it is bounded because the alternative to giving
+/// up is a run that never starts its batch.
+///
+/// Giving up writes nothing at all, which is the whole point: a batch with no
+/// `group` is one `smetana:merging` and `smetana:running-tasks` leave alone,
+/// while a batch under the app's own name is one they break the lock of. The
+/// cost of that is one recovery, and the cost of the wrong name is two runs on
+/// one branch.
+pub async fn group(pid: u32) -> Option<Proc> {
+    let deadline = Instant::now() + EXEC;
+    loop {
+        match procs::spawned(pid as i32) {
+            procs::Spawned::Named(proc) => return Some(proc),
+            procs::Spawned::Nothing => return None,
+            procs::Spawned::Inherited if Instant::now() >= deadline => return None,
+            procs::Spawned::Inherited => tokio::time::sleep(EXEC_POLL).await,
+        }
+    }
 }
 
 /// Finish the shutdown a dead app never got to, in every project this one knows

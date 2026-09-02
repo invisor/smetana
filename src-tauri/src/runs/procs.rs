@@ -3,12 +3,15 @@
 //! recovery knows about the operating system — `registry.rs` decides and this
 //! answers.
 //!
-//! Two questions are asked here and no others. *What is under this pid right
-//! now* (`look`), which is what makes a record's own evidence checkable, and
+//! Three questions are asked here and no others. *What is under this pid right
+//! now* (`look`), which is what makes a record's own evidence checkable,
 //! *write down what is under this pid* (`snapshot`), which is how that evidence
-//! is produced in the first place. Both answer with the same stamp so that the
-//! two are comparable by construction rather than by a rule kept in step by
-//! hand.
+//! is produced in the first place, and *write down what is under this pid, now
+//! that it is itself* (`spawned`), which is the same question asked about a
+//! process this app has only just started and which is therefore not yet
+//! certain to be the process it was started as. All three answer with the same
+//! stamp so that they are comparable by construction rather than by a rule kept
+//! in step by hand.
 //!
 //! The stamp is a process's start time, and it is read per platform because
 //! there is no portable way to ask: macOS answers a `proc_bsdinfo` through
@@ -49,6 +52,68 @@ pub fn snapshot(pid: i32) -> Option<Proc> {
 /// This process, for the `writer` on every record it goes on to write.
 pub fn own() -> Option<Proc> {
     snapshot(std::process::id() as i32)
+}
+
+/// What is under a pid this app forked a moment ago, which is not the same
+/// question as `snapshot` and cannot be answered by it.
+///
+/// A process's name is a lagging fact about it, and that is the whole of
+/// smetana-6nr0: every `batches[].group.command` in this repository's own
+/// `.smetana/runs.json` read `app`, the name of the process that started the
+/// agent, against a pid whose start time matched to the microsecond and which
+/// `ps` showed as `claude`. The two skills that read the field compare it with
+/// what stands under the pid *now* and read a difference as a reused pid, so
+/// the recorded lie inverts the lock rule: a live batch reads as dead and a
+/// lead mid-merge has its lock broken under it.
+///
+/// The cause, measured rather than assumed. A child gets its own `p_comm` only
+/// at `exec`; between the `fork` and the `exec` it is a copy of the process
+/// that forked it and wears **that** process's name — this one's. Ordinarily
+/// nobody sees that window, because `std`'s fork path holds the parent on a
+/// close-on-exec pipe until the image has been swapped; but `portable-pty`'s
+/// `pre_exec` calls `close_random_fds`, which closes every descriptor above 2
+/// and so closes that pipe itself, and the parent is released early by
+/// construction. Measured on macOS 26.5 against `/bin/sleep` spawned exactly as
+/// `terminal/pty.rs` spawns an agent: the first read after `spawn_command`
+/// returned gave the test binary's own name in 20 runs out of 20, and the real
+/// name arrived 160–675 µs later. The pid is right throughout, and so is the
+/// start time — `pbi_start_tvsec` is stamped at the fork — which is why the
+/// defect showed up in exactly one field.
+///
+/// So the wait is for the name to stop being ours, and that is enough because
+/// it is the same field, read by the same call, that the answer is made of:
+/// there is no second signal to keep in step with it, and no ordering inside
+/// the kernel to be right about. What it cannot tell apart is a child that
+/// really did exec into a program sharing this one's short name; that answers
+/// `Inherited` for ever and the caller gives up, which writes no name at all —
+/// the safe direction, since both skills read a missing `group` as "leave the
+/// lock alone" and a wrong one as "break it".
+///
+/// Asked about this very process it answers `Inherited` too, which is why
+/// `own()` above does not go through here: the app's own name is the one thing
+/// this function exists to refuse.
+pub enum Spawned {
+    /// A name that is the process's own. The evidence to write down.
+    Named(Proc),
+    /// Still wearing the name of the process that forked it. Ask again.
+    Inherited,
+    /// Nothing there to name, and nothing to wait for.
+    Nothing,
+}
+
+/// The evidence to write down about a process this app has just started. See
+/// `Spawned` for why this is not `snapshot`.
+pub fn spawned(pid: i32) -> Spawned {
+    let Some((started, command)) = info(pid) else { return Spawned::Nothing };
+    // Nothing to compare against is not a licence to trust the name: on a
+    // platform that cannot answer for this process, it cannot answer for that
+    // one either, and `info` returning something here while returning nothing
+    // for us would be a machine nobody has met.
+    let Some((_, ours)) = info(std::process::id() as i32) else { return Spawned::Nothing };
+    if command == ours {
+        return Spawned::Inherited;
+    }
+    Spawned::Named(Proc { pid, started, command })
 }
 
 /// The soft signal, to the process *group* — the same one `terminal/pty.rs`
@@ -251,6 +316,75 @@ mod tests {
             Liveness::Dead,
             "and if that pid has already been handed out again, the stamp says so"
         );
+    }
+
+    /// The half of smetana-6nr0 that can be asserted without a race: a name
+    /// this process cannot tell apart from its own is refused outright. Asked
+    /// about this very process, which is the extreme case of that, `spawned`
+    /// must never hand back a `Proc` — every recorded `group.command` in the
+    /// file that produced the bug was exactly this name.
+    #[test]
+    fn a_name_this_process_cannot_tell_from_its_own_is_never_handed_back() {
+        let Some(mine) = own() else {
+            eprintln!("this platform cannot read a process name; nothing to check");
+            return;
+        };
+        assert!(
+            matches!(spawned(mine.pid), Spawned::Inherited),
+            "the app's own name is the one answer this must refuse"
+        );
+    }
+
+    /// The defect itself, against the spawn path the app actually uses: a
+    /// process started here is written down under **its** name and never under
+    /// this test binary's, which is what `pbi_comm` answers until the exec
+    /// lands. A test asserting only that the name is non-empty passes on the
+    /// broken version, since `app` is a perfectly good non-empty string.
+    ///
+    /// `portable-pty` rather than a plain `Command`, because the window is that
+    /// crate's doing — `close_random_fds` in its `pre_exec` closes the pipe
+    /// `std` would otherwise hold the parent on until the exec (see `Spawned`),
+    /// and a plain spawn shows no window at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_process_started_here_is_written_down_under_its_own_name() {
+        use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
+
+        let Some(mine) = own() else {
+            eprintln!("this platform cannot read a process name; nothing to check");
+            return;
+        };
+        let system = NativePtySystem::default();
+        let pair = system
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .expect("a pty to start a process in");
+        let mut command = CommandBuilder::new("/bin/sleep");
+        command.arg("30");
+        let mut child = pair.slave.spawn_command(command).expect("a process to write down");
+        // The same drop `Pty::start` makes, and for the same reason.
+        drop(pair.slave);
+        let pid = child.process_id().expect("a pid") as i32;
+
+        // The caller's bounded wait, in miniature: the answer is asked for
+        // until it is the process's own, and the deadline is what stops a
+        // failure hanging the suite.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let named = loop {
+            match spawned(pid) {
+                Spawned::Named(proc) => break Some(proc),
+                Spawned::Nothing => break None,
+                Spawned::Inherited if std::time::Instant::now() >= deadline => break None,
+                Spawned::Inherited => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
+        };
+
+        let _ = child.kill();
+        let _ = child.wait();
+
+        let named = named.expect("the process is named within the deadline");
+        assert_eq!(named.pid, pid);
+        assert_eq!(named.command, "sleep", "the process's own name, not the one that forked it");
+        assert_ne!(named.command, mine.command);
     }
 
     #[test]
