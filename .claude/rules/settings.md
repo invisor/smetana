@@ -112,9 +112,14 @@ the thresholds above record: `adopt()` in `views/SettingsWindow.vue` skips a fie
 would stand on screen. One form on disk and on the wire alike; an `Option` on disk with a sentinel on
 the wire is two shapes of one fact to keep in step in both directions.
 
-The ladder is written out twice — `CAVEMAN_LEVELS` in `model.rs` and the interface's own dictionary,
-which does not exist yet — under `SUBSCRIPTION_STEPS`' obligation: what the front end offers must stay
-a subset of what Rust accepts. The two fields ride the flat message as `cavemanLevel` and
+The ladder is written out twice — `CAVEMAN_LEVELS` in `model.rs` and
+`components/settings/caveman.js`, which is the interface's own dictionary and what the Caveman group's
+two `Dropdown`s draw — under `SUBSCRIPTION_STEPS`' obligation: what the front end offers must stay
+a subset of what Rust accepts. `stores/settings.js` holds no list of its own and asks that module
+(`isLevel`, `isProjectLevel`), the way it asks `isThreshold` and `isSound`, so the guard on an
+incoming patch and the list on screen cannot disagree;
+`tests/components/settings/caveman.test.js` reads Rust's array out of `model.rs` and pins the subset.
+The two fields ride the flat message as `cavemanLevel` and
 `cavemanProjectLevel`, named for what they decide rather than for where they live, the way
 `notificationShowReport` and `gitAutoFetch` are; `applyPatch` checks each against its own ladder and
 leaves the previous value standing otherwise. `cavemanProjectLevel` is the **first per-project field
@@ -597,6 +602,44 @@ sequence number rather than the busy flag alone, since a change of agent must su
 already out. Kanban is the same shape one tab over, and the one tab whose lists are not a closed
 vocabulary at all — the columns it offers are the active project's own, read from the tracker, so
 with no project open or no answer yet it says so rather than drawing an empty list.
+
+**The Caveman group** sits on that same tab between Standing instruction and Run limits, and the
+neighbourhood is the argument: it is about how an agent talks. It is one line about how caveman
+stands on this machine and up to three rows under it — Install, All projects, This project — and
+every sentence in it is `components/settings/caveman.js`'s, another of the `branchChoice.js` family.
+The state is `caveman_state`'s four words (`src-tauri/src/caveman.rs`), read on **opening the tab**
+like the Storage numbers and the subscription probe, and re-read when the project changes, since one
+of the four is about a repository rather than about the machine. The journal's facts — the pack
+version and the files another installer rewrote — are drawn under `wired` alone: the journal survives
+an install that has since been unwired, so repeating its file list anywhere else would claim rewrites
+that may have been put back.
+
+**Install installs nothing.** It opens a terminal in the active project and *types* the command with
+no newline; Enter is the person's. Doing it for them would mean a Rust command of our own, an
+`installing`/`failed` pair of states to draw, and this app silently rewriting somebody's
+`~/.claude/settings.json` and turning their agent's traffic through a local proxy. What is refused on
+the other side is `curl … | bash`, and the commands are caveman's own words rather than an invention
+here — but they come from **two** places and the difference is worth keeping straight. `npm i -g
+@caveman-ai/cli` and `caveman setup --install` are the CLI's README, under "Getting the binaries";
+`caveman enable claude` is not in that README at all and is what the CLI itself prints as its
+`next native:` remediation, in that order after `setup --install`. It is preferred to the README's
+broader `setup --agent-native claude`, which is a strict superset — that one additionally installs a
+skills suite, cloud MCP servers and Core — because the whole point of a command typed on somebody's
+behalf is the smallest footprint they can review before pressing Enter. `enable` is also the verb
+that writes the hook and the journal `caveman.rs` reads back, so what the button offers and what the
+status line above it can see are the same act. All of it is shown on screen before it is typed, so
+somebody with no project open can still read what to run.
+
+Two messages carry it, and both are `stores/app.js`'s rather than the settings contract's, for
+`board:columns`' reason exactly: nothing about either reaches `settings.json`. `project:active` /
+`project:hello` is the app window saying which project it has open — needed because
+`caveman_state` is asked about one and because a terminal has to be opened somewhere, and a *live*
+announcement rather than a field on the contract because `announce()` fires on a hello and on an
+edit, never on a project being switched. `caveman:install` goes the other way, one-directional and
+unanswered: the command travels as a string and the app window opens the shell through the same
+`newTerminal` the `+` menu uses, so the tab is focused and a refused session is the toast every other
+refused session is. With no project open the button is drawn `disabled` and its description names the
+reason — the Launch at login shape, one tab over.
 
 **Two things on this screen are not settings at all**, and they are the exceptions that keep the
 rule readable. One is a whole tab and the other is a single row.

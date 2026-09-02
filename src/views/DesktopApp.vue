@@ -144,11 +144,13 @@ import {
 } from '../stores/notifications.js'
 import { initSettingsBridge, settings } from '../stores/settings.js'
 import {
+  announceActiveProject,
   announceBoardColumns,
   announceDialogProps,
   closeDialogWindow,
   closeWindow,
   copyText,
+  focusWindow,
   homeDir,
   isWindowMaximized,
   minimizeWindow,
@@ -159,9 +161,11 @@ import {
   revealInFileManager,
   toggleMaximizeWindow,
   watchBoardHello,
+  watchCavemanInstall,
   watchDialogHello,
   watchDialogResult,
-  watchFullscreen
+  watchFullscreen,
+  watchProjectHello
 } from '../stores/app.js'
 import { dialogWidth, stalenessMessage, stalenessOf } from './dialogRegistry.js'
 import { paintRoot } from './useAppearance.js'
@@ -384,6 +388,15 @@ onMounted(initSettingsBridge)
    with an empty list until the board next moves. Torn down on unmount so a
    view that is gone does not go on answering. */
 let stopBoardHello = null
+/* The third and fourth messages that window and this one exchange outside the
+   settings contract, and both belong to the Caveman group on its Agents tab.
+   The hello answers a settings window that opened after the last announcement,
+   which is otherwise a tab believing no project is open at all; the install
+   request comes the other way and is the only message in this file that puts
+   bytes into somebody's shell. `stores/app.js` carries why each is a message
+   rather than a field. */
+let stopProjectHello = null
+let stopCavemanInstall = null
 onMounted(async () => {
   try {
     stopBoardHello = await watchBoardHello(() => announceBoardColumns(projectColumns.value))
@@ -391,8 +404,22 @@ onMounted(async () => {
     /* A browser, or an ACL — the app is fully usable without a settings window. */
     console.warn('[app] the board columns will not be announced:', err)
   }
+  try {
+    stopProjectHello = await watchProjectHello(() => announceActiveProject(activePath.value))
+  } catch (err) {
+    console.warn('[app] the active project will not be announced:', err)
+  }
+  try {
+    stopCavemanInstall = await watchCavemanInstall(typeCavemanInstall)
+  } catch (err) {
+    console.warn('[app] the caveman install command will not be heard:', err)
+  }
 })
-onUnmounted(() => stopBoardHello?.())
+onUnmounted(() => {
+  stopBoardHello?.()
+  stopProjectHello?.()
+  stopCavemanInstall?.()
+})
 
 /* Everything that survives a restart lives in settings: the panels in layout,
    the selection inside a project in project. Local refs are left only for what
@@ -586,12 +613,39 @@ async function newAgent() {
    start. */
 async function newTerminal(cwd = null) {
   const path = activePath.value
-  if (!path) return
+  if (!path) return null
   const session = await createShell(path, cwd)
   /* Null is a refusal, already on screen as a toast — see `createShell`. */
-  if (!session) return
+  if (!session) return null
   const tab = terminalTabFor(session.id)
   if (tab) project.activeTab = tab.id
+  /* Handed back for the one caller that has something to put in the shell it
+     just opened. The `+` menu's own row ignores it, as it always has. */
+  return session
+}
+
+/* The Install button in the settings window's Caveman group, arriving as an
+   event because a terminal is this window's to open (`stores/app.js`).
+
+   The command is **typed and not run**: `send` writes exactly these bytes and
+   there is deliberately no `\r` after them, so the line sits at the prompt with
+   the cursor at its end until the person presses Enter themselves. That is the
+   whole of the design — caveman's installer rewrites two of somebody's own
+   configuration files and points the agent's traffic at a local proxy, and this
+   app does none of it behind their back. Do not "finish the job" by appending a
+   newline here.
+
+   Nothing is said back to the settings window. A project closed between the
+   press and this line, or a shell that would not start, is already answered
+   where it happens: the button is drawn dead without a project, and a refused
+   session is the toast `createShell` reports. */
+async function typeCavemanInstall(command) {
+  const session = await newTerminal()
+  if (!session) return
+  await send(session.id, command)
+  /* The press happened in a window sitting over this one, so without this the
+     terminal would appear behind whatever the person is looking at. */
+  focusWindow()
 }
 
 /* Which row does what. The rows themselves are `newTabMenu.js`'s — two callers
@@ -3630,6 +3684,13 @@ watch(
   () => announceBoardColumns(projectColumns.value),
   { immediate: true }
 )
+
+/* Which project the settings window's Caveman group is about, announced on
+   every switch and again whenever that window says hello. `null` is an ordinary
+   value here — every project closed — and it is what makes the Install button
+   over there draw itself dead with a reason rather than opening a terminal in a
+   project nobody has open. */
+watch(activePath, (path) => announceActiveProject(path), { immediate: true })
 
 /* Only when there is nothing else to show: a failing bd is no reason to hide
    the tasks that were already read. */

@@ -938,6 +938,45 @@ describe('the settings window', () => {
     )
   })
 
+  it('announces a project switch, so the two halves of one group cannot describe two projects', async () => {
+    /* The only announcement made outside the bridge's own two listeners, and the
+       field that makes it necessary is `project.caveman`: the settings window
+       draws it, and `loadProjectLayout` is the one thing that ever changes it.
+       Without this, the Caveman group's status line would already be describing
+       the new project — `project:active` in `stores/app.js` is announced on the
+       switch and the state re-read — while the This project row two lines below
+       went on showing the level of the project somebody had just left. */
+    ipc.on('settings_load', { project: { caveman: 'ultra' } })
+    await settings.loadProjectLayout('/a')
+    expect(settings.settings.project.caveman).toBe('ultra')
+
+    const heard = []
+    await listen(settings.SETTINGS_STATE, (event) => heard.push(event.payload))
+
+    ipc.on('settings_load', { project: {} })
+    await settings.loadProjectLayout('/b')
+    await vi.waitFor(() => expect(heard).toHaveLength(1))
+
+    expect(heard[0].cavemanProjectLevel).toBe('inherit')
+  })
+
+  it('announces the last project being closed as well, defaults and all', async () => {
+    /* The other branch, and it needs the announcement more rather than less: no
+       project means the section is reset here, and a window left showing the
+       last project's override would be offering to change a project that is not
+       open. */
+    ipc.on('settings_load', { project: { caveman: 'lite' } })
+    await settings.loadProjectLayout('/a')
+
+    const heard = []
+    await listen(settings.SETTINGS_STATE, (event) => heard.push(event.payload))
+
+    await settings.loadProjectLayout(null)
+    await vi.waitFor(() => expect(heard).toHaveLength(1))
+
+    expect(heard[0].cavemanProjectLevel).toBe('inherit')
+  })
+
   it('answers a hello with what this window holds, not with what is on disk', async () => {
     settings.settings.appearance.uiFontSize = 20
     const heard = []
