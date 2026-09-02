@@ -90,6 +90,35 @@ pub fn agent_prompt(path: &Path) -> String {
     load(path).0.agent_prompt
 }
 
+/// How compressed an agent's answers should be in one project, and nothing
+/// else out of the file. The shape of `agent` above, with the one difference
+/// that makes this function worth having: **the project's `inherit` is resolved
+/// here**, so the rule "a project's own level beats the global one" exists in a
+/// single place and no caller has to know there are two fields.
+///
+/// The key is the project's absolute path exactly as `resolve` stores it — the
+/// same key `run_target_branch` takes, and for the reason written there.
+///
+/// A project with no entry, an entry that says `inherit`, a missing file and an
+/// unreadable one all come to the global level, and a file that names none of
+/// that comes to `off`: the shipped answer, which is today's behaviour to the
+/// letter, since nothing in this app says a word about caveman to any agent
+/// until somebody chooses a level.
+///
+/// Nothing reads this yet: the paragraph a level turns into is a later task,
+/// and the store is deliberately finished before anything leans on it. Held
+/// back until then, the resolution below would have been written in whatever
+/// called it first, which is the one thing this function exists to prevent.
+#[allow(dead_code)]
+pub fn caveman_level(path: &Path, project: &str) -> String {
+    let settings = load(path).0;
+    let own = settings.projects.get(project).map(|state| state.caveman.as_str());
+    match own {
+        Some(level) if level != super::model::CAVEMAN_INHERIT => level.to_owned(),
+        _ => settings.caveman.level,
+    }
+}
+
 /// The run gate's thresholds, and nothing else out of the file. The shape of
 /// `agent` above, one section over, and read from the disk at every gate check
 /// rather than once per run: that is the whole of what lets somebody watching a
@@ -362,6 +391,48 @@ mod tests {
         let unreadable = dir.join("a-directory-in-its-place");
         fs::create_dir_all(&unreadable).expect("setup");
         assert!(git_remove_worktrees(&unreadable));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_caveman_level_resolves_the_project_against_the_global_one() {
+        // The one read here that answers with two fields rather than one, and
+        // the whole reason it is a function: the rule "a project's own level
+        // beats the global one" lives here and nowhere else.
+        let dir = temp_dir();
+
+        let stored = dir.join("stored.json");
+        fs::write(
+            &stored,
+            r#"{"version":1,"caveman":{"level":"lite"},
+                "projects":{"/a":{"caveman":"ultra"},"/b":{"caveman":"inherit"}}}"#,
+        )
+        .expect("setup");
+        assert_eq!(caveman_level(&stored, "/a"), "ultra", "a project's own level wins");
+        assert_eq!(caveman_level(&stored, "/b"), "lite", "inherit is the global level");
+        assert_eq!(caveman_level(&stored, "/never-opened"), "lite", "and so is no entry at all");
+
+        // Three ways to have no answer, and every one of them has to say `off`:
+        // that is what the app said about caveman before this setting existed,
+        // and a file nobody can read must not start compressing anybody's
+        // answers.
+        let missing = dir.join("settings.json");
+        assert_eq!(caveman_level(&missing, "/a"), "off", "a missing file is the first run");
+        assert!(!missing.exists(), "and reading it does not write the default back");
+
+        let without = dir.join("without.json");
+        fs::write(&without, r#"{"version":1,"projects":{"/a":{"sideTab":"agents"}}}"#)
+            .expect("setup");
+        assert_eq!(caveman_level(&without, "/a"), "off", "a file written before the section");
+
+        let broken = dir.join("broken.json");
+        fs::write(&broken, "{not json").expect("setup");
+        assert_eq!(caveman_level(&broken, "/a"), "off");
+
+        let unreadable = dir.join("a-directory-in-its-place");
+        fs::create_dir_all(&unreadable).expect("setup");
+        assert_eq!(caveman_level(&unreadable, "/a"), "off");
 
         let _ = fs::remove_dir_all(&dir);
     }

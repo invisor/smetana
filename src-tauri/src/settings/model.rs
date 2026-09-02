@@ -242,6 +242,79 @@ impl SubscriptionSettings {
     }
 }
 
+/// How compressed the caveman skill makes an agent's answers, everywhere.
+///
+/// The level lives nowhere on disk in caveman itself — its `SKILL.md` says the
+/// default is `full` and that `/caveman <level>` holds until the session ends,
+/// so it is a fact about one conversation and nothing keeps it between them.
+/// Which means the person's own choice has to be kept here or not at all.
+///
+/// At the root beside `agent_prompt` and the languages, and on their argument:
+/// how tersely somebody wants to be spoken to is a fact about them and travels
+/// with them between repositories. A section rather than a flat field, on
+/// `UpdateSettings`' precedent exactly — one field is already the house shape,
+/// the key names the subsystem, and a second caveman preference later has
+/// somewhere to go.
+///
+/// There is no switch beside the level, and that is a decision rather than an
+/// economy: `off` is a rung of caveman's own vocabulary (`/caveman off`), and a
+/// ladder whose first rung is "off" is already this file's habit —
+/// `subscription.pause_at` and `reduced_at` are the two. A switch beside the
+/// level would ask one question twice and then have to answer what "on, at
+/// level off" means.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CavemanSettings {
+    /// One of `CAVEMAN_LEVELS`. `off` is the shipped answer and it is today's
+    /// behaviour to the letter: the app says nothing at all about caveman to
+    /// any agent right now.
+    pub level: String,
+}
+
+impl Default for CavemanSettings {
+    fn default() -> Self {
+        Self { level: CAVEMAN_OFF.into() }
+    }
+}
+
+/// The rungs, `off` being the first. Written out a second time in the front
+/// end's own dictionary — what a `Dropdown` draws — under the obligation
+/// `SUBSCRIPTION_STEPS` and `SIDE_TABS` carry: what the front end offers must
+/// be a subset of what this accepts, or a choice reverts on the next save with
+/// nothing on screen to say so.
+pub const CAVEMAN_LEVELS: [&str; 7] =
+    ["off", "lite", "full", "ultra", "wenyan-lite", "wenyan-full", "wenyan-ultra"];
+
+/// The first rung, and the shipped global answer.
+const CAVEMAN_OFF: &str = "off";
+
+/// The one word a project's own field has and the global one does not: "as in
+/// every other project". It is the project field's default, and it is a word
+/// rather than an `Option` for `SubscriptionSettings`' mechanical reason —
+/// `adopt()` in `src/views/SettingsWindow.vue` skips any field that arrives
+/// `null`, so "no override here" would never reach the settings window and the
+/// previous project's level would stand on screen.
+pub const CAVEMAN_INHERIT: &str = "inherit";
+
+impl CavemanSettings {
+    fn validate(&mut self) {
+        // Off the ladder takes the shipped level rather than being forgotten,
+        // the rule `SubscriptionSettings` keeps: forgetting a `String` here
+        // *is* taking the default, so a second branch would say the same thing
+        // twice.
+        one_of(&mut self.level, &CAVEMAN_LEVELS, CAVEMAN_OFF);
+    }
+}
+
+/// `one_of` for a project's own caveman level, whose vocabulary is the global
+/// ladder plus `inherit`. A word off both takes `inherit`, which is the same
+/// rule one struct up and means "no override here" rather than "off".
+fn caveman_project_level(value: &mut String) {
+    if value != CAVEMAN_INHERIT && !CAVEMAN_LEVELS.contains(&value.as_str()) {
+        *value = CAVEMAN_INHERIT.to_owned();
+    }
+}
+
 /// What the main window does with the size and position it was left at.
 ///
 /// Global rather than under a project, on `GitSettings`' argument exactly:
@@ -735,6 +808,24 @@ pub struct ProjectState {
     /// from whichever play button was pressed, and remembering it would open
     /// the dialog claiming to run something nobody clicked.
     pub run_settings: Option<RunDefaults>,
+    /// How compressed an agent's answers are in this project, overriding the
+    /// global `caveman.level`, or `inherit` for "as in every other project".
+    ///
+    /// Beside `run_settings` and for its reason: what sits under a project key
+    /// is mostly the state of a screen, and these two are the preferences among
+    /// them. `.smetana/project.toml` was the other home and is refused — that
+    /// file is committed and travels to everybody who works in the repository,
+    /// and how tersely an agent talks to *a person* is not a fact about a
+    /// repository. It is the argument that refused a project half of
+    /// `agent_prompt`, one field over.
+    ///
+    /// A plain `String` and never an `Option`, which is where it parts company
+    /// with `run_settings` beside it: "nobody has chosen here" is a word of the
+    /// vocabulary rather than an absence, for the reason `CAVEMAN_INHERIT`
+    /// records. One form on disk and on the wire alike; an `Option` here with a
+    /// sentinel on the wire would be two shapes of one fact to keep in step in
+    /// both directions.
+    pub caveman: String,
     /// The highest attachment-storage threshold this project has already been
     /// warned about, in MiB, or `None` for a project nobody has been warned
     /// about yet. The one thing the notification bell keeps between runs.
@@ -772,6 +863,7 @@ impl Default for ProjectState {
             column_order: Vec::new(),
             tab_order: Vec::new(),
             run_settings: None,
+            caveman: CAVEMAN_INHERIT.into(),
             storage_warned_mib: None,
             used_at: None,
         }
@@ -920,6 +1012,9 @@ pub struct Settings {
     /// Which sessions it reaches is `agents::prompt::talks_to_a_person`, and
     /// this file has no opinion about it.
     pub agent_prompt: String,
+    /// How compressed the agent's answers are. At the root beside
+    /// `agent_prompt` for the reason `CavemanSettings` records.
+    pub caveman: CavemanSettings,
     pub last_project: Option<String>,
     /// The contents and order of the on-screen list — the order things were
     /// added, not how recent they are: rows that jump on every switch are
@@ -950,6 +1045,7 @@ impl Default for Settings {
             commit_language: crate::agents::DEFAULT_LANGUAGE.into(),
             report_language: crate::agents::DEFAULT_LANGUAGE.into(),
             agent_prompt: String::new(),
+            caveman: CavemanSettings::default(),
             last_project: None,
             open_projects: Vec::new(),
             projects: BTreeMap::new(),
@@ -994,6 +1090,10 @@ pub struct ResolvedSettings {
     pub report_language: String,
     /// The standing instruction. See `Settings::agent_prompt`.
     pub agent_prompt: String,
+    /// How compressed the agent's answers are, globally. See
+    /// `Settings::caveman`. The project's own override is not here: it rides
+    /// `project.caveman` like every other per-project field.
+    pub caveman: CavemanSettings,
     pub project: ProjectState,
     pub open_projects: Vec<String>,
     pub active_project: Option<String>,
@@ -1023,6 +1123,7 @@ impl Default for ResolvedSettings {
             commit_language: crate::agents::DEFAULT_LANGUAGE.into(),
             report_language: crate::agents::DEFAULT_LANGUAGE.into(),
             agent_prompt: String::new(),
+            caveman: CavemanSettings::default(),
             project: ProjectState::default(),
             open_projects: Vec::new(),
             active_project: None,
@@ -1076,6 +1177,7 @@ pub fn parse(text: &str) -> Outcome {
             .and_then(Value::as_str)
             .map(str::to_owned)
             .unwrap_or_default(),
+        caveman: section(&object, "caveman"),
         last_project: object.get("lastProject").and_then(Value::as_str).map(str::to_owned),
         open_projects: section(&object, "openProjects"),
         projects: projects(&object),
@@ -1125,6 +1227,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         commit_language: file.commit_language.clone(),
         report_language: file.report_language.clone(),
         agent_prompt: file.agent_prompt.clone(),
+        caveman: file.caveman.clone(),
         project: active
             .as_deref()
             .and_then(|path| file.projects.get(path))
@@ -1155,6 +1258,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.commit_language = resolved.commit_language;
     file.report_language = resolved.report_language;
     file.agent_prompt = resolved.agent_prompt;
+    file.caveman = resolved.caveman;
     file.open_projects = resolved.open_projects;
     file.last_project = resolved.active_project.clone();
 
@@ -1290,6 +1394,7 @@ impl Settings {
         known_language(&mut self.commit_language);
         known_language(&mut self.report_language);
         forget_if_too_long(&mut self.agent_prompt, MAX_AGENT_PROMPT);
+        self.caveman.validate();
         self.appearance.validate();
         self.layout.validate();
         self.editor.validate();
@@ -1313,6 +1418,7 @@ impl ResolvedSettings {
         known_language(&mut self.commit_language);
         known_language(&mut self.report_language);
         forget_if_too_long(&mut self.agent_prompt, MAX_AGENT_PROMPT);
+        self.caveman.validate();
         self.appearance.validate();
         self.layout.validate();
         self.editor.validate();
@@ -1452,6 +1558,10 @@ impl ProjectState {
         if let Some(run) = self.run_settings.as_mut() {
             run.validate();
         }
+        // A word off this project's own vocabulary takes `inherit` rather than
+        // being forgotten, which for a `String` is the same thing said once:
+        // the field's default *is* "no override here".
+        caveman_project_level(&mut self.caveman);
         // Off the ladder is forgotten rather than rounded, the same rule
         // `min_priority` keeps: a number nobody could have been warned at is a
         // hand-edited file, and the honest reading of it is that no warning has
@@ -1756,6 +1866,138 @@ mod tests {
 
         let field = settings_of(r#"{"version":1,"updates":{"autoCheck":"no"}}"#);
         assert!(field.updates.auto_check, "a field of the wrong type loses the section");
+    }
+
+    /// Default `off`, and `off` is today's behaviour to the letter: nothing in
+    /// this app says a word about caveman to any agent until somebody chooses a
+    /// level. The walk through `parse`, `resolve` and `merge` is
+    /// `restoreGeometry`'s and for its reason — a section added to the types and
+    /// missed in one of the three reads as the default for ever, and no
+    /// struct-alone test sees it.
+    #[test]
+    fn the_caveman_level_defaults_to_off_and_a_stored_one_survives_the_merge() {
+        assert_eq!(Settings::default().caveman.level, "off");
+        // Every settings file on a person's disk right now is this file, and
+        // reading one must not turn the default into a written value.
+        let untouched = settings_of(r#"{"version":1,"appearance":{"theme":"light"}}"#);
+        assert_eq!(untouched.caveman, CavemanSettings::default());
+        assert_eq!(untouched.caveman.level, "off");
+
+        let file = settings_of(r#"{"version":1,"caveman":{"level":"ultra"}}"#);
+        assert_eq!(file.caveman.level, "ultra", "parse must read it off the disk");
+
+        let resolved = resolve(&file, None);
+        assert_eq!(resolved.caveman.level, "ultra", "resolve must carry it to the front end");
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert_eq!(written.caveman.level, "ultra", "merge must carry it back into the file");
+    }
+
+    /// Every rung, and through the serializer as well as through `merge`: what
+    /// this pins is that the ladder and the wire agree about all seven names,
+    /// where the test above pins the road one value takes.
+    #[test]
+    fn every_rung_of_the_ladder_survives_being_written_and_read_again() {
+        for level in CAVEMAN_LEVELS {
+            let file = settings_of(&format!(r#"{{"version":1,"caveman":{{"level":"{level}"}}}}"#));
+            assert_eq!(file.caveman.level, level, "{level} must be read off the disk");
+
+            let mut written = Settings::default();
+            merge(&mut written, resolve(&file, None), "2026-08-01T00:00:00+00:00".into());
+            let text = serde_json::to_string(&written).expect("the settings must serialize");
+            assert_eq!(
+                settings_of(&text).caveman.level,
+                level,
+                "{level} must survive the write and the next read"
+            );
+        }
+    }
+
+    /// The rule `subscription` keeps rather than the one `min_priority` does:
+    /// off the ladder takes the shipped level. Forgetting a `String` here would
+    /// come to the same thing, so there is no second branch to write.
+    #[test]
+    fn a_caveman_level_off_the_ladder_takes_the_shipped_one() {
+        for text in [
+            r#"{"version":1,"caveman":{"level":"loud"}}"#,
+            r#"{"version":1,"caveman":{"level":7}}"#,
+            r#"{"version":1,"caveman":{"level":null}}"#,
+        ] {
+            assert_eq!(settings_of(text).caveman.level, "off", "{text} must come to off");
+        }
+    }
+
+    /// The shape `a_broken_editor_section_does_not_take_the_rest_of_the_file`
+    /// pins one section over: a section whose *type* is wrong fails to
+    /// deserialize and loses itself to its defaults, and nothing around it.
+    #[test]
+    fn a_broken_caveman_section_does_not_take_the_rest_of_the_file() {
+        let settings = settings_of(
+            r#"{"version":1,"caveman":"ultra","appearance":{"theme":"light"},"agent":"codex"}"#,
+        );
+        assert_eq!(settings.caveman, CavemanSettings::default());
+        assert_eq!(settings.appearance.theme, "light", "the neighbouring section must survive");
+        assert_eq!(settings.agent, "codex", "and so must the neighbouring field");
+    }
+
+    /// A project entry has one more word than the global ladder, and it is the
+    /// default: `inherit` is "as in every other project" and never "off".
+    #[test]
+    fn a_project_with_no_level_of_its_own_inherits() {
+        let settings = settings_of(r#"{"version":1,"projects":{"/a":{"sideTab":"agents"}}}"#);
+        assert_eq!(settings.projects["/a"].caveman, "inherit");
+        assert_eq!(ProjectState::default().caveman, "inherit");
+    }
+
+    #[test]
+    fn a_project_level_off_its_own_ladder_goes_back_to_inherit() {
+        let settings = settings_of(
+            r#"{"version":1,"projects":{"/a":{"caveman":"loud"},"/b":{"caveman":"ultra"}}}"#,
+        );
+        assert_eq!(
+            settings.projects["/a"].caveman, "inherit",
+            "a word off the ladder is no override rather than one to `off`"
+        );
+        assert_eq!(settings.projects["/b"].caveman, "ultra", "and the neighbour keeps its own");
+
+        // `off` is a real override here and the opposite of `inherit`: this
+        // project is the one where the agent is not to be compressed at all.
+        let refused = settings_of(r#"{"version":1,"projects":{"/a":{"caveman":"off"}}}"#);
+        assert_eq!(refused.projects["/a"].caveman, "off");
+    }
+
+    /// The shape `a_broken_project_entry_does_not_take_its_neighbours` pins: a
+    /// field of the wrong type costs the entry it is in and nothing else.
+    #[test]
+    fn a_broken_caveman_field_in_one_project_does_not_take_its_neighbours() {
+        let settings = settings_of(
+            r#"{"version":1,"projects":{"/bad":{"caveman":7},"/good":{"caveman":"lite"}}}"#,
+        );
+        assert!(!settings.projects.contains_key("/bad"));
+        assert_eq!(settings.projects["/good"].caveman, "lite");
+    }
+
+    /// What `settings_save` does with the two fields: the file is re-read and
+    /// the resolved view merged into it, so the global level and the active
+    /// project's override both have to come back out, and an entry the front end
+    /// never saw has to be left exactly as it was.
+    #[test]
+    fn a_save_keeps_the_level_at_the_root_and_in_every_project_entry() {
+        let mut file = settings_of(
+            r#"{"version":1,"caveman":{"level":"lite"},"openProjects":["/a"],"lastProject":"/a",
+                "projects":{"/a":{"caveman":"ultra"},"/b":{"caveman":"full"}}}"#,
+        );
+
+        let resolved = resolve(&file, Some("/a"));
+        assert_eq!(resolved.caveman.level, "lite");
+        assert_eq!(resolved.project.caveman, "ultra");
+
+        merge(&mut file, resolved, "2026-08-01T00:00:00+00:00".into());
+
+        assert_eq!(file.caveman.level, "lite");
+        assert_eq!(file.projects["/a"].caveman, "ultra");
+        assert_eq!(file.projects["/b"].caveman, "full", "an entry nobody looked at is untouched");
     }
 
     /// A section whose type is wrong loses the whole section to its defaults,

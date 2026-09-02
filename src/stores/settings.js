@@ -41,6 +41,23 @@ import {
 import { NOTIFICATION_DEFAULTS, isSound } from '../sounds.js'
 import { isThreshold, reconcile } from '../components/settings/subscription.js'
 
+/* How compressed the caveman skill makes an agent's answers: the rungs, `off`
+   first. The same list as `CAVEMAN_LEVELS` in `settings/model.rs`, under the
+   obligation every doubled vocabulary here carries — what the front end offers
+   must stay a subset of what Rust accepts, or a choice reverts on the next save
+   with nothing on screen to say so. Written out here rather than imported
+   because the interface has no dictionary of these yet; when it grows one, it
+   owns the list and this store asks it, the way it asks `isThreshold` and
+   `isSound` above. */
+const CAVEMAN_LEVELS = ['off', 'lite', 'full', 'ultra', 'wenyan-lite', 'wenyan-full', 'wenyan-ultra']
+
+/* The one word a project's own level has and the global one does not: "as in
+   every other project". A word rather than a `null`, because `adopt()` in
+   `views/SettingsWindow.vue` skips a field that arrives null and the settings
+   window would go on showing the previous project's level — the trap the
+   subscription thresholds already walked into and answered the same way. */
+const CAVEMAN_INHERIT = 'inherit'
+
 /* The defaults mirror the ones in Rust. With no back end (a browser) or after
    a failed read, the app still has to open looking a known way. */
 const defaults = () => ({
@@ -172,6 +189,15 @@ const defaults = () => ({
      answer. Which sessions it reaches is decided in Rust
      (`agents::prompt::talks_to_a_person`); nothing here knows or needs to. */
   agentPrompt: '',
+  /* How compressed an agent's answers are — caveman's own vocabulary, and `off`
+     is one of its words rather than the absence of a level. A section of its own
+     the way `updates` above is: one field is already the house shape, the key
+     names the subsystem, and a second caveman preference later has somewhere to
+     go. Shipped `off`, which is today's behaviour to the letter — the app says
+     nothing at all about caveman to any agent until somebody chooses. Rust
+     carries the same default, and a project may override it (`project.caveman`
+     below). */
+  caveman: { level: 'off' },
   /* The two percentages the run gate holds a batch on: `0` is off. Global
      beside `agent` and the languages, because a subscription is the person's
      and not the repository's, and shipped as today's behaviour exactly — the
@@ -252,6 +278,15 @@ const defaults = () => ({
        and it would be prefilled in the one dialog whose whole job is being the
        last cheap place to notice a run aimed at the wrong thing. */
     runSettings: null,
+    /* How compressed an agent's answers are in this project, or `inherit` for
+       "as in every other project" — which is the default, and a word rather than
+       a null for the reason `CAVEMAN_INHERIT` above records. Beside
+       `runSettings` and for its reason: this and that one are the preferences
+       among a project's remembered screen state. Listed here for the reason
+       `runSettings` spells out — a key missing from this object is a key the
+       defaults layer cannot clear, so one project's override would follow
+       somebody into the next project. */
+    caveman: 'inherit',
     /* The highest attachment-storage threshold this project has been warned
        about, in MiB — null until it has been warned about any. The one thing
        the notification bell keeps between runs, and per project because the
@@ -429,6 +464,7 @@ export async function loadSettings() {
     applySection(settings.subscription, base.subscription, stored.subscription)
     applySection(settings.window, base.window, stored.window)
     applySection(settings.updates, base.updates, stored.updates)
+    applySection(settings.caveman, base.caveman, stored.caveman)
     applySection(settings.kanban, base.kanban, stored.kanban)
     applySection(settings.notifications, base.notifications, stored.notifications)
     applySection(settings.layout, base.layout, stored.layout)
@@ -498,6 +534,12 @@ function toShared(source) {
   const windowSection = { ...base.window, ...source.window }
   const updates = { ...base.updates, ...source.updates }
   const notifications = { ...base.notifications, ...source.notifications }
+  const caveman = { ...base.caveman, ...source.caveman }
+  /* The first per-project field to cross this contract. The two windows have
+     spoken only about global settings until now, and widening that is the price
+     of a per-project caveman level — named out loud here rather than smuggled in
+     with the flat fields around it. */
+  const project = { ...base.project, ...source.project }
   return {
     theme: appearance.theme,
     density: appearance.density,
@@ -556,7 +598,16 @@ function toShared(source) {
     reportLanguage: source.reportLanguage ?? base.reportLanguage,
     /* Flat beside the four languages, and the fifth field of that family: what
        the person wants said in every session they are in. */
-    agentPrompt: source.agentPrompt ?? base.agentPrompt
+    agentPrompt: source.agentPrompt ?? base.agentPrompt,
+    /* Flat and named for what they decide rather than for where they live — the
+       shape `notificationShowReport` and `gitAutoFetch` take. The second is the
+       project's own override and rides the same flat message as the global one:
+       what a person is choosing between is one level and the other, not one
+       section and another. `inherit` travels as a word, never as a null, or
+       `adopt()` in the settings window would drop it and leave the level of
+       whichever project was looked at before standing on screen. */
+    cavemanLevel: caveman.level,
+    cavemanProjectLevel: project.caveman
   }
 }
 
@@ -709,6 +760,21 @@ export function applyPatch(patch) {
   }
   if (typeof patch.notificationShowReport === 'boolean') {
     settings.notifications.showReport = patch.notificationShowReport
+  }
+  /* The caveman level and this project's own override, each checked against its
+     own ladder — the relationship the board's two scalars have with
+     `boardView.js`: the vocabulary is a closed list, and a word off it is
+     skipped rather than normalised, so a malformed event leaves the previous
+     choice standing. The project's ladder is the global one plus `inherit`, and
+     `inherit` has to pass: it is how somebody takes an override off again. */
+  if (CAVEMAN_LEVELS.includes(patch.cavemanLevel)) {
+    settings.caveman.level = patch.cavemanLevel
+  }
+  if (
+    patch.cavemanProjectLevel === CAVEMAN_INHERIT ||
+    CAVEMAN_LEVELS.includes(patch.cavemanProjectLevel)
+  ) {
+    settings.project.caveman = patch.cavemanProjectLevel
   }
 }
 

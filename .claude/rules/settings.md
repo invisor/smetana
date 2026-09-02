@@ -25,6 +25,7 @@ state and width for each side, `railOpen` for whether the project rail is drawn 
 panel, and `gitSections` beside them), `editor` with its own `fontSize` and `wordWrap`, `agent`, the id of the CLI agent to
 start, `agentLanguage`, `taskLanguage`, `commitLanguage` and `reportLanguage`, the languages that agent
 works in, `agentPrompt`, the person's own standing instruction for every session they are in,
+`caveman`, how compressed an agent's answers are,
 `kanban`, how
 the board is drawn, `git`, what the app does to a person's repositories without asking each time,
 `window`, whether the main window opens where it was left, `updates`, whether the app asks
@@ -34,7 +35,7 @@ which sound each of the two announcements makes and whether a finished run shows
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
 absolute path to its content state (side tab, right tab, active tab, selected task, `recentTasks`,
 selected path, `selectedRepo`, expanded folders, `branchFolders`, `openTabs`, `previewTab`,
-`columnOrder`, `tabOrder`, `runSettings`, `storageWarnedMib`, `usedAt`).
+`columnOrder`, `tabOrder`, `runSettings`, `caveman`, `storageWarnedMib`, `usedAt`).
 
 `tabOrder` sits beside `openTabs` rather than replacing it, and the two answer different questions:
 that one is the **set of files to open again** — the dirty marks, the focus sweep and the closing of
@@ -81,6 +82,47 @@ beside it test truthiness as well. For a language an empty id is nothing anybody
 truthiness guard would swallow the clearing, leaving the old text in the app window's state and in
 the next session started while the field on screen looked empty. The shape to copy is
 `editorWordWrap`'s, not `agentLanguage`'s.
+
+`caveman` sits at the root beside `agentPrompt` and on its argument exactly: how tersely somebody
+wants to be spoken to is a fact about a **person** and travels with them between projects. One field
+under a section rather than a flat field, on `updates`' precedent — one field is already the house
+shape, the key names the subsystem, and a second caveman preference later has somewhere to go. The
+ladder is `off | lite | full | ultra | wenyan-lite | wenyan-full | wenyan-ultra`, and it ships `off`,
+which is today's behaviour to the letter: nothing in this app says a word about caveman to any agent
+until somebody chooses. The level lives nowhere on disk in caveman itself — its `SKILL.md` makes it a
+fact about one conversation, held until the session ends — so keeping the choice is ours to do or not
+at all.
+
+**There is no switch beside the level**, and that is a decision rather than an economy: `off` is a
+word of caveman's own vocabulary (`/caveman off`), and a ladder whose first rung is "off" already
+stands in this file twice, in `subscription.pauseAt` and `reducedAt`. A switch would ask one question
+twice and then have to answer what "on, at level off" means. A value off the ladder takes the shipped
+level, which is `subscription`'s rule and not `min_priority`'s — for a `String` forgetting the field
+*is* taking the default, so there is no second behaviour to write.
+
+This one **does** have a per-project half, which is where it parts company with `agentPrompt`: it is
+`caveman` in the project's own entry, beside `runSettings`, the other preference among a project's
+remembered screen state. `.smetana/project.toml` was the alternative and is refused — that file is
+committed and travels to everybody who works in the repository, while how tersely an agent talks to a
+*person* is not a fact about a repository. The project's vocabulary is the global ladder plus one
+word, `inherit`, which is its default and means "as in every other project"; a word off it takes
+`inherit` rather than `off`. **It is a plain string and never an `Option`**, for the mechanical reason
+the thresholds above record: `adopt()` in `views/SettingsWindow.vue` skips a field that arrives
+`null`, so "no override here" would never reach the settings window and the previous project's level
+would stand on screen. One form on disk and on the wire alike; an `Option` on disk with a sentinel on
+the wire is two shapes of one fact to keep in step in both directions.
+
+The ladder is written out twice — `CAVEMAN_LEVELS` in `model.rs` and the interface's own dictionary,
+which does not exist yet — under `SUBSCRIPTION_STEPS`' obligation: what the front end offers must stay
+a subset of what Rust accepts. The two fields ride the flat message as `cavemanLevel` and
+`cavemanProjectLevel`, named for what they decide rather than for where they live, the way
+`notificationShowReport` and `gitAutoFetch` are; `applyPatch` checks each against its own ladder and
+leaves the previous value standing otherwise. `cavemanProjectLevel` is the **first per-project field
+on the two windows' contract**, and widening that contract is the price of a per-project level, said
+out loud rather than smuggled in. Reading it is `settings::caveman_level(app, project)`, which answers
+with `inherit` already resolved — the project's level when it has one, the global one otherwise — so
+that rule exists in one place rather than in each caller. The schema version does not move: the change
+is additive.
 
 `subscription` sits at the root beside `agent` and the languages, on their argument exactly: a
 subscription belongs to the **person** and to the CLI they signed in to, not to a repository. Two
