@@ -530,11 +530,12 @@ function toShared(source) {
   const updates = { ...base.updates, ...source.updates }
   const notifications = { ...base.notifications, ...source.notifications }
   const caveman = { ...base.caveman, ...source.caveman }
-  /* The first per-project field to cross this contract. The two windows have
-     spoken only about global settings until now, and widening that is the price
-     of a per-project caveman level — named out loud here rather than smuggled in
-     with the flat fields around it. */
-  const project = { ...base.project, ...source.project }
+  /* Every field on this contract is about the machine, and none is about one
+     project. That is worth saying out loud because it was briefly untrue: the
+     per-project caveman level crossed here while its control sat on the Agents
+     tab, and it went back off when the control moved to the project settings
+     window. A window that does not know which project is open has no business
+     being told a per-project value. */
   return {
     theme: appearance.theme,
     density: appearance.density,
@@ -594,15 +595,14 @@ function toShared(source) {
     /* Flat beside the four languages, and the fifth field of that family: what
        the person wants said in every session they are in. */
     agentPrompt: source.agentPrompt ?? base.agentPrompt,
-    /* Flat and named for what they decide rather than for where they live — the
-       shape `notificationShowReport` and `gitAutoFetch` take. The second is the
-       project's own override and rides the same flat message as the global one:
-       what a person is choosing between is one level and the other, not one
-       section and another. `inherit` travels as a word, never as a null, or
-       `adopt()` in the settings window would drop it and leave the level of
-       whichever project was looked at before standing on screen. */
-    cavemanLevel: caveman.level,
-    cavemanProjectLevel: project.caveman
+    /* Flat and named for what it decides rather than for where it lives — the
+       shape `notificationShowReport` and `gitAutoFetch` take. The global level
+       alone: the project's own override rode beside it until its control moved
+       to the project settings window, and it is deliberately not sent any more.
+       It still travels under the same name — `cavemanProjectLevel`, through
+       `applyPatch` below — because the app window writes it on behalf of the
+       dialog window that owns the control now. */
+    cavemanLevel: caveman.level
   }
 }
 
@@ -761,7 +761,15 @@ export function applyPatch(patch) {
      `boardView.js`: the vocabulary is a closed list, and a word off it is
      skipped rather than normalised, so a malformed event leaves the previous
      choice standing. The project's ladder is the global one plus `inherit`, and
-     `inherit` has to pass: it is how somebody takes an override off again. */
+     `inherit` has to pass: it is how somebody takes an override off again.
+
+     The second is the one field here the settings window never sends. Its
+     control is a row in the project settings window, which is a dialog window
+     and so answers the app window through `onResult` rather than through
+     `settings:apply` — `openProjectSettings` in `views/DesktopApp.vue` calls
+     this function directly, under the same key. One ladder check for both
+     roads, which is the whole reason that write goes through here instead of
+     assigning the field. */
   if (isCavemanLevel(patch.cavemanLevel)) {
     settings.caveman.level = patch.cavemanLevel
   }
@@ -844,17 +852,19 @@ export async function readSharedSettings() {
    the new list). Taking the list from there would bring back a project that was
    just removed, or lose one that was just added.
 
-   **Both branches announce**, and that is not housekeeping: `settings.project`
-   holds a field the settings window draws — `caveman`, the project's own level,
-   the first per-project field ever to cross that contract — and `announce()`
-   otherwise fires only on a hello and on an edit, never on a project being
-   switched. Without this, a settings window sitting open on the Agents tab
-   would re-read how caveman stands in the new project (`project:active` in
-   `stores/app.js` is announced on the switch) while the This project row two
-   lines below went on showing the level of the project somebody had just left:
-   two halves of one group describing two different projects, with nothing on
-   screen to say which. Announcing costs one event on a switch, and only when
-   there is a window to hear it. */
+   **Neither branch announces**, and that is a fact about the contract rather
+   than an omission. `announce()` fires on a hello and on an edit and never on a
+   project being switched, which was wrong for exactly as long as `settings.project`
+   held a field the settings window drew: `caveman`, the project's own level,
+   which sat on the Agents tab beside the global one. A switch left the two rows
+   of that group describing two different projects. The level is edited in the
+   project settings window now — `components/run/ProjectSettingsModal.vue`, off
+   the project tile's own menu — and `toShared` above carries nothing per project
+   again, so there is nothing here for a switch to correct on that screen. What
+   *is* per project on the settings window, the caveman state line, was never
+   this contract's: it rides `project:active` in `stores/app.js` and is re-read
+   on the switch. Put an announcement back the moment a per-project field
+   crosses the contract again, and not before. */
 export async function loadProjectLayout(project) {
   /* No projects are left. There is nowhere for a layout to come from, and
      settings_load with no argument would answer about the active project from
@@ -862,11 +872,6 @@ export async function loadProjectLayout(project) {
      defaults. */
   if (!project) {
     Object.assign(settings.project, defaults().project)
-    /* Guarded by `bridged` in both branches, the way nothing else here has to
-       be: this is the one announcement made outside the bridge's own listeners,
-       so with no settings window ever opened there is no `emit` to reject and
-       no line in the console for a window that does not exist. */
-    if (bridged) announce()
     return
   }
   try {
@@ -875,8 +880,4 @@ export async function loadProjectLayout(project) {
   } catch (err) {
     console.error('[settings] reading the project layout failed:', err)
   }
-  /* Outside the `try`, so a failed read announces too: the section was left
-     standing on the previous project's values, and the window has to be told
-     what is actually drawn rather than what was hoped for. */
-  if (bridged) announce()
 }

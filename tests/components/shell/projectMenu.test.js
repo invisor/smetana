@@ -100,31 +100,39 @@ describe('the project settings item', () => {
     expect(captions(items)).toEqual(['Switch to this project first'])
   })
 
-  it('is dead with its own caption when the project has no configuration yet', () => {
+  it('is live on an active project that has no configuration yet', () => {
+    // The window is not only about `.smetana/project.toml` any more: it carries
+    // this machine's caveman level for the project, which is kept in
+    // `settings.json`. A project with no file still has that to change, so the
+    // item opens and the window says why there are no fields under it.
     const items = projectMenuItems({ ...base, configured: false, configBroken: false })
-    expect(settings(items).disabled).toBe(true)
-    expect(captions(items)).toEqual(['Set this project up first'])
-    // The route out stays live: setting the project up is what this refuses in
-    // favour of.
+    expect(settings(items).disabled).toBe(false)
+    expect(captions(items)).toEqual([])
+    // And the route to a file is still the live item above it.
     expect(find(items, 'setup').disabled).toBe(false)
   })
 
-  it('is dead with its own caption when the configuration will not parse', () => {
+  it('is live on an active project whose configuration will not parse', () => {
     const items = projectMenuItems({ ...base, configured: false, configBroken: true })
-    expect(settings(items).disabled).toBe(true)
-    expect(captions(items)).toEqual(["This project's configuration will not parse"])
-    // A form cannot help here — there are no parsed values to draw — and
-    // running the setup over the damaged file is exactly what this menu is for.
+    expect(settings(items).disabled).toBe(false)
+    expect(captions(items)).toEqual([])
+    // A form cannot help with the file itself — there are no parsed values to
+    // draw — and running the setup over the damaged file is what can, which is
+    // why that item reads "Set up again" and stays live beside this one.
     expect(find(items, 'setup').label).toBe('Set up again')
     expect(find(items, 'setup').disabled).toBe(false)
   })
 
-  it('puts the caption immediately above the item it refuses, so its reach is one row', () => {
-    const items = projectMenuItems({ ...base, configured: false, configBroken: false })
-    const at = items.findIndex((item) => item.label === 'Set this project up first')
-    expect(items[at + 1].kind).toBe('settings')
-    expect(items[at + 2].kind).toBe('add-agent')
-    expect(items[at + 2].disabled).toBe(false)
+  it('captions nothing over an active row, whatever the project config is in', () => {
+    // The two refusals this item used to carry are gone with the greying: a
+    // caption here would now refuse a window that has something to offer.
+    for (const config of [
+      { configured: true, configBroken: false },
+      { configured: false, configBroken: false },
+      { configured: false, configBroken: true }
+    ]) {
+      expect(captions(projectMenuItems({ ...base, ...config }))).toEqual([])
+    }
   })
 
   it("does not share the setup item's glyph", () => {

@@ -38,14 +38,18 @@ const REGISTRY = {
   'rename-branch': { width: 440, ground: ['project', 'repo', 'branch'] },
   'promote-column': { width: 440, ground: ['project', 'column'] },
   'setup-project': { width: 440, ground: ['project'] },
-  /* Editing `[defaults]` in the project's own `project.toml`. The same ground
-     as the setup window and for the same reason: the file belongs to the
+  /* Everything about one project that is not the board: `[defaults]` in the
+     project's own `project.toml`, and the caveman level this machine uses while
+     that project is open. The same ground as the setup window and for the same
+     reason, which the second half only sharpens: the file belongs to the
      project, so a window left standing over a project somebody has clicked away
-     from would save four numbers into the wrong repository. A window of its own
-     rather than one more tab in the settings window, which is about
-     `settings.json` — this machine's preferences, written by the app — where
-     `project.toml` is a file in somebody's repository, committed and shared
-     with whoever else works in it. */
+     from would save four numbers into the wrong repository — and, since
+     `settings.project` is the active project's entry, would write a level into
+     it as well. A window of its own rather than one more tab in the settings
+     window, and the split is by subject rather than by file: this one is about
+     one project, that one is about the machine, and a per-project row over
+     there could only mean "whichever project the app window happens to have
+     open". */
   'project-settings': { width: 440, ground: ['project'] },
   'delete-task': { width: 440, ground: ['project', 'issue'] },
   'ready-task': { width: 440, ground: ['project', 'issue'] },

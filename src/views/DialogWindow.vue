@@ -318,6 +318,13 @@ const EMITS = [
   'resolve',
   'rescope',
   'save',
+  /* The project settings window's other half, and a name of its own beside the
+     `save` above it for the reason `rename` has one: it carries a different
+     thing to a different file. `save` is `[defaults]` going into the project's
+     own `.smetana/project.toml` on a press; this is one caveman level going
+     into `settings.json` the moment it is picked, and the app window writes it
+     through `applyPatch` rather than through a command. */
+  'caveman',
   'draft'
 ]
 

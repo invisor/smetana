@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CONFIG_FILE,
   DEFAULTS_FALLBACK,
   NO_BRANCH,
   branchOptions,
+  configNotice,
   draftFrom,
   isDirty,
+  offersDefaults,
   validateDraft
 } from '../../../src/components/run/projectDefaults.js'
 
@@ -144,5 +147,47 @@ describe('isDirty', () => {
   it('is true for a branch cleared away', () => {
     const stored = { ...DEFAULTS_FALLBACK, target_branch: 'staging' }
     expect(isDirty({ ...stored, target_branch: '' }, stored)).toBe(true)
+  })
+})
+
+describe('what the window draws instead of the fields', () => {
+  it('offers the form for a parsed file and for nothing else', () => {
+    expect(offersDefaults('ok')).toBe(true)
+    expect(offersDefaults('missing')).toBe(false)
+    expect(offersDefaults('broken')).toBe(false)
+    // A state this front end has never heard of is an ordinary outcome: no
+    // fields, rather than four fall-backs presented as the project's values.
+    expect(offersDefaults('rearranged')).toBe(false)
+    expect(offersDefaults(undefined)).toBe(false)
+  })
+
+  it('says nothing where the fields are there to speak for themselves', () => {
+    expect(configNotice('ok')).toBeNull()
+  })
+
+  it('names which of the two states a project with no form is in', () => {
+    expect(configNotice('missing').lead).toBe('This project has no')
+    expect(configNotice('missing').tail).toMatch(/nothing here to fill in/)
+    expect(configNotice('broken').lead).toBe("This project's")
+    expect(configNotice('broken').tail).toMatch(/will not parse/)
+    // The two are genuinely different sentences: "set it up" against "set it up
+    // again", which is what the menu item beside this window offers in each.
+    expect(configNotice('missing')).not.toEqual(configNotice('broken'))
+  })
+
+  it('falls back to a sentence claiming nothing for a state it has not heard of', () => {
+    const notice = configNotice('rearranged')
+    expect(notice).toBeTruthy()
+    expect(notice).not.toEqual(configNotice('missing'))
+    expect(notice).not.toEqual(configNotice('broken'))
+  })
+
+  it('keeps the path out of both halves, since the window sets it in mono', () => {
+    for (const state of ['missing', 'broken', 'rearranged']) {
+      const { lead, tail } = configNotice(state)
+      expect(lead).not.toContain(CONFIG_FILE)
+      expect(tail).not.toContain(CONFIG_FILE)
+    }
+    expect(CONFIG_FILE).toBe('.smetana/project.toml')
   })
 })

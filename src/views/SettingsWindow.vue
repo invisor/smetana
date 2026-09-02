@@ -96,19 +96,18 @@ const view = reactive({
      `agentPrompt` in `stores/settings.js` for why empty is the whole of
      today's behaviour rather than a placeholder. */
   agentPrompt: '',
-  /* How compressed an agent's answers are, and this project's own override of
-     it. Shipped `off` and `inherit`, the same as `settings/model.rs` and
-     `defaults()` in `stores/settings.js` — the copies have to agree, or this
-     window draws a level the app is not using for the moment before the first
-     answer arrives, and in a browser under `?view=settings` for good.
+  /* How compressed an agent's answers are. Shipped `off`, the same as
+     `settings/model.rs` and `defaults()` in `stores/settings.js` — the copies
+     have to agree, or this window draws a level the app is not using for the
+     moment before the first answer arrives, and in a browser under
+     `?view=settings` for good.
 
-     `inherit` is a word and never a `null`, and that is load-bearing here of all
-     places: `adopt()` below skips any field that arrives null, so a project with
-     no override would never reach this window and the previously drawn level
-     would stand. The same trap the two subscription thresholds above answered
-     the same way — do not "improve" either end into an absence. */
+     The global level and nothing else. A project's own override stood beside it
+     here and is edited in the project settings window now
+     (`components/run/ProjectSettingsModal.vue`), which took the one per-project
+     field back off this contract: every field this window speaks in is about
+     the machine again, which is what the window is for. */
   cavemanLevel: 'off',
-  cavemanProjectLevel: 'inherit',
   /* The board's four, flat in the same message the rest ride in — see
      `toShared` in `stores/settings.js`. Shipped as today's board exactly, for
      the same reason the agent and the languages above are shipped values: this
@@ -714,7 +713,6 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :show-report="view.notificationShowReport"
           :caveman="caveman.reading"
           :caveman-level="view.cavemanLevel"
-          :caveman-project-level="view.cavemanProjectLevel"
           :project-open="Boolean(activeProject)"
           :usage="usage.reading"
           :busy="usage.busy"
@@ -728,7 +726,6 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @update:subscription-pause-at="change({ subscriptionPauseAt: $event })"
           @update:subscription-reduced-at="change({ subscriptionReducedAt: $event })"
           @update:caveman-level="change({ cavemanLevel: $event })"
-          @update:caveman-project-level="change({ cavemanProjectLevel: $event })"
           @install="installCaveman()"
           @refresh="readUsage()"
         />

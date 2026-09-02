@@ -142,7 +142,7 @@ import {
   measureStorage,
   notificationsState
 } from '../stores/notifications.js'
-import { initSettingsBridge, settings } from '../stores/settings.js'
+import { applyPatch, initSettingsBridge, settings } from '../stores/settings.js'
 import {
   announceActiveProject,
   announceBoardColumns,
@@ -1824,17 +1824,23 @@ const closeSetup = () => {
   closeDialog('setup-project')
 }
 
-/* The other window about `.smetana/project.toml`, and the one that changes it
-   without starting anything: `[defaults]`, four scalars, edited in a form.
-   Modelled on `openSetup` above down to holding the path this is about rather
-   than reading `activePath` at render time — a window that outlived a project
-   switch must fail loudly instead of quietly writing four numbers into another
-   repository.
+/* Everything about one project that is not the board: `[defaults]` in
+   `.smetana/project.toml`, four scalars edited in a form, and the caveman level
+   this machine talks to agents in while this project is open. Modelled on
+   `openSetup` above down to holding the path this is about rather than reading
+   `activePath` at render time — a window that outlived a project switch must
+   fail loudly instead of quietly writing four numbers into another repository.
 
-   The two are refused in different states and that is the whole reason there
-   are two: the setup runs over a damaged file, this one cannot, because there
-   are no parsed values to put in its fields. `shell/projectMenu.js` carries
-   that rule and the captions that explain it. */
+   **It opens whatever state the project's file is in**, which is the one thing
+   that changed when the caveman row arrived: the level is kept in
+   `settings.json` and has nothing to do with the repository, so a project
+   nobody has set up would otherwise be shut out of a preference it had while
+   that row lived on the settings window's Agents tab. The form is what the file
+   decides — `configState` below hands the window Rust's own word for it, and
+   `components/run/projectDefaults.js` turns it into either four fields or the
+   sentence that stands in for them. The setup item beside this one in the menu
+   is still the answer for a damaged file; this window says so rather than
+   refusing to open. */
 const settingsFor = ref(null)
 const savingSettings = ref(false)
 const settingsError = ref('')
@@ -1855,9 +1861,28 @@ const openProjectSettings = async (path) => {
          window, so what this value is at the moment the window mounts is what
          the fields get and a later announcement never reaches them. That is
          what stops a prop arriving mid-edit from taking away what somebody is
-         typing, and it is safe here because the menu item is greyed until
-         `configured` — which is exactly when `runConfig` is non-null. */
+         typing.
+
+         `runConfig` is null unless the file parsed, so with no file this is
+         four fall-backs — and they are never drawn: `configState` below is what
+         decides whether there is a form at all, and it is the same question one
+         word shorter. The pair has to stay one question, or a window would fill
+         its fields from `Defaults::default()` and offer a Save that wrote them
+         into somebody's repository as though they had been read from it. */
       defaults: draftFrom(runConfig.value),
+      /* Rust's own word for the project's file — `ok`, `missing` or `broken` —
+         handed over whole rather than unpacked into a boolean, so a state this
+         front end has not heard of cannot silently read as one it has. The
+         window draws the four fields for `ok` and one sentence for anything
+         else. */
+      configState: runsState.config.state,
+      /* This machine's caveman level for this project, read off the settings
+         store the way every other value here is read off its own. Announced on
+         every change like the rest and read once at the other end, in the same
+         watcher on `open` the defaults are seeded in: the window applies a pick
+         locally before sending it, so the announcement carrying that same pick
+         back must not be able to move the list under the cursor. */
+      cavemanLevel: settings.project.caveman,
       branches: gitState.branches,
       busy: savingSettings.value,
       error: settingsError.value
@@ -1869,6 +1894,7 @@ const openProjectSettings = async (path) => {
     onResult: (name, payload) => {
       if (name === 'close') closeDialog('project-settings')
       if (name === 'save') saveProjectSettings(payload)
+      if (name === 'caveman') setProjectCaveman(payload)
     }
   })
   /* After the dialog is up, for the run dialog's reason: the list is a git read
@@ -1877,6 +1903,26 @@ const openProjectSettings = async (path) => {
      branch field is filled from — asking twice for one list would be two
      sources to keep in step. */
   await loadBranches(path)
+}
+
+/* The other half of that window, and the half that reaches no command at all:
+   the caveman level is `settings.json`'s, so it lands in the settings store and
+   the debounce already watching that object carries it to disk. Immediately,
+   with no Save of its own — the window says so in the row's own description,
+   and `ProjectSettingsModal.vue`'s header carries why the two halves of one
+   window save differently.
+
+   `applyPatch` rather than an assignment, under the same key the settings
+   window's edits used to ride: the ladder check lives there, once, and a word
+   off it is skipped with the previous choice standing. What it writes is
+   `settings.project`, the **active** project's entry, which is the whole reason
+   the guard below is here rather than a comment saying it cannot happen — the
+   menu item is live on the active project alone, so the two agree at the moment
+   the window opens, and this refuses to write a level into another project's
+   entry if a switch and a pick land in the same tick. */
+const setProjectCaveman = (level) => {
+  if (!level || settingsFor.value !== activePath.value) return
+  applyPatch({ cavemanProjectLevel: level })
 }
 
 const saveProjectSettings = async (draft) => {

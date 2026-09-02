@@ -1,6 +1,15 @@
 /* What the Caveman group on the Agents tab offers, and what it says about how
    caveman stands on this machine. Nothing here about how any of it looks.
 
+   One of its lists is drawn somewhere else, and the file stays here anyway:
+   `projectLevelOptions` is the project's own ladder, and its row is in the
+   project settings window (`components/run/ProjectSettingsModal.vue`), off the
+   project tile's right-click menu. It is imported across groups rather than
+   copied, since a second list of the same rungs is exactly what this file
+   exists to prevent — and it belongs with the rest of the caveman vocabulary
+   rather than with the four scalars of a run configuration it happens to be
+   drawn above.
+
    Another of the `subscription.js` / `usage.js` / `storage.js` family next door:
    the whole of one rule, pure, with no Vue and no DOM in it, out here because a
    `.vue` file is the one thing no test in this repository can reach. The group
@@ -18,8 +27,8 @@
    it.
 
    It is doubled rather than fetched because each end needs it for a different
-   job: Rust to refuse a hand-edited word, this end to have something for a
-   `Dropdown` to draw. `src/stores/settings.js` used to hold a third list of its
+   job: Rust to refuse a hand-edited word, this end to have something for a list
+   on screen to draw. `src/stores/settings.js` used to hold a third list of its
    own and now asks `isLevel`/`isProjectLevel` here, which is what keeps the
    guard on an incoming patch and the list on screen from ever disagreeing.
 
@@ -87,9 +96,12 @@ const LEVEL_LABEL = {
   'wenyan-ultra': 'Wenyan ultra'
 }
 
-/* What `inherit` reads as in a list. It names the row above it — All projects —
-   rather than saying "default", because what it inherits is a choice somebody
-   made on this same screen and not a shipped value. */
+/* What `inherit` reads as in a list. It names the setting it defers to — All
+   projects, in the settings window's Caveman group — rather than saying
+   "default", because what it inherits is a choice somebody made on a screen of
+   this app and not a shipped value. The two rows are in two windows now, which
+   is what makes naming the other one worth more than it cost when they were
+   one above the other. */
 const INHERIT_LABEL = 'Same as all projects'
 
 /* The seven the global row offers. Built per call rather than frozen once: the
@@ -102,7 +114,8 @@ export function levelOptions() {
 /* The eight the project row offers: the override first, then the same seven.
    First rather than last because it is the default and the commonest answer,
    and because a person reading down the list should meet "same as all projects"
-   before they meet a level to depart to. */
+   before they meet a level to depart to. Drawn in the project settings window
+   rather than on this tab — see the header. */
 export function projectLevelOptions() {
   return [{ value: CAVEMAN_INHERIT, label: INHERIT_LABEL }, ...levelOptions()]
 }
