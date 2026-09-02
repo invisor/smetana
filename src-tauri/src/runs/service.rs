@@ -2023,13 +2023,20 @@ async fn spawn_batch(
 }
 
 /// The process group this batch's session runs in, with the evidence that says
-/// which process that pid is. `None` when the terminal worker cannot answer or
-/// the platform cannot read a start time — the batch is still recorded by its
-/// actor, which is what the tracker half matches on.
+/// which process that pid is. `None` when the terminal worker cannot answer,
+/// when the platform cannot read a start time, or when the process never became
+/// nameable as itself — the batch is still recorded by its actor, which is what
+/// the tracker half matches on.
+///
+/// It waits, and briefly: the pid comes back from the fork, and the name under
+/// it is this app's own until the exec lands (smetana-6nr0). What bounds that
+/// wait is the comment at the call site — from there on the app may be killed
+/// at any moment and the registry does not know about this agent yet — so the
+/// ceiling is `recovery::EXEC`, a second, against an ordinary cost of one poll.
 async fn group_of(terminal: &TerminalHandle, session: u64) -> Option<Proc> {
     let (tx, rx) = oneshot::channel();
     terminal.0.send(TerminalRequest::Group(session, tx)).await.ok()?;
-    recovery::group(rx.await.ok()??)
+    recovery::group(rx.await.ok()??).await
 }
 
 /// What ended the wait on a batch.
