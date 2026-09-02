@@ -734,6 +734,18 @@ fn handle(
                 // person's session and a run's batch cannot disagree about it.
                 // It lives with the same debounce.
                 agent_prompt: crate::settings::agent_prompt(app),
+                // The project as well as the app, and it is the one of these
+                // reads that takes both: a project may set its own level, and
+                // `settings::caveman_level` is where "the project's own beats
+                // the global one" is resolved, so no caller works it out for
+                // itself. The key is the project path exactly as `resolve`
+                // stores it, which is what `project` already is here.
+                //
+                // Read here for the reason the three above are, and it lives
+                // with the same debounce: a session started in the same
+                // fraction of a second as a level change reads the previous
+                // level.
+                caveman_level: crate::settings::caveman_level(app, &project),
             };
             let spawned = Pty::spawn(id, &launch, DEFAULT_COLS, DEFAULT_ROWS, chunks.clone());
             let _ = tx.send(match spawned {

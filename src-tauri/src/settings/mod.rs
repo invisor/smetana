@@ -78,9 +78,8 @@ pub fn agent_prompt(app: &AppHandle) -> String {
 /// A platform that will not name a config directory answers `off`, the shipped
 /// level, which says nothing at all to the agent and is today's behaviour.
 ///
-/// Unused until the prompt learns to say it — see `file::caveman_level`, which
-/// carries the reason the pair is written before its first caller.
-#[allow(dead_code)]
+/// The caller is `terminal::service`'s `Create` arm, which puts the answer on
+/// the `Launch` for `prompt::build` to turn into one line.
 pub fn caveman_level(app: &AppHandle, project: &str) -> String {
     path(app)
         .map(|path| file::caveman_level(&path, project))

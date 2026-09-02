@@ -105,11 +105,10 @@ pub fn agent_prompt(path: &Path) -> String {
 /// letter, since nothing in this app says a word about caveman to any agent
 /// until somebody chooses a level.
 ///
-/// Nothing reads this yet: the paragraph a level turns into is a later task,
-/// and the store is deliberately finished before anything leans on it. Held
-/// back until then, the resolution below would have been written in whatever
-/// called it first, which is the one thing this function exists to prevent.
-#[allow(dead_code)]
+/// What reads it is `settings::caveman_level`, and through it the one place
+/// every session in the app is built. The resolution below stays here rather
+/// than in that caller, which is the one thing this function exists for: two
+/// answers to "which level applies" is how the two fields start to disagree.
 pub fn caveman_level(path: &Path, project: &str) -> String {
     let settings = load(path).0;
     let own = settings.projects.get(project).map(|state| state.caveman.as_str());

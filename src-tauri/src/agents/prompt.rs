@@ -671,6 +671,38 @@ fn talks_to_a_person(intent: &Intent) -> bool {
     !matches!(intent, Intent::Run { .. })
 }
 
+/// The one line that carries a chosen caveman level into a session.
+///
+/// caveman keeps no level anywhere on disk: its own `SKILL.md` says
+/// `/caveman <level>` holds until the session ends, so a level is a fact about
+/// one conversation and nothing carries it between them. Which makes the
+/// session's first message the only chance the app has to say it without a
+/// person typing it themselves — see `settings::model::CavemanSettings` for why
+/// the choice is kept here at all.
+///
+/// A sentence with the command at the front of it, rather than the bare
+/// command. At the front because that is the literal form the skill listens
+/// for and it must not be buried in prose; a sentence because every prompt this
+/// app sends is a whole instruction — `no_prompt_stops_mid_sentence` is the
+/// mechanical half of that — and a paragraph one token long reads as a message
+/// somebody cut off. It also has to mean something to an agent with no caveman
+/// skill loaded: a level can be chosen on a machine where caveman was never
+/// installed, and nothing here asks whether it was.
+///
+/// It says "your answers" and not "your answers to me", because a run's batch
+/// gets this line too and there is nobody in that conversation to be answered.
+/// Nothing here restates caveman's own Boundaries section, which already leaves
+/// code, comments, commit messages, the text of an issue and a report as
+/// ordinary prose: a second copy of somebody else's rule goes stale the first
+/// time they change it, and the language paragraphs above are what this app has
+/// to say about those.
+fn caveman(level: &str) -> String {
+    format!(
+        "/caveman {level} — keep your answers at that level of compression for the whole of this \
+         session."
+    )
+}
+
 /// What the session opens on. `None` for exactly one intent, and it is the
 /// conversation language that makes every other one `Some`: that sentence is
 /// said in all of them, so even the "+ New agent" row opens on one paragraph.
@@ -693,6 +725,13 @@ pub fn build(
     facts: Option<&str>,
     text: SkillText,
     languages: &Languages,
+    // How compressed the person wants an agent to answer: one of
+    // `settings::model::CAVEMAN_LEVELS`, the project's `inherit` already
+    // resolved. Read from `settings.json` by the caller, for the reason
+    // `languages` is: this function stays pure and the disk stays outside it.
+    // In front of `agent_prompt` here because it is in front of it in the
+    // prompt, and the two orders are worth keeping in step.
+    caveman_level: &str,
     // The person's own standing instruction, or empty. Read from
     // `settings.json` by the caller, for the reason `languages` is: this
     // function stays pure and the disk stays outside it.
@@ -726,7 +765,37 @@ pub fn build(
         out.push_str("\n\n");
         out.push_str(&report_language(crate::agents::language_name(&languages.report)));
     }
-    // After the four language paragraphs and before the work, which is a
+    // After the four language paragraphs and before the person's own words,
+    // and both halves of that are decisions. After the languages, because those
+    // paragraphs close silent failures — a translated `## Acceptance Criteria`
+    // is bd refusing the issue — and a rule about style has no business
+    // standing in front of them. Before the standing instruction, because a
+    // reader resolves a contradiction in favour of what came later, and "do not
+    // abbreviate anything", written by hand, has to beat a level the app chose
+    // on a settings screen.
+    //
+    // No `talks_to_a_person` gate, unlike the standing instruction below, and
+    // the opposite answer is deliberate rather than an omission: a personal
+    // instruction is withheld from a run because nobody is in that conversation
+    // to have written it for, while how compressed an answer is is a question
+    // about tokens, and a run's batches are exactly where the most of them go.
+    // What keeps that safe is caveman's own Boundaries section, which leaves
+    // code, comments, commits, issue text and reports as ordinary prose — so
+    // neither the language paragraphs above nor `filing-a-task` is touched.
+    //
+    // The first rung is silence and not `/caveman off`: `off` means "we say
+    // nothing about caveman", which is what an app that had never heard of the
+    // setting says, rather than "we told it to stop". Whitespace and an empty
+    // string are read the same way, and that is what a `Launch` built with no
+    // settings file behind it carries — no level chosen is not an instruction
+    // to switch one off.
+    let caveman_level = caveman_level.trim();
+    if !caveman_level.is_empty() && caveman_level != crate::settings::model::CAVEMAN_OFF {
+        out.push_str("\n\n");
+        out.push_str(&caveman(caveman_level));
+    }
+    // After the four language paragraphs — and after the caveman line, which
+    // is put in front of this one on purpose — and before the work, which is a
     // decision rather than an order that fell out. Near the front for the
     // reason the languages are: what is said last can be pushed off the top of
     // what the agent reads first by seven kilobytes of skill text. After them
@@ -1656,7 +1725,7 @@ mod tests {
     }
 
     fn prompt_of(intent: Intent, delivery: SkillDelivery) -> String {
-        build(&intent, delivery, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "")
+        build(&intent, delivery, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "off", "")
             .unwrap()
     }
 
@@ -1743,6 +1812,7 @@ mod tests {
                     Some(FACTS),
                     every_skill(),
                     &english(),
+                    "off",
                     "",
                 )
                 .unwrap_or_default();
@@ -1949,7 +2019,7 @@ mod tests {
         // always was — because a person there says "commit this" and "file
         // tasks for this" in the same breath. `Run` alone takes the fourth
         // paragraph as well, which is why this equality is three and not four.
-        let text = build(&Intent::Bare, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "")
+        let text = build(&Intent::Bare, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "off", "")
             .expect("a bare session opens on the language sentences");
         assert_eq!(
             text,
@@ -1961,7 +2031,7 @@ mod tests {
             )
         );
 
-        let russian = build(&Intent::Bare, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &russian(), "")
+        let russian = build(&Intent::Bare, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &russian(), "off", "")
             .expect("builds");
         assert!(russian.contains("Russian"), "{russian}");
     }
@@ -1969,7 +2039,7 @@ mod tests {
     #[test]
     fn editing_an_issue_names_it_and_asks_what_to_change() {
         let intent = Intent::EditTask { id: "smetana-7".into(), title: "x y".into() };
-        let text = build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "").unwrap();
+        let text = build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "off", "").unwrap();
         // The work is the whole of the prompt after the language paragraphs,
         // which is what `ends_with` pins here: an edit session is told what to
         // do and nothing more.
@@ -1980,7 +2050,7 @@ mod tests {
     #[test]
     fn fixing_a_done_task_names_it_and_asks_what_is_wrong() {
         let intent = Intent::FixTask { id: "smetana-7".into(), title: "x y".into() };
-        let text = build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "").unwrap();
+        let text = build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "off", "").unwrap();
         // The work is the whole of the prompt after the language paragraphs,
         // the way an edit's is.
         assert!(text.ends_with(&format!("Issue smetana-7 (\"x y\") {FIX}")), "{text}");
@@ -2024,6 +2094,7 @@ mod tests {
                 Some(FACTS),
                 every_skill(),
                 &languages,
+                "off",
                 "",
             );
             assert_eq!(built, None, "{languages:?} put a prompt on a resumed session (fork: {fork})");
@@ -2088,23 +2159,33 @@ mod tests {
                 // Both language settings as well: every one of these prompts
                 // now opens on a sentence this walk has to cover.
                 for languages in [english(), russian()] {
-                    let text = build(
-                        &intent,
-                        delivery,
-                        ImageDelivery::InPrompt,
-                        &skills(),
-                        Some(FACTS),
-                        every_skill(),
-                        &languages,
-                        "",
-                    )
-                    .unwrap();
-                    let end = text.trim_end();
-                    assert!(
-                        !end.ends_with([':', ',', '—', '-']),
-                        "{intent:?}/{delivery:?}/{languages:?} hands the agent an unfinished \
-                         instruction: {end}"
-                    );
+                    // And every rung of the caveman ladder, `off` included.
+                    // The line a level turns into lands in the middle of a
+                    // prompt rather than at its end, so what this walk
+                    // actually covers is the one intent whose prompt is only
+                    // paragraphs — `Bare`, where the caveman line *is* the
+                    // last thing said. Walking all seven costs nothing and
+                    // means a later rung cannot arrive untested.
+                    for level in crate::settings::model::CAVEMAN_LEVELS {
+                        let text = build(
+                            &intent,
+                            delivery,
+                            ImageDelivery::InPrompt,
+                            &skills(),
+                            Some(FACTS),
+                            every_skill(),
+                            &languages,
+                            level,
+                            "",
+                        )
+                        .unwrap();
+                        let end = text.trim_end();
+                        assert!(
+                            !end.ends_with([':', ',', '—', '-']),
+                            "{intent:?}/{delivery:?}/{languages:?}/{level} hands the agent an \
+                             unfinished instruction: {end}"
+                        );
+                    }
                 }
             }
         }
@@ -2113,14 +2194,14 @@ mod tests {
     #[test]
     fn editing_an_issue_is_never_given_a_filing_skill() {
         let intent = Intent::EditTask { id: "smetana-7".into(), title: "x y".into() };
-        let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "").unwrap();
+        let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "off", "").unwrap();
         assert!(!text.contains("The title says what needs doing"), "nothing is filed here");
     }
 
     fn resolving(delivery: SkillDelivery, text: SkillText) -> String {
         let intent =
             Intent::ResolveTask { id: "smetana-29j".into(), title: "Show the state".into() };
-        build(&intent, delivery, ImageDelivery::InPrompt, &skills(), None, text, &english(), "").unwrap()
+        build(&intent, delivery, ImageDelivery::InPrompt, &skills(), None, text, &english(), "off", "").unwrap()
     }
 
     fn repair() -> Intent {
@@ -2133,7 +2214,7 @@ mod tests {
     }
 
     fn repair_prompt(delivery: SkillDelivery) -> String {
-        build(&repair(), delivery, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "")
+        build(&repair(), delivery, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "off", "")
             .unwrap()
     }
 
@@ -2183,7 +2264,7 @@ mod tests {
             stderr: String::new(),
         };
         let text =
-            build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "")
+            build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "off", "")
                 .unwrap();
         assert!(text.contains("no record of which bd command failed"), "{text}");
         assert!(!text.contains("`bd `"), "an empty command is not named: {text}");
@@ -2241,7 +2322,7 @@ mod tests {
     }
 
     fn review_prompt(delivery: SkillDelivery) -> String {
-        build(&review(), delivery, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "")
+        build(&review(), delivery, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "off", "")
             .unwrap()
     }
 
@@ -2360,6 +2441,7 @@ mod tests {
             None,
             nothing(),
             &english(),
+            "off",
             "",
         )
         .unwrap();
@@ -2387,6 +2469,7 @@ mod tests {
                 None,
                 every_skill(),
                 &english(),
+                "off",
                 "",
             )
             .unwrap();
@@ -2450,14 +2533,14 @@ mod tests {
             report: ".smetana/reviews/2026-08-31-pf40".into(),
             fetch_failed: Vec::new(),
         };
-        let text = build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "")
+        let text = build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "off", "")
             .unwrap();
         assert!(text.contains("Nothing was named to compare"), "{text}");
         assert!(!text.contains("What to review"), "no heading over nothing: {text}");
     }
 
     fn conflict_prompt(op: crate::vcs::model::OpKind, delivery: SkillDelivery) -> String {
-        build(&conflict(op), delivery, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "")
+        build(&conflict(op), delivery, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "off", "")
             .unwrap()
     }
 
@@ -2529,7 +2612,7 @@ mod tests {
             files: vec!["src/one.rs".into()],
         };
         let text =
-            build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "")
+            build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "off", "")
                 .unwrap();
         assert!(text.contains("merging develop into the branch it is on"), "{text}");
     }
@@ -2660,7 +2743,7 @@ mod tests {
         ] {
             for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
                 let text =
-                    build(&intent, delivery, ImageDelivery::InPrompt, &skills(), Some(FACTS), every_skill(), &english(), "")
+                    build(&intent, delivery, ImageDelivery::InPrompt, &skills(), Some(FACTS), every_skill(), &english(), "off", "")
                         .unwrap_or_default();
                 assert!(!text.contains(RESOLVE_WRITE), "{intent:?}/{delivery:?}: {text}");
                 assert!(!text.contains("smetana:resolving-questions"), "{intent:?}/{delivery:?}");
@@ -2671,7 +2754,7 @@ mod tests {
     fn drafted(draft: TaskDraft) -> String {
         let intent =
             Intent::NewTask { brainstorm: Stage::Off, spec: Stage::Off, plan: Stage::Off, draft };
-        build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "").unwrap()
+        build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "off", "").unwrap()
     }
 
     #[test]
@@ -2762,7 +2845,7 @@ mod tests {
                 ..draft()
             },
         };
-        build(&intent, SkillDelivery::PluginDir, image_delivery, &skills(), None, nothing(), &english(), "").unwrap()
+        build(&intent, SkillDelivery::PluginDir, image_delivery, &skills(), None, nothing(), &english(), "off", "").unwrap()
     }
 
     #[test]
@@ -2808,7 +2891,7 @@ mod tests {
             draft: TaskDraft { images: vec!["/data/a.png".into()], ..draft() },
         };
         let text =
-            build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "")
+            build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "off", "")
                 .unwrap();
         assert!(text.contains("There is an image attached to this task, at this absolute path"), "{text}");
         assert!(text.contains("Open and look at it before"), "{text}");
@@ -2831,7 +2914,7 @@ mod tests {
         // so a leak of either into the Off arm would say nothing about the
         // process and still pass a substring check on that word alone.
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
-            let text = build(&new_task(Stage::Off), delivery, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "").unwrap();
+            let text = build(&new_task(Stage::Off), delivery, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "off", "").unwrap();
             assert!(!text.contains(DISCUSS), "{delivery:?}: off must not carry the discussion prose");
             assert!(!text.contains(JUDGE), "{delivery:?}: off must not carry the judgement prose");
         }
@@ -2847,7 +2930,7 @@ mod tests {
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
             for mode in [Stage::Off, Stage::Auto, Stage::On] {
                 let text =
-                    build(&new_task(mode), delivery, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "")
+                    build(&new_task(mode), delivery, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "off", "")
                         .unwrap();
                 assert!(text.contains(STANDARD), "{delivery:?}/{mode:?}: {text}");
             }
@@ -2861,7 +2944,7 @@ mod tests {
         // an update. Leaking it would tell those sessions to validate a call
         // they are not making.
         for intent in [Intent::Bare, Intent::Setup, Intent::EditTask { id: "x-1".into(), title: "T".into() }] {
-            let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "")
+            let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "off", "")
                 .unwrap_or_default();
             assert!(!text.contains(STANDARD), "{intent:?}: {text}");
         }
@@ -2873,7 +2956,7 @@ mod tests {
         // from the PluginDir side of the same guarantee: filing applies to
         // every NewTask whatever the switch says.
         for mode in [Stage::Off, Stage::Auto, Stage::On] {
-            let text = build(&new_task(mode), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "").unwrap();
+            let text = build(&new_task(mode), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "off", "").unwrap();
             assert!(text.contains("smetana:filing-a-task"), "{mode:?}");
             assert!(!text.contains(FILING), "{mode:?}: no registry should carry the skill body");
         }
@@ -2885,7 +2968,7 @@ mod tests {
         // question: an agent that files without discussion still has to file
         // it properly.
         for mode in [Stage::Off, Stage::Auto, Stage::On] {
-            let text = build(&new_task(mode), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "").unwrap();
+            let text = build(&new_task(mode), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "off", "").unwrap();
             assert!(text.contains("The title says what needs doing"), "{mode:?}");
             assert!(!text.contains("smetana:filing-a-task"), "{mode:?}: no registry to name");
         }
@@ -2894,13 +2977,13 @@ mod tests {
     #[test]
     fn switched_on_a_plugin_dir_harness_is_told_the_skill_name() {
         let text =
-            build(&new_task(Stage::On), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "").unwrap();
+            build(&new_task(Stage::On), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "off", "").unwrap();
         assert!(text.contains("superpowers:brainstorming"));
     }
 
     #[test]
     fn switched_on_an_inline_harness_carries_the_whole_process() {
-        let text = build(&new_task(Stage::On), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "").unwrap();
+        let text = build(&new_task(Stage::On), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "off", "").unwrap();
         assert!(text.contains("Ask one question at a time."));
         assert!(
             !text.contains("superpowers:brainstorming"),
@@ -2911,20 +2994,20 @@ mod tests {
     #[test]
     fn on_inline_degrades_to_the_rule_when_the_skill_cannot_be_read() {
         let text =
-            build(&new_task(Stage::On), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "").unwrap();
+            build(&new_task(Stage::On), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "off", "").unwrap();
         assert!(text.contains("agree the design"), "the instruction survives a missing file");
     }
 
     #[test]
     fn auto_leaves_the_judgement_to_the_agent() {
         let text =
-            build(&new_task(Stage::Auto), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "").unwrap();
+            build(&new_task(Stage::Auto), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "off", "").unwrap();
         assert!(text.contains("more than one"), "auto states the test the agent applies");
     }
 
     #[test]
     fn auto_on_an_inline_harness_points_at_the_file_rather_than_pasting_it() {
-        let text = build(&new_task(Stage::Auto), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "").unwrap();
+        let text = build(&new_task(Stage::Auto), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "off", "").unwrap();
         assert!(text.contains("/app/resources/superpowers/skills/brainstorming/SKILL.md"));
         assert!(
             !text.contains("Ask one question at a time."),
@@ -2947,6 +3030,7 @@ mod tests {
             None,
             every_skill(),
             &english(),
+            "off",
             "",
         )
         .unwrap()
@@ -2996,7 +3080,7 @@ mod tests {
         ] {
             for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
                 let text =
-                    build(&intent, delivery, ImageDelivery::InPrompt, &skills(), Some(FACTS), every_skill(), &english(), "")
+                    build(&intent, delivery, ImageDelivery::InPrompt, &skills(), Some(FACTS), every_skill(), &english(), "off", "")
                         .unwrap_or_default();
                 no_paperwork(&text, &format!("{intent:?}/{delivery:?}"));
             }
@@ -3106,6 +3190,7 @@ mod tests {
             None,
             nothing(),
             &english(),
+            "off",
             "",
         )
         .unwrap();
@@ -3118,7 +3203,7 @@ mod tests {
     #[test]
     fn setting_a_project_up_carries_the_survey_and_names_the_file_to_write() {
         let text =
-            build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), Some(FACTS), nothing(), &english(), "")
+            build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), Some(FACTS), nothing(), &english(), "off", "")
                 .expect("a setup session opens on something");
         assert!(text.contains(".smetana/project.toml"), "{text}");
         assert!(text.contains("npm run test"), "the survey reaches the agent: {text}");
@@ -3127,7 +3212,7 @@ mod tests {
     #[test]
     fn a_plugin_dir_harness_is_told_the_setup_skill_by_name() {
         let text =
-            build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), Some(FACTS), nothing(), &english(), "")
+            build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), Some(FACTS), nothing(), &english(), "off", "")
                 .expect("builds");
         assert!(text.contains("smetana:project-setup"), "{text}");
     }
@@ -3144,6 +3229,7 @@ mod tests {
             Some(FACTS),
             every_skill(),
             &english(),
+            "off",
             "",
         )
         .expect("builds");
@@ -3180,6 +3266,7 @@ mod tests {
             Some(FACTS),
             every_skill(),
             languages,
+            "off",
             "",
         )
         .expect("every intent opens on at least the language sentence")
@@ -3195,6 +3282,7 @@ mod tests {
             Some(FACTS),
             every_skill(),
             &russian(),
+            "off",
             standing,
         )
         .expect("every intent opens on at least the language sentence")
@@ -3296,6 +3384,151 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The same call as `in_language`, with a caveman level in it and no
+    /// standing instruction — the two fields are next to each other in the
+    /// prompt and are deliberately not tested through one helper, so a test
+    /// about one of them cannot be passing on the other's words.
+    fn with_caveman(intent: &Intent, delivery: SkillDelivery, level: &str) -> String {
+        build(
+            intent,
+            delivery,
+            ImageDelivery::InPrompt,
+            &skills(),
+            Some(FACTS),
+            every_skill(),
+            &russian(),
+            level,
+            "",
+        )
+        .expect("every intent opens on at least the language sentence")
+    }
+
+    /// Every rung but the first, which is the one that says nothing.
+    fn caveman_levels() -> Vec<&'static str> {
+        crate::settings::model::CAVEMAN_LEVELS
+            .into_iter()
+            .filter(|level| *level != crate::settings::model::CAVEMAN_OFF)
+            .collect()
+    }
+
+    #[test]
+    fn a_caveman_level_reaches_every_session_a_run_included() {
+        // The run is the point of this test rather than an entry in the list.
+        // The standing instruction one function up is withheld from a run,
+        // because nobody is in that conversation to have written it; this is
+        // the opposite answer to the neighbouring question, and it is a
+        // decision — how compressed an answer is is about what tokens are
+        // spent, and a run's batches are where the most of them go.
+        //
+        // Every rung, verbatim, because the level travels into the prompt as
+        // the word itself: `wenyan-ultra` reaching an agent as `wenyan` would
+        // be a level nobody chose.
+        for intent in every_intent_and_the_conflicts() {
+            for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+                for level in caveman_levels() {
+                    let text = with_caveman(&intent, delivery, level);
+                    let line = format!("/caveman {level}");
+                    assert_eq!(
+                        text.matches(&line).count(),
+                        1,
+                        "{intent:?}/{delivery:?}/{level}: {text}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_first_rung_says_nothing_about_caveman_at_all() {
+        // `off` is silence and not `/caveman off`: it means the app has nothing
+        // to say about caveman, which is what it said before the setting
+        // existed, rather than an instruction to switch the skill off. Not one
+        // word and not one blank line — the shape
+        // `an_empty_standing_instruction_costs_a_prompt_nothing` holds for the
+        // field next door.
+        //
+        // The empty string and whitespace walk with it: a `Launch` can be built
+        // with no settings file behind it, and "no level chosen" must read as
+        // `off` rather than as a level whose name is nothing.
+        for intent in every_intent_and_the_conflicts() {
+            for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+                for level in [crate::settings::model::CAVEMAN_OFF, "", " ", "\n", "  \t\n "] {
+                    let text = with_caveman(&intent, delivery, level);
+                    assert!(
+                        !text.to_lowercase().contains("caveman"),
+                        "{intent:?}/{delivery:?}/{level:?}: {text}"
+                    );
+                    assert!(
+                        !text.contains("\n\n\n"),
+                        "the first rung left a blank line behind: \
+                         {intent:?}/{delivery:?}/{level:?}: {text}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_caveman_line_stands_after_the_languages_and_before_the_standing_instruction() {
+        // Both halves are the decision. After the languages, because those
+        // paragraphs close silent failures — a translated `## Acceptance
+        // Criteria` is bd refusing the issue — and a rule about style does not
+        // belong in front of them. Before the person's own words, because a
+        // reader resolves a contradiction in favour of what came later, and a
+        // hand-written "do not abbreviate anything" has to beat a level chosen
+        // on a settings screen.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let intent = Intent::EditTask { id: "x-1".into(), title: "T".into() };
+            let text = build(
+                &intent,
+                delivery,
+                ImageDelivery::InPrompt,
+                &skills(),
+                Some(FACTS),
+                every_skill(),
+                &russian(),
+                "ultra",
+                "Never abbreviate anything.",
+            )
+            .expect("builds");
+            let language = text.find("Write the prose of any bd issue").expect("a task language");
+            let caveman = text.find("/caveman ultra").expect("the caveman line is there");
+            let standing = text.find(STANDING).expect("the framing line is there");
+            let work = text.find("Read the issue first").expect("the work");
+            assert!(language < caveman, "{delivery:?}: {text}");
+            assert!(caveman < standing, "{delivery:?}: {text}");
+            assert!(standing < work, "{delivery:?}: {text}");
+        }
+    }
+
+    #[test]
+    fn a_level_puts_no_prompt_on_a_resumed_session() {
+        // `build` refuses this intent a prompt on its first line, before any
+        // paragraph is composed, and a level must not be the thing that walks
+        // round that: a resumed conversation already runs at whatever level it
+        // was left at, and the app typing `/caveman full` into it would be
+        // changing somebody's session on their behalf.
+        for level in crate::settings::model::CAVEMAN_LEVELS {
+            let built = build(
+                &Intent::ResumeSession {
+                    id: "9f1c0a2e".into(),
+                    cwd: "/p/.worktrees/smetana-0cj".into(),
+                    title: Some("Move the card".into()),
+                    fork: false,
+                },
+                SkillDelivery::PluginDir,
+                ImageDelivery::InPrompt,
+                &skills(),
+                Some(FACTS),
+                every_skill(),
+                &english(),
+                level,
+                "",
+            );
+            assert_eq!(built, None, "{level} put a prompt on a resumed session");
         }
     }
 
@@ -3623,7 +3856,7 @@ mod tests {
     fn a_setup_session_survives_a_survey_that_found_nothing() {
         // `render` always produces text, but a caller that could not run the
         // survey at all passes None, and the instruction still has to stand.
-        let text = build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "")
+        let text = build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "off", "")
             .expect("builds");
         assert!(text.contains(".smetana/project.toml"), "{text}");
     }

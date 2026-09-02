@@ -533,6 +533,17 @@ pub struct Launch {
     /// `settings.json` by the caller, for the reason `facts` is: `prompt.rs`
     /// stays pure and the disk stays outside it.
     pub languages: Languages,
+    /// How compressed an agent started now should answer: one of
+    /// `settings::model::CAVEMAN_LEVELS`, with the project's own `inherit`
+    /// already resolved against the global level. Read from `settings.json` by
+    /// the caller — `settings::caveman_level` does the resolving — for the
+    /// reason `languages` and `facts` are: `prompt.rs` stays pure and the disk
+    /// stays outside it.
+    ///
+    /// `off` and the empty string say the same thing here, which is what lets a
+    /// `Launch` be built with no settings behind it at all: neither reaches the
+    /// prompt as a word about caveman.
+    pub caveman_level: String,
     /// The person's own standing instruction, or empty. Read from
     /// `settings.json` by the caller, for the reason `languages` and `facts`
     /// are: `prompt.rs` stays pure and the disk stays outside it.

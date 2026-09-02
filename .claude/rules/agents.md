@@ -299,6 +299,33 @@ predicate and never reaches it — `build` refuses it a prompt on its first line
 would be dead code wearing the clothes of a decision. `agents::oneshot` is outside all of this too:
 it is one question with its answer on stdout, not a conversation anything can be carried into.
 
+The caveman level is the sixth field of that family and the one that is not this app's own words at
+all: it is somebody else's skill, and the only way a chosen level reaches an agent is a line in the
+conversation. caveman keeps no level on disk — its `SKILL.md` says `/caveman <level>` holds until the
+session ends — so the app's first message is the one chance to say it without a person typing it.
+`settings::caveman_level(app, project)` resolves a project's `inherit` against the global level and
+`terminal::service` reads it where it already reads `agent_prompt`, onto `Launch.caveman_level`, into
+a still-pure `prompt::build`. One line comes out of it, a sentence with the command at the front of
+it: at the front because that is the form the skill listens for, a sentence because every prompt here
+is a whole instruction.
+
+It sits **after** the four language paragraphs and **before** the standing instruction, and both
+halves are decisions. After the languages, because those close silent failures and a rule about style
+does not belong in front of them. Before the person's own words, because a reader resolves a
+contradiction in favour of what came later, and a hand-written "do not abbreviate anything" has to
+beat a level chosen on a settings screen.
+
+It carries **no `talks_to_a_person` gate**, which is the opposite answer to its neighbour's and
+deliberate: a standing instruction is withheld from a run because nobody is in that conversation to
+have written it for, while how compressed an answer is is a question about tokens, and a run's
+batches are where the most of them go. What keeps that safe is caveman's own Boundaries section,
+which leaves code, comments, commits, issue text and reports as ordinary prose — so neither the
+language paragraphs nor `filing-a-task` is touched by it. The first rung, `off`, is **silence rather
+than `/caveman off`**: it means the app says nothing about caveman, which is what it said before the
+setting existed, and an empty level reads the same way, since a `Launch` can be built with no
+settings file behind it. `ResumeSession` never sees the line at all — `build` refuses that intent a
+prompt before it composes a word, and a conversation already runs at whatever level it was left at.
+
 Claude Code's `--append-system-prompt` was the rejected alternative, and it would have been a real
 system prompt, closer to what the field is called. Only one of the two supported harnesses has such a
 switch: Codex has no per-session equivalent — the same asymmetry that already forces
