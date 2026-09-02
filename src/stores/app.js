@@ -391,6 +391,46 @@ export async function readAgentUsage(agent = null) {
   }
 }
 
+/* How caveman stands on this machine, and on this project.
+
+   Caveman is somebody else's layer between a CLI agent and its provider. This
+   app has no part in putting it there and only says whether it is there;
+   `src-tauri/src/caveman.rs` carries the whole of that reasoning, the four
+   states and the three facts beside them. None of that vocabulary is repeated
+   here, for the reason `settings:show` at the top of this file gives: this
+   store carries the message and never the words.
+
+   Here rather than in `settings.js`, and for the login item's reason exactly:
+   none of it is a setting. Nothing about caveman reaches `settings.json` — the
+   machine's own four files are the whole of the truth, and a copy of ours would
+   disagree with them the first time somebody ran `caveman setup` outside this
+   app, with no way to tell which half was stale. So nothing is kept here
+   either, and every call reads afresh.
+
+   The project travels because one of the four states is not a fact about the
+   machine at all: the skill in this repository alone. `null` would be a caller
+   with no project, and there is no such caller — a state is always asked for
+   somewhere.
+
+   Never rejects, like `autostartState` above and unlike `readAgentUsage` beside
+   it. The command is infallible in Rust, so a failure here is the channel and
+   not the answer — a browser, where there is nobody to ask at all — and nobody
+   asked for this out loud: it is a read a screen makes when it opens, not a
+   press somebody is waiting on. `absent` is the honest fallback because it is
+   the one state that offers nothing: a `wired` invented here would claim this
+   app had read somebody's `~/.claude/settings.json` when it had read nothing,
+   while an `absent` it did not earn only stays quiet. A fifth state meaning
+   "nobody to ask" is the rejected alternative — it would be a word this front
+   end made up and Rust has never heard of. */
+export async function readCavemanState(project) {
+  try {
+    return await invoke('caveman_state', { project })
+  } catch (err) {
+    console.debug('[app] nobody to ask about caveman (a browser, there is no Tauri):', err)
+    return { state: 'absent', packVersion: null, detectedAgentVersion: null, replacedFiles: [] }
+  }
+}
+
 /* ---- the window this app is drawn in ------------------------------------ */
 /* The app window has no title bar of its own any more: the scope bar is it.
    What is left over here is the small amount of that arrangement which needs a

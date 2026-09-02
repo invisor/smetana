@@ -757,6 +757,22 @@ export function installMockBackend() {
        refusal at the bottom, like every other write. The switch is disabled
        here, so nothing reaches it in the ordinary course. */
     if (command === 'autostart_state') return { supported: false, enabled: false }
+    /* How caveman stands on this machine. A read, so it answers — otherwise
+       whatever asks could not be opened under `npm run dev` without an error in
+       the console.
+
+       `absent` is the honest answer rather than a convenient one, and it is
+       honest twice over. A browser can read none of the four files the state is
+       made of — `~/.caveman`, caveman's journal, `~/.claude/settings.json` and
+       the project's skill directory — and there is no agent running under a
+       browser for caveman to be shortening in the first place. Any of the other
+       three would claim this app had looked at somebody's home directory and
+       found something there. The three facts come from a journal there is no
+       reading here either, so they are the empty ones Rust sends for a state
+       with no journal behind it. */
+    if (command === 'caveman_state') {
+      return { state: 'absent', packVersion: null, detectedAgentVersion: null, replacedFiles: [] }
+    }
     /* There is no updater in a browser, and `null` is the honest answer rather
        than a state invented for it: `stores/updates.js` reads anything that is
        not one of Rust's six tags as "there is nobody to ask", and the About tab

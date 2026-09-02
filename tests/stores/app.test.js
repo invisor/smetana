@@ -175,3 +175,68 @@ describe('what a re-aimed window reads off the event', () => {
     expect(shown).toHaveBeenLastCalledWith('/store/b.png', 'b.png')
   })
 })
+
+/* How caveman stands on this machine, from the front end's side of it.
+
+   The four states and the three facts beside them are Rust's
+   (`src-tauri/src/caveman.rs`), which reads them off four files and is tested
+   against a temporary home of its own. What is checked here is only what the
+   wrapper adds: that the project reaches the command, that the answer is
+   carried back whole rather than reshaped on the way, and that a machine there
+   is nobody to ask about reads as `absent` rather than as a rejection. */
+describe('how caveman stands on this machine', () => {
+  /* Whole and untouched, because every word in the answer is Rust's. A wrapper
+     that picked fields apart would be a second place to change for a state
+     added on the far side, and the two would disagree silently. */
+  it('asks about the project it was given and carries the answer back whole', async () => {
+    const { stores, ipc } = await loadStores()
+    const answer = {
+      state: 'wired',
+      packVersion: '2.1.0',
+      detectedAgentVersion: '1.0.44',
+      replacedFiles: ['/home/p/.claude/settings.json', '/home/p/.claude.json']
+    }
+    ipc.on('caveman_state', answer)
+
+    await expect(stores.app.readCavemanState('/tmp/project')).resolves.toEqual(answer)
+    expect(ipc.calls('caveman_state')).toEqual([{ project: '/tmp/project' }])
+  })
+
+  /* The state with nothing to say about it, which is what a machine nobody can
+     read amounts to. Not an invented fifth state: the caller switches on Rust's
+     four names and would have nothing to draw for a word this side made up. */
+  it('answers absent when there is nobody to ask', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.fail('caveman_state', new Error('mockBackend: there is no machine to read here'))
+    const quiet = vi.spyOn(console, 'debug').mockImplementation(() => {})
+
+    await expect(stores.app.readCavemanState('/tmp/project')).resolves.toEqual({
+      state: 'absent',
+      packVersion: null,
+      detectedAgentVersion: null,
+      replacedFiles: []
+    })
+
+    quiet.mockRestore()
+  })
+
+  /* A browser reaches this on every call, and nobody pressed anything to get
+     here: the line belongs in the debug channel with `homeDir`'s, not among the
+     errors a person is meant to read. */
+  it('says so quietly rather than loudly, since nobody asked out loud', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.fail('caveman_state', new Error('mockBackend: there is no machine to read here'))
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const quiet = vi.spyOn(console, 'debug').mockImplementation(() => {})
+
+    await stores.app.readCavemanState('/tmp/project')
+
+    expect(said).not.toHaveBeenCalled()
+    expect(warned).not.toHaveBeenCalled()
+    expect(quiet).toHaveBeenCalled()
+    said.mockRestore()
+    warned.mockRestore()
+    quiet.mockRestore()
+  })
+})
