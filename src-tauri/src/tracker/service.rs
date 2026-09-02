@@ -32,6 +32,20 @@ const FULL_RESYNC: Duration = Duration::from_secs(60);
 /// repeat, and the diff is idempotent.
 const OVERLAP_SECONDS: i64 = 5;
 
+/// Which half of [`Request::BoardAt`] answered — the live store, or a bd call
+/// made in the folder that was asked about.
+///
+/// Carried back rather than kept quiet because it is exactly the fact a journal
+/// reader wants weeks later: `Direct` says the folder this board was read for
+/// was **not** the one the app window had open at that moment, which is the
+/// condition that used to end a run on a stranger's empty queue with nothing on
+/// the record to say so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardSource {
+    Cache,
+    Direct,
+}
+
 pub enum Request {
     Health(oneshot::Sender<Health>),
     Snapshot(oneshot::Sender<Snapshot>),
@@ -61,7 +75,46 @@ pub enum Request {
     /// to look at it. A read: nothing is called and nothing is written.
     Failure(oneshot::Sender<Failure>),
     Resync(oneshot::Sender<Result<Snapshot, TrackerError>>),
+    /// The board of a **named folder**, as issues — the request a run makes.
+    ///
+    /// Every other read here answers about the project the worker currently
+    /// holds, which is whatever the app window is showing. A run is not the app
+    /// window: it was started against one folder and lives for hours, and a
+    /// person switching project mid-run had its next read answered from a
+    /// stranger's board — an empty queue, and a night that stopped a batch
+    /// early with two unblocked tasks left on the board (smetana-ynyc).
+    ///
+    /// Where `dir` is the folder the worker holds, this is the same live store
+    /// every other reader gets, and `fresh` is the resync [`Request::Resync`]
+    /// performs. Where it is any other folder, the answer is a one-off
+    /// `bd list` in that folder: no watcher, no cache, no store — there is
+    /// nothing on screen for it to update — and `fresh` is already true of it
+    /// by construction.
+    BoardAt {
+        dir: PathBuf,
+        fresh: bool,
+        reply: oneshot::Sender<Result<(Vec<Issue>, BoardSource), TrackerError>>,
+    },
     Update(String, IssuePatch, oneshot::Sender<Result<Issue, TrackerError>>),
+    /// One `bd update` in a **named folder** — the write half of
+    /// [`Request::BoardAt`], and it exists for the same reason.
+    ///
+    /// A run parks its stuck batch's claims and gives a dead batch's work back,
+    /// and both were addressed at whatever project the app window was showing.
+    /// A park that lands on another project's board is a claim left
+    /// `in_progress` under a dead actor on this one, and a stray write on that
+    /// one.
+    ///
+    /// Where `dir` is the folder the worker holds, this is [`Request::Update`]
+    /// exactly: the same `Bd`, and the store takes the delta so the board on
+    /// screen redraws. Where it is any other folder, the write is made and the
+    /// store is left alone — nothing on screen is showing that board.
+    UpdateAt {
+        dir: PathBuf,
+        id: String,
+        patch: IssuePatch,
+        reply: oneshot::Sender<Result<Issue, TrackerError>>,
+    },
     Close(String, Option<String>, oneshot::Sender<Result<Issue, TrackerError>>),
     Reopen(String, oneshot::Sender<Result<Issue, TrackerError>>),
     Delete(String, oneshot::Sender<Result<(), TrackerError>>),
@@ -85,6 +138,24 @@ struct Project {
 /// Reading and writing are only possible where a tracker exists.
 fn tracked(current: &Option<Project>) -> Option<&Bd> {
     current.as_ref().filter(|p| p.tracked).map(|p| &p.bd)
+}
+
+/// The worker's own `Bd`, but only if `dir` is the folder it is holding and
+/// that folder can be read.
+///
+/// The one place the folder-addressed requests decide which half of themselves
+/// answers, so `BoardAt` and `UpdateAt` cannot come to disagree about what
+/// counts as "the folder we already have". A clone rather than a borrow because
+/// both arms go on to touch the store and health, which the borrow would hold;
+/// `Bd` is a folder and an app handle, so the copy costs nothing.
+///
+/// `tracked` is folded in for the same reason it gates every other call here:
+/// a folder with no `.beads`, or one the system is refusing, has no board to
+/// serve from a store that was never filled. Those fall to the direct call,
+/// which fails in the caller's own folder and in bd's own words rather than in
+/// this worker's.
+fn own_bd(current: &Option<Project>, dir: &Path) -> Option<Bd> {
+    current.as_ref().filter(|p| p.tracked && access::same_dir(dir, &p.dir)).map(|p| p.bd.clone())
 }
 
 /// The worker's health: the current value (the same one `tracker_health`
@@ -774,12 +845,42 @@ async fn handle(
             let _ = reply.send(result.map(|()| store.snapshot()));
             false
         }
+        Request::BoardAt { dir, fresh, reply } => {
+            let result = match own_bd(current, &dir) {
+                Some(bd) if fresh => full_sync(app, &bd, store, health)
+                    .await
+                    .map(|()| (store.snapshot().issues, BoardSource::Cache)),
+                Some(_) => Ok((store.snapshot().issues, BoardSource::Cache)),
+                // Health is deliberately untouched here, and so is the store.
+                // Both belong to the project on screen; a run reading its own
+                // board in the background has no business putting a red line
+                // under somebody else's, and there is nothing drawn from this
+                // answer to redraw.
+                None => Bd::new(app.clone(), dir)
+                    .list_all()
+                    .await
+                    .map(|issues| (issues, BoardSource::Direct)),
+            };
+            let _ = reply.send(result);
+            false
+        }
         Request::Update(id, patch, reply) => {
             let result = match tracked(current) {
                 Some(bd) => bd.update(&id, &patch).await,
                 None => Err(no_tracker(health)),
             };
             let _ = reply.send(finish(app, store, result));
+            false
+        }
+        Request::UpdateAt { dir, id, patch, reply } => {
+            let result = match own_bd(current, &dir) {
+                // `finish` and not a bare write: this is the board on screen,
+                // so the delta has to go out exactly as it does for a write
+                // somebody made in the window.
+                Some(bd) => finish(app, store, bd.update(&id, &patch).await),
+                None => Bd::new(app.clone(), dir).update(&id, &patch).await,
+            };
+            let _ = reply.send(result);
             false
         }
         Request::Close(id, reason, reply) => {

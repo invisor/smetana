@@ -238,6 +238,26 @@ fn resolved(path: &Path) -> std::path::PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// Are these two spellings the same folder?
+///
+/// The literal comparison first, so the common case costs no syscall at all,
+/// and [`resolved`] behind it for the case that made this a rule rather than a
+/// `==`: a run carries the folder it was started with while the tracker worker
+/// carries the folder it was handed, and a symlink, or `/tmp` against
+/// `/private/tmp`, makes those two spellings of one project. Reading them as
+/// two projects sends a run's board read to a stranger's board, which is the
+/// whole of what this predicate exists to stop.
+///
+/// It is [`resolved`] rather than a second `canonicalize` of its own for the
+/// reason [`service_for`] uses that one: a path that cannot be opened still has
+/// to answer, and the literal spelling is what it answers with. A run's root
+/// may be gone from under it — a folder somebody moved mid-run — and a
+/// predicate that panicked or answered "not the same folder as itself" there
+/// would turn a missing folder into a write aimed somewhere else.
+pub(super) fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b || resolved(a) == resolved(b)
+}
+
 /// Which promptable service governs this folder, under **either** spelling of
 /// its path.
 ///
@@ -678,5 +698,53 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Two spellings of one folder are one folder, and two folders are two.
+    ///
+    /// The whole reason `same_dir` is not `==`: a run is started against the
+    /// folder the project list holds, the tracker worker is handed the folder
+    /// the app window opened, and a symlink anywhere between them makes those
+    /// two spellings of the same project. Reading them as different projects
+    /// is what sends a run's board read — and its parking writes — to a
+    /// stranger's board.
+    #[test]
+    fn two_spellings_of_one_folder_are_the_same_folder() {
+        let root = scratch("same-dir");
+        let real = root.join("project");
+        fs::create_dir_all(&real).expect("create the project folder");
+        let other = root.join("other");
+        fs::create_dir_all(&other).expect("create the second folder");
+
+        assert!(same_dir(&real, &real), "a folder is itself");
+        assert!(!same_dir(&real, &other), "two folders are two folders");
+
+        #[cfg(unix)]
+        {
+            let link = root.join("link");
+            let _ = fs::remove_file(&link);
+            std::os::unix::fs::symlink(&real, &link).expect("symlink the project folder");
+            assert!(same_dir(&link, &real), "a symlink and its target are one folder");
+            assert!(same_dir(&real, &link), "and the same asked the other way round");
+            assert!(!same_dir(&link, &other), "the link is still not the other folder");
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A path that cannot be opened is an ordinary answer, not a panic.
+    ///
+    /// `resolved` opens the path, and a run's root may be gone from under it —
+    /// a folder somebody moved or deleted while the run was going. The literal
+    /// spelling is then all there is, and it still has to answer: itself for
+    /// itself, and not for somebody else.
+    #[test]
+    fn a_folder_that_cannot_be_opened_falls_back_to_its_spelling() {
+        let missing = Path::new("/no/such/folder/anywhere");
+        assert!(same_dir(missing, missing), "a path names itself whether it exists or not");
+        assert!(
+            !same_dir(missing, Path::new("/no/such/folder/either")),
+            "two paths that both fail to resolve are still two paths"
+        );
     }
 }

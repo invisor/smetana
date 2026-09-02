@@ -153,9 +153,34 @@ loop is **adopted, not assigned** (`Run::adopt`), because stop is asked for on t
 never travels to the loop task, so taking the loop's copy wholesale unasked the stop a moment before
 the check that reads it.
 
+**A run reads and writes the board of its own folder, and names that folder every time**
+(smetana-ynyc). The tracker worker holds one project — whichever the app window is showing — so
+`board()` asking it for `Request::Snapshot` answered about whatever the person was looking at: on 2
+September a run read another project's board after its batch, found no ready work in it and ended
+the night one batch early with two unblocked tasks left standing on its own. `park_claims` and
+`release_claims` went the same way, which would have parked a stuck batch's claims on a stranger's
+board and left this one's `in_progress` under a dead actor. All four calls now go through
+`Request::BoardAt` and `Request::UpdateAt`, carrying the run's `root`; `Snapshot`, `Resync` and
+`Update` stay for the front end's own callers. Where the named folder is the one the worker holds,
+they are served exactly as before — the live store, the existing resync behind `fresh`, and a write
+through the worker's `Bd` so the board on screen redraws — and where it is any other folder the
+answer is a one-off `Bd::new(app, dir)` with the store left alone, there being nothing on screen to
+update. Folders are compared with `tracker::access::same_dir`, which is `resolved` and its fallback
+rather than a second copy of them, because a symlink makes two spellings of one project.
+
+Two costs are taken deliberately. A run whose project is not the selected one pays a real bd call
+per board read instead of a cache — at most four reads per batch against a batch of tens of minutes
+— and it gets neither `close_merged` nor health for its own board, both of which belong to the
+selected project and stay there. What says which happened is the journal: every `board (…)` line
+ends `via=cache` or `via=bd`, and `via=bd` is the run's project not being the one on screen at that
+moment. A tracker worker per project was the version with no compromise in it and was rejected as
+out of proportion; these two requests are the seam it would be built on.
+
 `queue.rs` is a port of `holiday-curb`'s `loop-state.mjs` with one substitution that changes its cost
 and not its logic: the source shelled out to `bd ready` and `bd list` between every batch, about four
-seconds each, while this reads the snapshot the tracker worker already keeps current. It tracks
+seconds each, while this reads the snapshot the tracker worker keeps current for the selected
+project — and a real `bd list` in the run's own folder when that folder is not the selected one, per
+the paragraph above. It tracks
 `unfinished` — `in_progress` and `ready_to_merge` — separately from `ready`, because `bd ready` hides
 both and a run watching only the ready set would leave a killed batch's orphans on the board forever.
 A dependency counts as blocking only when it is bd's `blocks` kind. And `LastBatch` has an answer per
