@@ -11,7 +11,7 @@ use super::model::{
     ProjectRepos, Tracking, VcsError, WorkingTree,
 };
 use super::run::Attempt;
-use super::{model, repos, run};
+use super::{merged, model, repos, run};
 use crate::agents::oneshot::{self, OneshotError};
 use crate::files::model::{looks_binary, BINARY_SNIFF_BYTES, MAX_FILE_BYTES};
 use crate::git;
@@ -376,11 +376,15 @@ fn delete_branch(repo: &Path, branch: &str, force: bool) -> Result<(), VcsError>
 }
 
 /// Whether every commit on this branch is already in the branch the repository
-/// is on. Exit 0 is yes, exit 1 is no, anything else is a refusal — which is
-/// `run::git_maybe`'s own shape, with the code named by the caller because this
-/// function is the only one that knows which non-zero exit was an answer.
+/// is on.
+///
+/// The question itself is `merged::is_ancestor`, which is where the exit code
+/// that means "no" is named — one repository asking "has this landed" is one
+/// rule, whether it is a refused delete asking about HEAD or the tracker sweep
+/// asking about a target branch, and two copies of it would agree until
+/// somebody fixed one.
 fn merged_into_head(repo: &Path, branch: &str) -> Result<bool, VcsError> {
-    run::git_maybe(repo, &["merge-base", "--is-ancestor", branch, "HEAD"], 1).map(|out| out.is_some())
+    merged::is_ancestor(repo, branch, "HEAD")
 }
 
 /// Rename a local branch.

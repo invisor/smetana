@@ -115,6 +115,21 @@ pub fn updates_auto_check(app: &AppHandle) -> bool {
         .unwrap_or_else(|| model::Settings::default().updates.auto_check)
 }
 
+/// Which branch this project's work is aimed at, as the run dialog was last
+/// left here.
+///
+/// Beside `agent` above and read the same way, from the disk on each call, and
+/// here for `updates_auto_check`'s reason rather than for convenience: the
+/// caller is the tracker's sixty-second sweep, so a branch chosen a minute ago
+/// takes effect on the next tick with no restart.
+///
+/// `None` where the file names none, and the caller falls back to the project's
+/// own `[defaults] target_branch` — the two sources, in that order, that the run
+/// dialog itself opens on.
+pub fn target_branch(app: &AppHandle, project: &str) -> Option<String> {
+    file::run_target_branch(&path(app)?, project)
+}
+
 /// How big one dialog window was left. `None` — including when there is no
 /// settings path at all — asks for the height the content comes to.
 pub fn dialog_size(app: &AppHandle, kind: &str) -> Option<model::DialogSize> {

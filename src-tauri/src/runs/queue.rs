@@ -14,8 +14,11 @@ use crate::tracker::model::{Issue, IssuePatch};
 
 /// bd's own status for work that has been claimed.
 const IN_PROGRESS: &str = "in_progress";
-/// Our custom status for work that is reviewed and not yet merged.
-const READY_TO_MERGE: &str = "ready_to_merge";
+/// Our custom status for work that is reviewed and not yet merged. `pub`
+/// because it is also the one status the app closes by itself when it finds the
+/// branch already in the target — see `tracker::service::close_merged` — and a
+/// second copy of the string would drift.
+pub const READY_TO_MERGE: &str = "ready_to_merge";
 /// Our custom status for a dead end left for a person. `pub` because parking is
 /// also something the run itself does to a stuck batch's claims — see
 /// `service::park_claims` — and a second copy of the string would drift.

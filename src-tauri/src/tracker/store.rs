@@ -138,6 +138,25 @@ impl Store {
         }
     }
 
+    /// The ids of everything holding one status, in id order.
+    ///
+    /// One caller: the sweep that closes a task whose branch somebody merged by
+    /// hand (`service::close_merged`), which asks for `ready_to_merge` and for
+    /// nothing else — the sweep's whole safety rests on that narrowness, since a
+    /// branch carrying a task's slug may be half merged or belong to other work
+    /// while the task is still open or in progress, and a false closure costs
+    /// more than a missed one.
+    ///
+    /// Here rather than a filter over `snapshot()`: the snapshot clones every
+    /// issue in the project to hand back a handful of ids, once a minute.
+    pub fn ids_with_status(&self, status: &str) -> Vec<String> {
+        self.issues
+            .values()
+            .filter(|issue| issue.status == status)
+            .map(|issue| issue.id.clone())
+            .collect()
+    }
+
     pub fn columns_delta(&mut self) -> Delta {
         self.generation += 1;
         Delta {
@@ -203,6 +222,27 @@ mod tests {
         let delta = store.remove_one("b");
         assert!(delta.is_empty());
         assert_eq!(store.generation(), 1);
+    }
+
+    /// The sweep that closes merged work asks for one status and gets exactly
+    /// it. The board holds tasks in flight and tasks nobody has started, and
+    /// both may have a branch carrying the same slug — closing either on the
+    /// strength of that branch is the failure the narrowness exists to prevent.
+    #[test]
+    fn only_the_status_asked_for_comes_back() {
+        let mut store = Store::default();
+        store.apply_incremental(vec![
+            issue("a", "ready_to_merge", "2026-07-31T00:00:01Z"),
+            issue("b", "in_progress", "2026-07-31T00:00:01Z"),
+            issue("c", "open", "2026-07-31T00:00:01Z"),
+            issue("d", "ready_to_merge", "2026-07-31T00:00:01Z"),
+            issue("e", "closed", "2026-07-31T00:00:01Z"),
+        ]);
+        assert_eq!(
+            store.ids_with_status("ready_to_merge"),
+            vec!["a".to_string(), "d".to_string()]
+        );
+        assert!(store.ids_with_status("parked").is_empty());
     }
 
     #[test]
