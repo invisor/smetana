@@ -390,7 +390,8 @@ onMounted(initSettingsBridge)
    view that is gone does not go on answering. */
 let stopBoardHello = null
 /* The third and fourth messages that window and this one exchange outside the
-   settings contract, and both belong to the Caveman group on its Agents tab.
+   settings contract, and both belong to the Caveman group on its Skills &
+   Plugins tab.
    The hello answers a settings window that opened after the last announcement,
    which is otherwise a tab believing no project is open at all; the install
    request comes the other way and is the only message in this file that puts

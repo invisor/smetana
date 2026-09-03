@@ -117,11 +117,11 @@ export async function watchBoardColumns(onColumns) {
    here for their reason exactly: nothing about it reaches `settings.json`, so it
    has no business in that file's three-event contract.
 
-   Two things on the Agents tab need it and neither can do without. `caveman.rs`
-   is asked about a project, because one of the four states it answers with is
-   the skill in this repository alone; and the Install button opens a terminal,
-   which has to be a terminal somewhere, so with nothing open it is drawn dead
-   and says why. The path itself never leaves this pair — the terminal is opened
+   Two things on the Skills & Plugins tab need it and neither can do without.
+   `caveman.rs` is asked about a project, because one of the four states it
+   answers with is the skill in this repository alone; and the Install button
+   opens a terminal, which has to be a terminal somewhere, so with nothing open
+   it is drawn dead and says why. The path itself never leaves this pair — the terminal is opened
    by the app window, which knows where it is pointed without being told.
 
    It is a live announcement rather than a field on the settings contract, and
@@ -160,9 +160,9 @@ export async function watchActiveProject(onProject) {
   return stop
 }
 
-/* The Install button on the Agents tab, travelling the other way: the settings
-   window has decided what should be typed, and the app window is the one that
-   can type it.
+/* The Install button on the Skills & Plugins tab, travelling the other way: the
+   settings window has decided what should be typed, and the app window is the
+   one that can type it.
 
    One event and no answer, which is unlike every other pair in this file, and
    the asymmetry is the point. Opening a terminal is the app window's own

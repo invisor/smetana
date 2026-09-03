@@ -42,8 +42,8 @@ import { NOTIFICATION_DEFAULTS, isSound } from '../sounds.js'
 import { isThreshold, reconcile } from '../components/settings/subscription.js'
 /* Pure, no Vue and no DOM: the caveman ladder and the one extra word a project
    has, `inherit`. Imported for the reason `isThreshold` above it is — the
-   Caveman group on the Agents tab owns that dictionary, since it is what a
-   `Dropdown` there draws, and a second list here would be a third copy of a
+   Caveman group on the Skills & Plugins tab owns that dictionary, since it is
+   what a `Dropdown` there draws, and a second list here would be a third copy of a
    vocabulary Rust already holds the authority over. What the front end offers
    has to stay a subset of `CAVEMAN_LEVELS` in `settings/model.rs`, or a choice
    reverts on the next save with nothing on screen to say so. */
@@ -856,8 +856,8 @@ export async function readSharedSettings() {
    than an omission. `announce()` fires on a hello and on an edit and never on a
    project being switched, which was wrong for exactly as long as `settings.project`
    held a field the settings window drew: `caveman`, the project's own level,
-   which sat on the Agents tab beside the global one. A switch left the two rows
-   of that group describing two different projects. The level is edited in the
+   which sat in the Caveman group beside the global one. A switch left the two
+   rows of that group describing two different projects. The level is edited in the
    project settings window now — `components/run/ProjectSettingsModal.vue`, off
    the project tile's own menu — and `toShared` above carries nothing per project
    again, so there is nothing here for a switch to correct on that screen. What
