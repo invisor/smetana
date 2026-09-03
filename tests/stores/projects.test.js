@@ -27,6 +27,11 @@ beforeEach(async () => {
      caught error — which works, and which would make the two tests below that
      answer this deliberately look like nothing special. */
   ipc.on('terminal_list', [])
+  /* Read beside the session list, in the same `loadSessions`, so every test
+     here reaches it too. Answered with nothing: what a project offers back
+     after a restart is `terminals.test.js`'s subject, and an unregistered
+     command would have this file exercising a caught failure instead. */
+  ipc.on('terminal_restorable', [])
 
   /* Mandatory: the settings watcher is installed only inside loadSettings.
      Without it flushPending has nothing to flush, settings_save never happens,

@@ -444,16 +444,66 @@ of what layer A does: a capture has just written into the session and is waiting
 arrive at all, so a screen that happens to look unchanged mid-answer is not a settled one, and
 reading a half-finished reply as finished would hand a caller the wrong text with nothing to say so.
 
-Sessions do not survive a restart, and nothing about them is written to `settings.json` — a session
-row with a dead process behind it is worse than an empty list. `RunEvent::Exit` calls
+**A session's process does not survive a restart, and a record does.** `RunEvent::Exit` calls
 `terminal::service::shutdown`, and the worker ends every session the way closing a terminal window
-does: `SIGHUP` to the session's process group — which reaches whatever the agent itself started, as
-`SIGKILL` to the direct child would not — then a short wait, then a kill for what is left. The two
-seconds `shutdown` itself waits are the ceiling on a *wedged worker*, the same one `settings.js` puts
-on its close-time flush: the window always closes, and a worker that never answers costs the cleanup,
-not the app. Anything that outruns that, or that the app never got a chance to signal, is an orphan;
-for the sessions a *run* started, the next launch finds them again through the registry in
-`.claude/rules/runs.md`, the one place a session's pid is written down.
+does: `SIGHUP` to the session's process group — which reaches whatever the
+agent itself started, as `SIGKILL` to the direct child would not — then a short wait, then a kill for
+what is left. The two seconds `shutdown` itself waits are the ceiling on a *wedged worker*, the same
+one `settings.js` puts on its close-time flush: the window always closes, and a worker that never
+answers costs the cleanup, not the app. Anything that outruns that, or that the app never got a
+chance to signal, is an orphan; for the sessions a *run* started, the next launch finds them again
+through the registry in `.claude/rules/runs.md`, the one place a session's pid is written down.
+**None of that changed**, and nothing here brings a process back: a daemon or a tmux-shaped PTY
+holder is the only shape where one really survives, and the PTY master fd dies with the app process,
+so a surviving agent would be one this app can neither read nor write.
+
+What survives is a **record**, in `.smetana/agents.json` in the project folder beside `runs.json` and
+outside the repository — `terminal::restore`, read by `terminal_restorable` and taken away by
+`terminal_forget`. One per agent session a person started: the conversation id, the profile, `cwd`
+and `project` (which differ for a worktree session), the same `SessionWork` the live row is captioned
+by, and when it started. No pid and no liveness check — `shutdown` killed the processes, and an
+unclean exit leaves an orphan with or without this file, so pid-plus-start-time liveness would be a
+second copy of `runs::registry`'s for a case this feature does not have.
+
+**Written at the spawn, not at the exit**, and only after the spawn has succeeded: an exit can be
+unclean, and a registry written on the way out is the defect `window.rs` exists for, while a record
+written before the spawn would offer a conversation the harness never opened. It is taken away when
+the agent exits on its own (`absorb`'s `Chunk::Gone`), when a person removes the row
+(`Request::Remove`), and when the session is resumed — the resume writes its own under the same id,
+so the row survives a second restart. `shutdown` deliberately touches none of it: `kill_all` returns
+out of the worker's loop before any of its hangups reaches `absorb`, which is what leaves the records
+in place for the next launch.
+
+**The app chooses the conversation id at the spawn.** `terminal::conversation::new_id` makes a
+version 4 UUID out of sixteen bytes off `/dev/urandom` — no crate, and every build target is a unix —
+and `Profile::session_id_args` puts it on the command line (`claude --session-id <uuid>`, in front of
+the plugins for the reason `--resume` and `batch_args` lead). The alternative was matching a live
+session to a transcript by directory and mtime, which is a guess that is wrong exactly where two
+agents share a directory. **A profile that cannot be told an id records nothing at all**: `codex.rs`
+keeps the default `None`, so a codex session never draws a row offering a resume it could not make,
+and no refusal has to be worded anywhere. A **fork** records nothing for the neighbouring reason —
+`--fork-session` has Claude Code invent an id for the new transcript, which this app never learns, so
+a record under the original's id would offer a row that reopens the wrong conversation. A run's
+session records nothing either: `runs::registry` owns the liveness of those processes and
+`smetana:running-tasks` Phase R owns their tracker half, and two mechanisms on one fact drift.
+
+The objection this replaces — *a session row with a dead process behind it is worse than an empty
+list* — is answered rather than overruled. The row is explicitly not a live one: it is drawn quiet
+(`state: 'done'`, which is what `attentionLevel` reads and `AgentList` dims by), it says `offline`
+where an elapsed time would be, it is counted by neither `liveAgentCount` nor `hasAgentSession` — so
+a freshly launched app does not open on an empty Agent tab — and its whole content is an offer. The
+click is the offer, and it takes the one road to a PTY: `resumeSession` in `DesktopApp.vue` →
+`createSession` with an `Intent::ResumeSession` → `--resume <id>` in the record's own directory. A
+worktree removed after its task merged is the ordinary case and is refused by `resume_cwd`, which
+reaches the person as a sentence in the toast corner like every other session verb's refusal. The
+`settings.json` half of the old sentence stands: the registry is per project and readable from
+outside the app, `settings.json` is per user and platform-dependent, which is the same reasoning
+`runs.json` carries.
+
+`terminalState.restored` is the front end's half, a third source in `agentRows` beside the sessions
+and the starts, captioned through the same `describeWork` so the three cannot word one caption three
+ways. Removing such a row is `forgetRestored` and never `terminal_remove`: there is no session behind
+it, so asking the worker to end one would answer `noSession` about an id it has never held.
 
 `src/stores/terminals.js` keeps the same cost-driven split as the worker: `sessions` and `agentRows`
 hold every session's state, cheap and needed for a background row's colour; output bytes go only to

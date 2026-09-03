@@ -47,6 +47,16 @@ export const terminalState = reactive({
      treats that list as "what the worker has", and a row with no process
      behind it must not reach code that would send it an id. */
   starting: [],
+  /* The agent sessions this project had when the app last closed — records off
+     `.smetana/agents.json`, not sessions. Nothing is running behind one: the
+     process was hung up when the window closed, and what survived is the
+     conversation id and enough to caption a row with. A row drawn from one is
+     an offer, and clicking it is the offer being taken (`resumeSession` in
+     DesktopApp.vue), which goes the one road to a PTY every other start takes.
+
+     Read beside the session list and replaced by it, so a project switch
+     cannot leave one project's history under another's name. */
+  restored: [],
   activeId: null,
   ready: false,
   project: null,
@@ -200,7 +210,12 @@ const lastAgent = () => agentSessions().at(-1)?.id ?? null
    tab that appeared only when the worker answered would leave the button
    somebody pressed with no visible effect for that second — the same reason
    `starting` exists for the panel at all. A shell has no start ticket to add
-   here, and needs none: it opens a tab of its own, which is not this one. */
+   here, and needs none: it opens a tab of its own, which is not this one.
+
+   **`terminalState.restored` deliberately does not count**, and it must not be
+   added: a restored row has no process, so the tab it would open is an empty
+   terminal — which is exactly the shape that was removed when this tab stopped
+   being pinned. A freshly launched app would then open on it. */
 export const hasAgentSession = computed(
   () => agentSessions().length > 0 || visibleStarts().length > 0
 )
@@ -469,6 +484,29 @@ export const agentRows = computed(() => [
     state: 'running',
     elapsed: 'starting',
     starting: true
+  })),
+  /* And last, the sessions the app was holding when it was closed. They sit
+     under the live rows deliberately: they are the project's past, and the
+     agents somebody is actually watching keep the top of the column.
+
+     Captioned through the same `describeWork` the other two use, from the work
+     the record carries — three sources wording one caption three ways is the
+     failure that function exists to prevent.
+
+     `done` is the state, which is what makes the row quiet: `attentionLevel`
+     reads it, `AgentList` dims anything quiet, and nothing is running behind
+     this row to be drawn live. It is the same word an ordinary session that
+     exited cleanly carries, through `toUiState` — a row for a dead process is
+     a row for a dead process, whichever way the app learnt about it. The
+     elapsed slot says what the row is rather than how long it has been going,
+     the way a start's says `starting`. */
+  ...terminalState.restored.map((record) => ({
+    id: record.sessionId,
+    ...describeWork(record.work, null),
+    state: 'done',
+    elapsed: 'offline',
+    restored: true,
+    cwd: record.cwd
   }))
 ])
 
@@ -502,7 +540,12 @@ export const agentRows = computed(() => [
 
    Deliberately a count and not `agentRows.value.length`: the rows carry
    captions and elapsed times, `now` ticks every thirty seconds, and this number
-   has no business being recomputed by the clock. */
+   has no business being recomputed by the clock. That is also what keeps
+   `terminalState.restored` out of it for free, and it must stay out: this
+   counter is how many agents are *running*, and none of those is — a footer
+   reading one over a freshly launched app with nothing started in it would be
+   the number ceasing to mean anything, which is the same objection `exited`
+   already answers one paragraph up. */
 export const liveAgentCount = computed(
   () => agentSessions().filter((s) => s.state !== 'exited').length + visibleStarts().length
 )
@@ -823,6 +866,52 @@ export async function loadSessions(project) {
     if (terminalState.project !== project) return
     report('read', err)
   }
+  await loadRestorable(project)
+}
+
+/* The offers this project left behind, read after its live sessions and never
+   before them: the two together are what the panel draws, and a restored row
+   arriving a tick early would flash a project's history over its running
+   agents.
+
+   Its own try, and its own silence. A failure here costs the offer and nothing
+   else — the sessions are already on screen — so it goes to the console rather
+   than through `report`, which puts a sentence in the corner: an app that
+   opened with a toast about housekeeping would be spending the loudness budget
+   on the opposite of a card needing a human. The list is emptied on the way, so
+   a project whose registry has become unreadable draws no rows rather than the
+   last project's.
+
+   Guarded by the same staleness check the session read uses, and for the same
+   reason: two project switches in flight at once answer in no fixed order. */
+async function loadRestorable(project) {
+  try {
+    const records = project ? await invoke('terminal_restorable', { project }) : []
+    if (terminalState.project !== project) return
+    terminalState.restored = records
+  } catch (err) {
+    if (terminalState.project !== project) return
+    terminalState.restored = []
+    console.error('[terminals] reading the sessions offered back failed:', err)
+  }
+}
+
+/* A person took a restored row away.
+
+   The registry alone: there is no session behind the row, so `terminal_remove`
+   — which asks the worker to end one — would be the wrong verb and would answer
+   `noSession` about an id the worker has never held. The row goes only once the
+   file says so, because a row removed from the list and left in the file would
+   be back at the next launch with nothing to explain it. */
+export async function forgetRestored(id) {
+  const project = terminalState.project
+  try {
+    await invoke('terminal_forget', { project, sessionId: id })
+  } catch (err) {
+    console.error('[terminals] forgetting a session offered back failed:', err)
+    return
+  }
+  terminalState.restored = terminalState.restored.filter((record) => record.sessionId !== id)
 }
 
 /* Whether what `activeId` names is still something a person can be looking at:
@@ -876,6 +965,17 @@ export async function createSession(project, intent = { kind: 'bare' }) {
        a fact about the panel rather than about the selection — who cares is
        for the reader to decide. */
     if (kept) lastHandover.value = { ticket: ticket.id, session: session.id }
+    /* A conversation that has been reopened is a live row now, so the offer
+       that produced it is spent — the worker has already rewritten the record
+       under the same id, and leaving it here would draw one conversation twice:
+       dim, underneath the agent it just became. On a failed spawn it
+       deliberately stays, because the refusal reached the person as a toast and
+       the row is what they press again. */
+    if (intent?.kind === 'resumeSession') {
+      terminalState.restored = terminalState.restored.filter(
+        (record) => record.sessionId !== intent.id
+      )
+    }
     terminalState.lastError = null
     return session
   } catch (err) {

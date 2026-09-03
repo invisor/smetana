@@ -65,6 +65,20 @@ impl Profile for Claude {
                 cmd.arg(arg);
             }
         }
+        // The id this app chose for the conversation, so that it can be offered
+        // back after a restart. In front of the plugins for the reason the two
+        // above are, and never beside a resume: that id is the transcript's own
+        // and `--resume` already carries it, so a second flag here would be one
+        // command line naming two different conversations. The worker holds the
+        // same rule where it decides whether to record the session at all —
+        // this one is about the command line, that one about the file.
+        if !matches!(launch.intent, Intent::ResumeSession { .. }) {
+            if let Some(id) = launch.session_id.as_deref() {
+                for arg in self.session_id_args(id).into_iter().flatten() {
+                    cmd.arg(arg);
+                }
+            }
+        }
         cmd.arg("--plugin-dir");
         cmd.arg(&launch.skills.smetana);
         if !launch.skills.superpowers_installed {
@@ -202,6 +216,19 @@ impl Profile for Claude {
     /// a caller that appended would be composing a command line out of halves.
     fn fork_args(&self, session: &str) -> Option<Vec<String>> {
         Some(vec!["--resume".to_owned(), session.to_owned(), "--fork-session".to_owned()])
+    }
+
+    /// `--session-id <uuid>`, which is Claude Code's own way of being told which
+    /// conversation to write. The value has to be a valid UUID and the CLI
+    /// refuses anything else, which is why `terminal::conversation::new_id`
+    /// makes one rather than any string being handed over.
+    ///
+    /// **This is Claude Code's grammar and nobody else's**, exactly as
+    /// `resume_args` is: `codex.rs` keeps the default `None` rather than a
+    /// guess, and the cost of it doing so is only that a codex session is not
+    /// offered back after a restart.
+    fn session_id_args(&self, session: &str) -> Option<Vec<String>> {
+        Some(vec!["--session-id".to_owned(), session.to_owned()])
     }
 
     fn parse_usage(&self, output: &str) -> Option<Usage> {
@@ -622,6 +649,7 @@ mod tests {
             intent,
             skills: skills(superpowers_installed),
             facts: None,
+            session_id: None,
             languages: crate::agents::Languages::default(),
             caveman_level: String::new(),
             agent_prompt: String::new(),
@@ -752,6 +780,60 @@ mod tests {
             ],
             "a forked session is the resumed command line plus --fork-session"
         );
+    }
+
+    /// A `Launch` whose conversation id this app chose, which is every ordinary
+    /// session once the worker is asking for one.
+    fn with_id(intent: Intent, id: &str) -> Launch {
+        Launch { session_id: Some(id.to_owned()), ..launch(intent, true) }
+    }
+
+    const CHOSEN: &str = "9f1c0a2e-0000-4000-8000-000000000000";
+
+    #[test]
+    fn a_chosen_conversation_id_is_on_the_command_line() {
+        use crate::agents::Profile;
+        assert_eq!(
+            Claude.session_id_args(CHOSEN),
+            Some(vec!["--session-id".to_owned(), CHOSEN.to_owned()])
+        );
+        let args = argv(&with_id(Intent::Bare, CHOSEN));
+        let flag = args.iter().position(|a| a == "--session-id").expect("the flag is on the line");
+        assert_eq!(args.get(flag + 1).map(String::as_str), Some(CHOSEN), "{args:?}");
+    }
+
+    #[test]
+    fn the_session_id_goes_in_front_of_the_plugins() {
+        // The reason `--resume` and `batch_args` lead: this app does not get to
+        // assume anything about somebody else's argument order, and the prompt
+        // that follows is positional.
+        let args = argv(&with_id(Intent::Bare, CHOSEN));
+        let id_at = args.iter().position(|a| a == "--session-id").expect("the flag is on the line");
+        let first_plugin =
+            args.iter().position(|a| a == "--plugin-dir").expect("the plugins are on the line");
+        assert!(id_at < first_plugin, "{args:?}");
+    }
+
+    #[test]
+    fn a_resumed_session_is_not_given_a_new_id() {
+        // The id is the transcript's own and `--resume` carries it; a second
+        // `--session-id` beside it would be this app asking for two different
+        // conversations in one command line. The worker does not offer one for a
+        // resume either — this is the guard standing where the argument would
+        // appear.
+        for fork in [false, true] {
+            let args = argv(&with_id(resuming(CHOSEN, fork), CHOSEN));
+            assert!(!args.iter().any(|a| a == "--session-id"), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn a_session_this_app_chose_no_id_for_carries_no_such_flag() {
+        // `session_id` is `None` wherever the machine would not give random
+        // bytes, and the session still starts — it simply cannot be offered
+        // back, which is where every session was before this existed.
+        let args = argv(&launch(Intent::Bare, true));
+        assert!(!args.iter().any(|a| a == "--session-id"), "{args:?}");
     }
 
     #[test]

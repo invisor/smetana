@@ -107,6 +107,7 @@ import {
   agentRows,
   createSession,
   createShell,
+  forgetRestored,
   initTerminals,
   lastHandover,
   lastRunStart,
@@ -2077,6 +2078,18 @@ watch(lastHandover, (handover) => {
    No await — selection is local state, and TerminalView attaches to whatever
    activeId names once it is on screen. */
 function selectAgent(id) {
+  /* A restored row has no session behind it, and its id is a conversation's
+     rather than the worker's — so selecting it would point the terminal at
+     something nobody holds. The row *is* the offer, and the click is the offer
+     being taken: it goes down the one road to a PTY, `createSession` with a
+     `resumeSession` intent, exactly as the Sessions tab's own verb does. A
+     worktree that has gone is refused by the worker and reaches the person as a
+     sentence in the toast corner. */
+  const offered = agentRows.value.find((row) => row.id === id && row.restored)
+  if (offered) {
+    resumeSession({ id: offered.id, cwd: offered.cwd, title: null })
+    return
+  }
   terminalState.activeId = id
   project.activeTab = 'terminal'
   const row = agentRows.value.find((candidate) => candidate.id === id)
@@ -2096,6 +2109,21 @@ function selectAgent(id) {
   } else if (work?.kind === 'newTask' || row?.claimed?.length) {
     rightFocus.value = id
   }
+}
+
+/* The X on a row in the agents panel, and which of the two removals it is.
+
+   A live row's remove ends a session at the worker. A restored row has none —
+   what it has is a record in the project's own registry, so the file is what is
+   written and `terminal_remove` is never called: it would ask the worker to end
+   a session it has never held, and answer that it has no such id. */
+function removeAgentRow(id) {
+  const offered = agentRows.value.find((row) => row.id === id && row.restored)
+  if (offered) {
+    forgetRestored(id)
+    return
+  }
+  removeSession(id)
 }
 
 /* The one start this window does not make: a run asks the terminal worker
@@ -5437,7 +5465,7 @@ const toastStackStyle = {
                 :rows="agentRows"
                 :active-id="terminalState.activeId"
                 @select="selectAgent"
-                @remove="removeSession"
+                @remove="removeAgentRow"
               />
             </div>
           </div>

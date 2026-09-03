@@ -333,6 +333,8 @@ pub fn run() {
       terminal::commands::terminal_resize,
       terminal::commands::terminal_write,
       terminal::commands::terminal_run_capture,
+      terminal::commands::terminal_restorable,
+      terminal::commands::terminal_forget,
     ])
     // build + run instead of .run(context): we need the exit event. This is
     // exactly what Builder::run does — build, then run — plus our callback.

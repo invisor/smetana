@@ -836,7 +836,21 @@ const agentRows = [
      will be once the session lands, so the handover moves nothing on screen.
      It lasts about a second in the app, which is exactly why it belongs here —
      the only place it can be looked at for longer than that. */
-  { id: 'start-1', label: 'Creating a task', tasks: [], state: 'running', elapsed: 'starting', starting: true }
+  { id: 'start-1', label: 'Creating a task', tasks: [], state: 'running', elapsed: 'starting', starting: true },
+  /* A session the last run of the app left behind, off `.smetana/agents.json`.
+     The row that answers "the agent is gone after a restart", and the whole of
+     what it is worth is how it is drawn: quiet, so it reads as the project's
+     past rather than as something running, with the word in place of a time
+     the way a start has one. `done` is the state deliberately — it is what
+     `attentionLevel` reads to dim the row, and the same word an ordinary
+     session that exited cleanly carries.
+
+     Last in the list because that is where `agentRows` puts these, under the
+     live rows: the agents somebody is watching keep the top of the column.
+     Beside the row above it is also the pair worth looking at — two rows that
+     are neither running nor finished, saying two different things in the same
+     slot. */
+  { id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60', label: 'Editing', tasks: ['smetana-42'], state: 'done', elapsed: 'offline', restored: true }
 ]
 
 /* The right column's Sessions tab: Claude Code's own transcripts, as

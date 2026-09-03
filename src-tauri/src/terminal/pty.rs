@@ -615,6 +615,7 @@ mod tests {
                 superpowers_installed: true,
             },
             facts: None,
+            session_id: None,
             languages: agents::Languages::default(),
             caveman_level: String::new(),
             agent_prompt: String::new(),

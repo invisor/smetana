@@ -66,7 +66,14 @@ pub struct Question {
 /// beside the start ticket because a start becomes a session about a second
 /// later: carried here it survives that handover for free, and the placeholder
 /// row and the session's own row draw the same words.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+///
+/// `Deserialize` beside `Serialize`, and it is read back in exactly one place:
+/// `terminal::restore`, which writes a restorable session's work into
+/// `.smetana/agents.json` so that a row offered back after a restart carries the
+/// caption it had. Nothing on the wire from the front end ever arrives as one of
+/// these — that is `Intent`'s job — so the derive is for this app reading its own
+/// file and for nothing else.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum SessionWork {
     Bare,
