@@ -1,5 +1,13 @@
-/* What the Caveman group on the Agents tab offers, and what it says about how
-   caveman stands on this machine. Nothing here about how any of it looks.
+/* What the Caveman group offers, and what it says about how caveman stands on
+   this machine. Nothing here about how any of it looks.
+
+   The group is the **Skills & Plugins** tab's (`SkillsPluginsSettings.vue`),
+   the tab immediately after Agents, and the line between the two is what is
+   *installed* on this machine against how an agent talks: caveman is somebody
+   else's software with a state and an install command, where the harness, the
+   languages, the standing instruction and the run limits next door are all
+   about what an agent says and what it spends. It stood on Agents until
+   smetana-ekrl, on the older argument that a level is a way of talking.
 
    One of its lists is drawn somewhere else, and the file stays here anyway:
    `projectLevelOptions` is the project's own ladder, and its row is in the
@@ -82,8 +90,8 @@ export const CAVEMAN_LEVELS = [
    project's level would go on standing on screen. */
 export const CAVEMAN_INHERIT = 'inherit'
 
-/* Labels for ids caveman already knows, the way the agent and language lists on
-   this tab are labels for ids Rust knows. Sentence case, like every other word
+/* Labels for ids caveman already knows, the way the agent and language lists
+   one tab over are labels for ids Rust knows. Sentence case, like every other word
    on this screen; wenyan is caveman's own name for the classical Chinese
    register and stays as it spells it. */
 const LEVEL_LABEL = {
@@ -97,7 +105,8 @@ const LEVEL_LABEL = {
 }
 
 /* What `inherit` reads as in a list. It names the setting it defers to — All
-   projects, in the settings window's Caveman group — rather than saying
+   projects, in the Caveman group on the settings window's Skills & Plugins
+   tab — rather than saying
    "default", because what it inherits is a choice somebody made on a screen of
    this app and not a shipped value. The two rows are in two windows now, which
    is what makes naming the other one worth more than it cost when they were
@@ -115,7 +124,7 @@ export function levelOptions() {
    First rather than last because it is the default and the commonest answer,
    and because a person reading down the list should meet "same as all projects"
    before they meet a level to depart to. Drawn in the project settings window
-   rather than on this tab — see the header. */
+   rather than on the tab this file's own group is on — see the header. */
 export function projectLevelOptions() {
   return [{ value: CAVEMAN_INHERIT, label: INHERIT_LABEL }, ...levelOptions()]
 }
@@ -193,8 +202,8 @@ export function offersInstall(reading) {
    person's. See the header for where each command comes from.
 
    `claude` is named in it rather than left for caveman to detect, and that is
-   the honest half of a limit this app already has: the Agent row above offers
-   Codex and cannot select it, and `caveman.rs` reads Claude Code's own hooks
+   the honest half of a limit this app already has: the Agent row one tab over
+   offers Codex and cannot select it, and `caveman.rs` reads Claude Code's own hooks
    file and nobody else's. A command that said `--detected` could wire an agent
    this screen would then be unable to say anything about. */
 export function installCommand(reading) {

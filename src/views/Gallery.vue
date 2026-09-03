@@ -92,6 +92,7 @@ import {
   RunModal,
   SetupProjectModal,
   Skeleton,
+  SkillsPluginsSettings,
   StatusBadge,
   StatusDot,
   StatusFooter,
@@ -1814,9 +1815,10 @@ const galleryAgentUsageHalf = {
   },
   band: 'reduced'
 }
-/* The Caveman group, and its four states — none of them reachable any other
-   way, since `mockBackend.js` answers `absent` and nothing in a browser can
-   make the other three happen. `wired` is the one with a layout rather than a
+/* The Caveman group on the Skills & Plugins tab, and its four states — none of
+   them reachable any other way, since `mockBackend.js` answers `absent` and
+   nothing in a browser can make the other three happen. `wired` is the one with
+   a layout rather than a
    sentence: the pack version, what it was applied to, and one mono line per
    file somebody else's installer rewrote, which is the row most likely to break
    the panel's width. The paths are a home directory's own, since that is what
@@ -1824,14 +1826,14 @@ const galleryAgentUsageHalf = {
 
    The level is a ref rather than a constant because that dropdown is the only
    control in the group, and a dropdown that cannot move says nothing about
-   whether it is bound to the right prop. The project's own override is not on
-   this tab any more — it is a row in the project settings window, drawn
-   among the dialogs above.
+   whether it is bound to the right prop. The project's own override is not in
+   this window at all — it is a row in the project settings window, drawn among
+   the dialogs above.
 
    The second ref beside it is that window's, and it is here rather than up
    there because this is where the caveman fixtures live: a level that is not
    `inherit` and not the global one either, so a glance says the row is bound to
-   the project's field and not to the tab's. */
+   the project's field and not to the other tab's. */
 const galleryCavemanLevel = ref('full')
 const galleryCavemanProjectLevel = ref('ultra')
 const galleryCavemanWired = {
@@ -4776,9 +4778,6 @@ const menuTargetStyle = {
             :commit-language="galleryCommitLanguage"
             :report-language="galleryReportLanguage"
             :agent-prompt="galleryAgentPrompt"
-            :caveman="galleryCavemanWired"
-            :caveman-level="galleryCavemanLevel"
-            project-open
             :usage="galleryAgentUsage"
             @update:agent="galleryAgent = $event"
             @update:agent-language="galleryAgentLanguage = $event"
@@ -4786,7 +4785,6 @@ const menuTargetStyle = {
             @update:commit-language="galleryCommitLanguage = $event"
             @update:report-language="galleryReportLanguage = $event"
             @update:agent-prompt="galleryAgentPrompt = $event"
-            @update:caveman-level="galleryCavemanLevel = $event"
           />
         </div>
         <!-- The same tab with Show run report off on the General tab, which is
@@ -4814,31 +4812,50 @@ const menuTargetStyle = {
             :report-language="galleryReportLanguage"
             :show-report="false"
             :subscription-pause-at="0"
-            :caveman="galleryCavemanAbsent"
             :usage="galleryAgentUsage"
           />
         </div>
-        <!-- The Caveman group's other states. Nothing installed with no project
-             open is the one an acceptance criterion is about: the Install
-             button is drawn and dead, and the row's description names the
-             reason rather than leaving somebody to guess — which is what the
-             cell above draws, since `projectOpen` defaults to false there.
+        <!-- The Skills & Plugins tab, and with it the Caveman group in each of
+             its four states — the only place any of them but `absent` can be
+             looked at, since `mockBackend.js` answers `absent` and nothing in a
+             browser can make the other three happen.
 
-             The same state **with** a project open is this first cell, and it
-             is the one to look at hardest: its command is the three-part chain,
-             the longest string this group can produce, so it is where a mono
-             line would push the panel wider instead of wrapping inside it.
-             Installed and switched off is the second state with a button, and
-             the one whose command is the short one; the project skill offers
-             none at all. -->
+             Wired is the first, and the one with a layout rather than a
+             sentence: the pack version, what it was applied to and one mono
+             line per file somebody else's installer rewrote. Its level
+             dropdown is the live one, since it is the only control in the
+             group and a list that cannot move says nothing about whether it is
+             bound to the right prop.
+
+             Nothing installed with no project open is the second and the one an
+             acceptance criterion is about: the Install button is drawn and
+             dead, and the row's description names the reason rather than
+             leaving somebody to guess. The same state **with** a project open
+             is the third and the one to look at hardest — its command is the
+             three-part chain, the longest string this group can produce, so it
+             is where a mono line would push the panel wider instead of wrapping
+             inside it. Installed and switched off is the other state with a
+             button, and the one whose command is the short one; the project
+             skill offers none at all. -->
         <div :style="{ width: '560px' }">
-          <AgentSettings :caveman="galleryCavemanAbsent" project-open />
+          <SkillsPluginsSettings
+            :caveman="galleryCavemanWired"
+            :caveman-level="galleryCavemanLevel"
+            project-open
+            @update:caveman-level="galleryCavemanLevel = $event"
+          />
         </div>
         <div :style="{ width: '560px' }">
-          <AgentSettings :caveman="galleryCavemanBinaries" project-open />
+          <SkillsPluginsSettings :caveman="galleryCavemanAbsent" />
         </div>
         <div :style="{ width: '560px' }">
-          <AgentSettings :caveman="galleryCavemanSkill" project-open />
+          <SkillsPluginsSettings :caveman="galleryCavemanAbsent" project-open />
+        </div>
+        <div :style="{ width: '560px' }">
+          <SkillsPluginsSettings :caveman="galleryCavemanBinaries" project-open />
+        </div>
+        <div :style="{ width: '560px' }">
+          <SkillsPluginsSettings :caveman="galleryCavemanSkill" project-open />
         </div>
         <!-- The subscription block in its other shapes, the way the Storage tab
              below is drawn in three: an agent that does not answer the question

@@ -222,6 +222,7 @@ export { default as GitSettings } from './settings/GitSettings.vue'
 export { default as KanbanSettings } from './settings/KanbanSettings.vue'
 export { default as SettingsGroup } from './settings/SettingsGroup.vue'
 export { default as SettingsRow } from './settings/SettingsRow.vue'
+export { default as SkillsPluginsSettings } from './settings/SkillsPluginsSettings.vue'
 export { default as StorageSettings } from './settings/StorageSettings.vue'
 
 // terminal
