@@ -303,6 +303,10 @@ The caveman level is the sixth field of that family and the one that is not this
 all: it is somebody else's skill, and the only way a chosen level reaches an agent is a line in the
 conversation. caveman keeps no level on disk — its `SKILL.md` says `/caveman <level>` holds until the
 session ends — so the app's first message is the one chance to say it without a person typing it.
+Where a person chooses it is two windows: the global level is the All projects row of the Caveman
+group, which is the settings window's **Skills & Plugins** tab — that tab is about what is installed
+on this machine, where Agents beside it is about how an agent talks and what it spends
+(`.claude/rules/settings.md`) — and a project's own override is a row of the project settings window.
 `settings::caveman_level(app, project)` resolves a project's `inherit` against the global level and
 `terminal::service` reads it where it already reads `agent_prompt`, onto `Launch.caveman_level`, into
 a still-pure `prompt::build`. One line comes out of it, a sentence with the command at the front of

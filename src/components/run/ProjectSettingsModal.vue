@@ -25,8 +25,9 @@
    thing no test in this repository can reach, so the bounds, the branch list,
    "has anything changed" and the sentence that stands in for the fields all
    live outside it. The level's own ladder is `settings/caveman.js`'s, which is
-   the interface's copy of `CAVEMAN_LEVELS` and the list the Agents tab's
-   remaining row draws from — imported across groups rather than copied, since
+   the interface's copy of `CAVEMAN_LEVELS` and the list the settings window's
+   own remaining row draws from, on its Skills & Plugins tab — imported across
+   groups rather than copied, since
    two lists of the same rungs is exactly what that file exists to prevent. */
 import { computed, ref, watch } from 'vue'
 import Modal from '../overlays/Modal.vue'

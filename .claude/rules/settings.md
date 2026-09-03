@@ -507,10 +507,23 @@ and the `Icon` call sites pass numeric literals, so glyphs stay put while their 
 The tabs are `components/settings/` — the directory is the list, for the reason the note under
 Commands gives — and each is presentational, handed values and emitting what was picked, so the whole
 window renders in `?view=gallery` too. The sections themselves are a closed list in
-`SettingsWindow.vue` alone (General, Editor, Agents, Kanban, Git, Storage, About); Rust guards the
+`SettingsWindow.vue` alone (General, Editor, Agents, Skills & Plugins, Kanban, Git, Storage,
+About); Rust guards the
 *shape* of a `?tab=` name so nothing can smuggle a second parameter into the URL, never its
 vocabulary, and an unknown section opens on General. Git sits between Kanban and Storage rather than
 at the end, because the tabs before Storage are settings and Storage is the one that is not.
+
+**Skills & Plugins** is the newest of them and sits straight after Agents (smetana-ekrl). The line
+between the two is the reason it exists: this one is about what is **installed** on this machine
+around the agent — somebody else's software, the state it is in, and the command that would change
+that — where Agents is about **how an agent talks and what it spends**: the harness, the four
+languages, the standing instruction, the run limits and the allowance under them. Caveman is the
+first of the installed things and today the only one, which is why the tab holds one group; a second
+skill or plugin has somewhere to go now that does not widen the tab next door. Its place is after
+Agents rather than at the end because the two are read together, and because it must not cross the
+line before Storage, which is the one tab that is not settings at all. Its label keeps a **capital
+P** — sentence case is this product's rule everywhere and Skills & plugins is the form the rule asks
+for, so the capital is a deliberate exception rather than a slip, and it is not to be "fixed".
 
 **A project's own run configuration is deliberately not a tab here** (smetana-2cfl). This window
 is about `settings.json` — this machine's preferences, written by the app, in the app's own data
@@ -617,22 +630,30 @@ original complaint. There is no timer, and a reading is cached nowhere. The sent
 reading at the start of every read: switch the agent and the block has to stop talking about the
 previous one before it knows anything about the new one — which is also why the guard there is a
 sequence number rather than the busy flag alone, since a change of agent must supersede a probe
-already out. Kanban is the same shape one tab over, and the one tab whose lists are not a closed
+already out. Kanban is the same shape further along the row, and the one tab whose lists are not a closed
 vocabulary at all — the columns it offers are the active project's own, read from the tracker, so
 with no project open or no answer yet it says so rather than drawing an empty list.
 
-**The Caveman group** sits on that same tab between Standing instruction and Run limits, and the
-neighbourhood is the argument: it is about how an agent talks. It is one line about how caveman
-stands on this machine and up to two rows under it — Install and All projects — and
+**The Caveman group** is the whole of the Skills & Plugins tab
+(`components/settings/SkillsPluginsSettings.vue`). It stood on Agents until smetana-ekrl, between
+Standing instruction and Run limits, and the argument for that place was the neighbourhood: a level
+is a way of talking, which is what the instruction above it asked for. The split that replaced it
+runs along the other question — what is installed on this machine, against how an agent talks — and
+the group went whole rather than in halves: the state line, the journal's facts, the command, Install
+and All projects are one account of one thing, and leaving the status behind would have made somebody
+read on one screen where caveman stands and choose on another what it does. It is one line about how
+caveman stands on this machine and up to two rows under it — Install and All projects — and
 every sentence in it is `components/settings/caveman.js`'s, another of the `branchChoice.js` family.
 A third row, This project, stood under them and is a row of the **project settings window** now: this
 window is about the machine, that one is about a project, and a per-project row here could only ever
 mean "whichever project the other window happens to have open" — which is not a thing a person
 reading a settings screen can see. `projectLevelOptions()` is still `caveman.js`'s and is drawn over
 there.
-The state is `caveman_state`'s four words (`src-tauri/src/caveman.rs`), read on **opening the tab**
-like the Storage numbers and the subscription probe, and re-read when the project changes, since one
-of the four is about a repository rather than about the machine. The journal's facts — the pack
+The state is `caveman_state`'s four words (`src-tauri/src/caveman.rs`), read on **opening the Skills
+& Plugins tab** like the Storage numbers and the subscription probe, and re-read when the project
+changes, since one of the four is about a repository rather than about the machine. Both reads
+happen only while that tab is the one on screen, so somebody who came to change the theme is never
+asking about another installer. The journal's facts — the pack
 version and the files another installer rewrote — are drawn under `wired` alone: the journal survives
 an install that has since been unwired, so repeating its file list anywhere else would claim rewrites
 that may have been put back.
@@ -662,7 +683,7 @@ edit, never on a project being switched. `caveman:install` goes the other way, o
 unanswered: the command travels as a string and the app window opens the shell through the same
 `newTerminal` the `+` menu uses, so the tab is focused and a refused session is the toast every other
 refused session is. With no project open the button is drawn `disabled` and its description names the
-reason — the Launch at login shape, one tab over.
+reason — the Launch at login shape, on the General tab.
 
 **Two things on this screen are not settings at all**, and they are the exceptions that keep the
 rule readable. One is a whole tab and the other is a single row.
