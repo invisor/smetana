@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadStores } from '../support/stores.js'
+/* The one thing a row's `state` is read for that a test can check without a
+   component: how loud it is. `AgentList` dims anything quiet. */
+import { attentionLevel } from '../../src/components/status/status.js'
 
 /* The DOM half of the sound, stood in for — the same seam `runs.test.js` uses,
    and for the same reason: what this store is answerable for is which sound it
@@ -40,6 +43,10 @@ const mark = (over = {}) => ({ id: 1, project: '/p', state: 'running', kind: 'ba
 async function ready() {
   const loaded = await loadStores()
   loaded.ipc.on('terminal_list', [session()])
+  /* Nothing offered back by default: what a project left behind when the app
+     last closed is its own subject below, and every other test here is about
+     the sessions the worker actually holds. */
+  loaded.ipc.on('terminal_restorable', [])
   loaded.ipc.on('terminal_marks', [])
   loaded.ipc.on('terminal_attach', { data: b64('hello'), seq: 0 })
   loaded.ipc.on('terminal_detach', null)
@@ -1295,6 +1302,197 @@ describe('elapsed time', () => {
     const { stores } = await loadStores()
     expect(stores.terminals.formatElapsed(-1_000)).toBe('0m')
     expect(stores.terminals.formatElapsed(-90 * 60_000)).toBe('0m')
+  })
+})
+
+/* What a project left behind when the app last closed: records off
+   `.smetana/agents.json`, one per agent session a person started. Nothing is
+   running behind one — the processes were hung up as the window closed — so
+   the whole of what the row is worth is that it is drawn at all and that
+   pressing it resumes.
+
+   The two absences are as much the subject as the presence. A restored row is
+   in the panel and in neither of the two numbers derived beside it: the footer
+   counts agents that are *running*, and the Agent tab exists while there is an
+   agent to draw in it — counting these would open a freshly launched app on an
+   empty terminal. */
+describe('the sessions a project offers back after a restart', () => {
+  const offered = (over = {}) => ({
+    sessionId: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+    agent: 'claude',
+    cwd: '/p/.worktrees/smetana-0cj',
+    project: '/p',
+    work: { kind: 'editTask', id: 'smetana-42' },
+    startedAt: '2026-09-03T10:00:00Z',
+    ...over
+  })
+
+  /* No live session at all, so the rows under test are the only ones there.
+     `ready()` answers `terminal_list` with one; this replaces both answers and
+     reads the project again. */
+  async function offering(...records) {
+    const loaded = await ready()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_restorable', records)
+    await loaded.stores.terminals.loadSessions('/p')
+    return loaded
+  }
+
+  it('draws a row for every session the last run of the app left', async () => {
+    const { stores } = await offering(offered())
+
+    const rows = stores.terminals.agentRows.value
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+      restored: true,
+      elapsed: 'offline',
+      cwd: '/p/.worktrees/smetana-0cj'
+    })
+  })
+
+  /* Through the same `describeWork` the live rows and the starts go through:
+     the record carries the work the session was started for, so the row comes
+     back with the caption it had rather than a second wording of it. */
+  it('captions the row with the work the session was started for', async () => {
+    const { stores } = await offering(offered())
+
+    expect(stores.terminals.agentRows.value[0]).toMatchObject({
+      label: 'Editing',
+      tasks: ['smetana-42']
+    })
+  })
+
+  /* `attentionLevel` reads the row's state and `AgentList` dims anything quiet.
+     `done` is the same word an ordinary session that exited cleanly carries —
+     a row for a dead process is a row for a dead process. */
+  it('draws it quiet, the way a session that has finished is drawn', async () => {
+    const { stores } = await offering(offered())
+
+    expect(attentionLevel(stores.terminals.agentRows.value[0].state)).toBe('quiet')
+  })
+
+  it('does not count a restored row as a running agent', async () => {
+    const { stores } = await offering(offered())
+
+    expect(stores.terminals.liveAgentCount.value).toBe(0)
+    expect(stores.terminals.agentCounts.value).toEqual({ loud: 0, live: 0 })
+  })
+
+  it('does not open the centre\'s Agent tab on a restored row alone', async () => {
+    const { stores } = await offering(offered())
+
+    expect(stores.terminals.hasAgentSession.value).toBe(false)
+  })
+
+  /* Live rows first, offers underneath: the agents somebody is watching keep
+     the top of the column, and the project's past sits below them. */
+  it('puts the offers under the sessions that are actually running', async () => {
+    const loaded = await ready()
+    loaded.ipc.on('terminal_restorable', [offered()])
+    await loaded.stores.terminals.loadSessions('/p')
+
+    expect(loaded.stores.terminals.agentRows.value.map((row) => row.id)).toEqual([
+      1,
+      '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60'
+    ])
+    expect(loaded.stores.terminals.liveAgentCount.value).toBe(1)
+  })
+
+  it('leaves one project\'s offers behind when another is opened', async () => {
+    const loaded = await offering(offered())
+    loaded.ipc.on('terminal_restorable', [])
+    await loaded.stores.terminals.loadSessions('/elsewhere')
+
+    expect(loaded.stores.terminals.terminalState.restored).toEqual([])
+  })
+
+  /* A registry that cannot be read costs the offer and nothing else: the
+     sessions are already on screen, and a sentence in the toast corner about
+     housekeeping would spend the loudness budget on the opposite of a card
+     needing a human. */
+  it('says nothing to the person when the registry cannot be read', async () => {
+    const loaded = await ready()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.fail('terminal_restorable', 'no such file')
+    await loaded.stores.terminals.loadSessions('/p')
+
+    expect(loaded.stores.terminals.agentRows.value).toEqual([])
+    expect(loaded.stores.terminals.terminalState.lastError).toBe(null)
+  })
+
+  it('forgets a row in the registry and takes it out of the list', async () => {
+    const loaded = await offering(offered())
+    loaded.ipc.on('terminal_forget', null)
+
+    await loaded.stores.terminals.forgetRestored('9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60')
+
+    expect(loaded.ipc.calls('terminal_forget')).toEqual([
+      { project: '/p', sessionId: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60' }
+    ])
+    expect(loaded.stores.terminals.agentRows.value).toEqual([])
+    /* Never the worker's verb: there is no session behind the row, so
+       `terminal_remove` would ask it to end one it has never held. */
+    expect(loaded.ipc.commands()).not.toContain('terminal_remove')
+  })
+
+  /* The row goes only once the file says so — one removed from the list and
+     left in the registry would be back at the next launch with nothing to
+     explain it. */
+  it('keeps the row when the registry refuses to let it go', async () => {
+    const loaded = await offering(offered())
+    loaded.ipc.fail('terminal_forget', 'read-only file system')
+
+    await loaded.stores.terminals.forgetRestored('9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60')
+
+    expect(loaded.stores.terminals.agentRows.value).toHaveLength(1)
+  })
+
+  /* The click, as the store sees it: the row is an offer, and taking it goes
+     down the one road to a PTY that every other start takes. */
+  it('resuming one asks for its own id and its own directory', async () => {
+    const loaded = await offering(offered())
+    loaded.ipc.on('terminal_create', session({ id: 9, work: { kind: 'resumeSession', title: null } }))
+
+    await loaded.stores.terminals.createSession('/p', {
+      kind: 'resumeSession',
+      id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+      cwd: '/p/.worktrees/smetana-0cj',
+      title: null,
+      fork: false
+    })
+
+    expect(loaded.ipc.calls('terminal_create')[0].intent).toMatchObject({
+      kind: 'resumeSession',
+      id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+      cwd: '/p/.worktrees/smetana-0cj'
+    })
+    /* And the offer is spent: the worker rewrote the record under the same id,
+       so a row left here would draw one conversation twice — dim, underneath
+       the agent it just became. */
+    expect(loaded.stores.terminals.terminalState.restored).toEqual([])
+    expect(loaded.stores.terminals.agentRows.value.map((row) => row.id)).toEqual([9])
+  })
+
+  it('keeps the offer when the resume is refused', async () => {
+    const loaded = await offering(offered())
+    loaded.ipc.fail('terminal_create', { kind: 'badCwd', message: '/p/.worktrees/smetana-0cj' })
+
+    await expect(
+      loaded.stores.terminals.createSession('/p', {
+        kind: 'resumeSession',
+        id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+        cwd: '/p/.worktrees/smetana-0cj',
+        title: null,
+        fork: false
+      })
+    ).rejects.toBeTruthy()
+
+    /* The worktree was removed after its task merged, which is the ordinary
+       case. The refusal reached the person as a toast; the row stays, because
+       it is what they would press again. */
+    expect(loaded.stores.terminals.terminalState.lastError).toBeTruthy()
+    expect(loaded.stores.terminals.agentRows.value).toHaveLength(1)
   })
 })
 

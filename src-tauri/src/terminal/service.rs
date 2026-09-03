@@ -149,6 +149,15 @@ struct Live {
     /// tick.
     pending: Vec<u8>,
     seq: u64,
+    /// The conversation id this app chose for the session, when it chose one:
+    /// the key of this session's record in `terminal::restore`, and `None` for
+    /// every session that has no record — a run's batch, a shell, a harness
+    /// that cannot be told an id, a machine that would give no random bytes.
+    ///
+    /// Held here rather than looked up again at the exit because there is
+    /// nothing to look it up by: the registry is keyed by the conversation id
+    /// and the worker knows a session by its own counter.
+    conversation: Option<String>,
 }
 
 /// Somebody waiting for a session to end — in practice the run worker, which
@@ -327,6 +336,52 @@ pub fn shutdown(app: &AppHandle) {
     let _ = rx.recv_timeout(SHUTDOWN_WAIT);
 }
 
+/// Whether a session started under this intent is one to offer back after a
+/// restart, and it is a person's own agent alone.
+///
+/// A run's session is deliberately out, whatever its mode: `runs::registry`
+/// already owns the liveness of those processes and `smetana:running-tasks`
+/// Phase R already recovers their tracker half, and two mechanisms on one fact
+/// drift. Deliberately **not** `agents::is_batch`, which is the neighbouring
+/// question and a narrower one — that asks whether the harness runs in its
+/// non-interactive form, and would let a supervised run's session through here
+/// as if a person had started it.
+///
+/// A shell does not reach this at all: it comes through `Request::CreateShell`,
+/// has no intent and no profile, and has no row in the panel this feature is
+/// about.
+fn records_a_restorable(intent: &Intent) -> bool {
+    !matches!(intent, Intent::Run { .. })
+}
+
+/// The conversation id this session is to be recorded under, or `None` for a
+/// session with no record.
+///
+/// Three answers in one place, because the three would otherwise be three
+/// scattered conditions saying one thing. A resume carries the id it reopened,
+/// so its record is rewritten under that id and the row survives a second
+/// restart. A **fork** does not: `--fork-session` has Claude Code invent a new
+/// id for the new transcript, and a record written under the original's id
+/// would offer a row that reopens the wrong conversation — so a fork records
+/// nothing, exactly as a harness that cannot be told an id records nothing.
+/// Everything else gets a fresh id, when the profile can be told one and the
+/// machine will give the bytes.
+fn conversation_for(profile: &'static dyn agents::Profile, intent: &Intent) -> Option<String> {
+    match intent {
+        Intent::ResumeSession { id, fork: false, .. } => Some(id.clone()),
+        Intent::ResumeSession { .. } => None,
+        _ if records_a_restorable(intent) => super::conversation::new_id()
+            .filter(|id| profile.session_id_args(id).is_some()),
+        _ => None,
+    }
+}
+
+/// Take this session's record out of its project's registry, if it had one.
+fn forget_session(live: &Live) {
+    let Some(id) = live.conversation.as_deref() else { return };
+    super::restore::drop_record(Path::new(&live.session.project), id);
+}
+
 fn emit_state(app: &AppHandle, session: &Session) {
     let _ = app.emit("terminal:state", session);
 }
@@ -363,6 +418,13 @@ fn absorb(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk
             live.session.finish(code);
             // The process is gone: there is nobody left to call for.
             live.bell_pending = false;
+            // And nothing left to offer back: the conversation ended on its own,
+            // so the row it would draw after the next restart would be an offer
+            // to reopen a finished agent. **This is not the path the app's own
+            // exit takes** — `kill_all` returns out of the loop before any of
+            // its hangups reaches this function, which is what leaves the
+            // records in place for the next launch.
+            forget_session(live);
             emit_state(app, &live.session);
         }
     }
@@ -701,6 +763,21 @@ fn handle(
             // it. Nothing else is kept from it: the rest is the agent's
             // briefing, not the panel's caption.
             let work = intent.work();
+            // And the id this app writes the conversation under, so that the
+            // session can be offered back after a restart. Taken here for the
+            // same reason `work` is — the launch consumes the intent — and
+            // spent twice below: once on the command line, through the
+            // `Launch`, and once on the record, after the spawn has succeeded.
+            let conversation = conversation_for(profile, &intent);
+            // A resume's id is already on its command line, behind `--resume`.
+            // The profile refuses a second one as well; this is the half that
+            // says the worker never asks for it, and the two guards are about
+            // different things — that one about somebody else's argument
+            // grammar, this one about what is being requested.
+            let session_id = match &intent {
+                agents::Intent::ResumeSession { .. } => None,
+                _ => conversation.clone(),
+            };
             let launch = agents::Launch {
                 profile,
                 cwd: dir.clone(),
@@ -746,6 +823,7 @@ fn handle(
                 // fraction of a second as a level change reads the previous
                 // level.
                 caveman_level: crate::settings::caveman_level(app, &project),
+                session_id,
             };
             let spawned = Pty::spawn(id, &launch, DEFAULT_COLS, DEFAULT_ROWS, chunks.clone());
             let _ = tx.send(match spawned {
@@ -776,7 +854,26 @@ fn handle(
                         last_output: Instant::now(),
                         pending: Vec::new(),
                         seq: 0,
+                        conversation: conversation.clone(),
                     };
+                    // After the spawn and not before it: a record for a session
+                    // that never started would be a row offering a conversation
+                    // the harness never opened. `conversation` is `None` for
+                    // everything that is not a person's own agent, so this is
+                    // the whole of what decides who gets a record.
+                    if let Some(session_id) = conversation {
+                        super::restore::record(
+                            Path::new(&session.project),
+                            super::restore::Restorable {
+                                session_id,
+                                agent: session.agent.clone(),
+                                cwd: session.cwd.clone(),
+                                project: session.project.clone(),
+                                work: session.work.clone(),
+                                started_at: session.started_at.clone(),
+                            },
+                        );
+                    }
                     sessions.insert(id, live);
                     emit_state(app, &session);
                     Ok(session)
@@ -784,7 +881,9 @@ fn handle(
                 // The agent is not on PATH — a legitimate outcome, not a
                 // panic. Nothing is inserted and the failure goes back as the
                 // command's error: an id was spent, but no half-built session
-                // is left behind for the list to carry.
+                // is left behind for the list to carry. Nothing is recorded
+                // either — the record is written on the branch above, where a
+                // process exists.
                 Err(err) => Err(err),
             });
         }
@@ -838,6 +937,10 @@ fn handle(
                         last_output: Instant::now(),
                         pending: Vec::new(),
                         seq: 0,
+                        // A shell is not an agent and has no conversation to
+                        // reopen — there is no transcript, no harness and no row
+                        // in the panel this field is about.
+                        conversation: None,
                     };
                     sessions.insert(id, live);
                     emit_state(app, &session);
@@ -852,6 +955,11 @@ fn handle(
         Request::Remove(id, tx) => {
             if let Some(mut live) = sessions.remove(&id) {
                 live.pty.kill();
+                // A person took the row away, so the offer goes with it. The
+                // front end has its own verb for a row with *no* session behind
+                // it — `terminal_forget` — and this is the same act one session
+                // earlier.
+                forget_session(&live);
                 // Announced, because not every removal is the front end's own
                 // doing any more: a run kills the session of a batch that
                 // stopped on a question (`runs/service.rs`), and without an
@@ -1066,6 +1174,98 @@ mod tests {
     fn the_empty_path_is_the_root() {
         let root = scratch("empty");
         assert_eq!(shell_cwd(&root, Some("")).unwrap(), root);
+    }
+
+    /* ---- what a session leaves behind ------------------------------------ */
+
+    fn run_intent(mode: crate::runs::model::RunMode) -> Intent {
+        use crate::runs::model::{RunScope, RunSettings};
+        Intent::Run {
+            settings: RunSettings {
+                scope: RunScope::Queue,
+                mode,
+                target_branch: "main".into(),
+                create_target: false,
+                min_priority: None,
+                max_parallel_tasks: None,
+                live_check: false,
+                file_findings: false,
+            },
+            reports: PathBuf::from("/p/.smetana/runs/1"),
+            batch: 1,
+            remove_worktrees: false,
+        }
+    }
+
+    #[test]
+    fn only_a_persons_own_agent_is_offered_back() {
+        use crate::runs::model::RunMode;
+        for intent in [
+            Intent::Bare,
+            Intent::Setup,
+            Intent::EditTask { id: "smetana-42".into(), title: "x".into() },
+        ] {
+            assert!(records_a_restorable(&intent), "{intent:?}");
+        }
+        // Both modes, because `is_batch` — the neighbouring question — answers
+        // only for the unattended one, and a supervised run's session is still
+        // the runs registry's rather than this file's.
+        for mode in [RunMode::Auto, RunMode::Supervised, RunMode::Solo] {
+            assert!(!records_a_restorable(&run_intent(mode)), "a run's session is not offered back");
+        }
+    }
+
+    /// The profile a test needs to ask `conversation_for` anything: the real
+    /// `claude`, which answers `session_id_args`, and the real `codex`, which
+    /// does not.
+    fn profile(id: &str) -> &'static dyn agents::Profile {
+        agents::resolve(id).expect("a listed id resolves")
+    }
+
+    #[test]
+    fn a_harness_that_cannot_be_told_an_id_records_nothing() {
+        // The whole of how codex avoids drawing a row it could not resume: no
+        // refusal is worded anywhere, because no record is ever written.
+        assert!(conversation_for(profile("codex"), &Intent::Bare).is_none());
+        assert!(conversation_for(profile("claude"), &Intent::Bare).is_some());
+    }
+
+    #[test]
+    fn a_run_is_recorded_by_its_own_registry_and_not_by_this_one() {
+        use crate::runs::model::RunMode;
+        assert!(conversation_for(profile("claude"), &run_intent(RunMode::Auto)).is_none());
+    }
+
+    #[test]
+    fn a_resumed_session_is_recorded_under_the_id_it_reopened() {
+        // And not under a fresh one: the row has to survive a second restart,
+        // and the transcript this session goes on writing into is the one the
+        // `--resume` named.
+        let intent = Intent::ResumeSession {
+            id: "9f1c0a2e-0000-4000-8000-000000000000".into(),
+            cwd: "/p".into(),
+            title: None,
+            fork: false,
+        };
+        assert_eq!(
+            conversation_for(profile("claude"), &intent).as_deref(),
+            Some("9f1c0a2e-0000-4000-8000-000000000000")
+        );
+    }
+
+    #[test]
+    fn a_forked_session_is_not_recorded_under_the_transcript_it_branched_from() {
+        // `--fork-session` has Claude Code invent an id for the new transcript,
+        // which this app never learns. A record under the original's id would
+        // offer a row that reopens the wrong conversation, so a fork records
+        // nothing at all.
+        let intent = Intent::ResumeSession {
+            id: "9f1c0a2e-0000-4000-8000-000000000000".into(),
+            cwd: "/p".into(),
+            title: None,
+            fork: true,
+        };
+        assert!(conversation_for(profile("claude"), &intent).is_none());
     }
 
     /* ---- where a resumed session starts ---------------------------------- */

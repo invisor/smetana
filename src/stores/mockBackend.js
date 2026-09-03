@@ -1400,6 +1400,34 @@ export function installMockBackend() {
         { id: 12, project: MOCK_PROJECTS[1], state: 'needs-you', kind: 'shell' }
       ]
     }
+    /* The sessions the last run of the app left behind, which in the app are
+       read out of `.smetana/agents.json`. A read, and answered here for the
+       reason every other read is: a browser has no project folder to walk, and
+       an unanswered command would log a failure on every project switch in
+       `npm run dev`.
+
+       One record rather than none, because the row it draws is the whole of
+       what this feature looks like and a browser is where it gets checked in
+       the four theme × density combinations. It is captioned by its `work` like
+       any other row, and the work is an edit so that the caption has both of its
+       halves in it — prose and an issue id — the way `terminal_list`'s
+       `needs-you` row does.
+
+       `terminal_forget` is deliberately **not** answered, exactly as
+       `terminal_remove` is not: taking a row away writes to a file, a browser
+       has none, and the loud refusal is the honest answer. */
+    if (command === 'terminal_restorable') {
+      return [
+        {
+          sessionId: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+          agent: 'claude',
+          cwd: MOCK_PROJECTS[0],
+          project: payload?.project ?? MOCK_PROJECTS[0],
+          work: { kind: 'editTask', id: 'bd-3c9d' },
+          startedAt: new Date(Date.now() - 19 * 3600000).toISOString()
+        }
+      ]
+    }
     if (command === 'terminal_attach') {
       return { data: toBase64(MOCK_SESSION_OUTPUT), seq: 0 }
     }

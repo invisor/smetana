@@ -148,3 +148,26 @@ pub async fn terminal_run_capture(
 ) -> Result<Vec<String>, TerminalError> {
     ask(&handle, |tx| Request::RunCapture(id, input, settle_ms, timeout_ms, tx)).await?
 }
+
+/// The agent sessions this project had when the app last closed, as rows the
+/// sidebar can offer back.
+///
+/// The two below take no `TerminalHandle` and put nothing on the worker's
+/// queue, which is the whole shape of them: the registry is a file, nothing
+/// here touches the sessions the worker holds, and a project the worker has
+/// never heard of answers exactly as well as one it has.
+#[tauri::command]
+pub async fn terminal_restorable(
+    project: String,
+) -> Result<Vec<super::restore::Restorable>, TerminalError> {
+    Ok(super::restore::read(std::path::Path::new(&project)).sessions)
+}
+
+/// A person took a restored row away. The registry alone, and deliberately not
+/// `terminal_remove`: there is no session behind the row, so asking the worker
+/// to end one would be the wrong verb and would answer `noSession`.
+#[tauri::command]
+pub async fn terminal_forget(project: String, session_id: String) -> Result<(), TerminalError> {
+    super::restore::drop_record(std::path::Path::new(&project), &session_id);
+    Ok(())
+}

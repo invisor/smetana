@@ -552,6 +552,13 @@ pub struct Launch {
     /// intent has any, and it is read by the caller for the same reason skill
     /// text is: `prompt.rs` stays pure and the disk stays outside it.
     pub facts: Option<String>,
+    /// The conversation id this app chose for the session, where the profile can
+    /// be told one (`Profile::session_id_args`).
+    ///
+    /// `None` for a resume — the id is the transcript's own and `--resume`
+    /// already carries it — and for a harness with no such flag. The worker
+    /// chooses it; `terminal::conversation` is what makes one.
+    pub session_id: Option<String>,
 }
 
 pub trait Profile: Sync {
@@ -646,6 +653,26 @@ pub trait Profile: Sync {
     /// The default is `None` and refuses before anything is spawned
     /// (`TerminalError::NoFork`), exactly as `resume_args`'s does.
     fn fork_args(&self, _session: &str) -> Option<Vec<String>> {
+        None
+    }
+
+    /// How this harness is told which conversation id to write the session
+    /// under, as the arguments that go in front of everything else, or `None`
+    /// where it cannot be told at all.
+    ///
+    /// A capability and its arguments in one answer, the shape `resume_args`
+    /// and `fork_args` already keep. What it buys is knowing afterwards what to
+    /// resume: the harness would otherwise invent the id and name its
+    /// transcript after it, and matching a live session to a transcript by
+    /// directory and mtime is a guess that is wrong exactly where two agents
+    /// share a directory.
+    ///
+    /// The default is `None`, and it is a working answer rather than a gap.
+    /// **A profile that cannot be told an id records nothing** — see
+    /// `terminal::restore` — so such a harness simply never draws a row it
+    /// could not resume, and no refusal has to be worded anywhere. That is what
+    /// every session did before this existed.
+    fn session_id_args(&self, _session: &str) -> Option<Vec<String>> {
         None
     }
 

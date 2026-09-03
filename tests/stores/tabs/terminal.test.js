@@ -42,6 +42,11 @@ beforeEach(async () => {
   loaded.stores.files.setRoot('/p')
   ipc.on('files_read', (args) => fileText({ path: args.path, text: `text of ${args.path}` }))
   ipc.on('terminal_list', [])
+  /* Read beside the session list, in the same `loadSessions`, so every test
+     here reaches it too. Answered with nothing: what a project offers back
+     after a restart is `terminals.test.js`'s subject, and an unregistered
+     command would have this file exercising a caught failure instead. */
+  ipc.on('terminal_restorable', [])
   ipc.on('terminal_remove', null)
 })
 

@@ -579,6 +579,7 @@ mod tests {
                 superpowers_installed: false,
             },
             facts: None,
+            session_id: None,
             languages: crate::agents::Languages::default(),
             caveman_level: String::new(),
             agent_prompt: String::new(),
@@ -625,6 +626,31 @@ mod tests {
         use crate::agents::Profile;
         assert_eq!(Codex.resume_args("9f1c0a2e"), None);
         assert_eq!(Codex.fork_args("9f1c0a2e"), None);
+    }
+
+    #[test]
+    fn codex_cannot_be_given_a_conversation_id() {
+        // The third of the same family, and the one with a consequence rather
+        // than a refusal behind it: a harness this app cannot name a
+        // conversation for records nothing in `.smetana/agents.json`, so a codex
+        // session never comes back as a row offering a resume it could not make.
+        use crate::agents::Profile;
+        assert_eq!(Codex.session_id_args("9f1c0a2e-0000-4000-8000-000000000000"), None);
+    }
+
+    #[test]
+    fn nothing_of_a_chosen_id_reaches_this_command_line() {
+        // The profile answering `None` is half of it; the other half is that a
+        // `Launch` carrying an id all the same puts no flag on the line, since
+        // this harness's `command` never asks for one.
+        use crate::agents::Profile;
+        let carried = Launch {
+            session_id: Some("9f1c0a2e-0000-4000-8000-000000000000".to_owned()),
+            ..launch(Intent::Bare)
+        };
+        let args = argv(&carried);
+        assert!(!args.iter().any(|a| a.contains("session-id")), "{args:?}");
+        let _ = Codex.id();
     }
 
     fn with_images(brainstorm: Stage, images: Vec<String>) -> Intent {
