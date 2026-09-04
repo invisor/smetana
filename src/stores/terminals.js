@@ -474,12 +474,25 @@ function describeWork(work, sessionId) {
 export const agentRows = computed(() => [
   ...agentSessions().map((session) => ({
     id: session.id,
+    /* The one name for this row that will mean the same thing tomorrow, and
+       the whole reason `Session` carries it: `id` is the worker's counter,
+       which starts at 1 on every launch, so the panel's order and its pins are
+       kept under this instead. `null` — for a run's batch, for a fork, for a
+       harness that cannot be told an id — is an ordinary answer, and such a
+       row simply takes part in the order while the window lives.
+       `components/agent/agentOrder.js` is what reads it. */
+    conversation: session.conversation ?? null,
     ...describeWork(session.work, session.id),
     state: toUiState(session),
     elapsed: formatElapsed(now.value - Date.parse(session.startedAt))
   })),
   ...visibleStarts().map((ticket) => ({
     id: ticket.id,
+    /* A start has no conversation: the worker chooses the id at the spawn and
+       this ticket is what stands in for the second before it answers. The row
+       becomes a session with one about a second later, under a different `id`
+       as well, so there is nothing here to remember either way. */
+    conversation: null,
     ...describeWork(ticket.work, null),
     state: 'running',
     elapsed: 'starting',
@@ -502,6 +515,13 @@ export const agentRows = computed(() => [
      the way a start's says `starting`. */
   ...terminalState.restored.map((record) => ({
     id: record.sessionId,
+    /* The record's key *is* the conversation id — it is what
+       `.smetana/agents.json` is keyed by — so a row that comes back after a
+       restart comes back under the very name the live row carried, which is
+       what lets a pin outlive the agent it was put on. Written out rather than
+       left to `id`: the two happen to be the same string for this one kind of
+       row, and a reader of the order has no business knowing that. */
+    conversation: record.sessionId,
     ...describeWork(record.work, null),
     state: 'done',
     elapsed: 'offline',

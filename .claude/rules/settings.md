@@ -35,7 +35,8 @@ which sound each of the two announcements makes and whether a finished run shows
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
 absolute path to its content state (side tab, right tab, active tab, selected task, `recentTasks`,
 selected path, `selectedRepo`, expanded folders, `branchFolders`, `openTabs`, `previewTab`,
-`columnOrder`, `tabOrder`, `runSettings`, `caveman`, `storageWarnedMib`, `usedAt`).
+`columnOrder`, `tabOrder`, `agentOrder`, `pinnedAgents`, `runSettings`, `caveman`,
+`storageWarnedMib`, `usedAt`).
 
 `tabOrder` sits beside `openTabs` rather than replacing it, and the two answer different questions:
 that one is the **set of files to open again** — the dirty marks, the focus sweep and the closing of
@@ -46,6 +47,15 @@ ceilings that are deliberately not `column_order`'s: an entry is a tab id and a 
 path, so the item limit is `MAX_PATH_LEN`, and the count is well past `MAX_OPEN_TABS` because three
 kinds of tab share the one list. A hint rather than a truth, exactly as the column order is — the
 rule that reads it is `components/shell/tabOrder.js` (`.claude/rules/files-and-editor.md`).
+
+`agentOrder` and `pinnedAgents` are the agents panel's own pair, keyed by the conversation id the app
+chose for each session and never by the worker's session number, which starts at 1 again on every
+launch. They are two fields rather than one because they are rewritten by different gestures — a drag
+rewrites the order, pinning rewrites the pins — and the first is rebuilt whole from the rows on screen
+the way `tabOrder` is while the second is written only when somebody pins or unpins. Both are
+validated with `sane_list` against `MAX_AGENT_ORDER` and the identifier ceiling, an id being a UUID
+rather than a path. What they *mean* is `.claude/rules/terminal.md`, which owns the panel; the rule
+that reads them is `components/agent/agentOrder.js`.
 
 `agentPrompt` sits at the root beside the four languages and for their reason rather than a new one:
 a standing instruction of the "talk to me briefly", "this machine has no Docker" kind is a fact about
