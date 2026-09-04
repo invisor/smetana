@@ -1301,6 +1301,15 @@ export function installMockBackend() {
           question: null,
           startedAt: new Date(Date.now() - 4 * 60000).toISOString(),
           exitCode: null,
+          /* The id the app chose for this conversation at the spawn, which is
+             what the agents panel keys its dragged order and its pins by. Two
+             of these three rows carry one and the run's batch below carries
+             `null`, which is the truth about a batch and also the only way a
+             browser can show the menu greying `Pin to top` with its reason on
+             it. Pinning here changes nothing on disk — `settings_save` is
+             accepted and dropped — so what `npm run dev` checks is the drawing
+             and not the remembering. */
+          conversation: '5f2d9c31-8a4e-4b6f-9c0d-1e2f3a4b5c6d',
           /* The draft rides in the session — see `SessionWork` in
              `src-tauri/src/terminal/model.rs`. There is no issue behind it and
              nothing else on the front end holds these words, so without this
@@ -1333,6 +1342,11 @@ export function installMockBackend() {
           question: null,
           startedAt: new Date(Date.now() - 64 * 60000).toISOString(),
           exitCode: null,
+          /* None, and that is what the worker really answers for a batch: a
+             run's session records nothing in `.smetana/agents.json`, so there
+             is no id under which a pin could survive a restart. The row is
+             dragged like any other and its menu greys the pin. */
+          conversation: null,
           work: { kind: 'run' }
         },
         {
@@ -1352,6 +1366,7 @@ export function installMockBackend() {
           },
           startedAt: new Date(Date.now() - 134 * 60000).toISOString(),
           exitCode: null,
+          conversation: '7c3b1a05-2d6e-4f81-9a3b-4c5d6e7f8a90',
           /* Without this the row would be captioned "Agent", which is the
              honest answer for a session whose work is unknown and a useless
              one for the only session a browser has. An edit is the case worth

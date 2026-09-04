@@ -505,6 +505,85 @@ and the starts, captioned through the same `describeWork` so the three cannot wo
 ways. Removing such a row is `forgetRestored` and never `terminal_remove`: there is no session behind
 it, so asking the worker to end one would answer `noSession` about an id it has never held.
 
+## The order of the panel, and the rows held at the top
+
+**The order belongs to the person.** Any row in the agents panel may be dragged past any other — a
+live session, one still starting, an offline record — and that flatness was asked for directly and
+answered directly: whether a process stands behind a row is not the question somebody is arranging
+this list to answer. The consequence is taken knowingly rather than worked around: an agent started
+now appears at the end of the list and may well sit below yesterday's rows.
+
+Above the flat part sits a leading block of **pinned** rows, which is the shape `shell/tabOrder.js`
+already has for the board and the Agent tab; the difference is who decides membership, a person here
+against the kind of the tab there. "Cannot be closed" is **drawn rather than enforced**: a pinned row
+has no cross at all, and its menu says `Unpin` where an ordinary row's says `Pin to top`. Closing one
+is two gestures on purpose, and the menu's refusal says which. The point of the whole feature is that
+a pin outlives its agent: the session ends, the row comes back after a restart as an `offline` one
+under the same name, and it comes back at the top.
+
+**That name is the conversation id and never `SessionId`.** The worker's counter starts at 1 on every
+launch and no process survives a restart, so an order — let alone a pin — kept under it would hand
+yesterday's place to whichever agent happened to be started second today. The conversation id is the
+one name for a session that means the same thing tomorrow: the app chooses it at the spawn
+(`conversation_for`), `.smetana/agents.json` keys the restorable record by it, and the offline row
+carries the very same one. It reaches the front end as `Session::conversation`, which exists for this
+and for nothing else, and `agentRows` puts it on every row — `null` for a start ticket, a fork, a
+run's batch and a harness that cannot be told an id, which is an ordinary answer rather than a
+failure.
+
+Two fields of `ProjectState` keep it, `agent_order` and `pinned_agents`, beside `column_order` and
+`tab_order` and per project for their reason. **Two and not one**, because they are rewritten by
+different gestures: a drag rewrites the order and leaves the pins alone, pinning rewrites the pins and
+leaves the order alone — which is what lets an unpinned row drop back into the place the order still
+remembers for it instead of landing at the end. Both are listed in the front end's `project` defaults
+(`src/stores/settings.js`) as well, and that is not decoration: `applySection` is
+`Object.assign(target, defaults, stored)`, so a key missing there is a key the defaults layer cannot
+clear, and one project's pinned agents would still be sitting at the top of the panel after somebody
+opened the next project.
+
+`components/agent/agentOrder.js` is the whole of the reconciliation and `components/agent/agentMenu.js`
+the whole of the menu, both pure and outside the component for the reason `dropPaths.js` is. The
+stored order is a hint the way `orderColumns`' is: rows it knows are drawn in its sequence, the rest
+go after them, and an id matching nothing is passed over rather than pruned, so a conversation offered
+back next week finds the place it was left in. The pinned block is lifted in front of that, ordered by
+the same stored sequence where it knows the rows and by the order the pins were put on where it does
+not — which is what makes dragging one pinned row past another work at all.
+
+**"An unpinned row drops back into the place the order still remembers" is a description and not a
+promise**, and the distinction is worth having in front of you before reading a bug into it. `Unpin`
+with no drag since the pin does return the row exactly where it was, because pinning never touched
+`agent_order`. But a drag rewrites that field from the rows **as drawn**, pinned block and all — so
+once any drag has happened the stored order names the pinned rows at the top, and a later `Unpin`
+leaves the row there rather than at its pre-pin place. That is the honest reading of a sequence
+somebody arranged by hand with the row already at the top, and the alternative — writing an order
+that does not match what is on screen — would make the block's own arrangement unrecordable.
+
+**One piece of the order is deliberately not in `settings.json`**, and `agentArrangement` in
+`DesktopApp.vue` is it. Only conversation ids may be written to the file, for the reason above, but a
+row that has none is dragged like any other — and with the file as the only memory it would snap back
+to the end the instant the pointer was released, since what the stored order has never heard of goes
+last. So this window keeps the whole drawn sequence and the file keeps the half of it that will still
+mean something tomorrow; the ref is emptied on a project switch, since those keys name another
+project's agents.
+
+**A drag that visibly did nothing writes nothing**, and that guard is this panel's own rather than a
+copy of the tab row's. `AgentList.vue` counts a move by comparing the **drawn** keys before and
+after, never the draft: `orderAgents` has the last word, so dragging a pinned row below the block —
+or an unpinned one above it — produces a new draft on every move that is then redrawn exactly as it
+was. Counting those would emit `reorder` with the order already on screen, flipping a project from
+"never arranged" to "arranged" for a gesture that moved nothing, which the paragraph above is
+precisely what makes not free. `moveAgent`'s reference-identity contract says the same thing one
+level down, and this is that rule where the drawn list and the draft can disagree.
+
+The drag itself is `TabBar.vue`'s and not `KanbanBoard.vue`'s, and the difference is load-bearing: a
+press must only **arm**, becoming a drag when the pointer leaves the row's box, because the row
+carries the click that picks an agent and a capture taken on `pointerdown` retargets the compatibility
+events until that click never fires. What is *not* copied is that file's latch — every row here is
+`--row-h` tall, so after a swap the pointer is over the held row again by construction, which is the
+guarantee a tab as wide as its own label cannot make. The menu is `PointerMenu` on `contextmenu`, the
+same panel `ProjectRail` and `BranchList` open, and there is no other right click to be had: the app
+refuses the native one everywhere (`src/nativeMenu.js`).
+
 `src/stores/terminals.js` keeps the same cost-driven split as the worker: `sessions` and `agentRows`
 hold every session's state, cheap and needed for a background row's colour; output bytes go only to
 the callbacks registered through `subscribeOutput` — in practice the one live `TerminalView.vue`.

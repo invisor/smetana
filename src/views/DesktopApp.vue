@@ -80,6 +80,7 @@ import Tooltip from '../components/core/Tooltip.vue'
 import IconButton from '../components/core/IconButton.vue'
 import { CommandPalette, TaskSearchButton, TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
+import { agentKey, conversationsOf, orderAgents } from '../components/agent/agentOrder.js'
 import SessionRow from '../components/agent/SessionRow.vue'
 import {
   DELETE_SESSION_TITLE,
@@ -242,6 +243,7 @@ import { checkNewName } from '../components/files/newEntry.js'
 import { absolutePath, relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
 import { workingKey } from '../components/run/configFreshness.js'
+import { needsReady, promotesToReady } from '../components/run/readyPromote.js'
 import { runTitle, scopeBusyReason } from '../components/run/runScopes.js'
 import { limitVoice } from '../components/run/limitVoice.js'
 import { DEFAULTS_FALLBACK, draftFrom } from '../components/run/projectDefaults.js'
@@ -713,21 +715,50 @@ const configErrorText = computed(() =>
    board and they know what the epic is — and taking the button away is not a
    way to have that conversation with them.
 
-   Three exclusions. Done: the run would claim a closed issue, and there is
-   nothing there to do. Blocked: the column is computed from unfinished
-   blockers, so the run would put an agent on work whose prerequisite is not
-   merged yet — and nothing here can go stale, because the blocker closing is
-   what moves the card into Ready and brings the button with it. Parked: an
-   agent already gave this task up over something it could not settle, and
-   starting another one on it walks the next agent into the same question. That
-   is the same refusal the Ready warning makes, and it has to be made here too —
-   otherwise the play is the way around the dialog, one row above it in the very
-   same menu. `bdStatus` rather than the normalized status, because parking is
-   bd's own custom word and this is the front end's one reading of it. */
+   Three exclusions, one of which is read twice — see below. Done: the run would
+   claim a closed issue, and there is nothing there to do. Blocked: the run would
+   put an agent on work whose prerequisite is not merged yet, and nothing here
+   can go stale, because the blocker closing is what makes the card runnable and
+   brings the button with it. Parked: an agent already gave this task up over
+   something it could not settle, and starting another one on it walks the next
+   agent into the same question. That is the same refusal the Ready warning
+   makes, and it has to be made here too — otherwise the play is the way around
+   the dialog, one row above it in the very same menu. `bdStatus` rather than the
+   normalized status, because parking is bd's own custom word and this is the
+   front end's one reading of it.
+
+   Blocked is read twice over, and that is not one check written twice. The
+   **column** catches a card the board draws under Blocked, which is only ever
+   an `open` issue with an unfinished blocker — plus, since the column is bd's
+   own status wherever it is not computed, an issue somebody put in bd's stored
+   `blocked` status by hand, which carries no dependency at all. The **count**
+   catches what the column cannot: bd keeps a dependent issue at its own status,
+   so a `deferred`, `pinned`, `hooked` or custom card waiting on an unfinished
+   blocker is bucketed under that status and was offered a run this app could
+   not carry out — `snapshot` in `runs/queue.rs` admits only an `open` and
+   unblocked issue to the ready set, so the run ended at once with an empty
+   report, and once the run started moving such a card to Ready (smetana-wbix)
+   it would have spent the person's chosen status on that same nothing. The two
+   readings are of one fact and neither subsumes the other, so both stay.
+
+   The count is asked **only of a status the run would have to move**, which is
+   `needsReady` and deliberately the very predicate the write reads — one rule
+   with two readers rather than a second statement of it here. A blocker is not
+   a reason to refuse by itself: `snapshot` matches `in_progress` and
+   `ready_to_merge` in an arm *above* the `OPEN` one and puts both into
+   `unfinished` whatever they wait on, so `next_action` answers
+   `Run(RecoverUnfinished)` rather than `Stop(QueueEmpty)` — a `ready_to_merge`
+   task waiting on a sibling that has not merged is an ordinary shape here, and
+   "Run this" on it is how the run is asked to merge it. Greying those was this
+   clause's first draft and the cost would have been a dead row with no words
+   at all, since the blocked refusal is deliberately silent (`taskMenu.js`) and
+   neither the Ready-to-merge column nor Running says anything about a
+   dependency. */
 const runnableTask = (task) =>
   runOffered.value &&
   task.status !== 'done' &&
   task.status !== 'blocked' &&
+  !(task.blockedBy && needsReady(task.bdStatus)) &&
   !isParked(task.bdStatus)
 
 /* Why the queue's own play is inactive, or '' when it is not. A project holds
@@ -1571,6 +1602,8 @@ const openRun = async (scopeValue) => {
          heading from "Run this task" to "Run these tasks". */
       title: runTitle(runScope.value),
       scope: runScope.value,
+      taskStatus: runScopeStatus.value,
+      taskBlocked: hasBlocker(runScope.value.id),
       count: runCount.value,
       partOf: runParent.value,
       branches: gitState.branches,
@@ -1657,6 +1690,30 @@ const runTheEpicInstead = () => {
   if (epic) runScope.value = { kind: 'epic', id: epic.id, title: epic.title }
 }
 
+/* What the board holds against the card the dialog is aimed at, in bd's own
+   words. It is what the dialog's line about the move to Ready is decided from,
+   and it is bd's vocabulary rather than `toUiStatus`'s because that is what
+   `readyPromote.js` is written against and what the write below sends back.
+
+   '' where there is no issue to read — an epic scope names one and a queue
+   scope names nothing, and a card can be deleted under an open window. Live,
+   like every other prop this dialog is served: somebody moving the card between
+   columns while the window stands takes the line with them.
+
+   Read here rather than carried in the scope, for `runParent`'s reason: the
+   scope is what the run is aimed at, and this is a fact about it that has to
+   stay right when `rescope` changes the aim. */
+const runScopeStatus = computed(() => issueById(runScope.value.id)?.status ?? '')
+
+/* Whether an unfinished blocker stands in front of an issue — the other half of
+   the decision above, and the store's own reading rather than a second one:
+   `dependencyEdges` keeps an entry only where at least one `blocks` dependency
+   is on the board and not closed, which is the rule `queue::blocked` applies in
+   Rust. Read straight off it rather than off the card, because the card exists
+   only where the board draws one and this is asked about whatever the dialog is
+   aimed at. */
+const hasBlocker = (id) => dependencyEdges.value.blockedBy.has(id)
+
 /* How much is in front of the run, for the line the dialog ends on. The whole
    ready column, not the drawn one: a run reads the board in Rust and the view
    settings do not reach it, so a number taken from what is on screen would
@@ -1683,6 +1740,42 @@ const startTheRun = async (chosen) => {
   runStarting.value = true
   runError.value = ''
   try {
+    /* A run takes its work out of Ready and nowhere else — `snapshot` in
+       `runs/queue.rs` puts only `open` into the ready set — so a run aimed at a
+       card standing in any other column used to stop in the same breath it
+       started, `QueueEmpty` and an empty report, leaving somebody to move the
+       task by hand and start again. It is moved here instead, before the run,
+       and the dialog has already said so: `readyPromote.js` is the one rule
+       both halves read, so the sentence on screen and the write cannot
+       disagree.
+
+       Only where the issue is actually held. A card deleted under an open
+       window is the worker's refusal to make, in its own words about a task bd
+       no longer has, and inventing a status write about it here would replace
+       that answer with a worse one.
+
+       And only where the write would land the task in Ready rather than in
+       Blocked, which `promotesToReady` is the whole of: an issue waiting on an
+       unfinished blocker is kept at its own status by bd, so `deferred` and
+       blocked is a card the board draws under Deferred, and writing `open` to
+       it would spend a status the person chose on a run that still finds
+       nothing. The card menu refuses such a card too (`runnableTask`), and this
+       is the same fact read again a moment later, because a blocker can be
+       reopened while the window stands.
+
+       Not caught: a status that would not write means a run that would find
+       nothing, so the dialog stays open with the tracker's own complaint in it
+       (`runFailure`) rather than starting something that ends at once. */
+    const aimedAt = chosen.scope?.kind === 'task' ? issueById(chosen.scope.id) : null
+    if (aimedAt && promotesToReady(aimedAt.status, hasBlocker(aimedAt.id))) {
+      await updateIssue(aimedAt.id, { status: READY })
+      /* The same check the rest of this file makes after every await, and the
+         same reason: somebody can switch projects while a write is in flight,
+         and from that moment the tracker worker points at another folder. The
+         run must not go out against a board that is no longer on screen — the
+         window itself is already gone, its ground being the project. */
+      if (activePath.value !== path) return
+    }
     await startRun(path, chosen)
     /* Answered, so it goes — whether or not any of the rest below applies. */
     closeDialog('run')
@@ -2109,6 +2202,43 @@ function selectAgent(id) {
   } else if (work?.kind === 'newTask' || row?.claimed?.length) {
     rightFocus.value = id
   }
+}
+
+/* The agents panel in the order the person put it in. bd's board and the
+   settings meet in `orderColumns` a few hundred lines down; this is the same
+   shape one panel over — the store owns which rows exist, `settings.json` owns
+   the sequence and the pins, and `agentOrder.js` is the reconciliation.
+
+   `agentArrangement` is the one piece of this that is not in `settings.json`,
+   and it is worth saying why rather than leaving it to be found. Not every row
+   has a conversation id — a run's batch, a fork, a start ticket, a harness that
+   cannot be told one — and only conversation ids may be written to the file:
+   the worker's session number starts at 1 again on the next launch, so an order
+   kept under it would hand yesterday's place to a stranger. But such a row is
+   still dragged like any other, and with the file as the only memory it would
+   snap back to the end of the list the instant the pointer was released, since
+   `orderAgents` puts what it has never heard of last. So this window keeps the
+   whole drawn sequence — conversation ids and this window's own keys alike —
+   and the file keeps the half of it that means anything tomorrow. It is
+   emptied on a project switch for the reason everything else per project is:
+   these keys name another project's agents. */
+const agentArrangement = ref([])
+
+const orderedAgentRows = computed(() =>
+  orderAgents(
+    agentRows.value,
+    agentArrangement.value.length ? agentArrangement.value : project.agentOrder,
+    project.pinnedAgents
+  )
+)
+
+/* A drag, applied. Two writes out of one answer, and neither is derivable from
+   the other: the window's own sequence, which holds every row that was on
+   screen, and the project's, which holds only what will still mean something
+   after a restart. */
+function reorderAgents(rows) {
+  agentArrangement.value = rows.map(agentKey)
+  project.agentOrder = conversationsOf(rows)
 }
 
 /* The X on a row in the agents panel, and which of the two removals it is.
@@ -4823,6 +4953,9 @@ watch(activePath, (path) => {
   loadHead(path)
   loadConfig(path)
   loadRun(path)
+  /* The keys in it are another project's agents, and the project being opened
+     brings its own order out of `settings.json`. */
+  agentArrangement.value = []
   /* Held until dismissed is right for a note naming a folder, and it is what
      makes this line necessary: the folder it names is beside one project's
      `.beads`, so left standing it would sit over the next project telling
@@ -5462,10 +5595,13 @@ const toastStackStyle = {
               />
               <AgentList
                 v-else
-                :rows="agentRows"
+                :rows="orderedAgentRows"
                 :active-id="terminalState.activeId"
+                :pinned="project.pinnedAgents"
                 @select="selectAgent"
                 @remove="removeAgentRow"
+                @reorder="reorderAgents"
+                @pin="project.pinnedAgents = $event"
               />
             </div>
           </div>
