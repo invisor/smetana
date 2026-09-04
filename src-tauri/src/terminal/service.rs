@@ -149,15 +149,6 @@ struct Live {
     /// tick.
     pending: Vec<u8>,
     seq: u64,
-    /// The conversation id this app chose for the session, when it chose one:
-    /// the key of this session's record in `terminal::restore`, and `None` for
-    /// every session that has no record — a run's batch, a shell, a harness
-    /// that cannot be told an id, a machine that would give no random bytes.
-    ///
-    /// Held here rather than looked up again at the exit because there is
-    /// nothing to look it up by: the registry is keyed by the conversation id
-    /// and the worker knows a session by its own counter.
-    conversation: Option<String>,
 }
 
 /// Somebody waiting for a session to end — in practice the run worker, which
@@ -377,8 +368,13 @@ fn conversation_for(profile: &'static dyn agents::Profile, intent: &Intent) -> O
 }
 
 /// Take this session's record out of its project's registry, if it had one.
+///
+/// The id is read off the session rather than held a second time beside it:
+/// `Session::conversation` is the same value, it crosses to the front end
+/// anyway, and the registry is keyed by it while the worker knows a session by
+/// its own counter — so there is nothing else here to look one up by.
 fn forget_session(live: &Live) {
-    let Some(id) = live.conversation.as_deref() else { return };
+    let Some(id) = live.session.conversation.as_deref() else { return };
     super::restore::drop_record(Path::new(&live.session.project), id);
 }
 
@@ -837,8 +833,14 @@ fn handle(
                     // opened from a folder in the tree has, one arm down. The
                     // project is what the panel, the rail and `List` read; the
                     // directory is where the agent actually is.
-                    let session =
-                        Session::new(id, profile.id(), &dir.to_string_lossy(), &project, work);
+                    let session = Session::new(
+                        id,
+                        profile.id(),
+                        &dir.to_string_lossy(),
+                        &project,
+                        work,
+                        conversation.clone(),
+                    );
                     let live = Live {
                         session: session.clone(),
                         profile: Some(profile),
@@ -854,7 +856,6 @@ fn handle(
                         last_output: Instant::now(),
                         pending: Vec::new(),
                         seq: 0,
-                        conversation: conversation.clone(),
                     };
                     // After the spawn and not before it: a record for a session
                     // that never started would be a row offering a conversation
@@ -921,6 +922,10 @@ fn handle(
                         &dir.to_string_lossy(),
                         &project,
                         crate::terminal::model::SessionWork::Shell,
+                        // A shell is not an agent and has no conversation to
+                        // reopen — there is no transcript, no harness and no
+                        // row in the panel that field is about.
+                        None,
                     );
                     let live = Live {
                         session: session.clone(),
@@ -937,10 +942,6 @@ fn handle(
                         last_output: Instant::now(),
                         pending: Vec::new(),
                         seq: 0,
-                        // A shell is not an agent and has no conversation to
-                        // reopen — there is no transcript, no harness and no row
-                        // in the panel this field is about.
-                        conversation: None,
                     };
                     sessions.insert(id, live);
                     emit_state(app, &session);

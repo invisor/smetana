@@ -820,12 +820,38 @@ const galleryProjectStates = {
    check is for, since prose and issue ids are set in different families and a
    row has to hold both without either one wandering. */
 const agentRows = [
-  { id: 1, label: null, tasks: ['smetana-42'], state: 'needs-you', elapsed: '2h 14m' },
+  /* A pinned row, first because that is where the panel puts one: pinned rows
+     lead the list and nothing may be dragged above them. What is worth looking
+     at here is what it does *not* draw — the cross is gone, and the pin stands
+     in exactly its box, so pinning a row moves nothing else on it. The way back
+     out is `Unpin` in the row's own menu. `orderAgents` is what lifts it in the
+     app; this page draws rows rather than the rule, so the order is written out
+     here by hand, the way the sessions below are. */
+  {
+    id: 4242,
+    conversation: 'a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d',
+    label: 'Editing',
+    tasks: ['smetana-h7l4'],
+    state: 'running',
+    elapsed: '26m'
+  },
+  {
+    id: 1,
+    conversation: '2b3c4d5e-6f70-4812-9a3b-4c5d6e7f8091',
+    label: null,
+    tasks: ['smetana-42'],
+    state: 'needs-you',
+    elapsed: '2h 14m'
+  },
   /* A run holding several. Also the longest caption the list can be asked to
      draw, and therefore the one that says whether the elapsed time and the
      remove button still have room. */
-  { id: 2, label: null, tasks: ['smetana-42', 'smetana-9je', 'smetana-hvw'], state: 'running', elapsed: '1h 02m' },
-  { id: 3, label: 'Editing', tasks: ['smetana-8av'], state: 'running', elapsed: '41m' },
+  /* No conversation id, and that is the truth about a batch rather than a gap
+     in the fixture: a run's session records nothing in `.smetana/agents.json`,
+     so there is nothing a pin could survive a restart under. Its menu is where
+     the refusal `Pin to top — nothing to remember it by` can be read. */
+  { id: 2, conversation: null, label: null, tasks: ['smetana-42', 'smetana-9je', 'smetana-hvw'], state: 'running', elapsed: '1h 02m' },
+  { id: 3, conversation: '3c4d5e6f-7081-4923-ab4c-5d6e7f809123', label: 'Editing', tasks: ['smetana-8av'], state: 'running', elapsed: '41m' },
   { id: 4, label: 'Creating a task', tasks: [], state: 'running', elapsed: '3m' },
   { id: 5, label: 'Project setup', tasks: [], state: 'done', elapsed: '18m' },
   /* A bare agent, and also a run that has not claimed anything yet: the same
@@ -850,8 +876,27 @@ const agentRows = [
      Beside the row above it is also the pair worth looking at — two rows that
      are neither running nor finished, saying two different things in the same
      slot. */
-  { id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60', label: 'Editing', tasks: ['smetana-42'], state: 'done', elapsed: 'offline', restored: true }
+  {
+    id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+    /* A restored row's id *is* its conversation id — that is what
+       `.smetana/agents.json` is keyed by — and the row carries it under both
+       names, exactly as `agentRows` builds it. Written out so this page shows
+       what the panel really offers on such a row: it can be pinned, which is
+       the whole point of a pin, since this is what a pinned agent comes back
+       as. */
+    conversation: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+    label: 'Editing',
+    tasks: ['smetana-42'],
+    state: 'done',
+    elapsed: 'offline',
+    restored: true
+  }
 ]
+
+/* Which of the rows above the panel is holding at the top, by conversation id —
+   the one the first row carries. The list is what `settings.json` keeps and
+   what `AgentList` takes as a prop, so this is that file's own shape. */
+const AGENT_PINS = ['a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d']
 
 /* The right column's Sessions tab: Claude Code's own transcripts, as
    `sessions_list` hands them over. A fixed clock rather than `Date.now()`, and
@@ -3493,7 +3538,7 @@ const menuTargetStyle = {
            comfortable row height: the point of this section is seeing every
            caption at once, and a scrollbar would hide the last of them. -->
       <div :style="{ width: '252px', height: '224px', border: 'var(--border-w) solid var(--border)' }">
-        <AgentList :rows="agentRows" :active-id="2" />
+        <AgentList :rows="agentRows" :active-id="2" :pinned="AGENT_PINS" />
       </div>
       <!-- What that second row's run has taken, drawn where it actually
            appears: the right column at its shipped 340px, padded by
