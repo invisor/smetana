@@ -495,8 +495,21 @@ a freshly launched app does not open on an empty Agent tab — and its whole con
 click is the offer, and it takes the one road to a PTY: `resumeSession` in `DesktopApp.vue` →
 `createSession` with an `Intent::ResumeSession` → `--resume <id>` in the record's own directory. A
 worktree removed after its task merged is the ordinary case and is refused by `resume_cwd`, which
-reaches the person as a sentence in the toast corner like every other session verb's refusal. The
-`settings.json` half of the old sentence stands: the registry is per project and readable from
+reaches the person as a sentence in the toast corner like every other session verb's refusal.
+
+**The other refusal is the front end's own and is asked before the worker is**: a record is written
+only for a profile that can be told a conversation id, but the row is drawn whatever agent the
+project is set to *now*, so switching it to one that cannot resume leaves a row whose press has
+nowhere to go. `resumeRefused` in `stores/terminals.js` is the guard — `resumeAvailability` with the
+configured agent, and `resumeReasonLine` into the same `terminalState.lastError` a refused spawn
+uses — and `selectAgent` asks it before `resumeSession`. It has to be asked *there* and not inside
+`resumeSession`, which returns in silence: the Sessions tab greys the row and writes the reason under
+the opened card, so a toast would say a second time what is already on screen, while a row in the
+agents panel has nowhere to draw one and used to answer a press with nothing at all (smetana-3awe).
+Nothing is spawned and nothing is forgotten, so the offer is still there once the agent is switched
+back — dimming or hiding such a row is a change to the panel's look and was left out deliberately.
+
+The `settings.json` half of the old sentence stands: the registry is per project and readable from
 outside the app, `settings.json` is per user and platform-dependent, which is the same reasoning
 `runs.json` carries.
 

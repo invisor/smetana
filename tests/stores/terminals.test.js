@@ -3,6 +3,10 @@ import { loadStores } from '../support/stores.js'
 /* The one thing a row's `state` is read for that a test can check without a
    component: how loud it is. `AgentList` dims anything quiet. */
 import { attentionLevel } from '../../src/components/status/status.js'
+/* The other half of the refusal below, and the reason it is imported rather
+   than written out: the sentence a person reads is `sessionMenu.js`'s own, and
+   a literal here would be a second copy of it free to drift. */
+import { resumeAvailability, resumeReasonLine } from '../../src/components/agent/sessionMenu.js'
 
 /* The DOM half of the sound, stood in for — the same seam `runs.test.js` uses,
    and for the same reason: what this store is answerable for is which sound it
@@ -1524,6 +1528,43 @@ describe('the sessions a project offers back after a restart', () => {
        the agent it just became. */
     expect(loaded.stores.terminals.terminalState.restored).toEqual([])
     expect(loaded.stores.terminals.agentRows.value.map((row) => row.id)).toEqual([9])
+  })
+
+  /* The other refusal, and the one nothing on this row can draw: the record is
+     written only for a profile that can be told a conversation id, but the row
+     is drawn whatever agent the project is set to now, so switching to one that
+     cannot resume leaves a row whose press has nowhere to go. It used to go
+     nowhere silently (smetana-3awe). */
+  it('says why when the project\'s agent cannot resume by id, and starts nothing', async () => {
+    const loaded = await offering(offered())
+    loaded.stores.settings.settings.agent = 'codex'
+    const record = {
+      id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+      cwd: '/p/.worktrees/smetana-0cj'
+    }
+
+    expect(loaded.stores.terminals.resumeRefused(record)).toBe(true)
+    expect(loaded.stores.terminals.terminalState.lastError.description).toBe(
+      resumeReasonLine(resumeAvailability(record, { agent: 'codex' }).reason)
+    )
+    /* Nothing was attempted and nothing was given up: the worker was never
+       asked to spawn, the registry was never asked to forget, and the offer is
+       still in the panel to press once the agent is switched back. */
+    expect(loaded.ipc.commands()).not.toContain('terminal_create')
+    expect(loaded.ipc.commands()).not.toContain('terminal_forget')
+    expect(loaded.stores.terminals.agentRows.value).toHaveLength(1)
+  })
+
+  it('stands out of the way of an agent that can resume', async () => {
+    const loaded = await offering(offered())
+
+    expect(
+      loaded.stores.terminals.resumeRefused({
+        id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+        cwd: '/p/.worktrees/smetana-0cj'
+      })
+    ).toBe(false)
+    expect(loaded.stores.terminals.terminalState.lastError).toBe(null)
   })
 
   it('keeps the offer when the resume is refused', async () => {

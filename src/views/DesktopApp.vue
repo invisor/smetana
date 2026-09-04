@@ -116,6 +116,7 @@ import {
   loadSessions,
   projectStates,
   removeSession,
+  resumeRefused,
   send,
   terminalState
 } from '../stores/terminals.js'
@@ -2177,10 +2178,22 @@ function selectAgent(id) {
      being taken: it goes down the one road to a PTY, `createSession` with a
      `resumeSession` intent, exactly as the Sessions tab's own verb does. A
      worktree that has gone is refused by the worker and reaches the person as a
-     sentence in the toast corner. */
+     sentence in the toast corner.
+
+     `resumeRefused` is the other refusal, and it has to be asked here rather
+     than left to `resumeSession`: that one returns in silence, which is right
+     where it is called from — the Sessions tab greys the row and writes the
+     reason under the opened card, so a toast would say a second time what is
+     already on screen. This row says nothing of the kind. It is drawn for every
+     project whatever agent it is set to, so under one that cannot resume by id
+     the press produced nothing at all: no toast, no row, no change (smetana-3awe).
+     The store puts the reason in the toast corner in the same words the menu
+     row uses, and nothing is spawned and nothing is forgotten — the offer is
+     still there to press once the agent is switched back. */
   const offered = agentRows.value.find((row) => row.id === id && row.restored)
   if (offered) {
-    resumeSession({ id: offered.id, cwd: offered.cwd, title: null })
+    const record = { id: offered.id, cwd: offered.cwd, title: null }
+    if (!resumeRefused(record)) resumeSession(record)
     return
   }
   terminalState.activeId = id
