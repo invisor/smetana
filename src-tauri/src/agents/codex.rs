@@ -114,7 +114,6 @@ impl Profile for Codex {
             launch.facts.as_deref(),
             text,
             &launch.languages,
-            &launch.caveman_level,
             &launch.agent_prompt,
         ) {
             cmd.arg(built);
@@ -581,7 +580,6 @@ mod tests {
             facts: None,
             session_id: None,
             languages: crate::agents::Languages::default(),
-            caveman_level: String::new(),
             agent_prompt: String::new(),
         }
     }

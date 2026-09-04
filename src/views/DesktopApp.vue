@@ -148,13 +148,11 @@ import {
 } from '../stores/notifications.js'
 import { applyPatch, initSettingsBridge, settings } from '../stores/settings.js'
 import {
-  announceActiveProject,
   announceBoardColumns,
   announceDialogProps,
   closeDialogWindow,
   closeWindow,
   copyText,
-  focusWindow,
   homeDir,
   isWindowMaximized,
   minimizeWindow,
@@ -165,11 +163,9 @@ import {
   revealInFileManager,
   toggleMaximizeWindow,
   watchBoardHello,
-  watchCavemanInstall,
   watchDialogHello,
   watchDialogResult,
-  watchFullscreen,
-  watchProjectHello
+  watchFullscreen
 } from '../stores/app.js'
 import { dialogWidth, stalenessMessage, stalenessOf } from './dialogRegistry.js'
 import { paintRoot } from './useAppearance.js'
@@ -393,16 +389,6 @@ onMounted(initSettingsBridge)
    with an empty list until the board next moves. Torn down on unmount so a
    view that is gone does not go on answering. */
 let stopBoardHello = null
-/* The third and fourth messages that window and this one exchange outside the
-   settings contract, and both belong to the Caveman group on its Skills &
-   Plugins tab.
-   The hello answers a settings window that opened after the last announcement,
-   which is otherwise a tab believing no project is open at all; the install
-   request comes the other way and is the only message in this file that puts
-   bytes into somebody's shell. `stores/app.js` carries why each is a message
-   rather than a field. */
-let stopProjectHello = null
-let stopCavemanInstall = null
 onMounted(async () => {
   try {
     stopBoardHello = await watchBoardHello(() => announceBoardColumns(projectColumns.value))
@@ -410,21 +396,9 @@ onMounted(async () => {
     /* A browser, or an ACL — the app is fully usable without a settings window. */
     console.warn('[app] the board columns will not be announced:', err)
   }
-  try {
-    stopProjectHello = await watchProjectHello(() => announceActiveProject(activePath.value))
-  } catch (err) {
-    console.warn('[app] the active project will not be announced:', err)
-  }
-  try {
-    stopCavemanInstall = await watchCavemanInstall(typeCavemanInstall)
-  } catch (err) {
-    console.warn('[app] the caveman install command will not be heard:', err)
-  }
 })
 onUnmounted(() => {
   stopBoardHello?.()
-  stopProjectHello?.()
-  stopCavemanInstall?.()
 })
 
 /* Everything that survives a restart lives in settings: the panels in layout,
@@ -625,33 +599,11 @@ async function newTerminal(cwd = null) {
   if (!session) return null
   const tab = terminalTabFor(session.id)
   if (tab) project.activeTab = tab.id
-  /* Handed back for the one caller that has something to put in the shell it
-     just opened. The `+` menu's own row ignores it, as it always has. */
+  /* Handed back for a caller with something to put in the shell it just opened.
+     Nobody has one today — the `+` menu's own row has always ignored it — and
+     it is kept because the alternative is a function that opens a session and
+     refuses to say which. */
   return session
-}
-
-/* The Install button in the settings window's Caveman group, arriving as an
-   event because a terminal is this window's to open (`stores/app.js`).
-
-   The command is **typed and not run**: `send` writes exactly these bytes and
-   there is deliberately no `\r` after them, so the line sits at the prompt with
-   the cursor at its end until the person presses Enter themselves. That is the
-   whole of the design — caveman's installer rewrites two of somebody's own
-   configuration files and points the agent's traffic at a local proxy, and this
-   app does none of it behind their back. Do not "finish the job" by appending a
-   newline here.
-
-   Nothing is said back to the settings window. A project closed between the
-   press and this line, or a shell that would not start, is already answered
-   where it happens: the button is drawn dead without a project, and a refused
-   session is the toast `createShell` reports. */
-async function typeCavemanInstall(command) {
-  const session = await newTerminal()
-  if (!session) return
-  await send(session.id, command)
-  /* The press happened in a window sitting over this one, so without this the
-     terminal would appear behind whatever the person is looking at. */
-  focusWindow()
 }
 
 /* Which row does what. The rows themselves are `newTabMenu.js`'s — two callers
@@ -1922,17 +1874,13 @@ const closeSetup = () => {
 }
 
 /* Everything about one project that is not the board: `[defaults]` in
-   `.smetana/project.toml`, four scalars edited in a form, and the caveman level
-   this machine talks to agents in while this project is open. Modelled on
+   `.smetana/project.toml`, four scalars edited in a form. Modelled on
    `openSetup` above down to holding the path this is about rather than reading
    `activePath` at render time — a window that outlived a project switch must
    fail loudly instead of quietly writing four numbers into another repository.
 
-   **It opens whatever state the project's file is in**, which is the one thing
-   that changed when the caveman row arrived: the level is kept in
-   `settings.json` and has nothing to do with the repository, so a project
-   nobody has set up would otherwise be shut out of a preference it had while
-   that row lived on the settings window's Agents tab. The form is what the file
+   **It opens whatever state the project's file is in** rather than refusing a
+   project nobody has set up. The form is what the file
    decides — `configState` below hands the window Rust's own word for it, and
    `components/run/projectDefaults.js` turns it into either four fields or the
    sentence that stands in for them. The setup item beside this one in the menu
@@ -1973,13 +1921,6 @@ const openProjectSettings = async (path) => {
          window draws the four fields for `ok` and one sentence for anything
          else. */
       configState: runsState.config.state,
-      /* This machine's caveman level for this project, read off the settings
-         store the way every other value here is read off its own. Announced on
-         every change like the rest and read once at the other end, in the same
-         watcher on `open` the defaults are seeded in: the window applies a pick
-         locally before sending it, so the announcement carrying that same pick
-         back must not be able to move the list under the cursor. */
-      cavemanLevel: settings.project.caveman,
       branches: gitState.branches,
       busy: savingSettings.value,
       error: settingsError.value
@@ -1991,7 +1932,6 @@ const openProjectSettings = async (path) => {
     onResult: (name, payload) => {
       if (name === 'close') closeDialog('project-settings')
       if (name === 'save') saveProjectSettings(payload)
-      if (name === 'caveman') setProjectCaveman(payload)
     }
   })
   /* After the dialog is up, for the run dialog's reason: the list is a git read
@@ -2000,26 +1940,6 @@ const openProjectSettings = async (path) => {
      branch field is filled from — asking twice for one list would be two
      sources to keep in step. */
   await loadBranches(path)
-}
-
-/* The other half of that window, and the half that reaches no command at all:
-   the caveman level is `settings.json`'s, so it lands in the settings store and
-   the debounce already watching that object carries it to disk. Immediately,
-   with no Save of its own — the window says so in the row's own description,
-   and `ProjectSettingsModal.vue`'s header carries why the two halves of one
-   window save differently.
-
-   `applyPatch` rather than an assignment, under the same key the settings
-   window's edits used to ride: the ladder check lives there, once, and a word
-   off it is skipped with the previous choice standing. What it writes is
-   `settings.project`, the **active** project's entry, which is the whole reason
-   the guard below is here rather than a comment saying it cannot happen — the
-   menu item is live on the active project alone, so the two agree at the moment
-   the window opens, and this refuses to write a level into another project's
-   entry if a switch and a pick land in the same tick. */
-const setProjectCaveman = (level) => {
-  if (!level || settingsFor.value !== activePath.value) return
-  applyPatch({ cavemanProjectLevel: level })
 }
 
 const saveProjectSettings = async (draft) => {
@@ -3903,13 +3823,6 @@ watch(
   () => announceBoardColumns(projectColumns.value),
   { immediate: true }
 )
-
-/* Which project the settings window's Caveman group is about, announced on
-   every switch and again whenever that window says hello. `null` is an ordinary
-   value here — every project closed — and it is what makes the Install button
-   over there draw itself dead with a reason rather than opening a terminal in a
-   project nobody has open. */
-watch(activePath, (path) => announceActiveProject(path), { immediate: true })
 
 /* Only when there is nothing else to show: a failing bd is no reason to hide
    the tasks that were already read. */

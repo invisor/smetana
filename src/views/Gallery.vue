@@ -92,7 +92,6 @@ import {
   RunModal,
   SetupProjectModal,
   Skeleton,
-  SkillsPluginsSettings,
   StatusBadge,
   StatusDot,
   StatusFooter,
@@ -1874,43 +1873,6 @@ const galleryAgentUsageHalf = {
   },
   band: 'reduced'
 }
-/* The Caveman group on the Skills & Plugins tab, and its four states — none of
-   them reachable any other way, since `mockBackend.js` answers `absent` and
-   nothing in a browser can make the other three happen. `wired` is the one with
-   a layout rather than a
-   sentence: the pack version, what it was applied to, and one mono line per
-   file somebody else's installer rewrote, which is the row most likely to break
-   the panel's width. The paths are a home directory's own, since that is what
-   the journal holds and what has to wrap without widening the column.
-
-   The level is a ref rather than a constant because that dropdown is the only
-   control in the group, and a dropdown that cannot move says nothing about
-   whether it is bound to the right prop. The project's own override is not in
-   this window at all — it is a row in the project settings window, drawn among
-   the dialogs above.
-
-   The second ref beside it is that window's, and it is here rather than up
-   there because this is where the caveman fixtures live: a level that is not
-   `inherit` and not the global one either, so a glance says the row is bound to
-   the project's field and not to the other tab's. */
-const galleryCavemanLevel = ref('full')
-const galleryCavemanProjectLevel = ref('ultra')
-const galleryCavemanWired = {
-  state: 'wired',
-  packVersion: '2.2.0',
-  detectedAgentVersion: '2.1.258 (Claude Code)',
-  replacedFiles: ['/Users/you/.claude/settings.json', '/Users/you/.claude.json']
-}
-const galleryCavemanBare = (state) => ({
-  state,
-  packVersion: null,
-  detectedAgentVersion: null,
-  replacedFiles: []
-})
-const galleryCavemanAbsent = galleryCavemanBare('absent')
-const galleryCavemanBinaries = galleryCavemanBare('binaries-only')
-const galleryCavemanSkill = galleryCavemanBare('project-skill-only')
-
 /* The Kanban tab. Both lists live rather than off, since the interesting shape
    of this tab is a checkbox column that does something — and the fixture board
    deliberately carries a name no column of it matches (`triage`), which is the
@@ -2564,12 +2526,7 @@ const menuTargetStyle = {
            without starting anything. Deliberately not on its defaults: a form
            showing 2, 3 and 5 with no branch proves nothing about the fields,
            and the branch here is one `branchOptions` had to keep because the
-           list no longer holds it.
-
-           The caveman row at the top is live here, since it is the one control
-           in this window that answers without anything behind it: it applies a
-           pick locally and emits, and the handler below does nothing, which is
-           exactly what the app window's absence looks like. -->
+           list no longer holds it. -->
       <div :style="{ position: 'relative', height: '760px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal
           :open="true"
@@ -2580,10 +2537,8 @@ const menuTargetStyle = {
             review_passes: 2
           }"
           :branches="everywhere('main', 'staging')"
-          :caveman-level="galleryCavemanProjectLevel"
           @close="() => {}"
           @save="() => {}"
-          @caveman="galleryCavemanProjectLevel = $event"
         />
       </div>
       <!-- And the shape a refusal takes: the command's own message under the
@@ -2606,27 +2561,14 @@ const menuTargetStyle = {
       </div>
       <!-- The same window over a project with no configuration at all, and over
            one whose file will not parse: no fields, no Save, one sentence in
-           their place, and the caveman row still live — which is the whole
-           reason the menu item that opens this is no longer greyed in either
-           state. The ghost button reads Close rather than Cancel here, since
-           the only thing on screen has already saved itself. -->
+           their place — which is the whole reason the menu item that opens this
+           is no longer greyed in either state. The ghost button reads Close
+           rather than Cancel here, since there is nothing on screen to undo. -->
       <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
-        <ProjectSettingsModal
-          :open="true"
-          config-state="missing"
-          caveman-level="inherit"
-          @close="() => {}"
-          @caveman="() => {}"
-        />
+        <ProjectSettingsModal :open="true" config-state="missing" @close="() => {}" />
       </div>
       <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
-        <ProjectSettingsModal
-          :open="true"
-          config-state="broken"
-          caveman-level="wenyan-ultra"
-          @close="() => {}"
-          @caveman="() => {}"
-        />
+        <ProjectSettingsModal :open="true" config-state="broken" @close="() => {}" />
       </div>
       <!-- Cutting a branch, from a row in the branch list. Live, because the
            line under the field is the half worth looking at: type a space or
@@ -4898,48 +4840,6 @@ const menuTargetStyle = {
             :subscription-pause-at="0"
             :usage="galleryAgentUsage"
           />
-        </div>
-        <!-- The Skills & Plugins tab, and with it the Caveman group in each of
-             its four states — the only place any of them but `absent` can be
-             looked at, since `mockBackend.js` answers `absent` and nothing in a
-             browser can make the other three happen.
-
-             Wired is the first, and the one with a layout rather than a
-             sentence: the pack version, what it was applied to and one mono
-             line per file somebody else's installer rewrote. Its level
-             dropdown is the live one, since it is the only control in the
-             group and a list that cannot move says nothing about whether it is
-             bound to the right prop.
-
-             Nothing installed with no project open is the second and the one an
-             acceptance criterion is about: the Install button is drawn and
-             dead, and the row's description names the reason rather than
-             leaving somebody to guess. The same state **with** a project open
-             is the third and the one to look at hardest — its command is the
-             three-part chain, the longest string this group can produce, so it
-             is where a mono line would push the panel wider instead of wrapping
-             inside it. Installed and switched off is the other state with a
-             button, and the one whose command is the short one; the project
-             skill offers none at all. -->
-        <div :style="{ width: '560px' }">
-          <SkillsPluginsSettings
-            :caveman="galleryCavemanWired"
-            :caveman-level="galleryCavemanLevel"
-            project-open
-            @update:caveman-level="galleryCavemanLevel = $event"
-          />
-        </div>
-        <div :style="{ width: '560px' }">
-          <SkillsPluginsSettings :caveman="galleryCavemanAbsent" />
-        </div>
-        <div :style="{ width: '560px' }">
-          <SkillsPluginsSettings :caveman="galleryCavemanAbsent" project-open />
-        </div>
-        <div :style="{ width: '560px' }">
-          <SkillsPluginsSettings :caveman="galleryCavemanBinaries" project-open />
-        </div>
-        <div :style="{ width: '560px' }">
-          <SkillsPluginsSettings :caveman="galleryCavemanSkill" project-open />
         </div>
         <!-- The subscription block in its other shapes, the way the Storage tab
              below is drawn in three: an agent that does not answer the question
