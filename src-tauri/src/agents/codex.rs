@@ -639,6 +639,19 @@ mod tests {
     }
 
     #[test]
+    fn this_harness_is_given_no_clearing_command_nobody_has_confirmed() {
+        // The fourth of the same family, and the rule is `resume_args`' rule:
+        // what clears a conversation is this harness's own vocabulary and this
+        // app does not get to guess it. The failure a guess buys is the quiet
+        // one — an unknown slash command is ordinary text to a CLI, so it would
+        // reach the agent as a line of a prompt rather than as an error — which
+        // is why the answer stays `None` until somebody reads it out of the
+        // CLI's own help. The menu row is greyed with a reason on it meanwhile.
+        use crate::agents::Profile;
+        assert_eq!(Codex.clear_command(), None);
+    }
+
+    #[test]
     fn nothing_of_a_chosen_id_reaches_this_command_line() {
         // The profile answering `None` is half of it; the other half is that a
         // `Launch` carrying an id all the same puts no flag on the line, since

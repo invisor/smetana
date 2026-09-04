@@ -106,6 +106,7 @@ import {
 import {
   agentCounts,
   agentRows,
+  clearSession,
   createSession,
   createShell,
   forgetRestored,
@@ -5611,10 +5612,12 @@ const toastStackStyle = {
                 :rows="orderedAgentRows"
                 :active-id="terminalState.activeId"
                 :pinned="project.pinnedAgents"
+                :agent="settings.agent"
                 @select="selectAgent"
                 @remove="removeAgentRow"
                 @reorder="reorderAgents"
                 @pin="project.pinnedAgents = $event"
+                @clear="clearSession"
               />
             </div>
           </div>

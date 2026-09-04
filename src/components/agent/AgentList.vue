@@ -26,7 +26,10 @@
    gesture `ProjectRail` and `BranchList` use; its rows are
    `components/agent/agentMenu.js`. There is no native context menu anywhere in
    this app (`src/nativeMenu.js`), so this is the only one a right click can
-   open here. */
+   open here. Clearing a session is one of its rows and is the only verb here
+   that reaches the harness rather than the app: the row carries the session id
+   and nothing more, and which words clear a conversation is
+   `agents::Profile::clear_command`'s to say. */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
@@ -44,7 +47,13 @@ const props = defineProps({
      row, which is `BranchList`'s shape for its favourites and the same subject:
      what is marked is a fact about the stored list, not about how the panel
      happens to be drawn today. */
-  pinned: { type: Array, default: () => [] }
+  pinned: { type: Array, default: () => [] },
+  /* The project's configured agent id, straight out of `settings.json` — the
+     same prop `SessionRow` takes and for the same reason: one row of the menu
+     is refused by the harness rather than by the session, and `agentMenu.js`
+     has to know while it is drawing. Nothing else here reads it, and nothing
+     draws it: this list has never named the agent on a row, deliberately. */
+  agent: { type: String, default: null }
 })
 
 /* `reorder` carries the rows in their new order rather than a from/to pair, for
@@ -58,7 +67,7 @@ const props = defineProps({
    `pin` carries the whole new list, the way `BranchList` emits its favourites:
    the toggle is a pure rule and belongs beside the others rather than in the
    caller. */
-const emit = defineEmits(['select', 'remove', 'reorder', 'pin'])
+const emit = defineEmits(['select', 'remove', 'reorder', 'pin', 'clear'])
 
 const body = { flex: 1, minHeight: 0, overflow: 'auto' }
 
@@ -345,7 +354,9 @@ const items = computed(() =>
   agentMenuItems({
     pinned: menuRow.value ? pinnedRow(menuRow.value) : false,
     conversation: menuRow.value?.conversation ?? null,
-    starting: Boolean(menuRow.value?.starting)
+    starting: Boolean(menuRow.value?.starting),
+    state: menuRow.value?.state ?? null,
+    agent: props.agent
   })
 )
 
@@ -363,6 +374,10 @@ const pick = (item, key) => {
   const row = props.rows.find((one) => agentKey(one) === key)
   if (!row) return
   if (item.kind === 'pin') emit('pin', togglePin(props.pinned, row.conversation))
+  /* The session and nothing else: what to write is the harness's own word for
+     it and this window never learns which harness a session runs, so the caller
+     hands the id to the store and Rust composes the line. */
+  else if (item.kind === 'clear') emit('clear', row.id)
   else if (item.kind === 'close') emit('remove', row.id)
 }
 

@@ -231,6 +231,18 @@ impl Profile for Claude {
         Some(vec!["--session-id".to_owned(), session.to_owned()])
     }
 
+    /// `/clear`, which is the command Claude Code's own `/help` lists for
+    /// clearing the conversation history. The session stays the one it was —
+    /// the process, the working directory and the transcript file are all
+    /// untouched — so this is the harness starting the conversation over
+    /// rather than the app starting the agent over.
+    ///
+    /// No carriage return here: the caller submits it, for the reason
+    /// `Profile::clear_command` records.
+    fn clear_command(&self) -> Option<&'static str> {
+        Some("/clear")
+    }
+
     fn parse_usage(&self, output: &str) -> Option<Usage> {
         usage(output)
     }
@@ -780,6 +792,17 @@ mod tests {
             ],
             "a forked session is the resumed command line plus --fork-session"
         );
+    }
+
+    #[test]
+    fn the_conversation_is_cleared_with_the_command_this_cli_documents() {
+        // `/clear` and nothing else, and no carriage return on it: submitting
+        // is `terminal::service`'s half. The value is what a person types into
+        // Claude Code's own composer, taken from its `/help`, because a slash
+        // command this harness did not know would be sent to the model as the
+        // first line of a prompt with nothing anywhere to say it had been.
+        use crate::agents::Profile;
+        assert_eq!(Claude.clear_command(), Some("/clear"));
     }
 
     /// A `Launch` whose conversation id this app chose, which is every ordinary

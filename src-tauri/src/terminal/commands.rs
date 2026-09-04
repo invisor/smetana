@@ -135,6 +135,25 @@ pub async fn terminal_write(
     ask(&handle, |tx| Request::Write(id, data, tx)).await?
 }
 
+/// Tell a live session's harness to forget the conversation so far, in that
+/// harness's own words.
+///
+/// Takes the session and nothing else: what to send is `Profile::clear_command`
+/// and the front end never learns which harness a session runs, so a command
+/// taking the line would be asking the caller to know something it cannot.
+///
+/// Three refusals and each is a `Result::Err` the store can tell apart:
+/// `noSession` for a row with nothing behind it, `noClear` for a harness with
+/// no such line, `busy` for one waiting on a person — writing into an open
+/// dialog would answer, on their behalf, a question nobody read.
+#[tauri::command]
+pub async fn terminal_clear(
+    handle: State<'_, TerminalHandle>,
+    id: SessionId,
+) -> Result<(), TerminalError> {
+    ask(&handle, |tx| Request::Clear(id, tx)).await?
+}
+
 /// Send and wait for the output to stop, then hand back the screen. Refuses
 /// with `busy` when the session is waiting for a human: see the comment in
 /// service.rs.
