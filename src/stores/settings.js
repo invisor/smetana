@@ -263,6 +263,27 @@ const defaults = () => ({
        ids that die with the app. `components/shell/tabOrder.js` is the rule that
        reconciles the two. */
     tabOrder: [],
+    /* The agents panel's rows in the order somebody dragged them into, by the
+       conversation id the app chose for each session, and which of them are
+       kept above the rest. Both empty means "never arranged, nothing pinned",
+       and the panel then draws the order it grew in: the live sessions, then
+       whatever is starting, then the records the last run of the app left.
+
+       By the conversation id and never by the worker's session number: that
+       counter starts at 1 on every launch and no process survives a restart, so
+       an order kept under it would hand yesterday's place — and yesterday's
+       pin — to whichever agent happened to be started second today.
+       `components/agent/agentOrder.js` is the rule that reconciles the two
+       lists with what is on screen.
+
+       Listed here for the reason `runSettings` below spells out, and this pair
+       is the one where it would be seen soonest: applySection is
+       Object.assign(target, defaults, stored), so a key missing from this
+       object is a key the defaults layer cannot clear, and one project's pinned
+       agents would still be sitting at the top of the panel after somebody
+       opened the next project. */
+    agentOrder: [],
+    pinnedAgents: [],
     /* What the run dialog was last set to here — null until somebody runs
        something. Listed rather than left out, and the difference is not
        cosmetic: applySection is Object.assign(target, defaults, stored), so a

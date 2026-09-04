@@ -80,6 +80,7 @@ import Tooltip from '../components/core/Tooltip.vue'
 import IconButton from '../components/core/IconButton.vue'
 import { CommandPalette, TaskSearchButton, TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
+import { agentKey, conversationsOf, orderAgents } from '../components/agent/agentOrder.js'
 import SessionRow from '../components/agent/SessionRow.vue'
 import {
   DELETE_SESSION_TITLE,
@@ -2109,6 +2110,43 @@ function selectAgent(id) {
   } else if (work?.kind === 'newTask' || row?.claimed?.length) {
     rightFocus.value = id
   }
+}
+
+/* The agents panel in the order the person put it in. bd's board and the
+   settings meet in `orderColumns` a few hundred lines down; this is the same
+   shape one panel over — the store owns which rows exist, `settings.json` owns
+   the sequence and the pins, and `agentOrder.js` is the reconciliation.
+
+   `agentArrangement` is the one piece of this that is not in `settings.json`,
+   and it is worth saying why rather than leaving it to be found. Not every row
+   has a conversation id — a run's batch, a fork, a start ticket, a harness that
+   cannot be told one — and only conversation ids may be written to the file:
+   the worker's session number starts at 1 again on the next launch, so an order
+   kept under it would hand yesterday's place to a stranger. But such a row is
+   still dragged like any other, and with the file as the only memory it would
+   snap back to the end of the list the instant the pointer was released, since
+   `orderAgents` puts what it has never heard of last. So this window keeps the
+   whole drawn sequence — conversation ids and this window's own keys alike —
+   and the file keeps the half of it that means anything tomorrow. It is
+   emptied on a project switch for the reason everything else per project is:
+   these keys name another project's agents. */
+const agentArrangement = ref([])
+
+const orderedAgentRows = computed(() =>
+  orderAgents(
+    agentRows.value,
+    agentArrangement.value.length ? agentArrangement.value : project.agentOrder,
+    project.pinnedAgents
+  )
+)
+
+/* A drag, applied. Two writes out of one answer, and neither is derivable from
+   the other: the window's own sequence, which holds every row that was on
+   screen, and the project's, which holds only what will still mean something
+   after a restart. */
+function reorderAgents(rows) {
+  agentArrangement.value = rows.map(agentKey)
+  project.agentOrder = conversationsOf(rows)
 }
 
 /* The X on a row in the agents panel, and which of the two removals it is.
@@ -4823,6 +4861,9 @@ watch(activePath, (path) => {
   loadHead(path)
   loadConfig(path)
   loadRun(path)
+  /* The keys in it are another project's agents, and the project being opened
+     brings its own order out of `settings.json`. */
+  agentArrangement.value = []
   /* Held until dismissed is right for a note naming a folder, and it is what
      makes this line necessary: the folder it names is beside one project's
      `.beads`, so left standing it would sit over the next project telling
@@ -5462,10 +5503,13 @@ const toastStackStyle = {
               />
               <AgentList
                 v-else
-                :rows="agentRows"
+                :rows="orderedAgentRows"
                 :active-id="terminalState.activeId"
+                :pinned="project.pinnedAgents"
                 @select="selectAgent"
                 @remove="removeAgentRow"
+                @reorder="reorderAgents"
+                @pin="project.pinnedAgents = $event"
               />
             </div>
           </div>
