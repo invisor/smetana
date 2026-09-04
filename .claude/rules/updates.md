@@ -165,9 +165,11 @@ out of the `runs.js` cycle.
 
 `npm run tauri signer generate` produced a minisign pair, once, and it was given a password. The
 public half is committed as `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`. **This signature
-is Tauri's own and cannot be turned off**, which is a different thing entirely from the ad-hoc code
-signing below. The `check` job in the workflow refuses to build while that field is empty, rather than
-publish a release nobody can install as an update.
+is Tauri's own and cannot be turned off**, which is a different thing entirely from the Apple code
+signing below: one is what an installed copy checks before it replaces itself, the other is what
+macOS checks before it will run the result, and neither substitutes for the other. The `check` job in
+the workflow refuses to build while that field is empty, rather than publish a release nobody can
+install as an update.
 
 The private half and its password are the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. `RELEASING.md` is where the rest is written
@@ -206,42 +208,47 @@ its `.sig` and `latest.json` on the release. `plugins.updater.endpoints` points 
 `releaseDraft` and `prerelease` are both false: that URL resolves against the latest **published**
 release only.
 
-## There is no Apple Developer ID
+## The Developer ID, and what an update would otherwise throw away
 
-The bundle is ad-hoc signed, not notarized, and that is a choice rather than an oversight. What it
-costs is the first launch: macOS will not open a freshly downloaded copy on a double-click, so it is
-right-click → Open on macOS 14 and earlier, and on macOS 15 Sequoia on, where that dialog no longer
-carries an Open button, System Settings → Privacy & Security → Open Anyway with Touch ID or a
-password. README's First launch section, inside `## Install`, and the workflow's `releaseBody` are
-the two copies of that, kept saying the same thing, and the second is the one strangers read.
+The bundle is signed with a Developer ID Application certificate and notarized. The visible half of
+that is the first launch — a downloaded copy opens on a double-click, so there are no Gatekeeper
+steps left to write down anywhere, and README's `## First launch` section and the `releaseBody`
+paragraph that were the two copies of them are both gone.
 
-What makes the bundle ad-hoc signed is one line — `bundle.macOS.signingIdentity` set to `"-"` in
-`src-tauri/tauri.conf.json` — and not the absence of a certificate, which is the trap: without that
-field `tauri-action` never calls `codesign` at all, and the release carries whatever the linker left
-on the arm64 executable, `adhoc, linker-signed`, `Info.plist` unbound, `Sealed Resources=none`.
-Nothing about the build says so. `codesign -dv --verbose=4` on the shipped `.app` is the only place
-it shows, and `spctl -a -vv` answers `code has no resources but signature indicates they must be
-present`. Gatekeeper reads that as a **broken** signature rather than an unknown developer, and a
-quarantined copy opens to "smetana is damaged and can't be opened" — a dialog with no Open button,
-and nothing appearing in Privacy & Security to press either, so both copies of the paragraph above
-describe steps that do not exist and the app cannot be started at all without `xattr`. v0.1.1
-shipped that way and is what the field was added for.
+**The half that belongs in this file is what it does to an update.** A macOS permission is stored
+against a code requirement rather than against a bundle identifier alone. An ad-hoc signature's
+requirement is a cdhash — a different value for every build — so an update installed in place
+invalidated every folder grant the person had given, and macOS, holding a stored decision, never
+asked again. It is silent on screen: the log says `Failed to match existing code requirement for
+subject com.invisor.smetana` and the folder simply cannot be read. A Developer ID's requirement is
+the team, which does not change between builds, so the grant outlives the release. That is
+smetana-fkt, and it is the reason this section is here rather than in `RELEASING.md` alone: the
+updater is what made the ad-hoc signature expensive, because installing in place is exactly the
+motion that broke the grant.
 
-It is once per machine rather than once per launch. What it does not cost is a repeat on every
-version: that step belongs to a copy somebody downloaded in a browser and opened by hand, and an
-update the plugin installs replaces the bundle in place with no such download and no such open.
-**That last sentence is verified nowhere in the tree** — no code and no test asserts it. It is the
-second thing in this file that only prose says, and the sharper of the two: the key custody above is
-at least written down in `RELEASING.md`, while this is written down nowhere at all.
+Two consequences worth keeping. `bundle.macOS.signingIdentity` is still `"-"` in
+`src-tauri/tauri.conf.json` and is overridden on the runner by `APPLE_SIGNING_IDENTITY`; the field
+stays because **without some identity in it the bundler never calls `codesign` at all**, and the
+release then carries whatever the linker left on the arm64 executable — `adhoc, linker-signed`,
+`Info.plist` unbound, `Sealed Resources=none`, which Gatekeeper reads as a *broken* signature rather
+than an unknown developer, so a quarantined copy opens to "smetana is damaged and can't be opened"
+with no way in but `xattr`. v0.1.1 shipped that way. And the failure is quiet in the other direction
+too: given no notarization credentials the bundler logs `skipping app notarization` and finishes
+green. Both are why the workflow checks the six secrets before it builds and re-reads the built
+bundle with `codesign -dv`, `spctl` and `stapler validate` afterwards. `RELEASING.md` holds the
+certificate, the key and the secrets.
 
-Two copies of the claim it contradicts are still standing, both written before there was an updater:
-the `releaseBody` in `.github/workflows/release.yml`, and the comment on that file's build step
-("Nothing verifies it yet — the app has no updater"). There were four. README's `## First launch`
-was the third and its "there is no in-app updater" sentence went when smetana-t3y rewrote that
-document, which is also what took the fourth: `## Releases`, stale differently — it described the
-updater, its schedule and the run gate correctly and then said the part drawn on screen was missing
-and the About rows a separate task, which smetana-oau had made false. Both survivors are
-smetana-j98's to settle, not this file's.
+**Releases up to and including v0.1.23 were ad-hoc signed**, so a grant given to one of those is
+already bound to a cdhash and is lost on the next update whatever this change does. The repair for
+one that has been lost is the app's own reset — `.claude/rules/tracker.md` and
+`src-tauri/src/tracker/access.rs` — which is the mitigation and not a replacement.
+
+One claim written before there was an updater is still standing: the `releaseBody`'s "There is no
+in-app updater yet". There were four. README's `## First launch` and `## Releases` went when
+smetana-t3y rewrote that document, and the build step's "Nothing verifies it yet — the app has no
+updater" went with the comment this change rewrote — restating a sentence known to be false was not
+available while authoring its replacement. The `releaseBody` survivor is smetana-j98's to settle, not
+this file's; do not re-sync it by putting the claim back into README.
 
 ## The front end, in one paragraph
 

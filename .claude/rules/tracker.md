@@ -181,9 +181,14 @@ reset only takes effect for a process that has not already been refused in this 
 restart is the second half of the repair rather than a courtesy — and the button says so, since
 there is no confirmation dialog.
 
-There is a second way into this state and it will keep happening while the bundle is ad-hoc signed: a
-grant is bound to the code requirement, which is then a cdhash that changes with every build, so an
-in-place update silently invalidates whatever was granted. The same reset undoes it.
+There is a second way into this state, and smetana-fkt is what stopped it happening again: a grant is
+bound to the code requirement, and under an ad-hoc signature that is a cdhash which changes with
+every build, so an in-place update silently invalidated whatever was granted. Signed with a Developer
+ID the requirement is the team and survives the update. The reset stays, because the releases before
+it were ad-hoc signed and a grant already lost that way is not repaired by the signature — and
+because the first way in, somebody once answering "Don't Allow", is untouched by any of this.
+`.claude/rules/updates.md` is where the signing itself is written down, and `RELEASING.md` names the
+last release that went out without it.
 
 ### Repair: fixing without diagnosing
 

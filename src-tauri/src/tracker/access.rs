@@ -22,9 +22,14 @@
 //!
 //! - somebody once answered "Don't Allow", and macOS asks only when there is no
 //!   stored decision, so no dialog will ever appear again;
-//! - the bundle is ad-hoc signed, so its code requirement is a cdhash that
-//!   changes with every build, and an in-place update silently invalidates
-//!   whatever was granted before it.
+//! - the grant was given to an ad-hoc signed copy, whose code requirement is a
+//!   cdhash that changes with every build, so an in-place update silently
+//!   invalidated whatever had been granted before it. smetana-fkt ended that
+//!   for every release signed with a Developer ID, whose requirement is the
+//!   team and does not move between builds — but a grant already lost that way
+//!   stays lost, and this is the only thing that gets it back. Which releases
+//!   were ad-hoc signed is in RELEASING.md; it is not a fact this file has any
+//!   way of checking, so it is not repeated here.
 //!
 //! Both are undone the same way — `tccutil reset <service> <identifier>` and a
 //! restart, after which macOS has no stored decision and asks again. That is
