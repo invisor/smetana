@@ -5,8 +5,16 @@ import Icon from './Icon.vue'
 import Tooltip from './Tooltip.vue'
 
 /* The hint is `Tooltip`, never the native `title`, and it is here rather than at
-   every call site so that every icon-only button in the app has one by
-   construction. `label` is required, so there is always something to say.
+   every call site so that every icon-only button in the app has one by default.
+   `label` is required whatever `hint` says, so there is always something to say
+   and always an accessible name: turning the panel off takes away what is drawn
+   on hover and nothing a screen reader hears.
+
+   `hint` is the way out of the default, and one caller takes it. `Toast` sits
+   in the corner of the window for a few seconds and its cross would open a
+   panel upwards, over the app's own content, to name a glyph that reads as
+   itself — a hint whose whole life is spent in the way of something. Every
+   other icon button in the app keeps its own.
 
    Attributes do not fall through to the wrapper: `Tooltip`'s span is the root
    now, and a caller sizing the control — `Tab`'s 16px close, `CodeBlock`'s 18px
@@ -25,7 +33,10 @@ const props = defineProps({
   size: { type: String, default: 'md' },
   variant: { type: String, default: 'ghost' },
   disabled: { type: Boolean, default: false },
-  selected: { type: Boolean, default: false }
+  selected: { type: Boolean, default: false },
+  /* Whether the button explains itself on hover — see the note above for the
+     one caller that says no. `label` is untouched by it. */
+  hint: { type: Boolean, default: true }
 })
 
 const { hover, active, handlers } = useInteractive(toRef(props, 'disabled'))
@@ -63,7 +74,7 @@ const style = computed(() => ({
 </script>
 
 <template>
-  <Tooltip :label="label">
+  <Tooltip :label="label" :enabled="hint">
     <button
       type="button"
       :disabled="disabled"
