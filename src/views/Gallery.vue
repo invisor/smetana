@@ -3545,7 +3545,11 @@ const menuTargetStyle = {
            comfortable row height: the point of this section is seeing every
            caption at once, and a scrollbar would hide the last of them. -->
       <div :style="{ width: '252px', height: '224px', border: 'var(--border-w) solid var(--border)' }">
-        <AgentList :rows="agentRows" :active-id="2" :pinned="AGENT_PINS" />
+        <!-- `agent` is the project's configured harness, which one row of the
+             row menu is refused by rather than by any session: with `claude`
+             here the Clear session row is live on a running agent and greyed
+             with its reason on the offline one and on the one waiting. -->
+        <AgentList :rows="agentRows" :active-id="2" :pinned="AGENT_PINS" agent="claude" />
       </div>
       <!-- What that second row's run has taken, drawn where it actually
            appears: the right column at its shipped 340px, padded by

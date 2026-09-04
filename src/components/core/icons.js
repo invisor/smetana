@@ -32,6 +32,7 @@ import {
   CornerDownRight,
   Dot,
   Ellipsis,
+  Eraser,
   ExternalLink,
   File,
   FileCode,
@@ -104,6 +105,12 @@ export const iconNodes = {
   'circle-dashed': CircleDashed,
   terminal: Terminal,
   'trash-2': Trash2,
+  /* Clear session, in the agents panel's row menu. An eraser and not the bin
+     beside it, and the difference is the whole reason the row asks for no
+     confirmation: nothing is deleted — the harness starts the conversation over
+     and the transcript stays a file the Sessions tab still lists. The bin is
+     what `DeleteSessionModal` is about, and the two verbs must not look alike. */
+  eraser: Eraser,
 
   // the dependency graph
   lock: Lock,

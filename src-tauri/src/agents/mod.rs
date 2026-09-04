@@ -676,6 +676,34 @@ pub trait Profile: Sync {
         None
     }
 
+    /// The line this harness understands as "forget everything said so far and
+    /// carry on in this same session", exactly as a person would type it into
+    /// the harness's own composer — or `None` where there is no such line.
+    ///
+    /// It sits beside `resume_args` and `fork_args` for their reason: the app
+    /// knows it wants a conversation cleared and does not know the words, and
+    /// each CLI has its own. What parts it from all three of its neighbours is
+    /// *when* it is read — they are read while a command line is being built,
+    /// this one while a session is already running, so what it produces is
+    /// written into that session's input rather than spawned. The keystroke
+    /// that submits it is the caller's (`terminal::service`), because a profile
+    /// carrying one would be describing a keyboard rather than a command.
+    ///
+    /// The default is `None`, a working answer rather than a gap in the shape
+    /// every optional method here keeps. **It is filled in from the harness's
+    /// own help and never guessed**, and the reason is that the failure is
+    /// silent: a slash command a CLI has never heard of is not an error there,
+    /// it is ordinary text, and it reaches the agent as the first line of a
+    /// prompt. `codex.rs` keeps the default for that reason, exactly as it
+    /// keeps `resume_args`'.
+    ///
+    /// Nothing on disk is touched by any answer to this: the transcript stays a
+    /// file and the Sessions tab goes on listing it, which is what makes the
+    /// menu row ask for no confirmation.
+    fn clear_command(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Extra arguments for working without a person, and the environment that
     /// goes with them.
     ///
@@ -1418,6 +1446,10 @@ mod tests {
         }
         assert!(Plain.batch_args().is_empty());
         assert!(Plain.transcript().is_none());
+        // The same shape one method over: a harness nobody has confirmed a
+        // clearing line for is asked for none, and the menu row that would
+        // send one is greyed rather than sending a guess.
+        assert!(Plain.clear_command().is_none());
     }
 
     #[test]

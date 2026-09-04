@@ -141,6 +141,51 @@ somebody left. The front end greys the rows before that, from `RESUMES_BY_ID` an
 mechanical joins the two sides, and both directions of drift are quiet, which is why those lists may
 be wrong there and never here.
 
+`clear_command` is the newest and sits beside those three, for their reason and with one difference
+that decides everything else about it: **the app knows it wants a conversation forgotten and does not
+know the words, and each CLI has its own.** Claude Code answers `/clear`, which is what its `/help`
+documents; Codex keeps the default `None`, and that is a decision rather than a gap in exactly the
+sense `resume_args`' is. What parts it from its three neighbours is *when* it is read — they are read
+while a command line is being built, this one while a session is already running — so what it
+produces is written into that session's input rather than spawned, and the carriage return that
+submits it is `terminal::service`'s rather than the profile's, since a profile carrying one would be
+describing a keyboard instead of a command.
+
+**A guess here fails silently, which is why the rule is that it is read out of the harness's own help
+or left `None`.** A slash command a CLI has never heard of is not an error there: it is ordinary
+text, and it reaches the agent as the first line of a prompt with nothing anywhere to say it had
+been. That is a worse outcome than the refusal, and the refusal is cheap — `TerminalError::NoClear`,
+its own variant beside `NoResume` and `NoFork` and for their reason, since nothing was written and
+nothing tried to be.
+
+The caller is `terminal_clear`, which takes a session id and nothing else — the front end never
+learns which harness a session runs, `agents::pick` may have substituted one, and a line composed on
+that side would be a guess written straight into somebody's prompt. `Request::Clear`'s arm asks the
+harness first and the session second, and the second question is the one the feature exists around:
+**a session in `needs-you` is refused (`TerminalError::Busy`)**, because an agent waiting for an
+answer reads the next line written into it as that answer, so the clearing command would be a pick in
+somebody else's dialog rather than a command at all. It is deliberately *not* `terminal_run_capture`'s
+stricter pair — that one also refuses on an unrung-out bell, because it writes a question and reads
+the answer back, while this writes one line and reads nothing, and a bell is rung at the end of every
+turn, which is exactly the moment somebody clears. `bell_pending` is left as it was rather than
+cleared the way an ordinary `Write` clears it: nobody has answered anything, and taking the mark away
+would spend the signal `run_capture` reads as its own guard.
+
+**Nothing is deleted by any of this**, and that is what the menu row rests on: the transcript stays a
+file, the Sessions tab goes on listing it, and the session, its tab and its row in the panel are all
+the ones they were. So the row asks for no confirmation, where `DeleteSessionModal` asks and has to.
+Its glyph is an eraser and deliberately not the bin beside it — the two verbs must not look alike.
+
+The front end greys the row before anybody can press it, from `CLEARS_BY_ID` in
+`components/agent/agentMenu.js`, which is **the third front-end table keyed by agent id** and the same
+knowing second copy `RESUMES_BY_ID` and `FORKS_BY_ID` are: the answer has to be known while the row
+is being drawn, and a menu greyed a round trip later is a menu somebody has already pressed. It
+drifts the same way and under the same rule — this list may be wrong and the profiles may not — and
+it reads the *configured* agent out of `settings.json` rather than what actually started, since
+nothing on screen ever learns what `pick` substituted. The two sides ask their refusals in the same
+order, harness before row, so a row refused twice over is worded the same on the greyed label and in
+the toast.
+
 `Intent::ResumeSession` carries `fork`, which is the whole difference between the Sessions tab's two
 launching verbs and nothing else about it: the directory, the id and the row it draws are one path.
 `Intent::work` reads the flag and drops it, so a resumed session and a forked one are the same row —

@@ -351,6 +351,20 @@ pub enum TerminalError {
     /// would be untrue about the row nobody pressed.
     #[error("{0} cannot carry a recorded session on in a new one")]
     NoFork(String),
+    /// A live session asked to forget the conversation so far by a harness with
+    /// no line for it — `Profile::clear_command` answered `None`. The string is
+    /// the agent id, the way `NoResume`'s and `NoFork`'s are.
+    ///
+    /// Its own variant for their reason: nothing was written, and nothing tried
+    /// to be. Writing something anyway is exactly what it exists to prevent — a
+    /// slash command a CLI has never heard of is not an error there, it is
+    /// ordinary text, and it would arrive at the agent as a line of a prompt
+    /// with nothing on screen to say so. The front end greys the menu row
+    /// before anybody can press it (`CLEARS_BY_ID` in
+    /// `src/components/agent/agentMenu.js`); this is the guard standing next to
+    /// the write, where a rule about writing belongs.
+    #[error("{0} cannot be told to clear its conversation")]
+    NoClear(String),
 }
 
 impl Session {

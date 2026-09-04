@@ -332,6 +332,7 @@ pub fn run() {
       terminal::commands::terminal_detach,
       terminal::commands::terminal_resize,
       terminal::commands::terminal_write,
+      terminal::commands::terminal_clear,
       terminal::commands::terminal_run_capture,
       terminal::commands::terminal_restorable,
       terminal::commands::terminal_forget,

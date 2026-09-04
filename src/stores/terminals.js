@@ -671,6 +671,25 @@ const ERRORS = {
     title: 'That folder is gone',
     description:
       'Smetana could not start a shell there. The tree may be out of date — refresh it.'
+  }),
+  /* `TerminalError::NoClear` — the configured harness has no line for clearing
+     a conversation. The menu row is greyed for it already (`CLEARS_BY_ID` in
+     `components/agent/agentMenu.js`), so this is only reachable when that
+     front-end list has drifted ahead of the profiles, which is the direction
+     that file says it may drift in. The content of the variant is the agent id.
+     */
+  noClear: (agent) => ({
+    title: 'This agent cannot clear its conversation',
+    description: `Smetana has no command ${agent} understands for it. Nothing was sent.`
+  }),
+  /* `TerminalError::Busy` — the session is waiting for a person. Its own words
+     rather than the generic write pair, because "Nothing was created, removed,
+     or sent" is true and says nothing about the one thing to do next. The row
+     is greyed for this too, and a round trip is long enough for a question to
+     have appeared since. */
+  busy: () => ({
+    title: 'The agent is waiting for you',
+    description: 'Answer it in the terminal first — anything sent now would be read as the answer.'
   })
 }
 
@@ -1170,6 +1189,37 @@ export async function send(id, data) {
   if (isStarting(id)) return
   try {
     await invoke('terminal_write', { id, data })
+    terminalState.lastError = null
+  } catch (err) {
+    report('write', err)
+  }
+}
+
+/* Tell a live agent's harness to forget the conversation so far.
+
+   The id and nothing else crosses the wire: what a harness understands as
+   "forget this" is `agents::Profile::clear_command`'s answer, this front end
+   never learns which harness a session runs — `agents::pick` may have
+   substituted one — and a line composed here would be a guess written straight
+   into somebody's prompt. The one thing this side knows is which row was
+   picked.
+
+   No confirmation in front of it, deliberately, and that is a fact about what
+   it does rather than a shortcut: nothing leaves the disk. The transcript stays
+   a file, the Sessions tab goes on listing it and the session, its tab and its
+   row are all the ones they were. `DeleteSessionModal` asks because that one
+   deletes.
+
+   Refused rather than queued for a start, exactly as `send` above is and for
+   its reason: there is no input to write to yet. The three refusals Rust
+   raises — no session, no such command, waiting for a person — reach the toast
+   corner through `report`, which is where every other refusal a session verb
+   raises goes; there is no dialog to keep open and nothing on screen to take
+   back, so nothing is rethrown. */
+export async function clearSession(id) {
+  if (isStarting(id)) return
+  try {
+    await invoke('terminal_clear', { id })
     terminalState.lastError = null
   } catch (err) {
     report('write', err)

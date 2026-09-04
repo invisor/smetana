@@ -96,6 +96,15 @@ pub enum Request {
     Detach(SessionId),
     Resize(SessionId, u16, u16),
     Write(SessionId, String, oneshot::Sender<Result<(), TerminalError>>),
+    /// Tell this session's harness to forget the conversation so far, in that
+    /// harness's own words (`Profile::clear_command`).
+    ///
+    /// Its own request rather than a `Write` the front end composes, and that
+    /// is the whole point of the task: which line clears a conversation is a
+    /// fact about the harness, the front end never learns which harness a
+    /// session runs (`agents::pick` may have substituted one), and a wrong line
+    /// is not refused anywhere — it is prompt text.
+    Clear(SessionId, oneshot::Sender<Result<(), TerminalError>>),
     RunCapture(SessionId, String, u64, u64, oneshot::Sender<Result<Vec<String>, TerminalError>>),
     /// The pid of this session's process group, for the run registry to write
     /// down — `None` for a session the worker does not have, or one whose
@@ -1041,6 +1050,52 @@ fn handle(
                     Ok(())
                 }
             });
+        }
+        Request::Clear(id, tx) => {
+            let outcome = match sessions.get_mut(&id) {
+                None => Err(TerminalError::NoSession(id)),
+                Some(live) => match live.profile.and_then(|profile| profile.clear_command()) {
+                    // The harness is asked before anything about this session,
+                    // which is `sessionMenu.js`'s order for its own refusals and
+                    // is kept here so the two sides word a doubly-refused row
+                    // the same way: a harness with no such line refuses every
+                    // row of the project alike, and there is nothing about any
+                    // one of them left to explain. A shell arrives here as
+                    // `profile: None` and is refused by the same arm — it runs
+                    // no agent, so there is no conversation to clear.
+                    None => Err(TerminalError::NoClear(live.session.agent.clone())),
+                    // An agent waiting for an answer reads the next line written
+                    // into it as that answer, so the clearing command would be a
+                    // pick in somebody else's dialog rather than a command at
+                    // all. Drawn as a greyed menu row too, and this is still not
+                    // redundant: a row greyed a round trip ago is a row somebody
+                    // can press in the meantime.
+                    //
+                    // Deliberately *not* `RunCapture`'s stricter pair. That one
+                    // also refuses on an unrung-out bell, because it writes a
+                    // question and then reads the answer back; this writes one
+                    // line and reads nothing, and a bell is rung at the end of
+                    // every turn — which is exactly the moment somebody clears.
+                    // Refusing there would refuse the ordinary case.
+                    Some(_) if live.session.state == SessionState::NeedsYou => {
+                        Err(TerminalError::Busy)
+                    }
+                    Some(command) => {
+                        // The carriage return is added here rather than carried
+                        // by the profile, which describes a command and not a
+                        // keyboard — see `Profile::clear_command`.
+                        live.pty.write(format!("{command}\r").as_bytes());
+                        // `bell_pending` is deliberately left as it was, unlike
+                        // in `Write` above: nobody has answered anything. The
+                        // bell says a person was called and has not yet read
+                        // what about; clearing the conversation is the app
+                        // forwarding a command, and taking the mark away would
+                        // spend a signal `RunCapture` reads as its own guard.
+                        Ok(())
+                    }
+                },
+            };
+            let _ = tx.send(outcome);
         }
         Request::RunCapture(id, input, settle_ms, timeout_ms, tx) => {
             match sessions.get_mut(&id) {
