@@ -250,6 +250,22 @@ pub struct Session {
     /// row whose caption changed under a person would be describing a session
     /// they are no longer looking at.
     pub work: SessionWork,
+    /// The conversation id this app chose for the session, when it chose one —
+    /// `conversation_for` in `service.rs` is the whole of that decision, and
+    /// this is the same value `terminal::restore` keys the session's record by.
+    ///
+    /// It crosses the boundary because the agents panel needs a name for a row
+    /// that means the same thing tomorrow: `SessionId` is a counter that starts
+    /// at 1 on every launch, so an order or a pin saved under it would hand
+    /// yesterday's place to whichever agent happened to be started second
+    /// today. This is the one field of a session that survives the process.
+    ///
+    /// `None` is an ordinary answer and not a failure: a run's batch, a shell,
+    /// a fork — whose new transcript picks its own id, which this app never
+    /// learns — and a harness that cannot be told an id all have none. Such a
+    /// row takes part in the panel's order for as long as the window lives and
+    /// is written to no file.
+    pub conversation: Option<String>,
 }
 
 /// What the project rail needs to know about a session, and nothing else: a
@@ -338,7 +354,19 @@ pub enum TerminalError {
 }
 
 impl Session {
-    pub fn new(id: SessionId, agent: &str, cwd: &str, project: &str, work: SessionWork) -> Self {
+    /// The conversation id is a parameter rather than a field filled in
+    /// afterwards: it is decided at the spawn, before anything else about the
+    /// session exists, and every caller has it in its hand. A setter would be
+    /// one a caller could forget, and a session missing it draws a row nothing
+    /// can pin.
+    pub fn new(
+        id: SessionId,
+        agent: &str,
+        cwd: &str,
+        project: &str,
+        work: SessionWork,
+        conversation: Option<String>,
+    ) -> Self {
         Self {
             id,
             agent: agent.to_owned(),
@@ -349,6 +377,7 @@ impl Session {
             started_at: chrono::Utc::now().to_rfc3339(),
             exit_code: None,
             work,
+            conversation,
         }
     }
 
@@ -379,7 +408,44 @@ mod tests {
     use super::*;
 
     fn session() -> Session {
-        Session::new(1, "claude", "/p", "/p", SessionWork::Bare)
+        Session::new(1, "claude", "/p", "/p", SessionWork::Bare, None)
+    }
+
+    #[test]
+    fn a_session_names_its_conversation_on_the_wire() {
+        // `conversation`, camel-cased to nothing because the word is one word.
+        // `src/stores/terminals.js` reads it off every session to key the
+        // agents panel's order and its pins by, and a rename here goes quiet
+        // rather than loud: every row would come back with `undefined`, the
+        // panel would go on drawing, and one project's dragged order and pinned
+        // rows would simply stop coming back after a restart.
+        let json = serde_json::to_string(&Session::new(
+            1,
+            "claude",
+            "/p",
+            "/p",
+            SessionWork::Bare,
+            Some("9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60".into()),
+        ))
+        .expect("serializes");
+        assert!(
+            json.contains(r#""conversation":"9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60""#),
+            "the conversation id has to reach the front end under that name: {json}"
+        );
+    }
+
+    #[test]
+    fn a_session_with_no_conversation_says_so_rather_than_leaving_the_field_out() {
+        // A run's batch, a shell, a fork and a harness that cannot be told an
+        // id all have none, and the front end reads the absence as "this row
+        // cannot be pinned". An omitted key would read the same in JavaScript
+        // today and stop doing so the moment anything asked for the field by
+        // name, so the null is written rather than skipped.
+        let json = serde_json::to_string(&session()).expect("serializes");
+        assert!(
+            json.contains(r#""conversation":null"#),
+            "absence travels as null: {json}"
+        );
     }
 
     #[test]

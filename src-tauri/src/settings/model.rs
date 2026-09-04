@@ -80,6 +80,16 @@ const MAX_COLUMNS: usize = 60;
 /// field whole on every drag, from the tabs that exist at that moment, so what
 /// it actually holds can never outgrow the row.
 const MAX_TAB_ORDER: usize = 200;
+/// How many agents an order may name, and how many of them may be pinned. One
+/// number for the two lists because they hold the same thing — conversation
+/// ids, one per session the app has ever started in this project — and the
+/// pinned list is a subset of what the order can hold. Generous by the measure
+/// that matters: `.smetana/agents.json` is what the offline rows come back
+/// from, and a person with two hundred conversations still on offer in one
+/// project has a panel that is a list of the year rather than of the morning.
+/// The cap is a ceiling on a hand-edited file, not a budget somebody works
+/// through; the app rewrites the order whole on every drag.
+const MAX_AGENT_ORDER: usize = 200;
 /// How many recently opened tasks a project remembers. The palette draws them
 /// under `Recent` with an empty query, and `RECENT_LIMIT` in `DesktopApp.vue` is
 /// the same number on the other side — three rows is a reminder, and a longer
@@ -805,6 +815,64 @@ pub struct ProjectState {
     /// nothing. The front end rewrites the field whole on the next drag, from
     /// the tabs standing at that moment, so the file cleans itself up.
     pub tab_order: Vec<String>,
+    /// The agents panel's rows in the order they were dragged into, by the
+    /// conversation id the app chose for each session
+    /// (`Session::conversation`). Empty means "never rearranged", and the panel
+    /// then draws the order it already had: the live sessions, then whatever is
+    /// starting, then the records the last run of the app left behind.
+    ///
+    /// **By the conversation id and never by `SessionId`**, which is the whole
+    /// reason the front end was given that field. The worker's counter starts
+    /// at 1 on every launch and no process survives a restart, so an order
+    /// stored under it would hand yesterday's place to whichever agent happened
+    /// to be started second today. The conversation id is the one name for a
+    /// session that means the same thing tomorrow — it is what
+    /// `.smetana/agents.json` keys a restorable record by, so the row that
+    /// comes back after a restart comes back under the very same name.
+    ///
+    /// A hint rather than a truth, exactly as `tab_order` is: an id nothing on
+    /// screen matches is passed over on the way in rather than refused, so a
+    /// list read back is never the reason a row is missing. It is **not** kept
+    /// for ever, and this is where it parts company with `column_order`: the
+    /// front end rewrites the field whole on the next drag, from the rows
+    /// standing at that moment, so the file cleans itself up — the sentence
+    /// `tab_order` carries two fields up. That is wanted here rather than
+    /// tolerated. A status bd no longer has may come back; a conversation
+    /// dropped from `.smetana/agents.json` — the agent exited on its own, or
+    /// somebody closed the row — never will, so an entry naming one is dead
+    /// weight and losing it costs nothing.
+    ///
+    /// A session with no conversation id — a run's batch, a shell, a fork, a
+    /// harness that cannot be told one — takes part in the panel's order while
+    /// the window lives and never reaches this list.
+    pub agent_order: Vec<String>,
+    /// Which agents the panel keeps above all the others, by the same
+    /// conversation id, in the order they were pinned.
+    ///
+    /// A plain `Vec` and not an `Option`, where `branch_folders` is one: there
+    /// is no third state here, since nothing is pinned until somebody pins it —
+    /// the same argument `favorite_branches` above carries, and this is the
+    /// same kind of mark on the same kind of list.
+    ///
+    /// Two fields rather than one flag inside `agent_order`, because they are
+    /// rewritten by different gestures: a drag rewrites the order and leaves
+    /// the pins alone, and pinning rewrites the pins and leaves the order
+    /// alone — which is what lets an unpinned row drop back into the place the
+    /// order still remembers for it instead of landing at the end.
+    ///
+    /// Not checked against anything, the rule `column_order` and
+    /// `favorite_branches` both keep: which sessions exist is not known here,
+    /// and a pin that matches nothing simply pins nothing. That is also what
+    /// makes a pin outlive the agent it was put on: the session ends, the row
+    /// comes back after a restart as an offline one under the same
+    /// conversation id, and it comes back pinned.
+    ///
+    /// And unlike `agent_order` above, nothing prunes this one: it is written
+    /// only when somebody pins or unpins, never rebuilt from what is on screen,
+    /// so a pin survives every launch in which its conversation happened not to
+    /// be offered back. Taking one off is a person's own gesture and nothing
+    /// else's.
+    pub pinned_agents: Vec<String>,
     /// What the run dialog was last set to here. `None` until somebody opens
     /// it, which is every settings file written before this existed.
     ///
@@ -867,6 +935,8 @@ impl Default for ProjectState {
             preview_tab: None,
             column_order: Vec::new(),
             tab_order: Vec::new(),
+            agent_order: Vec::new(),
+            pinned_agents: Vec::new(),
             run_settings: None,
             caveman: CAVEMAN_INHERIT.into(),
             storage_warned_mib: None,
@@ -1560,6 +1630,20 @@ impl ProjectState {
         // deliberately not checked, for the same reason as the column order: an
         // id that matches no tab is passed over by the row.
         sane_list(&mut self.tab_order, MAX_TAB_ORDER, MAX_PATH_LEN);
+        // A conversation id — a 36-character UUID this app minted itself — so
+        // the identifier ceiling, the one `column_order` takes. Membership is
+        // deliberately not checked for the reason those two record, and here it
+        // could not be: which sessions exist is a question for the terminal
+        // worker and for a file in the project folder, neither of which this
+        // module can see. An id that matches nothing on screen is passed over
+        // by the panel, which is what lets a conversation offered back next
+        // week find the place it was left in.
+        sane_list(&mut self.agent_order, MAX_AGENT_ORDER, MAX_ID_LEN);
+        // The same cleaning and the same ceiling, and deliberately no check
+        // that a pinned id is also in the order: the two are written by
+        // different gestures, and a pin put on an agent nobody has ever dragged
+        // is the ordinary case rather than an inconsistency.
+        sane_list(&mut self.pinned_agents, MAX_AGENT_ORDER, MAX_ID_LEN);
         if let Some(run) = self.run_settings.as_mut() {
             run.validate();
         }
@@ -3343,6 +3427,42 @@ mod tests {
         ));
         assert_eq!(file.agent_prompt, "", "one byte past the ceiling loses the whole field");
         assert_eq!(file.agent, "codex", "and nothing else in the file");
+    }
+
+    #[test]
+    fn a_project_nobody_has_arranged_agents_in_has_no_order_and_no_pins() {
+        // Both empty, and both listed in the front end's own `project` defaults
+        // (`src/stores/settings.js`) for a reason no test on this side can
+        // catch: `applySection` there is `Object.assign(target, defaults,
+        // stored)`, so a key missing from that object is a key the defaults
+        // layer cannot clear — and one project's pinned agents would still be
+        // sitting in the panel after somebody opened the next project.
+        let state = ProjectState::default();
+        assert!(state.agent_order.is_empty(), "never rearranged");
+        assert!(state.pinned_agents.is_empty(), "nothing pinned until somebody pins it");
+
+        // And a file written before either field existed, which is every file
+        // on a person's disk right now.
+        let old: ProjectState =
+            serde_json::from_str(r#"{"sideTab":"agents"}"#).expect("deserializes");
+        assert!(old.agent_order.is_empty());
+        assert!(old.pinned_agents.is_empty());
+    }
+
+    #[test]
+    fn a_hand_edited_agent_order_is_cleaned_rather_than_refused() {
+        // The cleaning every list in this file gets: the empty string and the
+        // duplicate out, the rest left alone. An id that matches no session is
+        // deliberately kept — that is the whole of how a conversation offered
+        // back next week finds the place it was left in.
+        let mut state = ProjectState {
+            agent_order: vec!["a".into(), "".into(), "a".into(), "b".into()],
+            pinned_agents: vec!["b".into(), "b".into()],
+            ..ProjectState::default()
+        };
+        state.validate();
+        assert_eq!(state.agent_order, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(state.pinned_agents, vec!["b".to_string()]);
     }
 
     #[test]

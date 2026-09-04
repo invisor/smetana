@@ -1309,6 +1309,54 @@ describe('elapsed time', () => {
   })
 })
 
+/* The one name for a row that means the same thing tomorrow. `id` is the
+   worker's counter and starts at 1 on every launch, so the agents panel keys
+   its dragged order and its pins by this instead —
+   `src/components/agent/agentOrder.js` is what reads it. */
+describe('the conversation id a row carries', () => {
+  it('is the session\'s own for a live row, and null when the app chose none', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_list', [
+      session({ id: 1, conversation: 'conv-a' }),
+      // A run's batch, a fork, a harness that cannot be told an id: no record
+      // is written for any of them, so there is no conversation to carry.
+      session({ id: 2, conversation: null })
+    ])
+    await stores.terminals.loadSessions('/p')
+
+    expect(stores.terminals.agentRows.value.map((row) => [row.id, row.conversation])).toEqual([
+      [1, 'conv-a'],
+      [2, null]
+    ])
+  })
+
+  /* A worker older than the field, and a browser's mock backend, both answer
+     without it. Undefined would reach `settings.json` as a hole in the order. */
+  it('is null rather than undefined when the worker does not send one', async () => {
+    const { ipc, stores } = await ready()
+    const { conversation, ...withoutTheField } = session({ conversation: 'x' })
+    ipc.on('terminal_list', [withoutTheField])
+    await stores.terminals.loadSessions('/p')
+
+    expect(stores.terminals.agentRows.value[0].conversation).toBeNull()
+  })
+
+  /* A start has none either, and never will under this id: the worker chooses
+     the conversation at the spawn and the row is handed a different `id` a
+     second later, when the session lands. */
+  it('is null for a row the worker has not answered for yet', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_create', () => new Promise(() => {}))
+
+    stores.terminals.createSession('/p', { kind: 'bare' })
+
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      starting: true,
+      conversation: null
+    })
+  })
+})
+
 /* What a project left behind when the app last closed: records off
    `.smetana/agents.json`, one per agent session a person started. Nothing is
    running behind one — the processes were hung up as the window closed — so
@@ -1351,7 +1399,11 @@ describe('the sessions a project offers back after a restart', () => {
       id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
       restored: true,
       elapsed: 'offline',
-      cwd: '/p/.worktrees/smetana-0cj'
+      cwd: '/p/.worktrees/smetana-0cj',
+      /* The record's key *is* the conversation id, so the row comes back under
+         the very name the live row carried — which is what lets a pin outlive
+         the agent it was put on. */
+      conversation: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60'
     })
   })
 
