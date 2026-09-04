@@ -18,6 +18,13 @@ import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { basename } from '../paths.js'
 import { dropSpaceFromPlatform, viewportPoint } from '../components/terminal/dropPoint.js'
+/* The pure half of what the Sessions tab's two launching verbs may do, borrowed
+   rather than asked again: whether the configured agent can pick a recorded
+   conversation up at all is one rule, and a second reading of it here would be
+   free to disagree with the one that greys the menu row. The direction is the
+   same as `dropPoint.js` above — a store reaching for a rule that has no Vue
+   and no Tauri in it. */
+import { resumeAvailability, resumeReasonLine } from '../components/agent/sessionMenu.js'
 /* The audible half of what the app has to say. Here rather than in a watcher
    over the session list, because the list holds the active project only and the
    marks below hold every project — and somebody supervising two overnight is
@@ -989,6 +996,38 @@ export async function createSession(project, intent = { kind: 'bare' }) {
   } finally {
     terminalState.starting = terminalState.starting.filter((t) => t.id !== ticket.id)
   }
+}
+
+/* Whether this project's agent can reopen a recorded conversation at all, with
+   the refusal already in the toast corner when it cannot.
+
+   The one guard in front of `createSession` that has to answer before the
+   worker is asked anything: `RESUMES_BY_ID` is a fact about the configured
+   harness rather than about the record, so there is nothing to spawn and
+   nothing for Rust to refuse. A restored row in the agents panel is drawn for
+   every project whatever agent it is set to — the record is written only for a
+   profile that can be told a conversation id, and switching the project to one
+   that cannot does not take the row away — so pressing it under `codex` used to
+   return out of `resumeSession` in silence, with no toast, no row and no change
+   of any kind (smetana-3awe). The Sessions tab has a drawn refusal for the same
+   guard, in the greyed menu row and under the opened card; a row in the agents
+   panel has nowhere to put one, so it goes where every other refusal a session
+   verb raises goes.
+
+   The words are `sessionMenu.js`'s own, capitalised and stopped by
+   `resumeReasonLine` exactly as the opened card sets them, and the title is the
+   one `report('write', …)` already puts on a spawn that was refused. Nothing
+   new is worded here: two accounts of one refusal are two things to keep in
+   step, and this one would drift out of sight of the tab that draws the other.
+
+   Not folded into `createSession`, which is about a start that was actually
+   attempted, and not into `resumeAvailability`, which is pure and knows nothing
+   about a toast. */
+export function resumeRefused(record) {
+  const { available, reason } = resumeAvailability(record, { agent: settings.agent })
+  if (available) return false
+  terminalState.lastError = { title: ERRORS.write.title, description: resumeReasonLine(reason) }
+  return true
 }
 
 /* A shell of the person's own. A worker session like any other and not an
