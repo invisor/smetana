@@ -455,28 +455,20 @@ their purpose: the type stops 300, the bound stops the typo that spawns two hund
 A stored branch the list no longer holds stays in the list as an option of its own, because opening a
 settings screen must never be a way to change a value silently.
 
-**This window writes two files, and the two halves save differently.** `[defaults]` is the
-repository's and goes on an explicit Save; above it is the caveman level this machine talks to agents
-in while this project is open, which is `project.caveman` in `settings.json`
-(`.claude/rules/settings.md`) and is written the moment it is picked. Neither half is a mistake to
-tidy into the other. A file that is committed and travels to everybody in the repository is one where
-a keystroke has to be a decision; a preference on one machine is not, and this one has a mechanical
-reason besides — **Save is offered only over a parsed file, and this window now opens without one**,
-so a level behind that button would be a control nobody could reach in the very states it was moved
-here to serve. The row says both things in its own description, and the ghost button reads Close
-rather than Cancel where there are no fields, since the only thing on screen has already saved
-itself. The level rides back as a `caveman` result of its own rather than as a second shape of
-`save` — `EMITS` in `views/DialogWindow.vue`, then `applyPatch` in the app window — because one
-handler working out which file it is being asked to write is how the two get confused.
+**The fields go on an explicit Save**, which the settings window's save-as-you-type deliberately is
+not, and the difference is the file rather than the form: `.smetana/project.toml` is committed and
+travels to everybody working in the repository, so a keystroke here has to be a decision, where the
+app's own file on this machine is the other case. **Save is offered only over a parsed file**, and
+this window opens without one, so the ghost button reads Close rather than Cancel where there are no
+fields — there is nothing typed for it to undo.
 
 The menu item is **live on the active project whatever state its file is in**, and refuses on one
 fact only: another project's row, under `projectMenu.js`'s existing "Switch to this project first".
 Two more captions stood there — "Set this project up first" and "This project's configuration will
-not parse" — and both went with the caveman row's arrival, because a project with no file, or with a
-damaged one, still has a level to set and used to be able to set it on the settings window's Agents
-tab. The reason a form cannot help with a damaged file has not changed, so it is said **inside the
-window** instead, where there is room for a sentence: no fields, no Save, and one line naming which
-of the two states it is (`configNotice`). Greying each field in turn was the other answer and is more
+not parse" — and both are gone, because the reason a form cannot help with a damaged file is better
+said **inside the window**, where there is room for a sentence: no fields, no Save, and one line
+naming which of the two states it is (`configNotice`). A caption on a row nobody can press says
+less. Greying each field in turn was the other answer and is more
 code for the same meaning, with four dead controls saying nothing about why.
 
 The `invoke` is `stores/runs.js`'s `saveDefaults` and not the view's, since the stores are the only

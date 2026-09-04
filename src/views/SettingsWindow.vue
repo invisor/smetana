@@ -22,7 +22,6 @@ import TabBar from '../components/shell/TabBar.vue'
 import GeneralSettings from '../components/settings/GeneralSettings.vue'
 import EditorSettings from '../components/settings/EditorSettings.vue'
 import AgentSettings from '../components/settings/AgentSettings.vue'
-import SkillsPluginsSettings from '../components/settings/SkillsPluginsSettings.vue'
 import KanbanSettings from '../components/settings/KanbanSettings.vue'
 import GitSettings from '../components/settings/GitSettings.vue'
 import StorageSettings from '../components/settings/StorageSettings.vue'
@@ -40,17 +39,10 @@ import {
   autostartState,
   openExternal,
   readAgentUsage,
-  readCavemanState,
-  requestCavemanInstall,
   setAutostart,
-  watchActiveProject,
   watchBoardColumns,
   watchSettingsSection
 } from '../stores/app.js'
-/* Pure, no Vue and no DOM: what the Install button would type. The press
-   arrives here as a bare event, the way `refresh` does, so the one place that
-   knows a state's command is the module the group draws from. */
-import { installCommand } from '../components/settings/caveman.js'
 import { clearStorage, surveyStorage } from '../stores/attachments.js'
 import { checkForUpdate, initUpdates, installUpdate, updatesState } from '../stores/updates.js'
 
@@ -97,18 +89,6 @@ const view = reactive({
      `agentPrompt` in `stores/settings.js` for why empty is the whole of
      today's behaviour rather than a placeholder. */
   agentPrompt: '',
-  /* How compressed an agent's answers are. Shipped `off`, the same as
-     `settings/model.rs` and `defaults()` in `stores/settings.js` — the copies
-     have to agree, or this window draws a level the app is not using for the
-     moment before the first answer arrives, and in a browser under
-     `?view=settings` for good.
-
-     The global level and nothing else. A project's own override stood beside it
-     here and is edited in the project settings window now
-     (`components/run/ProjectSettingsModal.vue`), which took the one per-project
-     field back off this contract: every field this window speaks in is about
-     the machine again, which is what the window is for. */
-  cavemanLevel: 'off',
   /* The board's four, flat in the same message the rest ride in — see
      `toShared` in `stores/settings.js`. Shipped as today's board exactly, for
      the same reason the agent and the languages above are shipped values: this
@@ -245,7 +225,6 @@ const changeAgentPrompt = (text) => {
 let stopWatching = null
 let stopSections = null
 let stopColumns = null
-let stopProject = null
 let stopUpdates = null
 const version = ref(null)
 
@@ -272,19 +251,6 @@ const updateRefusal = ref(null)
    gap. */
 const boardColumns = ref([])
 
-/* Which project the app window has open, announced by it the way the board
-   columns are and for the same reason (`stores/app.js`): it is not a setting
-   and has no business on the settings contract. Two things on the Skills &
-   Plugins tab want it — the Caveman group's Install button, which opens a
-   terminal and so needs there to be somewhere to open one, and the state read
-   below, since one of the four states caveman can be in is the skill in this
-   repository alone.
-
-   `null` is the ordinary state rather than a gap: every project closed, or no
-   app window to answer at all, which is what a browser under `?view=settings`
-   is. */
-const activeProject = ref(null)
-
 onMounted(async () => {
   try {
     stopWatching = await watchSharedSettings((state) => adopt(state, true))
@@ -308,13 +274,6 @@ onMounted(async () => {
     })
   } catch (err) {
     console.warn('[settings-window] no app window to hear the board columns from:', err)
-  }
-  try {
-    stopProject = await watchActiveProject((path) => {
-      activeProject.value = typeof path === 'string' && path ? path : null
-    })
-  } catch (err) {
-    console.warn('[settings-window] no app window to hear the active project from:', err)
   }
   /* And only now: this window is listening, and the section its URL named is
      the one `tab` was seeded with at setup. A gear pressed on a section while
@@ -344,7 +303,6 @@ onUnmounted(() => {
   stopWatching?.()
   stopSections?.()
   stopColumns?.()
-  stopProject?.()
   stopUpdates?.()
 })
 
@@ -368,13 +326,6 @@ const TABS = [
   { id: 'general', label: 'General', kind: 'pinned' },
   { id: 'editor', label: 'Editor', kind: 'pinned' },
   { id: 'agents', label: 'Agents', kind: 'pinned' },
-  /* Straight after Agents and before Kanban. The two are read together — one
-     is how an agent talks and what it spends, the other is what is installed on
-     this machine around it — and the line before Storage, between the tabs that
-     are settings and the one that is not, is untouched by putting it here.
-     The capital P in the label is deliberate and not a slip against this
-     product's sentence case; it was chosen over "Skills & plugins". */
-  { id: 'skills', label: 'Skills & Plugins', kind: 'pinned' },
   { id: 'kanban', label: 'Kanban', kind: 'pinned' },
   /* Between Kanban and Storage rather than at the end: every tab before it is
      settings and Storage is the one that is not, so another section of settings
@@ -510,65 +461,6 @@ const readUsage = async (agent = adopted.value ? view.agent : null) => {
   }
 }
 
-/* How caveman stands on this machine, and the fifth part of this window that is
-   not a setting: nothing about it reaches `settings.json`. The machine's own
-   four files are the whole of the truth (`src-tauri/src/caveman.rs`), so it is
-   asked rather than remembered — a copy of ours would disagree with the disk
-   the first time somebody ran `caveman enable` outside this app, with no way to
-   tell which half was stale.
-
-   Read on opening the Skills & Plugins tab, the way the Storage numbers, the
-   login item and the subscription probe are read on opening theirs. Not on
-   mounting the window: everybody who comes to change the theme would otherwise
-   be asking about somebody else's installer. It is re-read when the project
-   changes too, since one of the four states is about a repository rather than
-   about the machine — but only while that tab is the one on screen, for the
-   reason it is not read on mounting.
-
-   The project travels as the empty string when there is none, which is what the
-   command is asked with in a browser and with every project closed. Rust joins
-   the skill path onto it and finds nothing, which is exactly right: the three
-   states that can be true with no project open are facts about the machine and
-   need no path at all.
-
-   The reading is cleared at the start of every read, the way the subscription
-   block's is, so a stale answer about the previous project cannot sit under a
-   sentence about the new one; and the guard is a sequence number for that same
-   reason. `readCavemanState` never rejects — a browser is a `debug` line and an
-   `absent` — so there is no error branch to draw. */
-const caveman = reactive({ reading: null, busy: false })
-let askedCaveman = 0
-
-const readCaveman = async () => {
-  const mine = (askedCaveman += 1)
-  caveman.busy = true
-  caveman.reading = null
-  try {
-    const reading = await readCavemanState(activeProject.value ?? '')
-    if (mine !== askedCaveman) return
-    caveman.reading = reading
-  } finally {
-    if (mine === askedCaveman) caveman.busy = false
-  }
-}
-
-/* The Install press. Nothing is opened from here: the terminal belongs to the
-   app window, which has the project and the tab row, so what goes is the
-   command and the app window types it — without a newline, which is the whole
-   point of the button. A state with no command cannot reach this, since the row
-   is not drawn at all in the other two states. */
-const installCaveman = () => {
-  const command = installCommand(caveman.reading)
-  if (command) requestCavemanInstall(command)
-}
-
-/* The project changed under an open window. Only while the Skills & Plugins tab
-   is the one on screen: the read is cheap, but asking on behalf of a tab nobody
-   is looking at is the habit this window does not have. */
-watch(activeProject, () => {
-  if (tab.value === 'skills') readCaveman()
-})
-
 /* An agent is chosen: the edit goes where every edit on this window goes, and
    the block is asked again, since it is about whoever would answer now. */
 const chooseAgent = (id) => {
@@ -612,10 +504,6 @@ watch(
        off this tab and back while a minute-long probe is out must not start a
        second one against the same harness. */
     if (which === 'agents' && !usage.busy) readUsage()
-    /* Guarded by `busy` like the two above, though this one is four file reads
-       rather than somebody else's CLI: walking off the tab and back should not
-       queue a second answer behind the first. */
-    if (which === 'skills' && !caveman.busy) readCaveman()
   },
   { immediate: true }
 )
@@ -732,18 +620,6 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @update:subscription-pause-at="change({ subscriptionPauseAt: $event })"
           @update:subscription-reduced-at="change({ subscriptionReducedAt: $event })"
           @refresh="readUsage()"
-        />
-        <!-- What is installed on this machine around the agent, which today is
-             the Caveman group alone. The state is read on opening this tab and
-             again when the project changes under it; the level is an ordinary
-             edit and goes the way every other one on this window goes. -->
-        <SkillsPluginsSettings
-          v-else-if="tab === 'skills'"
-          :caveman="caveman.reading"
-          :caveman-level="view.cavemanLevel"
-          :project-open="Boolean(activeProject)"
-          @update:caveman-level="change({ cavemanLevel: $event })"
-          @install="installCaveman()"
         />
         <KanbanSettings
           v-else-if="tab === 'kanban'"

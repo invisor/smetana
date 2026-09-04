@@ -40,17 +40,6 @@ import {
    so what the tab offers stays a subset of what Rust accepts. */
 import { NOTIFICATION_DEFAULTS, isSound } from '../sounds.js'
 import { isThreshold, reconcile } from '../components/settings/subscription.js'
-/* Pure, no Vue and no DOM: the caveman ladder and the one extra word a project
-   has, `inherit`. Imported for the reason `isThreshold` above it is — the
-   Caveman group on the Skills & Plugins tab owns that dictionary, since it is
-   what a `Dropdown` there draws, and a second list here would be a third copy of a
-   vocabulary Rust already holds the authority over. What the front end offers
-   has to stay a subset of `CAVEMAN_LEVELS` in `settings/model.rs`, or a choice
-   reverts on the next save with nothing on screen to say so. */
-import {
-  isLevel as isCavemanLevel,
-  isProjectLevel as isCavemanProjectLevel
-} from '../components/settings/caveman.js'
 
 /* The defaults mirror the ones in Rust. With no back end (a browser) or after
    a failed read, the app still has to open looking a known way. */
@@ -183,15 +172,6 @@ const defaults = () => ({
      answer. Which sessions it reaches is decided in Rust
      (`agents::prompt::talks_to_a_person`); nothing here knows or needs to. */
   agentPrompt: '',
-  /* How compressed an agent's answers are — caveman's own vocabulary, and `off`
-     is one of its words rather than the absence of a level. A section of its own
-     the way `updates` above is: one field is already the house shape, the key
-     names the subsystem, and a second caveman preference later has somewhere to
-     go. Shipped `off`, which is today's behaviour to the letter — the app says
-     nothing at all about caveman to any agent until somebody chooses. Rust
-     carries the same default, and a project may override it (`project.caveman`
-     below). */
-  caveman: { level: 'off' },
   /* The two percentages the run gate holds a batch on: `0` is off. Global
      beside `agent` and the languages, because a subscription is the person's
      and not the repository's, and shipped as today's behaviour exactly — the
@@ -293,16 +273,6 @@ const defaults = () => ({
        and it would be prefilled in the one dialog whose whole job is being the
        last cheap place to notice a run aimed at the wrong thing. */
     runSettings: null,
-    /* How compressed an agent's answers are in this project, or `inherit` for
-       "as in every other project" — which is the default, and a word rather than
-       a null for the reason `CAVEMAN_INHERIT` in
-       `components/settings/caveman.js` records. Beside
-       `runSettings` and for its reason: this and that one are the preferences
-       among a project's remembered screen state. Listed here for the reason
-       `runSettings` spells out — a key missing from this object is a key the
-       defaults layer cannot clear, so one project's override would follow
-       somebody into the next project. */
-    caveman: 'inherit',
     /* The highest attachment-storage threshold this project has been warned
        about, in MiB — null until it has been warned about any. The one thing
        the notification bell keeps between runs, and per project because the
@@ -480,7 +450,6 @@ export async function loadSettings() {
     applySection(settings.subscription, base.subscription, stored.subscription)
     applySection(settings.window, base.window, stored.window)
     applySection(settings.updates, base.updates, stored.updates)
-    applySection(settings.caveman, base.caveman, stored.caveman)
     applySection(settings.kanban, base.kanban, stored.kanban)
     applySection(settings.notifications, base.notifications, stored.notifications)
     applySection(settings.layout, base.layout, stored.layout)
@@ -550,12 +519,8 @@ function toShared(source) {
   const windowSection = { ...base.window, ...source.window }
   const updates = { ...base.updates, ...source.updates }
   const notifications = { ...base.notifications, ...source.notifications }
-  const caveman = { ...base.caveman, ...source.caveman }
   /* Every field on this contract is about the machine, and none is about one
-     project. That is worth saying out loud because it was briefly untrue: the
-     per-project caveman level crossed here while its control sat on the Agents
-     tab, and it went back off when the control moved to the project settings
-     window. A window that does not know which project is open has no business
+     project. A window that does not know which project is open has no business
      being told a per-project value. */
   return {
     theme: appearance.theme,
@@ -615,15 +580,7 @@ function toShared(source) {
     reportLanguage: source.reportLanguage ?? base.reportLanguage,
     /* Flat beside the four languages, and the fifth field of that family: what
        the person wants said in every session they are in. */
-    agentPrompt: source.agentPrompt ?? base.agentPrompt,
-    /* Flat and named for what it decides rather than for where it lives — the
-       shape `notificationShowReport` and `gitAutoFetch` take. The global level
-       alone: the project's own override rode beside it until its control moved
-       to the project settings window, and it is deliberately not sent any more.
-       It still travels under the same name — `cavemanProjectLevel`, through
-       `applyPatch` below — because the app window writes it on behalf of the
-       dialog window that owns the control now. */
-    cavemanLevel: caveman.level
+    agentPrompt: source.agentPrompt ?? base.agentPrompt
   }
 }
 
@@ -777,26 +734,6 @@ export function applyPatch(patch) {
   if (typeof patch.notificationShowReport === 'boolean') {
     settings.notifications.showReport = patch.notificationShowReport
   }
-  /* The caveman level and this project's own override, each checked against its
-     own ladder — the relationship the board's two scalars have with
-     `boardView.js`: the vocabulary is a closed list, and a word off it is
-     skipped rather than normalised, so a malformed event leaves the previous
-     choice standing. The project's ladder is the global one plus `inherit`, and
-     `inherit` has to pass: it is how somebody takes an override off again.
-
-     The second is the one field here the settings window never sends. Its
-     control is a row in the project settings window, which is a dialog window
-     and so answers the app window through `onResult` rather than through
-     `settings:apply` — `openProjectSettings` in `views/DesktopApp.vue` calls
-     this function directly, under the same key. One ladder check for both
-     roads, which is the whole reason that write goes through here instead of
-     assigning the field. */
-  if (isCavemanLevel(patch.cavemanLevel)) {
-    settings.caveman.level = patch.cavemanLevel
-  }
-  if (isCavemanProjectLevel(patch.cavemanProjectLevel)) {
-    settings.project.caveman = patch.cavemanProjectLevel
-  }
 }
 
 function announce() {
@@ -875,17 +812,12 @@ export async function readSharedSettings() {
 
    **Neither branch announces**, and that is a fact about the contract rather
    than an omission. `announce()` fires on a hello and on an edit and never on a
-   project being switched, which was wrong for exactly as long as `settings.project`
-   held a field the settings window drew: `caveman`, the project's own level,
-   which sat in the Caveman group beside the global one. A switch left the two
-   rows of that group describing two different projects. The level is edited in the
-   project settings window now — `components/run/ProjectSettingsModal.vue`, off
-   the project tile's own menu — and `toShared` above carries nothing per project
-   again, so there is nothing here for a switch to correct on that screen. What
-   *is* per project on the settings window, the caveman state line, was never
-   this contract's: it rides `project:active` in `stores/app.js` and is re-read
-   on the switch. Put an announcement back the moment a per-project field
-   crosses the contract again, and not before. */
+   project being switched, and `toShared` above carries nothing per project, so
+   there is nothing on that screen for a switch to correct. It was wrong for
+   exactly as long as `settings.project` held a field the settings window drew,
+   and a switch then left two rows of one group describing two different
+   projects. Put an announcement back the moment a per-project field crosses the
+   contract again, and not before. */
 export async function loadProjectLayout(project) {
   /* No projects are left. There is nowhere for a layout to come from, and
      settings_load with no argument would answer about the active project from

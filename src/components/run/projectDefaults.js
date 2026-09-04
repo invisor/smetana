@@ -133,12 +133,9 @@ export const CONFIG_FILE = '.smetana/project.toml'
    identifier and the window sets it in mono, which a single sentence would have
    no way to ask for.
 
-   The window it belongs to is not only about this file any more, which is what
-   makes the case worth a sentence at all rather than a greyed menu item. It
-   also carries this machine's caveman level for the project, which lives in
-   `settings.json` and is nothing to do with the repository — so a project
-   nobody has set up still has something to change here, and the fields are the
-   only part that has to say why it is absent. */
+   A sentence rather than a greyed menu item: the window opens whatever state
+   the file is in, and saying which of the two states it is in — where there is
+   room for the words — is more use than a caption on a row nobody can press. */
 const NOTICE = {
   missing: {
     lead: 'This project has no',

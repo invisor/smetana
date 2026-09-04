@@ -38,19 +38,12 @@ const ELSEWHERE = 'Switch to this project first'
 /* Two more refusals stood here, both the settings item's alone: "Set this
    project up first" over an active project with no `.smetana/project.toml`, and
    "This project's configuration will not parse" over one whose file is damaged.
-   Both are gone and the item is live in either state, and the reason is what
-   that window holds now.
-
-   It edits two things rather than one: `[defaults]` in the project's own file,
-   and this machine's caveman level for this project, which lives in
-   `settings.json` and has nothing to do with the file. So a project with no
-   file, or with a damaged one, would have been shut out of a preference it had
-   before — it used to be a row on the Agents tab of the settings window, which
-   asks nothing about a project's configuration. The window says which of the
-   two states it is in, in its own words and where there is room for them
-   (`configNotice` in `components/run/projectDefaults.js`), and draws no Save
-   over a file it cannot fill a form from. A caption here would now be refusing
-   a window that has something to offer.
+   Both are gone and the item is live in either state, because that window opens
+   whatever state the file is in: it says which of the two states it is in, in
+   its own words and where there is room for them (`configNotice` in
+   `components/run/projectDefaults.js`), and draws no Save over a file it cannot
+   fill a form from. A caption here would be refusing a window that has
+   something to say.
 
    What is left is the one fact this menu can still act on, and it is
    `ELSEWHERE`'s: another project's row. */
@@ -87,8 +80,8 @@ export function projectMenuItems({ active, configured, configBroken, canAddAgent
       disabled: !here
     },
     {
-      /* Editing `[defaults]` in the project's own file, and the caveman level
-         this machine uses in it, without starting anything. The setup item
+      /* Editing `[defaults]` in the project's own file, without starting
+         anything. The setup item
          above is the other verb about that file and is not a substitute for
          this one: it costs a session and takes no instruction, which is the
          right price for "this project grew a fourth repository" and the wrong
