@@ -56,7 +56,15 @@ const props = defineProps({
      the other kind of hint — prose about the thing under the pointer, on a
      surface people cross constantly on the way to something else, where a panel
      opening at once is in the way rather than of use. */
-  delay: { type: Number, default: 0 }
+  delay: { type: Number, default: 0 },
+  /* Whether there is a hint to give at all. Anything that wraps itself in this
+     component has something to say about what it is, so the default is true and
+     no call site in the app states it; what the prop is for is the one place
+     where the panel costs more than it explains. `Toast` is that place — it
+     lives for a few seconds in the corner of the window, and its hint would
+     open upwards over the app's own content. Off, the trigger's span stays
+     exactly where it was, so no layout moves either way. */
+  enabled: { type: Boolean, default: true }
 })
 
 /* The distance from the trigger, carried over from the `calc(100% + 6px)` the
@@ -94,6 +102,14 @@ const cancel = () => {
    included, since measuring first would put the panel in the document — and on
    screen for a frame — before anybody had held still for it. */
 function show() {
+  /* The one gate, and it is deliberately here rather than on the template's two
+     handlers: `show` is also what an ancestor relays into through the exposed
+     surface below — `ColumnHeader` owns the focus this span never hears — so a
+     check placed on the events alone would leave that route open and put the
+     rule in two components again, which is the split that once left a panel
+     parked over the board. Disabled, this component cannot be opened by any
+     route it has. */
+  if (!props.enabled) return
   cancel()
   if (props.delay > 0) {
     timer = setTimeout(() => {
@@ -185,6 +201,19 @@ function hide() {
   at.value = null
   document.removeEventListener('pointerdown', onDocumentPointerdown, true)
 }
+
+/* Turned off while a panel is up, the panel goes with it. `enabled` is a
+   constant at every call site today, so this costs nothing now; what it buys is
+   that "disabled" means the panel is not on screen rather than only that it
+   cannot open, since otherwise a hint could outlive the moment its own control
+   decided it was in the way, with `mouseleave` the only thing left to take it
+   down. */
+watch(
+  () => props.enabled,
+  (on) => {
+    if (!on) hide()
+  }
+)
 
 /* Set when a press inside this trigger took the panel down, and read by
    `onFocusin` alone: it means the focus arriving here is the press's own doing

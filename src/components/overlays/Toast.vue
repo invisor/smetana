@@ -50,6 +50,10 @@ const style = {
         <slot name="action" />
       </div>
     </div>
-    <IconButton v-if="closable" icon="x" label="Dismiss" size="sm" @click="$emit('close')" />
+    <!-- No hint on the cross. This box is gone in seconds and stands in the
+         corner of the window, so the panel would open over the app's own
+         content to name a glyph that reads as itself; `label` still carries the
+         accessible name. -->
+    <IconButton v-if="closable" icon="x" label="Dismiss" size="sm" :hint="false" @click="$emit('close')" />
   </div>
 </template>
