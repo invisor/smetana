@@ -2867,10 +2867,17 @@ const menuTargetStyle = {
             @rescope="() => {}"
           />
         </div>
+        <!-- The third also carries the one state the line about Ready has: a
+             task standing outside that column, which the run moves there on
+             the press and says so beforehand. It is on this frame rather than
+             a sixth because this is the shortest of the three — solo draws no
+             "How many at once" row — so the sentence costs a line the height
+             above already has room for. -->
         <div :style="{ position: 'relative', width: '480px', height: '800px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
           <RunModal
             :open="true"
             :scope="{ kind: 'task', id: 'smetana-77', title: 'Fold the settings debounce into the store' }"
+            task-status="deferred"
             :count="1"
             :branches="everywhere('main', 'staging')"
             default-branch="main"

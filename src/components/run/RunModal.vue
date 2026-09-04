@@ -14,12 +14,28 @@ import BranchSelect from './BranchSelect.vue'
 import Switch from '../core/Switch.vue'
 import Tooltip from '../core/Tooltip.vue'
 import { needsCutting, pickBranch } from './branchChoice.js'
+import { readyPromoteNote } from './readyPromote.js'
 import { runTitle } from './runScopes.js'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
   /* { kind: 'queue' | 'task' | 'epic', id, title }. `queue` carries neither. */
   scope: { type: Object, default: () => ({ kind: 'queue' }) },
+  /* The scope task's status, in bd's own words rather than the board's, and ''
+     where the dialog has no issue to read one off. bd's, because that is the
+     vocabulary `readyPromote.js` is written against and the one the start
+     writes back in; the board's `toUiStatus` would be a second one to keep in
+     step for no gain. It rides in as a prop rather than being read here for the
+     reason every other value does: this dialog is a window of its own and
+     nothing in it can reach a store. */
+  taskStatus: { type: String, default: '' },
+  /* Whether an unfinished blocker stands in front of that same task. A second
+     prop rather than a status of its own, because Blocked is a column the board
+     computes and not a word bd writes: a task can be `deferred` and blocked at
+     once, and only the pair decides whether the start's write would land it in
+     Ready or in Blocked. Served live, like everything else here — a blocker
+     closing while this window stands takes the refusal away with it. */
+  taskBlocked: { type: Boolean, default: false },
   /* How much is in front of it, for the line at the bottom. Null while it is
      still being counted, which reads as nothing rather than as zero. */
   count: { type: Number, default: null },
@@ -255,6 +271,16 @@ const description = computed(() =>
   props.scope?.id ? `${props.scope.id} — ${props.scope.title ?? ''}`.trim() : 'Everything ready on the board.'
 )
 
+/* Said before it happens, because it happens on the press: a run takes its work
+   out of Ready, so `startTheRun` moves a task standing anywhere else there
+   first, and a status changing under somebody who only meant to start a run is
+   exactly the sort of thing a dialog owes a sentence about. The words and the
+   rule are `readyPromote.js`'s, which is the half of this a test can reach —
+   the same file the start reads, so the promise and the write cannot disagree. */
+const readyNote = computed(() =>
+  readyPromoteNote(props.scope, props.taskStatus, props.taskBlocked)
+)
+
 /* Named out loud, because the dialog is the last place a wrong aim is
    cheap. Null means it has not been counted, and saying nothing is better
    than saying zero.
@@ -392,6 +418,18 @@ const takesStyle = {
   color: 'var(--text-secondary)',
   fontFamily: 'var(--font-sans)'
 }
+/* A statement about what the press will do, in the same quiet type as the line
+   at the bottom that says what the run will take — one fact about this run in
+   two places, and neither of them is a warning. No sunken slab of its own: the
+   two blocks above it are each several lines with a glyph, and a single
+   sentence in that dress would read as a third kind of trouble. `--leading-normal`
+   because it wraps in a 440-wide window, which `takesStyle` never does. */
+const readyNoteStyle = {
+  fontSize: 'var(--text-xs)',
+  lineHeight: 'var(--leading-normal)',
+  color: 'var(--text-secondary)',
+  fontFamily: 'var(--font-sans)'
+}
 const errorStyle = {
   fontSize: 'var(--text-xs)',
   lineHeight: 'var(--leading-normal)',
@@ -437,6 +475,13 @@ const errorStyle = {
           Run all of it
         </Button>
       </div>
+
+      <!-- Under the scope line the header carries, and above the fields: it is
+           a fact about the aim rather than a choice about the run. Not while
+           the file is unreadable, for the reason the line at the bottom is not
+           either — nothing can be started, so a sentence about what starting
+           does is a promise this dialog is in no position to keep. -->
+      <span v-if="readyNote && !broken" :style="readyNoteStyle">{{ readyNote }}</span>
 
       <div :style="row">
         <span :style="labelStyle">Merge into</span>
