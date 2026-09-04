@@ -61,17 +61,10 @@
    percentages and two reset times and says nothing at all about a tariff, so
    those two rows could only ever have stayed empty.
 
-   The Caveman group used to sit between the standing instruction and the run
-   limits, and it is the Skills & Plugins tab's now
-   (`SkillsPluginsSettings.vue`), immediately after this one. The old
-   neighbourhood was an argument about how an agent talks; the split that
-   replaced it runs along a different question, and it is the one to keep in
-   mind before moving anything back. **This tab is about how an agent talks and
-   what it spends** — the harness, the four languages, the standing instruction,
-   the run limits and the allowance under them. That one is about what is
-   *installed* on this machine around the agent: somebody else's software, its
-   state, and the command that would change it. Nothing about caveman is drawn
-   here any more, and nothing here imports `caveman.js`. */
+   **This tab is about how an agent talks and what it spends** — the harness,
+   the four languages, the standing instruction, the run limits and the
+   allowance under them. Anything about what is *installed* on this machine
+   around the agent is a different question and does not belong here. */
 import { computed } from 'vue'
 import Button from '../core/Button.vue'
 import Dropdown from '../core/Dropdown.vue'
@@ -276,12 +269,10 @@ const headingStyle = {
   color: 'var(--text-primary)',
   font: 'var(--weight-medium) var(--text-ui-size)/var(--leading-snug) var(--font-sans)'
 }
-/* This and the two under it stand here and again in
-   `SkillsPluginsSettings.vue`, where the Caveman group draws the same
-   name-and-value shape — its value carries two properties more, to break a home
-   directory that will not fit. The copy is deliberate: a few lines of style
-   literal are not a rule, and a module for them would be a home for something
-   neither file could then read in place. */
+/* This and the two under it are the name-and-value shape the subscription facts
+   are drawn in. Written out here rather than lifted into a module: a few lines
+   of style literal are not a rule, and a module for them would be a home for
+   something this file could then no longer read in place. */
 const factStyle = { display: 'flex', alignItems: 'baseline', gap: 'var(--space-4)' }
 /* A `ch` measure, not pixels: this is a column of words, and it is the first
    thing that would clip when the app-wide font size grows. `ch` is the width of
