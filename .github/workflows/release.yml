@@ -6,16 +6,23 @@
 # which is why the release must not be a draft or a prerelease: that URL
 # resolves against the latest published release only.
 #
-# Two things this depends on were done by a person, once, and are in place —
-# RELEASING.md records what was done and where the private half of the key
-# lives:
-#   * npm run tauri signer generate, with the public key committed as
-#     plugins.updater.pubkey in src-tauri/tauri.conf.json;
-#   * TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD set as
-#     repository secrets.
+# What this depends on was done by a person, once, and is in place — RELEASING.md
+# records what was done and where the private halves live. Two separate
+# signatures, and they answer different questions:
+#   * Tauri's own, over the updater artefacts. npm run tauri signer generate,
+#     with the public key committed as plugins.updater.pubkey in
+#     src-tauri/tauri.conf.json, and TAURI_SIGNING_PRIVATE_KEY and
+#     TAURI_SIGNING_PRIVATE_KEY_PASSWORD as repository secrets. It is what an
+#     installed copy checks before it replaces itself.
+#   * Apple's, over the bundle. A Developer ID Application certificate and an
+#     App Store Connect key for notarization, as the six APPLE_*/KEYCHAIN_*
+#     secrets. It is what macOS checks before it will run the result — and,
+#     less obviously and more expensively, what a granted folder permission is
+#     stored against, which is why an ad-hoc signature cost a person every
+#     grant on every update.
 # The check job below refuses to build if the public key is ever empty, because
 # a release with an unsigned latest.json cannot be installed as an update by
-# anybody.
+# anybody, and refuses if any of the six is, because that failure is silent.
 name: Release
 
 on:
@@ -59,6 +66,37 @@ jobs:
             echo "::error::plugins.updater.pubkey in src-tauri/tauri.conf.json is empty — run npm run tauri signer generate, commit the public key, and set TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD as repository secrets. See RELEASING.md."
             exit 1
           fi
+
+      # Checked here for the same reason the updater key is, and it is the
+      # sharper of the two: a missing signing secret does not stop the build,
+      # it changes what the build produces. The bundler signs with whatever
+      # identity it is handed and notarizes only when notarization credentials
+      # are there, warning and carrying on when they are not — so a release cut
+      # with one secret empty is published looking exactly like a signed one,
+      # and the first person to find out is whoever downloads it and is told
+      # the app is damaged. Six seconds on ubuntu against a full macOS build
+      # and a bad release nobody can unpublish from a tag.
+      - name: Check the macOS signing secrets have been set
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          missing=""
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD \
+                      APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8; do
+            if [ -z "${!name}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::repository secrets are empty or unset:${missing} — the bundle would be published unsigned or unnotarized without saying so. See the Developer ID section of RELEASING.md."
+            exit 1
+          fi
+          echo "all six macOS signing secrets are set"
 
   release:
     name: Build and publish
@@ -126,60 +164,212 @@ jobs:
       - name: Fetch the bd sidecar
         run: npm run fetch-bd
 
-      # The bundle is ad-hoc signed, and what makes it so is
-      # bundle.macOS.signingIdentity in src-tauri/tauri.conf.json rather than
-      # the absence of a certificate. Without that field tauri-action never
-      # calls codesign at all, and what ships is the signature the linker put on
-      # the arm64 executable by itself: adhoc and linker-signed, with the
-      # Info.plist unbound and no sealed resources. Gatekeeper does not read
-      # that as an unidentified developer, it reads it as a broken one, and a
-      # quarantined copy opens to "smetana is damaged and can't be opened" — a
-      # dialog carrying no Open button, with nothing appearing in Privacy &
-      # Security to press either, so every word of releaseBody below is
-      # unfollowable and the app cannot be started at all without xattr. v0.1.1
-      # shipped that way; the field is the whole fix.
-      # There is still no Apple Developer ID and no notarization, so a
-      # downloaded copy still has to be let past Gatekeeper by hand once —
-      # releaseBody below says how. The minisign signature is a different
-      # thing entirely: Tauri's own, mandatory, and what an updater would verify.
-      # Nothing verifies it yet — the app has no updater, and these artefacts are
-      # produced ahead of the task that adds one.
+      # The certificate lives in a keychain this step makes and nothing else
+      # uses, rather than in the runner's login keychain: a runner is thrown
+      # away after the job, but a default keychain with a private key in it is
+      # readable by every later step of the same job, and there is no reason
+      # for npm or cargo to be near it.
+      #
+      # The identity string is read back out of that keychain instead of being
+      # carried as a secret of its own, and that is the decision worth keeping.
+      # APPLE_SIGNING_IDENTITY has to match the certificate's common name
+      # exactly — "Developer ID Application: <name> (<team id>)" — so a copy
+      # held separately is a second place to get one character wrong, and it
+      # would go wrong silently: codesign would refuse, tauri would warn, and
+      # the release would publish. Derived here there is only ever one spelling
+      # and it is the certificate's own. The grep is what turns "the wrong
+      # certificate was uploaded" into a stopped build with the identities it
+      # did find printed under it — an Apple Development certificate imports
+      # perfectly well and signs nothing Gatekeeper accepts.
+      - name: Import the Developer ID certificate
+        if: startsWith(matrix.platform, 'macos')
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          p12="$RUNNER_TEMP/certificate.p12"
+          umask 077
+          printf '%s' "$APPLE_CERTIFICATE" | base64 -D > "$p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          # Both of these, and they are not the same thing. The default keychain
+          # is where a new item is filed; the search list is where codesign
+          # looks, and setting the first does not touch the second — a build
+          # that skips this line imports the certificate perfectly and then
+          # fails to find any identity by that name. The existing list is
+          # carried along rather than replaced, so nothing the runner image put
+          # there stops resolving.
+          security list-keychains -d user -s build.keychain $(security list-keychains -d user | tr -d '"')
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          # An hour, stated rather than left to whatever the default is: a
+          # keychain that re-locks partway through a build fails the signature
+          # it was unlocked for, and the error names the identity rather than
+          # the lock, so the hour is bought against a confusing failure and not
+          # against a likely one.
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import "$p12" -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          # Without this, the first codesign of the build opens a dialog asking
+          # to use the key — on a runner that is a job that hangs until it is
+          # cancelled rather than an error anybody can read.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm -f "$p12"
+          identity="$(security find-identity -v -p codesigning build.keychain \
+            | grep 'Developer ID Application' | head -n 1 | awk -F'"' '{print $2}')"
+          if [ -z "$identity" ]; then
+            echo "::error::the imported certificate carries no Developer ID Application identity — an Apple Development certificate is not one, and cannot produce a bundle Gatekeeper accepts. What was imported:"
+            security find-identity -v -p codesigning build.keychain
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "signing as $identity"
+
+      # Notarization authenticates as an App Store Connect API key rather than
+      # as an Apple ID with an app-specific password. Both are accepted by the
+      # bundler; the key is the one that does not stop working when the account
+      # holder turns two-factor authentication over to a new phone, and it can
+      # be revoked on its own without touching anything else the account can do.
+      # APPLE_API_KEY is the Key ID rather than the key, which reads wrongly and
+      # is Tauri's naming: the key itself is the .p8, and what the bundler wants
+      # is a path to it.
+      - name: Write the App Store Connect key for notarization
+        if: startsWith(matrix.platform, 'macos')
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/asc-api-key.p8"
+          umask 077
+          printf '%s' "$APPLE_API_KEY_P8" | base64 -D > "$key"
+          echo "APPLE_API_KEY_PATH=$key" >> "$GITHUB_ENV"
+
+      # What the signature is for is not Gatekeeper's first-launch dialog, which
+      # notarization settles on its own, but the code requirement a macOS
+      # permission is stored against. An ad-hoc signature's requirement is a
+      # cdhash, which changes with every build, so every folder a person had
+      # granted stopped matching the moment they updated in place — and because
+      # the stored decision survives, macOS never asked again. It showed up in
+      # the system log as "Failed to match existing code requirement for subject
+      # com.invisor.smetana". Signed with a Developer ID the requirement is the
+      # team, so a grant outlives the build it was given to.
+      #
+      # bundle.macOS.signingIdentity in src-tauri/tauri.conf.json stays "-" and
+      # is overridden here by APPLE_SIGNING_IDENTITY, which is documented to
+      # take precedence over it. Leaving it is deliberate: without some identity
+      # in that field a local build never calls codesign at all and what comes
+      # out is whatever the linker put on the arm64 executable by itself —
+      # adhoc and linker-signed, Info.plist unbound, no sealed resources, which
+      # Gatekeeper reads as a broken signature rather than an unknown developer.
+      # v0.1.1 shipped that way. The certificate is not on a laptop and should
+      # not be; "-" is what a laptop gets, and the runner gets the real one.
+      #
+      # The minisign signature is a different thing entirely: Tauri's own,
+      # mandatory, and what the app's updater verifies before it replaces
+      # itself. Nothing about code signing touches it.
       - name: Build the bundle and publish the release
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Smetana ${{ github.ref_name }}'
-          # The Gatekeeper steps are kept saying the same thing as the First
-          # launch section of README.md, inside its Install section, which is the
-          # other half of that pair. This copy is the one strangers read, because
-          # it is printed on the release page itself.
+          # The Gatekeeper paragraph that stood here is gone, and so is the
+          # First launch section of README.md it was kept in step with: the
+          # bundle is signed with a Developer ID and notarized, so a downloaded
+          # copy opens on a double-click and there are no steps to give. Neither
+          # half of that pair exists any more, which is why nothing here says a
+          # thing about the first launch.
           #
-          # The last paragraph is no longer part of the pair and is knowingly
-          # stale: the app has had an updater since smetana-oau, and smetana-t3y
-          # dropped the matching sentence from README rather than restate it in a
-          # document that advertises in-place updates a few lines above. Fixing
-          # this copy is smetana-j98's, together with the "no updater" comment on
-          # this same step above. Do not quietly re-sync the two by putting the
-          # claim back into README.
+          # The paragraph below is not part of it and is knowingly stale: the
+          # app has had an updater since smetana-oau, and smetana-t3y dropped the
+          # matching sentence from README rather than restate it in a document
+          # that advertises in-place updates a few lines above. Fixing this copy
+          # is smetana-j98's. Do not quietly re-sync the two by putting the claim
+          # back into README. Its second clause used to send a reader back to the
+          # Gatekeeper steps and had to go with them — that is a repair to a
+          # sentence this change broke, not a settling of what is left.
           releaseBody: |
-            Download the .dmg below.
-
-            The app is not signed with an Apple Developer ID, so macOS will not
-            open a freshly downloaded copy on a double-click. Right-click
-            Smetana.app and choose Open. On macOS 14 and earlier the dialog that
-            appears has an Open button and that is all. From macOS 15 Sequoia on
-            it does not — dismiss it, then go to System Settings → Privacy &
-            Security, scroll to the message naming Smetana and press Open Anyway;
-            that asks for Touch ID or your password and confirms once more before
-            the app opens. Once per machine.
+            Download the .dmg below and drag Smetana to Applications.
 
             There is no in-app updater yet, so a new version means downloading
-            the .dmg again and letting it past Gatekeeper the same way.
+            the .dmg again.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
           args: ${{ matrix.args }}
+
+      # This runs after the release is published and cannot stop it, and it is
+      # here anyway, because the alternative is nobody finding out. tauri-action
+      # builds and publishes in one step, so there is no moment between the two
+      # to look at what was built; and the bundler's own failure mode here is to
+      # warn and carry on — "skipping app notarization" is a log line in the
+      # middle of a green build. A red job on a published release is a person
+      # deleting a tag, which is an afternoon; a quiet unsigned release is every
+      # permission every user granted, lost on their next update, discovered
+      # weeks later.
+      #
+      # The three questions are the three halves of what a Developer ID buys.
+      # TeamIdentifier is the one the permissions depend on — it is what the
+      # stored code requirement matches against, and "not set" is exactly the
+      # ad-hoc signature this change exists to retire. spctl is Gatekeeper's own
+      # answer and has to name the source as Notarized: an unnotarized Developer
+      # ID bundle signs and verifies perfectly and is still refused on a
+      # double-click. stapler is the third because notarization can succeed
+      # while the ticket never reaches the bundle, and a copy without one is
+      # only accepted while the machine opening it can reach Apple.
+      - name: Check the bundle really is signed, notarized and stapled
+        if: startsWith(matrix.platform, 'macos')
+        run: |
+          set -euo pipefail
+          app="$(find src-tauri/target -type d -name '*.app' -path '*/bundle/macos/*' | head -n 1)"
+          if [ -z "$app" ]; then
+            echo "::error::no .app was found under src-tauri/target — the bundle cannot be checked"
+            exit 1
+          fi
+          echo "checking $app"
+          codesign -dv --verbose=4 "$app" 2>&1 | tee "$RUNNER_TEMP/codesign.txt"
+          if ! grep -q '^TeamIdentifier=' "$RUNNER_TEMP/codesign.txt" \
+             || grep -q '^TeamIdentifier=not set' "$RUNNER_TEMP/codesign.txt"; then
+            echo "::error::the published bundle carries no TeamIdentifier — it was signed ad-hoc, and every permission a person grants it will stop matching on their next update. Delete the release and the tag."
+            exit 1
+          fi
+          if ! spctl -a -vvv -t exec "$app" 2>&1 | tee "$RUNNER_TEMP/spctl.txt" \
+             || ! grep -q 'source=Notarized Developer ID' "$RUNNER_TEMP/spctl.txt"; then
+            echo "::error::Gatekeeper does not accept the published bundle as notarized. Delete the release and the tag."
+            cat "$RUNNER_TEMP/spctl.txt"
+            exit 1
+          fi
+          if ! xcrun stapler validate "$app"; then
+            echo "::error::the notarization ticket is not stapled to the published bundle, so it is only accepted on a machine that can reach Apple. Delete the release and the tag."
+            exit 1
+          fi
+
+          # The .dmg is reported and never fails the job, and the asymmetry is
+          # the point. The bundler notarizes and staples the .app and then only
+          # *signs* the disk image built around it — nothing in this repository
+          # decides that, and a check that failed on it would fail every release
+          # over a decision made upstream. What a person downloads is the .dmg,
+          # so what Gatekeeper makes of it is worth knowing; the first release
+          # cut with a certificate is where the answer comes from, and it comes
+          # from this line rather than from anybody's reasoning about it.
+          # Accepted here and the pair is finished. Refused, and the app inside
+          # is still stapled and still opens once it is dragged out — but the
+          # image warns on the way, and the way past that is notarizing the
+          # image too, which means taking the publish out of tauri-action's
+          # hands. That is a task, not an edit.
+          dmg="$(find src-tauri/target -type f -name '*.dmg' | head -n 1)"
+          if [ -n "$dmg" ]; then
+            echo "assessing $dmg"
+            if spctl -a -vvv -t open --context context:primary-signature "$dmg" 2>&1 | tee "$RUNNER_TEMP/dmg.txt"; then
+              echo "::notice::Gatekeeper accepts the disk image: $(cat "$RUNNER_TEMP/dmg.txt" | tr '\n' ' ')"
+            else
+              echo "::warning::Gatekeeper does not accept the disk image itself — the app inside is stapled and opens once dragged out, but the .dmg warns on the way. $(cat "$RUNNER_TEMP/dmg.txt" | tr '\n' ' ')"
+            fi
+          fi

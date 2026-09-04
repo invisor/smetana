@@ -66,32 +66,15 @@ agent that runs `bd` in a session started by the app reaches that same binary.
 ## Install
 
 Download the `.dmg` from [Releases](https://github.com/invisor/smetana/releases) and drag Smetana to
-Applications.
+Applications. It is signed with an Apple Developer ID and notarized, so it opens on a double-click
+with nothing to dismiss and nothing to grant first.
 
-### First launch
-
-The app is not signed with an Apple Developer ID and is not notarized — the bundle is ad-hoc signed,
-which is a deliberate choice and not an oversight. macOS therefore refuses to open a freshly
-downloaded copy on a double-click, and the way past that depends on the version:
-
-- Right-click `Smetana.app` and choose Open. On macOS 14 and earlier the dialog that appears carries
-  an Open button, and pressing it is the whole of it.
-- From macOS 15 Sequoia on, that button is gone — the dialog offers only Move to Trash and Done.
-  Dismiss it, then go to System Settings → Privacy & Security, scroll down to the message naming
-  Smetana, and press Open Anyway. That asks for Touch ID or your password, and then confirms once
-  more before the app opens.
-
-Either way it is once per machine, not once per launch.
-
-A dialog saying **"smetana" is damaged and can't be opened** is a different fault and not this one,
-and the two are easy to confuse because both follow a download. That one means the bundle reached the
-release carrying no signature of its own: the ad-hoc signature is `bundle.macOS.signingIdentity` in
-`src-tauri/tauri.conf.json`, and without that field `tauri-action` never runs `codesign`, leaving
-only what the linker put on the arm64 executable by itself — `codesign -dv` on such a copy says
-`adhoc, linker-signed` with `Sealed Resources=none`. Gatekeeper reads a broken signature rather than
-an unknown developer, so the dialog offers no Open button and Privacy & Security stays empty: nothing
-above works, and the only way in is `xattr -dr com.apple.quarantine` on a copy moved off the
-read-only disk image. v0.1.1 shipped that way and is the only release that did.
+Releases up to and including v0.1.23 were not signed, and there is one crossing to make from one of
+those. A folder permission is stored against the exact build it was granted to, so updating an
+unsigned copy to a signed one loses it — and macOS, holding a decision it thinks it has already made,
+does not ask a second time. The app notices that it cannot read the folder and offers the repair
+itself. From the first signed release on it stops happening: the permission is stored against the
+certificate instead, which does not change between versions.
 
 ## Getting started
 
@@ -135,7 +118,6 @@ This is an early version, and honest about it:
 
 - **macOS on Apple silicon only.** Windows and Linux builds are wanted and neither has been checked
   by eye yet; there is no Intel build.
-- **Not notarized.** The bundle is ad-hoc signed, which is what the First launch steps above are for.
 - The app drives Claude Code and nothing else, and what a run can finish unattended is whatever
   Claude Code can finish unattended.
 - **[Codex](https://github.com/openai/codex) is not supported yet.** It is visible in the Agents
