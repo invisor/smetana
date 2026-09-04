@@ -13,7 +13,7 @@ import { computed, nextTick, ref } from 'vue'
 import Dropdown from '../core/Dropdown.vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
-import { branchOptions, needsCutting } from './branchChoice.js'
+import { branchHint, branchOptions, needsCutting } from './branchChoice.js'
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
@@ -32,22 +32,16 @@ const naming = ref(false)
 const draft = ref('')
 const nameField = ref(null)
 
-/* A name typed here is new until it turns out not to be, and a branch picked
-   from the list may still need cutting where a repository lacks it — one rule
-   for both, next door and pinned by its own tests. */
-const isNew = computed(() => props.modelValue !== '' && needsCutting(props.branches, props.modelValue))
-
 const options = computed(() => branchOptions(props.branches))
 
-/* Two different facts and two different sentences: a name nothing has, and a
-   branch that three repositories out of four already carry. The names
-   themselves are in the row's own note, where there is room for them. */
-const hint = computed(() => {
-  if (!isNew.value) return ''
-  const found = props.branches.find((b) => b?.name === props.modelValue)
-  const short = found?.missing_in?.length ?? 0
-  return short ? `will be created in ${short}` : 'will be created'
-})
+/* A name typed here is new until it turns out not to be, and a branch picked
+   from the list may still need cutting where a repository lacks it. Which of
+   the two sentences that is worth is `branchChoice.js`'s, like every other rule
+   of this field and for the same reason — a `.vue` is the one thing no test in
+   this repository can reach, so no wording of it lives here. How it is drawn is
+   `Dropdown`'s: an info glyph with the sentence in its tooltip, since a field
+   holding a branch name has room for one icon and not for a phrase. */
+const hint = computed(() => branchHint(props.branches, props.modelValue))
 
 const startNaming = async (closePanel) => {
   closePanel()

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { branchOptions, needsCutting, pickBranch } from '../../../src/components/run/branchChoice.js'
+import { branchHint, branchOptions, needsCutting, pickBranch } from '../../../src/components/run/branchChoice.js'
 
 /* The list the field is handed: what the worker sends, which is a branch and
    the repositories that do not have it. */
@@ -121,5 +121,61 @@ describe('the list the branch field draws', () => {
   it('an absent list is an empty list', () => {
     expect(branchOptions(undefined)).toEqual([])
     expect(branchOptions(null)).toEqual([])
+  })
+})
+
+describe('what the field says about a branch that has to be cut', () => {
+  it('says nothing about a branch every repository has', () => {
+    expect(branchHint(everywhere('develop', 'main'), 'develop')).toBe('')
+  })
+
+  it('says nothing when no branch is chosen', () => {
+    expect(branchHint(everywhere('develop'), '')).toBe('')
+    expect(branchHint(everywhere('develop'), undefined)).toBe('')
+  })
+
+  it('says a name nothing in the list carries will be created', () => {
+    expect(branchHint(everywhere('develop'), 'release/9')).toBe('will be created')
+  })
+
+  /* The two sentences are kept apart deliberately: "will be created" about a
+     branch three repositories out of four already have would say it is nowhere,
+     which is the reading that sent a run out to cut an existing `develop`. */
+  it('says a branch some repositories are missing may be created where it is missing', () => {
+    const list = [{ name: 'release/7', missing_in: ['admin', 'extension'] }]
+    expect(branchHint(list, 'release/7')).toBe('may be created where it is missing')
+  })
+
+  /* The defect itself (smetana-f22o): the count was the repositories of the
+     whole project the branch is missing from, while a run cuts the branch only
+     in the ones the task touches — so the field promised work in repositories
+     nothing would ever create anything in. */
+  it('counts no repositories in either sentence', () => {
+    const list = [
+      { name: 'release/7', missing_in: ['admin', 'extension', 'frontend'] },
+      { name: 'develop', missing_in: [] }
+    ]
+    expect(branchHint(list, 'release/7')).not.toMatch(/\d/)
+    expect(branchHint(list, 'release/9')).not.toMatch(/\d/)
+  })
+
+  /* An absent list says what the run will actually be allowed to do, which is
+     what `needsCutting` answers about the same input: nothing the front end has
+     seen carries the name. */
+  it('an absent or empty list promises nothing it cannot promise', () => {
+    expect(branchHint(undefined, 'develop')).toBe('will be created')
+    expect(branchHint(null, 'develop')).toBe('will be created')
+    expect(branchHint([], 'develop')).toBe('will be created')
+    expect(needsCutting([], 'develop')).toBe(true)
+  })
+
+  it('has something to say about exactly the branches that need cutting', () => {
+    const list = [
+      { name: 'develop', missing_in: [] },
+      { name: 'release/7', missing_in: ['admin'] }
+    ]
+    for (const name of ['develop', 'release/7', 'release/9']) {
+      expect(branchHint(list, name) !== '').toBe(needsCutting(list, name))
+    }
   })
 })

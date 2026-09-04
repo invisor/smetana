@@ -25,7 +25,6 @@ state and width for each side, `railOpen` for whether the project rail is drawn 
 panel, and `gitSections` beside them), `editor` with its own `fontSize` and `wordWrap`, `agent`, the id of the CLI agent to
 start, `agentLanguage`, `taskLanguage`, `commitLanguage` and `reportLanguage`, the languages that agent
 works in, `agentPrompt`, the person's own standing instruction for every session they are in,
-`caveman`, how compressed an agent's answers are,
 `kanban`, how
 the board is drawn, `git`, what the app does to a person's repositories without asking each time,
 `window`, whether the main window opens where it was left, `updates`, whether the app asks
@@ -35,7 +34,7 @@ which sound each of the two announcements makes and whether a finished run shows
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
 absolute path to its content state (side tab, right tab, active tab, selected task, `recentTasks`,
 selected path, `selectedRepo`, expanded folders, `branchFolders`, `openTabs`, `previewTab`,
-`columnOrder`, `tabOrder`, `agentOrder`, `pinnedAgents`, `runSettings`, `caveman`,
+`columnOrder`, `tabOrder`, `agentOrder`, `pinnedAgents`, `runSettings`,
 `storageWarnedMib`, `usedAt`).
 
 `tabOrder` sits beside `openTabs` rather than replacing it, and the two answer different questions:
@@ -93,62 +92,13 @@ truthiness guard would swallow the clearing, leaving the old text in the app win
 the next session started while the field on screen looked empty. The shape to copy is
 `editorWordWrap`'s, not `agentLanguage`'s.
 
-`caveman` sits at the root beside `agentPrompt` and on its argument exactly: how tersely somebody
-wants to be spoken to is a fact about a **person** and travels with them between projects. One field
-under a section rather than a flat field, on `updates`' precedent — one field is already the house
-shape, the key names the subsystem, and a second caveman preference later has somewhere to go. The
-ladder is `off | lite | full | ultra | wenyan-lite | wenyan-full | wenyan-ultra`, and it ships `off`,
-which is today's behaviour to the letter: nothing in this app says a word about caveman to any agent
-until somebody chooses. The level lives nowhere on disk in caveman itself — its `SKILL.md` makes it a
-fact about one conversation, held until the session ends — so keeping the choice is ours to do or not
-at all.
-
-**There is no switch beside the level**, and that is a decision rather than an economy: `off` is a
-word of caveman's own vocabulary (`/caveman off`), and a ladder whose first rung is "off" already
-stands in this file twice, in `subscription.pauseAt` and `reducedAt`. A switch would ask one question
-twice and then have to answer what "on, at level off" means. A value off the ladder takes the shipped
-level, which is `subscription`'s rule and not `min_priority`'s — for a `String` forgetting the field
-*is* taking the default, so there is no second behaviour to write.
-
-This one **does** have a per-project half, which is where it parts company with `agentPrompt`: it is
-`caveman` in the project's own entry, beside `runSettings`, the other preference among a project's
-remembered screen state. `.smetana/project.toml` was the alternative and is refused — that file is
-committed and travels to everybody who works in the repository, while how tersely an agent talks to a
-*person* is not a fact about a repository. That argument outlived the control that first stood on it:
-the level is edited in the **project settings window** now, the one window in the app that draws
-`.smetana/project.toml`, and it still does not go into that file. The window writes two files and
-says so on screen (`.claude/rules/runs.md`). The project's vocabulary is the global ladder plus one
-word, `inherit`, which is its default and means "as in every other project"; a word off it takes
-`inherit` rather than `off`. **It is a plain string and never an `Option`**, for the mechanical reason
-the thresholds above record: a sentinel is a value a window can draw and an absence is a field that
-gets skipped on the way through, and this one is read straight out of `settings.project` by the app
-window to fill a dialog. One form on disk and on the wire alike; an `Option` on disk with a sentinel
-on the wire is two shapes of one fact to keep in step in both directions.
-
-The ladder is written out twice — `CAVEMAN_LEVELS` in `model.rs` and
-`components/settings/caveman.js`, which is the interface's own dictionary and what both lists on
-screen draw from, the settings window's `Dropdown` and the project settings window's `Select` —
-under `SUBSCRIPTION_STEPS`' obligation: what the front end offers must stay
-a subset of what Rust accepts. `stores/settings.js` holds no list of its own and asks that module
-(`isLevel`, `isProjectLevel`), the way it asks `isThreshold` and `isSound`, so the guard on an
-incoming patch and the list on screen cannot disagree;
-`tests/components/settings/caveman.test.js` reads Rust's array out of `model.rs` and pins the subset.
-
-**The two levels are edited in two different windows, and only one of them rides this contract.**
-`cavemanLevel` travels flat as the fields beside it do, named for what it decides rather than for
-where it lives. `cavemanProjectLevel` was the **first per-project field on the two windows'
-contract** and is off it again: its row moved to the project settings window, which is per project
-already and opens for projects the settings window cannot see. The name survived the move — that
-window answers the app window through `onResult`, and `openProjectSettings` in `views/DesktopApp.vue`
-calls `applyPatch` under the same key — so there is still one ladder check for both roads, and
-`applyPatch` still leaves the previous value standing on a word off the ladder. What the narrowing
-buys is a contract on which **every field is about the machine again**: `toShared` sends nothing per
-project, and `loadProjectLayout` no longer has to announce on a switch to stop two rows of one group
-describing two projects. Put that announcement back the moment a per-project field crosses again.
-Reading the level is `settings::caveman_level(app, project)`, which answers
-with `inherit` already resolved — the project's level when it has one, the global one otherwise — so
-that rule exists in one place rather than in each caller. The schema version does not move, and
-neither does the field: the move was a control's, not a value's.
+**A removed field leaves its key on disk and nothing migrates it out.** serde ignores a key it has no
+field for, in silence, so a file written before the removal goes on loading and everything beside the
+retired key reads exactly as it did — which is what makes removing a field cost no migration. A read
+that stripped such keys would be one-way code written for a value nobody reads, and it would take the
+setting away from anybody who went back to the previous version. There is no warning either: a key
+nobody asked for is not an error, and a log line per launch would outlive every reader of it.
+`a_key_this_schema_no_longer_has_costs_its_neighbours_nothing` in `model.rs` pins it.
 
 `subscription` sits at the root beside `agent` and the languages, on their argument exactly: a
 subscription belongs to the **person** and to the CLI they signed in to, not to a repository. Two
@@ -517,23 +467,18 @@ and the `Icon` call sites pass numeric literals, so glyphs stay put while their 
 The tabs are `components/settings/` — the directory is the list, for the reason the note under
 Commands gives — and each is presentational, handed values and emitting what was picked, so the whole
 window renders in `?view=gallery` too. The sections themselves are a closed list in
-`SettingsWindow.vue` alone (General, Editor, Agents, Skills & Plugins, Kanban, Git, Storage,
-About); Rust guards the
+`SettingsWindow.vue` alone (General, Editor, Agents, Kanban, Git, Storage, About); Rust guards the
 *shape* of a `?tab=` name so nothing can smuggle a second parameter into the URL, never its
 vocabulary, and an unknown section opens on General. Git sits between Kanban and Storage rather than
 at the end, because the tabs before Storage are settings and Storage is the one that is not.
 
-**Skills & Plugins** is the newest of them and sits straight after Agents (smetana-ekrl). The line
-between the two is the reason it exists: this one is about what is **installed** on this machine
-around the agent — somebody else's software, the state it is in, and the command that would change
-that — where Agents is about **how an agent talks and what it spends**: the harness, the four
-languages, the standing instruction, the run limits and the allowance under them. Caveman is the
-first of the installed things and today the only one, which is why the tab holds one group; a second
-skill or plugin has somewhere to go now that does not widen the tab next door. Its place is after
-Agents rather than at the end because the two are read together, and because it must not cross the
-line before Storage, which is the one tab that is not settings at all. Its label keeps a **capital
-P** — sentence case is this product's rule everywhere and Skills & plugins is the form the rule asks
-for, so the capital is a deliberate exception rather than a slip, and it is not to be "fixed".
+A **Skills & Plugins** tab stood between Agents and Kanban and went whole rather than staying empty
+(smetana-tcvi). It was opened for one group and never held a second, so with that group gone the tab
+was a promise of work nobody had taken, read on every opening of this window. What it was for is
+still a real line — Agents is about **how an agent talks and what it spends**, and a tab about what
+is **installed** on this machine around the agent is a different question — so it comes back in a
+dozen lines the moment there is a second such thing to draw. Leaving it in place with an empty state
+was the rejected alternative.
 
 **A project's own run configuration is deliberately not a tab here** (smetana-2cfl). This window
 is about `settings.json` — this machine's preferences, written by the app, in the app's own data
@@ -542,13 +487,6 @@ whoever else works in it, and about one project rather than about the app. A tab
 different kinds of thing behind one door and would then have to explain, on the tab itself, that this
 one travels with the repository. It is a dialog window of its own instead, `'project-settings'`, off
 the project tile's right-click menu; `.claude/rules/runs.md` carries the whole of it.
-
-The traffic between the two windows since runs the other way and does not weaken that: the project
-settings window now carries **one** field of `settings.json`, the project's caveman level, above the
-`[defaults]` form. The split still holds because it is by subject rather than by file — that window
-is about one project and this one is about the machine, and a level for "whichever project the app
-window happens to have open" was a row this screen could not honestly draw. The two halves of that
-window save differently and say so on screen, which is the whole of what a reader has to know here.
 
 A tab is a stack of `SettingsRow`s, and where a run of them belongs together it is wrapped in
 `SettingsGroup`. The group draws two marks and they say different halves of one thing: a **caption**
@@ -644,57 +582,6 @@ already out. Kanban is the same shape further along the row, and the one tab who
 vocabulary at all — the columns it offers are the active project's own, read from the tracker, so
 with no project open or no answer yet it says so rather than drawing an empty list.
 
-**The Caveman group** is the whole of the Skills & Plugins tab
-(`components/settings/SkillsPluginsSettings.vue`). It stood on Agents until smetana-ekrl, between
-Standing instruction and Run limits, and the argument for that place was the neighbourhood: a level
-is a way of talking, which is what the instruction above it asked for. The split that replaced it
-runs along the other question — what is installed on this machine, against how an agent talks — and
-the group went whole rather than in halves: the state line, the journal's facts, the command, Install
-and All projects are one account of one thing, and leaving the status behind would have made somebody
-read on one screen where caveman stands and choose on another what it does. It is one line about how
-caveman stands on this machine and up to two rows under it — Install and All projects — and
-every sentence in it is `components/settings/caveman.js`'s, another of the `branchChoice.js` family.
-A third row, This project, stood under them and is a row of the **project settings window** now: this
-window is about the machine, that one is about a project, and a per-project row here could only ever
-mean "whichever project the other window happens to have open" — which is not a thing a person
-reading a settings screen can see. `projectLevelOptions()` is still `caveman.js`'s and is drawn over
-there.
-The state is `caveman_state`'s four words (`src-tauri/src/caveman.rs`), read on **opening the Skills
-& Plugins tab** like the Storage numbers and the subscription probe, and re-read when the project
-changes, since one of the four is about a repository rather than about the machine. Both reads
-happen only while that tab is the one on screen, so somebody who came to change the theme is never
-asking about another installer. The journal's facts — the pack
-version and the files another installer rewrote — are drawn under `wired` alone: the journal survives
-an install that has since been unwired, so repeating its file list anywhere else would claim rewrites
-that may have been put back.
-
-**Install installs nothing.** It opens a terminal in the active project and *types* the command with
-no newline; Enter is the person's. Doing it for them would mean a Rust command of our own, an
-`installing`/`failed` pair of states to draw, and this app silently rewriting somebody's
-`~/.claude/settings.json` and turning their agent's traffic through a local proxy. What is refused on
-the other side is `curl … | bash`, and the commands are caveman's own words rather than an invention
-here — but they come from **two** places and the difference is worth keeping straight. `npm i -g
-@caveman-ai/cli` and `caveman setup --install` are the CLI's README, under "Getting the binaries";
-`caveman enable claude` is not in that README at all and is what the CLI itself prints as its
-`next native:` remediation, in that order after `setup --install`. It is preferred to the README's
-broader `setup --agent-native claude`, which is a strict superset — that one additionally installs a
-skills suite, cloud MCP servers and Core — because the whole point of a command typed on somebody's
-behalf is the smallest footprint they can review before pressing Enter. `enable` is also the verb
-that writes the hook and the journal `caveman.rs` reads back, so what the button offers and what the
-status line above it can see are the same act. All of it is shown on screen before it is typed, so
-somebody with no project open can still read what to run.
-
-Two messages carry it, and both are `stores/app.js`'s rather than the settings contract's, for
-`board:columns`' reason exactly: nothing about either reaches `settings.json`. `project:active` /
-`project:hello` is the app window saying which project it has open — needed because
-`caveman_state` is asked about one and because a terminal has to be opened somewhere, and a *live*
-announcement rather than a field on the contract because `announce()` fires on a hello and on an
-edit, never on a project being switched. `caveman:install` goes the other way, one-directional and
-unanswered: the command travels as a string and the app window opens the shell through the same
-`newTerminal` the `+` menu uses, so the tab is focused and a refused session is the toast every other
-refused session is. With no project open the button is drawn `disabled` and its description names the
-reason — the Launch at login shape, on the General tab.
-
 **Two things on this screen are not settings at all**, and they are the exceptions that keep the
 rule readable. One is a whole tab and the other is a single row.
 
@@ -738,7 +625,7 @@ the scope declined. The predicate is "is there a real back end", which is **not*
 the dev server and quietly took the app's branch there, leaving the link opening nothing at all.
 `mockBackend.js` publishes what it decided (`usingMockBackend`), the only honest answer.
 
-**About also carries the whole of the update machine**, and it is the fifth part of this window that
+**About also carries the whole of the update machine**, and it is the fourth part of this window that
 is not a setting: nothing about it reaches `settings.json`, and `FIELDS` in `SettingsWindow.vue`
 deliberately does not name it. `src-tauri/src/updates.rs` owns the state — `idle`, `checking`,
 `available`, `downloading`, `ready`, `failed`, one tagged value that travels whole — and

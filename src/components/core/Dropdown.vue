@@ -24,6 +24,7 @@
    anything scrolls. */
 import { computed, nextTick, ref, watch } from 'vue'
 import Icon from './Icon.vue'
+import Tooltip from './Tooltip.vue'
 
 const props = defineProps({
   modelValue: { type: [String, Number], default: '' },
@@ -46,7 +47,9 @@ const props = defineProps({
   /* The same two `Select` has, and the same names: a dense panel wants the
      short one. */
   size: { type: String, default: 'md' },
-  /* Something to say about the current value, muted, before the chevron. */
+  /* Something to say about the current value, drawn before the chevron as an
+     info glyph with this text in its tooltip — never as words in the field. See
+     the template for what words there cost. */
   hint: { type: String, default: '' }
 })
 
@@ -497,18 +500,12 @@ const emptyStyle = {
   fontFamily: 'var(--font-sans)'
 }
 
-const hintStyle = {
-  fontSize: 'var(--text-2xs)',
-  color: 'var(--text-muted)',
-  whiteSpace: 'nowrap',
-  fontFamily: 'var(--font-sans)'
-}
-
-/* A row's own note. The field's `hintStyle` colour and size, deliberately not
-   `hintStyle` itself: this one has to lose a negotiation the field's hint never
-   enters. It is the only span in the row that shrinks while both are present —
-   see `labelStyle` for why that ordering is stated outright rather than
-   weighted — so the whole of the shortfall lands here and ellipsises here. */
+/* A row's own note: the muted, small, sans voice a hint about a value is said
+   in, and a style of its own rather than one shared with the field's hint,
+   which is a glyph and has no words to size. It is the only span in the row
+   that shrinks while both are present — see `labelStyle` for why that ordering
+   is stated outright rather than weighted — so the whole of the shortfall lands
+   here and ellipsises here. */
 const noteStyle = {
   fontSize: 'var(--text-2xs)',
   color: 'var(--text-muted)',
@@ -546,7 +543,23 @@ const headerStyle = (index) => ({
       @click="show"
     >
       <span :style="valueStyle">{{ selectedLabel || placeholder }}</span>
-      <span v-if="hint" :style="hintStyle">{{ hint }}</span>
+      <!-- The hint as a glyph, because it shares this line with the value and a
+           long value leaves it nothing: `feat/desing-update` and
+           `will be created in 3` filled the run dialog's field between them. The
+           sentence moves into the tooltip, where its length costs the field
+           nothing, and `title` keeps it in the button's accessible name exactly
+           as the span it replaces did.
+
+           No delay, since somebody puts the pointer on this glyph in order to
+           ask it something — a wait is for prose on a surface people cross on
+           the way to something else. And it cannot leave a hint standing over
+           this control's own panel: opening that panel is a press, and
+           `Tooltip` takes its panel down on every press in the window. The one
+           thing lost is a disabled field, which dispatches no pointer events at
+           all, so its hint is a glyph nobody can ask. -->
+      <Tooltip v-if="hint" :label="hint" :style="{ flexShrink: 0 }">
+        <Icon name="info" :size="13" :title="hint" :style="{ color: 'var(--text-muted)' }" />
+      </Tooltip>
       <Icon name="chevron-down" :size="14" :style="{ color: 'var(--text-muted)' }" />
     </button>
 
@@ -598,14 +611,14 @@ const headerStyle = (index) => ({
             />
             <span :style="rowTextStyle">
               <span :style="labelStyle(option)">{{ option.label }}</span>
-              <!-- Something to say about this row in particular: the field's
-                   `hintStyle` voice, in its own style rather than that one.
-                   Reusing it would carry `white-space: nowrap` with nothing to
-                   shrink or clip it, and in a flex row that means the *label*
-                   gives way — a long note eating the branch name it is about,
-                   which is the opposite of what a note is for. So it keeps the
-                   colour and size and adds what a row needs: it may shrink, and
-                   it clips itself when it does. -->
+              <!-- Something to say about this row in particular, and the one
+                   place in the control where a hint is still words: a row is a
+                   line of its own and the panel is as wide as the field, so
+                   there is room for a name and a note. `nowrap` alone would not
+                   do — in a flex row it makes the *label* give way, a long note
+                   eating the branch name it is about, which is the opposite of
+                   what a note is for. So `noteStyle` adds what a row needs: it
+                   may shrink, and it clips itself when it does. -->
               <span v-if="option.note" :style="noteStyle">{{ option.note }}</span>
             </span>
           </button>

@@ -246,36 +246,6 @@ describe('loading', () => {
     const sent = second.ipc.calls('settings_save').at(-1).settings
     expect(sent.agentPrompt).toBe('Always use pnpm.')
   })
-
-  it('opens with caveman off, and keeps both the global level and this project\'s own', async () => {
-    /* Off is today's behaviour to the letter: until somebody chooses a level the
-       app says nothing at all about caveman, and `settings/model.rs` ships the
-       same word. */
-    const { ipc, stores } = await loadStores()
-    ipc.on('settings_load', {})
-    ipc.on('settings_save', null)
-    await stores.settings.loadSettings()
-    expect(stores.settings.settings.caveman).toEqual({ level: 'off' })
-    expect(stores.settings.settings.project.caveman).toBe('inherit')
-
-    const second = await loadStores()
-    second.ipc.on('settings_load', {
-      caveman: { level: 'wenyan-ultra' },
-      project: { caveman: 'lite' }
-    })
-    second.ipc.on('settings_save', null)
-    await second.stores.settings.loadSettings()
-    expect(second.stores.settings.settings.caveman.level).toBe('wenyan-ultra')
-    expect(second.stores.settings.settings.project.caveman).toBe('lite')
-
-    /* And back out on the next write, both of them: a save that dropped either
-       would lose the choice at the next start with nothing to say so. */
-    second.stores.settings.settings.appearance.theme = 'light'
-    await second.stores.settings.flushPending()
-    const written = second.ipc.calls('settings_save').at(-1).settings
-    expect(written.caveman).toEqual({ level: 'wenyan-ultra' })
-    expect(written.project.caveman).toBe('lite')
-  })
 })
 
 describe('a project\'s layout', () => {
@@ -320,19 +290,19 @@ describe('a project\'s layout', () => {
     expect(settings.settings.project.recentTasks).toEqual([])
   })
 
-  it("clears one project's caveman override when another project is opened", async () => {
-    /* The reason the field is listed in `defaults().project`: applySection is
-       Object.assign(target, defaults, stored), so a key the defaults layer does
-       not name is a key it cannot clear — and one project's level would go on
-       compressing an agent in the next project. */
-    ipc.on('settings_load', { project: { caveman: 'ultra' } })
+  it("clears one project's side tab when another project is opened", async () => {
+    /* The reason every per-project field is listed in `defaults().project`:
+       applySection is Object.assign(target, defaults, stored), so a key the
+       defaults layer does not name is a key it cannot clear — and one project's
+       value would follow somebody into the next project. */
+    ipc.on('settings_load', { project: { sideTab: 'agents' } })
     await settings.loadSettings()
-    expect(settings.settings.project.caveman).toBe('ultra')
+    expect(settings.settings.project.sideTab).toBe('agents')
 
     ipc.on('settings_load', { project: {} })
     await settings.loadProjectLayout('/another')
 
-    expect(settings.settings.project.caveman).toBe('inherit')
+    expect(settings.settings.project.sideTab).toBe('files')
   })
 
   it("remembers the right column's tab, and clears it for a project that has none", async () => {
@@ -878,82 +848,15 @@ describe('the settings window', () => {
     expect(settings.sharedSettings().notificationShowReport).toBe(false)
   })
 
-  /* The caveman level, checked against its ladder the way the two board scalars
-     are checked against `boardView.js`'s: the vocabulary is closed, and a word
-     off it is skipped rather than normalised, so a malformed event leaves the
-     choice already made standing. */
-  it('takes a caveman level off the ladder, and leaves the previous one standing otherwise', async () => {
-    await emit(settings.SETTINGS_APPLY, { cavemanLevel: 'wenyan-lite' })
-    await nextTick()
-    expect(settings.settings.caveman.level).toBe('wenyan-lite')
-
-    await emit(settings.SETTINGS_APPLY, { cavemanLevel: 'loud' })
-    await nextTick()
-    expect(settings.settings.caveman.level).toBe(
-      'wenyan-lite',
-      'a word nobody ships is skipped, not replaced by the default'
-    )
-
-    await emit(settings.SETTINGS_APPLY, { cavemanLevel: null })
-    await nextTick()
-    expect(settings.settings.caveman.level).toBe('wenyan-lite')
-
-    await emit(settings.SETTINGS_APPLY, { cavemanLevel: 'off' })
-    await nextTick()
-    expect(settings.settings.caveman.level).toBe('off', 'off is a rung and not an absence')
-  })
-
-  /* The project's own override, whose ladder is the global one plus `inherit`.
-     That word has to arrive and land: it is how somebody takes an override off
-     again. Its control is the project settings window rather than the settings
-     window now, so what sends this patch is `openProjectSettings` in
-     `views/DesktopApp.vue` calling `applyPatch` directly — the same key and the
-     same ladder check, which is exactly why it goes through this function
-     rather than assigning the field. Driven here through the event because that
-     is what this suite can reach, and both roads meet in `applyPatch`. */
-  it("takes this project's caveman override, inherit included", async () => {
-    await emit(settings.SETTINGS_APPLY, { cavemanProjectLevel: 'ultra' })
-    await nextTick()
-    expect(settings.settings.project.caveman).toBe('ultra')
-
-    await emit(settings.SETTINGS_APPLY, { cavemanProjectLevel: 'inherit' })
-    await nextTick()
-    expect(settings.settings.project.caveman).toBe('inherit')
-
-    await emit(settings.SETTINGS_APPLY, { cavemanProjectLevel: 'shout' })
-    await nextTick()
-    expect(settings.settings.project.caveman).toBe('inherit', 'a word off the ladder is skipped')
-
-    await emit(settings.SETTINGS_APPLY, { cavemanProjectLevel: null })
-    await nextTick()
-    expect(settings.settings.project.caveman).toBe('inherit')
-  })
-
-  it('keeps the project override off the two windows’ contract', async () => {
-    /* It rode there while its control was a row on the Agents tab, and it went
-       back off when that row moved to the project settings window. Every field
-       the settings window is told about is about the machine again, which is
-       what that window is for — and a window that does not know which project
-       is open has no business being sent a per-project value. */
-    settings.settings.caveman.level = 'full'
-    settings.settings.project.caveman = 'ultra'
-
-    const shared = settings.sharedSettings()
-
-    expect(shared.cavemanLevel).toBe('full')
-    expect(shared).not.toHaveProperty('cavemanProjectLevel')
-  })
-
+  /* Both branches of `loadProjectLayout`, and both silent. `announce()` fires
+     on a hello and on an edit and never on a project being switched, and
+     `toShared` carries nothing per project, so there is nothing on that screen
+     for a switch to correct. The announcement that used to stand here existed
+     for the one per-project field the settings window drew, and went with it. */
   it('says nothing to the settings window when the project changes', async () => {
-    /* Both branches of `loadProjectLayout`, and both silent. The announcement
-       that used to be here existed for `project.caveman` alone, which the
-       settings window drew; with nothing per project left on the contract there
-       is nothing for a switch to correct over there. The caveman *state* line
-       on that tab is per project and is not this contract's — it rides
-       `project:active` in `stores/app.js`. */
-    ipc.on('settings_load', { project: { caveman: 'ultra' } })
+    ipc.on('settings_load', { project: { sideTab: 'agents' } })
     await settings.loadProjectLayout('/a')
-    expect(settings.settings.project.caveman).toBe('ultra')
+    expect(settings.settings.project.sideTab).toBe('agents')
 
     const heard = []
     await listen(settings.SETTINGS_STATE, (event) => heard.push(event.payload))
@@ -961,7 +864,7 @@ describe('the settings window', () => {
     ipc.on('settings_load', { project: {} })
     await settings.loadProjectLayout('/b')
     await nextTick()
-    expect(settings.settings.project.caveman).toBe('inherit', 'the section is still reloaded')
+    expect(settings.settings.project.sideTab).toBe('files', 'the section is still reloaded')
 
     await settings.loadProjectLayout(null)
     await nextTick()
@@ -1002,8 +905,7 @@ describe('the settings window', () => {
       taskLanguage: 'en',
       commitLanguage: 'en',
       reportLanguage: 'en',
-      agentPrompt: '',
-      cavemanLevel: 'off'
+      agentPrompt: ''
     })
   })
 
@@ -1059,8 +961,7 @@ describe('the settings window', () => {
       taskLanguage: 'en',
       commitLanguage: 'en',
       reportLanguage: 'en',
-      agentPrompt: '',
-      cavemanLevel: 'off'
+      agentPrompt: ''
     })
   })
 })

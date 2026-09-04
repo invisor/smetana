@@ -101,10 +101,9 @@ describe('the project settings item', () => {
   })
 
   it('is live on an active project that has no configuration yet', () => {
-    // The window is not only about `.smetana/project.toml` any more: it carries
-    // this machine's caveman level for the project, which is kept in
-    // `settings.json`. A project with no file still has that to change, so the
-    // item opens and the window says why there are no fields under it.
+    // The window opens whatever state the file is in and says inside itself
+    // why there are no fields under it, which is more use than a caption on a
+    // row nobody can press.
     const items = projectMenuItems({ ...base, configured: false, configBroken: false })
     expect(settings(items).disabled).toBe(false)
     expect(captions(items)).toEqual([])

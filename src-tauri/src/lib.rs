@@ -1,7 +1,6 @@
 mod agents;
 mod attachments;
 mod autostart;
-mod caveman;
 mod files;
 mod git;
 mod project;
@@ -319,7 +318,6 @@ pub fn run() {
       window::window_show_ready,
       autostart::autostart_state,
       autostart::autostart_set,
-      caveman::caveman_state,
       updates::updates_state,
       updates::updates_check,
       updates::updates_install,
