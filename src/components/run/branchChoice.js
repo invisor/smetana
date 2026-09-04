@@ -85,3 +85,34 @@ export function branchOptions(branches) {
   )
   return rows
 }
+
+/* What the field says about a branch that will have to be cut somewhere.
+
+   Two cases and two sentences, and the difference between them is not
+   decoration: a name nothing in the list carries is a branch that is nowhere
+   yet, while a branch three repositories out of four already have is one the
+   run may well find already there. One sentence for both would say the branch
+   does not exist, which is the reading that once sent a run out to cut a
+   `develop` that already had its own history.
+
+   Neither sentence carries a number, and that is the defect this was written
+   for (smetana-f22o). The count used to be `missing_in.length` — the
+   repositories of the **whole project** the branch is missing from — while a
+   run cuts the branch only in the repositories the task touches, so for a task
+   in one repository the field promised work in the other three that nothing
+   would ever do. The count cannot be narrowed here either: the dialog knows
+   neither the task's `repo:` labels nor `[project].repos`, and `create_target`
+   is a permission rather than a plan. The prompt is already honest in exactly
+   this way — "wherever it does not exist yet" — so the sentence is a permission
+   too, and there is no number in it left to be wrong. The names themselves are
+   in the row's own note, where there is room for them and where they are a fact
+   rather than a promise.
+
+   An absent or empty list answers `will be created`, in step with
+   `needsCutting` above: nothing the front end has seen carries the name, and
+   that is the same permission the run is about to be given. */
+export function branchHint(branches, name) {
+  if (!name || !needsCutting(branches, name)) return ''
+  const known = (Array.isArray(branches) ? branches : []).some((b) => b?.name === name)
+  return known ? 'may be created where it is missing' : 'will be created'
+}

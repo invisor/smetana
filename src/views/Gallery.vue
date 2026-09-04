@@ -683,7 +683,7 @@ const pickedMode = ref('done')
 /* Records for the branch fields below — the shape `target_branches` actually
    answers with, now that git.js passes it straight through. */
 const everywhere = (...names) => names.map((name) => ({ name, missing_in: [] }))
-const partialBranch = ref('release/7')
+const partialBranch = ref('feature/runs-project-config')
 const checked = ref(true)
 const switched = ref(true)
 
@@ -4504,16 +4504,30 @@ const menuTargetStyle = {
           />
         </div>
         <div :style="{ width: '320px' }">
-          <!-- A branch three of the project's repositories carry and one does
-               not. The hint counts them and the row names them: "will be created"
-               on its own would say the branch does not exist, which is the very
-               thing that sent a run out to cut a `develop` that already had its
-               own history in four repositories. -->
+          <!-- A branch some of the project's repositories are missing, against
+               the field above it, whose branches are all everywhere and which
+               therefore draws no glyph at all. Here there is an info glyph after
+               the name, and holding the pointer over it says "may be created
+               where it is missing" — a permission rather than a plan, since a
+               run cuts the branch only in the repositories the task touches and
+               this dialog does not know which those are. The two sentences stay
+               apart: "will be created" on its own would say the branch is
+               nowhere, which is the very thing that sent a run out to cut a
+               `develop` that already had its own history in four repositories.
+               The other half is fact rather than permission and stays words,
+               inside the panel where the row has a line to itself: open it for
+               "not in admin, extension".
+
+               The name it opens on is a long one on purpose. That is what the
+               glyph is for — the phrase used to stand in the field beside the
+               name, and the two filled it between them — so this is the field
+               to look at for the name giving way rather than the glyph. -->
           <BranchSelect
             v-model="partialBranch"
             :branches="[
               { name: 'develop', missing_in: [] },
               { name: 'main', missing_in: [] },
+              { name: 'feature/runs-project-config', missing_in: ['extension'] },
               { name: 'release/7', missing_in: ['admin', 'extension'] },
               { name: 'spike/auth', missing_in: ['frontend', 'admin', 'extension'] }
             ]"
