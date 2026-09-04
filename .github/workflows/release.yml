@@ -34,6 +34,21 @@ on:
 permissions:
   contents: read
 
+# Every third-party action here is pinned by major tag rather than by sha, which
+# is a choice about how versions move and not an oversight: a tag was already the
+# convention in this file, and pinning by sha is a decision about reproducible
+# builds worth taking whole rather than in passing.
+#
+# checkout and setup-node are on v5 because v4 targets Node 20, which GitHub has
+# deprecated: v0.1.24's log carried "the following actions target Node.js 20 but
+# are being forced to run on Node.js 24". The runner substitutes the runtime
+# today; when it stops, the action stops with it, and a release is the only thing
+# that runs this file. The other two were checked at the same time and left
+# alone, because neither can raise that warning: dtolnay/rust-toolchain@stable is
+# a composite action with no Node runtime of its own, and tauri-apps/tauri-action@v1
+# already declares node24. tauri-action in particular carries the whole of the
+# signing and publishing, so its major version is its own piece of work with its
+# own check, never a line in somebody else's.
 jobs:
   # Runs once, before any of the matrix, so a mismatch costs a few seconds
   # rather than a full macOS build.
@@ -41,7 +56,7 @@ jobs:
     name: Check the tag and the signing key
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # tauri.conf.json is the single source of the version: it is what
       # getVersion() reports inside the app and the number a person quotes in a
@@ -128,10 +143,10 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: lts/*
           cache: npm
