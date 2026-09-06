@@ -107,10 +107,23 @@ repository without the branch does not hold the closure up: merged in the backen
 the frontend is half-finished work. The whole of that rule is `vcs::merged::merged_in_all`, pure and
 tested; `merged.rs` exists at all because `git.rs`, which finds the branch, is forbidden a process.
 
-Three narrownesses, and each is a way of being wrong that costs the work rather than a minute.
+Four narrownesses, and each is a way of being wrong that costs the work rather than a minute.
 **Only `ready_to_merge`** — an `open` or `in_progress` task may have a branch with the same slug, half
-merged or cut for another attempt. **Only local refs** — nothing asks a remote, so no timer ever
-carries a network call, and a branch merged only on somebody's server is not merged on this machine.
+merged or cut for another attempt. **Only a task no live run is holding**
+(`runs::recovery::live_actors` over `.smetana/runs.json`, the rule and its tests in
+`runs::registry::live_actors`) — ancestry cannot tell a merged branch from a branch with no commits
+of its own, since a branch cut from the target's tip is already an ancestor of it, and the workflow
+this app drives makes that an ordinary state rather than an anomaly: the worker leaves approved work
+uncommitted, sets `ready_to_merge`, and the lead commits at the merge phase. The predicate is not
+fixable, because the fast-forward the sweep exists for has the same shape; the sweep is for a person
+who merged past the app, and a task a run holds is closed by that run. It cost a night on
+holiday-curb (smetana-cksn): a task closed 26 seconds before its branch's only commit, and fifteen
+files left on a branch with nothing on the board to say they were there. A record whose writer this
+platform cannot ask about counts as live, the same asymmetry the rest of the sweep is built on. What
+is still open by design: a run dead longer than `registry::ABANDONED_DAYS` loses its record, and its
+task is Phase R's to recover rather than this sweep's to protect. **Only local refs** — nothing asks
+a remote, so no timer ever carries a network call, and a branch merged only on somebody's server is
+not merged on this machine.
 **Only a target branch this project has actually named**: what the run dialog was last left on here
 (`settings.json`, per project), then `[defaults] target_branch` in `.smetana/project.toml`. Those are
 `branchChoice.js`'s first two terms and deliberately not its third — falling back to "the branch most
