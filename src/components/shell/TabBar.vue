@@ -72,6 +72,49 @@ const revealActiveTab = () => {
   el?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
 }
 
+/* Bringing the *active* tab into view is not a way to reach an inactive one:
+   with the strip's own scrollbar hidden there was no visible means at all, so a
+   tab that had slid past the left edge — the board's, in a project with enough
+   files open — could not be clicked at all. These three say whether the row
+   overflows and which edge it is standing at; the two arrows below are drawn
+   from them.
+
+   They are plain refs rather than computed values because what they describe is
+   the DOM's, not the props': nothing in `tabs` says how wide a label came out. */
+const overflowing = ref(false)
+const atStart = ref(true)
+const atEnd = ref(true)
+
+const measure = () => {
+  const el = scrollerRef.value
+  if (!el) return
+  const { scrollLeft, clientWidth, scrollWidth } = el
+  overflowing.value = scrollWidth > clientWidth
+  /* `<= 0` rather than `=== 0`: a trackpad may leave the position fractionally
+     negative while it rubber-bands, and that is still the left edge. The right
+     edge takes a pixel of tolerance for the other half of the same arithmetic —
+     the three widths are fractional, so they need not add up exactly. */
+  atStart.value = scrollLeft <= 0
+  atEnd.value = scrollLeft + clientWidth >= scrollWidth - 1
+}
+
+/* How far one press moves the row: most of a screenful, so something of what
+   was on it stays on it and the eye has somewhere to land. Not a token — this
+   is a fraction of whatever width the row happens to have, not a length. */
+const PAGE = 0.8
+
+/* Instantly, deliberately: `behavior: 'smooth'` is not used anywhere in this
+   system, for the reason `revealActiveTab` above gives. Measuring straight
+   afterwards rather than waiting for the `scroll` event costs nothing —
+   `scrollLeft` reads back already clamped — and it is what keeps an arrow from
+   staying live for a frame after it has run out of room. */
+const scrollRow = (direction) => {
+  const el = scrollerRef.value
+  if (!el) return
+  el.scrollLeft += direction * el.clientWidth * PAGE
+  measure()
+}
+
 watch(
   () => props.activeId,
   async () => {
@@ -79,6 +122,19 @@ watch(
     // be rendered in the DOM yet.
     await nextTick()
     revealActiveTab()
+  }
+)
+
+/* Opening or closing a tab changes what the row holds without changing the
+   strip's own box, so the ResizeObserver below never hears about it — and
+   without this watch the arrows would appear or go only on the next resize.
+   nextTick for the reason the watch above has one: the tab is not in the DOM at
+   the moment the list changes. */
+watch(
+  () => props.tabs,
+  async () => {
+    await nextTick()
+    measure()
   }
 )
 
@@ -90,8 +146,12 @@ onMounted(() => {
   // not fired at that point. immediate: true on the watch would not do: it would
   // run before the render, when there is nothing to look for.
   revealActiveTab()
+  measure()
 
-  resizeObserver = new ResizeObserver(revealActiveTab)
+  resizeObserver = new ResizeObserver(() => {
+    revealActiveTab()
+    measure()
+  })
   if (scrollerRef.value) {
     resizeObserver.observe(scrollerRef.value)
   }
@@ -346,6 +406,17 @@ const afterPinnedStyle = {
   padding: '0 var(--space-2)',
   borderRight: 'var(--border-w) solid var(--border-subtle)'
 }
+/* Outside the scrolling strip, which is the whole point of it: a control for
+   scrolling the row cannot be a thing that scrolls out of the row. `flex: '0 0
+   auto'` for `afterPinnedStyle`'s reason — this box only exists when the row is
+   already too narrow, and an arrow squeezed by it would be a target nobody can
+   hit. */
+const arrowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  flex: '0 0 auto',
+  padding: '0 var(--space-1)'
+}
 const overflowStyle = {
   display: 'flex',
   alignItems: 'center',
@@ -356,6 +427,19 @@ const overflowStyle = {
 
 <template>
   <div role="tablist" :style="barStyle">
+    <!-- Both arrows appear and go together, on the one condition that the row
+         does not fit; at an edge the arrow of that edge is disabled rather than
+         hidden, because a row whose width changed as it was scrolled would move
+         the tabs out from under the pointer. -->
+    <div v-if="overflowing" :style="arrowStyle">
+      <IconButton
+        icon="chevron-left"
+        label="Scroll tabs left"
+        size="sm"
+        :disabled="atStart"
+        @click="scrollRow(-1)"
+      />
+    </div>
     <!-- The strip is where the capture is taken, so every move and release
          during a drag arrives here whichever tab the pointer has crossed into.
          The pinned tabs and the `afterPinned` slot are inside it and stay in
@@ -365,6 +449,7 @@ const overflowStyle = {
       ref="scrollerRef"
       class="sm-scroll-hidden"
       :style="{ display: 'flex', minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }"
+      @scroll="measure"
       @pointermove="onPointermove"
       @pointerup="end()"
       @pointercancel="end(false)"
@@ -393,6 +478,15 @@ const overflowStyle = {
         @close="$emit('close', t.id)"
         @promote="$emit('promote', t.id)"
         @grab="onGrab(t.id, $event)"
+      />
+    </div>
+    <div v-if="overflowing" :style="arrowStyle">
+      <IconButton
+        icon="chevron-right"
+        label="Scroll tabs right"
+        size="sm"
+        :disabled="atEnd"
+        @click="scrollRow(1)"
       />
     </div>
     <div v-if="overflowCount > 0" :style="overflowStyle">
