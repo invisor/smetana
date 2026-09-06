@@ -124,6 +124,10 @@ import { MOCK_TREE } from '../stores/mockBackend.js'
    inspector's raise `copy-id` and know nothing about a clipboard, so the thing
    drawing them has to answer — here as in `DesktopApp.vue`. */
 import { copyText, openExternal } from '../stores/app.js'
+/* The harness catalogue, so the agent picker on this page is the one the
+   settings window draws rather than a second list written out here. Read once
+   at startup in `main.js`; in a browser `mockBackend.js` answers it. */
+import { agents } from '../stores/agents.js'
 import { fileIconUrl } from '../catppuccinIcon.js'
 import { documentTheme } from '../documentTheme.js'
 
@@ -3527,7 +3531,7 @@ const menuTargetStyle = {
              row menu is refused by rather than by any session: with `claude`
              here the Clear session row is live on a running agent and greyed
              with its reason on the offline one and on the one waiting. -->
-        <AgentList :rows="agentRows" :active-id="2" :pinned="AGENT_PINS" agent="claude" />
+        <AgentList :rows="agentRows" :active-id="2" :pinned="AGENT_PINS" clearable />
       </div>
       <!-- What that second row's run has taken, drawn where it actually
            appears: the right column at its shipped 340px, padded by
@@ -3598,7 +3602,8 @@ const menuTargetStyle = {
         <SessionRow
           :session="GALLERY_SESSIONS[5]"
           :now="GALLERY_SESSION_NOW"
-          agent="codex"
+          :can-resume="false"
+          :can-fork="false"
           separated
           expanded
         />
@@ -4497,18 +4502,19 @@ const menuTargetStyle = {
             ]"
           />
         </div>
-        <!-- A row the list names and cannot pick, drawn as the agent picker in
-             the settings window draws it: muted, a note beside it, the same
-             height as the row above so the list keeps its rhythm, and
-             `not-allowed` under the pointer. The arrows step straight over it
-             and Enter takes Claude Code from either direction. -->
+        <!-- The agent picker the settings window draws, built the way that
+             window builds it: one row per harness this build ships, named by
+             Rust through `agents::catalogue` and `stores/agents.js`. Nothing
+             here is written out, so a harness added in Rust appears in this
+             page too.
+
+             It used to draw Codex as a row the list named and could not pick,
+             which is what demonstrated a `disabled` option with a note beside
+             it. That limit is gone; the mode field below still shows two. -->
         <div :style="{ width: '220px' }">
           <Dropdown
             v-model="pickedAgent"
-            :options="[
-              { value: 'claude', label: 'Claude Code' },
-              { value: 'codex', label: 'Codex', disabled: true, note: 'Not supported yet' }
-            ]"
+            :options="agents.map((row) => ({ value: row.id, label: row.label }))"
           />
         </div>
         <!-- The same flag against captions and a filter, and two things worth

@@ -19,27 +19,36 @@ const BOTH = {
   weekReset: 'Aug 11 at 5:59pm (Europe/Moscow)'
 }
 
+/* What `agentLabel` in `stores/agents.js` does, standing in for it: the store
+   reads the labels off `agents::catalogue` and answers an unknown id with the id
+   itself, and this module takes that answer as a parameter rather than keeping a
+   table of its own. */
+const nameFor = (id) => ({ claude: 'Claude Code', codex: 'Codex' })[id] ?? id
+
 describe('usageAgentLabel', () => {
   it('names whoever answered the probe, not whoever is selected in settings', () => {
-    expect(usageAgentLabel(reading(BOTH))).toBe('Claude Code')
-    expect(usageAgentLabel({ state: 'unsupported', agent: 'codex' })).toBe('Codex')
+    expect(usageAgentLabel(reading(BOTH), nameFor)).toBe('Claude Code')
+    expect(usageAgentLabel({ state: 'unsupported', agent: 'codex' }, nameFor)).toBe('Codex')
   })
 
-  /* An id this build has no label for is a hand-edited file or a Rust newer
+  /* An id the catalogue has no label for is a hand-edited file or a Rust newer
      than this bundle. It is drawn as it stands: dressing it up as one of ours
      would put a name over another agent's allowance, and dropping it would
-     leave the strip claiming there was nobody to ask. */
+     leave the strip claiming there was nobody to ask. Both roads to that are
+     checked — a namer that answers the id back, and no namer at all. */
   it('draws an id it has no label for as it stands', () => {
-    expect(usageAgentLabel({ state: 'read', agent: 'aider', usage: BOTH, band: 'normal' })).toBe('aider')
+    const unknown = { state: 'read', agent: 'aider', usage: BOTH, band: 'normal' }
+    expect(usageAgentLabel(unknown, nameFor)).toBe('aider')
+    expect(usageAgentLabel(unknown)).toBe('aider')
   })
 
   /* Nothing read yet, and no agent on this machine, are the two answers with
      nobody to name. Both take the bare word rather than borrowing the selected
      agent's label, which would be the app claiming a reading it has not got. */
   it('says the bare word when there is nobody to name', () => {
-    expect(usageAgentLabel(null)).toBe('Agent')
-    expect(usageAgentLabel({ state: 'unsupported', agent: null })).toBe('Agent')
-    expect(usageAgentLabel({ state: 'moonshot' })).toBe('Agent')
+    expect(usageAgentLabel(null, nameFor)).toBe('Agent')
+    expect(usageAgentLabel({ state: 'unsupported', agent: null }, nameFor)).toBe('Agent')
+    expect(usageAgentLabel({ state: 'moonshot' }, nameFor)).toBe('Agent')
   })
 })
 

@@ -346,23 +346,25 @@ enum Feed<'a> {
 /// Run a child with a ceiling on how long it may take, and come back with what
 /// it said.
 ///
-/// **The pipes are the whole of this function, and they are why it is not the
-/// loop in `agents::oneshot::ask`.** That loop polls `try_wait` and reads both
-/// pipes only once the child is gone, and its own comment says exactly what
-/// makes that safe: the output is bounded — one line asked for — so neither
-/// pipe can fill. Nothing here is bounded. `git pull` writes a merge diffstat
-/// of one line per changed file, `git fetch --prune` a line per updated ref,
-/// and `git diff HEAD` the whole patch; past the 64 KiB a pipe holds, git
-/// blocks in `write`, `try_wait` never answers `Some`, and the deadline kills a
-/// git that had already finished its work — under a sentence saying this app
-/// stopped it.
+/// **The pipes are the whole of this function.** Nothing a git command prints is
+/// bounded: `git pull` writes a merge diffstat of one line per changed file,
+/// `git fetch --prune` a line per updated ref, and `git diff HEAD` the whole
+/// patch; past the 64 KiB a pipe holds, git blocks in `write`, `try_wait` never
+/// answers `Some`, and the deadline kills a git that had already finished its
+/// work — under a sentence saying this app stopped it.
 ///
 /// So **every pipe that is opened is drained on a thread of its own** while the
-/// wait happens. That is the precondition `oneshot`'s loop states and this one
-/// cannot: with it, the child can write as much as it likes and the only thing
-/// holding it up is its own work. A caller with nothing to do with standard
-/// output says so (`Capture::Discard`) and it is never opened at all, which is
-/// the cheaper half of the same rule rather than a different one.
+/// wait happens, and the child can write as much as it likes with nothing but
+/// its own work holding it up. A caller with nothing to do with standard output
+/// says so (`Capture::Discard`) and it is never opened at all, which is the
+/// cheaper half of the same rule rather than a different one.
+///
+/// `agents::oneshot::ask_raw` reached this same shape by its own road, and its
+/// header carries that account: it read both pipes after the child was gone
+/// while every caller's prompt bounded the answer, and stopped being able to
+/// rely on that once the one-shot arguments became a per-harness answer. It
+/// takes the join discipline below with it — joined on the ordinary path, never
+/// on the two that give up.
 ///
 /// **Standard input is `/dev/null` unless a caller hands over bytes**, and that
 /// is a ceiling of its own: git with an *inherited* stdin waits on the editor or

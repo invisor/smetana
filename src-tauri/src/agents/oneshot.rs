@@ -217,20 +217,102 @@ fn strip_pair(line: &str, mark: char) -> &str {
     }
 }
 
+/// One stream, read to the end on a thread of its own. The same shape
+/// `vcs::run::drain` has, including the `Option`: a stream that was never piped
+/// is the empty answer rather than a second case for the caller to handle.
+///
+/// `read_to_end` and not a line reader: what comes back is handed to
+/// `Profile::oneshot_answer`, which is the only thing entitled to decide what
+/// shape this harness's output has. A read that fails answers with what it had —
+/// this function's job is to stop the child stalling, and the caller already has
+/// an exit status and a deadline to judge the result by.
+fn drain<S: std::io::Read + Send + 'static>(
+    pipe: Option<S>,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut said = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut said);
+        }
+        said
+    })
+}
+
+/// End the call and reap it, so a killed child is not left defunct.
+///
+/// **The signal goes to the one process and not to its group**, which is where
+/// this parts company with `vcs::run::terminate`, and it is the behaviour this
+/// function has always had rather than a corner cut today. What is on the far
+/// end differs: git is asked to stop mid-write and has `*.lock` files to remove,
+/// so that one signals the group, sleeps a grace and signals again. Here the
+/// deadline has already passed on a question nobody is waiting on any more, and
+/// a two-second grace on the path a person is watching a spinner over would be
+/// paid every time. A descendant the agent left behind is not reached, and that
+/// is why the readers below are **not** joined once this has been called.
+fn stop(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Ask, and wait, and hand back what the harness printed, untouched.
 ///
 /// Blocking, and called from `spawn_blocking` for the same reason `usage::read`
 /// is.
 ///
-/// One invariant travels with this function and has to be preserved by every
-/// caller: **both pipes are read only after the child is gone**, which is safe
-/// for one reason and no other — the output is bounded, so neither pipe can
-/// fill and stall the child while we wait for it. `ask` below bounds it by
-/// asking for a single line; `tracker::search` bounds it by asking for at most
-/// twenty ids, in the instruction itself rather than only in the parser. A
-/// caller that lets a model answer at length would fill a pipe and stall the
-/// child until the deadline kills it.
+/// **Both pipes are drained while the child runs**, on a thread apiece, and that
+/// is a correction rather than a flourish. This used to read them only after the
+/// child was gone, and it was safe for one reason and no other: the output was
+/// bounded, because every caller asks for something small — `ask` for a single
+/// line, `tracker::search` for at most twenty ids, in the instruction itself
+/// rather than only in the parser.
+///
+/// What broke that was `oneshot_args` becoming a per-harness answer. The bound
+/// was on what the *model* says, and Codex's one-shot form is
+/// `codex exec --json`, which wraps that answer in a stream of its own events —
+/// a `command_execution` item can carry aggregated output the prompt never asked
+/// for. Past a pipe buffer, roughly 64 KB, the child blocks on the write, never
+/// exits, and the deadline below kills it: the commit-message button would spin
+/// for ninety seconds and then fail, on a question that was answered in the
+/// first second.
+///
+/// So that invariant is **removed rather than re-stated**, since it was a
+/// property of every caller's prompt and this function has no way to check one.
+///
+/// **The readers are joined on the ordinary path and deliberately not on the
+/// two that give up.** This is the part that has to be right, and the reasoning
+/// that looks obvious is wrong: killing the child does *not* close the pipes,
+/// because the child is not necessarily the only thing holding them. Anything
+/// the agent started inherited both descriptors, `stop` above signals one
+/// process rather than a group, and a `read_to_end` with a live writer still on
+/// the other end never returns — so a join there would wait for ever on exactly
+/// the thing whose wait had just been given up on, wedging the `spawn_blocking`
+/// thread for the life of the process and never handing the caller its
+/// `Timeout`. Dropping the handles instead costs two detached threads, which is
+/// the trade `vcs::run::bounded` already makes at the same point and for the
+/// same reason.
+///
+/// **What that leaves is the ordinary path's own join, and it is unbounded.**
+/// It rests on the harness being the last writer, so the read ends when the
+/// harness does; an agent that leaves a background process holding stderr breaks
+/// it, and the ceiling above is over the child rather than over this. It is
+/// named here rather than fixed, exactly as `vcs::run::bounded` names it: the
+/// fix is a channel with a deadline and a leaked thread, and the case has not
+/// earned that yet. What it must not cost is somebody's afternoon in the poll
+/// loop below.
 pub fn ask_raw(profile: &'static dyn Profile, prompt: &str) -> Result<String, OneshotError> {
+    ask_within(profile, prompt, TIMEOUT)
+}
+
+/// The whole of `ask_raw` with the ceiling handed in.
+///
+/// Split out for `vcs::run::bounded`'s reason, which takes its own timeout as a
+/// parameter: the give-up path is the one with the care in it, and a test of it
+/// against the ninety seconds the product uses would be a test nobody runs.
+fn ask_within(
+    profile: &'static dyn Profile,
+    prompt: &str,
+    timeout: Duration,
+) -> Result<String, OneshotError> {
     let args =
         profile.oneshot_args().ok_or_else(|| OneshotError::Unsupported(profile.binary().into()))?;
     let mut command = Command::new(profile.binary());
@@ -252,30 +334,57 @@ pub fn ask_raw(profile: &'static dyn Profile, prompt: &str) -> Result<String, On
         _ => OneshotError::Io(err.to_string()),
     })?;
 
-    let deadline = Instant::now() + TIMEOUT;
-    loop {
+    // Taken off the child before the wait, so the readers own them: a pipe
+    // nobody is emptying is what stalls a child with more to say than the
+    // buffer holds. Bound by name rather than collected, so which stream a
+    // handle carries is said on the line that made it rather than left to the
+    // order two reads a dozen lines further down happen to be written in.
+    let out = drain(child.stdout.take());
+    let err = drain(child.stderr.take());
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break status,
+            // Stopped and reaped, and then **returned without joining** — see
+            // the header. The readers may still be held open by something the
+            // agent started, and waiting on them here is the unbounded hang
+            // this ceiling exists to prevent.
             Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                return Err(OneshotError::Timeout(TIMEOUT.as_secs()));
+                stop(&mut child);
+                return Err(OneshotError::Timeout(timeout.as_secs()));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(100)),
-            Err(err) => return Err(OneshotError::Io(err.to_string())),
+            // The same treatment, for the same reason and one more: without the
+            // `stop` this arm returns leaving a live child nobody will ever
+            // reap, since dropping a `Child` neither kills nor waits.
+            Err(err) => {
+                stop(&mut child);
+                return Err(OneshotError::Io(err.to_string()));
+            }
         }
-    }
+    };
 
-    let out = child.wait_with_output().map_err(|err| OneshotError::Io(err.to_string()))?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    // A thread that panicked leaves this call with no output rather than with no
+    // answer: what it was carrying is a message to read, and the exit status is
+    // the fact the caller branches on.
+    let printed = out.join().unwrap_or_default();
+    let said = err.join().unwrap_or_default();
+
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&said).trim().to_string();
         return Err(OneshotError::Failed(if stderr.is_empty() {
-            format!("{} exited {}.", profile.binary(), out.status.code().unwrap_or(-1))
+            format!("{} exited {}.", profile.binary(), status.code().unwrap_or(-1))
         } else {
             stderr
         }));
     }
 
-    let answer = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // The profile's own reading of its output, not this function's: a harness
+    // whose one-shot mode prints the answer alone keeps the default, and
+    // nothing changes for it.
+    let printed = String::from_utf8_lossy(&printed);
+    let answer = profile.oneshot_answer(&printed).trim().to_string();
     if answer.is_empty() {
         // A zero exit and nothing to show for it. Silence is the one outcome
         // that must not reach the field, since an empty field after a spinner
@@ -298,6 +407,152 @@ pub fn ask(profile: &'static dyn Profile, prompt: &str) -> Result<String, Onesho
         return Err(OneshotError::Failed(format!("{} answered with nothing.", profile.binary())));
     }
     Ok(message)
+}
+
+#[cfg(all(test, unix))]
+mod spawn_tests {
+    use super::*;
+
+    /// A profile whose binary is the shell, so the prompt this module appends as
+    /// the positional argument becomes the script that runs. Nothing about the
+    /// product uses this; it is the only way to hand `ask_raw` a process whose
+    /// output this test chooses.
+    ///
+    /// Unix only, and gated rather than skipped: `sh` is not on the Windows
+    /// target, and a test that quietly passes by not running is worse than one
+    /// that is honestly absent.
+    struct Sh;
+
+    impl Profile for Sh {
+        fn id(&self) -> &'static str {
+            "sh"
+        }
+        fn label(&self) -> &'static str {
+            "Shell"
+        }
+        fn binary(&self) -> &'static str {
+            "sh"
+        }
+        fn delivery(&self) -> crate::agents::SkillDelivery {
+            crate::agents::SkillDelivery::Inline
+        }
+        fn command(&self, _launch: &crate::agents::Launch) -> portable_pty::CommandBuilder {
+            portable_pty::CommandBuilder::new(self.binary())
+        }
+        fn oneshot_args(&self) -> Option<&'static [&'static str]> {
+            Some(&["-c"])
+        }
+    }
+
+    /// The reason both pipes are drained while the child runs rather than after
+    /// it is gone.
+    ///
+    /// A pipe buffer is about 64 KB, and a child with more to say than that
+    /// blocks on the write until somebody empties it. Under the old shape
+    /// nobody did until the child had exited, so it never exited, and the
+    /// deadline killed it ninety seconds later — the commit-message button
+    /// spinning that whole time over a question answered in the first second.
+    ///
+    /// 300 KB is comfortably past the buffer on every platform this ships on,
+    /// and it is what `codex exec --json` can put around one answer: the stream
+    /// carries the harness's own events, and a `command_execution` item can
+    /// carry aggregated output the prompt never asked for. The bound this
+    /// function used to rely on was on what the *model* says, which is no longer
+    /// the same thing as what the process prints.
+    #[test]
+    fn a_harness_that_prints_more_than_a_pipe_holds_still_answers() {
+        let started = Instant::now();
+        let answer = ask_raw(&Sh, "printf 'x%.0s' $(seq 1 300000); printf '\nthe answer\n'")
+            .expect("a child that outlives its pipe buffer is not a failure");
+        assert!(answer.ends_with("the answer"), "the whole of stdout comes back");
+        assert!(
+            answer.len() > 300_000,
+            "nothing was dropped on the way: {} bytes",
+            answer.len()
+        );
+        assert!(
+            started.elapsed() < TIMEOUT,
+            "it answered rather than being killed at the deadline"
+        );
+    }
+
+    /// The other pipe, on its own, since a harness that writes its progress to
+    /// stderr stalls exactly the same way and the failure looks like a timeout
+    /// rather than like a full pipe.
+    #[test]
+    fn a_harness_that_fills_the_error_pipe_stalls_no_more_than_the_other_one() {
+        let answer = ask_raw(&Sh, "printf 'e%.0s' $(seq 1 300000) >&2; printf 'the answer\n'")
+            .expect("stderr is drained too");
+        assert_eq!(answer, "the answer");
+    }
+
+    /// And a failure still carries the harness's own words rather than an exit
+    /// code, which is what the drained stderr is for.
+    #[test]
+    fn a_child_that_failed_reaches_the_panel_in_its_own_words() {
+        let err = ask_raw(&Sh, "echo 'no model configured' >&2; exit 3")
+            .expect_err("a non-zero exit is a failure");
+        assert!(
+            matches!(&err, OneshotError::Failed(said) if said == "no model configured"),
+            "{err:?}"
+        );
+    }
+
+    /// Run `ask_within` on a thread and refuse to wait for ever on it.
+    ///
+    /// The whole point of the test below is a shape that **hangs** when it is
+    /// wrong, and a hanging test is worse than no test: it wedges the suite with
+    /// nothing to say why. So the answer is collected through a channel with a
+    /// ceiling of its own, and a miss is a failure with a sentence on it. The
+    /// thread is left behind in that case, which is acceptable in the one run
+    /// that is already failing.
+    fn within(prompt: &'static str, timeout: Duration, patience: Duration) -> OneshotError {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(ask_within(&Sh, prompt, timeout).err());
+        });
+        match rx.recv_timeout(patience) {
+            Ok(Some(err)) => err,
+            Ok(None) => panic!("expected the deadline to fire"),
+            Err(_) => panic!(
+                "ask_within never returned: the give-up path is waiting on something unbounded"
+            ),
+        }
+    }
+
+    /// The reason the readers are not joined once the deadline has fired.
+    ///
+    /// The direct child is killed and reaped, but a **grandchild inherited both
+    /// pipes** and is still holding them, so `read_to_end` cannot return and a
+    /// join on it would never return either — the caller would never get its
+    /// `Timeout` and the `spawn_blocking` thread would be wedged for the life of
+    /// the process. That is strictly worse than the stall the draining was
+    /// added to fix, which at least ended after ninety seconds.
+    ///
+    /// `trap "" TERM` is inherited across fork and exec, so the grandchild
+    /// survives anything short of the group kill this function deliberately does
+    /// not do (see `stop`). It is the case `vcs::run`'s own
+    /// `the_kill_still_reaches_a_grandchild_that_refuses_to_stop` covers from
+    /// the other side: that one proves the signal arrives, this one proves the
+    /// caller is answered whether it arrives or not.
+    #[test]
+    fn a_descendant_still_holding_the_pipes_does_not_hold_the_deadline() {
+        let err = within(
+            "sh -c 'trap \"\" TERM; sleep 30' & wait",
+            Duration::from_millis(400),
+            Duration::from_secs(10),
+        );
+        assert!(matches!(err, OneshotError::Timeout(_)), "{err:?}");
+    }
+
+    /// The same guarantee where nothing was inherited at all, which is the case
+    /// that already worked and is worth keeping honest beside the one that did
+    /// not: a plain child that will not finish is still answered on time.
+    #[test]
+    fn a_child_that_will_not_finish_is_given_up_on_and_reaped() {
+        let err = within("sleep 30", Duration::from_millis(400), Duration::from_secs(10));
+        assert!(matches!(err, OneshotError::Timeout(_)), "{err:?}");
+    }
 }
 
 #[cfg(test)]

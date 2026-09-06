@@ -30,11 +30,15 @@ const session = (over = {}) => ({
   ...over
 })
 
-/* The project as it is configured out of the box. Written once because every
-   test about the two launching verbs has to say which agent the project is set
-   to, and the answer decides the whole rule. */
-const claude = { agent: 'claude' }
-const forking = { agent: 'claude', fork: true }
+/* A harness that can do the verb being asked about. Written once because every
+   test about the two launching verbs has to say so, and the answer decides the
+   whole rule.
+
+   `capable` and not an agent id: which harnesses resume and which fork is Rust's
+   answer, carried to the caller by `stores/agents.js`, and this module stays
+   pure by taking the boolean rather than looking the id up. */
+const claude = { capable: true }
+const forking = { capable: true, fork: true }
 
 const kinds = (items) => items.filter((item) => !item.type).map((item) => item.kind)
 
@@ -169,12 +173,13 @@ describe('bringing a session back as a live agent', () => {
     expect(resumeMenuLabel(answer.reason)).toBe(`${RESUME_LABEL} — no working directory recorded`)
   })
 
-  /* `--resume <id>` is Claude Code's grammar and this app does not guess
-     anybody else's: `Profile::resume_args` in `agents/codex.rs` keeps its
-     default `None`, and this is the front-end half of that pair. */
-  it('refuses every session when the project is set to an agent that cannot resume', () => {
-    for (const agent of ['codex', '', 'something-new']) {
-      const answer = resumeAvailability(session(), { agent })
+  /* Whether a harness can be told to reopen a conversation is
+     `Profile::resume_args`'s answer, and it reaches here as a boolean. Nothing
+     said is the same as no: a caller that has not read the catalogue — or read
+     it and failed — greys the row rather than promising on a guess. */
+  it('refuses every session when the harness cannot resume', () => {
+    for (const options of [{ capable: false }, {}]) {
+      const answer = resumeAvailability(session(), options)
       expect(answer.available).toBe(false)
       expect(answer.reason).toBe('this agent cannot resume by id')
     }
@@ -262,8 +267,8 @@ describe('carrying a session on in a new one', () => {
      reopens a transcript and cannot branch one is the shape this keeps room
      for. */
   it('says it is the forking the agent cannot do, not the resuming', () => {
-    for (const agent of ['codex', '', 'something-new']) {
-      const answer = resumeAvailability(session(), { agent, fork: true })
+    for (const options of [{ capable: false, fork: true }, { fork: true }]) {
+      const answer = resumeAvailability(session(), options)
       expect(answer.available).toBe(false)
       expect(answer.reason).toBe('this agent cannot fork')
     }

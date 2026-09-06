@@ -4,6 +4,10 @@ import Icon from '../core/Icon.vue'
 import Tooltip from '../core/Tooltip.vue'
 import { agentsLabel, dirtyLabel } from './statusCounters.js'
 import { usageAgentLabel, usageSegments, usageTooltip } from './usageFooter.js'
+/* The name a person reads for an agent id, out of the harness catalogue Rust
+   answers — the same source the settings window's picker is built from, so the
+   strip and that window cannot come to call one harness two things. */
+import { agentLabel } from '../../stores/agents.js'
 
 /* The strip along the bottom of the app window — the sibling of the scope bar
    at the top of it, and the one bar in this app that is about state rather than
@@ -80,7 +84,7 @@ const props = defineProps({
    with no answer behind it. */
 defineEmits(['refresh'])
 
-const label = computed(() => usageAgentLabel(props.usage))
+const label = computed(() => usageAgentLabel(props.usage, agentLabel))
 const segments = computed(() => usageSegments(props.usage))
 const tip = computed(() => usageTooltip(props.usage, props.busy, props.error))
 

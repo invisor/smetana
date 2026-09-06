@@ -48,12 +48,18 @@ const props = defineProps({
      what is marked is a fact about the stored list, not about how the panel
      happens to be drawn today. */
   pinned: { type: Array, default: () => [] },
-  /* The project's configured agent id, straight out of `settings.json` — the
-     same prop `SessionRow` takes and for the same reason: one row of the menu
-     is refused by the harness rather than by the session, and `agentMenu.js`
-     has to know while it is drawing. Nothing else here reads it, and nothing
-     draws it: this list has never named the agent on a row, deliberately. */
-  agent: { type: String, default: null }
+  /* Whether the project's configured harness has a line that clears a
+     conversation — `Profile::clear_command`, by way of `agents::catalogue` and
+     `stores/agents.js`. The same shape `SessionRow`'s two capability props have
+     and for the same reason: one row of the menu is refused by the harness
+     rather than by the session, and `agentMenu.js` has to know while it is
+     drawing. Nothing else here reads it, and nothing draws it: this list has
+     never named the agent on a row, deliberately.
+
+     `false` by default, which is the answer a caller that has not said greys
+     the row with: sending a clearing line nobody confirmed would reach the
+     agent as the first line of a prompt. */
+  clearable: { type: Boolean, default: false }
 })
 
 /* `reorder` carries the rows in their new order rather than a from/to pair, for
@@ -356,7 +362,7 @@ const items = computed(() =>
     conversation: menuRow.value?.conversation ?? null,
     starting: Boolean(menuRow.value?.starting),
     state: menuRow.value?.state ?? null,
-    agent: props.agent
+    clearable: props.clearable
   })
 )
 

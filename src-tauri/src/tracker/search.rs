@@ -36,10 +36,16 @@ pub const MAX_CORPUS: usize = 48 * 1024;
 /// worth having only if it holds whatever goes in.
 const MAX_QUERY: usize = 1024;
 
-/// How many ids the agent may answer with. This is not presentation: it is what
-/// keeps `oneshot::ask_raw`'s bounded-output invariant true, since both pipes
-/// are read only after the child has gone. So the number belongs in the
-/// instruction as well as here — see `prompt` below.
+/// How many ids the agent may answer with. This is not presentation: an answer
+/// this app has to read and match against the board is one it has to be able to
+/// hold in a screen, and a model told nothing would list the lot. So the number
+/// belongs in the instruction as well as here — see `prompt` below.
+///
+/// It used to carry a second job, and that job is gone: it was what kept
+/// `oneshot::ask_raw`'s bounded-output invariant true, back when that function
+/// read both pipes only after the child had gone. It drains them while the child
+/// runs now, so a long answer is slow rather than fatal, and this ceiling is
+/// about the answer being usable rather than about the pipe.
 pub const MAX_HITS: usize = 20;
 
 /// What one described issue costs beyond the description itself: the four
