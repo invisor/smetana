@@ -81,6 +81,24 @@ attended one it is how the work is handed back, with a way out that is a sentenc
 conversation rather than a silence, since a lead that shrugged the file off would leave the run
 hanging with nothing on screen to say why.
 
+**A run's policy carries one line about the model its subagents run on, and it is a request rather
+than a guarantee.** The `code` role in `settings.json` (`.claude/rules/settings.md`) names a harness
+and a model; the harness half does not reach a run's workers at all, because a subagent is spawned
+inside the lead's own harness and a Codex subagent cannot be started out of a Claude Code session or
+the other way round. Only the model can be asked for, and only in the prompt — there is no command
+line of ours to put a flag on — so the line is `- run the subagents that write code on model <id>`
+in the same policy list as `live_check`, `file_findings` and the worktree switch, and nothing in this
+app can check what a subagent actually ran on. `settings::worker_model` is what resolves it, and
+`terminal::service` reads it for `Intent::Run` and for no other intent, since every other one
+delegates to nobody.
+
+It appears under **two** conditions rather than one, and the second is the one worth knowing.
+A model nobody chose says nothing at all, which is the shipped state. And **Solo never gets it**,
+whatever is chosen: Solo's own line four rows up asks the agent to do the work itself rather than
+delegating it, so a sentence about the model its subagents run on would be this app contradicting
+its own instructions about workers that are never going to exist. Both other modes delegate and both
+get it. `agents/prompt.rs`'s tests pin all three cases.
+
 **Stopping is cooperative, and that is a decision with a cost attached.** `request_stop` sets a flag
 and the loop reads it between batches; the batch in flight is allowed to finish, because a run
 interrupted between a merge and a close is exactly the state the recovery phase exists to clean up. A
