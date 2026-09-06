@@ -301,8 +301,15 @@ pub enum Intent {
     /// clipped by `sessions::model::CLIP`, and it is here for the row rather
     /// than for the agent: a resumed session has no tracker work, so without it
     /// the row in the agents panel would either say nothing about which
-    /// conversation this is or pass itself off as a claimed task. `None` for a
-    /// transcript with no human message in it, which is an ordinary outcome.
+    /// conversation this is or pass itself off as a claimed task. It is the
+    /// person's own words rather than the first record in the file:
+    /// `sessions::kickoff` takes them back out of whatever prompt Smetana
+    /// wrapped them in, so a row cannot caption a resumed session with the
+    /// language paragraph this app opened it with.
+    ///
+    /// `None` in two cases, both ordinary: a transcript with no human message
+    /// in it at all, and a session Smetana started for something nobody types a
+    /// word into — a run's batch, a setup, "+ New agent".
     ///
     /// `fork` is the whole difference between the two rows the Sessions tab
     /// offers. `false` is Resume in worktree, which goes on writing into the

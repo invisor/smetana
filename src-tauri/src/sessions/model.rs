@@ -28,8 +28,10 @@ pub struct SessionSummary {
     pub cwd: String,
     pub branch: Option<String>,
     pub title: Option<String>,
-    /// The first thing the person actually typed, which is always
-    /// [`human_text`]'s answer and never the generated one.
+    /// The first thing the person actually typed, and never the generated
+    /// title: [`human_text`] read through [`super::kickoff`], so that a session
+    /// this app started gives back what somebody wrote in the new-task dialog
+    /// rather than the prompt Smetana wrapped it in.
     ///
     /// It exists because `title` stopped being that. A generated `ai-title`
     /// wins the row's title when a transcript carries one, so the row now
@@ -40,9 +42,12 @@ pub struct SessionSummary {
     /// 218 of the 313 files measured on this machine carry one, so the two
     /// answers differ on about seven rows in ten rather than on a rare one.
     ///
-    /// `None` when the transcript holds no human message at all: a session
-    /// opened and abandoned, which is why the card has a sentence to draw
-    /// instead of an empty frame.
+    /// `None` in two cases, and the card draws its own sentence for both. A
+    /// transcript with no human message at all — a session opened and
+    /// abandoned. And a session Smetana started for something nobody types a
+    /// word into: a run's batch, a setup, a conflict, "+ New agent". The first
+    /// message there is this app's own prompt, and answering with the start of
+    /// it is exactly the defect [`super::kickoff`] exists to end.
     pub first_prompt: Option<String>,
     /// `"user"` or `"assistant"` — whoever spoke last, for the card's prefix.
     pub last_role: Option<String>,
@@ -250,6 +255,16 @@ pub fn one_line(text: &str) -> String {
 /// answer for files written by a version that has it, which is why the rules
 /// above stay: an older transcript carries no `origin` at all and is read by
 /// the shape of what is in it.
+///
+/// **The message comes back as it was written** — every line break kept and
+/// nothing clipped — where this used to hand over one clipped line. What
+/// changed is who reads it: in a session Smetana started, this record is the
+/// prompt *this app* composed, and the person's own words are several hundred
+/// characters into it, past the language paragraphs. A [`CLIP`]'s worth of it
+/// is all prompt and no person, so [`super::kickoff`] takes the words out first
+/// and [`one_line`] is applied to what is left — the same cut on the same
+/// field, one step later. The cost is bounded by the record this is called
+/// over: `read::MAX_LINE` is the most of a transcript line that is ever held.
 pub fn human_text(record: &Record) -> Option<String> {
     if !record.is_user() || record.is_sidechain == Some(true) || record.is_meta == Some(true) {
         return None;
@@ -260,8 +275,8 @@ pub fn human_text(record: &Record) -> Option<String> {
         }
     }
     let content = record.message.as_ref()?.content.as_ref()?;
-    let text = one_line(&strip_envelopes(&message_text(content)));
-    (!text.is_empty()).then_some(text)
+    let text = strip_envelopes(&message_text(content));
+    (!text.trim().is_empty()).then_some(text)
 }
 
 /// The title Claude Code generated for this session, or `None` when this record
@@ -461,10 +476,17 @@ mod tests {
         assert_eq!(human_text(&record), None);
     }
 
+    /// What survives the three rules is the message as it was written, line
+    /// breaks and all: the clip is the caller's now, taken after
+    /// [`super::kickoff`] has had the words out.
     #[test]
     fn the_first_thing_a_person_typed_survives_all_of_it() {
         let record = user(serde_json::json!("Talk to me in Russian:\n  everything"));
-        assert_eq!(human_text(&record).as_deref(), Some("Talk to me in Russian: everything"));
+        assert_eq!(human_text(&record).as_deref(), Some("Talk to me in Russian:\n  everything"));
+        assert_eq!(
+            human_text(&record).as_deref().map(one_line).as_deref(),
+            Some("Talk to me in Russian: everything")
+        );
     }
 
     #[test]

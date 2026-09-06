@@ -1,11 +1,12 @@
 //! The disk half: turning a folder of transcripts into a list of rows.
 //!
 //! **A transcript is streamed, never loaded.** The ceiling on what one file
-//! costs in memory is [`MAX_LINE`] for the line being looked at plus
-//! [`TAIL_WINDOW`] for the window read back from the end — 320 KiB, for a file
-//! of any size, and the largest one on the machine this was written against is
-//! 16 MB. Files are summarised one at a time, so that is the ceiling for the
-//! whole command as well.
+//! costs in memory is [`MAX_LINE`] for the line being looked at, [`MAX_LINE`]
+//! again for the first human record, which is kept whole so that
+//! [`super::kickoff`] has something to read, and [`TAIL_WINDOW`] for the window
+//! read back from the end — 384 KiB, for a file of any size, and the largest
+//! one on the machine this was written against is 16 MB. Files are summarised
+//! one at a time, so that is the ceiling for the whole command as well.
 //!
 //! **One pass forward, one window back.** Everything a row needs is in one of
 //! three places: at the head (`cwd`, `gitBranch`, the session's title), at the
@@ -37,8 +38,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use super::kickoff::{self, Kickoff};
 use super::model::{
-    belongs_to, folder_could_hold, generated_title, human_text, spoken_text, Record,
+    belongs_to, folder_could_hold, generated_title, human_text, one_line, spoken_text, Record,
     SessionSummary,
 };
 
@@ -146,13 +148,19 @@ struct Facts {
     cwd: Option<String>,
     branch: Option<String>,
     /// Claude Code's own one-line title for the session, when the transcript
-    /// carries one. It wins over `human_title`; see [`summarise`].
+    /// carries one. It wins over whatever the person typed; see [`summarise`].
     generated_title: Option<String>,
-    /// The first thing the person actually typed. It titles a transcript with
-    /// no generated title, and it is `SessionSummary::first_prompt` either way
-    /// — which is why it is still collected on a file whose title is already
-    /// decided.
-    human_title: Option<String>,
+    /// The first record a person is recorded as having sent, whole and
+    /// unclipped — which is not the same thing as the first words they typed.
+    /// In a session this app started it is the prompt Smetana composed, and
+    /// `super::kickoff` is what takes the person's own words back out of it;
+    /// `summarise` does that once, at the end, and both the title and the
+    /// card's first prompt are answered from the one reading.
+    ///
+    /// Unclipped, because the words are past our own opening and a message cut
+    /// to `CLIP` would be all prompt and no person. What bounds it is
+    /// [`MAX_LINE`], the same bound every other field here lives under.
+    human: Option<String>,
     model: Option<String>,
     messages: u32,
     sidechains: u32,
@@ -188,7 +196,7 @@ fn scan_forward(file: File, project: &Path, also: Option<&Path>) -> Option<Facts
         if index < HEAD_LINES && !line.truncated {
             let wants = (facts.cwd.is_none() && text.contains("\"cwd\""))
                 || (facts.generated_title.is_none() && text.contains(AI_TITLE))
-                || (facts.human_title.is_none() && is_user)
+                || (facts.human.is_none() && is_user)
                 || (facts.model.is_none() && is_assistant);
             if wants {
                 if let Ok(record) = serde_json::from_str::<Record>(&text) {
@@ -211,8 +219,8 @@ fn scan_forward(file: File, project: &Path, also: Option<&Path>) -> Option<Facts
                     if facts.generated_title.is_none() {
                         facts.generated_title = generated_title(&record);
                     }
-                    if facts.human_title.is_none() {
-                        facts.human_title = human_text(&record);
+                    if facts.human.is_none() {
+                        facts.human = human_text(&record);
                     }
                     if facts.model.is_none() {
                         facts.model = record
@@ -356,6 +364,24 @@ fn summarise(
        is nothing else this field could usefully say. */
     let cwd = facts.cwd.unwrap_or_default();
     let cwd_exists = !cwd.is_empty() && Path::new(&cwd).is_dir();
+    /* The person's own words, out of whatever the first human record holds.
+       A session somebody started themselves is passed through untouched; one
+       Smetana started is a prompt of this app's, and what comes back is what
+       they wrote into the new-task dialog — or nothing at all, for the intents
+       nobody types a word into. `kickoff` carries the whole of that rule.
+
+       Clipped here rather than in the pass, because the words are past our own
+       opening: cutting the message to CLIP first would leave nothing of the
+       person in it to find. What travels is one line of at most CLIP
+       characters, exactly as it always was. */
+    let typed = facts
+        .human
+        .as_deref()
+        .and_then(|message| match kickoff::of(message) {
+            Kickoff::Typed(text) | Kickoff::Words(text) => Some(one_line(text)),
+            Kickoff::Ours => None,
+        })
+        .filter(|text| !text.is_empty());
     Some(SessionSummary {
         subagents: subagents(folder, &id, facts.sidechains),
         id,
@@ -366,14 +392,18 @@ fn summarise(
         /* The title rule, in one line: Claude Code's own one-liner when the
            transcript has one, and the first thing the person typed when it does
            not. `generated_title` has already refused an empty one, so an
-           `ai-title` record saying nothing falls through here too. */
-        title: facts.generated_title.or(facts.human_title.clone()),
-        /* The other question, and the reason `Facts` keeps both: the row's
-           title may now be Claude Code's sentence rather than the person's, so
-           the opened card's "First prompt" block is answered from the human
-           line directly and reads the same whichever way the title fell. The
-           forward pass gathered this already; nothing extra is read for it. */
-        first_prompt: facts.human_title,
+           `ai-title` record saying nothing falls through here too. And "typed"
+           is now meant literally: a session started from "+ New task" is titled
+           by the task, never by the language paragraph this app opened it
+           with. */
+        title: facts.generated_title.or_else(|| typed.clone()),
+        /* The other question, and the reason both are worked out here: the
+           row's title may be Claude Code's sentence rather than the person's,
+           so the opened card's "First prompt" block is answered from the same
+           reading and says the same thing whichever way the title fell. `None`
+           where nobody typed anything — a run's batch, a setup session — and
+           the card draws its own sentence for that. */
+        first_prompt: typed,
         last_role: tail.role,
         last_text: tail.text,
         messages: facts.messages,
@@ -664,6 +694,110 @@ mod tests {
             listed[0].title.as_deref(),
             Some("Talk to me in Russian: everything you say")
         );
+    }
+
+    /// The prompt Smetana actually sends, through the code that composes it,
+    /// written into a transcript exactly as Claude Code records it: as an
+    /// ordinary message the person is down as having typed.
+    fn our_prompt(intent: &crate::agents::Intent) -> String {
+        use crate::agents::library::Skills;
+        use crate::agents::prompt::{build, SkillText};
+        use crate::agents::{ImageDelivery, Languages, SkillDelivery};
+
+        build(
+            intent,
+            SkillDelivery::PluginDir,
+            ImageDelivery::InPrompt,
+            &Skills {
+                smetana: PathBuf::from("/app/resources/smetana"),
+                superpowers: PathBuf::from("/app/resources/superpowers"),
+                superpowers_installed: false,
+            },
+            None,
+            SkillText {
+                filing: None,
+                resolving: None,
+                brainstorming: None,
+                plans: None,
+                reviewing_branch: None,
+            },
+            &Languages::default(),
+            "",
+        )
+        .expect("every intent here opens on a prompt")
+    }
+
+    /// A filing session: the one intent that carries somebody's own words.
+    fn new_task_prompt(typed: &str) -> String {
+        use crate::agents::{Intent, Stage, TaskDraft};
+
+        our_prompt(&Intent::NewTask {
+            brainstorm: Stage::Auto,
+            spec: Stage::Auto,
+            plan: Stage::Auto,
+            draft: TaskDraft {
+                text: typed.to_owned(),
+                issue_type: None,
+                priority: None,
+                images: Vec::new(),
+                parent: None,
+            },
+        })
+    }
+
+    /// The whole road, end to end: a real prompt into a real file, and the
+    /// person's own words back out of the row. This is the defect smetana-w4i6
+    /// was filed for — every session Smetana started showed the same paragraph
+    /// of ours under First prompt — and the one test here that would catch it
+    /// coming back through the disk half rather than through `kickoff`'s own.
+    #[test]
+    fn a_session_this_app_started_is_answered_with_what_the_person_typed() {
+        let root = temp_dir("kickoff-root");
+        let project = temp_dir("kickoff-project");
+        let typed = "The scope bar counts dirty files it cannot see.\n\nCount only this worktree.";
+        write_session(
+            &root,
+            &project,
+            "filed",
+            &[
+                user_line(&project, "main", &new_task_prompt(typed)),
+                assistant_line(&project, "Filed as smetana-abc."),
+            ],
+        );
+
+        let listed = list_in(&root, &project);
+        let one_line = "The scope bar counts dirty files it cannot see. Count only this worktree.";
+        assert_eq!(listed[0].first_prompt.as_deref(), Some(one_line));
+        assert_eq!(
+            listed[0].title.as_deref(),
+            Some(one_line),
+            "with no generated title the row is titled by the task, never by our own paragraph"
+        );
+    }
+
+    /// The other half of the same rule: a prompt of ours with nobody's words in
+    /// it says so, rather than showing the person the language paragraph it
+    /// opens with. A setup session stands here for the whole family of them —
+    /// a run's batch, a conflict, "+ New agent" — which `kickoff`'s own tests
+    /// walk one by one.
+    #[test]
+    fn a_session_nobody_typed_a_word_into_has_no_first_prompt_at_all() {
+        let root = temp_dir("kickoff-none-root");
+        let project = temp_dir("kickoff-none-project");
+        let ours = our_prompt(&crate::agents::Intent::Setup);
+        write_session(
+            &root,
+            &project,
+            "provisioned",
+            &[
+                user_line(&project, "main", &ours),
+                assistant_line(&project, "Written .smetana/project.toml."),
+            ],
+        );
+
+        let listed = list_in(&root, &project);
+        assert_eq!(listed[0].first_prompt, None);
+        assert_eq!(listed[0].title, None, "there is nothing of the person's to title it with");
     }
 
     #[test]
