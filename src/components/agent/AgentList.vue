@@ -47,7 +47,7 @@ const props = defineProps({
      row, which is `BranchList`'s shape for its favourites and the same subject:
      what is marked is a fact about the stored list, not about how the panel
      happens to be drawn today. */
-  pinned: { type: Array, default: () => [] },
+  pinned: { type: Array, default: () => [] }
 })
 
 /* `reorder` carries the rows in their new order rather than a from/to pair, for

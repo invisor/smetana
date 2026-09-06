@@ -304,10 +304,10 @@ describe('agent rows', () => {
 
     const rows = stores.terminals.agentRows.value
     expect(rows.find((row) => row.id === 1).clearable).toBe(true)
-    expect(rows.find((row) => row.id === 2).clearable).toBe(
-      false,
+    expect(
+      rows.find((row) => row.id === 2).clearable,
       'this CLI documents no command that clears a conversation'
-    )
+    ).toBe(false)
   })
 
   /* An id nobody ships — a hand-edited file, or a catalogue that could not be

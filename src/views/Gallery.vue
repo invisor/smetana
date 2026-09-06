@@ -3575,10 +3575,13 @@ const menuTargetStyle = {
            comfortable row height: the point of this section is seeing every
            caption at once, and a scrollbar would hide the last of them. -->
       <div :style="{ width: '252px', height: '224px', border: 'var(--border-w) solid var(--border)' }">
-        <!-- `agent` is the project's configured harness, which one row of the
-             row menu is refused by rather than by any session: with `claude`
-             here the Clear session row is live on a running agent and greyed
-             with its reason on the offline one and on the one waiting. -->
+        <!-- No capability is handed to the list at all: whether a session can
+             be told to clear its conversation is that session's harness's
+             answer, so each row above carries its own. The Codex row is in the
+             fixture for exactly this — open the row menu on it and on any row
+             above it, and the two sentences of Clear session can be read side
+             by side, which is the state the panel could not draw at all while
+             one flag stood for the whole project. -->
         <AgentList :rows="agentRows" :active-id="2" :pinned="AGENT_PINS" />
       </div>
       <!-- What that second row's run has taken, drawn where it actually

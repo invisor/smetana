@@ -1,7 +1,7 @@
 /* What the app knows about the harnesses it can run: their names, what each of
-   them can be asked to do, and what each may be run on. The single copy of that is Rust's — `agents::IDS`
-   and the `Profile` methods behind `agents::catalogue` — and this store is how
-   it reaches a row being drawn.
+   them can be asked to do, and what each may be run on. The single copy of that
+   is Rust's — `agents::IDS` and the `Profile` methods behind
+   `agents::catalogue` — and this store is how it reaches a row being drawn.
 
    Read **once at startup** and never again. That is the property four
    hand-written lists in this tree were keeping — one of agent labels in
