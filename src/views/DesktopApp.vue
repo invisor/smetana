@@ -170,6 +170,10 @@ import {
   watchDialogResult,
   watchFullscreen
 } from '../stores/app.js'
+/* Which harness a run would actually start. The settings window imports the
+   same function for the same block, and `runs/commands.rs` answers the same
+   question for a caller that names nobody — three readers, one rule. */
+import { runLeadAgent } from '../components/settings/agentRoles.js'
 import { dialogWidth, stalenessMessage, stalenessOf } from './dialogRegistry.js'
 import { paintRoot } from './useAppearance.js'
 import {
@@ -2423,6 +2427,15 @@ onUnmounted(() => {
    the hint has to say the reading failed rather than that nobody has asked yet,
    which is the sentence an empty reading alone would draw over an attempt that
    happened. */
+/* Whose subscription the strip is about: the harness a run would actually
+   start, which is the Run lead row's or the root's behind it. Not
+   `settings.agent`, which is the Default row and answers a different question —
+   with Run lead on Codex under a Claude root the strip would draw Claude Code's
+   allowance, and the band under it, for a run spending Codex's. That is
+   precisely the figure somebody watches to know whether tonight's batch will be
+   gated, and `runs::service` snapshots and gates on the same row. */
+const leadAgent = () => runLeadAgent(settings.agentRoles, settings.agent)
+
 const USAGE_EVERY_MS = 10 * 60 * 1000
 const usageReading = ref(null)
 const usageBusy = ref(false)
@@ -2434,7 +2447,7 @@ const readUsage = async () => {
   usageBusy.value = true
   usageError.value = null
   try {
-    usageReading.value = await readAgentUsage(settings.agent)
+    usageReading.value = await readAgentUsage(leadAgent())
   } catch (err) {
     usageReading.value = null
     usageError.value = err.message
@@ -2454,8 +2467,14 @@ onUnmounted(() => {
 
 /* Whoever would answer has changed, so whatever is on the strip is about
    somebody else. The settings window is where that edit is made, and it reaches
-   this window through the bridge above. */
-watch(() => settings.agent, () => readUsage())
+   this window through the bridge above.
+
+   The watch is on the **answer** rather than on either field it is derived
+   from: two fields move it — the Run lead row and, while that row inherits, the
+   root — and watching one of them would have left the strip stale for whichever
+   was edited, silently. It fires only when the harness actually changes, so
+   editing the Tasks or Code row costs no probe. */
+watch(leadAgent, () => readUsage())
 
 const initing = ref(false)
 const initHere = async () => {
@@ -5529,7 +5548,6 @@ const toastStackStyle = {
                 :rows="orderedAgentRows"
                 :active-id="terminalState.activeId"
                 :pinned="project.pinnedAgents"
-                :clearable="can(settings.agent, 'clear')"
                 @select="selectAgent"
                 @remove="removeAgentRow"
                 @reorder="reorderAgents"

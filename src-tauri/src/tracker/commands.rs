@@ -305,8 +305,11 @@ pub async fn tracker_search_semantic(
         // The Default row, for the reason `vcs_suggest_message` records: a
         // one-shot has no session and therefore no `Intent` to ask a role with.
         let (agent, model) = crate::settings::default_pair(&app);
-        let profile = crate::agents::pick(&agent, crate::shell_env::path())
-            .ok_or_else(|| OneshotError::NoAgent(agent.clone()))?;
+        // `pick_with_model` for the reason `vcs_suggest_message` records: the
+        // substitution stays, the model does not cross it.
+        let (profile, model) =
+            crate::agents::pick_with_model(&agent, model, crate::shell_env::path())
+                .ok_or_else(|| OneshotError::NoAgent(agent.clone()))?;
         // The merge lock is coordination and not work, and it is out of every
         // list on screen — so it is out of the question too, rather than only
         // out of the answer. See `search::is_lock`.

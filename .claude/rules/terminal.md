@@ -590,6 +590,20 @@ leaves the row there rather than at its pre-pin place. That is the honest readin
 somebody arranged by hand with the row already at the top, and the alternative — writing an order
 that does not match what is on screen — would make the block's own arrangement unrecordable.
 
+**One row of that menu is asked per row rather than per panel**, and it is `Clear conversation`.
+Whether a harness has a line that clears one is `Profile::clear_command`'s answer, reached through
+`agents::catalogue` and `stores/agents.js`, and it arrived as a single prop on `AgentList` keyed to
+`settings.agent` — which was right only while every session in a project ran the configured harness.
+Per-role harnesses (`.claude/rules/settings.md`) ended that: a session started for the Tasks or the
+Code row can be on another one, and one flag was wrong in both directions — a Clear row drawn over a
+Codex session that `terminal_clear` then refuses in Rust, and no Clear row over a Claude Code session
+that supports it. `agentRows` carries the answer per row now, asked about `Session.agent`, which is
+also the harness that *actually* started rather than the configured one: this is one of the few
+places `agents::pick`'s silent substitution is visible at all. A start ticket has no harness yet and
+says `true` — not a claim, but "nothing has refused it", which leaves the refusal to `starting` one
+line further down `agentMenu.js`, where it is certainly true; a restored row asks about the harness
+its record kept. `agentMenu.js` itself is untouched and still asks the harness before the row.
+
 **One piece of the order is deliberately not in `settings.json`**, and `agentArrangement` in
 `DesktopApp.vue` is it. Only conversation ids may be written to the file, for the reason above, but a
 row that has none is dragged like any other — and with the file as the only memory it would snap back

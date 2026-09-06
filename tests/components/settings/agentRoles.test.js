@@ -7,6 +7,7 @@ import {
   pairOf,
   providerOptions,
   ROLE_ROWS,
+  runLeadAgent,
   SAME_AS_DEFAULT
 } from '../../../src/components/settings/agentRoles.js'
 
@@ -110,6 +111,25 @@ describe('what a row stands for', () => {
   })
 })
 
+describe('whose subscription a run would spend', () => {
+  it('is the run lead row where it names a harness', () => {
+    const roles = { ...empty(), runLead: { agent: 'codex', model: 'gpt-5.6-sol' } }
+    expect(runLeadAgent(roles, 'claude')).toBe('codex')
+  })
+
+  it('is the root where that row chose nothing', () => {
+    expect(runLeadAgent(empty(), 'claude')).toBe('claude')
+    expect(runLeadAgent(undefined, 'codex')).toBe('codex')
+  })
+
+  /* The row beside it is not this question: only the lead's harness decides
+     which subscription a batch spends, since the workers live inside it. */
+  it('is not moved by any other row', () => {
+    const roles = { ...empty(), code: { agent: 'codex', model: 'gpt-5.6-sol' } }
+    expect(runLeadAgent(roles, 'claude')).toBe('claude')
+  })
+})
+
 describe('what the two dropdowns offer', () => {
   it('offers every shipped harness, and the giving-back row only to a role', () => {
     expect(providerOptions('tasks', AGENTS)).toEqual([
@@ -138,12 +158,35 @@ describe('what the two dropdowns offer', () => {
   })
 
   /* A hand-edited file, or a catalogue that could not be read: the field is the
-     empty row alone rather than a picker holding somebody else's list. */
+     empty row alone rather than a picker holding somebody else's list.
+
+     This is also where the lookup itself is pinned, since `modelOptions` is the
+     only place in the app that turns a harness id into its models — the store
+     carries the rows and does not wrap the `find`, for the reason `agentLabel`
+     in `stores/agents.js` records. The empty string is in here because it is
+     not a hypothetical: it is what a role with nothing chosen holds, and this
+     function is asked about it on every render. */
   it('offers nothing but the empty row for a harness nobody ships', () => {
     expect(modelOptions(null, AGENTS, 'cursor', false)).toEqual([
       { value: '', label: HARNESS_CHOOSES }
     ])
+    expect(modelOptions('tasks', AGENTS, '', true)).toEqual([
+      { value: '', label: SAME_AS_DEFAULT }
+    ])
+    expect(modelOptions(null, AGENTS, null, false)).toHaveLength(1)
     expect(modelOptions(null, [], 'claude', false)).toHaveLength(1)
+  })
+
+  /* The order is each profile's own `MODELS`, strongest first, and neither this
+     module nor the store reshapes it: a list reordered on the way to a dropdown
+     would put a different model under the same cursor position on two
+     machines. */
+  it('offers the models of a harness in the order Rust offered them', () => {
+    expect(modelOptions(null, AGENTS, 'claude', false)).toEqual([
+      { value: '', label: HARNESS_CHOOSES },
+      { value: 'fable', label: 'Fable' },
+      { value: 'opus', label: 'Opus' }
+    ])
   })
 })
 

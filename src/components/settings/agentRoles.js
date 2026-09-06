@@ -52,7 +52,7 @@ export const ROLE_ROWS = [
     role: null,
     label: 'Default',
     description:
-      'Behind every row below, and what a session with no row of its own uses — a bare agent, project setup, a one-off question.'
+      'Behind every row below, and what a session with no row of its own uses — a bare agent, project setup, a one-off question. Every row here reaches the next session started; the ones already running keep what they started with.'
   },
   { role: 'tasks', label: 'Tasks', description: '' },
   {
@@ -77,6 +77,21 @@ export function pairOf(role, roles, rootAgent, rootModel) {
     return { agent: stored.agent, model: stored.model ?? INHERIT, inherited: false }
   }
   return { agent: rootAgent, model: role ? INHERIT : rootModel, inherited: Boolean(role) }
+}
+
+/* Which harness a run would actually start, which is the `runLead` row's — its
+   own where it named one, the root's where it did not.
+
+   Named for the question rather than left to each caller as a `pairOf` on a
+   particular role, because the two callers are the two windows' subscription
+   probes and neither of them is about roles: the allowance strip in the app and
+   the block on the Agents tab both ask "whose subscription would tonight's
+   batch spend", and `runs/commands.rs` answers the same question the same way
+   for a caller that names nobody. Reading the root `agent` there instead — which
+   is what both did before roles existed — draws Claude Code's allowance, and
+   the sentence about a run taking fewer tasks, over a run spending Codex's. */
+export function runLeadAgent(roles, rootAgent) {
+  return pairOf('runLead', roles, rootAgent, INHERIT).agent
 }
 
 /* What the harness dropdown offers on one row: every harness this build ships,
@@ -110,13 +125,15 @@ export function modelOptions(role, agents, agent, inherited) {
    as well is what stops the field showing a model the new harness has never
    heard of for as long as the window is open.
 
-   The default row writes the root pair; a role writes its own. `null` for the
-   harness on a role is the inheritance coming back, and it takes the model with
-   it. */
+   The two kinds of row make the **same** edit, which is why there is no branch
+   here: `role` is already `null` for the default row, and a ternary whose arms
+   are identical reads as though the two differed. Where they do differ is who
+   unpacks the answer — the default row's `null` lands on the root `agent` and
+   `model`, a role's on its own pair — and that is `SettingsWindow.vue`'s to
+   know, not this module's. `null` for the harness on a role is the inheritance
+   coming back, and it takes the model with it. */
 export function chooseProvider(role, agent) {
-  return role
-    ? { role, pair: { agent, model: INHERIT } }
-    : { role: null, pair: { agent, model: INHERIT } }
+  return { role, pair: { agent, model: INHERIT } }
 }
 
 /* The edit a model dropdown makes.

@@ -185,7 +185,16 @@ pub async fn agent_usage(app: AppHandle, agent: Option<String>) -> AgentUsage {
     let profile = tokio::task::spawn_blocking(move || {
         // The run lead's row, which is the harness a run would actually
         // start, and therefore the subscription a run would actually spend.
-        // The root's only where that row inherits it.
+        // The root's only where that row inherits it, which is the ordinary
+        // case and the whole of what this used to read.
+        //
+        // Both front-end callers name it rather than taking this fallback —
+        // `runLeadAgent` in `components/settings/agentRoles.js`, which is the
+        // same rule, for the reason the doc above gives about the debounce —
+        // so what this branch is for is a caller with no opinion, and what
+        // matters is that the two answers agree. A fallback reading the root
+        // would draw Claude Code's allowance, and the band under it, over a run
+        // spending Codex's; `runs::service` snapshots this very row.
         let id = wanted(agent, || {
             crate::settings::role_pair(&app, crate::agents::Role::RunLead).0
         });

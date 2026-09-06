@@ -192,24 +192,8 @@ const emit = defineEmits([
   'refresh'
 ])
 
-/* The harnesses this build ships, named by Rust: `agents::catalogue` answers a
-   row per id in `agents::IDS`, carrying the label beside the capabilities, and
-   `stores/agents.js` reads it once before anything is drawn. Nothing in this
-   file names an agent any more — an id added in Rust is offered here for free,
-   and one removed there stops being offered.
-
-   This used to be a hand-written pair of labels, and it was the first of four
-   such lists keyed by agent id; the other three were in the two agent menus.
-   Each was a knowing second copy of a fact Rust owns, each could drift in both
-   directions in silence, and a third harness meant four edits in two languages.
-
-   Codex used to be drawn here `disabled`, with `Not supported yet` beside it.
-   That limit is gone: the profile answers resume, fork, batch and one-shot, and
-   finds out the id of a session it started. */
-const AGENTS = computed(() => agents.value.map((row) => ({ value: row.id, label: row.label })))
-
 /* The languages, still written out here, and the doubling is accepted for the
-   reason the row above no longer has to accept it: these are
+   reason the rows above no longer have to accept it: these are
    `agents::LANGUAGES` in `src-tauri/src/agents/mod.rs`, which carries the
    English name beside each because that name is what goes into the prompt —
    these are labels for ids Rust already knows and validates, so drift costs a

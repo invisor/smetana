@@ -31,11 +31,33 @@ use crate::terminal::model::{Question, QuestionOption};
 /// Read off the installed CLI at 0.146.0 on 2026-09-06 rather than recalled.
 /// `codex --help` documents `-m, --model <MODEL>` and no ids at all — it names
 /// no vocabulary the way Claude Code's help does — so the ids come from the
-/// model catalogue that CLI ships inside itself, which is the same table its
-/// own picker is drawn from: every entry whose `visibility` is `list`, in that
-/// catalogue's own `priority` order, with each `display_name` as written there.
-/// The hidden ones are left out for the reason they are hidden: this app has no
-/// standing to offer what that CLI has stopped offering.
+/// model catalogue that CLI ships **inside its own binary**, which is the table
+/// its `/model` picker is drawn from.
+///
+/// **Where to look, because "0.146.0" is not something the next person can diff
+/// against.** The catalogue is a JSON document embedded in the executable
+/// `codex` resolves to (`~/.codex/packages/standalone/current/bin/codex` on
+/// this machine, a symlink into the installed release). Its top-level key is
+/// `models`, and each entry carries `slug`, `display_name`, `visibility` and
+/// `priority` among much else. A re-reading is:
+///
+/// ```sh
+/// strings -a "$(readlink -f "$(command -v codex)")" |
+///   grep -nE '^ +"(slug|display_name|visibility|priority)": '
+/// ```
+///
+/// What is taken from it: every entry whose `visibility` is `list`, in that
+/// catalogue's own ascending `priority` order, each with its `display_name`
+/// exactly as written there. At 0.146.0 that was priorities 1, 2, 3, 7 and 29;
+/// the entries left out were the three marked `hide` (`gpt-5.4`,
+/// `gpt-5.4-mini`, `codex-auto-review`), and they are left out for the reason
+/// they are hidden — this app has no standing to offer what that CLI has
+/// stopped offering.
+///
+/// Getting one of these ids wrong is quiet rather than loud: `known_model` in
+/// `settings/model.rs` would empty a person's chosen model on the next read of
+/// the file, with nothing on screen to say why. So check them against the
+/// command above rather than against memory.
 ///
 /// The `-c model="o3"` in that help is an example of the config-override syntax
 /// and not a model this CLI proposes; taking an id out of it would be exactly

@@ -480,7 +480,17 @@ cannot come to disagree about which harness and which model this kind of call ge
 is gone — every caller now asks for the pair, because a harness read apart from its model is exactly
 how a model chosen against one provider reaches another.
 
-`chosen` is the one seam, and it exists for a run. `None` is a caller with no opinion — the front
+**`pick` is the third substitution and had to be guarded too.** `agents::pick_with_model` is `pick`
+with the pair rule on it: the fallback to the first installed harness is untouched and still silent,
+and the model is dropped whenever it fires, because a model id chosen against one provider is not one
+the substitute has ever heard of. All three callers take it — the `Create` arm and both one-shots —
+and it is one function rather than three `filter`s because the fourth caller added later is the one
+that would forget. Without it the guard existed everywhere except where it mattered most: the
+settings window offers every shipped harness whether or not it is on `PATH`, so choosing Codex and
+one of its models on a machine with only Claude Code turned a fallback that used to work in silence
+into `claude --model gpt-5.6-sol` and a session dead at its first argument.
+
+`chosen` is the other seam, and it exists for a run. `None` is a caller with no opinion — the front
 end, which knows nothing about roles. `Some(id)` is a harness the caller already holds and will not
 give up: a run snapshots its own `RunLead` harness when it starts and carries it for the whole of
 the run, so that the allowance gate and the batches cannot land on two different ones (smetana-3fi).

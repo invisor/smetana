@@ -286,6 +286,43 @@ describe('agent rows', () => {
     }
   })
 
+  /* Per row and never per panel, which is the whole of what this field is for.
+     Until roles existed every session ran the harness in `settings.agent`, so
+     one flag over the list was the session's harness by construction; a session
+     started for the Tasks or the Code row can be on another one now, and one
+     flag was wrong in both directions — a Clear row drawn over a session Rust
+     then refuses, and none over a session that supports it.
+
+     `Session.agent` is what is asked about, which is also the harness that
+     *actually* started rather than the one that was configured: `agents::pick`
+     substitutes silently, and this is one of the few places that substitution
+     is visible at all. */
+  it('asks each row about the harness that session actually ran', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 2, agent: 'codex' }))
+    await nextTick()
+
+    const rows = stores.terminals.agentRows.value
+    expect(rows.find((row) => row.id === 1).clearable).toBe(true)
+    expect(rows.find((row) => row.id === 2).clearable).toBe(
+      false,
+      'this CLI documents no command that clears a conversation'
+    )
+  })
+
+  /* An id nobody ships — a hand-edited file, or a catalogue that could not be
+     read — greys the row, which is the direction the whole catalogue takes:
+     Rust refuses an unsupported verb with a sentence anyway, so being wrong
+     here costs a row nobody can press rather than a line written into
+     somebody's prompt. */
+  it('greys the row for a harness the catalogue has never heard of', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 2, agent: 'somebody-elses-cli' }))
+    await nextTick()
+
+    expect(stores.terminals.agentRows.value.find((row) => row.id === 2).clearable).toBe(false)
+  })
+
   /* The point of the whole change: a column of `claude-1`…`claude-5` said
      nothing about who was doing what. Each intent gets its own caption, and
      the two halves are kept apart because the component sets them

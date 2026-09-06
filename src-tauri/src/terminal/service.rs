@@ -738,7 +738,13 @@ fn handle(
             // The login shell's PATH, not this process's: a bundled app started
             // from Finder inherits launchd's, where nothing a person installed
             // is reachable and every agent would look uninstalled.
-            let Some(profile) = agents::pick(&agent, crate::shell_env::path()) else {
+            // `pick_with_model` rather than `pick`: the fallback to whatever
+            // is installed is untouched and still silent, and the model is
+            // dropped when it fires, because a model id chosen against one
+            // harness is not one the substitute has ever heard of. That
+            // function carries the whole of the argument.
+            let picked = agents::pick_with_model(&agent, model, crate::shell_env::path());
+            let Some((profile, model)) = picked else {
                 let _ = tx.send(Err(TerminalError::NoAgent(agents::IDS.join(", "))));
                 return;
             };
@@ -859,10 +865,14 @@ fn handle(
                 // front end owns the truth of the settings and writes them on a
                 // 400 ms debounce, so a session started in the same fraction of
                 // a second as a language change reads the previous language —
-                // one session, and the same lag `settings::role_pair(app, …)` already
-                // lives with over in `runs::service`. (The `agent` parameter
-                // above is not that: it comes down from the front end's live
-                // store and has no lag at all.) And a run reads these per
+                // one session, and the same lag the harness and the model at
+                // the top of this arm now live with. That parenthetical used to
+                // exempt the harness, because the front end sent it down from
+                // its own live store; it does not any more, and it must not be
+                // put back — which half of an indivisible pair had no lag was
+                // never the interesting question, and the answer today is that
+                // neither half has an exemption. `terminal_create`'s own header
+                // records the trade. And a run reads these per
                 // batch, where it snapshots its agent and its whole
                 // `RunSettings` once and carries them: a language changed at
                 // 2am reaches the next batch, so one run's issues can end up

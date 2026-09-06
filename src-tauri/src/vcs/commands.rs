@@ -712,8 +712,12 @@ pub async fn vcs_suggest_message(
         // `settings::default_pair` is where that is said once for both callers
         // of this shape.
         let (agent, model) = crate::settings::default_pair(&app);
-        let profile = crate::agents::pick(&agent, crate::shell_env::path())
-            .ok_or_else(|| OneshotError::NoAgent(agent.clone()))?;
+        // `pick_with_model`, which is `pick` with the pair rule on it: the
+        // fallback to whatever is installed is unchanged, and the model goes
+        // with it only if it was the harness that ran. See that function.
+        let (profile, model) =
+            crate::agents::pick_with_model(&agent, model, crate::shell_env::path())
+                .ok_or_else(|| OneshotError::NoAgent(agent.clone()))?;
         // The same file the agent id came from, one field over, and read the
         // same way — a session's own commits are told this language by
         // `agents::prompt`, so the button and the run agree by construction

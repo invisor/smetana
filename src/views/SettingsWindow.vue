@@ -26,6 +26,11 @@ import KanbanSettings from '../components/settings/KanbanSettings.vue'
 import GitSettings from '../components/settings/GitSettings.vue'
 import StorageSettings from '../components/settings/StorageSettings.vue'
 import AboutSettings from '../components/settings/AboutSettings.vue'
+/* Which harness a run would actually start, out of the same pure module the
+   Models group's own rules live in: this window and the app window both ask it,
+   and `runs/commands.rs` answers it the same way for a caller that names
+   nobody. */
+import { runLeadAgent } from '../components/settings/agentRoles.js'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
 import { paintRoot, usePrefersDark } from './useAppearance.js'
 import {
@@ -461,7 +466,14 @@ const clear = async () => {
 const usage = reactive({ reading: null, busy: false, error: null })
 let asked = 0
 
-const readUsage = async (agent = adopted.value ? view.agent : null) => {
+/* Whose subscription a run would spend: the Run lead row's harness, or the
+   root's where that row chose nothing. Not `view.agent` — that is the Default
+   row, and with a Run lead on another harness the block would draw the wrong
+   allowance and, under it, the sentence about a run taking fewer tasks per
+   batch for a run that is spending something else entirely. */
+const leadAgent = () => runLeadAgent(view.agentRoles, view.agent)
+
+const readUsage = async (agent = adopted.value ? leadAgent() : null) => {
   const mine = (asked += 1)
   usage.busy = true
   usage.reading = null
@@ -478,25 +490,28 @@ const readUsage = async (agent = adopted.value ? view.agent : null) => {
   }
 }
 
-/* An agent is chosen: the edit goes where every edit on this window goes, and
-   the block is asked again, since it is about whoever would answer now. */
 /* One edit out of the Models group, whichever of its ten dropdowns made it.
    `role` is the role's key, or `null` for the Default row — which is the root
-   pair, and therefore the same `agent` field the tab has always had. A new
-   harness on that row re-probes the allowance, exactly as the Agent row used
-   to: the block at the bottom of the tab is about whoever would actually run.
+   pair, and therefore the same `agent` field the tab has always had.
 
    The whole `agentRoles` object goes out rather than the one row that changed.
    It is a table rather than a message of independent fields, and `adopt` above
    replaces this field whole: a patch carrying one row would leave the other
-   three `undefined` here until the app window announced them back. */
+   three `undefined` here until the app window announced them back.
+
+   The allowance is asked again when — and only when — the harness a run would
+   *start* has moved, which is two of the ten dropdowns and not one: the Run
+   lead row's own, and the Default row's while Run lead is inheriting it. The
+   test is on the answer rather than on which row was touched, so neither case
+   has to be enumerated, and the other eight cost nothing. It is asked after the
+   edit has been applied locally, which is what makes `leadAgent()` read the new
+   state; probing on every edit was the alternative, and it would start
+   somebody else's CLI under a 60-second ceiling for a change of task model. */
 const changeRole = ({ role, pair }) => {
-  if (!role) {
-    change({ agent: pair.agent, model: pair.model })
-    readUsage(pair.agent)
-    return
-  }
-  change({ agentRoles: { ...view.agentRoles, [role]: pair } })
+  const before = leadAgent()
+  if (!role) change({ agent: pair.agent, model: pair.model })
+  else change({ agentRoles: { ...view.agentRoles, [role]: pair } })
+  if (leadAgent() !== before) readUsage()
 }
 
 /* The login item, and the other part of this window that is not a setting:

@@ -601,8 +601,15 @@ and two strings. Two things it must keep saying: the stored value is untouched w
 so turning the switch back on brings the choice back rather than `en`, and the Off sentence says
 reports are not *shown* — it must never claim the document is not written, because
 `runs::service::finish` writes it either way. The
-subscription block under it was a placeholder with dashes and is now the reading itself: the tab asks
-`agent_usage`, which is `runs/usage.rs`'s probe — the same one the run gate makes before every batch
+subscription block under it is about **the harness a run would start**, which is the Run lead row's
+or the root's behind it (`runLeadAgent`, and `runs/commands.rs` answers the same question for a
+caller that names nobody). Not the Default row: with Run lead on Codex under a Claude root the block
+would draw Claude Code's allowance, and the sentence about a run taking fewer tasks per batch, for a
+run spending a different subscription — and that figure is precisely what somebody watches to know
+whether tonight's batch will be gated. The same rule feeds the status footer's strip in the app
+window, and both re-probe when — and only when — that derived harness moves, which is two of the ten
+dropdowns rather than one. It was a placeholder with dashes and is now the reading itself: the tab
+asks `agent_usage`, which is `runs/usage.rs`'s probe — the same one the run gate makes before every batch
 — put from the other end of the app. Four things about it are decisions rather than mechanics. The
 answer has **three distinguishable states** and not an `Option`: an agent with no `usage_command`
 (Codex) reads differently from one that was asked and could not answer, since those are different

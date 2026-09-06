@@ -478,7 +478,18 @@ function describeWork(work, sessionId) {
    and `Session.agent` is the only record of what it picked. A start says what
    it is doing instead of an elapsed time, which is also why it needs no
    separate state: `running` already draws the live dot, and `starting` in the
-   corner says the rest. */
+   corner says the rest.
+
+   The one thing that record now decides is `clearable`, and it is **per row**
+   rather than one answer for the panel. Until roles existed every session ran
+   the harness in `settings.agent`, so a single flag keyed to that field was the
+   session's harness by construction; now a session started for the Tasks or the
+   Code row can be on another one, and the flag was wrong in both directions —
+   a Clear row drawn over a Codex session, which `terminal_clear` then refuses
+   in Rust, and no Clear row on a Claude Code session that supports it. It is
+   still `Profile::clear_command`'s own answer, reached the same way through
+   `agents::catalogue` and `stores/agents.js`; only the id it is asked about has
+   changed, from the configured harness to the one this session actually ran. */
 export const agentRows = computed(() => [
   ...agentSessions().map((session) => ({
     id: session.id,
@@ -490,6 +501,9 @@ export const agentRows = computed(() => [
        row simply takes part in the order while the window lives.
        `components/agent/agentOrder.js` is what reads it. */
     conversation: session.conversation ?? null,
+    /* Whether *this session's* harness has a line that clears a conversation.
+       See the note above for why it is a row's answer and not the panel's. */
+    clearable: can(session.agent, 'clear'),
     ...describeWork(session.work, session.id),
     state: toUiState(session),
     elapsed: formatElapsed(now.value - Date.parse(session.startedAt))
@@ -501,6 +515,13 @@ export const agentRows = computed(() => [
        becomes a session with one about a second later, under a different `id`
        as well, so there is nothing here to remember either way. */
     conversation: null,
+    /* A start has no harness yet either: which one it will be is the intent's
+       role's, resolved in Rust at the spawn, and this row is gone by the time
+       there is an answer. `true` is not a claim that it can be cleared — it is
+       "nothing has refused it", which leaves the refusal to `starting` one line
+       further down `agentMenu.js`, and that is the reason that is certainly
+       true of this row. */
+    clearable: true,
     ...describeWork(ticket.work, null),
     state: 'running',
     elapsed: 'starting',
@@ -530,6 +551,11 @@ export const agentRows = computed(() => [
        left to `id`: the two happen to be the same string for this one kind of
        row, and a reader of the order has no business knowing that. */
     conversation: record.sessionId,
+    /* The record carries the harness that ran, so this row can be asked the
+       same question a live one is. It is refused as `offline` before the answer
+       matters, but the two refusals are different sentences and a row that
+       could never be cleared should not read as one that is merely asleep. */
+    clearable: can(record.agent, 'clear'),
     ...describeWork(record.work, null),
     state: 'done',
     elapsed: 'offline',

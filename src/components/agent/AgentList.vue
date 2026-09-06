@@ -48,18 +48,6 @@ const props = defineProps({
      what is marked is a fact about the stored list, not about how the panel
      happens to be drawn today. */
   pinned: { type: Array, default: () => [] },
-  /* Whether the project's configured harness has a line that clears a
-     conversation — `Profile::clear_command`, by way of `agents::catalogue` and
-     `stores/agents.js`. The same shape `SessionRow`'s two capability props have
-     and for the same reason: one row of the menu is refused by the harness
-     rather than by the session, and `agentMenu.js` has to know while it is
-     drawing. Nothing else here reads it, and nothing draws it: this list has
-     never named the agent on a row, deliberately.
-
-     `false` by default, which is the answer a caller that has not said greys
-     the row with: sending a clearing line nobody confirmed would reach the
-     agent as the first line of a prompt. */
-  clearable: { type: Boolean, default: false }
 })
 
 /* `reorder` carries the rows in their new order rather than a from/to pair, for
@@ -362,7 +350,21 @@ const items = computed(() =>
     conversation: menuRow.value?.conversation ?? null,
     starting: Boolean(menuRow.value?.starting),
     state: menuRow.value?.state ?? null,
-    clearable: props.clearable
+    /* **The row's own answer, not the panel's.** Whether the harness has a line
+       that clears a conversation is `Profile::clear_command`'s, by way of
+       `agents::catalogue` and `stores/agents.js`, and it used to arrive here as
+       one prop for the whole list — which was right only while every session in
+       a project ran the same harness. It is a session's fact now: two rows of
+       one panel can be on two harnesses, and a single flag was wrong in both
+       directions, drawing a Clear row that Rust then refuses and hiding one
+       that would have worked.
+
+       Still nothing this list *draws*: it has never named the agent on a row,
+       deliberately, and this is read by the menu alone. `false` for a row that
+       does not say, which is the same refusal the prop's default was: a row
+       promising on a guess would send a clearing line nobody confirmed as the
+       first line of somebody's prompt. */
+    clearable: Boolean(menuRow.value?.clearable)
   })
 )
 

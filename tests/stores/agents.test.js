@@ -108,27 +108,19 @@ describe('the agent catalogue', () => {
     expect(agents.agentLabel('somebody-elses-cli')).toBe('somebody-elses-cli')
   })
 
-  it('answers with the models a harness offers, in the order Rust offered them', async () => {
-    /* The order is each profile's own `MODELS` — strongest first — and not
-       this store's to sort: a dropdown that reordered them would put a
-       different model under the same cursor position on two machines. */
+  it('carries the models a harness offers, in the order Rust offered them', async () => {
+    /* The row holds them and nothing here reshapes them: the order is each
+       profile's own `MODELS`, strongest first, and a store that sorted would
+       put a different model under the same cursor position on two machines.
+       Who reads them is `modelOptions` in `components/settings/agentRoles.js`,
+       which is handed this array whole — there is no `modelsOf` here, and
+       `agentLabel` above records why. */
     const { agents } = await loadCatalogue()
 
-    expect(agents.modelsOf('claude')).toEqual([
+    expect(agents.agents.value.find((row) => row.id === 'claude').models).toEqual([
       { id: 'fable', label: 'Fable' },
       { id: 'opus', label: 'Opus' }
     ])
-    expect(agents.modelsOf('codex')).toEqual([{ id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' }])
-  })
-
-  it('offers no model at all for a harness it has never heard of', async () => {
-    /* Including the empty string, which is what a role with nothing chosen
-       holds: the settings window asks about that id on every render. */
-    const { agents } = await loadCatalogue()
-
-    expect(agents.modelsOf('somebody-elses-cli')).toEqual([])
-    expect(agents.modelsOf('')).toEqual([])
-    expect(agents.modelsOf(null)).toEqual([])
   })
 
   it('leaves every row greyed when the read did not work', async () => {
@@ -137,7 +129,6 @@ describe('the agent catalogue', () => {
     expect(agents.agents.value).toEqual([])
     expect(agents.can('claude', 'resume')).toBe(false)
     expect(agents.agentLabel('claude')).toBe('claude')
-    expect(agents.modelsOf('claude')).toEqual([])
   })
 
   /* A worker older than this command, or one that answered something else

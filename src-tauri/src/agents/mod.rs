@@ -1106,6 +1106,38 @@ pub fn pick(id: &str, path_var: Option<&str>) -> Option<&'static dyn Profile> {
     IDS.iter().filter_map(|id| resolve(id)).find(|p| installed(*p))
 }
 
+/// `pick`, with the model that was chosen against `id` — and **the model is
+/// dropped whenever the substitution above actually happens.**
+///
+/// `pick` is the third and quietest member of the family the pair rule is
+/// about. `AgentRole::validate` empties a role that holds a model with no
+/// harness beside it; `settings::role_model` drops the model when a run's
+/// pinned harness disagrees with the file; and this one hands back a *different
+/// profile* when the configured harness is not on `PATH`. A model id is
+/// meaningful only against the provider it was chosen for, so carrying one
+/// across a substitution would put a Codex model on Claude Code's command line.
+///
+/// It is not hypothetical: the settings window offers every shipped harness
+/// whether or not it is installed. Choose Codex and one of its models on a
+/// machine with only Claude Code, and the fallback that used to work in silence
+/// would spawn `claude --model gpt-5.6-sol` and die at the first argument — at
+/// night, in a run, which is the case this whole feature was designed around.
+///
+/// The substitution itself is untouched and stays silent, exactly as it was:
+/// what is lost is the flag, which puts the session back on that harness's own
+/// default. That is this app's behaviour before the model field existed.
+///
+/// Here rather than at the three call sites because it is one rule about one
+/// mechanism, and the fourth caller added later would be the one that forgot.
+pub fn pick_with_model(
+    id: &str,
+    model: Option<String>,
+    path_var: Option<&str>,
+) -> Option<(&'static dyn Profile, Option<String>)> {
+    let profile = pick(id, path_var)?;
+    Some((profile, model.filter(|_| profile.id() == id)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2203,6 +2235,24 @@ mod tests {
 
         let path_var = dir.to_str().expect("temp dir path is valid UTF-8");
         assert_eq!(pick("claude", Some(path_var)).map(|p| p.id()), Some("codex"));
+
+        // And the model goes no further than the harness it was chosen
+        // against. The substitution is the same one as above — this is the
+        // case where a person chose Claude Code and a Claude model on a machine
+        // that has only Codex — and carrying `opus` onto Codex's command line
+        // would turn a working fallback into a session that dies at spawn.
+        let substituted = pick_with_model("claude", Some("opus".into()), Some(path_var));
+        assert_eq!(substituted.map(|(p, m)| (p.id(), m)), Some(("codex", None)));
+
+        // The harness that was actually asked for keeps its model.
+        let asked = pick_with_model("codex", Some("gpt-5.6-sol".into()), Some(path_var));
+        assert_eq!(
+            asked.map(|(p, m)| (p.id(), m)),
+            Some(("codex", Some("gpt-5.6-sol".to_owned())))
+        );
+
+        // Nothing installed is nothing to run, model or no model.
+        assert!(pick_with_model("claude", Some("opus".into()), Some("/nowhere")).is_none());
 
         std::fs::remove_dir_all(&dir).expect("remove temp dir for the fake install");
     }
