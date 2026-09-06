@@ -49,3 +49,16 @@ export function can(id, capability) {
 export function agentLabel(id) {
   return agents.value.find((agent) => agent.id === id)?.label ?? id
 }
+
+/* What this harness may be asked to run on, as `{ id, label }` rows in the
+   order Rust offered them — which is each profile's own `MODELS`, strongest
+   first, and not this file's to sort.
+
+   An id nobody ships answers with an empty list, and so does a read that
+   failed: the settings window then draws a picker with nothing in it, which is
+   the same safe direction the greying above takes. The alternative was a fifth
+   hand-written table keyed by agent id, which is exactly what this store exists
+   to have abolished. */
+export function modelsOf(id) {
+  return agents.value.find((agent) => agent.id === id)?.models ?? []
+}

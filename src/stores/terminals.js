@@ -995,7 +995,12 @@ export async function createSession(project, intent = { kind: 'bare' }) {
   const before = terminalState.activeId
   terminalState.activeId = ticket.id
   try {
-    const session = await invoke('terminal_create', { project, agent: settings.agent, intent })
+    /* No agent id goes with it. Which harness — and which model — a kind of
+       call gets is a role's answer now, and roles live in Rust
+       (`settings::role_model`): this store used to send the root `agent` out of
+       its own live state, which would have meant one half of an indivisible
+       pair coming from here and the other half being read off the file. */
+    const session = await invoke('terminal_create', { project, intent })
     const kept = upsert(session)
     /* The handover, and the whole point of the ticket. Only if nobody has moved
        since: a person who picked another agent while this one was starting has

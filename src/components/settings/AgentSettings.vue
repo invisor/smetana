@@ -1,21 +1,31 @@
 <script setup>
-/* The Agents tab: which CLI coding agent the app starts, the languages it works
-   in, and what is left of its subscription.
+/* The Agents tab: which CLI coding agent the app starts and on which model, the
+   languages it works in, and what is left of its subscription.
 
-   The picker and the languages under it are real and take effect on the next
-   session started — the id travels to `terminal_create`, and Rust resolves it
-   (`agents::resolve`); the languages travel by a different road and never cross
-   the IPC as arguments at all, since `terminal::service` reads them from the
-   file itself when it builds the session, which is what keeps a person's
-   session and a run's batch from disagreeing about them. The commit language
-   has a second reader beside a session: `vcs_suggest_message` reads the same
-   field for the Git panel's "suggest a message" button, so the two cannot
-   disagree either.
+   The pickers and the languages under them are real and take effect on the next
+   session started. None of them crosses the IPC as an argument: `terminal_create`
+   carries the intent and nothing else, and `terminal::service` reads the harness,
+   the model, the languages and the standing instruction off the file itself when
+   it builds the session — which is what keeps a person's session and a run's
+   batch from disagreeing about any of them. The commit language has a second
+   reader beside a session: `vcs_suggest_message` reads the same field for the
+   Git panel's "suggest a message" button, so the two cannot disagree either.
 
-   The languages sit inside one `SettingsGroup` and the Agent row above stays
-   outside it — the shape the General tab already draws, and there is no second
-   group over that one row: a caption over a single row is a caption for its own
-   sake.
+   **The Agent row is no longer a row of its own.** It is the Default row of the
+   group below, bound to the same `agent` field it always was — a group over one
+   row would have been a caption for its own sake, and a group of five with a
+   sixth control writing one of the same fields would have been worse: two
+   controls over one setting is the drift this codebase keeps arguing against.
+
+   Which kinds of call have a row of their own is Rust's list and not this
+   file's (`agents::Role` and `role_of`), and so is what each dropdown may offer:
+   the harnesses and their models come from `stores/agents.js`, which is
+   `agents_catalog` read once at startup. The rule about what a row shows and
+   what a choice in it changes is `settings/agentRoles.js`, out of this file for
+   the reason every rule in this tree is out of the component that draws it.
+
+   The languages sit inside a `SettingsGroup` of their own, the shape the General
+   tab already draws.
 
    Report language is the one row here with a condition on it, and the condition
    belongs to another tab: with **Show run report** off on General, the row is
@@ -73,15 +83,52 @@ import SettingsGroup from './SettingsGroup.vue'
 import SettingsRow from './SettingsRow.vue'
 import { agentOf, offersRefresh, usageLines, usageNote } from './usage.js'
 import { thresholdOptions } from './subscription.js'
-/* Which harnesses this build ships and what each can do, read once at startup.
-   A reactive store rather than props, because the picker below is the one row
-   on this tab whose *options* are a fact about the build rather than about the
-   person's settings, and every window that draws this tab would otherwise have
-   to carry the same list to it. */
+/* Which harnesses this build ships, what each can do and what each may be run
+   on, read once at startup. A reactive store rather than props, because the ten
+   pickers below are the rows on this tab whose *options* are a fact about the
+   build rather than about the person's settings, and every window that draws
+   this tab would otherwise have to carry the same list to it.
+
+   Nothing in this file names an agent or a model. The harness list used to be a
+   hand-written pair of labels here, and it was the first of four such lists keyed
+   by agent id; the other three were in the two agent menus. Each was a knowing
+   second copy of a fact Rust owns, each could drift in both directions in
+   silence, and a third harness meant four edits in two languages — a
+   hand-written model table here would have been the fifth.
+
+   Codex used to be drawn `disabled`, with `Not supported yet` beside it. That
+   limit is gone: the profile answers resume, fork, batch and one-shot, and finds
+   out the id of a session it started. */
 import { agentLabel, agents } from '../../stores/agents.js'
+/* What a row of the Models group shows and what a choice in one changes. Out of
+   this file because a `.vue` file is unreachable by any test here, and one case
+   in it is silently wrong when it is wrong at all: a model chosen in a row that
+   has chosen no harness has to write the harness in beside it, or validation
+   empties the pair on the next read. */
+import { chooseModel, chooseProvider, modelOptions, pairOf, providerOptions, ROLE_ROWS } from './agentRoles.js'
 
 const props = defineProps({
   agent: { type: String, default: 'claude' },
+  /* Which model the app asks for behind everything with no row of its own, and
+     the fallback behind every role. The empty string is the ordinary value and
+     means the flag is not passed at all — the harness picks for itself, which is
+     what this app did before the field existed. */
+  model: { type: String, default: '' },
+  /* One `{ agent, model }` pair per kind of agent call, keyed as the settings
+     file spells them. Both halves empty is "inherit the default", and the pair
+     is indivisible: `settings/model.rs` empties a role that names a model with
+     no harness beside it, since a model id means nothing against another
+     provider. Defaulted whole so the group draws in `?view=gallery` and in the
+     moment before the first answer arrives. */
+  agentRoles: {
+    type: Object,
+    default: () => ({
+      tasks: { agent: '', model: '' },
+      code: { agent: '', model: '' },
+      runLead: { agent: '', model: '' },
+      reviewBranch: { agent: '', model: '' }
+    })
+  },
   /* The language the agent talks to the person in, the language the prose of a
      bd issue it writes is in, the language a git commit message it writes is
      in, and the language the prose of a run's report is in. BCP-47 ids,
@@ -125,7 +172,16 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
-  'update:agent',
+  /* One event for all ten dropdowns of the group, carrying `{ role, pair }` —
+     the role's key, or `null` for the Default row, and the whole pair.
+
+     One event rather than a pair of them per row, and no `update:agent` beside
+     it any more: the harness and the model travel together, and an emit that
+     could move a model without the harness it was chosen against would be
+     offering the exact state `settings/model.rs` throws away. The Default row's
+     `null` still lands on the `agent` field — `SettingsWindow.vue` is where the
+     pair is unpacked, and it is where the allowance is re-probed. */
+  'update:agentRole',
   'update:agentLanguage',
   'update:taskLanguage',
   'update:commitLanguage',
@@ -211,6 +267,40 @@ const PROMPT_WIDTH = '48ch'
    file check stays a real backstop rather than a formality. `MAX_AGENT_PROMPT`'s
    own doc carries that arithmetic. */
 const MAX_AGENT_PROMPT = 4000
+
+/* The five rows, each already knowing which pair it stands for and what its two
+   lists hold. Computed rather than worked out in the template: the model list
+   depends on the harness the row resolves to, which is the root's for a row that
+   has chosen none, and a template expression repeating that would be the place
+   the two halves come apart. */
+const modelRows = computed(() =>
+  ROLE_ROWS.map((row) => {
+    const pair = pairOf(row.role, props.agentRoles, props.agent, props.model)
+    return {
+      ...row,
+      pair,
+      providers: providerOptions(row.role, agents.value),
+      models: modelOptions(row.role, agents.value, pair.agent, pair.inherited)
+    }
+  })
+)
+
+/* A row of the Models group asks for two fields side by side, so it asks for
+   twice the column the rows above it take plus the gap between them. In `ch`
+   for the reason `CONTROL_WIDTH` is, and `SettingsRow` lets the pair give way
+   rather than paint outside the panel where there is not that much room. */
+const PAIR_WIDTH = '38ch'
+const pairStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-3)',
+  width: '100%'
+}
+/* Each half takes half of whatever the row got, and neither refuses to shrink:
+   `GPT-5.6-Terra` and `Same as default` are the longest labels either list
+   holds, and `Dropdown` ellipsises a label that does not fit rather than
+   growing its field. */
+const halfStyle = { flex: '1 1 0', minWidth: 0 }
 
 /* What the block below is headed, and it names **whoever answered the probe**
    rather than whoever is showing in the picker above. The two can differ:
@@ -302,22 +392,45 @@ const errorStyle = {
 
 <template>
   <div>
-    <SettingsRow
-      label="Agent"
-      description="Which CLI agent new sessions start. Sessions already running keep the one they started with."
-      :control-width="CONTROL_WIDTH"
-    >
-      <Dropdown
-        :model-value="props.agent"
-        :options="AGENTS"
-        @update:model-value="emit('update:agent', $event)"
-      />
-    </SettingsRow>
+    <!-- Which agent and which model each kind of call gets. Five rows, and the
+         first of them is what used to be the Agent row on its own: the same
+         `agent` field, drawn once, with the model it is chosen against beside
+         it. Every row under it falls back to that first one, in both halves at
+         once — which is why "Same as default" appears in both fields of an
+         untouched row rather than in one. -->
+    <SettingsGroup label="Agents and models">
+      <SettingsRow
+        v-for="row in modelRows"
+        :key="row.label"
+        :label="row.label"
+        :description="row.description"
+        :control-width="PAIR_WIDTH"
+      >
+        <div :style="pairStyle">
+          <div :style="halfStyle">
+            <Dropdown
+              :model-value="row.pair.inherited ? '' : row.pair.agent"
+              :options="row.providers"
+              @update:model-value="emit('update:agentRole', chooseProvider(row.role, $event))"
+            />
+          </div>
+          <div :style="halfStyle">
+            <Dropdown
+              :model-value="row.pair.model"
+              :options="row.models"
+              @update:model-value="
+                emit(
+                  'update:agentRole',
+                  chooseModel(row.role, $event, props.agentRoles, props.agent)
+                )
+              "
+            />
+          </div>
+        </div>
+      </SettingsRow>
+    </SettingsGroup>
 
-    <!-- The rows that answer the same question about different writing. The
-         Agent row above is outside the group deliberately: a second group over
-         one row would be a caption for its own sake, and the General tab does
-         not do that either. -->
+    <!-- The rows that answer the same question about different writing. -->
     <SettingsGroup label="Languages">
       <SettingsRow
         label="Conversation language"

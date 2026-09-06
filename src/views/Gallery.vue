@@ -1839,6 +1839,38 @@ const galleryRestoreGeometry = ref(true)
    position a person's app will actually be in. */
 const galleryUpdatesAutoCheck = ref(true)
 const galleryAgent = ref('claude')
+/* The Models group, and **no two rows alike**, for the reason the languages
+   below carry: five rows all showing the same thing would never draw the state
+   worth looking at, and a row bound to the wrong pair would read as correct.
+
+   So the four states the group has are all on screen at once. Default names a
+   harness and a model, since it always has both. Tasks names the other harness
+   and one of its own models, which is what a role that overrode the default
+   looks like — and it is the row whose model list has to be the other harness's.
+   Code names a harness and no model, the half state. Run lead and Branch review
+   are untouched, which is "Same as default" in both fields and the state every
+   settings file on a person's disk is in right now. */
+const galleryAgentModel = ref('opus')
+const galleryAgentRoles = ref({
+  tasks: { agent: 'codex', model: 'gpt-5.6-sol' },
+  code: { agent: 'claude', model: '' },
+  runLead: { agent: '', model: '' },
+  reviewBranch: { agent: '', model: '' }
+})
+/* One edit out of the group, unpacked the way `SettingsWindow.vue` unpacks it —
+   the Default row is `null` and lands on the root pair, a role writes its own.
+   Written out here rather than left unbound: the one case worth checking by eye
+   is choosing a model in an untouched role, which has to fill that role's
+   harness in as well, and a cell that dropped the event would show nothing at
+   all happening. */
+const galleryChooseRole = ({ role, pair }) => {
+  if (!role) {
+    galleryAgent.value = pair.agent
+    galleryAgentModel.value = pair.model
+    return
+  }
+  galleryAgentRoles.value = { ...galleryAgentRoles.value, [role]: pair }
+}
 /* The Agents tab's three language pickers, and **no two of them alike**. Not
    all on English, because the longest label any of the lists holds is the one
    worth looking at and a tab showing "English" three times would never draw it
@@ -4841,13 +4873,15 @@ const menuTargetStyle = {
         <div :style="{ width: '560px' }">
           <AgentSettings
             :agent="galleryAgent"
+            :model="galleryAgentModel"
+            :agent-roles="galleryAgentRoles"
             :agent-language="galleryAgentLanguage"
             :task-language="galleryTaskLanguage"
             :commit-language="galleryCommitLanguage"
             :report-language="galleryReportLanguage"
             :agent-prompt="galleryAgentPrompt"
             :usage="galleryAgentUsage"
-            @update:agent="galleryAgent = $event"
+            @update:agent-role="galleryChooseRole($event)"
             @update:agent-language="galleryAgentLanguage = $event"
             @update:task-language="galleryTaskLanguage = $event"
             @update:commit-language="galleryCommitLanguage = $event"
@@ -4874,6 +4908,8 @@ const menuTargetStyle = {
         <div :style="{ width: '560px' }">
           <AgentSettings
             :agent="galleryAgent"
+            :model="galleryAgentModel"
+            :agent-roles="galleryAgentRoles"
             :agent-language="galleryAgentLanguage"
             :task-language="galleryTaskLanguage"
             :commit-language="galleryCommitLanguage"

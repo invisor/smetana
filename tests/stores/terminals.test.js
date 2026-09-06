@@ -750,7 +750,12 @@ describe('detaching', () => {
 })
 
 describe('starting a session', () => {
-  it('sends the configured agent and the intent, not a prompt', async () => {
+  it('sends the intent and nothing else — no agent, and no prompt', async () => {
+    /* The agent id used to travel with it, out of this window's live settings.
+       It does not any more: which harness and which model a kind of call gets
+       is one answer with two halves, and Rust reads both off the file for the
+       intent's role. A payload that still named an agent would be half of that
+       pair arriving from somewhere else. */
     const { ipc, stores } = await loadStores()
     ipc.on('terminal_create', session({ id: 7, agent: 'codex' }))
     stores.settings.settings.agent = 'codex'
@@ -762,7 +767,7 @@ describe('starting a session', () => {
     })
 
     const args = ipc.calls('terminal_create').at(-1)
-    expect(args.agent).toBe('codex')
+    expect(args.agent).toBeUndefined()
     expect(args.intent).toEqual({ kind: 'editTask', id: 'smetana-7', title: 'x y' })
     expect(args.prompt).toBeUndefined()
   })
@@ -944,7 +949,6 @@ describe('starting a session', () => {
     // a review of somewhere else.
     expect(ipc.calls('terminal_create').at(-1)).toEqual({
       project: '/p',
-      agent: 'claude',
       intent: {
         kind: 'reviewBranch',
         pairs,
