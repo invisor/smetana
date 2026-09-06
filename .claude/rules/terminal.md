@@ -718,12 +718,25 @@ padding to plus one, and two Macs simply landed at different points of it (smeta
 `_core` — and `justifyContent: 'flex-end'` on the host spends the sub-row remainder above the first
 line, against the tab row, rather than below the last one. Nothing writes a size back onto the host,
 and that is what keeps it convergent: the host stays `flex: 1`, its box is the centre column's alone,
-and a fit is therefore never measured against its own last answer. **The width is deliberately still
-the addon's**, wrong in the same way and by one or two columns; it stays inside the pane because the
-14px the addon reserves for the scrollbar is wider than the padding it double-counts, so what it
-costs is that reserve rather than an overflow — and correcting it would change the column count a
-running agent wraps its own output at, which is a decision of its own and not a side effect of this
-one.
+and a fit is therefore never measured against its own last answer.
+
+**The width is deliberately still the addon's**, wrong in the same way and by one or two columns;
+what it costs is the reserve the addon keeps for the scrollbar rather than an overflow, so no text is
+clipped and the price is that a scrollbar can sit over the last column or two of a long line.
+Correcting it would change the column count a running agent wraps its own output at, which is a
+decision of its own and not a side effect of this one. **That it costs only the reserve is a
+threshold rather than a standing fact, and the threshold is `--space-3`.** The addon's width comes to
+`content width + 2 × --space-3 − 14`, so the terminal stays inside its pane only while
+`2 × --space-3 ≤ 14` — that is, while `--space-3` is **7px or under**, which it is today at 6px
+comfortable and 4px compact (`tokens/space.css`). Raise it to 8px for any reason and the pane starts
+drawing out through its own right-hand padding: the very defect this paragraph is about, on the other
+edge, with nothing in the console and no test failing — `tests/styles/tokens.test.js` reads
+`space.css` as text, but its pattern reaches only the `-h` heights and the icon sizes, so nothing
+mechanical joins the two files. The 14 itself is conditional too: the addon reserves
+`0 === options.scrollback ? 0 : (overviewRuler?.width || 14)`, and this pane asks for 5000 lines of
+scrollback, so a session opened without any would have no reserve to spend and would overflow at any
+padding at all. The vertical half is immune to both, `fittedRows` measuring `clientHeight` less the
+resolved paddings — the padding box under any box model.
 
 `TerminalView.vue` hosts one `Terminal` instance per view, not per session — switching agents calls
 `reset()` and refills from the new ring snapshot, so returning to an agent lands at the end of its

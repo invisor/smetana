@@ -83,13 +83,23 @@ const style = {
   /* Where the rounding remainder goes, and it goes up. A terminal is a whole
      number of cells tall and the pane it is given almost never is, so there is
      always up to one cell of space left over; `.xterm` is the host's one child
-     and is exactly `rows * cell` tall, so a column packed to the end spends
-     that leftover above the first row, against the tab bar, and leaves the
-     distance from the last row to the bottom of the dark ground at exactly the
-     padding on every window height and on every machine. Left at the default it
-     sat under the last row instead — next to the status footer and directly
+     and comes out exactly `rows * cell` tall, so a column packed to the end
+     spends that leftover above the first row, against the tab bar, and leaves
+     the distance from the last row to the bottom of the dark ground at exactly
+     the padding on every window height and on every machine. Left at the default
+     it sat under the last row instead — next to the status footer and directly
      under the agent's own prompt line, which is the one place on this pane a
-     person is looking at. */
+     person is looking at.
+
+     That height is passed up rather than declared, and the chain is worth having
+     written down because `.xterm-screen` is **not** a child of `.xterm` in xterm
+     6.0.0 — `Viewport` hands it to a `SmoothScrollableElement`, which reparents
+     it. What is in flow under `.xterm` is `.xterm-scrollable-element`, of auto
+     height and `position: relative`, holding the screen; `.xterm-viewport` is
+     absolute and contributes nothing. So the one element with a declared height
+     is the screen, at `rows * cell`, and `.xterm` measures the same because that
+     wrapper passes it through. Somebody going looking for the screen directly
+     under `.xterm` will not find it. */
   display: 'flex',
   flexDirection: 'column',
   justifyContent: 'flex-end'
