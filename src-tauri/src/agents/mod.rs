@@ -12,6 +12,8 @@
 
 pub mod claude;
 pub mod codex;
+pub mod codex_sessions;
+pub mod commands;
 pub mod library;
 pub mod oneshot;
 pub mod prompt;
@@ -552,6 +554,14 @@ pub struct Launch {
 
 pub trait Profile: Sync {
     fn id(&self) -> &'static str;
+
+    /// This harness's name as a person reads it — "Claude Code", "Codex".
+    ///
+    /// No default, deliberately: a harness added to `IDS` without a name must
+    /// not compile. It is this product's interface copy, so it is English like
+    /// the rest of it, and it lives here rather than in the front end because
+    /// the front end no longer names agents at all.
+    fn label(&self) -> &'static str;
     /// What to exec. Also what we look for on `PATH`.
     fn binary(&self) -> &'static str;
     fn delivery(&self) -> SkillDelivery;
@@ -608,6 +618,21 @@ pub trait Profile: Sync {
         None
     }
 
+    /// What this harness's one-shot output *is*, as one answer.
+    ///
+    /// The pair to `oneshot_args`, and its own method for `parse_usage`'s
+    /// reason: a harness that says how to ask a question without saying how to
+    /// read the reply leaves the caller reading somebody else's format. The
+    /// default is the whole of stdout, which is what `oneshot::ask_raw` did
+    /// before this existed and is exactly right for a harness whose one-shot
+    /// mode prints the answer alone — Claude Code's `-p` does.
+    ///
+    /// Codex's does not: `codex exec` prints its own progress around the
+    /// answer, so it overrides this and takes the last thing the agent said.
+    fn oneshot_answer(&self, stdout: &str) -> String {
+        stdout.to_owned()
+    }
+
     /// How this harness is told to pick a recorded session up again by its id,
     /// as the arguments that go in front of everything else on its command
     /// line, or `None` where it cannot be told at all.
@@ -662,6 +687,65 @@ pub trait Profile: Sync {
     /// could not resume, and no refusal has to be worded anywhere. That is what
     /// every session did before this existed.
     fn session_id_args(&self, _session: &str) -> Option<Vec<String>> {
+        None
+    }
+
+    /// Whether this harness names its own conversation, so its id is worth
+    /// looking for after the start.
+    ///
+    /// Asked while a session is being built, which is why it is a plain
+    /// question and not a probe: `session_id_after_start` reads a disk, and a
+    /// disk read standing in for a capability check would answer "no" on a
+    /// machine that simply has not written the file yet.
+    fn discovers_session_id(&self) -> bool {
+        false
+    }
+
+    /// Whatever this harness had **already** recorded, as of now.
+    ///
+    /// Taken at the instant of the spawn and handed straight back to
+    /// `session_id_after_start`, whose whole difficulty it answers: a record
+    /// that was already there cannot belong to the session just started, and
+    /// nothing else distinguishes the two. Only a resumed session runs in a
+    /// directory of its own — everything else runs at the project root — so two
+    /// agent sessions in one project share a working directory as a matter of
+    /// course, and modification time alone hands the newer one whatever the
+    /// older one is still writing.
+    ///
+    /// Paths rather than a timestamp, and it is worth saying why the obvious
+    /// answer is not used: `std::fs::Metadata::created` is not answered on every
+    /// filesystem this ships on, so a creation time is a fact this app cannot
+    /// rely on having. A path either was in the set or it was not.
+    ///
+    /// The default is nothing, which is a working answer: a harness that
+    /// discovers no id has nothing to take a snapshot of, and the empty set is
+    /// also the honest answer for one whose records could not be read at all.
+    fn sessions_before_start(&self) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
+    /// The id a harness gave a session **it has already started**, when this
+    /// app could not name one in advance.
+    ///
+    /// The other half of `session_id_args`, and deliberately a second method
+    /// rather than a fallback inside it: being told an id and finding out an id
+    /// are two capabilities, a harness may have either, and a caller composing
+    /// one out of the other would be inventing somebody else's behaviour.
+    ///
+    /// `before` is what `sessions_before_start` answered at the spawn, and the
+    /// caller is required to have taken it *then* rather than now — a snapshot
+    /// taken at the first poll would already contain this session's own record
+    /// and could never match anything.
+    ///
+    /// The default is `None` — a harness answering neither records no
+    /// conversation, which is what every harness but Claude Code did before
+    /// this existed.
+    fn session_id_after_start(
+        &self,
+        _cwd: &std::path::Path,
+        _started_after: std::time::SystemTime,
+        _before: &[std::path::PathBuf],
+    ) -> Option<String> {
         None
     }
 
@@ -772,6 +856,57 @@ pub fn is_batch(intent: &Intent) -> bool {
 /// CLAUDE.md — a value that survives the session and silently comes back as
 /// something else.
 pub const IDS: [&str; 2] = ["claude", "codex"];
+
+/// What one harness can do, as the front end needs to know it while a row is
+/// being drawn.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Capabilities {
+    pub resume: bool,
+    pub fork: bool,
+    pub clear: bool,
+    pub usage: bool,
+    pub batch: bool,
+    pub oneshot: bool,
+}
+
+/// One harness, as the front end sees it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRow {
+    pub id: String,
+    pub label: String,
+    pub capabilities: Capabilities,
+}
+
+/// Every shipped harness and what it can do — **asked of the profiles**, never
+/// written out.
+///
+/// This is what replaced four hand-kept lists in `src/`: `AGENTS` in
+/// `AgentSettings.vue`, `RESUMES_BY_ID` and `FORKS_BY_ID` in `sessionMenu.js`,
+/// `CLEARS_BY_ID` in `agentMenu.js`. Each was a knowing second copy of a fact
+/// this file owns, each drifted quietly in both directions, and a third harness
+/// meant four edits in two languages.
+///
+/// The probe string handed to the id-taking methods is never used: those are
+/// asked only whether they answer at all.
+pub fn catalogue() -> Vec<AgentRow> {
+    IDS.iter()
+        .filter_map(|id| resolve(id))
+        .map(|profile| AgentRow {
+            id: profile.id().to_owned(),
+            label: profile.label().to_owned(),
+            capabilities: Capabilities {
+                resume: profile.resume_args("probe").is_some(),
+                fork: profile.fork_args("probe").is_some(),
+                clear: profile.clear_command().is_some(),
+                usage: profile.usage_command().is_some(),
+                batch: !profile.batch_args().is_empty(),
+                oneshot: profile.oneshot_args().is_some(),
+            },
+        })
+        .collect()
+}
 
 /// The languages a person may pick, as BCP-47 ids with the English name of
 /// each, and the only copy of that list — `settings/model.rs` validates against
@@ -1423,6 +1558,9 @@ mod tests {
             fn id(&self) -> &'static str {
                 "plain"
             }
+            fn label(&self) -> &'static str {
+                "Plain"
+            }
             fn binary(&self) -> &'static str {
                 "plain"
             }
@@ -1439,6 +1577,152 @@ mod tests {
         // clearing line for is asked for none, and the menu row that would
         // send one is greyed rather than sending a guess.
         assert!(Plain.clear_command().is_none());
+    }
+
+    #[test]
+    fn a_harness_that_says_nothing_about_its_output_is_taken_at_its_word() {
+        // The default is today's behaviour to the letter: whatever the process
+        // printed is the answer, which is what `oneshot::ask_raw` did before
+        // this method existed. Claude Code's `-p` prints the answer alone, so
+        // it keeps this and implements nothing.
+        struct Plain;
+        impl Profile for Plain {
+            fn id(&self) -> &'static str {
+                "plain"
+            }
+            fn label(&self) -> &'static str {
+                "Plain"
+            }
+            fn binary(&self) -> &'static str {
+                "plain"
+            }
+            fn delivery(&self) -> SkillDelivery {
+                SkillDelivery::Inline
+            }
+            fn command(&self, _launch: &Launch) -> portable_pty::CommandBuilder {
+                portable_pty::CommandBuilder::new(self.binary())
+            }
+        }
+        assert_eq!(Plain.oneshot_answer("feat: add the thing"), "feat: add the thing");
+        // The pair beside it, and the same shape: a harness that says nothing
+        // about naming its own conversation is not asked after the start.
+        assert!(!Plain.discovers_session_id());
+        assert!(Plain.sessions_before_start().is_empty());
+        assert_eq!(
+            Plain.session_id_after_start(
+                std::path::Path::new("/work/tree"),
+                std::time::SystemTime::UNIX_EPOCH,
+                &[]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_harness_told_its_id_in_advance_has_nothing_to_go_looking_for() {
+        // Claude Code is handed `--session-id`, so the discovery half is not
+        // its question at all and both defaults stand. Pinned here rather than
+        // in `claude.rs` because what is being checked is the trait's division
+        // of labour, not that harness's command line.
+        let claude = resolve("claude").expect("claude is shipped");
+        assert!(claude.session_id_args("probe").is_some());
+        assert!(!claude.discovers_session_id());
+        assert!(claude.sessions_before_start().is_empty());
+        assert_eq!(
+            claude.session_id_after_start(
+                std::path::Path::new("/work/tree"),
+                std::time::SystemTime::UNIX_EPOCH,
+                &[]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn every_shipped_harness_has_a_name_to_put_in_front_of_a_person() {
+        for id in IDS {
+            let profile = resolve(id).expect("every id resolves to a profile");
+            assert!(!profile.label().is_empty(), "{id} must carry a label");
+        }
+    }
+
+    #[test]
+    fn the_catalogue_answers_for_every_id_and_asks_the_profiles_themselves() {
+        let rows = catalogue();
+        assert_eq!(rows.len(), IDS.len(), "one row per shipped harness");
+
+        let claude = rows.iter().find(|row| row.id == "claude").expect("claude is shipped");
+        assert_eq!(claude.label, "Claude Code");
+        assert!(claude.capabilities.resume && claude.capabilities.fork);
+        assert!(claude.capabilities.clear && claude.capabilities.usage);
+        assert!(claude.capabilities.batch && claude.capabilities.oneshot);
+
+        let codex = rows.iter().find(|row| row.id == "codex").expect("codex is shipped");
+        assert_eq!(codex.label, "Codex");
+        assert!(codex.capabilities.resume && codex.capabilities.fork);
+        assert!(codex.capabilities.batch && codex.capabilities.oneshot);
+        assert!(!codex.capabilities.usage, "this CLI has no command that prints an allowance");
+    }
+
+    #[test]
+    fn no_row_of_the_catalogue_says_anything_its_own_profile_would_not() {
+        // The whole point of the command: the row is derived, so this catches a
+        // capability that was written out beside the profiles rather than asked
+        // of them. Every id, every field, against the profile itself.
+        for row in catalogue() {
+            let profile = resolve(&row.id).expect("a listed id must resolve");
+            assert_eq!(row.label, profile.label(), "{}: label", row.id);
+            assert_eq!(
+                row.capabilities.resume,
+                profile.resume_args("probe").is_some(),
+                "{}: resume",
+                row.id
+            );
+            assert_eq!(
+                row.capabilities.fork,
+                profile.fork_args("probe").is_some(),
+                "{}: fork",
+                row.id
+            );
+            assert_eq!(
+                row.capabilities.clear,
+                profile.clear_command().is_some(),
+                "{}: clear",
+                row.id
+            );
+            assert_eq!(
+                row.capabilities.usage,
+                profile.usage_command().is_some(),
+                "{}: usage",
+                row.id
+            );
+            assert_eq!(
+                row.capabilities.batch,
+                !profile.batch_args().is_empty(),
+                "{}: batch",
+                row.id
+            );
+            assert_eq!(
+                row.capabilities.oneshot,
+                profile.oneshot_args().is_some(),
+                "{}: oneshot",
+                row.id
+            );
+        }
+    }
+
+    #[test]
+    fn the_catalogue_reaches_the_front_end_in_the_shape_it_reads() {
+        // The store and `mockBackend.js` both read `capabilities.oneshot` and
+        // the rest by those names, so the serialization is part of the
+        // contract rather than an implementation detail.
+        let json = serde_json::to_value(catalogue()).expect("the catalogue serializes");
+        let first = json.get(0).expect("at least one harness ships");
+        assert!(first.get("id").is_some() && first.get("label").is_some());
+        let capabilities = first.get("capabilities").expect("a row carries its capabilities");
+        for field in ["resume", "fork", "clear", "usage", "batch", "oneshot"] {
+            assert!(capabilities.get(field).is_some_and(serde_json::Value::is_boolean), "{field}");
+        }
     }
 
     #[test]
@@ -1463,6 +1747,153 @@ mod tests {
                 !profile.batch_args().is_empty(),
                 "{id}: a harness reads its own non-interactive output or asks for neither"
             );
+        }
+    }
+
+    /// A `Launch` for asking a profile what command line it would actually
+    /// build. The skills point at the real bundle resources, the way each
+    /// profile's own tests reach them, so nothing here depends on a read
+    /// failing.
+    fn launch(profile: &'static dyn Profile, intent: Intent) -> Launch {
+        Launch {
+            profile,
+            cwd: PathBuf::from("/tmp/project"),
+            intent,
+            skills: library::Skills {
+                smetana: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("resources")
+                    .join("smetana"),
+                superpowers: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("resources")
+                    .join("superpowers"),
+                superpowers_installed: false,
+            },
+            facts: None,
+            session_id: None,
+            languages: Languages::default(),
+            agent_prompt: String::new(),
+        }
+    }
+
+    fn argv(profile: &'static dyn Profile, intent: Intent) -> Vec<String> {
+        profile
+            .command(&launch(profile, intent))
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// Where `wanted` sits inside `args`, as a run of consecutive elements.
+    ///
+    /// The length guard is not decoration: without it a `wanted` longer than
+    /// `args` slices past the end and the test panics where it should have
+    /// failed with its own message — which is the difference between reading
+    /// "batch_args must lead the argv" and reading a slice index.
+    fn run_at(args: &[String], wanted: &[String]) -> Option<usize> {
+        if wanted.is_empty() || wanted.len() > args.len() {
+            return None;
+        }
+        (0..=args.len() - wanted.len())
+            .find(|&start| args[start..start + wanted.len()] == *wanted)
+    }
+
+    #[test]
+    fn every_harness_puts_the_arguments_it_answered_with_on_its_own_command_line() {
+        // The half the pair above cannot see, and the one that was actually
+        // wrong: `terminal::service` installs the translator on `is_batch`
+        // alone and refuses a resume on `resume_args` alone, but **applying**
+        // either is each profile's own job, inside its own `command` body,
+        // because a subcommand has one legal position and only the profile
+        // knows where the rest of its line goes. So a profile can answer all
+        // three methods correctly and never use any of them, and nothing
+        // anywhere fails.
+        //
+        // What that cost when it happened: an unattended Codex batch spawned
+        // the interactive TUI, which sits at its prompt for ever, so
+        // `watch_batch` never came round; the JSONL translator went over that
+        // TUI's ANSI stream and every row of the pane rendered as nothing; and
+        // a restored row spawned a bare `codex` with no prompt in the recorded
+        // worktree — a fresh session under a card promising the conversation
+        // somebody left, which is exactly what `NoResume` used to prevent for
+        // this harness by refusing.
+        //
+        // Each is checked as a **leading run** rather than by mere presence: an
+        // answer scattered through the line, or behind the positional prompt,
+        // is a command line this app is guessing somebody else's parser will
+        // forgive.
+        const ID: &str = "01a0765f-f205-74d0-8dc9-61006c68767f";
+        for id in IDS {
+            let profile = resolve(id).expect("a listed id must resolve");
+
+            let batch: Vec<String> = profile.batch_args().iter().map(|a| a.to_string()).collect();
+            if !batch.is_empty() {
+                let args = argv(profile, run_intent(crate::runs::model::RunMode::Auto));
+                assert_eq!(
+                    run_at(&args, &batch),
+                    Some(1),
+                    "{id}: batch_args must lead the argv, got {args:?}"
+                );
+            }
+
+            if let Some(resume) = profile.resume_args(ID) {
+                let args = argv(profile, resuming(ID, false));
+                assert_eq!(
+                    run_at(&args, &resume),
+                    Some(1),
+                    "{id}: resume_args must lead the argv, got {args:?}"
+                );
+            }
+
+            if let Some(fork) = profile.fork_args(ID) {
+                let args = argv(profile, resuming(ID, true));
+                assert_eq!(
+                    run_at(&args, &fork),
+                    Some(1),
+                    "{id}: fork_args must lead the argv, got {args:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_harness_carries_a_launching_verb_into_a_session_nobody_asked_one_of() {
+        // The leak the other way, and it is the worse direction: a `resume` or
+        // an `exec` on an ordinary session would reopen somebody else's
+        // conversation, or take the interface away from a person who is sitting
+        // in front of it.
+        const ID: &str = "01a0765f-f205-74d0-8dc9-61006c68767f";
+        for id in IDS {
+            let profile = resolve(id).expect("a listed id must resolve");
+            let verbs: Vec<String> = profile
+                .batch_args()
+                .iter()
+                .map(|a| a.to_string())
+                .chain(profile.resume_args(ID).into_iter().flatten())
+                .chain(profile.fork_args(ID).into_iter().flatten())
+                .filter(|arg| arg != ID)
+                .collect();
+            for intent in [
+                Intent::Bare,
+                Intent::Setup,
+                Intent::EditTask { id: "smetana-42".into(), title: "t".into() },
+                run_intent(crate::runs::model::RunMode::Supervised),
+                run_intent(crate::runs::model::RunMode::Solo),
+            ] {
+                let args = argv(profile, intent);
+                for verb in &verbs {
+                    assert!(!args.contains(verb), "{id}: {verb} leaked into {args:?}");
+                }
+            }
+        }
+    }
+
+    fn resuming(id: &str, fork: bool) -> Intent {
+        Intent::ResumeSession {
+            id: id.to_owned(),
+            cwd: "/tmp/project/.worktrees/smetana-0cj".into(),
+            title: Some("Move the card to done".into()),
+            fork,
         }
     }
 

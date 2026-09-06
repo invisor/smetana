@@ -474,14 +474,32 @@ so the row survives a second restart. `shutdown` deliberately touches none of it
 out of the worker's loop before any of its hangups reaches `absorb`, which is what leaves the records
 in place for the next launch.
 
-**The app chooses the conversation id at the spawn.** `terminal::conversation::new_id` makes a
-version 4 UUID out of sixteen bytes off `/dev/urandom` — no crate, and every build target is a unix —
-and `Profile::session_id_args` puts it on the command line (`claude --session-id <uuid>`, in front of
-the plugins for the reason `--resume` and `batch_args` lead). The alternative was matching a live
-session to a transcript by directory and mtime, which is a guess that is wrong exactly where two
-agents share a directory. **A profile that cannot be told an id records nothing at all**: `codex.rs`
-keeps the default `None`, so a codex session never draws a row offering a resume it could not make,
-and no refusal has to be worded anywhere. A **fork** records nothing for the neighbouring reason —
+**The app chooses the conversation id at the spawn, where it can.**
+`terminal::conversation::new_id` makes a version 4 UUID out of sixteen bytes off `/dev/urandom` — no
+crate, and every build target is a unix — and `Profile::session_id_args` puts it on the command line
+(`claude --session-id <uuid>`, in front of the plugins for the reason `--resume` and `batch_args`
+lead). The alternative was matching a live session to a transcript by directory and mtime, which is a
+guess that is wrong exactly where two agents share a directory.
+
+**A harness that cannot be told an id may still find out the one it chose**, and that is the
+second road to the same record. `codex.rs` keeps `session_id_args` at `None` — that CLI has no
+such flag — and answers `discovers_session_id` instead, so `conversation_for` mints nothing and
+`discovers_its_own_id` starts a thread that asks the profile what it called the session, ten tries
+half a second apart. What that thread carries with it is a snapshot of whatever the harness had
+already recorded, taken **in front of `Pty::spawn`** — `Profile::sessions_before_start` — without
+which a new session in a project where an older one is still working would be handed the older
+one's id, and the older one's restore record would be overwritten and then deleted. In front of
+the spawn rather than in the arm that handles it, so that a harness quick enough to write its
+rollout inside that window does not find its own file in the set it is told to ignore. The whole
+of why is in `.claude/rules/agents.md`.
+`Request::SessionIdFound` is what comes back: it fills `Session.conversation`, emits the state,
+and writes the record the spawn could not write. Giving up is silent, and a tab closed inside
+those five seconds is an ordinary outcome — the arm answers a session it no longer has by doing
+nothing. An id already set wins, so nothing can rename a conversation this app did not name. Where
+Codex reads it from, and why the walk is read-only, is `.claude/rules/agents.md`'s
+`agents::codex_sessions`. **A profile that answers neither records nothing at all**, and never
+draws a row offering a resume it could not make. A **fork** records nothing for the
+neighbouring reason —
 `--fork-session` has Claude Code invent an id for the new transcript, which this app never learns, so
 a record under the original's id would offer a row that reopens the wrong conversation. A run's
 session records nothing either: `runs::registry` owns the liveness of those processes and
@@ -498,11 +516,12 @@ worktree removed after its task merged is the ordinary case and is refused by `r
 reaches the person as a sentence in the toast corner like every other session verb's refusal.
 
 **The other refusal is the front end's own and is asked before the worker is**: a record is written
-only for a profile that can be told a conversation id, but the row is drawn whatever agent the
+only for a session whose conversation id this app knows, but the row is drawn whatever agent the
 project is set to *now*, so switching it to one that cannot resume leaves a row whose press has
-nowhere to go. `resumeRefused` in `stores/terminals.js` is the guard — `resumeAvailability` with the
-configured agent, and `resumeReasonLine` into the same `terminalState.lastError` a refused spawn
-uses — and `selectAgent` asks it before `resumeSession`. It has to be asked *there* and not inside
+nowhere to go. `resumeRefused` in `stores/terminals.js` is the guard — `resumeAvailability` with
+`can(settings.agent, 'resume')` off the harness catalogue, and `resumeReasonLine` into the
+same `terminalState.lastError` a refused spawn uses — and `selectAgent` asks it before
+`resumeSession`. It has to be asked *there* and not inside
 `resumeSession`, which returns in silence: the Sessions tab greys the row and writes the reason under
 the opened card, so a toast would say a second time what is already on screen, while a row in the
 agents panel has nowhere to draw one and used to answer a press with nothing at all (smetana-3awe).
@@ -930,13 +949,15 @@ answers a worktree removed since the tab was opened.
 **A profile that cannot resume greys it too**, with its own reason. `Profile::resume_args` and
 `Profile::fork_args` are the two capabilities — two answers, because a harness that reopens a
 transcript and cannot branch one is an ordinary shape — and `.claude/rules/agents.md` carries the
-arguments; `RESUMES_BY_ID` and `FORKS_BY_ID` in `components/agent/sessionMenu.js` are the front end's
-copy of them and the file says so. The refusals are worded apart for that reason, and the opened
-card draws every *distinct* one: the commonest, a worktree that is gone, stops both verbs in the same
-words and is said once, since two identical lines under two greyed buttons read as two faults. The
-fork's own fragment is the terse `cannot fork` because `SESSION_MENU_W` is what a refusal is worded
-against rather than the other way round — this menu opens over a side panel, and a panel grown to fit
-a longer sentence is one wider than the column its trigger stands in.
+arguments. The front end asks the same two questions of `stores/agents.js`, which read
+`agents::catalogue` once at startup; `sessionMenu.js` takes the answer as a `capable` boolean and
+stays pure. It used to hold two lists of agent ids written out by hand. The refusals are worded
+apart for that reason, and the opened card draws every *distinct* one: the commonest, a worktree
+that is gone, stops both verbs in the same words and is said once, since two identical lines under
+two greyed buttons read as two faults. The fork's own fragment is the terse `cannot fork` because
+`SESSION_MENU_W` is what a refusal is worded against rather than the other way round — this menu
+opens over a side panel, and a panel grown to fit a longer sentence is one wider than the column
+its trigger stands in.
 
 **The row must not lie about what it is doing.** A resumed session has no tracker work — nothing
 claimed it and there is no issue behind it — so `SessionWork::ResumeSession` carries the session's

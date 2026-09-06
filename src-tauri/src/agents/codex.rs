@@ -13,6 +13,9 @@
 //! bottom of this file. It reads someone else's interface and an update to that
 //! CLI can break it; when it does it breaks softly, leaving layer A in place.
 
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
 use portable_pty::CommandBuilder;
 
 use super::library::read_skill;
@@ -27,6 +30,10 @@ pub struct Codex;
 impl Profile for Codex {
     fn id(&self) -> &'static str {
         "codex"
+    }
+
+    fn label(&self) -> &'static str {
+        "Codex"
     }
 
     fn binary(&self) -> &'static str {
@@ -79,8 +86,59 @@ impl Profile for Codex {
             discussing.then(|| read_skill(&launch.skills.superpowers, "brainstorming")).flatten();
         let plans_text =
             planning.then(|| read_skill(&launch.skills.superpowers, "writing-plans")).flatten();
+        // First of all, and this is what makes an unattended batch end by
+        // itself: `codex exec --json`. `exec` is a **subcommand**, not a flag,
+        // so its position is not a preference — it has exactly one legal place
+        // and this is it. See `agents::is_batch` for which sessions get it, and
+        // `batch_args` for why the non-interactive form is what a run's loop
+        // needs at all.
+        //
+        // Read back through `self.batch_args()` rather than written out again,
+        // the same way the image flag below is read back through
+        // `self.images()`: the profile's answer and the command line cannot
+        // then come to disagree, which is exactly what
+        // `a_translator_is_only_ever_installed_over_a_stream_that_was_asked_for`
+        // is about — `terminal::service` installs the translator on `is_batch`
+        // alone, so a profile that answers `transcript` and forgets to apply
+        // `batch_args` gets a JSONL reader over an interactive TUI's ANSI
+        // stream and every row of the pane renders as nothing.
+        if crate::agents::is_batch(&launch.intent) {
+            for arg in self.batch_args() {
+                cmd.arg(arg);
+            }
+        }
+        // Then the resume, if this is one, and in the same leading position for
+        // the same reason: `codex resume <id>` and `codex fork <id>` are
+        // subcommands too. The two cannot both fire — `is_batch` is only ever
+        // true of `Intent::Run` — so there is one subcommand on this line or
+        // none.
+        //
+        // Which of the two capabilities the profile is asked for is the whole
+        // of the difference between the Sessions tab's two launching verbs, and
+        // it is asked as one question either way: neither branch composes a
+        // command line out of the other's answer plus a flag. Without this the
+        // spawn would be a bare `codex` in the recorded worktree with no prompt
+        // behind it — a fresh interactive session under a card promising the
+        // conversation somebody left, which is the outcome
+        // `TerminalError::NoResume` exists to prevent and which this profile's
+        // refusal used to provide for free.
+        if let Intent::ResumeSession { id, fork, .. } = &launch.intent {
+            let resume = if *fork { self.fork_args(id) } else { self.resume_args(id) };
+            for arg in resume.into_iter().flatten() {
+                cmd.arg(arg);
+            }
+        }
+        // No counterpart to `claude.rs`'s `session_id_args` block, and that is
+        // an absence rather than an omission: this harness cannot be told which
+        // conversation to write, so the loop would add nothing on every
+        // session. It finds out afterwards instead — `session_id_after_start`
+        // and `agents::codex_sessions`. `nothing_of_a_chosen_id_reaches_this_command_line`
+        // pins that a `Launch` carrying an id all the same puts no flag here.
+        //
         // Before the prompt, which is positional — see the same line in
-        // `claude.rs` for why the order is not left to the parser.
+        // `claude.rs` for why the order is not left to the parser. Both
+        // subcommands above accept this flag, checked against 0.146.0 rather
+        // than assumed, and only `Intent::Run` reaches it anyway.
         if let Intent::Run { settings, .. } = &launch.intent {
             for arg in self.autonomy(settings.mode).args {
                 cmd.arg(arg);
@@ -147,6 +205,110 @@ impl Profile for Codex {
             },
             env: vec![],
         }
+    }
+
+    /// `codex resume [SESSION_ID] [PROMPT]` — read out of that CLI's own help
+    /// at 0.146.0. A **subcommand** rather than a flag, which is the shape
+    /// difference from Claude Code's `--resume`: it goes in front of everything
+    /// else on the line, which is where `terminal::service` puts what these
+    /// methods answer.
+    ///
+    /// The prompt is deliberately not given: `prompt::build` refuses
+    /// `ResumeSession` a prompt at all, since a resumed conversation already
+    /// has somebody's words in it.
+    fn resume_args(&self, session: &str) -> Option<Vec<String>> {
+        Some(vec!["resume".to_owned(), session.to_owned()])
+    }
+
+    /// `codex fork [SESSION_ID] [PROMPT]`, its own subcommand — not `resume`
+    /// with a flag behind it, which is how Claude Code spells the same
+    /// capability. Written out whole for the reason `Profile::fork_args`
+    /// records: the two are separate answers to separate questions.
+    fn fork_args(&self, session: &str) -> Option<Vec<String>> {
+        Some(vec!["fork".to_owned(), session.to_owned()])
+    }
+
+    /// `codex exec --json`. `exec` is Codex's non-interactive form: it carries
+    /// the work out and **exits**, which is the whole of what `agents::is_batch`
+    /// needs — an interactive session sits at its prompt for ever and a loop
+    /// waiting on the process would never come round. `--json` is what makes
+    /// the output a stream a machine can read; without it the same run prints
+    /// prose meant for a person.
+    fn batch_args(&self) -> &'static [&'static str] {
+        &["exec", "--json"]
+    }
+
+    /// Codex's stream is JSONL of its own vocabulary and shares nothing with
+    /// Claude Code's, so this shares no code with `claude::transcript_line`
+    /// either — an event name one harness happens to use is exactly what
+    /// drifts.
+    fn transcript(&self) -> Option<fn(&str) -> Vec<String>> {
+        Some(transcript_line)
+    }
+
+    /// `codex exec --json`, the same non-interactive form a batch uses and a
+    /// different question: a batch is "carry this out and exit", this is
+    /// "answer this and exit". `--json` is here for the answer's sake rather
+    /// than the stream's — see `oneshot_answer`.
+    fn oneshot_args(&self) -> Option<&'static [&'static str]> {
+        Some(&["exec", "--json"])
+    }
+
+    /// The last `agent_message` in the stream, which is Codex's own answer.
+    ///
+    /// Reading the plain-text form instead was the version thrown away: `codex
+    /// exec` writes its progress, and on the machine this was measured on a
+    /// models-cache warning, to the same stdout — so the commit-message button
+    /// would have offered a paragraph of log. A line that is not JSON is
+    /// skipped for that reason rather than refused.
+    fn oneshot_answer(&self, stdout: &str) -> String {
+        stdout
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|event| {
+                event.get("type").and_then(serde_json::Value::as_str) == Some("item.completed")
+            })
+            .filter_map(|event| {
+                let item = event.get("item")?;
+                (item.get("type").and_then(serde_json::Value::as_str) == Some("agent_message"))
+                    .then(|| {
+                        item.get("text")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned()
+                    })
+            })
+            .last()
+            .unwrap_or_default()
+    }
+
+    fn discovers_session_id(&self) -> bool {
+        true
+    }
+
+    /// The rollout files this person's Codex had already written. Empty when
+    /// there is no such directory, which is an ordinary machine rather than a
+    /// failure — and the honest answer either way, since an empty snapshot only
+    /// widens what the search below will consider.
+    fn sessions_before_start(&self) -> Vec<PathBuf> {
+        super::codex_sessions::sessions_root()
+            .map(|root| super::codex_sessions::rollouts(&root))
+            .unwrap_or_default()
+    }
+
+    /// Codex names its own conversation and writes the name into the first line
+    /// of its rollout file, so the id is read back off disk rather than handed
+    /// over — see `agents::codex_sessions`, which also carries why `before` is
+    /// the condition that actually separates this session from the one that was
+    /// already running in the same folder.
+    fn session_id_after_start(
+        &self,
+        cwd: &Path,
+        started_after: SystemTime,
+        before: &[PathBuf],
+    ) -> Option<String> {
+        let root = super::codex_sessions::sessions_root()?;
+        super::codex_sessions::newest_session_id(&root, cwd, started_after, before)
     }
 }
 
@@ -551,6 +713,123 @@ fn question(screen: &[String]) -> Option<Question> {
     Some(Question { text, options, selected })
 }
 
+/// One line of `codex exec --json` as the lines a person reads in the pane.
+///
+/// Every shape here was read off the CLI at 0.146.0:
+///
+/// ```text
+/// {"type":"thread.started","thread_id":"…"}
+/// {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"…"}}
+/// {"type":"turn.started"}
+/// {"type":"turn.failed","error":{"message":"…"}}
+/// ```
+///
+/// **An event this function does not know draws nothing**, which is the same
+/// answer a line that is not JSON gets: a batch is watched by somebody, and a
+/// stream that grew a new event should cost a missing line rather than a pane
+/// full of raw JSON.
+pub fn transcript_line(line: &str) -> Vec<String> {
+    let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+        return Vec::new();
+    };
+    let str_at = |value: &serde_json::Value, key: &str| {
+        value.get(key).and_then(serde_json::Value::as_str).unwrap_or("").to_owned()
+    };
+    // Collapsed and clipped before the prefix goes on, never after: a prefix is
+    // this app's own character and must not be what the ellipsis eats, and the
+    // ceiling is meant to bound the agent's words rather than the row.
+    let said = |text: &str, max: usize| clip(&one_line(text), max);
+    match str_at(&event, "type").as_str() {
+        // An id, so it is neither collapsed nor clipped in the ordinary sense —
+        // a truncated conversation id is one nobody can resume by — but it goes
+        // through the same hygiene, since it is still a field off somebody
+        // else's stream.
+        "thread.started" => {
+            one(format!("· thread {}", said(&str_at(&event, "thread_id"), MAX_TEXT)))
+        }
+        "item.completed" => {
+            let Some(item) = event.get("item") else { return Vec::new() };
+            match str_at(item, "type").as_str() {
+                "agent_message" => one(said(&str_at(item, "text"), MAX_TEXT)),
+                "command_execution" => {
+                    one(format!("› {}", said(&str_at(item, "command"), MAX_DETAIL)))
+                }
+                "error" => one(format!("! {}", said(&str_at(item, "message"), MAX_TEXT))),
+                _ => Vec::new(),
+            }
+        }
+        "error" => one(format!("! {}", said(&str_at(&event, "message"), MAX_TEXT))),
+        "turn.failed" => {
+            let message =
+                event.get("error").map(|error| str_at(error, "message")).unwrap_or_default();
+            one(format!("! {}", said(&message, MAX_TEXT)))
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// A line with nothing but its own prefix in it is no line at all — a pane's
+/// rows are a person's screen, and an empty one spends a row on nothing.
+fn one(text: String) -> Vec<String> {
+    let bare = text.trim_start_matches(['·', '›', '!', ' ']).trim();
+    if bare.is_empty() {
+        Vec::new()
+    } else {
+        vec![text]
+    }
+}
+
+/// The agent's own words, and the command it ran: two ceilings, and they are
+/// `claude.rs`'s two, kept at the same numbers because they were chosen against
+/// real output rather than picked. A `command_execution` item carries whatever
+/// was typed — a heredoc, a `git commit -F -` with a whole message inside it —
+/// and an `agent_message` is routinely a paragraph. Unclipped, either is one
+/// unbounded row in a pane whose rows are a person's screen.
+const MAX_TEXT: usize = 200;
+const MAX_DETAIL: usize = 140;
+
+/// Whitespace collapsed and the whole thing on one line — a pane row is a row —
+/// and every other control character dropped.
+///
+/// Deliberately the same rule as `claude::one_line`, down to the wording of why,
+/// and it is worth saying that this is **not** the no-shared-code rule being
+/// broken: that rule is about the event *vocabulary*, where an event name one
+/// harness happens to use today is exactly what drifts. String hygiene is about
+/// this app's own pane and is the same fact for every harness that writes into
+/// it.
+///
+/// Collapsing rather than filtering is the half that was wrong here first. A
+/// dropped newline is not a smaller mistake than a rendered one: it welds two
+/// sentences together, so a two-line `agent_message` reached the pane as
+/// "…the tests pass.Next I will…" and read as a typo of the agent's.
+///
+/// The rest is not tidiness either. Everything reaching this function is
+/// **agent-authored**, and `serde_json` decodes an escaped escape or bell in the
+/// JSON into a live byte. Passed through, they would be colour and cursor
+/// movement in a transcript specified as plain text, and a bell would set
+/// `bell_pending`, turning the session's row `needs-you` and spending one of the
+/// one or two loud rows the whole design budgets for a screen. `char::is_control`
+/// covers C0, DEL and C1, and C1 is worth taking with them: U+009B is a CSI in
+/// its own right.
+fn one_line(text: &str) -> String {
+    text.split_whitespace()
+        .map(|word| word.chars().filter(|c| !c.is_control()).collect::<String>())
+        // A word that was nothing but control bytes leaves no gap of its own.
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Counted in characters rather than bytes: an agent answering in Russian is
+/// two bytes a letter, and slicing a string mid-character panics.
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(max.saturating_sub(3)).collect();
+    format!("{kept}...")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -610,30 +889,229 @@ mod tests {
     }
 
     #[test]
-    fn this_harness_says_it_can_neither_pick_a_recorded_session_up_nor_branch_one() {
-        // Codex has its own argument grammar and this app does not get to guess
-        // it, so the profile keeps both defaults rather than flags that look
-        // like Claude Code's. The refusals are what `terminal::service` turns
-        // into `TerminalError::NoResume` and `TerminalError::NoFork`, and they
-        // are what stops either verb from starting a *fresh* Codex in the
-        // worktree under a card promising the conversation somebody left.
-        //
-        // Two assertions and not one, because they are two capabilities: a
-        // harness that reopens a transcript and cannot branch one is an
-        // ordinary shape, and this one happens to answer no to both.
+    fn a_recorded_session_is_reopened_by_the_subcommand_this_cli_documents() {
+        // `codex resume [SESSION_ID] [PROMPT]`, read out of that CLI's own help
+        // at 0.146.0. A subcommand rather than a flag, which is why the answer
+        // is written out whole rather than composed from Claude Code's shape.
         use crate::agents::Profile;
-        assert_eq!(Codex.resume_args("9f1c0a2e"), None);
-        assert_eq!(Codex.fork_args("9f1c0a2e"), None);
+        let args = Codex
+            .resume_args("01a0765f-f205-74d0-8dc9-61006c68767f")
+            .expect("this harness resumes");
+        assert_eq!(
+            args,
+            vec!["resume".to_owned(), "01a0765f-f205-74d0-8dc9-61006c68767f".to_owned()]
+        );
     }
 
     #[test]
-    fn codex_cannot_be_given_a_conversation_id() {
+    fn branching_a_session_is_its_own_subcommand_and_not_the_resume_with_a_flag() {
+        // Two capabilities and two answers: `codex fork [SESSION_ID]` at
+        // 0.146.0, which is a different word from `resume` rather than the same
+        // word with something appended.
+        use crate::agents::Profile;
+        let args = Codex
+            .fork_args("01a0765f-f205-74d0-8dc9-61006c68767f")
+            .expect("this harness forks");
+        assert_eq!(
+            args,
+            vec!["fork".to_owned(), "01a0765f-f205-74d0-8dc9-61006c68767f".to_owned()]
+        );
+        assert!(
+            !args.iter().any(|arg| arg == "resume"),
+            "a fork is not a resume with something appended"
+        );
+    }
+
+    #[test]
+    fn a_batch_is_the_non_interactive_subcommand_with_a_machine_readable_stream() {
+        use crate::agents::Profile;
+        assert_eq!(Codex.batch_args(), &["exec", "--json"]);
+    }
+
+    #[test]
+    fn the_start_of_a_thread_names_the_conversation_it_opened() {
+        let lines = transcript_line(
+            r#"{"type":"thread.started","thread_id":"01a0765f-f205-74d0-8dc9-61006c68767f"}"#,
+        );
+        assert_eq!(lines, vec!["\u{b7} thread 01a0765f-f205-74d0-8dc9-61006c68767f".to_owned()]);
+    }
+
+    #[test]
+    fn an_agents_own_message_reaches_the_pane_as_its_text() {
+        let lines = transcript_line(
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Done, the tests pass."}}"#,
+        );
+        assert_eq!(lines, vec!["Done, the tests pass.".to_owned()]);
+    }
+
+    #[test]
+    fn a_command_the_agent_ran_is_drawn_with_the_command_and_nothing_else() {
+        let lines = transcript_line(
+            r#"{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"cargo test","exit_code":0}}"#,
+        );
+        assert_eq!(lines, vec!["\u{203a} cargo test".to_owned()]);
+    }
+
+    #[test]
+    fn an_error_item_and_a_failed_turn_both_carry_their_reason_across() {
+        assert_eq!(
+            transcript_line(
+                r#"{"type":"item.completed","item":{"type":"error","message":"the sandbox refused"}}"#
+            ),
+            vec!["! the sandbox refused".to_owned()]
+        );
+        assert_eq!(
+            transcript_line(r#"{"type":"error","message":"the stream broke"}"#),
+            vec!["! the stream broke".to_owned()]
+        );
+        assert_eq!(
+            transcript_line(r#"{"type":"turn.failed","error":{"message":"the model refused"}}"#),
+            vec!["! the model refused".to_owned()]
+        );
+    }
+
+    #[test]
+    fn an_event_this_translator_has_never_heard_of_draws_nothing_at_all() {
+        assert!(transcript_line(r#"{"type":"turn.started"}"#).is_empty());
+        assert!(transcript_line("not json at all").is_empty());
+        assert!(transcript_line("").is_empty());
+    }
+
+    #[test]
+    fn control_characters_never_reach_a_pane_that_was_promised_plain_text() {
+        // The two escapes are spelled the way JSON spells them, so `serde_json`
+        // decodes them into live bytes exactly as a real stream would, and the
+        // assertion says what a person must see once they are gone. One space
+        // where the bell stood and not two: a word that was nothing but control
+        // bytes leaves no gap of its own.
+        let raw = format!(
+            r#"{{"type":"item.completed","item":{{"type":"agent_message","text":"red {}[31m and a bell {} here"}}}}"#,
+            "\\u001b", "\\u0007"
+        );
+        let lines = transcript_line(&raw);
+        assert_eq!(lines, vec!["red [31m and a bell here".to_owned()]);
+    }
+
+    #[test]
+    fn a_newline_inside_a_message_becomes_a_gap_and_never_nothing() {
+        // Dropping it is not the smaller mistake: it welds two sentences
+        // together, and "the tests pass.Next I will" reads as a typo of the
+        // agent's rather than as this app's doing. A tab and a run of spaces
+        // collapse the same way, since a pane row is a row.
+        let raw = format!(
+            r#"{{"type":"item.completed","item":{{"type":"agent_message","text":"Done.{}Next{}I will run    it"}}}}"#,
+            "\\n", "\\t"
+        );
+        assert_eq!(transcript_line(&raw), vec!["Done. Next I will run it".to_owned()]);
+    }
+
+    #[test]
+    fn a_paragraph_the_agent_wrote_is_clipped_rather_than_spilt_down_the_pane() {
+        // A pane's rows are a person's screen and an unbounded one spends the
+        // lot. The ceilings are `claude.rs`'s, chosen there against real output,
+        // and the agent's own words get the wider of the two.
+        let long = "x".repeat(400);
+        let lines = transcript_line(&format!(
+            r#"{{"type":"item.completed","item":{{"type":"agent_message","text":"{long}"}}}}"#
+        ));
+        assert_eq!(lines[0].chars().count(), MAX_TEXT);
+        assert!(lines[0].ends_with("..."));
+
+        // A command carries whatever was typed — a heredoc, a commit message on
+        // stdin — and takes the tighter ceiling. The prefix is this app's own
+        // character and deliberately not what the ellipsis eats, so the row is
+        // the ceiling plus that prefix rather than the command cut two shorter.
+        let lines = transcript_line(&format!(
+            r#"{{"type":"item.completed","item":{{"type":"command_execution","command":"{long}"}}}}"#
+        ));
+        assert_eq!(lines[0].chars().count(), MAX_DETAIL + 2);
+        assert!(lines[0].ends_with("..."));
+    }
+
+    #[test]
+    fn a_message_of_nothing_but_control_bytes_spends_no_row_at_all() {
+        // `one` refuses a line with nothing but its own prefix in it, and this
+        // is one way to reach that: an agent message the hygiene empties, and a
+        // failure whose reason is blank.
+        let raw = format!(
+            r#"{{"type":"item.completed","item":{{"type":"agent_message","text":"{}{}"}}}}"#,
+            "\\u001b", "\\u0007"
+        );
+        assert!(transcript_line(&raw).is_empty());
+        assert!(transcript_line(r#"{"type":"turn.failed","error":{"message":"   "}}"#).is_empty());
+    }
+
+    #[test]
+    fn a_one_shot_question_is_asked_of_the_non_interactive_form() {
+        use crate::agents::Profile;
+        assert_eq!(Codex.oneshot_args(), Some(&["exec", "--json"][..]));
+    }
+
+    #[test]
+    fn the_answer_is_the_last_thing_the_agent_said_and_never_the_log_around_it() {
+        use crate::agents::Profile;
+        let stdout = concat!(
+            r#"{"type":"thread.started","thread_id":"01a0"}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"type":"command_execution","command":"git diff"}}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"first thought"}}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"fix: reread the branch"}}"#,
+            "\n",
+            r#"{"type":"turn.completed"}"#,
+            "\n",
+        );
+        assert_eq!(Codex.oneshot_answer(stdout), "fix: reread the branch");
+    }
+
+    #[test]
+    fn a_stream_that_failed_before_saying_anything_answers_with_nothing() {
+        use crate::agents::Profile;
+        let stdout = concat!(
+            r#"{"type":"thread.started","thread_id":"01a0"}"#,
+            "\n",
+            r#"{"type":"turn.failed","error":{"message":"the model refused"}}"#,
+            "\n",
+        );
+        assert_eq!(Codex.oneshot_answer(stdout), "");
+    }
+
+    #[test]
+    fn a_line_of_ordinary_prose_in_the_stream_is_not_mistaken_for_the_answer() {
+        // `codex exec` writes its own diagnostics to stdout beside the JSONL — a
+        // models-cache warning was there on the machine this was measured on.
+        use crate::agents::Profile;
+        let stdout = concat!(
+            "2026-09-06T10:59:52Z ERROR codex_models_manager::cache: failed to load\n",
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"fix: reread the branch"}}"#,
+            "\n",
+        );
+        assert_eq!(Codex.oneshot_answer(stdout), "fix: reread the branch");
+    }
+
+    #[test]
+    fn this_harness_finds_out_its_own_conversations_id() {
+        // The pair `session_id_args` cannot answer: Codex has no flag for an id
+        // it was given, and names its own instead — so the capability question
+        // is answered here and the lookup itself in `agents::codex_sessions`.
+        use crate::agents::Profile;
+        assert!(Codex.discovers_session_id());
+    }
+
+    #[test]
+    fn codex_cannot_be_given_a_conversation_id_and_finds_out_its_own_instead() {
         // The third of the same family, and the one with a consequence rather
-        // than a refusal behind it: a harness this app cannot name a
-        // conversation for records nothing in `.smetana/agents.json`, so a codex
-        // session never comes back as a row offering a resume it could not make.
+        // than a refusal behind it. The consequence used to be that a codex
+        // session recorded nothing in `.smetana/agents.json` and so never came
+        // back as a row offering a resume it could not make; it is now that the
+        // id is learnt after the start instead, from the harness's own rollout
+        // file. The two halves are asserted together because it is the *pair*
+        // that has to hold — a harness answering neither is the one that
+        // records nothing.
         use crate::agents::Profile;
         assert_eq!(Codex.session_id_args("9f1c0a2e-0000-4000-8000-000000000000"), None);
+        assert!(Codex.discovers_session_id());
     }
 
     #[test]
@@ -645,23 +1123,28 @@ mod tests {
         // reach the agent as a line of a prompt rather than as an error — which
         // is why the answer stays `None` until somebody reads it out of the
         // CLI's own help. The menu row is greyed with a reason on it meanwhile.
+        //
+        // The help was read, at 0.146.0, and carries no such command: `codex
+        // --help` lists no subcommand that clears or starts a conversation
+        // over, and no option does either. Whatever the TUI's own composer
+        // accepts is not in anything this CLI prints, so it stays unanswered.
         use crate::agents::Profile;
         assert_eq!(Codex.clear_command(), None);
     }
 
     #[test]
     fn nothing_of_a_chosen_id_reaches_this_command_line() {
-        // The profile answering `None` is half of it; the other half is that a
-        // `Launch` carrying an id all the same puts no flag on the line, since
-        // this harness's `command` never asks for one.
-        use crate::agents::Profile;
+        // The half of that pair which is about the *command line*: a `Launch`
+        // carrying an id all the same puts no flag on it, since this harness's
+        // `command` never asks for one. The other half — that the profile
+        // answers `None` when it is asked — is next door, in
+        // `codex_cannot_be_given_a_conversation_id_and_finds_out_its_own_instead`.
         let carried = Launch {
             session_id: Some("9f1c0a2e-0000-4000-8000-000000000000".to_owned()),
             ..launch(Intent::Bare)
         };
         let args = argv(&carried);
         assert!(!args.iter().any(|a| a.contains("session-id")), "{args:?}");
-        let _ = Codex.id();
     }
 
     fn with_images(brainstorm: Stage, images: Vec<String>) -> Intent {
@@ -1306,6 +1789,18 @@ mod tests {
         assert!(q.is_none(), "codex read a dialog drawn by another CLI");
     }
 
+    /// The intent behind both of the Sessions tab's launching verbs, built the
+    /// way `claude.rs`'s own helper builds it — one shape, and `fork` is the
+    /// whole of the difference between the two rows.
+    fn resuming(id: &str, fork: bool) -> Intent {
+        Intent::ResumeSession {
+            id: id.to_owned(),
+            cwd: "/tmp/project/.worktrees/smetana-0cj".into(),
+            title: Some("Move the card to done".into()),
+            fork,
+        }
+    }
+
     fn run(mode: crate::runs::model::RunMode) -> Intent {
         Intent::Run {
             settings: crate::runs::model::RunSettings {
@@ -1339,9 +1834,82 @@ mod tests {
     }
 
     #[test]
-    fn the_flag_goes_in_front_of_the_positional_prompt() {
+    fn the_subcommand_leads_and_the_flag_still_precedes_the_positional_prompt() {
+        // The whole argv of an unattended batch, in order. It used to assert
+        // three arguments and pass, which was the thing certifying that
+        // `batch_args` never reached the line at all: the profile answered
+        // `exec --json` and `command` never applied it, so a run spawned the
+        // interactive TUI, sat at its prompt for ever and `watch_batch` never
+        // came round.
         let args = argv(&launch(run(crate::runs::model::RunMode::Auto)));
-        assert_eq!(args[1], "--dangerously-bypass-approvals-and-sandbox");
-        assert_eq!(args.len(), 3, "binary, flag, prompt: {args:?}");
+        assert_eq!(args[0], "codex");
+        assert_eq!(args[1], "exec", "the subcommand has one legal position and it is first");
+        assert_eq!(args[2], "--json");
+        assert_eq!(args[3], "--dangerously-bypass-approvals-and-sandbox");
+        assert_eq!(args.len(), 5, "binary, subcommand, stream flag, autonomy, prompt: {args:?}");
+    }
+
+    #[test]
+    fn nothing_a_person_watches_is_turned_into_a_batch() {
+        // The guard against the subcommand leaking into a session with somebody
+        // in front of it: `exec` is the non-interactive form, so a supervised
+        // run given it would lose the interface that makes it supervised.
+        use crate::runs::model::RunMode;
+        for mode in [RunMode::Supervised, RunMode::Solo] {
+            let args = argv(&launch(run(mode)));
+            assert!(!args.iter().any(|a| a == "exec"), "{mode:?}: {args:?}");
+        }
+        for intent in [Intent::Bare, Intent::Setup, new_task(Stage::Off)] {
+            let args = argv(&launch(intent));
+            assert!(!args.iter().any(|a| a == "exec"), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn a_resumed_session_is_the_subcommand_and_the_id_and_nothing_else() {
+        // The half `resume_args` alone does not buy. Without it the spawn is a
+        // bare `codex` in the recorded worktree — and with no prompt either,
+        // since `prompt::build` refuses `ResumeSession` one — which is a fresh
+        // interactive session under a card promising the conversation somebody
+        // left, verbatim the outcome `TerminalError::NoResume` exists to
+        // prevent.
+        let args = argv(&launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", false)));
+        assert_eq!(
+            args,
+            vec![
+                "codex".to_owned(),
+                "resume".to_owned(),
+                "01a0765f-f205-74d0-8dc9-61006c68767f".to_owned(),
+            ],
+            "no prompt: a resumed conversation already has somebody's words in it"
+        );
+    }
+
+    #[test]
+    fn a_forked_session_takes_its_own_subcommand_and_not_the_resume() {
+        // Two capabilities, two subcommands: `fork` is a different word rather
+        // than `resume` with something appended, which is the shape difference
+        // from Claude Code's `--resume <id> --fork-session`.
+        let args = argv(&launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", true)));
+        assert_eq!(
+            args,
+            vec![
+                "codex".to_owned(),
+                "fork".to_owned(),
+                "01a0765f-f205-74d0-8dc9-61006c68767f".to_owned(),
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg == "resume"), "{args:?}");
+    }
+
+    #[test]
+    fn nothing_but_a_resume_puts_either_subcommand_on_a_command_line() {
+        // The guard against the leak the other way: a `resume` on an ordinary
+        // session would reopen some other conversation under somebody who asked
+        // for a new agent.
+        for intent in [Intent::Bare, Intent::Setup, new_task(Stage::Off)] {
+            let args = argv(&launch(intent));
+            assert!(!args.iter().any(|a| a == "resume" || a == "fork"), "{args:?}");
+        }
     }
 }

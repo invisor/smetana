@@ -308,3 +308,13 @@ windows = { version = "0.61", features = [
 # keep in step.
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+
+[dev-dependencies]
+# A directory of somebody else's making, for `agents::codex_sessions`: that
+# module walks Codex's own session tree, so its tests need a tree they may
+# create and destroy rather than the person's.
+#
+# The price, counted the way every other line in this file counts one:
+# **nothing at all**. `tempfile` 3.27.0 is already in `Cargo.lock` under
+# `tauri-plugin-updater`, and a dev-dependency reaches no shipped binary.
+tempfile = "3"

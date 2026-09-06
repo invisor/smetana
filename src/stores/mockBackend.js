@@ -930,6 +930,46 @@ export function installMockBackend() {
        is at the top of this file, where the run window's own fixture reads it
        too. */
     if (command === 'target_branches') return MOCK_TARGET_BRANCHES
+    /* Every harness this build ships and what it can do — the same shape
+       `agents::catalogue` answers, so the Agents tab and both agent menus stay
+       checkable in a browser. Without it `?view=gallery` and
+       `?view=settings&tab=agents` would draw an empty picker and rows greyed
+       for a reason that is not true.
+
+       It is a fixture and therefore a copy, which is the one thing the whole
+       catalogue exists to abolish — but a mock is a copy by definition and this
+       is the only one left: no component names an agent any more, and a browser
+       has no Rust to ask. Codex's `clear` is false here because it is false
+       there: `codex --help` at 0.146.0 documents no command that clears a
+       conversation, and `usage` for the same reason — it prints no allowance. */
+    if (command === 'agents_catalog') {
+      return [
+        {
+          id: 'claude',
+          label: 'Claude Code',
+          capabilities: {
+            resume: true,
+            fork: true,
+            clear: true,
+            usage: true,
+            batch: true,
+            oneshot: true
+          }
+        },
+        {
+          id: 'codex',
+          label: 'Codex',
+          capabilities: {
+            resume: true,
+            fork: true,
+            clear: false,
+            usage: false,
+            batch: true,
+            oneshot: true
+          }
+        }
+      ]
+    }
     /* What the Agents tab says about the subscription. A read, so it answers:
        without it `?view=settings&tab=agents` opens on the loud refusal at the
        bottom of this file and the block can never be looked at in a browser at

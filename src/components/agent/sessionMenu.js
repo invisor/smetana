@@ -128,32 +128,6 @@ const SESSION_REASON = {
 const RESUME_REASON = { ...SESSION_REASON, agent: 'this agent cannot resume by id' }
 const FORK_REASON = { ...SESSION_REASON, agent: 'this agent cannot fork' }
 
-/* The agent ids that can pick a recorded session up by its id, and the ones
-   that can carry one on in a new session instead.
-
-   **The second copy of a fact Rust owns**, and the first is `Profile::resume_args`
-   and `Profile::fork_args` — `agents/claude.rs` answers with `--resume <id>`
-   and with that plus `--fork-session`, and `agents/codex.rs` keeps both
-   defaults of `None`, because that harness's argument grammar is its own and
-   this app does not get to guess it. Nothing mechanical joins the two sides: a
-   profile that learned to resume and was not added here goes on drawing a
-   greyed row, and one added here that Rust cannot serve is refused at the spawn
-   with `TerminalError::NoResume` or `NoFork` rather than starting a fresh
-   agent. Both failures are quiet, and the second is the one with a sentence
-   behind it, which is why the list may be wrong here and never there.
-
-   Two lists and not one, mirroring the two methods: reopening a transcript and
-   branching it are two capabilities, and a harness that grows the first without
-   the second is an ordinary shape rather than a contradiction. They happen to
-   hold the same one id today.
-
-   Written out rather than asked over the wire because the answer has to be
-   known while the row is being *drawn* — a menu greyed a round trip later is a
-   menu somebody has already pressed. `usageFooter.js` keeps the other
-   front-end table keyed by these same ids and records the same thing about
-   where the truth lives. */
-const RESUMES_BY_ID = ['claude']
-const FORKS_BY_ID = ['claude']
 
 /* Whether this session can be brought back as a live agent right now, and the
    reason when it cannot. `fork` picks which of the two verbs is being asked
@@ -172,10 +146,17 @@ const FORKS_BY_ID = ['claude']
    resolves an id against the directory it is run in either way, so the fork
    would have no more of a place to run than the resume does.
 
-   `agent` is the configured id, not whatever actually starts: `agents::pick`
-   substitutes an installed harness for a configured one that is not on `PATH`,
-   and nothing on screen ever learns what it picked. So a project set to an
-   agent that cannot resume greys the row even in the case where the
+   `capable` is the harness's own answer to this one verb, handed in rather than
+   looked up: this module stays pure, which is what keeps it reachable by a test
+   at all, and the caller has it in hand from `stores/agents.js` before the row
+   is drawn. It is Rust's answer either way — `Profile::resume_args` and
+   `Profile::fork_args`, through `agents::catalogue` — and Rust refuses the spawn
+   with `TerminalError::NoResume` or `NoFork` if the two ever disagree.
+
+   It is asked about the **configured** agent, not whatever actually starts:
+   `agents::pick` substitutes an installed harness for a configured one that is
+   not on `PATH`, and nothing on screen ever learns what it picked. So a project
+   set to an agent that cannot resume greys the row even in the case where the
    substitution would have made it work — the honest reading of what the app was
    told, and the alternative is a row that promises on a guess.
 
@@ -185,11 +166,10 @@ const FORKS_BY_ID = ['claude']
    way to be wrong: the spawn's own guard refuses a directory that is not there
    and says so in words, while greying the row would take a working session away
    with no way to find out why. */
-export function resumeAvailability(session, { agent = '', fork = false } = {}) {
+export function resumeAvailability(session, { fork = false, capable = false } = {}) {
   const refuse = (reason) => ({ available: false, reason })
   const reason = fork ? FORK_REASON : RESUME_REASON
-  const able = fork ? FORKS_BY_ID : RESUMES_BY_ID
-  if (!able.includes(agent)) return refuse(reason.agent)
+  if (!capable) return refuse(reason.agent)
   if (!session?.id || !session?.cwd) return refuse(reason.noDirectory)
   if (session.cwdExists === false) return refuse(reason.gone)
   return { available: true, reason: null }

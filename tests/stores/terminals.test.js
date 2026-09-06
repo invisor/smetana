@@ -62,6 +62,38 @@ async function ready() {
      test that watches. Windows' answer is the default so that a test saying
      nothing gets the reading every platform used to get. */
   loaded.ipc.on('drag_drop_space', 'physical')
+  /* What each harness can be asked to do. `resumeRefused` reads it — whether a
+     recorded conversation can be reopened is a fact about the configured agent
+     — and a graph that never read it would grey every offer for a reason that
+     is not true. The rows are `agents::catalogue`'s, which is also what
+     `mockBackend.js` answers with. */
+  loaded.ipc.on('agents_catalog', [
+    {
+      id: 'claude',
+      label: 'Claude Code',
+      capabilities: {
+        resume: true,
+        fork: true,
+        clear: true,
+        usage: true,
+        batch: true,
+        oneshot: true
+      }
+    },
+    {
+      id: 'codex',
+      label: 'Codex',
+      capabilities: {
+        resume: true,
+        fork: true,
+        clear: false,
+        usage: false,
+        batch: true,
+        oneshot: true
+      }
+    }
+  ])
+  await loaded.stores.agents.initAgents()
   await loaded.stores.terminals.initTerminals()
   await loaded.stores.terminals.loadSessions('/p')
   return loaded
@@ -1531,13 +1563,18 @@ describe('the sessions a project offers back after a restart', () => {
   })
 
   /* The other refusal, and the one nothing on this row can draw: the record is
-     written only for a profile that can be told a conversation id, but the row
-     is drawn whatever agent the project is set to now, so switching to one that
-     cannot resume leaves a row whose press has nowhere to go. It used to go
-     nowhere silently (smetana-3awe). */
+     written only for a session whose conversation id this app knows, but the
+     row is drawn whatever agent the project is set to now, so switching to one
+     that cannot resume leaves a row whose press has nowhere to go. It used to
+     go nowhere silently (smetana-3awe).
+
+     The agent here is one the catalogue has never heard of — a hand-edited
+     `settings.json`, or a build that ships no such harness — since both shipped
+     harnesses resume today. `can` answers `false` for an unknown id, which is
+     the same road a harness that genuinely cannot resume would take. */
   it('says why when the project\'s agent cannot resume by id, and starts nothing', async () => {
     const loaded = await offering(offered())
-    loaded.stores.settings.settings.agent = 'codex'
+    loaded.stores.settings.settings.agent = 'somebody-elses-cli'
     const record = {
       id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
       cwd: '/p/.worktrees/smetana-0cj'
@@ -1545,7 +1582,7 @@ describe('the sessions a project offers back after a restart', () => {
 
     expect(loaded.stores.terminals.resumeRefused(record)).toBe(true)
     expect(loaded.stores.terminals.terminalState.lastError.description).toBe(
-      resumeReasonLine(resumeAvailability(record, { agent: 'codex' }).reason)
+      resumeReasonLine(resumeAvailability(record, { capable: false }).reason)
     )
     /* Nothing was attempted and nothing was given up: the worker was never
        asked to spawn, the registry was never asked to forget, and the offer is

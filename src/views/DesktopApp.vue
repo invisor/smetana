@@ -82,6 +82,9 @@ import { CommandPalette, TaskSearchButton, TerminalView } from '../components/in
 import AgentList from '../components/agent/AgentList.vue'
 import { agentKey, conversationsOf, orderAgents } from '../components/agent/agentOrder.js'
 import SessionRow from '../components/agent/SessionRow.vue'
+/* What each harness this build ships can be asked to do, read once at startup
+   — the two agent menus and the Sessions tab's cards are all drawn from it. */
+import { can } from '../stores/agents.js'
 import {
   DELETE_SESSION_TITLE,
   FORK_KIND,
@@ -3140,7 +3143,8 @@ async function deleteSession(session) {
 async function resumeSession(session, { fork = false } = {}) {
   const path = activePath.value
   if (!path) return
-  if (!resumeAvailability(session, { agent: settings.agent, fork }).available) return
+  const capable = can(settings.agent, fork ? 'fork' : 'resume')
+  if (!resumeAvailability(session, { fork, capable }).available) return
   try {
     project.sideTab = 'agents'
     project.activeTab = 'terminal'
@@ -5525,7 +5529,7 @@ const toastStackStyle = {
                 :rows="orderedAgentRows"
                 :active-id="terminalState.activeId"
                 :pinned="project.pinnedAgents"
-                :agent="settings.agent"
+                :clearable="can(settings.agent, 'clear')"
                 @select="selectAgent"
                 @remove="removeAgentRow"
                 @reorder="reorderAgents"
@@ -5897,7 +5901,8 @@ const toastStackStyle = {
                   :key="session.id"
                   :session="session"
                   :now="sessionsState.now"
-                  :agent="settings.agent"
+                  :can-resume="can(settings.agent, 'resume')"
+                  :can-fork="can(settings.agent, 'fork')"
                   :separated="index > 0"
                   :expanded="isSessionOpen(session.id)"
                   :busy="deletingSessionPath === session.path"

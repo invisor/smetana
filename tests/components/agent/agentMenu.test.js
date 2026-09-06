@@ -20,7 +20,7 @@ const row = (over = {}) => ({
   conversation: 'conv-a',
   starting: false,
   state: 'running',
-  agent: 'claude',
+  clearable: true,
   ...over
 })
 
@@ -127,21 +127,23 @@ describe('what it refuses, and in what words', () => {
 
   /* A fact about the project rather than about the row, which is why it is
      asked first: every row of a project set to such a harness says the same
-     thing. `CLEARS_BY_ID` is the front end's copy of `Profile::clear_command`,
-     and it is asked before the row so both sides of the wire word a row refused
-     twice over the same way. */
+     thing. `clearable` is `Profile::clear_command`'s own answer, carried here
+     through `agents::catalogue` and `stores/agents.js`, and it is asked before
+     the row so both sides of the wire word a row refused twice over the same
+     way. */
   it('refuses to clear under a harness with no command for it, whatever the row', () => {
     for (const over of [{}, { state: 'needs-you' }, { starting: true }]) {
-      const items = agentMenuItems(row({ ...over, agent: 'codex' }))
+      const items = agentMenuItems(row({ ...over, clearable: false }))
       expect(disabled(items, 'clear')).toBe(true)
       expect(labelOf(items, 'clear')).toBe(`${CLEAR_LABEL} — this agent cannot do it`)
     }
   })
 
-  /* No agent named at all is the same refusal and not an offer: the list is
-     what the app was told to run, and a row promising on a guess is what the
-     table exists to prevent. */
-  it('refuses to clear when no agent is named', () => {
+  /* Nothing said at all is the same refusal and not an offer: a caller that has
+     not read the catalogue — or read it and failed — greys the row, since a row
+     promising on a guess would send a line nobody confirmed as the first line of
+     a prompt. */
+  it('refuses to clear when nobody has said the harness can', () => {
     expect(disabled(agentMenuItems({ conversation: 'conv-a', state: 'running' }), 'clear')).toBe(
       true
     )
@@ -170,8 +172,7 @@ describe('the wording', () => {
       row({ state: 'done' }),
       row({ state: 'failed' }),
       row({ state: 'needs-you' }),
-      row({ agent: 'codex' }),
-      row({ agent: null })
+      row({ clearable: false })
     ]
     const longest = every
       .flatMap((one) => agentMenuItems(one))

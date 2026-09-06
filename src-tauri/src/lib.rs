@@ -299,6 +299,7 @@ pub fn run() {
       runs::commands::run_state,
       runs::commands::target_branches,
       runs::commands::agent_usage,
+      agents::commands::agents_catalog,
       sessions::commands::sessions_list,
       sessions::commands::sessions_open_log,
       sessions::commands::sessions_open_cwd,

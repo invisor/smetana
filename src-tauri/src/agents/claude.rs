@@ -22,6 +22,10 @@ impl Profile for Claude {
         "claude"
     }
 
+    fn label(&self) -> &'static str {
+        "Claude Code"
+    }
+
     fn binary(&self) -> &'static str {
         "claude"
     }

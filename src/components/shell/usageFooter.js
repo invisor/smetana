@@ -39,26 +39,27 @@ const READ = 'read'
    above uses for a column with nothing in it. */
 const DASH = '—'
 
-/* The one place besides the settings picker that puts a name to an agent id.
-   The ids are `agents::IDS` in `src-tauri/src/agents/mod.rs`, which is where
-   the truth lives; these are labels for ids Rust already knows, so an id this
-   list has not heard of is drawn as it stands rather than dressed up as one of
-   ours or hidden. */
-const AGENT_LABELS = {
-  claude: 'Claude Code',
-  codex: 'Codex'
-}
-
 /* With nobody to name — nothing read yet, no agent on this machine — the bare
    word, never the label of whoever is selected in the settings window.
    `agents::pick` substitutes the first installed profile for a configured one
    that is not on `PATH`, so a name taken from the picker could stand over
    another agent's allowance; and before the first answer there is no reading
-   to put a name on at all. */
-export function usageAgentLabel(answer) {
+   to put a name on at all.
+
+   `nameFor` turns an id into the name a person reads, handed in rather than
+   looked up: this module is pure, which is what keeps it reachable by a test at
+   all, and the caller has `agentLabel` from `stores/agents.js`, which read the
+   labels off `agents::catalogue`. This file used to keep a table of its own
+   here — one of five hand-written agent lists in `src/`, all now gone.
+
+   The default is the id itself, which is also what a name nobody knows comes
+   back as: dressing an unknown id up as one of ours would put a name over
+   another agent's allowance, and dropping it would leave the strip claiming
+   there was nobody to ask. */
+export function usageAgentLabel(answer, nameFor = (id) => id) {
   const id = agentOf(answer)
   if (!id) return 'Agent'
-  return AGENT_LABELS[id] ?? id
+  return nameFor(id) ?? id
 }
 
 /* `10%`, or the dash. `null` when the percentage is not a number — a half Rust

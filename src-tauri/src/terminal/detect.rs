@@ -448,6 +448,10 @@ mod tests {
             "no-layer-b"
         }
 
+        fn label(&self) -> &'static str {
+            "No layer B"
+        }
+
         fn binary(&self) -> &'static str {
             "no-layer-b"
         }

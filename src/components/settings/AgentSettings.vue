@@ -73,6 +73,12 @@ import SettingsGroup from './SettingsGroup.vue'
 import SettingsRow from './SettingsRow.vue'
 import { agentOf, offersRefresh, usageLines, usageNote } from './usage.js'
 import { thresholdOptions } from './subscription.js'
+/* Which harnesses this build ships and what each can do, read once at startup.
+   A reactive store rather than props, because the picker below is the one row
+   on this tab whose *options* are a fact about the build rather than about the
+   person's settings, and every window that draws this tab would otherwise have
+   to carry the same list to it. */
+import { agentLabel, agents } from '../../stores/agents.js'
 
 const props = defineProps({
   agent: { type: String, default: 'claude' },
@@ -130,27 +136,24 @@ const emit = defineEmits([
   'refresh'
 ])
 
-/* The one place in the front end that names an agent. The ids are `agents::IDS`
-   in `src-tauri/src/agents/mod.rs`, which is where the truth lives — Rust
-   validates `agent` against that list on the way to the file and drops anything
-   else. So this list is a set of labels for ids Rust already knows, and an id
-   added there and not here is simply not offered, while one added here and not
-   there is picked, dropped on save and back to Claude Code after a restart.
+/* The harnesses this build ships, named by Rust: `agents::catalogue` answers a
+   row per id in `agents::IDS`, carrying the label beside the capabilities, and
+   `stores/agents.js` reads it once before anything is drawn. Nothing in this
+   file names an agent any more — an id added in Rust is offered here for free,
+   and one removed there stops being offered.
 
-   Codex is offered and not selectable, and the restriction is this row and
-   nothing else: Rust still knows `codex`, `agents/codex.rs` is complete, and a
-   `settings.json` that already holds it goes on starting Codex sessions. That
-   is accepted rather than overlooked — the working code is not worth breaking
-   for a temporary limit, and lifting the limit is deleting the two fields
-   below. It is shown rather than dropped from the list because a person should
-   be able to see that the app knows the agent and has not switched it on yet;
-   a list of one says nothing at all. */
-const AGENTS = [
-  { value: 'claude', label: 'Claude Code' },
-  { value: 'codex', label: 'Codex', disabled: true, note: 'Not supported yet' }
-]
+   This used to be a hand-written pair of labels, and it was the first of four
+   such lists keyed by agent id; the other three were in the two agent menus.
+   Each was a knowing second copy of a fact Rust owns, each could drift in both
+   directions in silence, and a third harness meant four edits in two languages.
 
-/* The same doubling one row down, accepted for the same reason. The ids are
+   Codex used to be drawn here `disabled`, with `Not supported yet` beside it.
+   That limit is gone: the profile answers resume, fork, batch and one-shot, and
+   finds out the id of a session it started. */
+const AGENTS = computed(() => agents.value.map((row) => ({ value: row.id, label: row.label })))
+
+/* The languages, still written out here, and the doubling is accepted for the
+   reason the row above no longer has to accept it: these are
    `agents::LANGUAGES` in `src-tauri/src/agents/mod.rs`, which carries the
    English name beside each because that name is what goes into the prompt —
    these are labels for ids Rust already knows and validates, so drift costs a
@@ -222,7 +225,7 @@ const MAX_AGENT_PROMPT = 4000
 const heading = computed(() => {
   const id = agentOf(props.usage)
   if (!id) return 'Subscription'
-  return `${AGENTS.find((agent) => agent.value === id)?.label ?? id} subscription`
+  return `${agentLabel(id)} subscription`
 })
 
 /* One line under the label, and which one depends on whether the report is ever

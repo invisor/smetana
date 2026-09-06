@@ -117,17 +117,19 @@ const props = defineProps({
      Two props rather than one object: whoever draws this holds two refs, and a
      composite would be rebuilt on every unrelated render of the list. */
   copyNoun: { type: String, default: '' },
-  /* Which coding agent this project is set to, which decides whether either of
-     the two launching verbs can be offered at all: `--resume <id>` and
-     `--fork-session` are Claude Code's grammar, and `resumeAvailability` is the
-     rule.
+  /* Whether the project's configured harness can reopen a recorded
+     conversation, and whether it can branch one — two questions and two props,
+     because they are two capabilities and a harness may have either. Both come
+     from `agents::catalogue` by way of `stores/agents.js`; `resumeAvailability`
+     is the rule they are fed into.
 
-     A prop rather than a store read, for the reason every other fact on this
-     row is one: a component here knows nothing about `settings.json`. The
-     default matches `AgentSettings.vue`'s, so a row drawn on its own — a
-     gallery entry, a future one-off — offers the verb rather than a dead
-     button nobody can explain. */
-  agent: { type: String, default: 'claude' }
+     Props rather than a store read, for the reason every other fact on this row
+     is one: a component here knows nothing about `settings.json` and nothing
+     about which harnesses this build ships. They default to `true` so a row
+     drawn on its own — a gallery entry, a future one-off — offers the verb
+     rather than a dead button nobody can explain. */
+  canResume: { type: Boolean, default: true },
+  canFork: { type: Boolean, default: true }
 })
 
 const emit = defineEmits(['toggle', 'action'])
@@ -344,8 +346,10 @@ const last = computed(() => lastMessageLine(props.session))
 const meta = computed(() => sessionMeta(props.session, props.now))
 const prompt = computed(() => firstPrompt(props.session))
 const details = computed(() => sessionDetails(props.session))
-const resume = computed(() => resumeAvailability(props.session, { agent: props.agent }))
-const fork = computed(() => resumeAvailability(props.session, { agent: props.agent, fork: true }))
+const resume = computed(() => resumeAvailability(props.session, { capable: props.canResume }))
+const fork = computed(() =>
+  resumeAvailability(props.session, { fork: true, capable: props.canFork })
+)
 /* Every distinct reason among the two, as sentences. Distinct because the
    commonest refusal — the worktree is gone — stops both verbs in the same
    words, and saying it twice under two greyed buttons would read as two

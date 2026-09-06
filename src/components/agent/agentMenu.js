@@ -17,7 +17,11 @@
    (smetana-xyck), and the wait was the point: what clears a conversation is
    each harness's own vocabulary and belongs with the profiles, so
    `Profile::clear_command` had to exist before a row could offer it. What this
-   file keeps of that fact is `CLEARS_BY_ID` below, and it says what it is.
+   file keeps of that fact is nothing at all: the answer arrives as `clearable`,
+   a boolean the caller reads out of `stores/agents.js`, which read it out of
+   `agents::catalogue`, which asked the profile. This file used to hold a list of
+   the ids that clear, beside two more in `sessionMenu.js` for the ids that
+   resume and fork.
 
    The order is pinning, clearing, closing. Pinning first because it is wanted
    most often, closing last because every destructive row in this app is last,
@@ -100,32 +104,6 @@ export const UNPIN_LABEL = 'Unpin'
 export const CLEAR_LABEL = 'Clear session'
 export const CLOSE_LABEL = 'Close agent'
 
-/* The agent ids whose harness can be told to forget a conversation.
-
-   **The second copy of a fact Rust owns**, and the first is
-   `Profile::clear_command` — `agents/claude.rs` answers `/clear`, which is what
-   that CLI's own help documents, and `agents/codex.rs` keeps the default `None`
-   because nobody has read one out of its help. It is the same table
-   `sessionMenu.js` keeps as `RESUMES_BY_ID` and `FORKS_BY_ID`, kept knowingly
-   and for that file's reason: the answer has to be known while the row is being
-   *drawn*, and a menu greyed a round trip later is a menu somebody has already
-   pressed.
-
-   Nothing mechanical joins the two sides and both directions of drift are
-   quiet, so the rule is that this list may be wrong and Rust may not: a profile
-   that learned the command and was not added here goes on drawing a greyed row,
-   while one added here that Rust cannot serve is refused at the write with
-   `TerminalError::NoClear` and nothing is sent. The refusal with a sentence
-   behind it is the one to prefer.
-
-   The id is the **configured** agent out of `settings.json`, not whatever
-   actually started: `agents::pick` substitutes an installed harness for a
-   configured one that is not on `PATH` and nothing on screen ever learns what
-   it picked, so a project set to an agent that cannot clear greys the row even
-   where the substitution would have made it work. That is `sessionMenu.js`'s
-   trade too — the honest reading of what the app was told, against a row that
-   promises on a guess. */
-const CLEARS_BY_ID = ['claude']
 
 /* The states in which there is no process behind the row to write into.
 
@@ -148,9 +126,16 @@ export function agentMenuLabel(label, reason) {
 
    `pinned` and `starting` are facts about the row; `conversation` is the id the
    row carries, and its absence is what refuses the pin. `state` is the row's ui
-   state, the same word `attentionLevel` reads, and `agent` is the project's
-   configured agent id — neither is about this row alone, which is why only the
-   clear row asks for them.
+   state, the same word `attentionLevel` reads, and `clearable` is whether the
+   project's **configured** harness has a line that clears a conversation at all
+   — neither is about this row alone, which is why only the clear row asks for
+   them.
+
+   That last one is handed in rather than looked up, so this module stays pure
+   and reachable by a test: the caller has it from `stores/agents.js` before the
+   row is drawn, and it is the configured agent's answer rather than whatever
+   `agents::pick` actually started, for the reason `sessionMenu.js` records
+   about the same substitution.
 
    Two of the three ask nothing about what kind of row this is: the panel is one
    flat list on purpose, and a live session, a start and an offline record can
@@ -169,7 +154,7 @@ export function agentMenuItems({
   conversation = null,
   starting = false,
   state = null,
-  agent = null
+  clearable = false
 } = {}) {
   /* Asked in this order because a pinned row cannot also be one with no
      conversation — pinning is what needed the id in the first place — so the
@@ -190,7 +175,7 @@ export function agentMenuItems({
      Then the row: a start has no process yet, an offline row has none any more,
      and a live one that is waiting is the one case where the command would be
      read as something else entirely. */
-  const clearReason = !CLEARS_BY_ID.includes(agent)
+  const clearReason = !clearable
     ? AGENT_REASON.cannotClear
     : starting
       ? AGENT_REASON.starting

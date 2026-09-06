@@ -122,12 +122,13 @@ choice is what stops the halves drifting: `selectedTask` is remembered per proje
 `settings.json`, so a panel choice that wrote to it would turn a glance at an agent into an edit of a
 preference, and a stored version had the run case highlighting a card the inspector refused to draw.
 
-`src/stores/tracker.js`, `src/stores/settings.js`, `src/stores/projects.js`, `src/stores/files.js`,
-`src/stores/terminals.js`, `src/stores/sessions.js`, `src/stores/git.js`, `src/stores/vcs.js`,
-`src/stores/runs.js`, `src/stores/attachments.js`, `src/stores/updates.js`, `src/stores/compare.js`
-and `src/stores/app.js` are the **only** files in `src/` that know Tauri exists — components see
-reactive stores and nothing else. `mockBackend.js` below is the last and the exception that proves
-it: it imports Tauri in order to stand in for the absence of one. `app.js` is the odd one, and it is
+`src/stores/tracker.js`, `src/stores/settings.js`, `src/stores/projects.js`,
+`src/stores/files.js`, `src/stores/terminals.js`, `src/stores/sessions.js`, `src/stores/git.js`,
+`src/stores/vcs.js`, `src/stores/runs.js`, `src/stores/attachments.js`, `src/stores/updates.js`,
+`src/stores/compare.js`, `src/stores/agents.js` and `src/stores/app.js` are the **only** files in
+`src/` that know Tauri exists — components see reactive stores and nothing else.
+`mockBackend.js` below is the last and the exception that proves it: it imports Tauri in order
+to stand in for the absence of one. `app.js` is the odd one, and it is
 a store for exactly this reason rather than for holding state: it has none. It is what the app knows
 about itself and asks the desktop for — open the settings window, read this build's version, open a
 link in the person's own browser — and every one of those would otherwise be an `@tauri-apps/api`

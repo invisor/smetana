@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use base64::Engine;
 use tauri::{AppHandle, Emitter, Manager};
@@ -62,6 +62,15 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 const KILL_GRACE: Duration = Duration::from_millis(1200);
 const KILL_POLL: Duration = Duration::from_millis(50);
 
+/// How long to keep asking a harness what it called the session, and how often.
+/// Ten tries half a second apart: the rollout file appears within a second on
+/// the machine this was measured on, and five seconds sits well inside the time
+/// somebody spends reading the agent's first output. Giving up is silent — a
+/// session with no id recorded is the session this harness had before the
+/// lookup existed.
+const DISCOVERY_TRIES: u32 = 10;
+const DISCOVERY_GAP: Duration = Duration::from_millis(500);
+
 /// The answer to `terminal_attach`: everything the session has said so far,
 /// plus the sequence number that output arriving after it will continue from.
 #[derive(serde::Serialize)]
@@ -117,6 +126,13 @@ pub enum Request {
     /// `ExitWaiter` for why it is a request and not a subscription, and `Exit`
     /// for why the answer is three-valued rather than an exit code.
     AwaitExit(SessionId, oneshot::Sender<Exit>),
+    /// The id a harness chose for itself, arriving after the spawn — see
+    /// `discovers_its_own_id` and `Profile::session_id_after_start`.
+    ///
+    /// The one request nothing outside this module sends: it comes from a
+    /// thread this worker started, because the lookup reads somebody else's
+    /// disk and the worker answers every other command in the app.
+    SessionIdFound(SessionId, String),
     /// The one reply that is not a `oneshot`: it is awaited from the exit
     /// event, on a synchronous thread, and only `std::sync::mpsc` can put a
     /// ceiling on a blocking receive.
@@ -204,6 +220,14 @@ struct Capture {
 pub fn start(app: AppHandle) -> TerminalHandle {
     let (tx, mut rx) = mpsc::channel::<Request>(32);
     let (chunks_tx, mut chunks_rx) = mpsc::unbounded_channel::<Chunk>();
+    // A way back into this worker for the one answer that arrives after the
+    // request it belongs to has been replied to: the id a harness gave itself.
+    //
+    // **Weak** deliberately. A strong clone held by the worker would be a
+    // sender that never drops, so `rx.recv()` could never answer `None` and the
+    // "the senders are gone" arm below would become unreachable — a fallback
+    // quietly deleted by a feature that has nothing to do with it.
+    let requests = tx.downgrade();
 
     tauri::async_runtime::spawn(async move {
         let mut sessions: HashMap<SessionId, Live> = HashMap::new();
@@ -233,7 +257,7 @@ pub fn start(app: AppHandle) -> TerminalHandle {
                         let _ = tx.send(());
                         return;
                     }
-                    handle(&app, &mut sessions, &mut captures, &mut exit_waiters, &mut active, &mut next_id, &chunks_tx, request);
+                    handle(&app, &mut sessions, &mut captures, &mut exit_waiters, &mut active, &mut next_id, &chunks_tx, &requests, request);
                 }
                 chunk = chunks_rx.recv() => {
                     // Cannot happen while this task owns the sender it hands
@@ -374,6 +398,20 @@ fn conversation_for(profile: &'static dyn agents::Profile, intent: &Intent) -> O
             .filter(|id| profile.session_id_args(id).is_some()),
         _ => None,
     }
+}
+
+/// Whether this session's id is one to go looking for after the start.
+///
+/// The same gate `conversation_for` applies — a session nobody would be offered
+/// back is not one to record — with the harness question the other way round:
+/// there is an id to discover exactly when the profile could not be told one
+/// and says it names its own. A resume already knows its id, and a fork
+/// deliberately records nothing, so neither is here.
+fn discovers_its_own_id(profile: &'static dyn agents::Profile, intent: &Intent) -> bool {
+    !matches!(intent, Intent::ResumeSession { .. })
+        && records_a_restorable(intent)
+        && profile.session_id_args("probe").is_none()
+        && profile.discovers_session_id()
 }
 
 /// Take this session's record out of its project's registry, if it had one.
@@ -649,6 +687,7 @@ fn handle(
     active: &mut Option<SessionId>,
     next_id: &mut SessionId,
     chunks: &mpsc::UnboundedSender<Chunk>,
+    requests: &mpsc::WeakSender<Request>,
     request: Request,
 ) {
     match request {
@@ -818,6 +857,24 @@ fn handle(
                 agent_prompt: crate::settings::agent_prompt(app),
                 session_id,
             };
+            // Both of these are taken **before the process exists**, and the
+            // order is the whole of what they are for. `sessions_before_start`
+            // is "whatever this harness had already recorded", and the arm
+            // below cannot be where it is asked: by then the child is running,
+            // `Session::new` and the `Live` have been built and a restore
+            // record may have been written, and a harness that got its rollout
+            // onto disk inside that window would find its own file in the set
+            // it is being told to ignore — so its id would never be discovered
+            // at all. Same for the instant: a rollout written in that window
+            // would read as older than the spawn it came from.
+            //
+            // The walk costs one pass over somebody else's directory on the
+            // worker, and this is the one place it is paid for; the polling
+            // that follows is on a thread of its own.
+            let discovering = discovers_its_own_id(profile, &launch.intent);
+            let started = SystemTime::now();
+            let before =
+                if discovering { profile.sessions_before_start() } else { Vec::new() };
             let spawned = Pty::spawn(id, &launch, DEFAULT_COLS, DEFAULT_ROWS, chunks.clone());
             let _ = tx.send(match spawned {
                 Ok(pty) => {
@@ -872,6 +929,36 @@ fn handle(
                             },
                         );
                     }
+                    // A harness that names its own conversation is asked
+                    // what it chose, on a thread of its own: the file does not
+                    // exist at the instant of the spawn, and the worker must
+                    // never wait on somebody else's disk. Giving up is silent,
+                    // and so is a worker that has already stopped — the sender
+                    // is weak, so nothing here holds the app open.
+                    // `before` and `started` were taken above, in front of
+                    // the spawn — see there for why they cannot be taken here.
+                    // What that set buys is the whole of the separation: only a
+                    // resume runs in a directory of its own, so two agent
+                    // sessions in one project share a `cwd` as a matter of
+                    // course, and an older one still writing has the newer
+                    // modification time and would otherwise be claimed.
+                    if discovering {
+                        let requests = requests.clone();
+                        let dir = dir.clone();
+                        std::thread::spawn(move || {
+                            for _ in 0..DISCOVERY_TRIES {
+                                std::thread::sleep(DISCOVERY_GAP);
+                                let Some(found) =
+                                    profile.session_id_after_start(&dir, started, &before)
+                                else {
+                                    continue;
+                                };
+                                let Some(requests) = requests.upgrade() else { return };
+                                let _ = requests.blocking_send(Request::SessionIdFound(id, found));
+                                return;
+                            }
+                        });
+                    }
                     sessions.insert(id, live);
                     emit_state(app, &session);
                     Ok(session)
@@ -884,6 +971,35 @@ fn handle(
                 // process exists.
                 Err(err) => Err(err),
             });
+        }
+        // The session may be gone by now — somebody can close a tab in five
+        // seconds — so a missing one is an ordinary outcome and not a fault. An
+        // id already set wins: nothing else should be able to have set one, and
+        // overwriting would be this app renaming a conversation it did not name.
+        Request::SessionIdFound(id, conversation) => {
+            let Some(live) = sessions.get_mut(&id) else { return };
+            if live.session.conversation.is_some() {
+                return;
+            }
+            live.session.conversation = Some(conversation.clone());
+            let session = live.session.clone();
+            emit_state(app, &session);
+            // The record the spawn could not write, written now that there is
+            // an id to key it by: this is what puts the session in
+            // `.smetana/agents.json` and offers it back in the sidebar after a
+            // restart. Same fields as the spawn-time record one arm above — the
+            // only difference is when the id was known.
+            super::restore::record(
+                Path::new(&session.project),
+                super::restore::Restorable {
+                    session_id: conversation,
+                    agent: session.agent.clone(),
+                    cwd: session.cwd.clone(),
+                    project: session.project.clone(),
+                    work: session.work.clone(),
+                    started_at: session.started_at.clone(),
+                },
+            );
         }
         Request::CreateShell(project, cwd, tx) => {
             // Everything the agent branch above does about *which* agent — the
@@ -1267,11 +1383,63 @@ mod tests {
     }
 
     #[test]
-    fn a_harness_that_cannot_be_told_an_id_records_nothing() {
-        // The whole of how codex avoids drawing a row it could not resume: no
-        // refusal is worded anywhere, because no record is ever written.
+    fn a_harness_that_cannot_be_told_an_id_gets_none_on_its_command_line() {
+        // What this function decides is what goes on the *command line*, and for
+        // a harness with no flag for it the answer is nothing. That used to be
+        // the whole story for codex — no id, so no record, so no row — and it no
+        // longer is: the id arrives afterwards through `Request::SessionIdFound`
+        // and the record is written then, which is what
+        // `a_harness_that_names_its_own_conversation_is_asked_after_the_start`
+        // pins. A harness answering neither question is still the one that
+        // records nothing at all.
         assert!(conversation_for(profile("codex"), &Intent::Bare).is_none());
         assert!(conversation_for(profile("claude"), &Intent::Bare).is_some());
+    }
+
+    #[test]
+    fn a_harness_that_names_its_own_conversation_is_asked_after_the_start() {
+        // `conversation_for` answers `None` for such a harness, because there
+        // is no id to put on the command line — and that is not the same as
+        // "records nothing": the id arrives later, through
+        // `Request::SessionIdFound`, and the record is written then.
+        let intent = Intent::Bare;
+        assert_eq!(conversation_for(profile("codex"), &intent), None);
+        assert!(
+            discovers_its_own_id(profile("codex"), &intent),
+            "a bare Codex session is exactly the session whose id is worth finding"
+        );
+        assert!(
+            !discovers_its_own_id(profile("claude"), &intent),
+            "a harness told its id in advance has nothing to discover"
+        );
+    }
+
+    #[test]
+    fn a_resumed_session_already_knows_which_conversation_it_is() {
+        // Both halves of a `ResumeSession`, because they take different roads
+        // to the same answer: a plain resume carries its id already, and a fork
+        // deliberately records nothing at all, so neither is a session to go
+        // looking for an id for.
+        for fork in [false, true] {
+            let intent = Intent::ResumeSession {
+                id: "01a0765f-f205-74d0-8dc9-61006c68767f".into(),
+                cwd: "/p".into(),
+                title: None,
+                fork,
+            };
+            assert!(!discovers_its_own_id(profile("codex"), &intent), "fork: {fork}");
+        }
+    }
+
+    #[test]
+    fn a_run_leaves_no_id_to_go_looking_for_either() {
+        // The same gate `conversation_for` applies, and for its reason: the
+        // runs registry owns those sessions, so a discovered id would put a
+        // second mechanism on one fact.
+        use crate::runs::model::RunMode;
+        for mode in [RunMode::Auto, RunMode::Supervised, RunMode::Solo] {
+            assert!(!discovers_its_own_id(profile("codex"), &run_intent(mode)), "{mode:?}");
+        }
     }
 
     #[test]

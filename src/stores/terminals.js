@@ -25,6 +25,7 @@ import { dropSpaceFromPlatform, viewportPoint } from '../components/terminal/dro
    same as `dropPoint.js` above — a store reaching for a rule that has no Vue
    and no Tauri in it. */
 import { resumeAvailability, resumeReasonLine } from '../components/agent/sessionMenu.js'
+import { can } from './agents.js'
 /* The audible half of what the app has to say. Here rather than in a watcher
    over the session list, because the list holds the active project only and the
    marks below hold every project — and somebody supervising two overnight is
@@ -673,11 +674,12 @@ const ERRORS = {
       'Smetana could not start a shell there. The tree may be out of date — refresh it.'
   }),
   /* `TerminalError::NoClear` — the configured harness has no line for clearing
-     a conversation. The menu row is greyed for it already (`CLEARS_BY_ID` in
-     `components/agent/agentMenu.js`), so this is only reachable when that
-     front-end list has drifted ahead of the profiles, which is the direction
-     that file says it may drift in. The content of the variant is the agent id.
-     */
+     a conversation. The menu row is greyed for it already, off the same answer:
+     `agents::catalogue` asks `Profile::clear_command` and `stores/agents.js`
+     carries it to the row. So this is reachable only where the two readings can
+     differ — a catalogue that could not be read at all, or a session running a
+     harness `agents::pick` substituted for the configured one. The content of
+     the variant is the agent id. */
   noClear: (agent) => ({
     title: 'This agent cannot clear its conversation',
     description: `Smetana has no command ${agent} understands for it. Nothing was sent.`
@@ -1041,17 +1043,18 @@ export async function createSession(project, intent = { kind: 'bare' }) {
    the refusal already in the toast corner when it cannot.
 
    The one guard in front of `createSession` that has to answer before the
-   worker is asked anything: `RESUMES_BY_ID` is a fact about the configured
-   harness rather than about the record, so there is nothing to spawn and
-   nothing for Rust to refuse. A restored row in the agents panel is drawn for
-   every project whatever agent it is set to — the record is written only for a
-   profile that can be told a conversation id, and switching the project to one
-   that cannot does not take the row away — so pressing it under `codex` used to
-   return out of `resumeSession` in silence, with no toast, no row and no change
-   of any kind (smetana-3awe). The Sessions tab has a drawn refusal for the same
-   guard, in the greyed menu row and under the opened card; a row in the agents
-   panel has nowhere to put one, so it goes where every other refusal a session
-   verb raises goes.
+   worker is asked anything: whether the harness resumes at all is a fact about
+   the configured agent rather than about the record, so there is nothing to
+   spawn and nothing for Rust to refuse. A restored row in the agents panel is
+   drawn for every project whatever agent it is set to — the record is written
+   only for a session whose conversation id this app knows, by either road, and
+   switching the project to an agent that cannot resume does not take the row
+   away — so pressing it under such an agent used to return out of
+   `resumeSession` in silence, with no toast, no row and no change of any kind
+   (smetana-3awe). The Sessions tab has a drawn refusal for the same guard, in
+   the greyed menu row and under the opened card; a row in the agents panel has
+   nowhere to put one, so it goes where every other refusal a session verb
+   raises goes.
 
    The words are `sessionMenu.js`'s own, capitalised and stopped by
    `resumeReasonLine` exactly as the opened card sets them, and the title is the
@@ -1063,7 +1066,9 @@ export async function createSession(project, intent = { kind: 'bare' }) {
    attempted, and not into `resumeAvailability`, which is pure and knows nothing
    about a toast. */
 export function resumeRefused(record) {
-  const { available, reason } = resumeAvailability(record, { agent: settings.agent })
+  const { available, reason } = resumeAvailability(record, {
+    capable: can(settings.agent, 'resume')
+  })
   if (available) return false
   terminalState.lastError = { title: ERRORS.write.title, description: resumeReasonLine(reason) }
   return true
