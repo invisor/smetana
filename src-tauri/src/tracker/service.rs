@@ -356,6 +356,22 @@ async fn full_sync(
 /// one would throw away work nobody finished. A missed closure costs a minute;
 /// a false one costs the work.
 ///
+/// **And no task a live run is holding** (`runs::recovery::live_actors`, whose
+/// rule and tests are `runs::registry::live_actors`). Ancestry cannot tell a
+/// merged branch from a branch with no commits of its own: a branch cut from
+/// the target's tip is an ancestor of it trivially, before anybody has written
+/// a line. The predicate is not fixable — the fast-forward this sweep was
+/// written for has that very shape, tip equal to tip — so what is narrowed is
+/// whose task it is. In this project's own way of working a worker leaves
+/// approved work uncommitted, sets `ready_to_merge`, and the lead commits it at
+/// the merge phase, which makes "`ready_to_merge` on a branch with nothing on
+/// it" an ordinary state lasting minutes rather than an anomaly. This sweep
+/// exists for a person who merged a branch past the app; a task a run holds is
+/// closed by that run as the last step of merging it, so the two never needed
+/// to overlap. The night it cost is smetana-cksn: a task closed 26 seconds
+/// before its branch's only commit, and fifteen files left on a branch with
+/// nothing on the board to say they were ever there.
+///
 /// **The whole of the git side is `vcs::merged`**, which is where the ancestry
 /// question and the multi-repository rule live and where their tests are.
 /// `git.rs` finds the branch and spawns nothing, as its own header requires.
@@ -375,9 +391,26 @@ async fn full_sync(
 /// this idempotent rather than merely repeated.
 async fn close_merged(app: &AppHandle, current: &Option<Project>, store: &mut Store) {
     let Some(project) = current.as_ref().filter(|p| p.tracked) else { return };
-    let ids = store.ids_with_status(crate::runs::queue::READY_TO_MERGE);
+    let mut ids = store.ids_with_status(crate::runs::queue::READY_TO_MERGE);
     if ids.is_empty() {
         return;
+    }
+    // Ahead of the target branch and well ahead of `merged_tasks`, so that a
+    // task a run is holding costs not one git process: the answer for it is
+    // already known, and asking git would only be a chance to be told yes.
+    let held = crate::runs::recovery::live_actors(&project.dir);
+    if !held.is_empty() {
+        let before = ids.len();
+        ids.retain(|id| !store.assignee(id).is_some_and(|actor| held.contains(actor)));
+        if ids.len() != before {
+            log::debug!(
+                "[tracker] {} of {before} ready to merge are held by a live run",
+                before - ids.len()
+            );
+        }
+        if ids.is_empty() {
+            return;
+        }
     }
     let Some(target) = target_branch(app, &project.dir) else { return };
 
