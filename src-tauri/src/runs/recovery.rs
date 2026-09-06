@@ -23,6 +23,7 @@
 //! the interface would spend the loudness budget that belongs to a card needing
 //! a human. What was killed goes to the log.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -79,6 +80,35 @@ fn writer() -> Option<&'static Proc> {
             own
         })
         .as_ref()
+}
+
+/// Which actors a run is working under in this project at this moment.
+///
+/// The caller is `tracker::service::close_merged` on its sixty-second tick,
+/// asking the one question this file can answer and the board cannot: whether
+/// the app itself is holding a task. The rule is `registry::live_actors` and
+/// the tests are there; this is the read.
+///
+/// **It goes nowhere near `read` above, and that is the point.** That one takes
+/// a copy of a file it cannot parse and its callers then replace what is left,
+/// which is a write — and a sweep nobody asked for must not touch anybody's
+/// registry, least of all one another app instance is writing. So a file that
+/// is missing, empty, damaged, too new or unreadable answers with nothing at
+/// all here, which leaves the sweep behaving exactly as it did before this
+/// question was asked. That is the safe direction only because of what the
+/// answer is used for: an empty set closes tasks the way the sweep always did,
+/// and the run that would have been shielded is one whose file could not be
+/// read anyway.
+///
+/// A small synchronous read on the tracker worker's own task, beside the two
+/// `service::target_branch` already makes on the same tick and for the same
+/// reason.
+pub fn live_actors(root: &Path) -> HashSet<String> {
+    let Ok(text) = std::fs::read_to_string(path(root)) else { return HashSet::new() };
+    match registry::parse(&text) {
+        Some(held) => registry::live_actors(&held, root, &procs::look),
+        None => HashSet::new(),
+    }
 }
 
 /// Remember a run for as long as it lives. Called when the run starts.
