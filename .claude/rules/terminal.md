@@ -774,10 +774,30 @@ The measurements and the budget are `read.rs`'s `HEAD_LINES`; do not re-open the
 retaking them, which `bench_listing_the_real_projects_folder` is there for.
 
 **That is why a row carries two sentences and not one.** `title` answers what the session was about;
-`firstPrompt` is always `human_text`'s answer and answers what the person opened with. They hold the
+`firstPrompt` answers what the person opened with. They hold the
 same string only where a transcript carries no generated title, and that is the smaller half — 218 of
 this machine's 313 carry one, so the two differ on about seven rows in ten. One field cannot serve
 both, and the opened card's block is captioned "First prompt" in so many words. A card fed the title there claims the person typed a sentence Claude Code wrote.
+
+**Neither of them is the first human record any more, and the reason is that this app writes one.**
+A session Smetana starts opens on a prompt of its own, submitted as the session's first message, so
+Claude Code records it as an ordinary `user` record stamped `origin.kind: "human"` — nothing in the
+record tells it from a sentence somebody typed, and the tab drew the same paragraph of ours under
+First prompt on nearly every row (smetana-w4i6). `sessions/kickoff.rs` is the rule that undoes that,
+pure and outside `read.rs` so a test can reach it: our prompt is recognised by the invariant tail of
+the language sentence it always opens on — the tail, so the answer does not depend on which of the
+twelve `agentLanguage` is set to — and the person's words are cut out from between
+`prompt::NEW_TASK_OPENING` and whichever block `new_task` writes next. Three answers: a message that
+is not ours travels on untouched, `Intent::NewTask` gives back what somebody wrote in the dialog, and
+every other intent — a run's batch, a setup, a conflict, "+ New agent" — gives back nothing, which
+the card draws as `NO_FIRST_PROMPT`. The title falls out of the same reading, so a filing session is
+titled by the task rather than by our own paragraph.
+
+**Every phrase it matches on is a `pub const` in `prompt.rs`, read from there and never copied.** A
+second copy would drift the first time somebody reworded the prompt, nothing would fail, and the
+defect would come back exactly as it was. What holds the two sides together is one test: build a real
+prompt through `agents::prompt::build` and require the extractor to give back exactly `draft.text`.
+Comparing the strings by eye is what this replaces.
 
 `src/stores/sessions.js` is the front end's half: one command, `sessions_list`, and the store carries
 the rules the panel rests on — the list is emptied the moment another project is asked about, the

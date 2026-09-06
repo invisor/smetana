@@ -59,7 +59,11 @@ pub struct SkillText<'a> {
 /// `--validate` is named here and not only in the skill because it is the one
 /// mechanical part of the standard: bd itself refuses a description missing the
 /// sections its type requires, and prose can be skimmed where a refusal cannot.
-const STANDARD: &str =
+///
+/// `pub` for `sessions::kickoff`, which reads it as one of the blocks the
+/// person's own words stop at — see [`CONVERSATION_TAIL`] for why that reader
+/// takes the constant rather than a second copy of the sentence.
+pub const STANDARD: &str =
     "Whoever picks this up works alone and can ask nobody — file it so that it can be \
      carried out and checked off with no further question. Pass --validate to bd create: \
      it refuses a description missing the sections the type requires, and it is the only \
@@ -91,7 +95,13 @@ const STANDARD: &str =
 /// target branch, so the work is somewhere — but a run is started by a person
 /// who picks the branch by hand, and picking the wrong one is the failure this
 /// whole feature was asked for.
-const FOLLOW_UP: &str =
+///
+/// `pub` for `sessions::kickoff`, which takes everything in front of the first
+/// `{id}` as the opening this block is recognised by — the placeholder is what
+/// makes that a derivation rather than a second copy, so there is nothing here
+/// for a reader to keep in step by hand. [`CONVERSATION_TAIL`] carries the
+/// reasoning.
+pub const FOLLOW_UP: &str =
     "This is a follow-up to bd issue {id}: somebody has asked for further work on what that \
      task already did. Read it first — `bd show {id}` — and say in the new issue's own prose \
      what it refines and what is already done, so that whoever picks it up does not re-read \
@@ -370,6 +380,22 @@ const REVIEW_BRANCH: &str =
      the whole of what this session produces. File nothing in the tracker, run no bd command \
      that writes, and make no commit — the only thing you write is the report itself.";
 
+/// The invariant half of [`conversation`], and the whole of how a transcript is
+/// recognised as one this app wrote.
+///
+/// Only the language name is substituted into that sentence, so this tail reads
+/// the same in all twelve of them — which is what lets `sessions::kickoff` tell
+/// our prompt from a person's own first message without knowing anything about
+/// the `agentLanguage` setting.
+///
+/// It is `pub` for that one reader, and the visibility is the point rather than
+/// an accident: a copy of this sentence over there would drift the first time a
+/// word here changed, silently, and the Sessions tab would go back to showing
+/// every session's first prompt as the same paragraph of ours.
+pub const CONVERSATION_TAIL: &str =
+    "everything you say to me in this session, whatever language the code, the files and the \
+     tracker in front of you happen to be written in.";
+
 /// The language the agent talks to the person in, and it goes into every
 /// intent — `Bare` included, which is why that one no longer opens on nothing.
 ///
@@ -381,10 +407,7 @@ const REVIEW_BRANCH: &str =
 /// took `Bare` in — because the alternative is that the one session where a
 /// person talks to the agent most is the one session the setting cannot reach.
 fn conversation(language: &str) -> String {
-    format!(
-        "Talk to me in {language}: everything you say to me in this session, whatever language \
-         the code, the files and the tracker in front of you happen to be written in."
-    )
+    format!("Talk to me in {language}: {CONVERSATION_TAIL}")
 }
 
 /// The language the prose of a bd issue is written in, and it goes where the
@@ -1285,6 +1308,22 @@ fn setup(delivery: SkillDelivery, skills: &Skills, facts: Option<&str>) -> Strin
     out
 }
 
+/// What each half of [`fields`] opens on, and the whole of what
+/// `sessions::kickoff` needs of that block: which of the two is printed depends
+/// on what the person pinned, so both are boundaries and neither is optional.
+/// [`CONVERSATION_TAIL`] carries why they are read from here rather than
+/// copied.
+pub const FIELDS_GIVEN: &str = "File it with ";
+pub const FIELDS_AUTO: &str = "Decide the ";
+
+/// The end of the same sentence, and it is a constant of its own because three
+/// words are not enough to recognise a block by. "Decide the right count with
+/// me first" is an ordinary paragraph of a task somebody files, and a reader
+/// matching on the opening alone would cut their words off there. Both halves
+/// have to be in the paragraph for it to be this app's, and the middle is the
+/// only part that varies.
+pub const FIELDS_AUTO_TAIL: &str = " yourself, from what is written above.";
+
 /// What the person pinned, and what they left on Auto. Auto is said out loud
 /// rather than left to silence: an agent told nothing about the type would
 /// have to invent one anyway, but would not know that inventing it was its
@@ -1303,17 +1342,13 @@ fn fields(draft: &TaskDraft) -> String {
 
     let mut out = String::new();
     if !given.is_empty() {
-        let _ = write!(out, "File it with {}.", given.join(" and "));
+        let _ = write!(out, "{FIELDS_GIVEN}{}.", given.join(" and "));
     }
     if !auto.is_empty() {
         if !out.is_empty() {
             out.push(' ');
         }
-        let _ = write!(
-            out,
-            "Decide the {} yourself, from what is written above.",
-            auto.join(" and the ")
-        );
+        let _ = write!(out, "{FIELDS_AUTO}{}{FIELDS_AUTO_TAIL}", auto.join(" and the "));
     }
     out
 }
@@ -1331,6 +1366,20 @@ const IMAGES: &str = "Copy each path into the issue description exactly as it is
      the images; the words are what is left of them on a machine that does not have the files. \
      Neither on its own is enough.";
 
+/// The line the images block opens on, one apiece, because English has no way
+/// of saying it once for both counts.
+///
+/// Written out whole rather than assembled from three ternaries, which is what
+/// they were: `sessions::kickoff` matches on them to find where the person's
+/// own words stop, and a sentence built at run time out of fragments is not
+/// something another module can match against. The output is the same to the
+/// character. [`CONVERSATION_TAIL`] carries why that reader takes these
+/// constants rather than copies.
+pub const IMAGES_ONE: &str = "There is an image attached to this task, at this absolute path on \
+     this machine:";
+pub const IMAGES_MANY: &str = "There are images attached to this task, at these absolute paths \
+     on this machine:";
+
 /// The images, named. Empty when there are none — the whole block is absent
 /// then, rather than a heading with nothing under it.
 fn images(paths: &[String], delivery: ImageDelivery) -> String {
@@ -1339,13 +1388,7 @@ fn images(paths: &[String], delivery: ImageDelivery) -> String {
     }
     let one = paths.len() == 1;
     let mut out = String::new();
-    let _ = write!(
-        out,
-        "{} attached to this task, at {} absolute path{} on this machine:\n\n",
-        if one { "There is an image" } else { "There are images" },
-        if one { "this" } else { "these" },
-        if one { "" } else { "s" }
-    );
+    let _ = write!(out, "{}\n\n", if one { IMAGES_ONE } else { IMAGES_MANY });
     for path in paths {
         let _ = writeln!(out, "{path}");
     }
@@ -1443,6 +1486,14 @@ fn stages(
     out
 }
 
+/// The line the person's own words are announced by, and the one boundary
+/// `sessions::kickoff` cannot do without: everything between it and the first
+/// block below is what somebody typed into the new-task dialog, and there is
+/// no other mark in the prompt saying so. [`CONVERSATION_TAIL`] carries why it
+/// is read from here rather than copied.
+pub const NEW_TASK_OPENING: &str =
+    "File a new task in this project's bd tracker. This is what needs doing:";
+
 #[allow(clippy::too_many_arguments)]
 fn new_task(
     brainstorm: Stage,
@@ -1456,7 +1507,8 @@ fn new_task(
     text: SkillText,
 ) -> String {
     let mut out = String::new();
-    out.push_str("File a new task in this project's bd tracker. This is what needs doing:\n\n");
+    out.push_str(NEW_TASK_OPENING);
+    out.push_str("\n\n");
     out.push_str(draft.text.trim());
     out.push_str("\n\n");
     out.push_str(&images(&draft.images, image_delivery));
