@@ -10,7 +10,9 @@
 //! they are, in the left column.
 //!
 //! `model.rs` is the vocabulary and every rule that can be decided from text,
-//! `read.rs` is the disk, `act.rs` is the two verbs a session row's menu has
+//! `kickoff.rs` is one such rule kept apart because it reads `agents::prompt`'s
+//! own constants rather than a transcript's shapes, `read.rs` is the disk,
+//! `act.rs` is the two verbs a session row's menu has
 //! that touch a file rather than read one, and `commands.rs` is the thin layer
 //! over both. There is
 //! no worker, no queue and no watcher, which is the shape `git.rs` and `files/`
@@ -57,6 +59,19 @@
 //! is usually not a person talking at all, but a hook's output, a skill's body
 //! carried with `isMeta`, or the echo of a slash command.
 //!
+//! **A record a person is down as having typed may still not be their words**,
+//! and that is the one thing `human_text` cannot see. Smetana starts an agent
+//! by handing it a prompt of its own as the session's first message, so Claude
+//! Code writes that prompt into the transcript stamped `origin.kind: "human"`,
+//! indistinguishable from a sentence somebody wrote — and the tab drew the
+//! opening of it, identically, on nearly every row (smetana-w4i6).
+//! `kickoff::of` is what tells the two apart and cuts the person's own words
+//! back out of ours: the language paragraph the prompt always opens on is the
+//! mark, `agents::prompt`'s own constants are the boundaries, and a session
+//! somebody started from a terminal is not touched at all. Both the title and
+//! the card's first prompt are answered from that one reading, so a row cannot
+//! say one thing and the card another.
+//!
 //! It is bought inside the existing budget rather than paid for: the record
 //! sits tens of kilobytes into a file but only 7 to 88 *lines* in, well within
 //! the head the forward pass already parses, so `sessions_list` takes the same
@@ -79,5 +94,6 @@
 
 pub mod act;
 pub mod commands;
+pub mod kickoff;
 pub mod model;
 pub mod read;
