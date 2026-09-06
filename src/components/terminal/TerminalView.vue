@@ -193,7 +193,19 @@ onMounted(() => {
     // subscription is dropped there, but a chunk already in flight through
     // the store must not reach a disposed terminal.
     if (!term) return
-    if (meta?.reset) term.reset()
+    /* `meta.reset` marks a whole ring snapshot rather than a chunk of new
+       output — the screen is cleared and refilled from the beginning — so the
+       view belongs at the end of the buffer once that fill is in.
+
+       In `write`'s own callback and not after the call: `write` only queues the
+       bytes, the parser runs later, so scrolling on the line below would scroll
+       a buffer the snapshot has not reached yet. `term` is re-read there rather
+       than closed over, because the view can be unmounted between the two. */
+    if (meta?.reset) {
+      term.reset()
+      term.write(bytes, () => term?.scrollToBottom())
+      return
+    }
     term.write(bytes)
   })
 
@@ -220,9 +232,30 @@ onMounted(() => {
   sizes = new ResizeObserver(applySize)
   sizes.observe(host.value)
 
+  /* Fitted before anything is written into it. A Terminal opens at its own
+     default 80×24 and this pane is taller than that, so under the order this
+     replaces — `attach(id).then(applySize)` — the whole ring was parsed at a
+     size the pane never had and the fit that followed had to repair the result.
+
+     What that repair does is worth writing down, because it is narrower than it
+     looks: growing the row count pulls rows back out of the scrollback above
+     the cursor while there are any, and appends blank ones below once there are
+     none. Measured against @xterm/xterm 6.0.0, a short ring comes out of both
+     orders identically — so the empty tail under the output is not the
+     terminal's own arithmetic alone, and fitting first is the floor rather than
+     the whole of the answer.
+
+     The half the ordering does settle is the other one: this is also what tells
+     the PTY its size, and reading the ring first meant a snapshot could hold a
+     screen some program had drawn for the worker's fixed 120×30 and never been
+     asked to redraw. The size now goes out in front of the read, and whatever a
+     program repaints in answer to it arrives as ordinary output behind the
+     snapshot. */
+  applySize()
+
   if (props.sessionId && !isStarting(props.sessionId)) {
     attached = props.sessionId
-    attach(attached).then(applySize)
+    attach(attached)
   }
 
   /* A drop never reaches the webview — Tauri reports it against the window
@@ -274,7 +307,14 @@ watch(
       return
     }
     attached = id
-    attach(id).then(applySize)
+    /* Fitted first here too, for the reason onMounted carries. The pane's own
+       geometry has not moved since the last fit, so `fit()` finds nothing to do
+       and what this really buys is the second half: a session switched to may
+       never have been resized off the worker's fixed 120×30, and its ring is
+       about to be read. Telling it the size first is what keeps the snapshot
+       from being a screen drawn for a size nobody is looking at. */
+    applySize()
+    attach(id)
   }
 )
 
@@ -289,9 +329,11 @@ onBeforeUnmount(() => {
   detach(attached)
   attached = null
   term?.dispose()
-  /* An attach in flight still resolves into applySize after this. Forgetting
-     both here is what makes that harmless by construction, rather than by the
-     fit addon happening to bail on a detached element. */
+  /* An attach in flight can still answer after this. The subscription is
+     already dropped above, so its snapshot has nowhere to land; forgetting the
+     pair here is what makes the rest harmless by construction — every path back
+     into this view bails on a null `term` — rather than by the fit addon
+     happening to bail on a detached element. */
   term = null
   fit = null
 })
