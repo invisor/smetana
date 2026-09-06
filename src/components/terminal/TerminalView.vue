@@ -79,7 +79,20 @@ const style = {
   minWidth: 0,
   minHeight: 0,
   background: 'var(--editor-bg)',
-  padding: 'var(--space-3)'
+  padding: 'var(--space-3)',
+  /* Where the rounding remainder goes, and it goes up. A terminal is a whole
+     number of cells tall and the pane it is given almost never is, so there is
+     always up to one cell of space left over; `.xterm` is the host's one child
+     and is exactly `rows * cell` tall, so a column packed to the end spends
+     that leftover above the first row, against the tab bar, and leaves the
+     distance from the last row to the bottom of the dark ground at exactly the
+     padding on every window height and on every machine. Left at the default it
+     sat under the last row instead — next to the status footer and directly
+     under the agent's own prompt line, which is the one place on this pane a
+     person is looking at. */
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'flex-end'
 }
 
 /* With no session attached the pane was simply black, which reads as a
@@ -168,13 +181,73 @@ const dropCaption = computed(() =>
   dropCount.value > 1 ? `Drop to insert ${dropCount.value} file paths` : 'Drop to insert the file path'
 )
 
+/* How many rows the pane can really draw, and why this is not the fit addon's
+   own answer.
+
+   `FitAddon.proposeDimensions` measures `getComputedStyle(host).height` and then
+   subtracts the padding of the `.xterm` element inside it, which has none. Under
+   this project's global `box-sizing: border-box` that computed height is the
+   **border box** — the host's own `--space-3` padding is counted inside it — so
+   the addon divides a height two paddings larger than the terminal has to draw
+   in, and answers with up to one row more than fits. Measured against
+   @xterm/addon-fit 0.11.0 in Chromium 136 with a 13px cell: a 400px pane was
+   proposed 30 rows where 29 fit, and the extra row was drawn through the bottom
+   padding and out of the host's box, over whatever sits below it.
+
+   That overflow, rather than a rounding remainder left empty, is what made the
+   gap under the last line a fact about the machine: as the pane's height crosses
+   a multiple of the cell the distance from the last row to the bottom of the
+   dark ground walks the whole cycle from minus a padding to plus one, and where
+   a person's window happened to land decided which end of it they saw.
+
+   So the row count is taken from the host's **content** box — `clientHeight`
+   less its two paddings, both read back as resolved lengths rather than named
+   here — and the cell height from what xterm has actually drawn: `.xterm-screen`
+   is sized `cols * cell` by `rows * cell`, so dividing it by `term.rows` is the
+   same number `_core` holds, without reaching into `_core` for it.
+
+   The width is deliberately left exactly as it was. `proposeDimensions` measures
+   it the same wrong way and hands back one or two columns too many, but the
+   column count is what the agent's own output is wrapped at, so correcting it
+   silently alongside this would change what a running session looks like — a
+   separate defect with its own decision behind it.
+
+   Nothing here writes a size onto the host, and that is what keeps the
+   `ResizeObserver` below convergent: the host stays `flex: 1`, its box is a
+   function of the centre column alone, and a fit can therefore never be measured
+   against its own last answer — the loop the `minWidth: 0` note above describes.
+   Setting a height on the host, or a padding, would close exactly that circle. */
+function fittedRows() {
+  const screen = term.element?.querySelector('.xterm-screen')
+  if (!screen || !host.value) return 0
+  const box = getComputedStyle(host.value)
+  const inner = host.value.clientHeight - parseFloat(box.paddingTop) - parseFloat(box.paddingBottom)
+  const cell = screen.getBoundingClientRect().height / term.rows
+  // A pane that is not laid out yet, or one whose terminal has not drawn a
+  // frame, answers nothing rather than a row count divided by zero.
+  if (!(cell > 0) || !(inner > 0)) return 0
+  return Math.max(1, Math.floor(inner / cell))
+}
+
 /* Fitting the terminal to its pane has nothing to do with whether a session
    is attached — an empty terminal still has to fill the space it is given.
    Only the worker side of it, telling the PTY its new size, needs a session
    to send that to. */
 function applySize() {
   if (!fit || !term) return
-  fit.fit()
+  const cols = fit.proposeDimensions()?.cols
+  const rows = fittedRows()
+  /* `term.resize` rather than `fit.fit()`, since the rows are this file's now,
+     and guarded the way the addon guards its own: a resize with nothing to
+     change still reflows the buffer, and this runs on every observed layout
+     change. What the addon does either side of that call and this does not is
+     one `_renderService.clear()` in front of it, which for the DOM renderer this
+     app uses empties the row elements — and the resize repaints every one of
+     them through `_fullRefresh` regardless, so what is dropped is a repaint of a
+     repaint. A canvas or WebGL renderer would want it back with the addon. */
+  if (rows && Number.isFinite(cols) && (cols !== term.cols || rows !== term.rows)) {
+    term.resize(cols, rows)
+  }
   if (props.sessionId) resize(props.sessionId, term.cols, term.rows)
 }
 
@@ -326,7 +399,7 @@ watch(
     attached = id
     /* Fitted first here too, and here it is the smaller of the two halves
        onMounted sets out. The pane's geometry has not moved since the last fit,
-       so `fit()` finds nothing to change; what is left is `applySize`'s other
+       so the fit finds nothing to change; what is left is `applySize`'s other
        job, and a session being switched to may still be sitting on the worker's
        fixed 120×30, never having had a view of its own. Its ring already holds
        whatever it drew at that size and this cannot change that — the snapshot

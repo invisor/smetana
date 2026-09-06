@@ -703,6 +703,28 @@ column left the pane painted over the task panel, and converging visibly as `Res
 `fit()` → new cols → redraw fed each other. `KanbanBoard` and `FileEditor` never showed it only
 because `overflow: auto`/`hidden` zeroes that automatic minimum for them already.
 
+**How many rows fit is this file's arithmetic and no longer the fit addon's**, and the reason is a
+box model rather than a preference. `FitAddon.proposeDimensions` reads
+`getComputedStyle(host).height` and subtracts the padding of the `.xterm` element inside it, which
+has none — but under this project's global `box-sizing: border-box` that computed height *is* the
+border box, so the host's own `--space-3` is counted as space the terminal can draw in and the addon
+answers with up to one row more than fits. The extra row was drawn straight through the bottom
+padding and out of the host's box, over the status footer, which is what made the gap under the
+agent's own prompt line a fact about the machine: as a window's height crosses a multiple of the
+cell, the distance from the last row to the bottom of the dark ground walks the cycle from minus a
+padding to plus one, and two Macs simply landed at different points of it (smetana-v7e0). So
+`applySize` computes the rows from the host's **content** box and the cell height off the rendered
+`.xterm-screen` — `rows * cell` by construction, which is `_core`'s own number without reaching into
+`_core` — and `justifyContent: 'flex-end'` on the host spends the sub-row remainder above the first
+line, against the tab row, rather than below the last one. Nothing writes a size back onto the host,
+and that is what keeps it convergent: the host stays `flex: 1`, its box is the centre column's alone,
+and a fit is therefore never measured against its own last answer. **The width is deliberately still
+the addon's**, wrong in the same way and by one or two columns; it stays inside the pane because the
+14px the addon reserves for the scrollbar is wider than the padding it double-counts, so what it
+costs is that reserve rather than an overflow — and correcting it would change the column count a
+running agent wraps its own output at, which is a decision of its own and not a side effect of this
+one.
+
 `TerminalView.vue` hosts one `Terminal` instance per view, not per session — switching agents calls
 `reset()` and refills from the new ring snapshot, so returning to an agent lands at the end of its
 output rather than wherever it was scrolled to. An instance per session, the way `editor/states.js`
