@@ -220,6 +220,10 @@ onMounted(() => {
      too, and the re-read below then picks up the new size. `applySize` is what
      turns it into rows and columns the PTY agrees with. */
   observer = new MutationObserver(() => {
+    // Disconnected on unmount, so this should never run after one; the guard is
+    // here so that "nothing reaches this view once `term` is forgotten" holds
+    // of every callback in this file rather than of three out of four.
+    if (!term) return
     term.options.theme = terminalTheme()
     Object.assign(term.options, terminalFont())
     applySize()
@@ -232,25 +236,38 @@ onMounted(() => {
   sizes = new ResizeObserver(applySize)
   sizes.observe(host.value)
 
-  /* Fitted before anything is written into it. A Terminal opens at its own
-     default 80×24 and this pane is taller than that, so under the order this
-     replaces — `attach(id).then(applySize)` — the whole ring was parsed at a
-     size the pane never had and the fit that followed had to repair the result.
+  /* Fitted here, in front of the attach below rather than after it, and the
+     thing to have straight first is that the order this replaces was a race and
+     not a fixed wrong size. `sizes.observe` two lines up delivers an initial
+     callback of its own — `observe()` always does — and that callback is this
+     same `applySize`. It lands at the next rendering opportunity, while
+     `attach`'s snapshot lands after an IPC round trip, so which of the two came
+     first was a matter of timing: where the frame boundary won, the ring was
+     parsed at the pane's real size; where the round trip won, it was parsed at
+     the Terminal's own default 80×24, which this pane is much taller than. This
+     call is what takes the timing out of it, and it is also why the observer's
+     initial callback is no reason to delete the line: that callback is now a fit
+     with nothing to change, where before it was a repair.
 
-     What that repair does is worth writing down, because it is narrower than it
-     looks: growing the row count pulls rows back out of the scrollback above
+     What such a repair does is worth writing down, because it is narrower
+     than it looks: growing the row count pulls rows out of the scrollback above
      the cursor while there are any, and appends blank ones below once there are
      none. Measured against @xterm/xterm 6.0.0, a short ring comes out of both
      orders identically — so the empty tail under the output is not the
      terminal's own arithmetic alone, and fitting first is the floor rather than
      the whole of the answer.
 
-     The half the ordering does settle is the other one: this is also what tells
-     the PTY its size, and reading the ring first meant a snapshot could hold a
-     screen some program had drawn for the worker's fixed 120×30 and never been
-     asked to redraw. The size now goes out in front of the read, and whatever a
-     program repaints in answer to it arrives as ordinary output behind the
-     snapshot. */
+     The other half is `applySize`'s second job, telling the PTY its size, and
+     it is a smaller claim than it looks. `ring.rs` is cumulative — a snapshot is
+     everything since the session started, trimmed only on overflow — so a screen
+     some program drew for the worker's fixed 120×30 is in that snapshot
+     whichever order these two calls go out in, and nothing here can take bytes
+     back out of a ring. The old order asked for the redraw as well, in
+     `.then(applySize)`, one round trip later. What changes is the gap: the
+     resize is dispatched in front of the read now rather than behind it.
+     Dispatched, not arriving — neither `invoke` is awaited, each command reaches
+     the worker's queue through a task of its own, and nothing here depends on
+     them landing in that order. */
   applySize()
 
   if (props.sessionId && !isStarting(props.sessionId)) {
@@ -307,12 +324,14 @@ watch(
       return
     }
     attached = id
-    /* Fitted first here too, for the reason onMounted carries. The pane's own
-       geometry has not moved since the last fit, so `fit()` finds nothing to do
-       and what this really buys is the second half: a session switched to may
-       never have been resized off the worker's fixed 120×30, and its ring is
-       about to be read. Telling it the size first is what keeps the snapshot
-       from being a screen drawn for a size nobody is looking at. */
+    /* Fitted first here too, and here it is the smaller of the two halves
+       onMounted sets out. The pane's geometry has not moved since the last fit,
+       so `fit()` finds nothing to change; what is left is `applySize`'s other
+       job, and a session being switched to may still be sitting on the worker's
+       fixed 120×30, never having had a view of its own. Its ring already holds
+       whatever it drew at that size and this cannot change that — the snapshot
+       is cumulative — so what the order buys is only that the resize is
+       dispatched before the read rather than a round trip after it. */
     applySize()
     attach(id)
   }
@@ -329,11 +348,14 @@ onBeforeUnmount(() => {
   detach(attached)
   attached = null
   term?.dispose()
-  /* An attach in flight can still answer after this. The subscription is
-     already dropped above, so its snapshot has nowhere to land; forgetting the
-     pair here is what makes the rest harmless by construction — every path back
-     into this view bails on a null `term` — rather than by the fit addon
-     happening to bail on a detached element. */
+  /* An attach in flight can still answer after this, and so can a write already
+     queued in the parser. The subscription is dropped and the observers are
+     disconnected above, so in the ordinary case nothing reaches this view at
+     all; forgetting the pair here is what makes the leftovers harmless by
+     construction rather than by the order of those three lines. Every callback
+     back into this view returns on a null `term` — the output subscriber, the
+     snapshot's scroll, `applySize`, the theme observer — rather than the fit
+     addon happening to bail on a detached element. */
   term = null
   fit = null
 })
