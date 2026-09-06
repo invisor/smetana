@@ -20,6 +20,7 @@ import {
   Bug,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronsRight,
   CircleDashed,
@@ -265,6 +266,9 @@ export const iconNodes = {
   'panel-right-close': PanelRightClose,
   'panel-right-open': PanelRightOpen,
   'chevron-down': ChevronDown,
+  /* The pair the tab row scrolls itself with, when more tabs are open than fit
+     across it. `chevron-right` was already here for the tree's own rows. */
+  'chevron-left': ChevronLeft,
   'chevron-right': ChevronRight,
   // The card's overflow menu, where the play used to be. Three dots and not a
   // vertical `ellipsis-vertical`: the card's top row is horizontal and the

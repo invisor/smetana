@@ -730,6 +730,29 @@ const galleryTabOrder = ref([])
 
 const tabs = computed(() => orderTabs(galleryTabs.value, galleryTabOrder.value))
 
+/* The same row with more tabs than fit across it, which is the only state where
+   the arrows at its two ends are drawn at all — they appear on
+   `scrollWidth > clientWidth` and on nothing else, so the sample needs both this
+   longer list and the narrow container the template puts it in. Its own order
+   ref, for the reason the row above has one: a drag that snapped back would read
+   as a broken gesture rather than as a sample with nothing storing its order. */
+const galleryOverflowTabOrder = ref([])
+
+const overflowTabs = computed(() =>
+  orderTabs(
+    [
+      ...galleryTabs.value,
+      ...['main.rs', 'model.rs', 'service.rs', 'commands.rs', 'pty.rs'].map((name) => ({
+        id: name,
+        kind: 'file',
+        label: name,
+        iconUrl: fileIconUrl(name, documentTheme.value)
+      }))
+    ],
+    galleryOverflowTabOrder.value
+  )
+)
+
 /* `FileTree` walks a nested `children` array and draws a folder's contents only
    when `expanded` names it, while `MOCK_TREE` is keyed by directory the way
    `files_list` answers — so the gallery nests the one into the other and opens
@@ -3139,6 +3162,19 @@ const menuTargetStyle = {
           <MenuButton icon="plus" label="New task, agent, terminal or review" :items="NEW_TAB_ITEMS" :width="180" />
         </template>
       </TabBar>
+
+      <!-- The row again, in a container too narrow to hold it. The strip's own
+           scrollbar is hidden, so these two arrows are the only way to reach a
+           tab that has slid past an edge; at either end the arrow of that end is
+           disabled rather than taken away, since a row that changed width as it
+           scrolled would move the tabs out from under the pointer. -->
+      <div :style="{ width: '360px', maxWidth: '100%' }">
+        <TabBar
+          :tabs="overflowTabs"
+          active-id="main.rs"
+          @reorder="galleryOverflowTabOrder = $event"
+        />
+      </div>
 
       <!-- The other tab row, and the one that is not a tab row of files: the
            segmented strip under a side panel's header, drawn here at the width
