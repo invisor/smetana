@@ -23,7 +23,8 @@ thin commands.
 At the root the file keeps appearance — theme, density and `uiFontSize` — panel layout (collapsed
 state and width for each side, `railOpen` for whether the project rail is drawn beside the left
 panel, and `gitSections` beside them), `editor` with its own `fontSize` and `wordWrap`, `agent`, the id of the CLI agent to
-start, `agentLanguage`, `taskLanguage`, `commitLanguage` and `reportLanguage`, the languages that agent
+start, `model`, which model to ask it for, `agentRoles`, a harness-and-model pair per kind of agent
+call, `agentLanguage`, `taskLanguage`, `commitLanguage` and `reportLanguage`, the languages that agent
 works in, `agentPrompt`, the person's own standing instruction for every session they are in,
 `kanban`, how
 the board is drawn, `git`, what the app does to a person's repositories without asking each time,
@@ -91,6 +92,46 @@ beside it test truthiness as well. For a language an empty id is nothing anybody
 truthiness guard would swallow the clearing, leaving the old text in the app window's state and in
 the next session started while the field on screen looked empty. The shape to copy is
 `editorWordWrap`'s, not `agentLanguage`'s.
+
+`model` and `agentRoles` sit at the root beside `agent`, on that field's own argument: which model
+files a person's tasks is a habit of theirs, not a property of a project. `model` is the fallback
+behind everything; `agentRoles` is four `{ agent, model }` pairs — `tasks`, `code`, `runLead`,
+`reviewBranch` — one per kind of agent call. Which intents fall into which row is
+`agents::role_of`'s to say and deliberately not this schema's: this is the stored preference, that is
+the rule, and only one of the two belongs in a file people edit by hand
+(`.claude/rules/agents.md` carries the rule and why there are five rows and not eleven).
+
+**Two conventions about the empty string, and both are load-bearing.** An empty `model` means the
+flag is **not passed at all** and the harness picks for itself — this app's behaviour to the letter
+before the field existed, and the same argument that keeps every agent language at `en` rather than
+at an Auto position: shipping the field changes nothing for anybody until they go and choose. An
+empty `agent` on a *role* means that role inherits the root pair, and it takes the model with it.
+
+**Inheritance is by the pair and never by the field**, which is the sentence a reader who does not
+find it will "fix" into field-wise inheritance within a month. A model id is meaningful only against
+a provider — `opus` means nothing to Codex — so a role that could inherit the harness while carrying
+its own model would, on the day somebody switched the root from `claude` to `codex`, hold a model
+its provider has never heard of. The failure lands at spawn, in a run, at night, which is the one
+place this app cannot afford a surprise, and it is exactly the class of silent divergence
+`.claude/rules/agents.md` already records about guessed CLI flags. So a role either inherits whole or
+names both halves; the settings window fills the harness in on the first model chosen, so it costs
+the person nothing.
+
+Validation follows this file's own idiom — check against a list, never repeat one. A role's `agent`
+is `""` or a member of `agents::IDS`; a role's `model` is `""` or a member of its own harness's
+`Profile::models`, asked rather than copied. The three failures are three different amounts of
+damage, deliberately: an unknown harness empties **both** halves of that role and never touches the
+root `agent`; a model the chosen harness does not offer loses that one field and leaves the harness,
+which is still a harness this build ships; and a role with an empty `agent` and a non-empty `model`
+loses the model, because that is the half-pair the paragraph above refuses. The root `model` is
+checked against the root `agent` the same way. A test walks every model of every profile through
+`validate` and fails if one a profile offers is thrown away.
+
+`agentRoles` is the one field the settings window sends as an **object** rather than as a flat
+scalar, and the exception is the pair again: it is a table rather than a message of independent
+fields, so a whole role travels at a time and `applyPatch` refuses one carrying half of it. The
+window sends all four rows on every edit — `adopt()` replaces the field whole, so a patch naming one
+row would leave the other three `undefined` on that screen until the app window announced them back.
 
 **A removed field leaves its key on disk and nothing migrates it out.** serde ignores a key it has no
 field for, in silence, so a file written before the removal goes on loading and everything beside the
@@ -396,7 +437,8 @@ last edit rather than the app.
 
 Most of the file is still only ever changed by *using* the app: a dragged panel, a switched project,
 an opened tab. A handful of fields are the exception and they are what the settings window edits —
-`appearance.theme`, `appearance.uiFontSize`, both `editor` fields, `agent`, the languages beside it,
+`appearance.theme`, `appearance.uiFontSize`, both `editor` fields, `agent`, `model`, all four of
+`agentRoles`, the languages beside them,
 the four `kanban` fields, both `git` fields, `window.restoreGeometry`, `updates.autoCheck` and all
 four `notifications` fields. Density is not among them, deliberately: nothing has asked for it yet,
 and a screen full of switches nobody wanted is worse than a short one. `?theme=` and `?density=`
@@ -526,14 +568,20 @@ the eighth the `--row-h` height became a starting point and fifteen rows shared 
 each instead of scrolling at 28. `flexShrink: 0` is the fix, and a list that genuinely scrolls then
 needed `reveal`, the cursor's row brought into view on opening and on walking off either end.
 
-Agents is the one place in the front end that ever *names* an agent: the ids are still `agents::IDS`
-and Rust still drops one it does not ship, so this is a set of labels for ids Rust already knows. The
-language pickers under it are the same doubling against `agents::LANGUAGES`, accepted for the
-same reason — Rust validates the ids, so drift costs a stale label rather than a lost setting — and
-every row on the tab shares one control column, wider than the shipped default because `Dropdown`
-ellipsises a label that does not fit and "Chinese (Simplified)" is the longest label any of the lists
-holds. The languages sit in a `SettingsGroup` captioned Languages and the Agent row stays outside it,
-which is General's own drawing: a second group over that one row would be a caption for its own sake.
+Agents names no agent and no model of its own: both lists come from `stores/agents.js`, which is
+`agents_catalog` read once at startup, so an id added in Rust is offered here for free
+(`.claude/rules/agents.md`). The language pickers under them are the one doubling left on this tab,
+against `agents::LANGUAGES` and accepted for the usual reason — Rust validates the ids, so drift
+costs a stale label rather than a lost setting. Every row shares one control column, wider than the
+shipped default because `Dropdown` ellipsises a label that does not fit and "Chinese (Simplified)" is
+the longest label any of the lists holds; the five rows of the Models group ask for twice that, since
+each holds two fields side by side, and `SettingsRow` lets the pair give way rather than paint
+outside the panel where there is not that much room. The languages sit in a `SettingsGroup` captioned Languages, and the Agent row is no longer outside
+it as a row of its own: it is the Default row of the **Agents and models** group above, bound to the
+same `agent` field it always was. A group over one row would have been a caption for its own sake,
+which is why that row stood alone before; a group of five with a sixth control writing one of the
+same fields would be worse, since two controls over one setting is the drift this file keeps arguing
+against.
 Commit language reaches two places rather than one — the button in the Git
 panel and a run's own commits — for the reason `.claude/rules/agents.md` records.
 
@@ -553,8 +601,15 @@ and two strings. Two things it must keep saying: the stored value is untouched w
 so turning the switch back on brings the choice back rather than `en`, and the Off sentence says
 reports are not *shown* — it must never claim the document is not written, because
 `runs::service::finish` writes it either way. The
-subscription block under it was a placeholder with dashes and is now the reading itself: the tab asks
-`agent_usage`, which is `runs/usage.rs`'s probe — the same one the run gate makes before every batch
+subscription block under it is about **the harness a run would start**, which is the Run lead row's
+or the root's behind it (`runLeadAgent`, and `runs/commands.rs` answers the same question for a
+caller that names nobody). Not the Default row: with Run lead on Codex under a Claude root the block
+would draw Claude Code's allowance, and the sentence about a run taking fewer tasks per batch, for a
+run spending a different subscription — and that figure is precisely what somebody watches to know
+whether tonight's batch will be gated. The same rule feeds the status footer's strip in the app
+window, and both re-probe when — and only when — that derived harness moves, which is two of the ten
+dropdowns rather than one. It was a placeholder with dashes and is now the reading itself: the tab
+asks `agent_usage`, which is `runs/usage.rs`'s probe — the same one the run gate makes before every batch
 — put from the other end of the app. Four things about it are decisions rather than mechanics. The
 answer has **three distinguishable states** and not an `Option`: an agent with no `usage_command`
 (Codex) reads differently from one that was asked and could not answer, since those are different

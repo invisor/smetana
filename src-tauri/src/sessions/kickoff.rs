@@ -246,6 +246,7 @@ mod tests {
             nothing(),
             languages,
             agent_prompt,
+            None,
         )
         .expect("every intent here opens on a prompt")
     }

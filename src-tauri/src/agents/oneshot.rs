@@ -299,8 +299,12 @@ fn stop(child: &mut std::process::Child) {
 /// fix is a channel with a deadline and a leaked thread, and the case has not
 /// earned that yet. What it must not cost is somebody's afternoon in the poll
 /// loop below.
-pub fn ask_raw(profile: &'static dyn Profile, prompt: &str) -> Result<String, OneshotError> {
-    ask_within(profile, prompt, TIMEOUT)
+pub fn ask_raw(
+    profile: &'static dyn Profile,
+    model: Option<&str>,
+    prompt: &str,
+) -> Result<String, OneshotError> {
+    ask_within(profile, model, prompt, TIMEOUT)
 }
 
 /// The whole of `ask_raw` with the ceiling handed in.
@@ -310,14 +314,23 @@ pub fn ask_raw(profile: &'static dyn Profile, prompt: &str) -> Result<String, On
 /// against the ninety seconds the product uses would be a test nobody runs.
 fn ask_within(
     profile: &'static dyn Profile,
+    model: Option<&str>,
     prompt: &str,
     timeout: Duration,
 ) -> Result<String, OneshotError> {
     let args =
         profile.oneshot_args().ok_or_else(|| OneshotError::Unsupported(profile.binary().into()))?;
+    // The model, where the Default role named one. Asked of the profile rather
+    // than written out here, exactly as the arguments above it are: a one-shot
+    // is a session too, and there is no reason for the button in the Git panel
+    // to reach a different model from the one everything else with no role of
+    // its own reaches. Empty for a harness that cannot be told, and before the
+    // prompt, which is positional.
+    let model_args = model.map(|model| profile.model_args(model)).unwrap_or_default();
     let mut command = Command::new(profile.binary());
     command
         .args(args)
+        .args(&model_args)
         .arg(prompt)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -401,8 +414,12 @@ fn ask_within(
 /// this one is a harness that printed something `clean` found no line in — a
 /// bare code fence, say. Both reach the field as the same sentence, since from
 /// where a person is sitting they are the same nothing.
-pub fn ask(profile: &'static dyn Profile, prompt: &str) -> Result<String, OneshotError> {
-    let message = clean(&ask_raw(profile, prompt)?);
+pub fn ask(
+    profile: &'static dyn Profile,
+    model: Option<&str>,
+    prompt: &str,
+) -> Result<String, OneshotError> {
+    let message = clean(&ask_raw(profile, model, prompt)?);
     if message.is_empty() {
         return Err(OneshotError::Failed(format!("{} answered with nothing.", profile.binary())));
     }
@@ -436,6 +453,10 @@ mod spawn_tests {
         fn delivery(&self) -> crate::agents::SkillDelivery {
             crate::agents::SkillDelivery::Inline
         }
+        /// One entry so the trait is satisfied; nothing here asks for a model.
+        fn models(&self) -> &'static [(&'static str, &'static str)] {
+            &[("sh", "Shell")]
+        }
         fn command(&self, _launch: &crate::agents::Launch) -> portable_pty::CommandBuilder {
             portable_pty::CommandBuilder::new(self.binary())
         }
@@ -462,7 +483,7 @@ mod spawn_tests {
     #[test]
     fn a_harness_that_prints_more_than_a_pipe_holds_still_answers() {
         let started = Instant::now();
-        let answer = ask_raw(&Sh, "printf 'x%.0s' $(seq 1 300000); printf '\nthe answer\n'")
+        let answer = ask_raw(&Sh, None, "printf 'x%.0s' $(seq 1 300000); printf '\nthe answer\n'")
             .expect("a child that outlives its pipe buffer is not a failure");
         assert!(answer.ends_with("the answer"), "the whole of stdout comes back");
         assert!(
@@ -481,7 +502,7 @@ mod spawn_tests {
     /// rather than like a full pipe.
     #[test]
     fn a_harness_that_fills_the_error_pipe_stalls_no_more_than_the_other_one() {
-        let answer = ask_raw(&Sh, "printf 'e%.0s' $(seq 1 300000) >&2; printf 'the answer\n'")
+        let answer = ask_raw(&Sh, None, "printf 'e%.0s' $(seq 1 300000) >&2; printf 'the answer\n'")
             .expect("stderr is drained too");
         assert_eq!(answer, "the answer");
     }
@@ -490,7 +511,7 @@ mod spawn_tests {
     /// code, which is what the drained stderr is for.
     #[test]
     fn a_child_that_failed_reaches_the_panel_in_its_own_words() {
-        let err = ask_raw(&Sh, "echo 'no model configured' >&2; exit 3")
+        let err = ask_raw(&Sh, None, "echo 'no model configured' >&2; exit 3")
             .expect_err("a non-zero exit is a failure");
         assert!(
             matches!(&err, OneshotError::Failed(said) if said == "no model configured"),
@@ -509,7 +530,7 @@ mod spawn_tests {
     fn within(prompt: &'static str, timeout: Duration, patience: Duration) -> OneshotError {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(ask_within(&Sh, prompt, timeout).err());
+            let _ = tx.send(ask_within(&Sh, None, prompt, timeout).err());
         });
         match rx.recv_timeout(patience) {
             Ok(Some(err)) => err,

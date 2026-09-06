@@ -15,6 +15,29 @@ use crate::runs::model::RunMode;
 use crate::runs::usage::Usage;
 use crate::terminal::model::{Question, QuestionOption};
 
+/// The models this harness offers, the id first and the name a person reads
+/// second.
+///
+/// **Aliases rather than full names**, and that is the whole of the choice: the
+/// CLI's help offers both, an alias points at the latest model of its family,
+/// and a full name written into somebody's `settings.json` pins a version that
+/// goes stale where nobody looks. A new release moves what an alias means
+/// without moving anything in this file.
+///
+/// Read off `claude --help` at 2.1.263 on 2026-09-06, which documents the flag
+/// as taking "an alias for the latest model (e.g. 'fable', 'opus', or
+/// 'sonnet')". `haiku` is the fourth and is not in that sentence's examples: it
+/// is documented by the same CLI's own settings reference, which spells the
+/// field as `"model": "sonnet", // or "fable", "opus", "haiku", full model ID`.
+/// Strongest first, which is the order the CLI itself ranks them in and the
+/// order its help names them.
+const MODELS: &[(&str, &str)] = &[
+    ("fable", "Fable"),
+    ("opus", "Opus"),
+    ("sonnet", "Sonnet"),
+    ("haiku", "Haiku"),
+];
+
 pub struct Claude;
 
 impl Profile for Claude {
@@ -32,6 +55,24 @@ impl Profile for Claude {
 
     fn delivery(&self) -> SkillDelivery {
         SkillDelivery::PluginDir
+    }
+
+    /// The aliases, never the full names. `MODELS` carries the reasoning.
+    fn models(&self) -> &'static [(&'static str, &'static str)] {
+        MODELS
+    }
+
+    /// `--model <model>`, read off this CLI's own help at 2.1.263: "Model for
+    /// the current session. Provide an alias for the latest model (e.g.
+    /// 'fable', 'opus', or 'sonnet') or a model's full name."
+    ///
+    /// **This is Claude Code's grammar and nobody else's**, exactly as
+    /// `resume_args` is: `codex.rs` answers with its own short flag rather than
+    /// this one, because a wrong flag here is a session that dies at spawn — at
+    /// night, inside a run, which is the one place this app cannot afford a
+    /// surprise.
+    fn model_args<'a>(&self, model: &'a str) -> Vec<&'a str> {
+        vec!["--model", model]
     }
 
     /// `--plugin-dir` loads a plugin for this session only: nothing is
@@ -97,6 +138,31 @@ impl Profile for Claude {
                 cmd.arg(arg);
             }
         }
+        // Which model, where somebody has chosen one. Before the prompt for the
+        // reason the autonomy arguments above it are: the prompt is positional,
+        // and a flag after it would rely on somebody else's parser being
+        // relaxed about the order.
+        //
+        // Read back through `self.model_args` rather than written out again,
+        // the same way `batch_args` is above: the profile's answer and the
+        // command line cannot then come to disagree. Nothing at all when the
+        // `Launch` carries no model, which is the shipped state and this app's
+        // behaviour to the letter before the field existed — the harness picks
+        // for itself.
+        // Never on a resume, whatever the `Launch` carries. Two guards rather
+        // than one, exactly as the chosen session id above has: that one is
+        // `settings::role_model`, which refuses this intent a model at all, and
+        // this one stands where the flag would go on the line. A recorded
+        // conversation already has a model, and this app arriving with a second
+        // opinion is the intrusion `prompt::build` refuses when it declines to
+        // compose a prompt for the same intent.
+        if !matches!(launch.intent, Intent::ResumeSession { .. }) {
+            if let Some(model) = launch.model.as_deref() {
+                for arg in self.model_args(model) {
+                    cmd.arg(arg);
+                }
+            }
+        }
         // Nothing is read from disk here: both plugins are loaded, so the
         // prompt names the skills and Claude Code fetches them on demand.
         // Attached images are not on this command line either, and for a
@@ -119,6 +185,7 @@ impl Profile for Claude {
             text,
             &launch.languages,
             &launch.agent_prompt,
+            launch.worker_model.as_deref(),
         ) {
             cmd.arg(built);
         }
@@ -667,6 +734,8 @@ mod tests {
             session_id: None,
             languages: crate::agents::Languages::default(),
             agent_prompt: String::new(),
+            model: None,
+            worker_model: None,
         }
     }
 
@@ -710,6 +779,54 @@ mod tests {
         assert_eq!(args.len(), 6);
         assert!(args.last().unwrap().contains("Talk to me in English"), "{args:?}");
         assert_eq!(argv(&launch(Intent::Bare, true)).len(), 4);
+    }
+
+    #[test]
+    fn the_model_flag_is_the_one_this_cli_documents() {
+        // `--model <model>`, spelled long, which is what `claude --help` says
+        // and the whole of what this method is: a guessed flag is a session
+        // that dies at spawn.
+        assert_eq!(Claude.model_args("opus"), vec!["--model", "opus"]);
+    }
+
+    #[test]
+    fn every_offered_model_has_a_name_a_person_reads() {
+        assert!(!Claude.models().is_empty());
+        for (id, label) in Claude.models() {
+            assert!(!id.is_empty(), "a model id must not be empty");
+            assert!(!label.is_empty(), "model {id} has no label");
+        }
+    }
+
+    #[test]
+    fn a_chosen_model_reaches_the_command_line() {
+        let mut chosen = launch(Intent::Bare, false);
+        chosen.model = Some("opus".into());
+        let args = argv(&chosen);
+        assert!(
+            args.windows(2).any(|pair| pair[0] == "--model" && pair[1] == "opus"),
+            "the chosen model must be on the command line: {args:?}"
+        );
+    }
+
+    #[test]
+    fn no_chosen_model_means_no_flag_at_all() {
+        // The shipped state, and this app's behaviour to the letter before the
+        // setting existed: with nothing chosen the harness picks for itself.
+        let args = argv(&launch(Intent::Bare, false));
+        assert!(!args.iter().any(|arg| arg == "--model"), "{args:?}");
+    }
+
+    #[test]
+    fn a_resumed_session_is_never_told_which_model_to_use() {
+        // `settings::role_model` refuses this intent a model in the first
+        // place, so a `Launch` carrying one here is a fixture rather than a
+        // state the app reaches — and this is the second guard, standing where
+        // the flag would appear. A recorded conversation already has a model.
+        let mut chosen = launch(resume("9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60"), true);
+        chosen.model = Some("opus".into());
+        let args = argv(&chosen);
+        assert!(!args.iter().any(|arg| arg == "--model"), "{args:?}");
     }
 
     fn resume(id: &str) -> Intent {

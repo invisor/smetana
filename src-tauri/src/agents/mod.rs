@@ -557,6 +557,26 @@ pub struct Launch {
     /// already carries it — and for a harness with no such flag. The worker
     /// chooses it; `terminal::conversation` is what makes one.
     pub session_id: Option<String>,
+    /// The model this session's role asked for, or `None` where nobody has
+    /// chosen one and the harness picks for itself. Read from `settings.json`
+    /// by the caller, for the reason `languages` is: `prompt.rs` stays pure and
+    /// the disk stays outside it.
+    ///
+    /// Always `None` for `Intent::ResumeSession`, whatever the file says. A
+    /// recorded conversation already has a model, and this app arriving with a
+    /// second opinion is the same intrusion `prompt::build` refuses when it
+    /// declines to compose a prompt for that intent: whatever was settled in
+    /// there was settled before this window existed.
+    pub model: Option<String>,
+    /// The model a run is asked to give the subagents that write its code — the
+    /// `code` role's, not this session's. Meaningful only for `Intent::Run`.
+    ///
+    /// It reaches the agent as one line of the run policy and never as an
+    /// argument, because a subagent is spawned inside the lead's own harness
+    /// and there is no command line of ours to put a flag on. That makes it a
+    /// request rather than a guarantee, and the app cannot check what a
+    /// subagent actually ran on.
+    pub worker_model: Option<String>,
 }
 
 pub trait Profile: Sync {
@@ -572,6 +592,31 @@ pub trait Profile: Sync {
     /// What to exec. Also what we look for on `PATH`.
     fn binary(&self) -> &'static str;
     fn delivery(&self) -> SkillDelivery;
+
+    /// The models this harness accepts, each with the name a person reads in
+    /// the settings window. The ids come from the CLI's own `--help`, never
+    /// from memory: `.claude/rules/agents.md` records what guessing at a CLI's
+    /// vocabulary costs, and this is the same vocabulary `resume_args` and
+    /// `batch_args` are already careful about.
+    ///
+    /// **No default**, unlike almost every other method on this trait, and for
+    /// the reason `label` has none: a harness added to `IDS` without a model
+    /// list would ship an empty dropdown, which reads as a load that failed
+    /// rather than as a decision anybody made. The compiler is the cheapest
+    /// place to find that out.
+    fn models(&self) -> &'static [(&'static str, &'static str)];
+
+    /// How this harness is told which model to use, as the arguments that go on
+    /// its command line.
+    ///
+    /// The default is an empty vector, and — like `autonomy`'s and
+    /// `batch_args`' — it is a working answer rather than a gap: a harness with
+    /// no such flag simply cannot be told, so the setting is inert for it
+    /// instead of broken.
+    fn model_args<'a>(&self, _model: &'a str) -> Vec<&'a str> {
+        Vec::new()
+    }
+
     /// How images reach this harness. The default is the answer for any CLI
     /// that has no flag for them, which is most of them: a path named in the
     /// prompt is the one channel every harness has.
@@ -834,6 +879,47 @@ pub trait Profile: Sync {
     }
 }
 
+/// Which row of the settings window decides this session's harness and its
+/// model. Four named roles and a default, rather than one row per `Intent`:
+/// eleven rows is a settings screen nobody reads, and it would still not have
+/// separated a run's lead from the subagents it delegates to, since both live
+/// behind `Run`.
+///
+/// The lead is its own role for exactly that reason. A `--model` flag on a run's
+/// session sets the **lead's** model and nothing else — the subagents are
+/// spawned by the lead inside its own harness and take that harness's default —
+/// so "Opus writes the code" and "Opus leads the run" are two different requests
+/// and one flag cannot carry both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Tasks,
+    Code,
+    RunLead,
+    ReviewBranch,
+    Default,
+}
+
+/// Which role this intent falls into. Pure, and here rather than in `settings`
+/// for that reason: the mapping is a rule about intents, while reading somebody's
+/// file is not, and this half has to be testable without a disk.
+pub fn role_of(intent: &Intent) -> Role {
+    match intent {
+        Intent::NewTask { .. } | Intent::EditTask { .. } | Intent::ResolveTask { .. } => Role::Tasks,
+        Intent::FixTask { .. } | Intent::ResolveConflict { .. } => Role::Code,
+        Intent::Run { .. } => Role::RunLead,
+        Intent::ReviewBranch { .. } => Role::ReviewBranch,
+        // `Bare`, `Setup`, `RepairTracker` — and, deliberately,
+        // `ResumeSession`. A resumed conversation keeps the model it was
+        // started with and is never told one at all (`Launch::model`), so the
+        // row it nominally belongs to costs it nothing either way; putting it
+        // anywhere else would only invite somebody to make that row reach it.
+        Intent::Bare
+        | Intent::Setup
+        | Intent::RepairTracker { .. }
+        | Intent::ResumeSession { .. } => Role::Default,
+    }
+}
+
 /// What a profile needs added to run a batch.
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct Autonomy {
@@ -877,6 +963,16 @@ pub struct Capabilities {
     pub oneshot: bool,
 }
 
+/// One model a harness offers, as the front end needs it while a dropdown is
+/// being drawn: the id that goes on the command line and the name a person
+/// reads beside it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModel {
+    pub id: String,
+    pub label: String,
+}
+
 /// One harness, as the front end sees it.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -884,6 +980,12 @@ pub struct AgentRow {
     pub id: String,
     pub label: String,
     pub capabilities: Capabilities,
+    /// What this harness may be asked to run on. Carried in the same row as the
+    /// capabilities and for the same reason: the front end draws a model picker
+    /// per harness, and a hand-written table over there would be the fifth copy
+    /// of a fact this file owns — the four this command abolished are named on
+    /// `catalogue` below.
+    pub models: Vec<AgentModel>,
 }
 
 /// Every shipped harness and what it can do — **asked of the profiles**, never
@@ -911,6 +1013,14 @@ pub fn catalogue() -> Vec<AgentRow> {
                 batch: !profile.batch_args().is_empty(),
                 oneshot: profile.oneshot_args().is_some(),
             },
+            models: profile
+                .models()
+                .iter()
+                .map(|(id, label)| AgentModel {
+                    id: (*id).to_owned(),
+                    label: (*label).to_owned(),
+                })
+                .collect(),
         })
         .collect()
 }
@@ -994,6 +1104,38 @@ pub fn pick(id: &str, path_var: Option<&str>) -> Option<&'static dyn Profile> {
         return Some(profile);
     }
     IDS.iter().filter_map(|id| resolve(id)).find(|p| installed(*p))
+}
+
+/// `pick`, with the model that was chosen against `id` — and **the model is
+/// dropped whenever the substitution above actually happens.**
+///
+/// `pick` is the third and quietest member of the family the pair rule is
+/// about. `AgentRole::validate` empties a role that holds a model with no
+/// harness beside it; `settings::role_model` drops the model when a run's
+/// pinned harness disagrees with the file; and this one hands back a *different
+/// profile* when the configured harness is not on `PATH`. A model id is
+/// meaningful only against the provider it was chosen for, so carrying one
+/// across a substitution would put a Codex model on Claude Code's command line.
+///
+/// It is not hypothetical: the settings window offers every shipped harness
+/// whether or not it is installed. Choose Codex and one of its models on a
+/// machine with only Claude Code, and the fallback that used to work in silence
+/// would spawn `claude --model gpt-5.6-sol` and die at the first argument — at
+/// night, in a run, which is the case this whole feature was designed around.
+///
+/// The substitution itself is untouched and stays silent, exactly as it was:
+/// what is lost is the flag, which puts the session back on that harness's own
+/// default. That is this app's behaviour before the model field existed.
+///
+/// Here rather than at the three call sites because it is one rule about one
+/// mechanism, and the fourth caller added later would be the one that forgot.
+pub fn pick_with_model(
+    id: &str,
+    model: Option<String>,
+    path_var: Option<&str>,
+) -> Option<(&'static dyn Profile, Option<String>)> {
+    let profile = pick(id, path_var)?;
+    Some((profile, model.filter(|_| profile.id() == id)))
 }
 
 #[cfg(test)]
@@ -1574,6 +1716,11 @@ mod tests {
             fn delivery(&self) -> SkillDelivery {
                 SkillDelivery::Inline
             }
+            /// One entry so the trait is satisfied; this fixture is about the
+            /// session verbs and never about a model.
+            fn models(&self) -> &'static [(&'static str, &'static str)] {
+                &[("plain", "Plain")]
+            }
             fn command(&self, _launch: &Launch) -> portable_pty::CommandBuilder {
                 portable_pty::CommandBuilder::new(self.binary())
             }
@@ -1605,6 +1752,11 @@ mod tests {
             }
             fn delivery(&self) -> SkillDelivery {
                 SkillDelivery::Inline
+            }
+            /// One entry so the trait is satisfied; this fixture is about the
+            /// session verbs and never about a model.
+            fn models(&self) -> &'static [(&'static str, &'static str)] {
+                &[("plain", "Plain")]
             }
             fn command(&self, _launch: &Launch) -> portable_pty::CommandBuilder {
                 portable_pty::CommandBuilder::new(self.binary())
@@ -1643,6 +1795,135 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn every_installed_harness_offers_at_least_one_model() {
+        // `models` has no default for exactly this: a harness added to `IDS`
+        // without a list would ship an empty dropdown, which reads as a load
+        // that failed rather than as anybody's decision. The compiler catches
+        // the missing method; this catches an empty one.
+        for id in IDS {
+            let profile = resolve(id).expect("every id in IDS resolves to a profile");
+            assert!(!profile.models().is_empty(), "harness {id} offers no model to choose from");
+        }
+    }
+
+    #[test]
+    fn a_model_offered_by_a_harness_produces_arguments() {
+        // Offering models and having no way to be told which one is the pair
+        // coming apart: the settings window would draw a live-looking picker
+        // over a flag that never reaches a command line.
+        for id in IDS {
+            let profile = resolve(id).expect("every id in IDS resolves to a profile");
+            let (model, _) = profile.models()[0];
+            assert!(
+                !profile.model_args(model).is_empty(),
+                "harness {id} offers models but cannot be told which one to use"
+            );
+        }
+    }
+
+    #[test]
+    fn every_intent_falls_into_exactly_one_role() {
+        use crate::runs::model::RunMode;
+        use Role::*;
+
+        let cases: Vec<(Intent, Role)> = vec![
+            (Intent::Bare, Default),
+            (Intent::Setup, Default),
+            (
+                Intent::RepairTracker {
+                    dir: "/p".into(),
+                    bd_version: "0.0.0".into(),
+                    command: "bd list".into(),
+                    stderr: "no such file".into(),
+                },
+                Default,
+            ),
+            (
+                Intent::NewTask {
+                    brainstorm: Stage::Auto,
+                    spec: Stage::Auto,
+                    plan: Stage::Auto,
+                    draft: TaskDraft {
+                        text: "Something to file".into(),
+                        issue_type: None,
+                        priority: None,
+                        images: Vec::new(),
+                        parent: None,
+                    },
+                },
+                Tasks,
+            ),
+            (Intent::EditTask { id: "a-1".into(), title: "t".into() }, Tasks),
+            (Intent::ResolveTask { id: "a-1".into(), title: "t".into() }, Tasks),
+            (Intent::FixTask { id: "a-1".into(), title: "t".into() }, Code),
+            (
+                Intent::ResolveConflict {
+                    repo: "/p/backend".into(),
+                    op: crate::vcs::model::OpKind::Merge,
+                    ours: "main".into(),
+                    theirs: "feature/x".into(),
+                    files: vec!["src/lib.rs".into()],
+                },
+                Code,
+            ),
+            (
+                Intent::ReviewBranch {
+                    pairs: vec![ReviewPair {
+                        repo: "/p/backend".into(),
+                        base: "main".into(),
+                        head: "feature/x".into(),
+                    }],
+                    report: ".smetana/reviews/x".into(),
+                    fetch_failed: Vec::new(),
+                },
+                ReviewBranch,
+            ),
+            (run_intent(RunMode::Auto), RunLead),
+            (
+                Intent::ResumeSession {
+                    id: "9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60".into(),
+                    cwd: "/p/.worktrees/smetana-0cj".into(),
+                    title: None,
+                    fork: false,
+                },
+                Default,
+            ),
+        ];
+        assert_eq!(cases.len(), 11, "every variant of Intent has a row here");
+        for (intent, expected) in cases {
+            assert_eq!(role_of(&intent), expected, "wrong role for {intent:?}");
+        }
+    }
+
+    #[test]
+    fn a_resumed_session_belongs_to_no_role_of_its_own() {
+        // It falls into the default row and is never told a model all the same
+        // — `Launch::model` and both profiles' `command` say so. Filed here
+        // rather than given a row of its own because a row would invite
+        // somebody to make it reach a resumed conversation, which already has
+        // a model and somebody's words in it.
+        let resumed = Intent::ResumeSession {
+            id: "9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60".into(),
+            cwd: "/p/.worktrees/smetana-0cj".into(),
+            title: None,
+            fork: true,
+        };
+        assert_eq!(role_of(&resumed), Role::Default);
+    }
+
+    #[test]
+    fn filing_a_task_and_leading_a_run_are_different_rows() {
+        // The request this whole feature came from, in one line: three
+        // different kinds of work, three places to say which model does them.
+        // A second road into a session added later fails here rather than at
+        // 3am in a run.
+        use crate::runs::model::RunMode;
+        let filing = role_of(&Intent::EditTask { id: "a-1".into(), title: "t".into() });
+        assert_ne!(filing, role_of(&run_intent(RunMode::Auto)));
+        assert_ne!(filing, role_of(&Intent::FixTask { id: "a-1".into(), title: "t".into() }));
     }
 
     #[test]
@@ -1719,6 +2000,25 @@ mod tests {
     }
 
     #[test]
+    fn the_catalogue_carries_every_harnesss_models() {
+        // The row is where the front end gets the model list from, and the
+        // whole reason it does is that the alternative was a fifth hand-written
+        // table keyed by agent id.
+        for row in catalogue() {
+            assert!(!row.models.is_empty(), "catalogue row for {} offers no model", row.id);
+            let profile = resolve(&row.id).expect("a listed id must resolve");
+            let asked: Vec<(String, String)> = profile
+                .models()
+                .iter()
+                .map(|(id, label)| ((*id).to_owned(), (*label).to_owned()))
+                .collect();
+            let drawn: Vec<(String, String)> =
+                row.models.iter().map(|m| (m.id.clone(), m.label.clone())).collect();
+            assert_eq!(drawn, asked, "{}: the row says what its own profile says", row.id);
+        }
+    }
+
+    #[test]
     fn the_catalogue_reaches_the_front_end_in_the_shape_it_reads() {
         // The store and `mockBackend.js` both read `capabilities.oneshot` and
         // the rest by those names, so the serialization is part of the
@@ -1730,6 +2030,13 @@ mod tests {
         for field in ["resume", "fork", "clear", "usage", "batch", "oneshot"] {
             assert!(capabilities.get(field).is_some_and(serde_json::Value::is_boolean), "{field}");
         }
+        // The models travel in the same row and by the names the settings
+        // window's dropdown reads them by.
+        let models = first.get("models").and_then(serde_json::Value::as_array);
+        let models = models.expect("a row carries the models it offers");
+        let model = models.first().expect("at least one model is offered");
+        assert!(model.get("id").is_some_and(serde_json::Value::is_string));
+        assert!(model.get("label").is_some_and(serde_json::Value::is_string));
     }
 
     #[test]
@@ -1779,6 +2086,8 @@ mod tests {
             session_id: None,
             languages: Languages::default(),
             agent_prompt: String::new(),
+            model: None,
+            worker_model: None,
         }
     }
 
@@ -1926,6 +2235,24 @@ mod tests {
 
         let path_var = dir.to_str().expect("temp dir path is valid UTF-8");
         assert_eq!(pick("claude", Some(path_var)).map(|p| p.id()), Some("codex"));
+
+        // And the model goes no further than the harness it was chosen
+        // against. The substitution is the same one as above — this is the
+        // case where a person chose Claude Code and a Claude model on a machine
+        // that has only Codex — and carrying `opus` onto Codex's command line
+        // would turn a working fallback into a session that dies at spawn.
+        let substituted = pick_with_model("claude", Some("opus".into()), Some(path_var));
+        assert_eq!(substituted.map(|(p, m)| (p.id(), m)), Some(("codex", None)));
+
+        // The harness that was actually asked for keeps its model.
+        let asked = pick_with_model("codex", Some("gpt-5.6-sol".into()), Some(path_var));
+        assert_eq!(
+            asked.map(|(p, m)| (p.id(), m)),
+            Some(("codex", Some("gpt-5.6-sol".to_owned())))
+        );
+
+        // Nothing installed is nothing to run, model or no model.
+        assert!(pick_with_model("claude", Some("opus".into()), Some("/nowhere")).is_none());
 
         std::fs::remove_dir_all(&dir).expect("remove temp dir for the fake install");
     }

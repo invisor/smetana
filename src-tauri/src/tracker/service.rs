@@ -455,7 +455,7 @@ async fn close_merged(app: &AppHandle, current: &Option<Project>, store: &mut St
 /// branch anywhere gets no automatic closures, which is the honest answer.
 ///
 /// Two small file reads, on the worker rather than on the blocking pool: they
-/// are what `settings::agent` and `runs::config::load` already cost every other
+/// are what `settings::role_pair` and `runs::config::load` already cost every other
 /// caller, and reading them at each tick is what lets a branch chosen a minute
 /// ago take effect without a restart.
 fn target_branch(app: &AppHandle, dir: &Path) -> Option<String> {

@@ -857,6 +857,14 @@ const agentRows = [
     id: 4242,
     conversation: 'a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d',
     label: 'Editing',
+    /* Whether *this session's* harness has a line that clears a conversation.
+       A field of the row rather than a prop of the list, since two rows of one
+       panel can be on two harnesses now — the Tasks row and the Code row of the
+       settings window are free to name different ones. Only the menu reads it;
+       nothing on a row draws it. Most of the rows here say `true`, and the one
+       below on Codex says `false`, so both sentences of that menu row can be
+       read on this page. */
+    clearable: true,
     tasks: ['smetana-h7l4'],
     state: 'running',
     elapsed: '26m'
@@ -865,6 +873,7 @@ const agentRows = [
     id: 1,
     conversation: '2b3c4d5e-6f70-4812-9a3b-4c5d6e7f8091',
     label: null,
+    clearable: true,
     tasks: ['smetana-42'],
     state: 'needs-you',
     elapsed: '2h 14m'
@@ -876,19 +885,25 @@ const agentRows = [
      in the fixture: a run's session records nothing in `.smetana/agents.json`,
      so there is nothing a pin could survive a restart under. Its menu is where
      the refusal `Pin to top — nothing to remember it by` can be read. */
-  { id: 2, conversation: null, label: null, tasks: ['smetana-42', 'smetana-9je', 'smetana-hvw'], state: 'running', elapsed: '1h 02m' },
-  { id: 3, conversation: '3c4d5e6f-7081-4923-ab4c-5d6e7f809123', label: 'Editing', tasks: ['smetana-8av'], state: 'running', elapsed: '41m' },
-  { id: 4, label: 'Creating a task', tasks: [], state: 'running', elapsed: '3m' },
-  { id: 5, label: 'Project setup', tasks: [], state: 'done', elapsed: '18m' },
+  { id: 2, conversation: null, label: null, clearable: true, tasks: ['smetana-42', 'smetana-9je', 'smetana-hvw'], state: 'running', elapsed: '1h 02m' },
+  /* The one row on another harness, and the only reason it is here: its menu
+     draws `Clear conversation — this agent cannot do it` where every row above
+     it offers the verb. Before roles existed that was a fact about the project
+     and every row of this list agreed about it; a session started for the Tasks
+     or the Code row can be on its own harness now, so the panel has to be able
+     to draw both at once. */
+  { id: 3, conversation: '3c4d5e6f-7081-4923-ab4c-5d6e7f809123', label: 'Editing', clearable: false, tasks: ['smetana-8av'], state: 'running', elapsed: '41m' },
+  { id: 4, label: 'Creating a task', clearable: true, tasks: [], state: 'running', elapsed: '3m' },
+  { id: 5, label: 'Project setup', clearable: true, tasks: [], state: 'done', elapsed: '18m' },
   /* A bare agent, and also a run that has not claimed anything yet: the same
      caption, deliberately — it is an agent, and there is no work to name. */
-  { id: 6, label: 'Agent', tasks: [], state: 'ready', elapsed: '2m' },
+  { id: 6, label: 'Agent', clearable: true, tasks: [], state: 'ready', elapsed: '2m' },
   /* An agent the worker has not answered about yet: the word in place of a
      time, and a remove button with nothing to remove. Captioned exactly as it
      will be once the session lands, so the handover moves nothing on screen.
      It lasts about a second in the app, which is exactly why it belongs here —
      the only place it can be looked at for longer than that. */
-  { id: 'start-1', label: 'Creating a task', tasks: [], state: 'running', elapsed: 'starting', starting: true },
+  { id: 'start-1', label: 'Creating a task', clearable: true, tasks: [], state: 'running', elapsed: 'starting', starting: true },
   /* A session the last run of the app left behind, off `.smetana/agents.json`.
      The row that answers "the agent is gone after a restart", and the whole of
      what it is worth is how it is drawn: quiet, so it reads as the project's
@@ -912,6 +927,7 @@ const agentRows = [
        as. */
     conversation: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
     label: 'Editing',
+    clearable: true,
     tasks: ['smetana-42'],
     state: 'done',
     elapsed: 'offline',
@@ -1839,6 +1855,38 @@ const galleryRestoreGeometry = ref(true)
    position a person's app will actually be in. */
 const galleryUpdatesAutoCheck = ref(true)
 const galleryAgent = ref('claude')
+/* The Models group, and **no two rows alike**, for the reason the languages
+   below carry: five rows all showing the same thing would never draw the state
+   worth looking at, and a row bound to the wrong pair would read as correct.
+
+   So the four states the group has are all on screen at once. Default names a
+   harness and a model, since it always has both. Tasks names the other harness
+   and one of its own models, which is what a role that overrode the default
+   looks like — and it is the row whose model list has to be the other harness's.
+   Code names a harness and no model, the half state. Run lead and Branch review
+   are untouched, which is "Same as default" in both fields and the state every
+   settings file on a person's disk is in right now. */
+const galleryAgentModel = ref('opus')
+const galleryAgentRoles = ref({
+  tasks: { agent: 'codex', model: 'gpt-5.6-sol' },
+  code: { agent: 'claude', model: '' },
+  runLead: { agent: '', model: '' },
+  reviewBranch: { agent: '', model: '' }
+})
+/* One edit out of the group, unpacked the way `SettingsWindow.vue` unpacks it —
+   the Default row is `null` and lands on the root pair, a role writes its own.
+   Written out here rather than left unbound: the one case worth checking by eye
+   is choosing a model in an untouched role, which has to fill that role's
+   harness in as well, and a cell that dropped the event would show nothing at
+   all happening. */
+const galleryChooseRole = ({ role, pair }) => {
+  if (!role) {
+    galleryAgent.value = pair.agent
+    galleryAgentModel.value = pair.model
+    return
+  }
+  galleryAgentRoles.value = { ...galleryAgentRoles.value, [role]: pair }
+}
 /* The Agents tab's three language pickers, and **no two of them alike**. Not
    all on English, because the longest label any of the lists holds is the one
    worth looking at and a tab showing "English" three times would never draw it
@@ -3527,11 +3575,14 @@ const menuTargetStyle = {
            comfortable row height: the point of this section is seeing every
            caption at once, and a scrollbar would hide the last of them. -->
       <div :style="{ width: '252px', height: '224px', border: 'var(--border-w) solid var(--border)' }">
-        <!-- `agent` is the project's configured harness, which one row of the
-             row menu is refused by rather than by any session: with `claude`
-             here the Clear session row is live on a running agent and greyed
-             with its reason on the offline one and on the one waiting. -->
-        <AgentList :rows="agentRows" :active-id="2" :pinned="AGENT_PINS" clearable />
+        <!-- No capability is handed to the list at all: whether a session can
+             be told to clear its conversation is that session's harness's
+             answer, so each row above carries its own. The Codex row is in the
+             fixture for exactly this — open the row menu on it and on any row
+             above it, and the two sentences of Clear session can be read side
+             by side, which is the state the panel could not draw at all while
+             one flag stood for the whole project. -->
+        <AgentList :rows="agentRows" :active-id="2" :pinned="AGENT_PINS" />
       </div>
       <!-- What that second row's run has taken, drawn where it actually
            appears: the right column at its shipped 340px, padded by
@@ -4841,13 +4892,15 @@ const menuTargetStyle = {
         <div :style="{ width: '560px' }">
           <AgentSettings
             :agent="galleryAgent"
+            :model="galleryAgentModel"
+            :agent-roles="galleryAgentRoles"
             :agent-language="galleryAgentLanguage"
             :task-language="galleryTaskLanguage"
             :commit-language="galleryCommitLanguage"
             :report-language="galleryReportLanguage"
             :agent-prompt="galleryAgentPrompt"
             :usage="galleryAgentUsage"
-            @update:agent="galleryAgent = $event"
+            @update:agent-role="galleryChooseRole($event)"
             @update:agent-language="galleryAgentLanguage = $event"
             @update:task-language="galleryTaskLanguage = $event"
             @update:commit-language="galleryCommitLanguage = $event"
@@ -4874,6 +4927,8 @@ const menuTargetStyle = {
         <div :style="{ width: '560px' }">
           <AgentSettings
             :agent="galleryAgent"
+            :model="galleryAgentModel"
+            :agent-roles="galleryAgentRoles"
             :agent-language="galleryAgentLanguage"
             :task-language="galleryTaskLanguage"
             :commit-language="galleryCommitLanguage"

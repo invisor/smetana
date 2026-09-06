@@ -915,6 +915,48 @@ const MAX_PRIORITY: u8 = 4;
 /// obligation: both copies move together.
 const STORAGE_THRESHOLDS_MIB: [u32; 3] = [10, 50, 100];
 
+/// One (harness, model) pair per kind of agent call. Which intents fall into
+/// which role is `agents::role_of`'s to say and deliberately not this struct's:
+/// this is the stored preference, that is the rule, and only one of the two
+/// belongs in a file people hand-edit.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AgentRoles {
+    /// Filing an issue, editing one, and answering what a run parked.
+    pub tasks: AgentRole,
+    /// Correcting merged work and finishing a conflicted merge — and the model
+    /// a run is asked to give the subagents that write its code.
+    ///
+    /// The harness half of this role does not reach those subagents, and that
+    /// is a limit rather than an oversight: a subagent lives inside the lead's
+    /// harness, a Codex subagent cannot be spawned out of a Claude Code session
+    /// or the other way round, so only the model can be asked for. The settings
+    /// window says so in a sentence rather than hiding it.
+    pub code: AgentRole,
+    /// The session a run itself is: the agent that claims the batch, cuts the
+    /// worktrees, delegates, reviews and merges. Separate from `code` because a
+    /// `--model` flag on that session sets the lead's model and nothing else.
+    pub run_lead: AgentRole,
+    /// The branch review the compare window starts.
+    pub review_branch: AgentRole,
+}
+
+/// A role's own choice, or two empty strings meaning "whatever the root says".
+///
+/// Empty is checked on the harness and the pair travels together. A role that
+/// inherited the harness while carrying its own model would hold a model that
+/// harness has never heard of the day somebody switches the root — `opus` means
+/// nothing to Codex — and it would fail at spawn, in a run, at night, which is
+/// the one place this app cannot afford a surprise. So a role either inherits
+/// whole or names both halves; the settings window fills the harness in on the
+/// first model chosen, so that costs the person nothing.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AgentRole {
+    pub agent: String,
+    pub model: String,
+}
+
 /// The whole file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -990,6 +1032,22 @@ pub struct Settings {
     /// Which sessions it reaches is `agents::prompt::talks_to_a_person`, and
     /// this file has no opinion about it.
     pub agent_prompt: String,
+    /// Which model the app asks for when nothing more specific applies, and the
+    /// fallback behind every role in `agent_roles`.
+    ///
+    /// The empty string means the flag is not passed at all and the harness
+    /// picks for itself — this app's behaviour to the letter before the field
+    /// existed, and the same argument that keeps every agent language at `en`
+    /// rather than at an Auto position: shipping the field changes nothing for
+    /// anybody until they go and choose.
+    ///
+    /// The set of legal values is the chosen harness's own `Profile::models` and
+    /// is not repeated here, exactly as `agent` above defers to `agents::IDS`.
+    pub model: String,
+    /// Which harness and which model handle each kind of agent call. At the root
+    /// beside `agent` and for the reason written there: which model files a
+    /// person's tasks is a habit of theirs, not a property of a project.
+    pub agent_roles: AgentRoles,
     pub last_project: Option<String>,
     /// The contents and order of the on-screen list — the order things were
     /// added, not how recent they are: rows that jump on every switch are
@@ -1020,6 +1078,8 @@ impl Default for Settings {
             commit_language: crate::agents::DEFAULT_LANGUAGE.into(),
             report_language: crate::agents::DEFAULT_LANGUAGE.into(),
             agent_prompt: String::new(),
+            model: String::new(),
+            agent_roles: AgentRoles::default(),
             last_project: None,
             open_projects: Vec::new(),
             projects: BTreeMap::new(),
@@ -1064,6 +1124,12 @@ pub struct ResolvedSettings {
     pub report_language: String,
     /// The standing instruction. See `Settings::agent_prompt`.
     pub agent_prompt: String,
+    /// The model behind everything nothing more specific applies to. See
+    /// `Settings::model`.
+    pub model: String,
+    /// The (harness, model) pair per kind of agent call. See
+    /// `Settings::agent_roles`.
+    pub agent_roles: AgentRoles,
     pub project: ProjectState,
     pub open_projects: Vec<String>,
     pub active_project: Option<String>,
@@ -1093,6 +1159,8 @@ impl Default for ResolvedSettings {
             commit_language: crate::agents::DEFAULT_LANGUAGE.into(),
             report_language: crate::agents::DEFAULT_LANGUAGE.into(),
             agent_prompt: String::new(),
+            model: String::new(),
+            agent_roles: AgentRoles::default(),
             project: ProjectState::default(),
             open_projects: Vec::new(),
             active_project: None,
@@ -1146,6 +1214,12 @@ pub fn parse(text: &str) -> Outcome {
             .and_then(Value::as_str)
             .map(str::to_owned)
             .unwrap_or_default(),
+        model: object.get("model").and_then(Value::as_str).map(str::to_owned).unwrap_or_default(),
+        // A section of its own, read the way every other section is: a file
+        // written before this object existed has no `agentRoles` at all and
+        // must read without one, and a hand-edited one that is not an object
+        // loses the roles rather than the file.
+        agent_roles: section(&object, "agentRoles"),
         last_project: object.get("lastProject").and_then(Value::as_str).map(str::to_owned),
         open_projects: section(&object, "openProjects"),
         projects: projects(&object),
@@ -1195,6 +1269,8 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         commit_language: file.commit_language.clone(),
         report_language: file.report_language.clone(),
         agent_prompt: file.agent_prompt.clone(),
+        model: file.model.clone(),
+        agent_roles: file.agent_roles.clone(),
         project: active
             .as_deref()
             .and_then(|path| file.projects.get(path))
@@ -1225,6 +1301,8 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.commit_language = resolved.commit_language;
     file.report_language = resolved.report_language;
     file.agent_prompt = resolved.agent_prompt;
+    file.model = resolved.model;
+    file.agent_roles = resolved.agent_roles;
     file.open_projects = resolved.open_projects;
     file.last_project = resolved.active_project.clone();
 
@@ -1351,6 +1429,29 @@ fn trim(projects: &mut BTreeMap<String, ProjectState>, current: Option<&str>, op
 }
 
 impl Settings {
+    /// The harness and the model one role asks for: its own pair where it names
+    /// a harness, and the root pair — **whole** — where it does not.
+    ///
+    /// Pure, and here rather than in `settings::role_model` for the reason
+    /// `agents::role_of` is in `agents/`: the inheritance is a rule about this
+    /// schema and is testable without a disk, while reading somebody's file is
+    /// neither. The two empty strings each mean something and neither is a gap:
+    /// an empty harness is "inherit", an empty model is "say nothing and let the
+    /// harness pick".
+    pub fn role_pair(&self, role: crate::agents::Role) -> (String, String) {
+        let chosen = match role {
+            crate::agents::Role::Tasks => Some(&self.agent_roles.tasks),
+            crate::agents::Role::Code => Some(&self.agent_roles.code),
+            crate::agents::Role::RunLead => Some(&self.agent_roles.run_lead),
+            crate::agents::Role::ReviewBranch => Some(&self.agent_roles.review_branch),
+            crate::agents::Role::Default => None,
+        };
+        match chosen {
+            Some(role) if !role.agent.is_empty() => (role.agent.clone(), role.model.clone()),
+            _ => (self.agent.clone(), self.model.clone()),
+        }
+    }
+
     /// A value outside the allowed set is no reason to throw the file away:
     /// only the field itself is lost.
     pub fn validate(&mut self) {
@@ -1360,6 +1461,8 @@ impl Settings {
         known_language(&mut self.commit_language);
         known_language(&mut self.report_language);
         forget_if_too_long(&mut self.agent_prompt, MAX_AGENT_PROMPT);
+        known_model(&self.agent, &mut self.model);
+        self.agent_roles.validate();
         self.appearance.validate();
         self.layout.validate();
         self.editor.validate();
@@ -1383,6 +1486,8 @@ impl ResolvedSettings {
         known_language(&mut self.commit_language);
         known_language(&mut self.report_language);
         forget_if_too_long(&mut self.agent_prompt, MAX_AGENT_PROMPT);
+        known_model(&self.agent, &mut self.model);
+        self.agent_roles.validate();
         self.appearance.validate();
         self.layout.validate();
         self.editor.validate();
@@ -1605,6 +1710,56 @@ fn language_field(object: &Map<String, Value>, key: &str) -> String {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .unwrap_or_else(|| crate::agents::DEFAULT_LANGUAGE.to_owned())
+}
+
+impl AgentRoles {
+    fn validate(&mut self) {
+        for role in
+            [&mut self.tasks, &mut self.code, &mut self.run_lead, &mut self.review_branch]
+        {
+            role.validate();
+        }
+    }
+}
+
+impl AgentRole {
+    fn validate(&mut self) {
+        // Empty is the legal "inherit the root" value, and it takes the model
+        // with it: see this struct's own doc for why the pair is indivisible.
+        if self.agent.is_empty() {
+            self.model.clear();
+            return;
+        }
+        // A harness nobody ships loses the whole role rather than half of it,
+        // for the same reason: the model beside it was chosen against that
+        // harness and means nothing without it. The root `agent` is untouched —
+        // one damaged role is one damaged field, which is the rule `one_of`
+        // keeps everywhere else in this file.
+        if !crate::agents::IDS.contains(&self.agent.as_str()) {
+            self.agent.clear();
+            self.model.clear();
+            return;
+        }
+        known_model(&self.agent, &mut self.model);
+    }
+}
+
+/// `known_language` one field over: a model the chosen harness does not offer
+/// loses that one field rather than the role around it, and the harness stays,
+/// because it is still a harness this build ships.
+///
+/// The list is the profile's own and is asked rather than repeated, exactly as
+/// `agents::IDS` and `agents::LANGUAGES` are above — a second copy of a CLI's
+/// vocabulary is the drift `.claude/rules/agents.md` records the cost of.
+fn known_model(agent: &str, model: &mut String) {
+    if model.is_empty() {
+        return;
+    }
+    let known = crate::agents::resolve(agent)
+        .is_some_and(|profile| profile.models().iter().any(|(id, _)| id == model));
+    if !known {
+        model.clear();
+    }
 }
 
 /// `one_of` for a language, and it takes the same shape for the same reason:
@@ -3091,6 +3246,169 @@ mod tests {
         let mut written = Settings::default();
         merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
         assert_eq!(written.agent, "codex", "merge must carry it back into the file");
+    }
+
+    #[test]
+    fn a_fresh_settings_file_chooses_no_model_at_all() {
+        // The shipped state, and it is this app's behaviour to the letter
+        // before any of these fields existed: no flag on any command line, and
+        // every harness picking for itself.
+        let settings = Settings::default();
+        assert_eq!(settings.model, "");
+        assert_eq!(settings.agent_roles, AgentRoles::default());
+        for role in [
+            crate::agents::Role::Tasks,
+            crate::agents::Role::Code,
+            crate::agents::Role::RunLead,
+            crate::agents::Role::ReviewBranch,
+            crate::agents::Role::Default,
+        ] {
+            assert_eq!(settings.role_pair(role), ("claude".to_owned(), String::new()), "{role:?}");
+        }
+    }
+
+    #[test]
+    fn a_harness_nobody_ships_loses_the_role_and_not_the_file() {
+        let mut settings = Settings::default();
+        settings.agent = "claude".into();
+        settings.agent_roles.tasks.agent = "nosuchagent".into();
+        settings.agent_roles.tasks.model = "opus".into();
+        settings.validate();
+        assert_eq!(settings.agent_roles.tasks.agent, "");
+        assert_eq!(settings.agent_roles.tasks.model, "", "the pair goes together or not at all");
+        assert_eq!(settings.agent, "claude", "one damaged role must not move the root");
+    }
+
+    #[test]
+    fn a_model_the_chosen_harness_never_heard_of_is_forgotten() {
+        let mut settings = Settings::default();
+        settings.agent_roles.code.agent = "claude".into();
+        settings.agent_roles.code.model = "gpt-5.6-sol".into();
+        settings.validate();
+        assert_eq!(settings.agent_roles.code.agent, "claude", "the harness is legal and stays");
+        assert_eq!(settings.agent_roles.code.model, "", "only the model is forgotten");
+    }
+
+    #[test]
+    fn a_model_without_a_harness_empties_the_whole_role() {
+        // Inheritance is by the pair: a role that named a model but no harness
+        // would hold a model its inherited provider may never have heard of
+        // the moment somebody switches the root.
+        let mut settings = Settings::default();
+        settings.agent_roles.run_lead.agent = String::new();
+        settings.agent_roles.run_lead.model = "opus".into();
+        settings.validate();
+        assert_eq!(settings.agent_roles.run_lead.model, "");
+    }
+
+    #[test]
+    fn the_root_model_is_validated_against_the_root_harness() {
+        let mut settings = Settings::default();
+        settings.agent = "claude".into();
+        settings.model = "nosuchmodel".into();
+        settings.validate();
+        assert_eq!(settings.model, "");
+    }
+
+    #[test]
+    fn every_model_a_harness_offers_survives_validation() {
+        // The list is asked of the profile rather than repeated here, which is
+        // the whole point: a model added in Rust is legal in the file for free,
+        // and validation that threw one away would silence a choice somebody
+        // had just made in the settings window.
+        for id in crate::agents::IDS {
+            let profile = crate::agents::resolve(id).expect("every id in IDS resolves");
+            for (model, _) in profile.models() {
+                let mut settings = Settings::default();
+                settings.agent = (*id).into();
+                settings.model = (*model).into();
+                settings.agent_roles.code.agent = (*id).into();
+                settings.agent_roles.code.model = (*model).into();
+                settings.validate();
+                assert_eq!(
+                    settings.model, *model,
+                    "harness {id} offers {model} and validation threw it away"
+                );
+                assert_eq!(settings.agent_roles.code.model, *model, "{id}/{model} in a role");
+            }
+        }
+    }
+
+    #[test]
+    fn a_role_that_chose_nothing_inherits_the_root_pair_whole() {
+        let mut settings = Settings::default();
+        settings.agent = "claude".into();
+        settings.model = "opus".into();
+        settings.agent_roles.tasks.agent = "codex".into();
+        settings.agent_roles.tasks.model = "gpt-5.6-luna".into();
+        settings.validate();
+
+        assert_eq!(
+            settings.role_pair(crate::agents::Role::Tasks),
+            ("codex".to_owned(), "gpt-5.6-luna".to_owned()),
+            "a role that named both halves keeps both"
+        );
+        assert_eq!(
+            settings.role_pair(crate::agents::Role::Code),
+            ("claude".to_owned(), "opus".to_owned()),
+            "a role that named nothing takes the root pair, both halves of it"
+        );
+        assert_eq!(
+            settings.role_pair(crate::agents::Role::Default),
+            ("claude".to_owned(), "opus".to_owned()),
+            "the default row is the root pair by definition"
+        );
+    }
+
+    #[test]
+    fn the_roles_survive_the_whole_road_from_the_disk_and_back() {
+        // The road `a_chosen_agent_does_not_quietly_become_claude_again` walks
+        // one section over: a field wired into the structs and not into
+        // `parse`, `resolve` and `merge` reads as empty for ever whatever the
+        // file says, and no struct-alone test can see it.
+        let json = r#"{"version":1,"agent":"claude","model":"opus",
+            "agentRoles":{"tasks":{"agent":"codex","model":"gpt-5.6-luna"},
+            "runLead":{"agent":"claude","model":"fable"}}}"#;
+        let file = settings_of(json);
+        assert_eq!(file.model, "opus", "parse must read the root model off the disk");
+        assert_eq!(file.agent_roles.tasks.agent, "codex");
+        assert_eq!(file.agent_roles.tasks.model, "gpt-5.6-luna");
+        assert_eq!(file.agent_roles.run_lead.model, "fable");
+        assert_eq!(file.agent_roles.review_branch, AgentRole::default(), "an absent role is empty");
+
+        let resolved = resolve(&file, None);
+        assert_eq!(resolved.model, "opus", "resolve must carry it to the front end");
+        assert_eq!(resolved.agent_roles, file.agent_roles);
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert_eq!(written.model, "opus", "merge must carry it back into the file");
+        assert_eq!(written.agent_roles, file.agent_roles);
+    }
+
+    #[test]
+    fn a_file_written_before_the_roles_existed_still_reads() {
+        // Every file on a person's disk right now is this file.
+        let settings = settings_of(r#"{"version":1,"agent":"codex"}"#);
+        assert_eq!(settings.model, "");
+        assert_eq!(settings.agent_roles, AgentRoles::default());
+        assert_eq!(settings.agent, "codex", "and the rest of it is untouched");
+    }
+
+    #[test]
+    fn the_camel_case_names_are_the_ones_the_front_end_writes() {
+        // The front end sends the whole settings object back on every save, so
+        // these four keys are the contract rather than an implementation
+        // detail: a rename on either side is a choice silently dropped.
+        let mut settings = Settings::default();
+        settings.agent_roles.run_lead.agent = "claude".into();
+        settings.agent_roles.review_branch.agent = "codex".into();
+        let json = serde_json::to_value(&settings).expect("the settings serialize");
+        let roles = json.get("agentRoles").expect("agentRoles, not agent_roles");
+        assert!(json.get("model").is_some());
+        assert!(roles.get("runLead").is_some(), "runLead, not run_lead");
+        assert!(roles.get("reviewBranch").is_some(), "reviewBranch, not review_branch");
+        assert!(roles.get("tasks").is_some() && roles.get("code").is_some());
     }
 
     #[test]

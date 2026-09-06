@@ -18,7 +18,18 @@ const CATALOGUE = [
   {
     id: 'claude',
     label: 'Claude Code',
-    capabilities: { resume: true, fork: true, clear: true, usage: true, batch: true, oneshot: true }
+    capabilities: {
+      resume: true,
+      fork: true,
+      clear: true,
+      usage: true,
+      batch: true,
+      oneshot: true
+    },
+    models: [
+      { id: 'fable', label: 'Fable' },
+      { id: 'opus', label: 'Opus' }
+    ]
   },
   {
     id: 'codex',
@@ -30,7 +41,8 @@ const CATALOGUE = [
       usage: false,
       batch: true,
       oneshot: true
-    }
+    },
+    models: [{ id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' }]
   }
 ]
 
@@ -94,6 +106,21 @@ describe('the agent catalogue', () => {
     expect(agents.agentLabel('claude')).toBe('Claude Code')
     expect(agents.agentLabel('codex')).toBe('Codex')
     expect(agents.agentLabel('somebody-elses-cli')).toBe('somebody-elses-cli')
+  })
+
+  it('carries the models a harness offers, in the order Rust offered them', async () => {
+    /* The row holds them and nothing here reshapes them: the order is each
+       profile's own `MODELS`, strongest first, and a store that sorted would
+       put a different model under the same cursor position on two machines.
+       Who reads them is `modelOptions` in `components/settings/agentRoles.js`,
+       which is handed this array whole — there is no `modelsOf` here, and
+       `agentLabel` above records why. */
+    const { agents } = await loadCatalogue()
+
+    expect(agents.agents.value.find((row) => row.id === 'claude').models).toEqual([
+      { id: 'fable', label: 'Fable' },
+      { id: 'opus', label: 'Opus' }
+    ])
   })
 
   it('leaves every row greyed when the read did not work', async () => {

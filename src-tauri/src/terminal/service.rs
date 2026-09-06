@@ -89,9 +89,20 @@ pub enum Request {
     /// the agents panel is about one project; the rail is about all of them,
     /// and asking `List` once per open project would be a command per row.
     Marks(oneshot::Sender<Vec<SessionMark>>),
-    /// Project, agent id and intent. The agent id is what settings asked for,
-    /// not necessarily what runs — see the `Create` arm and `agents::pick`.
-    Create(String, String, Intent, oneshot::Sender<Result<Session, TerminalError>>),
+    /// Project, a harness the caller insists on, and the intent.
+    ///
+    /// The harness is `None` for every caller but one, and that is the point:
+    /// which harness an intent's role asks for is read here, in the `Create`
+    /// arm, so that the one resolver decides it for a person's session and a
+    /// run's batch alike. A run is the exception — it snapshots its own harness
+    /// when it starts and carries it for the whole of the run, so that its
+    /// allowance gate and its batches cannot land on two different ones
+    /// (smetana-3fi) — and `settings::role_model` is where a pinned harness
+    /// meets the pair rule.
+    ///
+    /// Either way it is what was *asked for* and not necessarily what runs:
+    /// see the `Create` arm and `agents::pick`.
+    Create(String, Option<String>, Intent, oneshot::Sender<Result<Session, TerminalError>>),
     /// The project to open a shell in, and where inside it to start — a shell
     /// takes no agent and no intent, because there is nothing this app is asking
     /// it to do. The second field is a path relative to the project's root, or
@@ -716,11 +727,24 @@ fn handle(
             list.sort_by_key(|m| m.id);
             let _ = tx.send(list);
         }
-        Request::Create(project, agent, intent, tx) => {
+        Request::Create(project, pinned, intent, tx) => {
+            // The one resolver, read here for the reason the languages below
+            // are read here: this is the single place every session in the app
+            // is built, so a person's session and a run's batch cannot come to
+            // disagree about which harness and which model this kind of call
+            // gets. A run's own snapshot is what `pinned` carries.
+            let (agent, model) =
+                crate::settings::role_model(app, &intent, pinned.as_deref());
             // The login shell's PATH, not this process's: a bundled app started
             // from Finder inherits launchd's, where nothing a person installed
             // is reachable and every agent would look uninstalled.
-            let Some(profile) = agents::pick(&agent, crate::shell_env::path()) else {
+            // `pick_with_model` rather than `pick`: the fallback to whatever
+            // is installed is untouched and still silent, and the model is
+            // dropped when it fires, because a model id chosen against one
+            // harness is not one the substitute has ever heard of. That
+            // function carries the whole of the argument.
+            let picked = agents::pick_with_model(&agent, model, crate::shell_env::path());
+            let Some((profile, model)) = picked else {
                 let _ = tx.send(Err(TerminalError::NoAgent(agents::IDS.join(", "))));
                 return;
             };
@@ -822,6 +846,10 @@ fn handle(
                 agents::Intent::ResumeSession { .. } => None,
                 _ => conversation.clone(),
             };
+            // Before the `Launch` takes the intent: the struct literal moves
+            // it, and this question has to be asked of it while it is still
+            // here.
+            let leads_a_run = matches!(intent, agents::Intent::Run { .. });
             let launch = agents::Launch {
                 profile,
                 cwd: dir.clone(),
@@ -837,10 +865,14 @@ fn handle(
                 // front end owns the truth of the settings and writes them on a
                 // 400 ms debounce, so a session started in the same fraction of
                 // a second as a language change reads the previous language —
-                // one session, and the same lag `settings::agent(app)` already
-                // lives with over in `runs::service`. (The `agent` parameter
-                // above is not that: it comes down from the front end's live
-                // store and has no lag at all.) And a run reads these per
+                // one session, and the same lag the harness and the model at
+                // the top of this arm now live with. That parenthetical used to
+                // exempt the harness, because the front end sent it down from
+                // its own live store; it does not any more, and it must not be
+                // put back — which half of an indivisible pair had no lag was
+                // never the interesting question, and the answer today is that
+                // neither half has an exemption. `terminal_create`'s own header
+                // records the trade. And a run reads these per
                 // batch, where it snapshots its agent and its whole
                 // `RunSettings` once and carries them: a language changed at
                 // 2am reaches the next batch, so one run's issues can end up
@@ -856,6 +888,19 @@ fn handle(
                 // It lives with the same debounce.
                 agent_prompt: crate::settings::agent_prompt(app),
                 session_id,
+                // Resolved at the top of this arm, off the same file and in the
+                // same breath as the harness beside it: the two are one choice
+                // and reading them apart is what would let a model meant for
+                // one harness reach another.
+                model,
+                // Only for a run, and `None` everywhere else rather than a
+                // value nothing reads: every other intent delegates to nobody,
+                // so there are no subagents for a model to be about. A field
+                // that is sometimes meaningful and never says which is the
+                // shape this `Launch` keeps out deliberately.
+                worker_model: leads_a_run
+                    .then(|| crate::settings::worker_model(app))
+                    .flatten(),
             };
             // Both of these are taken **before the process exists**, and the
             // order is the whole of what they are for. `sessions_before_start`

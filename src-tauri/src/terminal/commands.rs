@@ -56,16 +56,27 @@ pub async fn terminal_marks(
 }
 
 /// `intent` is why the session is being started; the profile turns it into a
-/// command line. `agent` is the id from settings — an unknown or uninstalled
-/// one falls back to whatever is installed rather than failing.
+/// command line.
+///
+/// No agent id crosses this boundary any more, and its absence is the design
+/// rather than a simplification. Which harness — and which model — a kind of
+/// call gets is a role's answer now (`settings::role_model`), and the front end
+/// knows nothing about roles: it used to send the root `agent` out of its own
+/// live store, which would have meant one half of an indivisible pair arriving
+/// from one place and the other half being read off the file. The cost is that
+/// a session started in the same fraction of a second as a harness change reads
+/// the previous choice — the 400 ms the languages and the standing instruction
+/// already live with, and the same one session.
+///
+/// What is asked for is still not necessarily what runs: an unknown or
+/// uninstalled harness falls back to whatever is installed rather than failing.
 #[tauri::command]
 pub async fn terminal_create(
     handle: State<'_, TerminalHandle>,
     project: String,
-    agent: String,
     intent: Intent,
 ) -> Result<Session, TerminalError> {
-    ask(&handle, |tx| Request::Create(project, agent, intent, tx)).await?
+    ask(&handle, |tx| Request::Create(project, None, intent, tx)).await?
 }
 
 /// A shell in the project, with no agent and no intent behind it. Its own

@@ -395,7 +395,13 @@ fn handle(
             // silently changed harness between batches would have asked the
             // allowance of a subscription it then stopped spending
             // (smetana-3fi). Re-reading it per batch would buy nothing but that.
-            let agent = crate::settings::agent(app);
+            //
+            // The run lead's row and not the root's: leading a run is its own
+            // kind of call, and the model half of the pair is deliberately left
+            // here — `terminal::service` resolves that at each spawn, off the
+            // same row, and drops it if this snapshot and the file have since
+            // come to disagree.
+            let (agent, _) = crate::settings::role_pair(app, crate::agents::Role::RunLead);
             // Beside it and read the same way, for the same reason: a run that
             // silently changed its mind about worktrees between batches would
             // leave half a night's checkouts on the disk and sweep the other
@@ -2052,7 +2058,19 @@ async fn spawn_batch(
         Intent::Run { settings, reports: reports.to_path_buf(), batch, remove_worktrees };
     terminal
         .0
-        .send(TerminalRequest::Create(run.project.clone(), agent.to_string(), intent, tx))
+        .send(TerminalRequest::Create(
+            run.project.clone(),
+            // Pinned, where a person's session sends nothing: this is the
+            // harness the run snapshotted when it started, and a run that
+            // silently changed harness between batches would have asked the
+            // allowance of a subscription it then stopped spending. The model
+            // is not pinned with it — `settings::role_model` resolves that per
+            // batch and drops it where the pin and the file disagree, which is
+            // the pair rule at the seam.
+            Some(agent.to_string()),
+            intent,
+            tx,
+        ))
         .await
         .map_err(|_| "the terminal worker is not running".to_string())?;
     match rx.await {

@@ -707,9 +707,17 @@ pub async fn vcs_suggest_message(
     // calls of `describe` are every one of them blocking, and the ask itself
     // then waits on a model for as long as ninety seconds.
     tokio::task::spawn_blocking(move || {
-        let agent = crate::settings::agent(&app);
-        let profile = crate::agents::pick(&agent, crate::shell_env::path())
-            .ok_or_else(|| OneshotError::NoAgent(agent.clone()))?;
+        // A one-shot with no session behind it, so there is no `Intent` to ask
+        // a role with: it takes the Default row, which is the root pair, and
+        // `settings::default_pair` is where that is said once for both callers
+        // of this shape.
+        let (agent, model) = crate::settings::default_pair(&app);
+        // `pick_with_model`, which is `pick` with the pair rule on it: the
+        // fallback to whatever is installed is unchanged, and the model goes
+        // with it only if it was the harness that ran. See that function.
+        let (profile, model) =
+            crate::agents::pick_with_model(&agent, model, crate::shell_env::path())
+                .ok_or_else(|| OneshotError::NoAgent(agent.clone()))?;
         // The same file the agent id came from, one field over, and read the
         // same way — a session's own commits are told this language by
         // `agents::prompt`, so the button and the run agree by construction
@@ -721,7 +729,7 @@ pub async fn vcs_suggest_message(
         let prompt = describe(Path::new(&repo), language)
             .map_err(|err| OneshotError::Git(err.to_string()))?
             .ok_or(OneshotError::Nothing)?;
-        oneshot::ask(profile, &prompt)
+        oneshot::ask(profile, model.as_deref(), &prompt)
     })
     .await
     .map_err(|err| OneshotError::Io(err.to_string()))?

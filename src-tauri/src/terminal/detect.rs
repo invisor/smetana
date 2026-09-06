@@ -460,6 +460,10 @@ mod tests {
             crate::agents::SkillDelivery::Inline
         }
 
+        fn models(&self) -> &'static [(&'static str, &'static str)] {
+            &[("no-layer-b", "No layer B")]
+        }
+
         fn command(&self, _launch: &crate::agents::Launch) -> portable_pty::CommandBuilder {
             portable_pty::CommandBuilder::new(self.binary())
         }

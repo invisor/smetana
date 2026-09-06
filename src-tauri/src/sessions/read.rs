@@ -723,6 +723,7 @@ mod tests {
             },
             &Languages::default(),
             "",
+            None,
         )
         .expect("every intent here opens on a prompt")
     }

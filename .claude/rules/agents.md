@@ -403,11 +403,111 @@ there was settled before this window existed.
 
 `agents::IDS` is the single copy of the agent-id list, and `settings/model.rs` validates against it
 rather than repeating it — the side-tab hazard again: a value that survives the session and silently
-comes back as something else. The front end never learns the names either: `settings.js` holds
-whatever string is in the file and passes it to `terminal_create`, and Rust resolves it. A configured
-agent that is not on `PATH` falls back to the first one that is, and `Session.agent` carries what
-actually started; nothing on screen reads it, so the substitution is silent and the terminal is the
-only way to see it. When nothing at all is installed the session fails with `NoAgent`.
+comes back as something else. The front end never learns the names either, and it no longer even
+carries one across the boundary: `terminal_create` takes the project and the intent, and Rust reads
+the harness off the file for that intent's role (`settings::role_model`, below). A configured agent
+that is not on `PATH` falls back to the first one that is, and `Session.agent` carries what actually
+started; nothing on screen reads it, so the substitution is silent and the terminal is the only way
+to see it. When nothing at all is installed the session fails with `NoAgent`.
+
+## Which agent, and on which model
+
+`Profile` answers two questions about models, and the split is the one `usage_command`/`parse_usage`
+already makes: what a harness offers, and how it is told which one to use.
+
+`models()` is **the second method here with no default**, beside `label` and for its reason: a
+harness added to `IDS` without a model list would ship an empty dropdown in the settings window,
+which reads as a load that failed rather than as a decision anybody made, and the compiler is the
+cheapest place to find that out. It answers `&[(id, label)]` — the id that goes on a command line and
+the name a person reads beside it.
+
+`model_args(model)` is how the harness is told, as the arguments themselves: `["--model", m]` for
+Claude Code, `["-m", m]` for Codex. Its default **is** an empty vector, and that is a working answer
+rather than a gap — the shape `autonomy` and `batch_args` keep: a harness with no such flag simply
+cannot be told, so the setting is inert for it instead of broken.
+
+**The ids are read off the installed CLI and never recalled**, which is this file's standing rule
+about somebody else's vocabulary applied one field over. Claude Code's own `--help` names the
+aliases outright, and aliases are what is offered rather than full names: an alias points at the
+latest model of its family, where a full name written into somebody's `settings.json` pins a version
+that goes stale where nobody looks. Codex's help documents the flag and **no ids at all**, so its
+list comes from the model catalogue that CLI ships inside itself — the same table its own picker is
+drawn from — taking every entry it marks visible, in that catalogue's own order, with its own display
+names. Each profile's `MODELS` carries where and when it was read; a re-reading updates that note
+along with the list.
+
+The list travels to the front end as a field of the `agents_catalog` row, beside the capabilities and
+for the reason recorded above: the front end draws a model picker per harness, and a hand-written
+table over there would have been the fifth of the lists this command exists to have abolished.
+
+### Role, and `role_of`
+
+An `Intent` says why a session is being started; a **`Role`** says which row of the settings window
+decides its harness and its model. There are five — `Tasks`, `Code`, `RunLead`, `ReviewBranch` and
+`Default` — against eleven intents, and the count is the design rather than an economy. Eleven rows
+is a settings screen nobody reads, and it would still not have separated a run's lead from the
+subagents it delegates to, since both live behind `Run`.
+
+`agents::role_of` is the mapping, pure and here rather than in `settings/` for the reason
+`prompt::build` is pure: reading somebody's file is not a rule about intents, and this half has to be
+testable without a disk. `NewTask`, `EditTask` and `ResolveTask` are `Tasks`; `FixTask` and
+`ResolveConflict` are `Code`; `Run` is `RunLead`; `ReviewBranch` is its own; `Bare`, `Setup`,
+`RepairTracker` and `ResumeSession` fall to `Default`. A test walks all eleven and names the role of
+each, so a variant added to `Intent` meets a decision rather than a wildcard.
+
+**The lead is its own role and not the code one**, which is the distinction the whole feature turns
+on. A run's session is a lead: it reads the board, claims a batch, cuts the worktrees and delegates
+the implementation to subagents, then reviews and merges. A `--model` flag on that session sets the
+**lead's** model and nothing else, because the subagents are spawned by the lead inside its own
+harness and take that harness's default. "Opus writes the code" and "Opus leads the run" are two
+different requests and one flag cannot carry both.
+
+**`ResumeSession` is never told a model**, whatever the file says, and it is guarded twice — the
+shape the chosen session id already has. `settings::role_model` refuses this intent one, and each
+profile's `command` refuses to put the flag on the line. The reason is `prompt::build`'s own for
+declining that intent a prompt: `--resume` (and `codex resume`) continue a conversation that already
+has a model, and this app arriving with a second opinion is talking over the person whose session it
+is. Whatever was settled in there was settled before this window existed.
+
+### One resolver, and the one place it is called
+
+`settings::role_pair(app, role)` is the file half — a role's own pair where it names a harness, the
+root pair whole where it does not — and `Settings::role_pair` beside it is the pure rule it wraps.
+`settings::role_model(app, intent, chosen)` is what `terminal::service`'s `Create` arm calls while
+building the `Launch`, in the same breath as `settings::languages(app)` and for the identical reason:
+this is the one place every session in the app is built, so a person's session and a run's batch
+cannot come to disagree about which harness and which model this kind of call gets. `settings::agent`
+is gone — every caller now asks for the pair, because a harness read apart from its model is exactly
+how a model chosen against one provider reaches another.
+
+**`pick` is the third substitution and had to be guarded too.** `agents::pick_with_model` is `pick`
+with the pair rule on it: the fallback to the first installed harness is untouched and still silent,
+and the model is dropped whenever it fires, because a model id chosen against one provider is not one
+the substitute has ever heard of. All three callers take it — the `Create` arm and both one-shots —
+and it is one function rather than three `filter`s because the fourth caller added later is the one
+that would forget. Without it the guard existed everywhere except where it mattered most: the
+settings window offers every shipped harness whether or not it is on `PATH`, so choosing Codex and
+one of its models on a machine with only Claude Code turned a fallback that used to work in silence
+into `claude --model gpt-5.6-sol` and a session dead at its first argument.
+
+`chosen` is the other seam, and it exists for a run. `None` is a caller with no opinion — the front
+end, which knows nothing about roles. `Some(id)` is a harness the caller already holds and will not
+give up: a run snapshots its own `RunLead` harness when it starts and carries it for the whole of
+the run, so that the allowance gate and the batches cannot land on two different ones (smetana-3fi).
+**A pinned harness that disagrees with what the file now says arrives without a model**, which is
+the indivisible pair applied at that seam rather than a special case.
+
+`Launch` carries the two answers: `model`, this session's own, and `worker_model`, the `code` role's,
+which is meaningful only for `Intent::Run` and is `None` for every other intent rather than a value
+nothing reads. The second reaches the agent as one line of the run policy and never as an argument —
+`.claude/rules/runs.md` carries what that line says, that it is a request rather than a guarantee,
+and why Solo does not get it.
+
+The two one-shot calls have no session and therefore no `Intent` to ask with: the Git panel's
+commit-message button and the tracker's semantic search both take `settings::default_pair`, which is
+the `Default` row and therefore the root pair, asked through the same resolver so that one place
+decides what "the default" means. `oneshot::ask` and `ask_raw` take the model beside the profile and
+put `model_args` on the line in front of the positional prompt.
 
 `agents::LANGUAGES` is the same idea one field over: the twelve languages a person may choose, as
 BCP-47 ids **with the English name of each**, and the only copy of that list — `settings/model.rs`
@@ -424,7 +524,7 @@ alternative was that the session where a person talks to the agent most is the o
 reach.
 
 None of them crosses the IPC. `settings::languages(app)` reads the file where
-`settings::agent(app)` already does, and `terminal::service`'s `Create` arm calls it while building
+`settings::role_pair(app, …)` already does, and `terminal::service`'s `Create` arm calls it while building
 the `Launch` — the one place every session in the app is built, so a person's session and a run's
 batch get the same answer by construction. From the `Launch` the ids reach `prompt::build`,
 which stays pure. The commit language has one reader outside a session, and it reads the same field
@@ -433,7 +533,7 @@ button, so the message a person is offered and the messages a run writes overnig
 closing only one of the two was the rejected design, since a setting that lies about half its cases
 is worse than none. Two costs come with reading it there and both are accepted: a session started in the same
 fraction of a second as a language change reads the previous language (the front end writes on a
-400 ms debounce, the lag `settings::agent(app)` already lives with), and a run reads the languages
+400 ms debounce, the lag the harness itself already lives with), and a run reads the languages
 **per batch** rather than snapshotting them, so a language changed at 2am reaches the next batch and
 one run's issues can end up in two languages. Putting them on `Intent::Run` instead would be a second
 road into a session, which is what reading them in one place exists to prevent.

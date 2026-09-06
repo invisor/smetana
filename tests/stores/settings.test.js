@@ -227,6 +227,61 @@ describe('loading', () => {
     expect(sent.reportLanguage).toBe('it')
   })
 
+  it('carries the model and the per-role pairs through a save and a load', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('settings_load', {
+      model: 'opus',
+      agentRoles: { tasks: { agent: 'codex', model: 'gpt-5.6-luna' } }
+    })
+    ipc.on('settings_save', null)
+    await stores.settings.loadSettings()
+    expect(stores.settings.settings.model).toBe('opus')
+    expect(stores.settings.settings.agentRoles.tasks).toEqual({
+      agent: 'codex',
+      model: 'gpt-5.6-luna'
+    })
+
+    /* And back out on the next write, so a restart brings the choice back. */
+    stores.settings.settings.agentRoles.code.agent = 'claude'
+    stores.settings.settings.agentRoles.code.model = 'fable'
+    await stores.settings.flushPending()
+    const sent = ipc.calls('settings_save').at(-1).settings
+    expect(sent.model).toBe('opus')
+    expect(sent.agentRoles.tasks).toEqual({ agent: 'codex', model: 'gpt-5.6-luna' })
+    expect(sent.agentRoles.code).toEqual({ agent: 'claude', model: 'fable' })
+  })
+
+  it('reads a settings file that has no roles in it at all', async () => {
+    /* Every file on a person's disk right now is this file. Every field is
+       `serde(default)` on the Rust side, and the front end must not assume the
+       object is there either — a tab reading `undefined.agent` is a blank
+       Agents tab. */
+    const { ipc, stores } = await loadStores()
+    ipc.on('settings_load', { agent: 'claude' })
+    ipc.on('settings_save', null)
+    await stores.settings.loadSettings()
+    expect(stores.settings.settings.model).toBe('')
+    expect(stores.settings.settings.agentRoles).toEqual({
+      tasks: { agent: '', model: '' },
+      code: { agent: '', model: '' },
+      runLead: { agent: '', model: '' },
+      reviewBranch: { agent: '', model: '' }
+    })
+  })
+
+  it('a file naming two roles leaves the other two empty rather than undefined', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('settings_load', {
+      agentRoles: { code: { agent: 'claude', model: 'opus' }, runLead: { agent: 'codex' } }
+    })
+    ipc.on('settings_save', null)
+    await stores.settings.loadSettings()
+    expect(stores.settings.settings.agentRoles.code).toEqual({ agent: 'claude', model: 'opus' })
+    expect(stores.settings.settings.agentRoles.runLead).toEqual({ agent: 'codex', model: '' })
+    expect(stores.settings.settings.agentRoles.tasks).toEqual({ agent: '', model: '' })
+    expect(stores.settings.settings.agentRoles.reviewBranch).toEqual({ agent: '', model: '' })
+  })
+
   it('opens on no standing instruction when the file names none, and takes the one it does', async () => {
     const { ipc, stores } = await loadStores()
     ipc.on('settings_load', {})
@@ -905,8 +960,51 @@ describe('the settings window', () => {
       taskLanguage: 'en',
       commitLanguage: 'en',
       reportLanguage: 'en',
-      agentPrompt: ''
+      agentPrompt: '',
+      model: '',
+      agentRoles: {
+        tasks: { agent: '', model: '' },
+        code: { agent: '', model: '' },
+        runLead: { agent: '', model: '' },
+        reviewBranch: { agent: '', model: '' }
+      }
     })
+  })
+
+  it('takes a whole role from the settings window, and never half of one', async () => {
+    /* The pair is indivisible: a model without the harness it was chosen
+       against is the one state `settings/model.rs` throws away, so a patch
+       carrying half of a role is not an answer to anything. */
+    await emit(settings.SETTINGS_APPLY, {
+      model: 'opus',
+      agentRoles: {
+        tasks: { agent: 'codex', model: 'gpt-5.6-luna' },
+        code: { model: 'fable' },
+        runLead: 'claude'
+      }
+    })
+    await nextTick()
+
+    expect(settings.settings.model).toBe('opus')
+    expect(settings.settings.agentRoles.tasks).toEqual({
+      agent: 'codex',
+      model: 'gpt-5.6-luna'
+    })
+    expect(settings.settings.agentRoles.code).toEqual({ agent: '', model: '' })
+    expect(settings.settings.agentRoles.runLead).toEqual({ agent: '', model: '' })
+  })
+
+  it('lets a chosen model be cleared again', async () => {
+    /* The empty string is a real value of this field — "say nothing and let
+       the harness pick" — so the guard is the type and never truthiness, the
+       same shape the standing instruction keeps. */
+    await emit(settings.SETTINGS_APPLY, { model: 'opus' })
+    await nextTick()
+    expect(settings.settings.model).toBe('opus')
+
+    await emit(settings.SETTINGS_APPLY, { model: '' })
+    await nextTick()
+    expect(settings.settings.model).toBe('')
   })
 
   it('announces the new truth after every edit, so a refused value is corrected', async () => {
@@ -961,7 +1059,14 @@ describe('the settings window', () => {
       taskLanguage: 'en',
       commitLanguage: 'en',
       reportLanguage: 'en',
-      agentPrompt: ''
+      agentPrompt: '',
+      model: '',
+      agentRoles: {
+        tasks: { agent: '', model: '' },
+        code: { agent: '', model: '' },
+        runLead: { agent: '', model: '' },
+        reviewBranch: { agent: '', model: '' }
+      }
     })
   })
 })

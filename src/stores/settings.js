@@ -172,6 +172,36 @@ const defaults = () => ({
      answer. Which sessions it reaches is decided in Rust
      (`agents::prompt::talks_to_a_person`); nothing here knows or needs to. */
   agentPrompt: '',
+  /* Which model the app asks for when nothing more specific applies, and the
+     fallback behind every role below. The empty string means the flag is not
+     passed at all and the harness picks for itself — the app's behaviour to
+     the letter before this field existed, which is why it ships empty rather
+     than naming anything. The legal values are the chosen harness's own, and
+     Rust owns that list (`Profile::models`, read through `stores/agents.js`);
+     `settings/model.rs` forgets a model the harness never offered. */
+  model: '',
+  /* Which harness and which model handle each kind of agent call: filing and
+     editing tasks, writing code, leading a run, reviewing a branch. All four
+     present and empty, which is what says "inherit the root pair".
+
+     The pair is indivisible on the Rust side — a role either names both halves
+     or neither — because a model id means nothing against another provider,
+     and a role holding its own model behind an inherited harness would break at
+     spawn on the day somebody switched the root. `settings/model.rs` throws
+     such a half away; the settings window fills the harness in on the first
+     model chosen, so nothing on screen can produce that state.
+
+     Written out with every role rather than left to arrive from the file, for
+     the reason `runSettings` below spells out: a key missing from this object
+     is a key the defaults layer cannot clear, and a tab reading
+     `undefined.agent` is a blank Agents tab for a file written before this
+     existed. */
+  agentRoles: {
+    tasks: { agent: '', model: '' },
+    code: { agent: '', model: '' },
+    runLead: { agent: '', model: '' },
+    reviewBranch: { agent: '', model: '' }
+  },
   /* The two percentages the run gate holds a batch on: `0` is off. Global
      beside `agent` and the languages, because a subscription is the person's
      and not the repository's, and shipped as today's behaviour exactly — the
@@ -462,6 +492,14 @@ export async function loadSettings() {
     settings.commitLanguage = stored.commitLanguage ?? base.commitLanguage
     settings.reportLanguage = stored.reportLanguage ?? base.reportLanguage
     settings.agentPrompt = stored.agentPrompt ?? base.agentPrompt
+    settings.model = stored.model ?? base.model
+    /* Section by section rather than in one assignment, the shape
+       `applySection` uses above and for its reason: a file written before this
+       object existed carries none of the four roles, and one that carries two
+       of them must not lose the other two to `undefined`. */
+    for (const role of ROLES) {
+      applySection(settings.agentRoles[role], base.agentRoles[role], stored.agentRoles?.[role])
+    }
   } catch (err) {
     console.error('[settings] the read failed, taking the defaults:', err)
   }
@@ -501,6 +539,28 @@ export async function loadSettings() {
 export const SETTINGS_APPLY = 'settings:apply'
 export const SETTINGS_STATE = 'settings:state'
 export const SETTINGS_HELLO = 'settings:hello'
+
+/* The four rows of `agentRoles`, written out once because three places walk
+   them: the load, the message to the settings window, and the edit coming back.
+   The names are the file's own — `runLead` and `reviewBranch` are what
+   `settings/model.rs` serializes, and a spelling that drifted here would be a
+   choice saved into a key nothing reads. */
+const ROLES = ['tasks', 'code', 'runLead', 'reviewBranch']
+
+/* One (harness, model) pair per role, copied field by field rather than spread:
+   a role missing from `source` takes two empty strings, which is what "inherit
+   the root" is, and a role carrying junk cannot bring a third field along. */
+function roles(source) {
+  const out = {}
+  for (const role of ROLES) {
+    const pair = source?.[role]
+    out[role] = {
+      agent: typeof pair?.agent === 'string' ? pair.agent : '',
+      model: typeof pair?.model === 'string' ? pair.model : ''
+    }
+  }
+  return out
+}
 
 /* Both the store's live values and a raw `settings_load` answer go through here,
    so the settings window cannot be shown one shape by the main window and
@@ -580,7 +640,16 @@ function toShared(source) {
     reportLanguage: source.reportLanguage ?? base.reportLanguage,
     /* Flat beside the four languages, and the fifth field of that family: what
        the person wants said in every session they are in. */
-    agentPrompt: source.agentPrompt ?? base.agentPrompt
+    agentPrompt: source.agentPrompt ?? base.agentPrompt,
+    /* The root model, flat beside the agent it is chosen against. */
+    model: source.model ?? base.model,
+    /* The four roles, as one object and deliberately not flattened the way
+       every scalar above is: this is not a message of independent fields but a
+       table, and the settings window sends a whole role back at a time —
+       `applyPatch` below is what refuses half of one. A copy rather than the
+       object itself, so the settings window cannot write into this window's
+       state by holding a reference to it. */
+    agentRoles: roles(source.agentRoles ?? base.agentRoles)
   }
 }
 
@@ -645,6 +714,29 @@ export function applyPatch(patch) {
      started, with the field on screen looking empty. */
   if (typeof patch.agentPrompt === 'string') {
     settings.agentPrompt = patch.agentPrompt
+  }
+  /* The type and nothing else, the shape `agentPrompt` above uses and for its
+     reason: the empty string is a real value of this field — "say nothing and
+     let the harness pick" — so a truthiness guard would make clearing it
+     impossible. What is legal beyond that is the chosen harness's own list,
+     which Rust owns and `Settings::validate` checks the file against, exactly
+     as `agent` above defers to `agents::IDS`. */
+  if (typeof patch.model === 'string') {
+    settings.model = patch.model
+  }
+  /* A whole role at a time, and never half of one: the pair is indivisible, and
+     a patch carrying a model without the harness it was chosen against is the
+     one state `settings/model.rs` throws away. An unknown role name is skipped
+     rather than added — the four are a closed list, and a fifth key would only
+     travel to the file to be dropped there. */
+  if (patch.agentRoles && typeof patch.agentRoles === 'object') {
+    for (const role of ROLES) {
+      const pair = patch.agentRoles[role]
+      if (!pair || typeof pair !== 'object') continue
+      if (typeof pair.agent !== 'string' || typeof pair.model !== 'string') continue
+      settings.agentRoles[role].agent = pair.agent
+      settings.agentRoles[role].model = pair.model
+    }
   }
   /* The board's four. The two scalars are checked against the closed lists
      `boardView.js` holds — unlike `agent`, where Rust is the only party with

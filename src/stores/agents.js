@@ -1,7 +1,7 @@
-/* What the app knows about the harnesses it can run: their names, and what each
-   of them can be asked to do. The single copy of that is Rust's — `agents::IDS`
-   and the `Profile` methods behind `agents::catalogue` — and this store is how
-   it reaches a row being drawn.
+/* What the app knows about the harnesses it can run: their names, what each of
+   them can be asked to do, and what each may be run on. The single copy of that
+   is Rust's — `agents::IDS` and the `Profile` methods behind
+   `agents::catalogue` — and this store is how it reaches a row being drawn.
 
    Read **once at startup** and never again. That is the property four
    hand-written lists in this tree were keeping — one of agent labels in
@@ -45,7 +45,18 @@ export function can(id, capability) {
 
 /* The label a person reads, or the raw id when the catalogue has never heard of
    it: naming an unknown harness as one of ours would be the app claiming
-   something it does not know. */
+   something it does not know.
+
+   There is deliberately **no `modelsOf` beside this**, though a row carries its
+   models too. `agentLabel` is here because two unrelated callers want it and
+   neither has the row in hand; the model list has exactly one reader — the
+   Models group's `modelOptions` in `components/settings/agentRoles.js` — which
+   is handed `agents.value` whole and does the lookup there. Adding the wrapper
+   would have put "the models of this harness id" in two places, and the tested
+   copy would have been the one nothing runs. What must not happen instead is
+   that rule reaching in here: `agentRoles.js` is one of the pure modules, and
+   importing this store would pull Vue and Tauri into a family defined by having
+   neither. */
 export function agentLabel(id) {
   return agents.value.find((agent) => agent.id === id)?.label ?? id
 }

@@ -302,16 +302,21 @@ pub async fn tracker_search_semantic(
         .map_err(|err| OneshotError::Io(err.to_string()))?;
 
     tokio::task::spawn_blocking(move || {
-        let agent = crate::settings::agent(&app);
-        let profile = crate::agents::pick(&agent, crate::shell_env::path())
-            .ok_or_else(|| OneshotError::NoAgent(agent.clone()))?;
+        // The Default row, for the reason `vcs_suggest_message` records: a
+        // one-shot has no session and therefore no `Intent` to ask a role with.
+        let (agent, model) = crate::settings::default_pair(&app);
+        // `pick_with_model` for the reason `vcs_suggest_message` records: the
+        // substitution stays, the model does not cross it.
+        let (profile, model) =
+            crate::agents::pick_with_model(&agent, model, crate::shell_env::path())
+                .ok_or_else(|| OneshotError::NoAgent(agent.clone()))?;
         // The merge lock is coordination and not work, and it is out of every
         // list on screen — so it is out of the question too, rather than only
         // out of the answer. See `search::is_lock`.
         let issues: Vec<Issue> =
             snapshot.issues.into_iter().filter(|issue| !search::is_lock(issue)).collect();
         let question = search::prompt(&query, &issues);
-        let raw = agent_oneshot::ask_raw(profile, &question)?;
+        let raw = agent_oneshot::ask_raw(profile, model.as_deref(), &question)?;
         let known: std::collections::HashSet<String> =
             issues.iter().map(|issue| issue.id.clone()).collect();
         Ok(search::parse(&raw, &known))

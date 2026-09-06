@@ -52,23 +52,27 @@ pub fn load(path: &Path) -> (Settings, Option<Problem>) {
     }
 }
 
-/// The configured agent id, and nothing else out of the file.
+/// The harness and the model one kind of agent call asks for, and nothing else
+/// out of the file: a role that names its own pair, or the root pair behind it.
 ///
-/// The answer is always one of `agents::IDS`: `parse` validates the field on the
-/// way in, so an id nobody ships comes back as the default rather than reaching
-/// `agents::pick` as an unknown name. A missing or unreadable file answers with
-/// the default too — the first run has no file, and neither of those is a reason
-/// to refuse to start an agent.
+/// Both halves are always legal: `parse` validates them on the way in, so the
+/// harness is one of `agents::IDS` and the model is one that harness offers, or
+/// the empty string, which is the ordinary "nobody has chosen". An id nobody
+/// ships therefore never reaches `agents::pick` as an unknown name. A missing or
+/// unreadable file answers with the shipped pair — Claude Code and no model at
+/// all — because the first run has no file and that is no reason to refuse to
+/// start an agent.
 ///
-/// One value rather than the resolved view `settings_load` hands the front end:
-/// the callers here want the file's own answer to a single question, and none of
-/// them has a project to resolve against.
-pub fn agent(path: &Path) -> String {
-    load(path).0.agent
+/// Two values rather than the resolved view `settings_load` hands the front end:
+/// the callers here want the file's own answer to one question, and none of them
+/// has a project to resolve against. It is the head of this family and the
+/// readers below it are written against its shape.
+pub fn role_pair(path: &Path, role: crate::agents::Role) -> (String, String) {
+    load(path).0.role_pair(role)
 }
 
 /// The configured languages, and nothing else out of the file. The same shape
-/// as `agent` above and answering under the same guarantees: every one of them
+/// as `role_pair` above and answering under the same guarantees: every one of them
 /// is always an id `agents::LANGUAGES` knows, because `parse` validates them on
 /// the way in, and a missing or unreadable file answers with the default set.
 pub fn languages(path: &Path) -> crate::agents::Languages {
@@ -82,7 +86,7 @@ pub fn languages(path: &Path) -> crate::agents::Languages {
 }
 
 /// The standing instruction off the file, and nothing else out of it. The shape
-/// of `agent` above, one field over, and answering on the same terms: a missing
+/// of `role_pair` above, one field over, and answering on the same terms: a missing
 /// or unreadable file answers with the empty string, which says nothing at all —
 /// today's behaviour to the letter, and the right answer on a first run when
 /// there is no file yet.
@@ -91,7 +95,7 @@ pub fn agent_prompt(path: &Path) -> String {
 }
 
 /// The run gate's thresholds, and nothing else out of the file. The shape of
-/// `agent` above, one section over, and read from the disk at every gate check
+/// `role_pair` above, one section over, and read from the disk at every gate check
 /// rather than once per run: that is the whole of what lets somebody watching a
 /// paused run lower the gate and have that run go on.
 ///
@@ -103,7 +107,7 @@ pub fn subscription(path: &Path) -> crate::settings::model::SubscriptionSettings
 }
 
 /// Whether a run may remove a task's worktree once it is merged and closed, and
-/// nothing else out of the file. The shape of `agent` above, one field over.
+/// nothing else out of the file. The shape of `role_pair` above, one field over.
 ///
 /// A missing or unreadable file answers `true`, the shipped state, which is what
 /// the running-tasks skill has always done: this switch exists to *stop* the
@@ -114,7 +118,7 @@ pub fn git_remove_worktrees(path: &Path) -> bool {
 }
 
 /// Whether the update timer may go to the release feed by itself, and nothing
-/// else out of the file. The shape of `agent` above, one section over, and read
+/// else out of the file. The shape of `role_pair` above, one section over, and read
 /// from the disk at every tick rather than once at start: that is the whole of
 /// what makes the switch take effect without a restart.
 ///
@@ -127,7 +131,7 @@ pub fn updates_auto_check(path: &Path) -> bool {
 }
 
 /// What this project's runs were last aimed at, and nothing else out of the
-/// file. The shape of `agent` above, one map deeper.
+/// file. The shape of `role_pair` above, one map deeper.
 ///
 /// The key is the project's absolute path exactly as `resolve` stores it, which
 /// is the directory `project::nearest_tracked_ancestor` normalized — the same
@@ -144,7 +148,7 @@ pub fn run_target_branch(path: &Path, project: &str) -> Option<String> {
 }
 
 /// How big one dialog window was left, and nothing else out of the file. The
-/// shape of `agent` above, one section over, and read from the disk at the
+/// shape of `role_pair` above, one section over, and read from the disk at the
 /// moment the window opens rather than once at start — the same reason
 /// `updates_auto_check` is: it is what makes a size chosen a minute ago apply
 /// to the next window without a restart.
@@ -312,7 +316,7 @@ mod tests {
         let path = dir.join("settings.json");
         fs::write(&path, r#"{"version":1,"agent":"codex"}"#).expect("setup");
 
-        assert_eq!(agent(&path), "codex");
+        assert_eq!(role_pair(&path, crate::agents::Role::Default).0, "codex");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -326,15 +330,23 @@ mod tests {
         let default_agent = Settings::default().agent;
 
         let missing = dir.join("settings.json");
-        assert_eq!(agent(&missing), default_agent, "a missing file is the first run");
+        assert_eq!(
+            role_pair(&missing, crate::agents::Role::Default).0,
+            default_agent,
+            "a missing file is the first run"
+        );
 
         let unknown = dir.join("unknown.json");
         fs::write(&unknown, r#"{"version":1,"agent":"cursor"}"#).expect("setup");
-        assert_eq!(agent(&unknown), default_agent, "an id nobody ships loses the field");
+        assert_eq!(
+            role_pair(&unknown, crate::agents::Role::Default).0,
+            default_agent,
+            "an id nobody ships loses the field"
+        );
 
         let broken = dir.join("broken.json");
         fs::write(&broken, "{not json").expect("setup");
-        assert_eq!(agent(&broken), default_agent);
+        assert_eq!(role_pair(&broken, crate::agents::Role::Default).0, default_agent);
         let _ = fs::remove_dir_all(&dir);
     }
 

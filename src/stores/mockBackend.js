@@ -941,7 +941,13 @@ export function installMockBackend() {
        is the only one left: no component names an agent any more, and a browser
        has no Rust to ask. Codex's `clear` is false here because it is false
        there: `codex --help` at 0.146.0 documents no command that clears a
-       conversation, and `usage` for the same reason — it prints no allowance. */
+       conversation, and `usage` for the same reason — it prints no allowance.
+
+       The models are the same copy of `Profile::models`, and they are not
+       decoration either: the Models group on the Agents tab draws its ten
+       dropdowns off this list, so without them `?view=gallery` and
+       `?view=settings&tab=agents` would show ten empty pickers, which reads as
+       a load that failed rather than as anything anybody decided. */
     if (command === 'agents_catalog') {
       return [
         {
@@ -954,7 +960,13 @@ export function installMockBackend() {
             usage: true,
             batch: true,
             oneshot: true
-          }
+          },
+          models: [
+            { id: 'fable', label: 'Fable' },
+            { id: 'opus', label: 'Opus' },
+            { id: 'sonnet', label: 'Sonnet' },
+            { id: 'haiku', label: 'Haiku' }
+          ]
         },
         {
           id: 'codex',
@@ -966,7 +978,14 @@ export function installMockBackend() {
             usage: false,
             batch: true,
             oneshot: true
-          }
+          },
+          models: [
+            { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' },
+            { id: 'gpt-5.6-terra', label: 'GPT-5.6-Terra' },
+            { id: 'gpt-5.6-luna', label: 'GPT-5.6-Luna' },
+            { id: 'gpt-5.5', label: 'GPT-5.5' },
+            { id: 'gpt-5.2', label: 'GPT-5.2' }
+          ]
         }
       ]
     }
