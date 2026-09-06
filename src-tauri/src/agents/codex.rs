@@ -25,6 +25,29 @@ use super::{
 use crate::runs::model::RunMode;
 use crate::terminal::model::{Question, QuestionOption};
 
+/// The models this harness offers, the id first and the name a person reads
+/// second.
+///
+/// Read off the installed CLI at 0.146.0 on 2026-09-06 rather than recalled.
+/// `codex --help` documents `-m, --model <MODEL>` and no ids at all — it names
+/// no vocabulary the way Claude Code's help does — so the ids come from the
+/// model catalogue that CLI ships inside itself, which is the same table its
+/// own picker is drawn from: every entry whose `visibility` is `list`, in that
+/// catalogue's own `priority` order, with each `display_name` as written there.
+/// The hidden ones are left out for the reason they are hidden: this app has no
+/// standing to offer what that CLI has stopped offering.
+///
+/// The `-c model="o3"` in that help is an example of the config-override syntax
+/// and not a model this CLI proposes; taking an id out of it would be exactly
+/// the guess `.claude/rules/agents.md` records the cost of.
+const MODELS: &[(&str, &str)] = &[
+    ("gpt-5.6-sol", "GPT-5.6-Sol"),
+    ("gpt-5.6-terra", "GPT-5.6-Terra"),
+    ("gpt-5.6-luna", "GPT-5.6-Luna"),
+    ("gpt-5.5", "GPT-5.5"),
+    ("gpt-5.2", "GPT-5.2"),
+];
+
 pub struct Codex;
 
 impl Profile for Codex {
@@ -42,6 +65,23 @@ impl Profile for Codex {
 
     fn delivery(&self) -> SkillDelivery {
         SkillDelivery::Inline
+    }
+
+    /// `MODELS` carries where this list was read from.
+    fn models(&self) -> &'static [(&'static str, &'static str)] {
+        MODELS
+    }
+
+    /// `-m, --model <MODEL>` — "Model the agent should use", read off this
+    /// CLI's own help at 0.146.0. The short form is what that help documents
+    /// first, and it is accepted by the bare invocation and by `exec` alike,
+    /// which are the two shapes this profile's `command` builds.
+    ///
+    /// **This is Codex's grammar and nobody else's**, exactly as `resume_args`
+    /// is: `claude.rs` answers `--model`, and neither is composed out of the
+    /// other's answer.
+    fn model_args<'a>(&self, model: &'a str) -> Vec<&'a str> {
+        vec!["-m", model]
     }
 
     /// `-i, --image <FILE>...` — verified against the installed CLI's own help.
@@ -144,6 +184,27 @@ impl Profile for Codex {
                 cmd.arg(arg);
             }
         }
+        // Which model, where somebody has chosen one. Before the prompt for the
+        // reason the autonomy arguments above it are — the prompt is positional
+        // — and read back through `self.model_args` rather than written out
+        // again, the same way the image flag below is read back through
+        // `self.images()`, so the profile's answer and the command line cannot
+        // come to disagree. Nothing at all when no model was chosen, which is
+        // this app's behaviour to the letter before the field existed.
+        // Never on a resume, whatever the `Launch` carries. Two guards rather
+        // than one, exactly as the chosen session id above has: that one is
+        // `settings::role_model`, which refuses this intent a model at all, and
+        // this one stands where the flag would go on the line. A recorded
+        // conversation already has a model, and this app arriving with a second
+        // opinion is the intrusion `prompt::build` refuses when it declines to
+        // compose a prompt for the same intent.
+        if !matches!(launch.intent, Intent::ResumeSession { .. }) {
+            if let Some(model) = launch.model.as_deref() {
+                for arg in self.model_args(model) {
+                    cmd.arg(arg);
+                }
+            }
+        }
         // The pixels, on the command line. The paths are in the prompt as well,
         // and that is not a duplicate: what rides here is what Codex looks at,
         // and what rides there is what has to end up in the issue description.
@@ -173,6 +234,7 @@ impl Profile for Codex {
             text,
             &launch.languages,
             &launch.agent_prompt,
+            launch.worker_model.as_deref(),
         ) {
             cmd.arg(built);
         }
@@ -860,6 +922,8 @@ mod tests {
             session_id: None,
             languages: crate::agents::Languages::default(),
             agent_prompt: String::new(),
+            model: None,
+            worker_model: None,
         }
     }
 
@@ -1863,6 +1927,55 @@ mod tests {
             let args = argv(&launch(intent));
             assert!(!args.iter().any(|a| a == "exec"), "{args:?}");
         }
+    }
+
+    #[test]
+    fn the_model_flag_is_the_short_one_this_cli_documents() {
+        // `-m, --model <MODEL>`, and the short form is what that help
+        // documents first. Written out rather than composed from Claude Code's
+        // `--model`: two CLIs, two grammars.
+        use crate::agents::Profile;
+        assert_eq!(Codex.model_args("gpt-5.6-sol"), vec!["-m", "gpt-5.6-sol"]);
+    }
+
+    #[test]
+    fn every_offered_model_has_a_name_a_person_reads() {
+        use crate::agents::Profile;
+        assert!(!Codex.models().is_empty());
+        for (id, label) in Codex.models() {
+            assert!(!id.is_empty(), "a model id must not be empty");
+            assert!(!label.is_empty(), "model {id} has no label");
+        }
+    }
+
+    #[test]
+    fn a_chosen_model_reaches_the_command_line() {
+        let mut chosen = launch(Intent::Bare);
+        chosen.model = Some("gpt-5.6-sol".into());
+        let args = argv(&chosen);
+        assert!(
+            args.windows(2).any(|pair| pair[0] == "-m" && pair[1] == "gpt-5.6-sol"),
+            "the chosen model must be on the command line: {args:?}"
+        );
+    }
+
+    #[test]
+    fn no_chosen_model_means_no_flag_at_all() {
+        // The shipped state, and this app's behaviour to the letter before the
+        // setting existed: with nothing chosen the harness picks for itself.
+        let args = argv(&launch(Intent::Bare));
+        assert!(!args.iter().any(|arg| arg == "-m"), "{args:?}");
+    }
+
+    #[test]
+    fn a_resumed_session_is_never_told_which_model_to_use() {
+        // The second guard, standing where the flag would appear: a resumed
+        // conversation already has a model, and `settings::role_model` refuses
+        // this intent one before a `Launch` is ever built.
+        let mut chosen = launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", false));
+        chosen.model = Some("gpt-5.6-sol".into());
+        let args = argv(&chosen);
+        assert!(!args.iter().any(|arg| arg == "-m"), "{args:?}");
     }
 
     #[test]

@@ -183,7 +183,12 @@ pub async fn browser_tools(app: AppHandle, project: String) -> BrowserTools {
 pub async fn agent_usage(app: AppHandle, agent: Option<String>) -> AgentUsage {
     let limits = crate::settings::subscription(&app);
     let profile = tokio::task::spawn_blocking(move || {
-        let id = wanted(agent, || crate::settings::agent(&app));
+        // The run lead's row, which is the harness a run would actually
+        // start, and therefore the subscription a run would actually spend.
+        // The root's only where that row inherits it.
+        let id = wanted(agent, || {
+            crate::settings::role_pair(&app, crate::agents::Role::RunLead).0
+        });
         crate::agents::pick(&id, crate::shell_env::path())
     })
     .await

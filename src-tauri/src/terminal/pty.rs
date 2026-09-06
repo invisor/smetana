@@ -618,6 +618,8 @@ mod tests {
             session_id: None,
             languages: agents::Languages::default(),
             agent_prompt: String::new(),
+            model: None,
+            worker_model: None,
         }
     }
 
