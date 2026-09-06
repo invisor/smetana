@@ -157,6 +157,19 @@ impl Store {
             .collect()
     }
 
+    /// Who holds one issue, for a caller that already has the id.
+    ///
+    /// The same caller as `ids_with_status` above and the other half of its
+    /// question: which of those tasks a run of this app is working on right
+    /// now (`service::close_merged`'s fourth narrowness). Here rather than in
+    /// `ids_with_status` because the rule that reads it is the sweep's and not
+    /// the snapshot's, and here rather than through `snapshot()` for the reason
+    /// that method gives — a clone of every issue in the project to answer
+    /// about a handful of them, once a minute.
+    pub fn assignee(&self, id: &str) -> Option<&str> {
+        self.issues.get(id).and_then(|issue| issue.assignee.as_deref())
+    }
+
     pub fn columns_delta(&mut self) -> Delta {
         self.generation += 1;
         Delta {
@@ -243,6 +256,22 @@ mod tests {
             vec!["a".to_string(), "d".to_string()]
         );
         assert!(store.ids_with_status("parked").is_empty());
+    }
+
+    /// The input to the sweep's fourth narrowness: it has an id and asks who
+    /// holds it. An unassigned issue is held by nobody, which is what lets it
+    /// through the filter rather than what stops it.
+    #[test]
+    fn who_holds_an_issue_is_readable_by_id() {
+        let mut store = Store::default();
+        let mut claimed = issue("a", "ready_to_merge", "2026-07-31T00:00:01Z");
+        claimed.assignee = Some("smetana-run-4".into());
+        let free = issue("b", "ready_to_merge", "2026-07-31T00:00:01Z");
+        store.apply_incremental(vec![claimed, free]);
+
+        assert_eq!(store.assignee("a"), Some("smetana-run-4"));
+        assert_eq!(store.assignee("b"), None, "bd omits an empty field entirely");
+        assert_eq!(store.assignee("nothing-of-the-sort"), None);
     }
 
     #[test]

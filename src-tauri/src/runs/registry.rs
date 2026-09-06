@@ -33,6 +33,9 @@
 //! out of it). Phase R reads it with an ordinary file read, needing nothing
 //! from the app and no path passed in through a prompt.
 
+use std::collections::HashSet;
+use std::path::Path;
+
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -290,6 +293,45 @@ pub fn abandoned_actors(registry: &Registry, table: &impl Fn(i32) -> Seen) -> Ve
         .runs
         .iter()
         .filter(|record| liveness(&record.writer, table(record.writer.pid)) == Liveness::Dead)
+        .flat_map(|record| record.batches.iter().map(|batch| batch.actor.clone()))
+        .collect()
+}
+
+/// The actors a run is holding *right now* in one project: every one named
+/// under a record for that folder whose writer is not provably gone.
+///
+/// The mirror of `abandoned_actors` above, and deliberately not its negation —
+/// `Unknown` gives its actors up there and gives them here as well, because
+/// both readers want the same instinct pointed at opposite costs. There, an
+/// actor that cannot be shown dead keeps its claim; here, an actor that cannot
+/// be shown dead keeps its task. A platform that cannot answer about a process
+/// must not cost somebody a night's work either way round.
+///
+/// The caller is `tracker::service::close_merged`, the sweep that closes a task
+/// whose branch is already in the target branch, and this is its fourth
+/// narrowness: a task the app itself is running is not the sweep's to close.
+/// The sweep exists for a person who merged a branch past the app; a run closes
+/// its own tasks as the last step of merging them.
+///
+/// **A record for another folder gives nothing**, which matters because the
+/// file is per project and the actor names are not: `smetana-run-4` in one
+/// project's registry and `smetana-run-4` on another project's board are two
+/// different runs whenever two apps, or two projects, are going at once — the
+/// session ids restart at 1 with every launch. Folders are compared as paths
+/// rather than as strings so that a trailing separator is not a second project;
+/// nothing here touches the disk, so a symlinked spelling is not resolved, and
+/// the cost of that is a closure this narrowness lets through rather than a
+/// task closed wrongly.
+pub fn live_actors(
+    registry: &Registry,
+    project: &Path,
+    table: &impl Fn(i32) -> Seen,
+) -> HashSet<String> {
+    registry
+        .runs
+        .iter()
+        .filter(|record| Path::new(&record.project) == project)
+        .filter(|record| liveness(&record.writer, table(record.writer.pid)) != Liveness::Dead)
         .flat_map(|record| record.batches.iter().map(|batch| batch.actor.clone()))
         .collect()
 }
@@ -646,6 +688,79 @@ mod tests {
         );
 
         assert_eq!(dead, vec!["smetana-run-0".to_string()], "only the run whose app is gone");
+    }
+
+    /// A record for one project, stated outright: the batch groups are left
+    /// out because the rule never reads them — a batch holds its task under a
+    /// run whose *writer* is still there, whatever the process table says
+    /// about the agent itself.
+    fn holding(project: &str, writer: Proc, actors: &[&str]) -> Record {
+        Record {
+            token: 1,
+            project: project.into(),
+            target_branch: "develop".into(),
+            started_at: ago(0),
+            writer,
+            batches: actors
+                .iter()
+                .map(|actor| Batch { actor: (*actor).to_string(), group: None })
+                .collect(),
+        }
+    }
+
+    fn sorted(actors: HashSet<String>) -> Vec<String> {
+        let mut actors: Vec<String> = actors.into_iter().collect();
+        actors.sort();
+        actors
+    }
+
+    #[test]
+    fn a_live_run_holds_its_actors_and_a_dead_one_holds_none() {
+        // What the merged-branch sweep asks before it closes anything: a task
+        // assigned to the first actor is a run's to close, and a task assigned
+        // to the second is left behind by an app that is gone.
+        let held = registry(vec![
+            holding("/p", stamp(10, 1), &["smetana-run-1", "smetana-run-2"]),
+            holding("/p", stamp(11, 3), &["smetana-run-9"]),
+        ]);
+
+        let alive = table(&[(10, Seen::Running { started: 1 })]);
+
+        let live = live_actors(&held, Path::new("/p"), &alive);
+
+        assert_eq!(
+            sorted(live),
+            vec!["smetana-run-1".to_string(), "smetana-run-2".to_string()],
+            "every batch of the live run, and nothing from the run whose app is gone"
+        );
+    }
+
+    #[test]
+    fn a_run_this_platform_cannot_ask_about_still_holds_its_actors() {
+        // The asymmetry stated in the header, and the whole reason it is
+        // stated: a missed closure costs a minute and a false one costs the
+        // work, so a platform that cannot answer leaves the task alone.
+        let held = registry(vec![holding("/p", stamp(10, 1), &["smetana-run-1"])]);
+
+        let live = live_actors(&held, Path::new("/p"), &table(&[(10, Seen::Unknown)]));
+
+        assert_eq!(sorted(live), vec!["smetana-run-1".to_string()]);
+    }
+
+    #[test]
+    fn a_run_in_another_project_holds_nothing_here() {
+        // Actor names are per launch and not per project, so a live
+        // `smetana-run-1` next door must not shield this project's
+        // `smetana-run-1`. A trailing separator is the same folder.
+        let held = registry(vec![holding("/elsewhere", stamp(10, 1), &["smetana-run-1"])]);
+        let alive = table(&[(10, Seen::Running { started: 1 })]);
+
+        assert!(live_actors(&held, Path::new("/p"), &alive).is_empty());
+        assert_eq!(
+            sorted(live_actors(&held, Path::new("/elsewhere/"), &alive)),
+            vec!["smetana-run-1".to_string()],
+            "and the folder it does name is that folder however it is spelled"
+        );
     }
 
     #[test]
