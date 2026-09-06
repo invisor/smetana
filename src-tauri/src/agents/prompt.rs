@@ -1316,12 +1316,25 @@ fn setup(delivery: SkillDelivery, skills: &Skills, facts: Option<&str>) -> Strin
 pub const FIELDS_GIVEN: &str = "File it with ";
 pub const FIELDS_AUTO: &str = "Decide the ";
 
-/// The end of the same sentence, and it is a constant of its own because three
-/// words are not enough to recognise a block by. "Decide the right count with
-/// me first" is an ordinary paragraph of a task somebody files, and a reader
-/// matching on the opening alone would cut their words off there. Both halves
-/// have to be in the paragraph for it to be this app's, and the middle is the
-/// only part that varies.
+/// **Neither opening is enough on its own, and both are three ordinary English
+/// words.** "Decide the right count with me first" and "File it with the other
+/// counter bug" are paragraphs of a task somebody files, and a reader matching
+/// on the opening alone would cut their words off at one — silently, since
+/// nothing downstream can tell a short first prompt from a short task. So each
+/// is paired with the only other invariant part of its sentence, and a block
+/// counts only where the paragraph carries both.
+///
+/// The pinned half is paired with the **name of the first field in it**, which
+/// is what `fields` writes straight after the opening: `FIELDS_GIVEN` plus one
+/// of these two is the whole of what that paragraph can begin with. It is
+/// exhaustive because there are two fields and both are here, whichever order
+/// they are pushed in — a third field pinnable in the dialog would need a third
+/// constant here, and that is the coupling to remember rather than the order.
+pub const FIELDS_TYPE: &str = "type ";
+pub const FIELDS_PRIORITY: &str = "priority P";
+
+/// The end of the auto half's sentence: the middle is the only part of it that
+/// varies. See [`FIELDS_TYPE`] for why the pairing exists at all.
 pub const FIELDS_AUTO_TAIL: &str = " yourself, from what is written above.";
 
 /// What the person pinned, and what they left on Auto. Auto is said out loud
@@ -1331,12 +1344,16 @@ pub const FIELDS_AUTO_TAIL: &str = " yourself, from what is written above.";
 fn fields(draft: &TaskDraft) -> String {
     let mut given: Vec<String> = Vec::new();
     let mut auto: Vec<&str> = Vec::new();
+    // The type first and the priority second, which is the order the dialog
+    // draws them in. Nothing rests on it — `sessions::kickoff` matches both
+    // openings — but a reader comparing the two files should not have to work
+    // that out.
     match &draft.issue_type {
-        Some(kind) => given.push(format!("type {kind}")),
+        Some(kind) => given.push(format!("{FIELDS_TYPE}{kind}")),
         None => auto.push("type"),
     }
     match draft.priority {
-        Some(priority) => given.push(format!("priority P{priority}")),
+        Some(priority) => given.push(format!("{FIELDS_PRIORITY}{priority}")),
         None => auto.push("priority"),
     }
 

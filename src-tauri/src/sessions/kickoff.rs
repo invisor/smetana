@@ -36,8 +36,8 @@
 //! the visible cost is this defect coming back exactly as it was.
 
 use crate::agents::prompt::{
-    CONVERSATION_TAIL, FIELDS_AUTO, FIELDS_AUTO_TAIL, FIELDS_GIVEN, FOLLOW_UP, IMAGES_MANY,
-    IMAGES_ONE, NEW_TASK_OPENING, STANDARD,
+    CONVERSATION_TAIL, FIELDS_AUTO, FIELDS_AUTO_TAIL, FIELDS_GIVEN, FIELDS_PRIORITY, FIELDS_TYPE,
+    FOLLOW_UP, IMAGES_MANY, IMAGES_ONE, NEW_TASK_OPENING, STANDARD,
 };
 
 /// What the first human record of a transcript turns out to be.
@@ -117,13 +117,19 @@ fn end_of_words(rest: &str) -> usize {
     // follow-up block, and derived from the constant rather than written out
     // again beside it.
     let follow_up = FOLLOW_UP.split("{id}").next().unwrap_or(FOLLOW_UP);
-    // The second half is required only where the first is too short to stand
-    // for a block on its own — see [`paragraph_start`], and `FIELDS_AUTO_TAIL`
-    // in `prompt.rs`, for what three words would otherwise cost somebody.
+    // The two openings the pinned half of the fields block can have, composed
+    // here rather than written down: `prompt::fields` puts the name of the
+    // first pinned field straight after the opening, and there are two fields.
+    // Three words on their own would cut somebody's own paragraph short —
+    // `FIELDS_TYPE`'s doc carries the whole of that argument, and the same
+    // pairing is what `FIELDS_AUTO_TAIL` is for one line below.
+    let given_type = format!("{FIELDS_GIVEN}{FIELDS_TYPE}");
+    let given_priority = format!("{FIELDS_GIVEN}{FIELDS_PRIORITY}");
     [
         (IMAGES_ONE, None),
         (IMAGES_MANY, None),
-        (FIELDS_GIVEN, None),
+        (given_type.as_str(), None),
+        (given_priority.as_str(), None),
         (FIELDS_AUTO, Some(FIELDS_AUTO_TAIL)),
         (follow_up, None),
         (STANDARD, None),
@@ -143,6 +149,15 @@ fn end_of_words(rest: &str) -> usize {
 /// nothing and takes a matching sentence in the middle of a paragraph out of
 /// the running.
 fn paragraph_start(text: &str, opening: &str, tail: Option<&str>) -> Option<usize> {
+    // Nothing is not a block. Unreachable through the openings above — the only
+    // computed one is `FOLLOW_UP` up to its placeholder, and that constant does
+    // not begin with the placeholder — but the loop below advances by the
+    // opening's own length, so an empty one would find itself at 0 for ever and
+    // hang `sessions_list`, taking the Sessions tab with it. A rule that has
+    // moved should cost a wrong string rather than a wedged command.
+    if opening.is_empty() {
+        return None;
+    }
     let mut from = 0usize;
     while let Some(found) = text[from..].find(opening) {
         let at = from + found;
@@ -175,10 +190,15 @@ mod tests {
     use std::path::PathBuf;
 
     /// What the person wrote, and it is deliberately more than one line and
-    /// deliberately opens a paragraph with a word one of the blocks opens with:
-    /// prose is what this field holds, and the cut has to survive it.
+    /// deliberately opens two of its paragraphs with the words a block of ours
+    /// opens with: prose is what this field holds, and the cut has to survive
+    /// it. Both are why `FIELDS_AUTO_TAIL` and the two pinned-field openings
+    /// exist — matching on "Decide the" or "File it with" alone would end the
+    /// person's words here, and the row would carry the first sentence of a
+    /// task that has three.
     const TYPED: &str = "The scope bar counts dirty files it cannot see.\n\n\
-                         Decide the right count with me before changing anything.";
+                         Decide the right count with me before changing anything.\n\n\
+                         File it with the other counter bug if that reads better.";
 
     fn skills() -> Skills {
         Skills {
@@ -348,12 +368,17 @@ mod tests {
     #[test]
     fn a_message_that_is_not_our_prompt_comes_back_exactly_as_it_arrived() {
         for message in [
-            "Move the card to done",
-            "Talk to me in Russian. Then read src-tauri/src/sessions/read.rs.",
-            "File a new task in this project's bd tracker. This is what needs doing:\n\nthe board",
-            "",
+            "Move the card to done".to_owned(),
+            "Talk to me in Russian. Then read src-tauri/src/sessions/read.rs.".to_owned(),
+            // Our own filing line and nothing else of ours around it. What
+            // settles a message is the language paragraph, so this is somebody
+            // quoting an opening rather than a prompt — and it is written
+            // through the constant so that a reworded opening moves the case
+            // rather than leaving it passing about a sentence nothing writes.
+            format!("{NEW_TASK_OPENING}\n\nthe board"),
+            String::new(),
         ] {
-            assert_eq!(of(message), Kickoff::Typed(message));
+            assert_eq!(of(&message), Kickoff::Typed(message.as_str()));
         }
     }
 
