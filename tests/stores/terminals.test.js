@@ -1528,6 +1528,68 @@ describe('the sessions a project offers back after a restart', () => {
     expect(loaded.stores.terminals.liveAgentCount.value).toBe(1)
   })
 
+  /* The registry is written at the spawn and not at the exit, so a session has
+     a record in the file the whole time it runs. Nothing showed at the first
+     read of a project — it happens before anybody has started an agent there —
+     but a switch away and back reads again, and every running agent came back
+     with a dim `offline` twin underneath itself, offering to resume the
+     conversation already going one row above (smetana-psbb).
+
+     Matched on the conversation id, which is the only pair of fields that means
+     the same thing on both sides: a live row's `id` is the worker's counter,
+     a number, and a record's key is the conversation id. */
+  it('draws no offer under a conversation that is already running', async () => {
+    const loaded = await ready()
+    loaded.ipc.on('terminal_list', [session({ id: 4, conversation: offered().sessionId })])
+    loaded.ipc.on('terminal_restorable', [offered()])
+    await loaded.stores.terminals.loadSessions('/p')
+
+    const rows = loaded.stores.terminals.agentRows.value
+    expect(rows).toHaveLength(1)
+    expect(rows[0].id).toBe(4)
+    expect(rows[0].restored).toBeUndefined()
+  })
+
+  /* Derived and not consumed: the rule is re-asked every time the rows are
+     drawn, so it holds for the second switch and the third the way it holds for
+     the first. A filter applied once on the way in would not. */
+  it('keeps the offer hidden across several project switches', async () => {
+    const loaded = await ready()
+    const live = [session({ id: 4, conversation: offered().sessionId })]
+    loaded.ipc.on('terminal_list', ({ project }) => (project === '/p' ? live : []))
+    loaded.ipc.on('terminal_restorable', ({ project }) => (project === '/p' ? [offered()] : []))
+
+    for (let pass = 0; pass < 3; pass += 1) {
+      await loaded.stores.terminals.loadSessions('/elsewhere')
+      await loaded.stores.terminals.loadSessions('/p')
+    }
+
+    expect(loaded.stores.terminals.agentRows.value.map((row) => row.id)).toEqual([4])
+  })
+
+  /* And the other side of the same rule, which is the whole point of the file:
+     a record no running conversation claims is a legitimate offer and stays
+     one. Two live sessions here, neither of them it — one on another
+     conversation, and one carrying none at all, since a session started for a
+     run or a fork has no id to record and `null` must match nothing. */
+  it('still offers a record no live conversation claims', async () => {
+    const loaded = await ready()
+    loaded.ipc.on('terminal_list', [
+      session({ id: 4, conversation: 'a9e2b7d0-1111-4222-8333-444455556666' }),
+      session({ id: 5, conversation: null })
+    ])
+    loaded.ipc.on('terminal_restorable', [offered()])
+    await loaded.stores.terminals.loadSessions('/p')
+
+    const rows = loaded.stores.terminals.agentRows.value
+    expect(rows).toHaveLength(3)
+    expect(rows[2]).toMatchObject({
+      id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+      elapsed: 'offline',
+      restored: true
+    })
+  })
+
   it('leaves one project\'s offers behind when another is opened', async () => {
     const loaded = await offering(offered())
     loaded.ipc.on('terminal_restorable', [])
