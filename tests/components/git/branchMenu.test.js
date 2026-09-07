@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { branchMenuItems, remoteBranchMenuItems } from '../../../src/components/git/branchMenu.js'
+import {
+  branchMenuItems,
+  originBranchMenuItems
+} from '../../../src/components/git/branchMenu.js'
 
 const verbs = (items) => items.filter((it) => !it.type)
 const caption = (items) => items.find((it) => it.type === 'label')?.label ?? null
@@ -298,43 +301,107 @@ describe('branchMenuItems', () => {
   })
 })
 
-describe('remoteBranchMenuItems', () => {
-  it('offers the checkout and the name, and nothing else', () => {
-    expect(verbs(remoteBranchMenuItems()).map((it) => it.kind)).toEqual([
-      'checkout-remote',
-      'copy-name'
-    ])
+describe('originBranchMenuItems', () => {
+  /* A branch only `origin` has: the checkout that creates a local one tracking
+     it, and the name. Two items, and the shortness is the decision. */
+  describe('a row with no local twin', () => {
+    it('offers the checkout and the name, and nothing else', () => {
+      expect(verbs(originBranchMenuItems()).map((it) => it.kind)).toEqual([
+        'checkout-remote',
+        'copy-name'
+      ])
+    })
+
+    it('says where the branch comes from rather than calling it a switch', () => {
+      expect(verbs(originBranchMenuItems())[0].label).toBe('Check out from origin')
+    })
+
+    it('draws the cloud the row itself draws, so the item and the row read as one', () => {
+      expect(verbs(originBranchMenuItems())[0].icon).toBe('cloud')
+    })
   })
 
-  it('draws the cloud the row itself draws, so the item and the row read as one', () => {
-    expect(verbs(remoteBranchMenuItems())[0].icon).toBe('cloud')
+  /* And a branch this repository already has, which is the row the old group
+     never held: the same act the Local tab offers, in the same words, reaching
+     the same event. */
+  describe('a row with a local twin', () => {
+    it('offers the local switch and the name, and nothing else', () => {
+      expect(verbs(originBranchMenuItems({ hasLocal: true })).map((it) => it.kind)).toEqual([
+        'checkout',
+        'copy-name'
+      ])
+    })
+
+    it('words the switch exactly as the local row words it', () => {
+      const here = verbs(originBranchMenuItems({ hasLocal: true }))[0]
+      const there = verbs(branchMenuItems()).find((it) => it.kind === 'checkout')
+      expect(here.label).toBe(there.label)
+      expect(here.icon).toBe(there.icon)
+    })
+
+    /* The tick is on this row, and a checkout of where you are standing is a
+       row with nothing behind it — the same refusal and the same caption the
+       Local tab uses. It can only ever reach a row that has a local twin. */
+    it('refuses the switch on the branch the repository is on', () => {
+      const items = originBranchMenuItems({ hasLocal: true, current: true })
+      expect(caption(items)).toBe('Already on this branch')
+      expect(disabledKinds(items)).toEqual(['checkout'])
+    })
   })
 
   it('says nothing at the top while nothing refuses anything', () => {
-    expect(caption(remoteBranchMenuItems())).toBe(null)
-    expect(disabledKinds(remoteBranchMenuItems())).toEqual([])
+    expect(caption(originBranchMenuItems())).toBe(null)
+    expect(disabledKinds(originBranchMenuItems())).toEqual([])
   })
 
   it('refuses the checkout while a run holds the panel, and says so once', () => {
-    const items = remoteBranchMenuItems({ allowed: false })
+    const items = originBranchMenuItems({ allowed: false })
     expect(caption(items)).toBe('A run is going in this project')
     expect(disabledKinds(items)).toEqual(['checkout-remote'])
   })
 
   it('refuses it again while git is already working in this repository', () => {
-    const items = remoteBranchMenuItems({ busy: true })
+    const items = originBranchMenuItems({ busy: true })
     expect(caption(items)).toBe('Git is working in this repository')
     expect(disabledKinds(items)).toEqual(['checkout-remote'])
   })
 
+  /* The run and the operation reach both shapes of the first item, since either
+     of them writes the working tree. */
+  it('refuses the local switch on this tab for the same two reasons', () => {
+    expect(disabledKinds(originBranchMenuItems({ hasLocal: true, allowed: false }))).toEqual([
+      'checkout'
+    ])
+    expect(disabledKinds(originBranchMenuItems({ hasLocal: true, busy: true }))).toEqual([
+      'checkout'
+    ])
+  })
+
+  /* The reason a run outranks the tick, one caption and not two. */
+  it('says the run before it says the tick', () => {
+    const items = originBranchMenuItems({ hasLocal: true, current: true, allowed: false })
+    expect(caption(items)).toBe('A run is going in this project')
+    expect(items.filter((it) => it.type === 'label')).toHaveLength(1)
+  })
+
   it('leaves the name readable while everything else is refused', () => {
-    const items = remoteBranchMenuItems({ allowed: false, busy: true })
+    const items = originBranchMenuItems({ allowed: false, busy: true })
     expect(verbs(items).find((it) => it.kind === 'copy-name').disabled).toBe(false)
   })
 
   it('copies the wording of the local row for the item the two share', () => {
-    const here = verbs(remoteBranchMenuItems()).find((it) => it.kind === 'copy-name')
+    const here = verbs(originBranchMenuItems()).find((it) => it.kind === 'copy-name')
     const there = verbs(branchMenuItems()).find((it) => it.kind === 'copy-name')
     expect(here).toEqual(there)
+  })
+
+  /* What is deliberately absent, in both shapes: every verb about a local
+     branch lives on the Local tab, and the comparison is the review window's
+     job. A row here has two items whatever it is. */
+  it('offers no merge, rebase, rename, delete, new branch, favourite or compare', () => {
+    for (const row of [originBranchMenuItems(), originBranchMenuItems({ hasLocal: true })]) {
+      expect(verbs(row)).toHaveLength(2)
+      expect(row.some((it) => it.type === 'separator')).toBe(false)
+    }
   })
 })

@@ -80,10 +80,10 @@ export const vcsState = reactive({
      Loaded on request rather than with the panel, and by two callers now: the
      branch review window, which asks about every repository of the project in
      turn, and `selectRepo`, which asks about the one the panel is showing so
-     that the `origin` group at the foot of the branch list has something to
-     draw. `remoteBranchesRepo` beside it is what tells those two apart, and it
-     is why the panel draws that group only while the field names the repository
-     it is showing. An empty list is the ordinary answer for a repository nobody
+     that the Origin tab of the branch list has something to draw.
+     `remoteBranchesRepo` beside it is what tells those two apart, and it is why
+     the panel fills that tab only while the field names the repository it is
+     showing. An empty list is the ordinary answer for a repository nobody
      has fetched into. */
   remoteBranches: [],
   /* When each of those branches was last moved here, keyed by name: epoch
@@ -447,8 +447,8 @@ export async function selectRepo(path) {
      reaches it: `catchUp` calls `loadRepos`, which comes back through here.
 
      Last in the list rather than first, and not awaited ahead of anything: the
-     branch list above is what the panel draws first, and the group at the foot
-     of it can arrive a tick later. */
+     local branches are the tab a project starts on, and the other tab's list
+     can arrive a tick later. */
   await Promise.all([loadStatus(), loadBranchList(), loadTracking(), loadRemoteBranches(path)])
 }
 
@@ -866,15 +866,16 @@ export async function checkout(branch) {
 
    Through `write` like every other write here, so it takes the same `busy`, its
    refusal lands in the same block under `GitPanel`, and the whole list comes
-   back afterwards. That last part is what moves the row: the branch is local
-   from this moment on, so the refresh draws it in the list above and the
-   `origin` group is one row shorter — the group is what `origin` has and this
-   repository does not, and it does not any more.
+   back afterwards. That last part is what redraws the row: the branch is local
+   from this moment on, so the refresh gives it a row on the Local tab and the
+   row it was pressed on stays exactly where it was on the Origin tab, drawn
+   from that moment as one with a local twin — `git-branch` instead of `cloud`,
+   and an ordinary switch behind the next double click.
 
    `op: 'checkout'` and not a fourth word. What the spinner and a refusal are
    about is a checkout, and the row they are drawn on is the row that was
    pressed — `busy.branch` is the plain name here as it is there, which is what
-   puts the spinner on the row of the group rather than nowhere. */
+   puts the spinner on the Origin tab's row rather than nowhere. */
 export async function checkoutRemote(branch) {
   if (!branch) return
   await write('checkout', branch, (repo) => invoke('vcs_checkout_remote', { repo, branch }))
