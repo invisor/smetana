@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   BRANCH_FILTER_LABEL,
+  BRANCH_SIDES,
   PICKER_KEY_HINT,
+  SIDE_TOGGLES,
   branchCountLabel,
   branchMeta,
   fetchedLabel,
   matchingBranches,
+  normalizeSide,
+  openingSide,
   pickerRows,
   repoCountLabel,
   shortAge,
@@ -207,49 +211,114 @@ describe('the filter', () => {
 describe('the list itself', () => {
   const all = [branch('main', [], NOW - 2 * HOUR), branch('develop', ['admin'], NOW - 3 * DAY)]
 
-  it('draws the local row and then the origin row of every branch', () => {
-    const rows = pickerRows(all, { repos: 6, now: NOW, fetchedAt: NOW - 2 * MINUTE })
+  /* The whole of what the side toggles buy: one row per branch, and never the
+     other side's row standing between any two of them. */
+  it('draws one row per branch on the local side, with no origin row anywhere', () => {
+    const rows = pickerRows(all, { side: 'local', repos: 6, now: NOW, fetchedAt: NOW - 2 * MINUTE })
 
     expect(rows.map((row) => `${row.origin ? 'origin/' : ''}${row.name}`)).toEqual([
       'main',
+      'develop'
+    ])
+    expect(rows.every((row) => row.origin === false)).toBe(true)
+  })
+
+  it('draws one row per branch on the origin side, and every one of them is origin', () => {
+    const rows = pickerRows(all, { side: 'origin', repos: 6, now: NOW, fetchedAt: NOW - 2 * MINUTE })
+
+    expect(rows.map((row) => `${row.origin ? 'origin/' : ''}${row.name}`)).toEqual([
       'origin/main',
-      'develop',
       'origin/develop'
     ])
+    expect(rows.every((row) => row.origin === true)).toBe(true)
+  })
+
+  it('opens on the local side when nobody said which', () => {
+    expect(pickerRows(all, {}).every((row) => row.origin === false)).toBe(true)
+    expect(pickerRows(all, { side: 'upstream' }).every((row) => row.origin === false)).toBe(true)
   })
 
   it('keeps the order the branches arrived in, which is by recency', () => {
     const rows = pickerRows([branch('zeta'), branch('alpha')], {})
 
-    expect(rows.map((row) => row.name)).toEqual(['zeta', 'zeta', 'alpha', 'alpha'])
+    expect(rows.map((row) => row.name)).toEqual(['zeta', 'alpha'])
   })
 
-  /* The two rows of a pair carry the same name, so the side has to be part of
-     the key or Vue reuses one row for the other side of the same branch. */
-  it('gives the two rows of a pair different keys', () => {
-    const [local, origin] = pickerRows([branch('main')], {})
+  /* The side is still part of the key, and it has to be: the keys are what the
+     component watches to re-seat its highlight, so a key that stayed the same
+     across a switch of sides would leave Enter armed over the other side of
+     whatever branch was under it. */
+  it('gives the two sides of one branch different keys', () => {
+    const [local] = pickerRows([branch('main')], { side: 'local' })
+    const [origin] = pickerRows([branch('main')], { side: 'origin' })
 
     expect(local.key).not.toBe(origin.key)
-    expect(local.origin).toBe(false)
-    expect(origin.origin).toBe(true)
+    expect(local.key).toBe('local:main')
+    expect(origin.key).toBe('origin:main')
   })
 
-  it('carries the meta line each side of the pair earns', () => {
-    const rows = pickerRows(all, { repos: 6, now: NOW, fetchedAt: NOW - 2 * MINUTE })
+  it('carries the meta line the side it is drawn on earns', () => {
+    const local = pickerRows(all, { side: 'local', repos: 6, now: NOW, fetchedAt: NOW - 2 * MINUTE })
+    const remote = pickerRows(all, {
+      side: 'origin',
+      repos: 6,
+      now: NOW,
+      fetchedAt: NOW - 2 * MINUTE
+    })
 
-    expect(rows[0].meta).toBe('local · 6 repos · 2h')
-    expect(rows[1].meta).toBe('origin · fetched 2m ago')
-    expect(rows[2].meta).toBe('local · 5 repos · 3d')
+    expect(local[0].meta).toBe('local · 6 repos · 2h')
+    expect(local[1].meta).toBe('local · 5 repos · 3d')
+    expect(remote[0].meta).toBe('origin · fetched 2m ago')
   })
 
-  it('filters on the way in, both rows of a branch at a time', () => {
-    const rows = pickerRows(all, { query: 'dev', repos: 6, now: NOW })
-
-    expect(rows.map((row) => row.key)).toEqual(['local:develop', 'origin:develop'])
+  it('filters on the way in, on whichever side is showing', () => {
+    expect(pickerRows(all, { query: 'dev', side: 'local' }).map((row) => row.key)).toEqual([
+      'local:develop'
+    ])
+    expect(pickerRows(all, { query: 'dev', side: 'origin' }).map((row) => row.key)).toEqual([
+      'origin:develop'
+    ])
   })
 
   it('a filter that matches nothing is an empty list and not a broken one', () => {
     expect(pickerRows(all, { query: 'nothing-is-called-this' })).toEqual([])
+  })
+})
+
+describe('which side a list opens on', () => {
+  /* The rule the picker cannot get wrong without breaking a promise it already
+     makes: it opens its highlight on what is picked, and it cannot do that from
+     the other side. */
+  it('opens on the side of the branch that is already picked', () => {
+    expect(openingSide({ name: 'foo', origin: true }, 'local')).toBe('origin')
+    expect(openingSide({ name: 'foo', origin: false }, 'origin')).toBe('local')
+  })
+
+  it('opens on the remembered side when nothing is picked', () => {
+    expect(openingSide(null, 'origin')).toBe('origin')
+    expect(openingSide({ name: '', origin: true }, 'origin')).toBe('origin')
+    expect(openingSide({ name: '' }, 'local')).toBe('local')
+  })
+
+  /* A clean `settings.json` has no such field at all, and local branches are
+     what somebody works in. */
+  it('opens on local when nothing is picked and nothing is remembered', () => {
+    expect(openingSide(null, undefined)).toBe('local')
+    expect(openingSide(undefined, null)).toBe('local')
+    expect(openingSide({}, '')).toBe('local')
+  })
+
+  /* A file somebody edited by hand: a side matching no row would be an empty
+     list with nothing on screen to say why. */
+  it('reads a remembered value that is neither side as local', () => {
+    expect(openingSide(null, 'upstream')).toBe('local')
+    expect(openingSide(null, 7)).toBe('local')
+    expect(normalizeSide('origin')).toBe('origin')
+    expect(normalizeSide('Origin')).toBe('local')
+  })
+
+  it('names the same two sides the settings file is validated against', () => {
+    expect(BRANCH_SIDES).toEqual(['local', 'origin'])
   })
 })
 
@@ -303,5 +372,20 @@ describe('the words the component draws', () => {
   it('name the three keys the list answers', () => {
     expect(PICKER_KEY_HINT).toContain('enter select')
     expect(PICKER_KEY_HINT).toContain('esc close')
+  })
+
+  /* The label is the tooltip and the accessible name at once, so a button with
+     none is a button a screen reader cannot say and nobody can hover. */
+  it('give each side toggle a sentence-case label and the glyph its rows carry', () => {
+    expect(SIDE_TOGGLES.map((toggle) => toggle.side)).toEqual(['local', 'origin'])
+    expect(SIDE_TOGGLES.map((toggle) => toggle.icon)).toEqual(['git-branch', 'cloud'])
+    expect(SIDE_TOGGLES.map((toggle) => toggle.label)).toEqual([
+      'Show local branches',
+      'Show branches on origin'
+    ])
+    for (const { label } of SIDE_TOGGLES) {
+      expect(label[0]).toBe(label[0].toUpperCase())
+      expect(label.slice(1)).toBe(label.slice(1).toLowerCase())
+    }
   })
 })

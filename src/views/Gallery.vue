@@ -1512,6 +1512,20 @@ const PICKER_BRANCHES = [
    click into the field, walk with the arrows and press Enter. */
 const pickerChoice = ref({ name: 'main', origin: false })
 
+/* Which side each frame is showing. One ref per frame rather than one shared
+   between them: the toggles are a control this page is here to try, and a press
+   in one frame moving the two beside it would be a thing the component does not
+   do. In the app the same value comes from `layout.branchSide` and a press is
+   reported back to the app window; here the frame is the only side there is.
+
+   The second is set to `origin` on purpose, so the origin list is on the page
+   without anybody having to press anything: `origin · fetched 2m ago` on every
+   row, the cloud lit in the filter row, and — in that frame, which is told no
+   fetch time — `origin` and nothing after it. */
+const pickerSide = ref('local')
+const pickerSideBare = ref('origin')
+const pickerSideNarrow = ref('local')
+
 /* git's own sentence, verbatim from a repository where a second worktree held
    the branch — which is exactly what a run's provisioning phase leaves behind,
    and the message that tells somebody why the tick did not move. The `op` is
@@ -2821,6 +2835,7 @@ const menuTargetStyle = {
           :fetched-at="REVIEW_FETCHED_AT"
           @close="() => {}"
           @submit="() => {}"
+          @branch-side="() => {}"
         />
       </div>
       <!-- The same window after Review was pressed: the body recedes, every
@@ -2878,6 +2893,7 @@ const menuTargetStyle = {
           :fetched-at="REVIEW_FETCHED_AT"
           @close="() => {}"
           @submit="() => {}"
+          @branch-side="() => {}"
         />
       </div>
       <!-- Three, because the fields differ between them: solo is offered for a
@@ -4501,10 +4517,17 @@ const menuTargetStyle = {
 
            The rest of what this frame is for: the list stops at nine rows and
            scrolls inside itself, so the footer stays visible in both densities
-           and at `--ui-scale` 1.2; every branch appears twice, itself and then
-           `origin/` in a muted prefix under the cloud; and the arrows move the
-           highlight with the row pulled back into view at either end, Enter
-           takes it, Escape reports a close. -->
+           and at `--ui-scale` 1.2; the two toggles in the filter row are a
+           radio pair, so exactly one of them is ever lit and pressing the lit
+           one does nothing at all; the list holds one side at a time, `origin/`
+           in a muted prefix under the cloud when the cloud is the lit one; and
+           the arrows move the highlight with the row pulled back into view at
+           either end, Enter takes it, Escape reports a close.
+
+           The frame opens with `main` picked on the local side, so pressing the
+           cloud is also where the selection bar being on no row is visible —
+           the pick is a name and a side together, and `main` is not
+           `origin/main`. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
         <div :style="{ width: '720px' }">
           <BranchPicker
@@ -4514,8 +4537,10 @@ const menuTargetStyle = {
             :now="PICKER_NOW"
             :selected="pickerChoice.name"
             :selected-origin="pickerChoice.origin"
+            :side="pickerSide"
             scope="Applies to 6 repositories"
             @select="pickerChoice = $event"
+            @side="pickerSide = $event"
             @close="() => {}"
           />
         </div>
@@ -4525,15 +4550,29 @@ const menuTargetStyle = {
              by a piece rather than carrying `NaN`, `Invalid Date` or a gap
              between two separators — and the footer's right-hand end is empty,
              which is the ordinary state when nobody has said what the choice
-             applies to. -->
+             applies to.
+
+             It opens on the origin side, which is where a missing fetch time is
+             visible at all: every row reads `origin` and nothing after it. -->
         <div :style="{ width: '720px' }">
-          <BranchPicker :branches="PICKER_BRANCHES.slice(0, 3)" :now="PICKER_NOW" @close="() => {}" />
+          <BranchPicker
+            :branches="PICKER_BRANCHES.slice(0, 3)"
+            :now="PICKER_NOW"
+            :side="pickerSideBare"
+            @side="pickerSideBare = $event"
+            @close="() => {}"
+          />
         </div>
         <!-- At a side panel's width, which is not where this component is used
              and is where its one wrapping rule is visible: a name wider than
              the list wraps and takes the row's height with it, since the row
              declares a floor rather than a height. Nothing is ellipsised
-             anywhere in this component, deliberately. -->
+             anywhere in this component, deliberately.
+
+             The narrowest the filter row is ever asked to be, which is where the
+             two toggles have to be checked for fitting beside the field, the
+             counter and the cross — in compact and at `--ui-scale` 1.2 as
+             well. -->
         <div :style="{ width: 'var(--panel-right-w)' }">
           <BranchPicker
             :branches="PICKER_BRANCHES.slice(0, 4)"
@@ -4541,7 +4580,9 @@ const menuTargetStyle = {
             :fetched-at="PICKER_NOW - 120"
             :now="PICKER_NOW"
             selected="main"
+            :side="pickerSideNarrow"
             scope="1 repository"
+            @side="pickerSideNarrow = $event"
             @close="() => {}"
           />
         </div>

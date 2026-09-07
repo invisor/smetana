@@ -22,7 +22,9 @@ thin commands.
 
 At the root the file keeps appearance — theme, density and `uiFontSize` — panel layout (collapsed
 state and width for each side, `railOpen` for whether the project rail is drawn beside the left
-panel, and `gitSections` beside them), `editor` with its own `fontSize` and `wordWrap`, `agent`, the id of the CLI agent to
+panel, `branchSide` for which side the review window's branch list is put on — `local` or `origin`,
+`local` by default, validated by `one_of` against `BRANCH_SIDES` — and `gitSections` beside them),
+`editor` with its own `fontSize` and `wordWrap`, `agent`, the id of the CLI agent to
 start, `model`, which model to ask it for, `agentRoles`, a harness-and-model pair per kind of agent
 call, `agentLanguage`, `taskLanguage`, `commitLanguage` and `reportLanguage`, the languages that agent
 works in, `agentPrompt`, the person's own standing instruction for every session they are in,

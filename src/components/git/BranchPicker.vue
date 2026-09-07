@@ -22,11 +22,22 @@
 
    **`origin` is a prefix and not a second side.** There were two dropdowns
    here, one for the name and one for `local`/`origin`, which is four controls
-   on a row that asks two questions. There is one list now, holding every branch
-   twice — itself, then its `origin/` variant — and what comes out is a name plus
-   a flag saying which of the two it was. The reasoning, the order and the meta
-   line all live in `branchPicker.js`, for the reason that whole family exists:
-   a `.vue` file is the one thing no test in this repository can reach.
+   on a row that asks two questions. There is one list now, and what comes out
+   of it is a name plus a flag saying which of the two it was — one movement,
+   with no second control to agree with.
+
+   **What the list holds is one side at a time**, chosen by the two toggles in
+   the filter row: a branch drawn twice over is 472 rows on a repository of 236,
+   and neither side can be read with the other standing between every two of it.
+   That is a filter over the list and not half of the answer, which is the whole
+   of why it is not the dropdown coming back — `branchPicker.js`' header carries
+   the argument. The side is a prop and a press of a toggle is an event, the
+   same shape as `selected` and `select` beside it: this component holds no
+   preference and knows nothing about where one is kept.
+
+   The reasoning, the order, the meta line and the toggles' own labels all live
+   in `branchPicker.js`, for the reason that whole family exists: a `.vue` file
+   is the one thing no test in this repository can reach.
 
    `ReviewChangesDialog.vue` is what draws it: once for the project's own pair
    and once per row that keeps a pair of its own, in place of the table and
@@ -36,10 +47,13 @@ import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import {
   BRANCH_FILTER_LABEL,
+  LOCAL_SIDE,
   NO_BRANCH_MATCHES,
   PICKER_KEY_HINT,
+  SIDE_TOGGLES,
   branchCountLabel,
   matchingBranches,
+  normalizeSide,
   pickerRows,
   stepCursor
 } from './branchPicker.js'
@@ -80,27 +94,48 @@ const props = defineProps({
      changed. */
   selected: { type: String, default: '' },
   selectedOrigin: { type: Boolean, default: false },
+  /* Which side the list is showing, `local` or `origin`. A prop and never a
+     ref of this component's own, for the reason the header gives: which side a
+     list opens on is a rule about what is picked and what somebody chose last
+     (`openingSide`), and both of those facts belong to the caller. Anything
+     that is not one of the two words is read as `local` rather than drawing an
+     empty list. */
+  side: { type: String, default: LOCAL_SIDE },
   /* The right-hand end of the footer: what picking here applies to. The words
      are the caller's — this component has no idea how many repositories a
      review will touch — and an empty string simply leaves that end blank. */
   scope: { type: String, default: '' }
 })
 
-const emit = defineEmits(['select', 'close'])
+const emit = defineEmits(['select', 'side', 'close'])
 
 const query = ref('')
 const cursor = ref(0)
 const filterField = ref(null)
 const listBox = ref(null)
 
+const shownSide = computed(() => normalizeSide(props.side))
+
 const matched = computed(() => matchingBranches(props.branches, query.value))
 const rows = computed(() =>
   pickerRows(matched.value, {
+    side: shownSide.value,
     repos: props.repos,
     now: props.now,
     fetchedAt: props.fetchedAt
   })
 )
+
+/* A press on the lit toggle is nothing at all — not a re-announcement of the
+   side and not a re-seating of the highlight. The pair is a radio pair, and the
+   one thing a radio pair must never do is answer a press on what is already
+   chosen: the caller writes a preference on this event, and a person tapping
+   the side they are already on would otherwise be saving it over and over. */
+const chooseSide = (side) => {
+  if (side === shownSide.value) return
+  emit('side', side)
+}
+
 /* Branches and not rows — see `branchCountLabel` for why the two differ here,
    and why the honest number is the one somebody is choosing between. */
 const count = computed(() => branchCountLabel(matched.value.length, props.branches.length))
@@ -227,6 +262,18 @@ const inputStyle = {
   font: 'var(--weight-regular) var(--text-sm)/1 var(--font-mono)'
 }
 
+/* The two toggles sit closer to each other than to anything else in the row,
+   which is the whole of what says they are one control with two states rather
+   than two buttons that happen to be adjacent. Nothing else is spent on saying
+   it: no border around the pair, no separator, since the lit one already
+   carries `--surface-selected` and the row is four items wide as it is. */
+const sideGroupStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-1)',
+  flex: 'none'
+}
+
 const countStyle = {
   flex: 'none',
   color: 'var(--text-muted)',
@@ -339,6 +386,21 @@ const footerEndStyle = {
         :placeholder="BRANCH_FILTER_LABEL"
         :aria-label="BRANCH_FILTER_LABEL"
       />
+      <!-- Which side the list is showing. A radio pair and not two switches:
+           exactly one is lit at any moment, `IconButton`'s `selected` is what
+           lights it and what puts `aria-pressed` on it, and pressing the lit
+           one is nothing rather than a way back to a list of both. -->
+      <div :style="sideGroupStyle">
+        <IconButton
+          v-for="toggle in SIDE_TOGGLES"
+          :key="toggle.side"
+          :icon="toggle.icon"
+          :label="toggle.label"
+          size="sm"
+          :selected="toggle.side === shownSide"
+          @click="chooseSide(toggle.side)"
+        />
+      </div>
       <span :style="countStyle">{{ count }}</span>
       <IconButton icon="x" label="Close" size="sm" @click="emit('close')" />
     </div>
@@ -359,8 +421,9 @@ const footerEndStyle = {
       >
         <!-- The cloud is what says a row is not on this machine. It is drawn
              beside the prefix rather than instead of it: `origin/` is part of
-             what would be typed, and the glyph is what makes the pair of rows
-             tell themselves apart at a glance. -->
+             what would be typed, and the glyph is what a whole list of one side
+             is read by — the same one lit in the filter row above it, which is
+             what ties the control to what it did. -->
         <Icon
           :name="row.origin ? 'cloud' : 'git-branch'"
           :size="GLYPH"

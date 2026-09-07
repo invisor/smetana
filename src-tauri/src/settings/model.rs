@@ -554,8 +554,29 @@ pub struct Layout {
     pub rail_open: bool,
     pub left_width: u32,
     pub right_width: u32,
+    /// Which side the review window's branch list is put on: `local` or
+    /// `origin`, one at a time and never both.
+    ///
+    /// In this section rather than in `ProjectState`, on `GitSections`' own
+    /// argument one field over: which side of a list somebody reads is a habit
+    /// of theirs and not a fact about a repository, and a preference that
+    /// changed under them as they switched projects would be one nobody made.
+    /// It is about the screen the same way the widths beside it are, which is
+    /// what this section is for.
+    ///
+    /// A string and not a bool, because the list has two sides today and the
+    /// pair of them is a closed set with a name rather than a switch that is
+    /// off: `BRANCH_SIDES` below is the whole of it, mirrored by the same two
+    /// words in `src/components/git/branchPicker.js`.
+    pub branch_side: String,
     pub git_sections: GitSections,
 }
+
+/// The two sides, and the only two. A hand-edited file naming a third goes back
+/// to `local` rather than leaving the picker with a side that matches no row —
+/// `one_of`'s rule, the one `KanbanSettings::validate` follows for its own
+/// enumerated strings.
+const BRANCH_SIDES: [&str; 2] = ["local", "origin"];
 
 /// How the three sections of the Git panel are folded, and how tall two of them
 /// were dragged to.
@@ -645,6 +666,10 @@ impl Default for Layout {
             rail_open: true,
             left_width: LEFT_WIDTH_DEFAULT,
             right_width: RIGHT_WIDTH_DEFAULT,
+            // The same default the front end ships (`branchSide` in
+            // `stores/settings.js`): local branches are what somebody works in,
+            // and origin is one press away.
+            branch_side: "local".into(),
             git_sections: GitSections::default(),
         }
     }
@@ -1598,6 +1623,7 @@ impl Layout {
     fn validate(&mut self) {
         in_range(&mut self.left_width, LEFT_WIDTH_DEFAULT);
         in_range(&mut self.right_width, RIGHT_WIDTH_DEFAULT);
+        one_of(&mut self.branch_side, &BRANCH_SIDES, "local");
         self.git_sections.validate();
     }
 }
@@ -2491,6 +2517,36 @@ mod tests {
 
         let hidden = settings_of(r#"{"version":1,"layout":{"railOpen":false}}"#);
         assert!(!hidden.layout.rail_open, "a stored flag survives the load");
+    }
+
+    #[test]
+    fn a_settings_file_without_a_branch_side_opens_the_picker_on_local() {
+        // The field shipped after this struct did, so every file already on
+        // disk is missing it. Local branches are what somebody works in, and a
+        // file that says nothing must not open the list on origin.
+        let stored = settings_of(r#"{"version":1,"layout":{"leftWidth":300}}"#);
+        assert_eq!(stored.layout.branch_side, "local");
+        assert_eq!(stored.layout.left_width, 300, "the neighbouring field must survive");
+
+        let remote = settings_of(r#"{"version":1,"layout":{"branchSide":"origin"}}"#);
+        assert_eq!(remote.layout.branch_side, "origin", "a stored side survives the load");
+    }
+
+    #[test]
+    fn a_branch_side_that_is_not_one_of_the_two_goes_back_to_local() {
+        // A side matching no row would draw an empty list of branches with
+        // nothing on screen to say why, so a hand-edited word loses itself and
+        // nothing else does.
+        let odd = settings_of(r#"{"version":1,"layout":{"branchSide":"upstream","leftWidth":300}}"#);
+        assert_eq!(odd.layout.branch_side, "local");
+        assert_eq!(odd.layout.left_width, 300, "the neighbouring field must survive");
+
+        // A value of the wrong type takes the section rather than the file:
+        // `section` reads each one on its own, so the layout comes back whole
+        // and the picker still opens on local.
+        let typed = settings_of(r#"{"version":1,"layout":{"branchSide":7}}"#);
+        assert_eq!(typed.layout.branch_side, "local");
+        assert_eq!(typed.layout.left_width, LEFT_WIDTH_DEFAULT);
     }
 
     #[test]
