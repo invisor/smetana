@@ -40,10 +40,15 @@
    the second would be invisible, since nothing on a row says when it was
    pinned.
 
-   **The hairline is under the last row of the top block**, not under the
-   current branch. It says one thing — the real list starts below — and that is
-   a fact about the bottom of the block rather than about which branch the
-   repository is on. `divider` is the row that carries it.
+   **The top block is two surfaces rather than one hairline.** A lifted row
+   carries `block` — `'current'` for the branch the repository is on and
+   `'favourite'` for each marked one — and a row of the tree carries none. What
+   those are drawn as is `BranchList`'s and not this file's: the current branch
+   on `--surface-selected` between two rules, the marked ones on `--surface`
+   with a hairline under the last of them, the tree on the canvas under both.
+   Three surfaces rather than one line under the last row, because with several
+   marked branches the two groups are two things and a single rule under the
+   pair of them said only where the tree started.
 
    The tree is flattened to a single list, exactly as `FileTree.vue` flattens
    its own — one `v-for` over rows carrying their own depth, rather than a
@@ -119,8 +124,11 @@ function build(branches) {
  * whose name is in `favorites` also carries `favorite`, including the current
  * branch when it is marked, which is one row and not two.
  *
- * The last row of that top block carries `divider`, and the component draws the
- * hairline under it: the fact being stated is that the real list starts below.
+ * Every lifted row carries `block`, which says which of those two groups it is
+ * in — `'current'` or `'favourite'` — and a row of the tree carries none. The
+ * component draws a surface per block from it; the fact being stated is that
+ * the branch the repository is on, the branches somebody marked and the list
+ * proper are three things and not one.
  *
  * A folded folder leaves its branches out of the list altogether rather than
  * hiding them, which is both the height this buys back and what makes the count
@@ -142,19 +150,19 @@ export function branchRows(branches, expanded, favorites) {
   )
   const open = new Set(expanded ?? [])
   const rows = []
-  const lift = (branch) => {
+  const lift = (branch, block) => {
     rows.push({
       ...branch,
       kind: 'branch',
       label: branch.name,
       depth: 0,
       pinned: true,
+      block,
       favorite: marked.has(branch.name)
     })
   }
-  if (current) lift(current)
-  for (const branch of pinnedFavorites) lift(branch)
-  if (rows.length > 0) rows[rows.length - 1].divider = true
+  if (current) lift(current, 'current')
+  for (const branch of pinnedFavorites) lift(branch, 'favourite')
   const walk = (nodes) => {
     for (const node of nodes) {
       if (node.kind === 'branch') {

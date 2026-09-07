@@ -3,7 +3,8 @@ import {
   branchNameError,
   canCreate,
   canRename,
-  renameError
+  renameError,
+  splitName
 } from '../../../src/components/git/branchName.js'
 
 const BRANCHES = [{ name: 'develop', current: true }, { name: 'feat/login', current: false }]
@@ -169,5 +170,34 @@ describe('canRename', () => {
      branch happens to carry it. */
   it('holds it when there is no branch to rename', () => {
     expect(canRename({ ...ready, from: null })).toBe(false)
+  })
+})
+
+/* Where a whole name is cut so the half that identifies a branch survives.
+   The current branch and every marked one draw a whole name in a column about
+   252px wide, and cutting at the end there leaves a column of rows that all
+   read `feat/nxc-204-kickbox-emai…`. */
+describe('splitName', () => {
+  it('keeps the last twelve characters as the tail', () => {
+    expect(splitName('feat/nxc-204-kickbox-email-validation')).toEqual({
+      head: 'feat/nxc-204-kickbox-emai',
+      tail: 'l-validation'
+    })
+  })
+
+  /* Nothing is ever drawn twice: a name that fits is the whole of the tail and
+     the head is empty, so the two spans together are still the name. */
+  it('is all tail when the name is twelve characters or fewer', () => {
+    expect(splitName('main')).toEqual({ head: '', tail: 'main' })
+    expect(splitName('twelve-chars')).toEqual({ head: '', tail: 'twelve-chars' })
+  })
+
+  it('takes the tail length it is given', () => {
+    expect(splitName('feature/login', 5)).toEqual({ head: 'feature/', tail: 'login' })
+  })
+
+  it('answers with empty strings for nothing', () => {
+    expect(splitName('')).toEqual({ head: '', tail: '' })
+    expect(splitName(null)).toEqual({ head: '', tail: '' })
   })
 })

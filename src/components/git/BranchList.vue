@@ -80,40 +80,97 @@
    whatever the reflog says and whatever fold its name would otherwise put it
    behind. Under it come the branches somebody marked, in the order the list
    arrived in. Both groups draw their **whole** name rather than the leaf every
-   other row draws — there is no heading above them to carry the prefix — and
-   the **last row of the block** carries the hairline `SectionHeader` uses,
-   saying the list proper starts below. The hairline sits inside the row's own
-   `--row-h` and adds no height to it, which `box-sizing: border-box` is what
-   makes true, so `GitPanel`'s arithmetic over `BRANCH_ROWS` is untouched. It
-   all scrolls with the rest: what was asked for is an order, and a row pinned
+   other row draws — there is no heading above them to carry the prefix. It all
+   scrolls with the rest: what was asked for is an order, and a row pinned
    against the top of a box capped at a handful of rows would spend one of them
    on every scroll.
+
+   **The list is three surfaces, and `block` is what says which.** The current
+   branch sits on `--surface-selected` between a rule above and a rule below;
+   the marked branches sit on `--surface` with one hairline under the last of
+   them; the tree sits on `--canvas`, which is the background of this
+   component's own root. Which block a row is in is `branchTree.js`'s answer,
+   not this file's. It replaces a single hairline under the last lifted row,
+   which said only where the tree started and left the two groups above it
+   reading as one. Every rule is drawn **inside** the row's own `--row-h` and
+   adds no height to it — `box-sizing: border-box` is what makes that true — so
+   `GitPanel`'s arithmetic over `BRANCH_ROWS` is untouched, and the row height
+   is the same in every block and in every state.
+
+   On the Origin tab nothing is lifted, so no row carries a `block` and the
+   whole list is on the canvas — including the branch the repository is
+   standing on, which draws its tick there and not the selected surface.
+
+   A whole name is cut **in the middle** rather than at the end: the last
+   twelve characters are kept and the head is ellipsised, because the tail is
+   the half that identifies a branch. `splitName` in `branchName.js` is the
+   rule and there is no measurement in JS — two spans in a `min-width: 0` flex
+   line do the rest. A leaf under a folder is untouched by it, since a leaf is
+   already a tail.
 
    A marked row draws a star **in the leading icon's place**, instead of
    `git-branch` and at the same size — a sixth glyph in front of the name would
    put the marked rows' names out of line with all the others, which is the one
    thing this list cannot afford in a column this narrow. What it does not take
-   from the glyph it stands in for is the colour: the star is filled, in
-   `--branch-favorite-fg`, the one yellow in the system. Position alone says a
-   row is at the top and not why it is there, so the mark has to be legible as a
-   mark — which the muted outline this used to be was not.
+   from the glyph it stands in for is the fill: the star is drawn solid where
+   every other glyph is an outline, and that is the whole of the mark. It takes
+   **no hue at all**, in `--text-secondary` like any other neutral glyph,
+   because the one colour this section spends is the one that says a branch is
+   behind its upstream. A yellow star spent that budget on a bookmark.
 
    A heading can be pressed while a run holds the three writes, and it is
    deliberately not dimmed with the rows: unfolding is reading, not writing, and
    a heading greyed out beside branches that are greyed out for a real reason
    would say something untrue about it.
 
+   ## A detached HEAD stands where the current branch would
+
+   With HEAD on a commit rather than on a branch there is no current row for
+   `branchTree.js` to lift — that rule knows nothing about this and is not going
+   to: no branch stands behind the plate, so nothing in the tree changes and
+   there is nothing for a pure rule to answer. This file draws one row instead,
+   `HEAD · <short sha>` in the same mono, on the current block's surface between
+   the current block's two rules, with the tick in the box at the end. It is
+   the same fact the scope bar draws one level up, and the panel saying it is
+   what stops the section reading as a repository whose branch simply failed to
+   load.
+
+   It answers nothing: no menu, no double click, no hover. There is no branch
+   to check out, to merge or to rename, and a row that opened a menu of refusals
+   would be offering a vocabulary about something that is not there. Pull and
+   Push are gone from the tab row above for the same reason, which is
+   `GitPanel`'s half of it.
+
+   ## Each tab's empty state
+
+   An `EmptyState` rather than a line of prose, so a tab with nothing on it
+   reads as a state of the panel and not as a list that failed to draw, and the
+   two of them say different things. `No local branches` is a folder git can see
+   no branch in at all — a repository with no commit yet still offers one, since
+   `git.rs` pushes HEAD's own name into the list. `Nothing on origin` covers a
+   repository with no remote, one whose `origin` is empty, and the moment while
+   the store's single remote list is about another repository; under it is the
+   one control this component draws outside a row, a `Fetch` that leaves as an
+   event, because "you have not fetched yet" is the only one of those three a
+   person can do something about from here. `EmptyState` gains no action slot
+   for it: one button in one place is not an API.
+
    ## Where a branch stands against its upstream
 
-   A row whose upstream holds commits it does not draws its name in
-   `--git-modified` and a `↓N` beside it, and one that is ahead draws `↑N` in
-   the neutral `--type-plain-fg` without taking the colour: what was asked for is
-   a branch with something to **pull**, and colouring both would leave the two
-   indistinguishable at a glance. Never colour alone, which is what the count is
-   for — the mark survives a monochrome screen and anybody who does not separate
-   those two hues. A folded heading carries a bare `↓` for the branches it is
-   hiding, since otherwise the mark would be invisible in exactly the
-   repositories that need it.
+   A row whose upstream holds commits it does not draws a `↓N` beside its name
+   in `--git-modified`, and one that is ahead draws `↑N` in the neutral
+   `--type-plain-fg`: what was asked for is a branch with something to **pull**,
+   and colouring both would leave the two indistinguishable at a glance. Never
+   colour alone, which is what the count is for — the mark survives a
+   monochrome screen and anybody who does not separate those two hues. A folded
+   heading carries a bare `↓` for the branches it is hiding, since otherwise the
+   mark would be invisible in exactly the repositories that need it.
+
+   **The name itself takes no colour.** It used to take `--git-modified` with
+   the mark, and in a repository where a hundred branches are behind that is a
+   column of orange saying nothing the `↓N` beside each name did not. The
+   `orange` flag `tracking.js` answers with is still read — the folded
+   heading's own mark is made of it — and it stops at the mark.
 
    What any of that means is `tracking.js`, pure and tested, of the
    `gitActions.js` family; this file draws its verdict and holds none of it.
@@ -172,11 +229,14 @@
    and nothing else. Creating a branch was outside this list too until a row's
    menu had somewhere to put it, and renaming followed the same way. */
 import { computed, ref } from 'vue'
+import Button from '../core/Button.vue'
+import EmptyState from '../core/EmptyState.vue'
 import Icon from '../core/Icon.vue'
 import Tooltip from '../core/Tooltip.vue'
 import PointerMenu from '../overlays/PointerMenu.vue'
 import { useInteractive } from '../core/interactive.js'
 import { branchMenuItems, originBranchMenuItems } from './branchMenu.js'
+import { splitName } from './branchName.js'
 import {
   DEFAULT_BRANCH_TAB,
   branchRows,
@@ -226,6 +286,18 @@ const props = defineProps({
      other piece of state here. `branchTree.js` holds the closed list and the
      default, which `settings/model.rs` mirrors. */
   tab: { type: String, default: DEFAULT_BRANCH_TAB },
+  /* The short hash HEAD is sitting on when it is on no branch at all, or null
+     for the ordinary case. It is handed down rather than derived here: this
+     component is given the branch list and would have to read a detached HEAD
+     out of its absence, which is the same shape as a list that has not landed
+     yet. `branchTree.js` is deliberately not told about it — no branch stands
+     behind the plate, so there is no row for a pure rule to lift. */
+  detached: { type: String, default: null },
+  /* Whether a fetch somebody pressed for is still out, which is the whole of
+     what the button under the Origin tab's empty state reads: it dims while
+     the answer it would ask for is already on its way. Its own flag and not
+     `busy`, exactly as `GitPanel` holds it — a fetch freezes no row. */
+  fetching: { type: Boolean, default: false },
   /* `{ allowed, reason }` from `gitActions.js`. The default is the answer for a
      project with no run going, which is what the gallery and every
      single-branch frame want. */
@@ -257,6 +329,11 @@ const emit = defineEmits([
   'rename',
   'delete',
   'toggle-folder',
+  /* The one verb this component offers outside a row, from under the Origin
+     tab's empty state: ask the remote what it has. It carries nothing — the
+     repository is the caller's — and it is the same event the tab row's own
+     check leaves as, so there is one fetch in this panel and not two. */
+  'fetch',
   /* The whole name of a branch only `origin` has. A second event and not
      `checkout` with a flag, for the reason the Rust command it reaches is a
      second command: what happens is a local branch being created, and a caller
@@ -412,6 +489,26 @@ const hint = computed(() => (props.actions?.allowed ? '' : (props.actions?.reaso
 
 const target = (branch) => !branch.current && !blocked.value
 
+/* Which rows have their pointer state tracked, which is a wider question than
+   which rows can be pressed: the current branch answers no gesture and still
+   takes `--surface-active` under the press, because a surface that does not
+   move under a finger reads as an element that is not there. Everything else
+   is `target`'s, so a row a run has frozen is tracked by nothing and cannot
+   promise a press it would refuse. */
+const tracked = (row) => target(row) || row.block === 'current'
+
+/* The last of the marked rows, which is the one carrying the hairline under
+   that block. Read off the drawn rows rather than off `favorites`: the stored
+   list holds names this repository may not have, and the rule is what decides
+   which of them became a row at all. Null when nothing is marked, and the
+   whole question then falls away. */
+const lastFavourite = computed(
+  () =>
+    [...rows.value]
+      .reverse()
+      .find((row) => row.block === 'favourite')?.name ?? null
+)
+
 /* The double click on a row of the Origin tab, and the one place in this file
    where one gesture reaches two events. `hasLocal` is `branchTree.js`'s answer:
    a branch this repository already has is an ordinary switch onto the local
@@ -429,7 +526,16 @@ const originCheckout = (row) => {
    there is something to press: the branch already checked out is not a target,
    and neither is any row while a run is going, so hovering must not promise
    one. Muted with the rest of the row rather than dimmed as a group — the
-   current branch is still worth reading while a run holds the panel. */
+   current branch is still worth reading while a run holds the panel.
+
+   **The background is the row's block**, which `branchTree.js` answers and this
+   file only draws: the current branch on `--surface-selected`, a marked one on
+   `--surface`, everything else transparent over the canvas this component's
+   root paints. Interaction is a step of surface on top of that and never a
+   colour or a transform, the rule `interactive.js` states — so the current
+   branch keeps its own surface under the pointer and takes `--surface-active`
+   only under the press, where a row that reacted by changing colour would be
+   saying something about what it is rather than about being touched. */
 const rowStyle = (branch, key = keyOf(branch)) => ({
   display: 'flex',
   alignItems: 'center',
@@ -444,15 +550,19 @@ const rowStyle = (branch, key = keyOf(branch)) => ({
       ? 'var(--text-muted)'
       : 'var(--text-secondary)',
   background:
-    branch.current
-      ? 'var(--surface-selected)'
+    branch.block === 'current'
+      ? !blocked.value && interactiveFor(key).active.value
+        ? 'var(--surface-active)'
+        : 'var(--surface-selected)'
       : /* The row with the menu open counts as hovered whether or not anything
            on it may be pressed: the panel is teleported to the body, so the
            pointer moving into it leaves the row, and a menu explaining why a
            row is refused would be doing it over a row nothing points at. */
         menuFor.value === branch.name || (target(branch) && interactiveFor(key).hover.value)
         ? 'var(--surface-hover)'
-        : 'transparent',
+        : branch.block === 'favourite'
+          ? 'var(--surface)'
+          : 'transparent',
   cursor: blocked.value && !branch.current ? 'not-allowed' : 'default',
   /* The row switches on a double click, and a double click on text is also
      how a browser selects a word — so without this the second press left the
@@ -464,15 +574,60 @@ const rowStyle = (branch, key = keyOf(branch)) => ({
      press. `agent/LogLine.vue` and `agent/CodeBlock.vue` do the same for the
      gutter they draw beside text somebody is meant to copy. */
   userSelect: 'none',
-  /* The rule under the **last** row of the top block, the same hairline
-     `SectionHeader` draws above a caption and for the same reason: without it
-     those rows read as more rows of the list rather than as the thing the list
-     is being read against. Under the last one and not under each, because it
-     states one fact — the real list starts below — and that fact is about the
-     bottom of the block. `branchTree.js` says which row carries it. */
-  borderBottom: branch.divider ? 'var(--border-w) solid var(--border-subtle)' : 'none',
+  /* The two rules that close the current branch's own surface, and the one
+     under the last marked row. They are drawn **inside** the row's `--row-h`,
+     which `box-sizing: border-box` is what makes true, so `GitPanel`'s
+     arithmetic over `BRANCH_ROWS` never sees them and every row in this list is
+     exactly one row tall whatever block it is in.
+
+     `--border` around the current branch and `--border-subtle` under the
+     favourites, which is the difference between closing a plate and saying
+     where a group ends: the first is a thing on its own and the second is the
+     bottom of a run of rows. Under the **last** marked row and not under each,
+     because the fact stated is about the bottom of the block. */
+  borderTop: branch.block === 'current' ? 'var(--border-w) solid var(--border)' : 'none',
+  borderBottom:
+    branch.block === 'current'
+      ? 'var(--border-w) solid var(--border)'
+      : branch.block === 'favourite' && lastFavourite.value === branch.name
+        ? 'var(--border-w) solid var(--border-subtle)'
+        : 'none',
   transition: 'var(--transition-control)'
 })
+
+/* The plate a detached HEAD draws where the current branch would be: the same
+   row, on the same surface, between the same two rules, and inert. It is a
+   constant rather than a call into `rowStyle` because there is no row behind
+   it — no depth to indent by, no block to look up, nothing to hover — and
+   writing it as a branch row with every branch-shaped field faked would be a
+   row pretending to be one. */
+const detachedStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-3)',
+  height: 'var(--row-h)',
+  padding: '0 var(--space-5)',
+  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
+  color: 'var(--text-primary)',
+  background: 'var(--surface-selected)',
+  borderTop: 'var(--border-w) solid var(--border)',
+  borderBottom: 'var(--border-w) solid var(--border)',
+  cursor: 'default',
+  userSelect: 'none'
+}
+
+/* Whether to draw it, and the second half of the test is what keeps it honest:
+   the hash is about the repository this panel has selected, and a list that
+   still holds a current branch is a list that has not caught up with the
+   checkout yet. Two rows claiming to be where HEAD is would be worse than a
+   moment without the plate. Local only — the Origin tab lifts nothing and has
+   no place for it. */
+const detachedPlate = computed(
+  () =>
+    props.tab !== 'origin' &&
+    Boolean(props.detached) &&
+    !props.branches.some((branch) => branch?.current)
+)
 
 /* A heading, in the same mono as the rows under it — a folder here is the first
    segment of an identifier and not prose, which is where it differs from the
@@ -539,29 +694,54 @@ const nameStyle = {
    and a `.vue` file is not. */
 const mark = (row) => trackingMark(props.tracking[row.name])
 
-/* The name takes the colour when there is something to bring in, and the row's
-   own muting still wins over it: while a run holds the panel every row is
-   `--text-muted`, and one name in orange there would say a press was possible.
-   The current branch is deliberately **not** an exception — it is the row Pull
-   is about, and its `↓N` is drawn in the same token whatever the name does. */
-const branchNameStyle = (row) =>
-  !blocked.value && mark(row).orange
-    ? { ...nameStyle, color: `var(${BEHIND_TOKEN})` }
-    : nameStyle
+/* The name takes no colour at all, and that is a decision rather than an
+   omission. It used to take `--git-modified` with the mark beside it, which in
+   a repository where a hundred branches are behind their upstream is a column
+   of orange saying nothing the `↓N` on each row did not — and a hue that is on
+   most of the rows has stopped meaning anything. `trackingMark`'s own `orange`
+   flag is untouched: the folded heading's bare `↓` is still made of it, and so
+   are its tests.
+
+   A function rather than the constant it now returns, because the template
+   asks it per row and the question — what colour is this name — is one this
+   file may have to answer again. */
+const branchNameStyle = () => nameStyle
+
+/* A whole name, cut in the middle. The head shrinks and ellipsises, the tail
+   is held whole, and the line they sit in is `min-width: 0` so the head has
+   somewhere to give way to — without it a flex item refuses to go below its
+   own content and the row simply overflows. Where the cut falls is
+   `branchName.js`'s `splitName`, so the one thing worth testing here is
+   outside the file no test can reach. */
+const wholeNameStyle = { display: 'flex', minWidth: 0, flex: '0 1 auto' }
+const headStyle = {
+  flex: '0 1 auto',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
+}
+const tailStyle = { flex: '0 0 auto', whiteSpace: 'nowrap' }
 
 /* The leading glyph, which is the branch icon on an ordinary row and the star
-   on a marked one. The star is the only thing in this panel drawn in a colour
-   of its own: `--branch-favorite-fg` is a yellow kept for exactly this mark, so
-   a marked row is readable at a glance without a sixth glyph or a second
-   column. Both `color` and `fill`, and that is the whole trick — `Icon` sets
+   on a marked one. What the star does not take from the glyph it stands in for
+   is the fill: it is drawn solid where every other glyph in this panel is an
+   outline, and being the one filled shape in the column is the whole of what
+   makes it a mark. Both `color` and `fill`, and that is the trick — `Icon` sets
    `fill="none"` as a presentation attribute, which any CSS declaration
    overrides, while the outline is still drawn with `stroke="currentColor"`.
-   Filling alone would leave a yellow body inside a grey outline, which reads as
-   a rendering fault rather than as a filled star. An unmarked row keeps
-   `--text-muted` and no fill at all. */
+   Filling alone would leave a filled body inside a differently coloured
+   outline, which reads as a rendering fault rather than as a filled star.
+
+   **It takes no hue.** `--text-secondary`, one step up from the `--text-muted`
+   an unmarked row's glyph keeps, so it is legible as a mark without spending a
+   colour: the one colour this section spends is `--git-modified`, and what
+   that means here is distance from upstream. A yellow of its own said
+   "bookmark" in the same breath, in a section where every other coloured thing
+   is about the remote. */
 const leadStyle = (row) =>
   row.favorite
-    ? { flex: 'none', color: 'var(--branch-favorite-fg)', fill: 'var(--branch-favorite-fg)' }
+    ? { flex: 'none', color: 'var(--text-secondary)', fill: 'var(--text-secondary)' }
     : { flex: 'none', color: 'var(--text-muted)' }
 
 /* The count beside the arrow, and never the colour alone: the mark has to
@@ -608,7 +788,7 @@ const OPERATIONS = {
      branch had when git was asked: the row under the spinner is the old name
      until the refresh brings the list back under the new one. */
   rename: 'Renaming this branch',
-  /* The two that leave from the section header rather than from a row. They
+  /* The two that leave from the tab row rather than from a row of the list. They
      are about the current branch and `busy` carries its name, so the spinner
      lands on the row with the tick — which is the rule this panel already keeps
      for every other write. */
@@ -656,15 +836,48 @@ const empty = computed(() =>
      here. */
   props.tab === 'origin' ? originRows.value.length === 0 : props.branches.length === 0
 )
-const EMPTY_LINE = {
-  local: 'No local branches in this repository.',
-  origin: 'Nothing on origin for this repository.'
+/* An `EmptyState` rather than the line of prose this used to be, so a tab with
+   nothing on it reads as a state of the panel rather than as a list that failed
+   to draw. `compact`, because the box it sits in is capped at a handful of rows
+   and the roomy version's padding alone is taller than that. The second line of
+   each says what to do about it or what it means, which is the difference
+   between a sentence and a shrug — and the Origin tab, whose one actionable
+   case is a fetch nobody has run, gets a button under it. */
+const EMPTY_COPY = {
+  local: {
+    title: 'No local branches',
+    description: 'The first commit creates one. Fetch to see what origin has.'
+  },
+  origin: {
+    title: 'Nothing on origin',
+    description: 'Either the remote is empty or you have not fetched yet.'
+  }
 }
-const emptyLine = computed(() => EMPTY_LINE[props.tab] ?? EMPTY_LINE.local)
+const emptyCopy = computed(() => EMPTY_COPY[props.tab] ?? EMPTY_COPY.local)
 </script>
 
 <template>
-  <div>
+  <!-- The canvas under the tree, which is the third of the section's three
+       surfaces and is the root's rather than each row's: a tree row draws no
+       background of its own, so what shows through is this. `minHeight: 100%`
+       so a short list does not leave the panel's own `--surface` showing under
+       the last row, where the block would read as ending somewhere nobody put
+       an end to it. -->
+  <div :style="{ background: 'var(--canvas)', minHeight: '100%' }">
+    <!-- Where HEAD is when it is on no branch: the current block's surface and
+         its two rules, with the tick in the box every row keeps at its end.
+         Above the rows rather than among them, because that is where the branch
+         it stands in for would be. It answers nothing at all — no menu, no
+         double click, no hover — since there is no branch here to check out, to
+         merge or to rename. -->
+    <div v-if="detachedPlate" :style="detachedStyle">
+      <Icon name="git-branch" :size="MARK" :style="{ flex: 'none', color: 'var(--text-secondary)' }" />
+      <span :style="nameStyle">HEAD · {{ detached }}</span>
+      <span :style="{ flex: 1 }" />
+      <span :style="markBox">
+        <Icon name="check" :size="MARK" title="Detached HEAD" />
+      </span>
+    </div>
     <!-- The wrapper is a `Tooltip` only where there is something to explain,
          and a plain `div` otherwise: a tooltip on every row of a list somebody
          is reading would open on the way past each one. The hint has to sit on
@@ -731,7 +944,7 @@ const emptyLine = computed(() => EMPTY_LINE[props.tab] ?? EMPTY_LINE.local)
         <div
           :style="rowStyle(row)"
           :aria-disabled="target(row) ? undefined : 'true'"
-          v-bind="target(row) ? interactiveFor(keyOf(row)).handlers : {}"
+          v-bind="tracked(row) ? interactiveFor(keyOf(row)).handlers : {}"
           @dblclick="target(row) && $emit('checkout', row.name)"
           @contextmenu.prevent="openMenu(row, $event)"
         >
@@ -739,25 +952,36 @@ const emptyLine = computed(() => EMPTY_LINE[props.tab] ?? EMPTY_LINE.local)
                beside it: a sixth icon before the name would shift the marked
                rows' names against every other row's, which is the one thing a
                column this narrow cannot afford. Same size as the glyph it
-               stands in for, but a colour of its own — filled yellow, since
-               position alone cannot say what the mark means and the muted
-               outline it used to be said nothing either. `leadStyle` carries
-               the reason. -->
+               stands in for and the same neutral family — what makes it a mark
+               is that it is filled where every other glyph here is an outline.
+               `leadStyle` carries the reason it takes no hue. -->
           <Icon
             :name="row.favorite ? 'star' : 'git-branch'"
             :size="MARK"
             :style="leadStyle(row)"
             :title="row.favorite ? 'A favourite branch' : undefined"
           />
+          <!-- A whole name, cut in the middle: the last twelve characters are
+               held whole and the head gives way, because the tail is the half
+               that identifies a branch — a column of `feat/nxc-204-kickbox-emai…`
+               tells nobody which row is which. Where the cut falls is
+               `splitName`'s and the two spans are adjacent on purpose: any
+               whitespace between them would be drawn inside the name. -->
+          <span v-if="row.pinned" :style="wholeNameStyle" :title="fullName(row)">
+            <span :style="headStyle">{{ splitName(row.name).head
+            }}</span><span :style="tailStyle">{{ splitName(row.name).tail }}</span>
+          </span>
           <!-- The leaf, with the whole name behind it: under a heading the
                prefix is on every row and the tail is the half that identifies
                one, so drawing the prefix again spends the width the folder was
-               made to save. -->
-          <span :style="branchNameStyle(row)" :title="fullName(row)">{{ row.label }}</span>
+               made to save. It is already a tail, so nothing is cut out of its
+               middle. -->
+          <span v-else :style="branchNameStyle(row)" :title="fullName(row)">{{ row.label }}</span>
           <!-- Beside the name rather than at the end of the row: it is a fact
                about this branch, where the box at the end is about what the row
-               is doing. `↓` colours the name and `↑` does not — what was asked
-               for is a branch with something to pull. -->
+               is doing. `↓` takes `--git-modified` and `↑` stays neutral —
+               what was asked for is a branch with something to pull — and
+               neither of them reaches the name. -->
           <span v-if="mark(row).behind" :style="behindStyle">
             <Icon name="arrow-down" :size="MARK" />{{ mark(row).behind }}
           </span>
@@ -864,7 +1088,7 @@ const emptyLine = computed(() => EMPTY_LINE[props.tab] ?? EMPTY_LINE.local)
         </div>
       </component>
     </template>
-    <!-- One sentence per tab, like every other empty state in this panel, and
+    <!-- One state per tab, like every other empty state in this panel, and
          deliberately narrow about what each can mean. A repository with no
          commit yet still offers one local branch — `git.rs` pushes HEAD's own
          name into the list precisely so an unborn repository has something to
@@ -873,15 +1097,34 @@ const emptyLine = computed(() => EMPTY_LINE[props.tab] ?? EMPTY_LINE.local)
          `origin` is empty, and the moment while the store's single remote list
          is about another repository: all three are "this app knows of no branch
          on origin here", and none of them is a blank area. -->
-    <div
-      v-if="empty"
-      :style="{
-        padding: 'var(--space-5)',
-        color: 'var(--text-muted)',
-        font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-sans)'
-      }"
-    >
-      {{ emptyLine }}
+    <div v-if="empty" :style="{ padding: 'var(--space-5)' }">
+      <EmptyState
+        compact
+        icon="git-branch"
+        :title="emptyCopy.title"
+        :description="emptyCopy.description"
+      />
+      <!-- The one of the three cases a person can act on from here, and the
+           only control this component draws outside a row. It is under
+           `EmptyState` rather than inside it: one button in one place does not
+           earn that component a new slot, and the shared empty state is drawn
+           in a dozen other places that would have to go on ignoring it. The
+           Local tab has no such button — a first commit is not something this
+           panel can make. -->
+      <div
+        v-if="tab === 'origin'"
+        :style="{ display: 'flex', justifyContent: 'center', marginTop: 'var(--space-4)' }"
+      >
+        <Button
+          variant="secondary"
+          size="sm"
+          icon="refresh-cw"
+          :disabled="fetching"
+          @click="emit('fetch')"
+        >
+          Fetch
+        </Button>
+      </div>
     </div>
     <PointerMenu ref="menu" :items="items" :width="MENU_W" @select="pick" @close="menuFor = null" />
   </div>

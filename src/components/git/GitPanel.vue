@@ -7,11 +7,12 @@
    behind it. The state itself is `src/stores/vcs.js` and the wiring is
    `views/DesktopApp.vue`.
 
-   Four things can be empty and they are four different sentences: git is not on
+   Four things can be empty and each says something of its own: git is not on
    this machine, this folder holds no repository, this repository has nothing
-   uncommitted, this repository has no local branch yet. One blank area for all
-   of them would be a panel saying nothing four different ways, and the first is
-   the one a person can act on.
+   uncommitted, this repository has no local branch yet — and the branch list
+   has a fifth for a tab whose `origin` this app knows nothing about. One blank
+   area for all of them would be a panel saying nothing several different ways,
+   and the first is the one a person can act on.
 
    A click on a changed file leaves as `open` and opens it as a diff in the
    centre column; which repository it belongs to is the caller's business, since
@@ -29,13 +30,13 @@
    — leave as events and are drawn by `BranchList`, and beside them the one item
    in that menu that asks git for nothing: pinning a branch above the tree,
    which leaves here as the whole new list. Three more leave from the Branches
-   caption rather than from a row: Pull and Push are about the branch this
-   repository is **on**, so a row's menu would refuse them on nine rows in ten,
-   and the caption is also the one thing on screen saying the two verbs exist.
-   Beside them is the check — a `git fetch`, asking the remote what it has —
-   which is about the repository rather than about any branch, and which is
-   there because both verbs beside it are refused in the state somebody most
-   wants to ask about: a branch level with its upstream.
+   **tab row** rather than from a row of the list: Pull and Push are about the
+   branch this repository is **on**, so a row's menu would refuse them on nine
+   rows in ten, and the row they sit in is also the one thing on screen saying
+   the two verbs exist. Beside them is the check — a `git fetch`, asking the
+   remote what it has — which is about the repository rather than about any
+   branch, and which is there because both verbs beside it are refused in the
+   state somebody most wants to ask about: a branch level with its upstream.
    What they say and whether they may be pressed is `tracking.js`, pure and
    tested; this file draws its verdict. What is drawn here is git's refusal of
    whichever write was last refused, for the reason recorded beside the block: the branch
@@ -59,15 +60,48 @@
    caption above went on describing only the half above it.
 
    The row is its own row rather than three more controls in the caption: that
-   caption already carries a chevron, a word, a count and the three verbs above,
-   and this panel is drawn 252 pixels wide. It is `shell/SegmentedTabs.vue`, the
-   same row the two side columns draw, rather than a copy of its style objects
-   here — that component's own header names a second copy of them as the pair
-   that drifts. What it costs is that the row is not `--row-h` tall, since it
-   sizes itself from `--control-h-sm` and its own padding: so `headerRows`
-   **measures** it and divides by a row, which the arithmetic takes in its
-   stride — `available` is already a fraction and the ceiling is floored at the
-   end.
+   caption is 252 pixels wide and already carries a chevron, a word and a count.
+   It is `shell/SegmentedTabs.vue`, the same row the two side columns draw,
+   rather than a copy of its style objects here — that component's own header
+   names a second copy of them as the pair that drifts. What it costs is that
+   the row is not `--row-h` tall, since it sizes itself from `--control-h-sm`
+   and its own padding: so `headerRows` **measures** it and divides by a row,
+   which the arithmetic takes in its stride — `available` is already a fraction
+   and the ceiling is floored at the end.
+
+   **Fetch, Pull and Push sit at the right end of that row**, beside the tabs
+   rather than in the caption where they used to be. Two things pushed them
+   there: the caption is the narrowest strip in this panel and is about to gain
+   a search button of its own, and the tab row already exists, is already
+   measured, and has a whole half of itself doing nothing. They are `size="sm"`,
+   which is what keeps them inside a height the segmented control had set
+   already — so the row is still measured and still never asserted, and nothing
+   in this file declares how tall it is. What moved is the place and nothing
+   else: `tracking.js` still says what each verb is called and whether it may
+   be pressed, `hasBranch` still takes Pull and Push off a detached HEAD, and
+   the check still spins where it always did.
+
+   One consequence is worth stating, because nothing on screen explains it: the
+   three of them are inside `tabBox`, so **folding the Branches section away
+   takes them with it**. That is the fold meaning what it says, and it is the
+   price of the row being measured rather than declared — a control drawn
+   outside that wrapper would be a height the arithmetic never sees.
+
+   **Under them, while a run holds this repository, is a strip saying so once.**
+   The rows below mute and go inert as they always have and each keeps its own
+   tooltip, which is the reason for the pointer and the keyboard; the strip is
+   the reason for the eye, and it is what stops a panel of grey rows reading as
+   a panel that failed to load. It is drawn inside the same wrapper the tab row
+   is, so the measurement above already counts it and there is no second
+   observer. It names no agent: the verdict carries none, and a name invented
+   for the sentence would be this panel claiming to know which run.
+
+   **The check stays pressable under a run**, alone of the three. A fetch writes
+   remote-tracking refs and touches neither the working tree nor the index, so
+   there is nothing for a batch mid-merge to lose by it — the same argument that
+   keeps the commit box's sparkle alive and lets the background sweep go out
+   under a batch. Pull and Push are refused by the verdict `tracking.js` folds
+   in, exactly as before.
 
    Which tab is showing is the caller's state, remembered per project
    (`settings.project.branchTab`); this panel emits the id and holds nothing.
@@ -148,6 +182,13 @@ const props = defineProps({
      arrives — grouped into folders by `branchTree.js`, which keeps that
      order. */
   branches: { type: Array, default: () => [] },
+  /* The short hash HEAD is sitting on when it is on no branch at all, or null.
+     It is about **the selected repository** and so is read off that
+     repository's own tree by the caller, not off the project's root: a project
+     can hold several repositories, and the plate this draws names the one this
+     panel is showing. Passed on to `BranchList`, which draws it where the
+     current branch would be. */
+  detached: { type: String, default: null },
   /* Which branch folders are unfolded, as `settings.project.branchFolders`
      keeps it, or null for "nobody has chosen here". Passed straight through:
      what a folder means and what a press on one leaves behind is
@@ -539,6 +580,75 @@ const spinStyle = { color: 'var(--attn-live)', animation: 'sm-spin var(--dur-pul
    the folded list is still on — which is what that caption's own rule already
    promises about a fold. */
 const branchTabs = BRANCH_TABS.map((id) => ({ id, label: id === 'origin' ? 'Origin' : 'Local' }))
+
+/* The tab row and the three verbs in one line. The tabs take whatever the
+   verbs leave and shrink to it — `minWidth: 0`, or a flex item refuses to go
+   below its own content and the buttons would be pushed off the end of a
+   252px panel. The right inset is this row's own, since `SegmentedTabs` draws
+   its padding inside itself and a button against the panel's edge is the
+   defect `SectionHeader` insets its own slot for. */
+const tabRowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-2)',
+  paddingRight: 'var(--space-3)'
+}
+const tabsSlotStyle = { flex: 1, minWidth: 0 }
+/* `--space-1` between the buttons, the same step `SectionHeader`'s own slot
+   keeps and for its reason: with nothing between them a pair whose refused
+   state is a filled, bordered chip fuses into one slab with a seam down the
+   middle and reads as a segmented control rather than as two verbs. */
+const verbsStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-1)', flex: 'none' }
+
+/* The strip that says, once, that this repository is being held. The running
+   palette rather than a neutral one: what it describes is work happening
+   somewhere else, which is exactly what that status means everywhere else in
+   the app — and deliberately not the needs-you amber, since nothing here is
+   waiting on the person reading it. `--control-h-sm` rather than `--row-h`: it
+   is a strip of chrome in the same wrapper as the tab row, not a row of the
+   list, and reading as one would put a fourth surface in a section that has
+   three. The sentence is clipped rather than wrapped, because a strip that
+   grows to two lines under a run would move every section boundary below it —
+   the whole of it is on the per-row tooltip either way. */
+const freezeStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-2)',
+  height: 'var(--control-h-sm)',
+  padding: '0 var(--space-3)',
+  background: 'var(--status-running-bg)',
+  borderBottom: 'var(--border-w) solid var(--status-running-border)',
+  color: 'var(--status-running-fg)',
+  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-sans)',
+  overflow: 'hidden'
+}
+/* The clipping is on the text and not on the strip around it: `text-overflow`
+   acts on a block container's own inline content, and the span inside a flex
+   row is a flex item — stated on the row, it would clip the sentence with no
+   ellipsis to show for it. `minWidth: 0` for the reason every shrinking flex
+   item in this file has it: without it the item refuses to go below its own
+   content and there is nothing left to clip. */
+const freezeTextStyle = {
+  flex: '0 1 auto',
+  minWidth: 0,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis'
+}
+/* The strip's own spinner takes the strip's own colour rather than the
+   `--attn-live` the buttons and the rows spin in. The two tokens are the same
+   value today; naming the one the text beside it is drawn in is what keeps
+   them the same thing if either ever moves. */
+const freezeSpinStyle = {
+  flex: 'none',
+  color: 'var(--status-running-fg)',
+  animation: 'sm-spin var(--dur-pulse) linear infinite'
+}
+/* What the strip says, which is `gitActions.js`'s own sentence with the state
+   it leaves the panel in on the end. The clause is added here and not in the
+   rule, because the rule is read by controls that are simply disabled — a
+   tooltip over a dead button has no "read only" to report. */
+const freezeLine = computed(() => `${props.actions?.reason ?? ''} · read only`)
 
 /* What the caption counts, which is the list underneath it and never the other
    one. A number describing the half a person is not looking at is the whole of
@@ -939,103 +1049,115 @@ const onReset = (section) => emit('resize', { section, rows: null })
           @dragend="onDragEnd"
           @reset="onReset('branches')"
         />
+        <!-- The caption carries a chevron, a word and a count and nothing else.
+             The three verbs that used to be in its `actions` slot are one row
+             down, at the end of the tab row: this strip is 252 pixels wide, and
+             the row under it already exists and is already measured. The slot
+             itself stays on the component — the repositories may yet fill
+             it. -->
         <SectionHeader
           divided
           label="Branches"
           :count="branchCount"
           :open="fold.branchesOpen"
           @toggle="emit('toggle', 'branches')"
-        >
-          <!-- The two remote verbs and the check, in the caption rather than in
-               a row's menu:
-               they are about the current branch, so on nine rows in ten the
-               item would be refused, and a menu here answers about the row it
-               was opened on. The caption is also the one thing on screen saying
-               these two verbs exist at all.
-
-               A `<button>` cannot hold a button, which is why the caption has a
-               slot beside it rather than inside it — press one of these and the
-               section would otherwise fold on the way through. -->
-          <template #actions>
-            <!-- First of the three and the only one always here: it is the
-                 question the other two are answers to, and with both of them
-                 refused over a branch that is level it is the whole of what
-                 this caption can still do. On a detached HEAD it is the only
-                 control in the row. -->
-            <Tooltip v-bind="hintProps(check)">
-              <!-- Two buttons and not one with a `v-if` inside its slot, which
-                   is the version this shipped as and the defect it shipped
-                   with. `Button` draws its slot as `<span v-if="$slots.default">`,
-                   and a slot **function** is there whether or not the `v-if`
-                   inside it renders anything: the empty span stayed a flex
-                   child, the button spent its `gap` on nothing and came out
-                   6px wider than the two arrows beside it — then snapped back
-                   to their width the moment a fetch started, sliding the count
-                   and both arrows sideways. Interaction is a surface step and
-                   never a shift. Handing the slot over only in the state that
-                   fills it is what keeps all three buttons one width. -->
-              <Button
-                v-if="fetching"
-                variant="ghost"
-                size="sm"
-                :aria-label="check.label"
-                :disabled="!check.allowed"
-                @click="$emit('fetch')"
-              >
-                <Icon name="loader-circle" :size="SPIN" :style="spinStyle" />
-              </Button>
-              <Button
-                v-else
-                variant="ghost"
-                size="sm"
-                icon="refresh-cw"
-                :aria-label="check.label"
-                :disabled="!check.allowed"
-                @click="$emit('fetch')"
-              />
-            </Tooltip>
-            <Tooltip v-if="hasBranch" v-bind="hintProps(pull)">
-              <Button
-                variant="ghost"
-                size="sm"
-                icon="arrow-down"
-                :aria-label="pull.label"
-                :disabled="!pull.allowed || Boolean(busy)"
-                @click="$emit('pull')"
-              />
-            </Tooltip>
-            <Tooltip v-if="hasBranch" v-bind="hintProps(push)">
-              <Button
-                variant="ghost"
-                size="sm"
-                icon="arrow-up"
-                :aria-label="push.label"
-                :disabled="!push.allowed || Boolean(busy)"
-                @click="$emit('push')"
-              />
-            </Tooltip>
-          </template>
-        </SectionHeader>
-        <!-- The two sides, in a row of their own directly under the caption:
-             that caption already carries a chevron, a word, a count and three
-             verbs, and this panel is drawn 252 pixels wide.
+        />
+        <!-- The two sides and the three verbs, in one row directly under the
+             caption.
 
              `SegmentedTabs` and not a row written here, so the two tab rows in
              this app are one control rather than two that have to be kept
              looking alike — the reason that component's own header gives for
              existing at all. It sizes itself from `--control-h-sm` and its own
              padding, which is not `--row-h`, so the wrapper is what
-             `headerRows` measures rather than a height this file asserts.
+             `headerRows` measures rather than a height this file asserts. The
+             buttons are `sm` and sit inside that height, so moving them here
+             changed no measurement at all.
 
-             It is live while a run holds every write in this panel: choosing
-             which side of the repository to look at is reading, the same rule
-             that keeps a folder heading pressable. -->
+             The tabs are live while a run holds every write in this panel:
+             choosing which side of the repository to look at is reading, the
+             same rule that keeps a folder heading pressable. -->
         <div v-if="branchTabsDrawn" ref="tabBox" :style="{ flex: '0 0 auto' }">
-          <SegmentedTabs
-            :tabs="branchTabs"
-            :model-value="branchTab"
-            @update:model-value="$emit('branch-tab', $event)"
-          />
+          <div :style="tabRowStyle">
+            <div :style="tabsSlotStyle">
+              <SegmentedTabs
+                :tabs="branchTabs"
+                :model-value="branchTab"
+                @update:model-value="$emit('branch-tab', $event)"
+              />
+            </div>
+            <div :style="verbsStyle">
+              <!-- First of the three and the only one always here: it is the
+                   question the other two are answers to, and with both of them
+                   refused over a branch that is level it is the whole of what
+                   this row can still do. On a detached HEAD it is the only
+                   verb drawn, and under a run it is the only one live. -->
+              <Tooltip v-bind="hintProps(check)">
+                <!-- Two buttons and not one with a `v-if` inside its slot,
+                     which is the version this shipped as and the defect it
+                     shipped with. `Button` draws its slot as
+                     `<span v-if="$slots.default">`, and a slot **function** is
+                     there whether or not the `v-if` inside it renders anything:
+                     the empty span stayed a flex child, the button spent its
+                     `gap` on nothing and came out 6px wider than the two arrows
+                     beside it — then snapped back to their width the moment a
+                     fetch started, sliding both arrows sideways. Interaction is
+                     a surface step and never a shift. Handing the slot over
+                     only in the state that fills it is what keeps all three
+                     buttons one width. -->
+                <Button
+                  v-if="fetching"
+                  variant="ghost"
+                  size="sm"
+                  :aria-label="check.label"
+                  :disabled="!check.allowed"
+                  @click="$emit('fetch')"
+                >
+                  <Icon name="loader-circle" :size="SPIN" :style="spinStyle" />
+                </Button>
+                <Button
+                  v-else
+                  variant="ghost"
+                  size="sm"
+                  icon="refresh-cw"
+                  :aria-label="check.label"
+                  :disabled="!check.allowed"
+                  @click="$emit('fetch')"
+                />
+              </Tooltip>
+              <Tooltip v-if="hasBranch" v-bind="hintProps(pull)">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon="arrow-down"
+                  :aria-label="pull.label"
+                  :disabled="!pull.allowed || Boolean(busy)"
+                  @click="$emit('pull')"
+                />
+              </Tooltip>
+              <Tooltip v-if="hasBranch" v-bind="hintProps(push)">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon="arrow-up"
+                  :aria-label="push.label"
+                  :disabled="!push.allowed || Boolean(busy)"
+                  @click="$emit('push')"
+                />
+              </Tooltip>
+            </div>
+          </div>
+          <!-- Said once, for the eye. Every row below is muted and inert and
+               carries the same sentence on a tooltip, which answers the pointer
+               and the keyboard and answers nothing to somebody glancing at a
+               panel of grey rows. Inside this wrapper on purpose: `tabsPx`
+               already measures it, so a strip that appears and goes with a run
+               moves the section arithmetic with it and needs no observer of its
+               own. -->
+          <div v-if="actions && actions.allowed === false" role="status" :style="freezeStyle">
+            <Icon name="loader-circle" :size="SPIN" :style="freezeSpinStyle" />
+            <span :style="freezeTextStyle">{{ freezeLine }}</span>
+          </div>
         </div>
         <div v-if="fold.branchesOpen" ref="branchBox" :style="branchStyle">
           <BranchList
@@ -1046,9 +1168,12 @@ const onReset = (section) => emit('resize', { section, rows: null })
             :remote="remote"
             :remote-folders="remoteFolders"
             :tab="branchTab"
+            :detached="detached"
+            :fetching="fetching"
             :actions="actions"
             :busy="busy"
             @checkout="$emit('checkout', $event)"
+            @fetch="$emit('fetch')"
             @compare="$emit('compare', $event)"
             @review="$emit('review', $event)"
             @favorite="$emit('favorite', $event)"

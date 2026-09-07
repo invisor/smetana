@@ -144,13 +144,13 @@ describe('what a list of branch names becomes', () => {
     ])
   })
 
-  /* The hairline goes under the last row of the block above the list, and with
-     nothing marked that is still the current branch — which is what the rule
-     was before favourites existed. */
-  it('rules off under the current branch when nothing is marked', () => {
+  /* The block a lifted row belongs to, which is what the component draws a
+     surface from. With nothing marked the top block is the current branch
+     alone, and every row under it is a row of the tree with no block at all. */
+  it('marks the current branch as its own block when nothing is marked', () => {
     const rows = branchRows(branches('*main', 'develop'), [])
-    expect(rows[0].divider).toBe(true)
-    expect(rows[1].divider).toBeUndefined()
+    expect(rows[0].block).toBe('current')
+    expect(rows[1].block).toBeUndefined()
   })
 
   /* A repository nobody is standing in — a detached HEAD, or a list that
@@ -226,11 +226,20 @@ describe('the branches somebody pinned', () => {
     expect(rows[0]).toMatchObject({ name: 'main', current: true, favorite: true, pinned: true })
   })
 
-  /* The hairline is about the bottom of the block rather than about the current
-     branch: it says the real list starts below, and it says it once. */
-  it('rules off under the last marked row rather than under the current branch', () => {
+  /* The marked rows are a block of their own under the current one, so the two
+     groups can be told apart by their surfaces rather than by one hairline
+     under the pair of them. */
+  it('marks the pinned favourites as the favourite block, under the current one', () => {
     const rows = branchRows(branches('*main', 'develop', 'spike'), [], ['develop', 'spike'])
-    expect(rows.map((row) => Boolean(row.divider))).toEqual([false, false, true])
+    expect(rows.map((row) => row.block)).toEqual(['current', 'favourite', 'favourite'])
+  })
+
+  /* A branch that is both current and marked is one row in the current block,
+     with the star on it: the first group wins, and the mark rides along. */
+  it('draws a branch that is both current and marked in the current block', () => {
+    const rows = branchRows(branches('*main', 'develop'), [], ['main'])
+    expect(rows[0].block).toBe('current')
+    expect(rows[0].favorite).toBe(true)
   })
 
   /* A project can hold several repositories and the list is one list, so a name
@@ -239,7 +248,8 @@ describe('the branches somebody pinned', () => {
   it('draws no row for a name this repository does not have', () => {
     const rows = branchRows(branches('*main', 'develop'), [], ['nothing-called-this'])
     expect(labels(rows)).toEqual(['main', 'develop'])
-    expect(rows[0].divider).toBe(true)
+    expect(rows[0].block).toBe('current')
+    expect(rows[1].block).toBeUndefined()
   })
 
   /* Nothing marked is the state every project starts in, and it has to draw
@@ -498,7 +508,7 @@ describe('the origin tab', () => {
   it('lifts nothing to the top, not even the current branch', () => {
     const rows = originBranchRows(['zeta', 'main'], local, [])
     expect(labels(rows)).toEqual(['zeta', 'main'])
-    expect(rows.some((row) => row.pinned || row.divider)).toBe(false)
+    expect(rows.some((row) => row.pinned || row.block)).toBe(false)
   })
 
   it('carries no favourite mark and no children on a folder row', () => {
