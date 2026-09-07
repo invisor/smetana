@@ -241,42 +241,63 @@ export function branchMenuItems({
 }
 
 /**
- * The menu on a row of the `origin` group — a branch this repository does not
- * have yet. Two items, and the shortness is the decision rather than a first
- * draft.
+ * The menu on a row of the **Origin** tab. Two items, and the shortness is the
+ * decision rather than a first draft.
  *
  * Merge, rebase, rename, delete and `New branch from this` are every one of
- * them a write against a ref this app does not own, and the honest first step
- * for all of them is the checkout sitting above. Compare is left off too:
- * comparing against `origin` is what the branch review window is for, and that
- * window already reaches every repository of the project rather than the one
- * this panel has selected. The favourite goes for a reason of its own —
- * `favoriteBranches` names branches the repository *has*, and pinning is about
- * what somebody returns to, which for one of these starts with the checkout.
+ * them about a local branch and live on the Local tab; offering them here would
+ * be offering the same verb in two places, refused differently. Compare is left
+ * off too: comparing against `origin` is what the branch review window is for,
+ * and that window already reaches every repository of the project rather than
+ * the one this panel has selected. The favourite goes for a reason of its own —
+ * `favoriteBranches` names branches the repository *has*, and the mark is drawn
+ * on the Local tab, where the list it reorders is.
  *
- * The refusal is `frozen`'s, unchanged and with the same caption: checking a
- * remote branch out writes the working tree, so a run holding this panel or an
- * operation already going refuses it exactly as it refuses the local switch.
- * `current` is not a parameter at all — no branch in this group is the one the
- * repository is on, by definition.
+ * **The first item is one of two verbs and the row decides which.** A name this
+ * repository already has is an ordinary checkout of a local branch, so the row
+ * says `Switch to this branch` word for word as the Local tab's does; a name it
+ * does not have is `Check out from origin`, which creates the local branch and
+ * sets its upstream. `hasLocal` is `originBranchRows`' own answer, so the item,
+ * the glyph on the row and the double click cannot disagree about which act
+ * this is.
+ *
+ * The refusal is `frozen`'s, unchanged and with the same caption: either verb
+ * writes the working tree, so a run holding this panel or an operation already
+ * going refuses it exactly as it refuses the local switch. `current` refuses the
+ * switch on top of that, for `branchMenuItems`' own reason — a checkout of the
+ * branch you are standing on is a row with nothing behind it — and it can only
+ * ever be true of a row that has a local twin.
  *
  * Copying the name reads and writes nothing, so nothing refuses it: the third
  * reach `branchMenuItems` describes, and the same one.
  */
-export function remoteBranchMenuItems({ allowed = true, busy = false } = {}) {
+export function originBranchMenuItems({
+  allowed = true,
+  busy = false,
+  hasLocal = false,
+  current = false
+} = {}) {
   const held = frozen({ allowed, busy })
+  const caption = held ?? (current ? 'Already on this branch' : null)
   return [
-    ...(held ? [{ type: 'label', label: held }] : []),
-    /* The one verb, and the label says where the branch comes from rather than
-       calling it a switch: what the press does is create a local branch here
-       and move onto it, and a row reading `Switch to this branch` would be
-       describing the act the list above offers. */
-    {
-      kind: 'checkout-remote',
-      label: 'Check out from origin',
-      icon: 'cloud',
-      disabled: Boolean(held)
-    },
+    ...(caption ? [{ type: 'label', label: caption }] : []),
+    /* The one verb, in the two shapes the row can take. The label of the second
+       says where the branch comes from rather than calling it a switch: what the
+       press does is create a local branch here and move onto it, and a row
+       reading `Switch to this branch` would be describing the other act. */
+    hasLocal
+      ? {
+          kind: 'checkout',
+          label: 'Switch to this branch',
+          icon: 'git-branch',
+          disabled: Boolean(held) || current
+        }
+      : {
+          kind: 'checkout-remote',
+          label: 'Check out from origin',
+          icon: 'cloud',
+          disabled: Boolean(held)
+        },
     /* Word for word the item the local row carries, deliberately: the two rows
        are the same act and a second wording would read as a second act. The
        **whole** name and never the leaf, for that item's own reason. */

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  BRANCH_TABS,
+  DEFAULT_BRANCH_TAB,
   MAX_FAVORITES,
   branchRows,
   currentChain,
   expandedFolders,
   liftedOut,
-  remoteBranchRows,
+  originBranchRows,
   toggleFavorite,
   toggleFolder,
   toggleRemoteFolder
@@ -389,129 +391,155 @@ describe('what a press on a folder leaves behind', () => {
   })
 })
 
-/* The group at the foot of the list: what `origin` holds and this repository
-   does not. `local` is `vcs_branches`' own shape, `remote` the plain names
-   `vcs_remote_branches` answers with. */
-describe('the origin group', () => {
+/* The Origin tab: the whole of what `origin` has, drawn instead of the local
+   list rather than under it. `local` is `vcs_branches`' own shape, `remote` the
+   plain names `vcs_remote_branches` answers with, and `expanded` the fold paths
+   as `remoteBranchFolders` keeps them — with no group prefix on them any more,
+   since there is no heading above them to prefix with. */
+describe('the origin tab', () => {
   const local = branches('*main', 'feature/one')
 
-  it('draws nothing when origin has nothing this repository lacks', () => {
-    expect(remoteBranchRows(['main', 'feature/one'], local, ['origin'])).toEqual([])
+  it('draws nothing at all when origin has nothing', () => {
+    expect(originBranchRows([], local, [])).toEqual([])
   })
 
-  it('draws no heading rather than an empty one', () => {
-    expect(remoteBranchRows([], local, ['origin'])).toEqual([])
+  /* The change of mind this tab is: the group it replaces held only what had no
+     local twin, because a group under the local list would otherwise have been a
+     duplicate of it. A tab called Origin shows origin. */
+  it('draws every branch origin has, local twin or not', () => {
+    const rows = originBranchRows(['develop', 'main'], local, [])
+    expect(labels(rows)).toEqual(['develop', 'main'])
   })
 
-  it('heads the group with origin and counts what it holds', () => {
-    expect(remoteBranchRows(['main', 'feature/two', 'spike'], local, [])).toEqual([
-      { kind: 'folder', path: 'origin', label: 'origin', depth: 0, count: 2, expanded: false }
+  /* And the case that made the group unfindable in the other direction: a
+     repository whose origin holds nothing this one lacks drew no group at all,
+     which on screen was indistinguishable from the feature being broken. */
+  it('draws a full list where the old group drew nothing', () => {
+    expect(labels(originBranchRows(['main', 'feature/one'], local, []))).toEqual([
+      'main',
+      '/feature'
     ])
   })
 
-  it('is folded until the group is in the stored list', () => {
-    const rows = remoteBranchRows(['spike'], local, ['origin'])
-    expect(labels(rows)).toEqual(['/origin', 'spike'])
-    expect(rows[1]).toMatchObject({ kind: 'branch', name: 'spike', depth: 1, remote: true })
+  it('marks the rows this repository already has, and only those', () => {
+    const rows = originBranchRows(['develop', 'main'], local, [])
+    expect(rows.map((row) => [row.name, row.hasLocal])).toEqual([
+      ['develop', false],
+      ['main', true]
+    ])
   })
 
-  it('builds folders inside the group and indents them under the heading', () => {
-    const rows = remoteBranchRows(['feature/two'], local, ['origin'])
+  /* The tick, and the one thing that can carry it. A repository can only ever
+     be standing on a branch it has, so `current` is never true of a row that
+     `hasLocal` is false of. */
+  it('marks the branch the repository is on, which always has a local twin', () => {
+    const rows = originBranchRows(['develop', 'main'], local, [])
+    expect(rows.map((row) => [row.name, row.current])).toEqual([
+      ['develop', false],
+      ['main', true]
+    ])
+    expect(rows.every((row) => !row.current || row.hasLocal)).toBe(true)
+  })
+
+  it('folds names with a slash in them by the same rule the local tab uses', () => {
+    const rows = originBranchRows(['feature/two', 'main'], local, [])
     expect(rows.map((row) => [row.kind, row.label, row.depth])).toEqual([
-      ['folder', 'origin', 0],
-      ['folder', 'feature', 1]
+      ['folder', 'feature', 0],
+      ['branch', 'main', 0]
+    ])
+    expect(rows[0].count).toBe(1)
+  })
+
+  /* The paths carry no group prefix, which is the whole of what changed about
+     the stored list. `origin/feature`, which is what the old shape wrote, now
+     matches nothing — and an entry matching nothing means a folded folder,
+     which is why the spec asks for no migration. */
+  it('unfolds a folder by its bare path and ignores the old prefixed one', () => {
+    expect(originBranchRows(['feature/two'], local, ['feature']).map((row) => row.label)).toEqual([
+      'feature',
+      'two'
+    ])
+    expect(originBranchRows(['feature/two'], local, ['origin/feature'])).toEqual([
+      { kind: 'folder', path: 'feature', label: 'feature', depth: 0, count: 1, expanded: false }
     ])
   })
 
-  it('unfolds a folder inside the group by its whole path', () => {
-    const rows = remoteBranchRows(['feature/two'], local, ['origin', 'origin/feature'])
+  it('nests as deeply as the name does', () => {
+    const rows = originBranchRows(['fix/legacy/depot'], local, ['fix', 'fix/legacy'])
     expect(rows.map((row) => [row.kind, row.label, row.depth])).toEqual([
-      ['folder', 'origin', 0],
-      ['folder', 'feature', 1],
-      ['branch', 'two', 2]
+      ['folder', 'fix', 0],
+      ['folder', 'legacy', 1],
+      ['branch', 'depot', 2]
     ])
-    expect(rows[2]).toMatchObject({ name: 'feature/two', remote: true })
+    expect(rows[2]).toMatchObject({ name: 'fix/legacy/depot' })
   })
 
-  /* Every path inside this group is written under the heading, so a bare
-     `feature` — which is what the *local* tree's folder of that name is stored
-     as — reaches nothing here. The group stays folded on it, heading included,
-     which is the half of the two-fields rule this side can be asked about. */
-  it('a local folder path in the stored list unfolds nothing in this group', () => {
-    const rows = remoteBranchRows(['feature/two'], local, ['feature'])
-    expect(rows).toEqual([
-      { kind: 'folder', path: 'origin', label: 'origin', depth: 0, count: 1, expanded: false }
+  /* The collision the `remoteBranchFolders` field exists for, from the side a
+     test can reach: a local branch called `origin/spike` puts a folder named
+     `origin` in the *local* tree, and this tab has a folder of its own for a
+     name like `feature`. Two tabs, two lists, and neither unfolds the other. */
+  it('folds by its own list and never by the local one', () => {
+    const withLocalFolder = branches('*main', 'feature/one')
+    expect(labels(originBranchRows(['feature/two'], withLocalFolder, []))).toEqual(['/feature'])
+    expect(labels(branchRows(withLocalFolder, ['feature'], []))).toEqual([
+      'main',
+      '/feature',
+      'one'
     ])
-  })
-
-  /* The collision the whole `remoteBranchFolders` field exists for, from the
-     side a test can reach. A local branch may legally be called `origin/spike`,
-     which puts a **local** folder named `origin` in the tree above beside this
-     group's own heading — so the two folds have to answer to two different
-     lists. Rust pins that the two settings fields survive the trip apart; this
-     is the rule underneath them. */
-  describe('a local branch called origin/…', () => {
-    const withLocalOrigin = branches('*main', 'origin/spike')
-
-    it('is not the same branch as one origin holds under that leaf', () => {
-      const rows = remoteBranchRows(['spike'], withLocalOrigin, ['origin'])
-      /* `origin/spike` and `spike` are two different names: the local list
-         holds the first and this group is what it does not hold, so the row
-         stays — dropping it would need the leaf to be compared rather than the
-         name, which is not what a checkout is given. */
-      expect(labels(rows)).toEqual(['/origin', 'spike'])
-      expect(rows[1]).toMatchObject({ kind: 'branch', name: 'spike', remote: true })
-    })
-
-    it('folds by its own list and not by the local folder of the same name', () => {
-      /* What the tree above would store for its `origin` folder is the bare
-         `origin`, and it is the same string this group's heading is stored as —
-         which is exactly why they are not one list. Given only what the *group*
-         was told, the group answers: unfolded here, whatever the local folder
-         is doing, and folded here when its own list is empty. */
-      expect(remoteBranchRows(['spike'], withLocalOrigin, ['origin'])).toHaveLength(2)
-      expect(remoteBranchRows(['spike'], withLocalOrigin, [])).toEqual([
-        { kind: 'folder', path: 'origin', label: 'origin', depth: 0, count: 1, expanded: false }
-      ])
-    })
-
-    it('leaves the local branch of that name in the tree above untouched', () => {
-      /* The other half of the same fact, read off `branchRows`: the group takes
-         nothing out of the list above it, so the local `origin/spike` is still
-         a row under a local heading called `origin`, and that heading is the
-         one `branchFolders` opens. */
-      expect(labels(branchRows(withLocalOrigin, ['origin'], []))).toEqual([
-        'main',
-        '/origin',
-        'spike'
-      ])
-    })
   })
 
   it('keeps the alphabetical order the command answered in', () => {
-    const rows = remoteBranchRows(['zeta', 'alpha'], local, ['origin'])
-    expect(labels(rows.slice(1))).toEqual(['zeta', 'alpha'])
+    expect(labels(originBranchRows(['zeta', 'alpha'], local, []))).toEqual(['zeta', 'alpha'])
   })
 
-  it('carries no children on a folder row, exactly as the tree above does not', () => {
-    const rows = remoteBranchRows(['feature/two'], local, ['origin'])
-    expect(rows.every((row) => !('children' in row))).toBe(true)
+  /* Nothing is lifted to the top here, unlike the local tab: the alphabet holds
+     all the way down, so the branch the repository is on stays where its name
+     puts it. */
+  it('lifts nothing to the top, not even the current branch', () => {
+    const rows = originBranchRows(['zeta', 'main'], local, [])
+    expect(labels(rows)).toEqual(['zeta', 'main'])
+    expect(rows.some((row) => row.pinned || row.divider)).toBe(false)
+  })
+
+  it('carries no favourite mark and no children on a folder row', () => {
+    const rows = originBranchRows(['feature/two', 'main'], local, ['feature'])
+    expect(rows.every((row) => !('children' in row) && !('favorite' in row))).toBe(true)
+  })
+
+  it('reads a missing list of either side as nothing rather than throwing', () => {
+    expect(originBranchRows(undefined, undefined, undefined)).toEqual([])
+    expect(originBranchRows([null, ''], local, [])).toEqual([])
+  })
+})
+
+/* The closed list itself, which is the half of this that a person can get wrong
+   silently: a word the front end offers and `settings/model.rs` has never heard
+   of is rewritten to the default on the way in, and the only symptom is the app
+   forgetting a choice after a restart. */
+describe('the two tabs', () => {
+  it('names both sides and nothing else', () => {
+    expect(BRANCH_TABS).toEqual(['local', 'origin'])
+  })
+
+  it('starts on the side the list has always been', () => {
+    expect(DEFAULT_BRANCH_TAB).toBe('local')
+    expect(BRANCH_TABS).toContain(DEFAULT_BRANCH_TAB)
   })
 })
 
 describe('toggleRemoteFolder', () => {
   it('opens a folder that is closed and closes one that is open', () => {
-    expect(toggleRemoteFolder([], 'origin')).toEqual(['origin'])
-    expect(toggleRemoteFolder(['origin', 'origin/fix'], 'origin/fix')).toEqual(['origin'])
+    expect(toggleRemoteFolder([], 'feature')).toEqual(['feature'])
+    expect(toggleRemoteFolder(['feature', 'fix'], 'fix')).toEqual(['feature'])
   })
 
   it('reads a missing list as everything folded', () => {
-    expect(toggleRemoteFolder(undefined, 'origin')).toEqual(['origin'])
+    expect(toggleRemoteFolder(undefined, 'feature')).toEqual(['feature'])
   })
 
   it('always returns a new array, so the settings watcher notices', () => {
-    const stored = ['origin']
-    expect(toggleRemoteFolder(stored, 'origin/fix')).not.toBe(stored)
-    expect(stored).toEqual(['origin'])
+    const stored = ['feature']
+    expect(toggleRemoteFolder(stored, 'fix')).not.toBe(stored)
+    expect(stored).toEqual(['feature'])
   })
 })

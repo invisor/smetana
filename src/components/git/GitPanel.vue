@@ -43,6 +43,38 @@
    ordinary case. A conflict is not one of those refusals and is not drawn here
    at all — it is an outcome with two doors, and the modal is `ConflictModal`.
 
+   ## The Branches section has two sides, and a row of tabs to choose between
+
+   Under that caption sits a row of exactly two tabs, `Local` and `Origin`, and
+   `BranchList` draws one side or the other rather than both. It replaces the
+   `origin` group that used to sit at the foot of the local list: on the
+   repository this was asked for that heading was 346 rows down a scroller, and
+   in a repository where `origin` holds nothing extra it was not drawn at all,
+   which on screen reads as broken rather than as working.
+
+   **The count in the caption is the count of the tab underneath it.** The
+   number of local branches on `Local`, the number of branches `origin` has on
+   `Origin` — a count describing the other list is exactly the defect that made
+   this task necessary, since the group's own heading carried its number and the
+   caption above went on describing only the half above it.
+
+   The row is its own row rather than three more controls in the caption: that
+   caption already carries a chevron, a word, a count and the three verbs above,
+   and this panel is drawn 252 pixels wide. It is `shell/SegmentedTabs.vue`, the
+   same row the two side columns draw, rather than a copy of its style objects
+   here — that component's own header names a second copy of them as the pair
+   that drifts. What it costs is that the row is not `--row-h` tall, since it
+   sizes itself from `--control-h-sm` and its own padding: so `headerRows`
+   **measures** it and divides by a row, which the arithmetic takes in its
+   stride — `available` is already a fraction and the ceiling is floored at the
+   end.
+
+   Which tab is showing is the caller's state, remembered per project
+   (`settings.project.branchTab`); this panel emits the id and holds nothing.
+   The two ids are `branchTree.js`'s closed list, mirrored in
+   `settings/model.rs` — a value the front end offers and Rust refuses comes
+   back as `local` after a restart with nothing on screen saying why.
+
    ## The three sections fold and are dragged
 
    Each caption is a `SectionHeader`, which is a button, and between the
@@ -83,8 +115,10 @@ import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import RepoList from './RepoList.vue'
 import Resizer from '../shell/Resizer.vue'
+import SegmentedTabs from '../shell/SegmentedTabs.vue'
 import SectionHeader from './SectionHeader.vue'
 import Tooltip from '../core/Tooltip.vue'
+import { BRANCH_TABS, DEFAULT_BRANCH_TAB } from './branchTree.js'
 import { DEFAULT_ROWS as COMMIT_ROWS } from './commitBox.js'
 import { failureTextStyle, failureTitleStyle } from './failureStyle.js'
 import {
@@ -127,18 +161,23 @@ const props = defineProps({
      the reason the folders above are: what a mark does to the order is
      `branchTree.js`, and this panel is presentational on it. */
   favoriteBranches: { type: Array, default: () => [] },
-  /* What `origin` is known to have, as plain names — the group at the foot of
-     the branch list is drawn from it. Passed straight through like everything
-     else here, including the decision that only the names with no local twin
-     get a row: that is `branchTree.js`'s. The caller is what guarantees the
-     list belongs to the repository this panel is showing, since the store holds
-     one such list for the whole project. */
+  /* What `origin` is known to have, as plain names — the Origin tab of the
+     branch list is drawn from it. Passed straight through like everything else
+     here, including the decision that every one of them gets a row whether or
+     not this repository has a branch of that name: that is `branchTree.js`'s.
+     The caller is what guarantees the list belongs to the repository this panel
+     is showing, since the store holds one such list for the whole project. */
   remote: { type: Array, default: () => [] },
-  /* Which folders of that group are unfolded, as
+  /* Which folders of that tab are unfolded, as
      `settings.project.remoteBranchFolders` keeps them. Its own prop and not the
-     `branchFolders` above, because it is its own settings field — a local
-     folder may be called `origin` too, and one list would unfold both. */
+     `branchFolders` above, because it is its own settings field — `feature` on
+     one tab and `feature` on the other are two different rows. */
   remoteFolders: { type: Array, default: () => [] },
+  /* Which of the two sides of the branch list is showing, as
+     `settings.project.branchTab` keeps it. The tab row is drawn here, in the
+     section's caption, and the choice is the caller's to hold: this panel is
+     presentational on it as on every other piece of state. */
+  branchTab: { type: String, default: DEFAULT_BRANCH_TAB },
   /* Where each branch stands against its upstream, keyed by name, as
      `vcsState.tracking` holds it. It draws the marks on the rows and it is what
      the two buttons in the Branches caption are made of — an empty object is a
@@ -263,11 +302,16 @@ const emit = defineEmits([
      `WRITE_REFUSED`'s `checkout` title like the local switch's — the store gives
      both the same `op`, since what was pressed is a checkout either way. */
   'checkout-remote',
-  /* The whole new list for the group's folds, resolved by `branchTree.js`,
-     exactly as `toggle-folder` carries the local one. Absent from
-     `WRITE_REFUSED` below for `favorite`'s reason: it writes `settings.json`
-     and nothing else. */
+  /* The whole new list for the Origin tab's folds, resolved by
+     `branchTree.js`, exactly as `toggle-folder` carries the local one. Absent
+     from `WRITE_REFUSED` below for `favorite`'s reason: it writes
+     `settings.json` and nothing else. */
   'toggle-remote-folder',
+  /* Which of the two tabs was pressed, by id. Absent from `WRITE_REFUSED` for
+     the same reason again — it writes a preference, and it is a read either
+     way, which is why the row goes on answering while a run holds every write
+     in this panel. */
+  'branch-tab',
   'resize'
 ])
 
@@ -483,6 +527,31 @@ const check = computed(() => fetchAction(props.fetching))
 const SPIN = 13
 const spinStyle = { color: 'var(--attn-live)', animation: 'sm-spin var(--dur-pulse) linear infinite' }
 
+/* The two sides of the branch list, labelled — `SegmentedTabs`' own shape,
+   because that component is the row this app draws for a choice like this one
+   and its own header says why a second copy of those style objects is the pair
+   that drifts. The ids are `branchTree.js`'s closed list and are mirrored in
+   `settings/model.rs`; the words beside them are this panel's, sentence case
+   like every other label in the app.
+
+   Drawn only while the section is unfolded: a folded section has no list for a
+   tab to be about, and the caption's count goes on describing whichever side
+   the folded list is still on — which is what that caption's own rule already
+   promises about a fold. */
+const branchTabs = BRANCH_TABS.map((id) => ({ id, label: id === 'origin' ? 'Origin' : 'Local' }))
+
+/* What the caption counts, which is the list underneath it and never the other
+   one. A number describing the half a person is not looking at is the whole of
+   why this feature exists: the `origin` group this replaces carried its own
+   count on its heading while the caption above went on saying how many local
+   branches there were, so `Branches 236` sat over a list of 593. Null below two
+   for the reason `SectionHeader` refuses a zero — a section with one row says
+   everything about itself by drawing it. */
+const branchCount = computed(() => {
+  const total = props.branchTab === 'origin' ? props.remote.length : props.branches.length
+  return total > 1 ? total : null
+})
+
 /* Prose over a control somebody is on their way past waits; a control's own
    name does not. `Tooltip`'s own note is the rule, and a refused button here is
    the first kind — a whole sentence about something a pointer crosses on the
@@ -532,6 +601,20 @@ const drawn = computed(() => {
 })
 const fills = computed(() => filler(drawn.value))
 
+/* The rows of chrome a section cannot give away: one per caption on screen,
+   plus the branch list's own tab row when there is one. That row is a
+   `SegmentedTabs` and is **not** `--row-h` — it sizes itself from
+   `--control-h-sm` and its own padding, which comes to about 1.18 rows in both
+   densities — so its height is measured above and divided by a row here rather
+   than counted as one. The fraction costs nothing: `available` is a fraction
+   already, and `clampRows` floors the ceiling. Folded, the tab row is not drawn
+   and `tabsPx` is 0, which is the same rule the captions keep about the lists
+   under them. */
+const branchTabsDrawn = computed(() => branchesDrawn.value && fold.value.branchesOpen)
+const headerRows = computed(
+  () => drawn.value.length + (rowPx.value ? tabsPx.value / rowPx.value : 0)
+)
+
 const rows = (n) => `calc(var(--row-h) * ${n})`
 
 /* The measurements, which is the half of this that no test in this repository
@@ -546,12 +629,23 @@ const rows = (n) => `calc(var(--row-h) * ${n})`
    those two settings do. */
 const panel = ref(null)
 const reposHeader = ref(null)
+/* The branch list's tab row, measured rather than told. `SegmentedTabs` sizes
+   itself from `--control-h-sm` and its own padding, which is not `--row-h` and
+   is not meant to be — so the arithmetic below asks how tall it actually is and
+   divides by a row, exactly as it divides the panel. The alternative was a
+   bespoke row pinned at `--row-h`, which is thirteen declarations copied from
+   that component with nothing mechanical holding the copies together. A
+   fraction is perfectly at home here: `available` is already one, and the
+   ceiling is floored at the end. */
+const tabBox = ref(null)
 
 const rowPx = ref(0)
 const panelPx = ref(0)
+const tabsPx = ref(0)
 const measure = () => {
   rowPx.value = reposHeader.value?.el?.getBoundingClientRect().height ?? 0
   panelPx.value = panel.value?.getBoundingClientRect().height ?? 0
+  tabsPx.value = tabBox.value?.getBoundingClientRect().height ?? 0
 }
 const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null
 /* Re-subscribed rather than subscribed once: `noGit` takes every section off
@@ -562,6 +656,7 @@ watchPostEffect(() => {
   observer.disconnect()
   if (panel.value) observer.observe(panel.value)
   if (reposHeader.value?.el) observer.observe(reposHeader.value.el)
+  if (tabBox.value) observer.observe(tabBox.value)
   measure()
 })
 onBeforeUnmount(() => observer?.disconnect())
@@ -598,7 +693,7 @@ const drawnRows = (id) => {
   if (!available.value) return stored
   return clampRows(stored, {
     available: available.value,
-    headers: drawn.value.length,
+    headers: headerRows.value,
     fixed: otherFixed(id)
   })
 }
@@ -675,7 +770,7 @@ const onDragStart = (section) => {
     section,
     base: stored ?? (box ? box.getBoundingClientRect().height / rowPx.value : 0),
     available: available.value,
-    headers: drawn.value.length,
+    headers: headerRows.value,
     fixed: otherFixed(section)
   }
 }
@@ -847,7 +942,7 @@ const onReset = (section) => emit('resize', { section, rows: null })
         <SectionHeader
           divided
           label="Branches"
-          :count="branches.length > 1 ? branches.length : null"
+          :count="branchCount"
           :open="fold.branchesOpen"
           @toggle="emit('toggle', 'branches')"
         >
@@ -921,6 +1016,27 @@ const onReset = (section) => emit('resize', { section, rows: null })
             </Tooltip>
           </template>
         </SectionHeader>
+        <!-- The two sides, in a row of their own directly under the caption:
+             that caption already carries a chevron, a word, a count and three
+             verbs, and this panel is drawn 252 pixels wide.
+
+             `SegmentedTabs` and not a row written here, so the two tab rows in
+             this app are one control rather than two that have to be kept
+             looking alike — the reason that component's own header gives for
+             existing at all. It sizes itself from `--control-h-sm` and its own
+             padding, which is not `--row-h`, so the wrapper is what
+             `headerRows` measures rather than a height this file asserts.
+
+             It is live while a run holds every write in this panel: choosing
+             which side of the repository to look at is reading, the same rule
+             that keeps a folder heading pressable. -->
+        <div v-if="branchTabsDrawn" ref="tabBox" :style="{ flex: '0 0 auto' }">
+          <SegmentedTabs
+            :tabs="branchTabs"
+            :model-value="branchTab"
+            @update:model-value="$emit('branch-tab', $event)"
+          />
+        </div>
         <div v-if="fold.branchesOpen" ref="branchBox" :style="branchStyle">
           <BranchList
             :branches="branches"
@@ -929,6 +1045,7 @@ const onReset = (section) => emit('resize', { section, rows: null })
             :favorites="favoriteBranches"
             :remote="remote"
             :remote-folders="remoteFolders"
+            :tab="branchTab"
             :actions="actions"
             :busy="busy"
             @checkout="$emit('checkout', $event)"

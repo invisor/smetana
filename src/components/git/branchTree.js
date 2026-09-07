@@ -280,96 +280,108 @@ export function toggleFolder(stored, branches, path) {
   return open.includes(path) ? open.filter((folder) => folder !== path) : [...open, path]
 }
 
-/* The name of the group's own heading, which is also its entry in
-   `settings.project.remoteBranchFolders`. One constant rather than the string
-   in four places: the panel, the rule and the stored list have to agree on it,
-   and this app knows exactly one remote. */
-export const REMOTE_GROUP = 'origin'
+/* The two sides this section is drawn as, by id, and the one a project starts
+   on.
+
+   **A closed list duplicated across the IPC boundary**, exactly as `SIDE_TABS`
+   and `RIGHT_TABS` are one column over: `BRANCH_TABS` in
+   `src-tauri/src/settings/model.rs` holds the same two words, and
+   `ProjectState::validate` rewrites anything else back to `local` with nothing
+   logged and nothing on screen. A third tab added only here would work all
+   session and come back as Local after a restart. The default is written out on
+   both sides too, and a third time in `src/stores/settings.js`'s project
+   defaults — a key missing from that object is a key the defaults layer cannot
+   clear, so one project's choice would follow somebody into the next project's
+   panel.
+
+   Here rather than in `GitPanel.vue`, where the labelled rows that draw them
+   live, for this family's reason: a `.vue` file is the one thing no test in this
+   repository can reach, and the closed list is exactly the half worth pinning.
+*/
+export const BRANCH_TABS = ['local', 'origin']
+export const DEFAULT_BRANCH_TAB = 'local'
 
 /**
- * The rows of the `origin` group, top to bottom, and `[]` when there is nothing
- * to draw.
+ * The rows of the Origin tab, top to bottom, and `[]` when `origin` has nothing.
  *
  * `remote` is the plain names `vcs_remote_branches` answered — alphabetical,
  * with `origin/` and `origin/HEAD` already off — `local` is `vcs_branches`' own
  * list, and `expanded` is `settings.project.remoteBranchFolders`.
  *
- * **Only the branches this repository does not have.** A remote branch with a
- * local twin has a row already, one group up, and that is the row worth
- * pressing: it is the branch itself rather than a copy of it at whatever commit
- * the last fetch saw. So the group answers the one question the list above
- * cannot — what is on the server that is not here yet — and a repository level
- * with `origin` draws no group at all rather than an empty heading.
+ * **The whole of `origin`, including the branches this repository already
+ * has.** That is a change of mind about `remoteBranchRows`, which this replaces,
+ * and it follows from the shape rather than from taste. A group at the foot of
+ * the local list was obliged to answer the narrower question — what is on the
+ * server that is not here yet — or it would have been a duplicate of the list
+ * above it. A tab of its own is called `Origin` and shows `origin`; a list
+ * missing half its branches would be lying in its own title. What that group
+ * cost is what the tab exists to undo: in a repository with 346 local branches
+ * the heading sat 346 rows down the scroller, and in one where `origin` holds
+ * nothing extra it was not drawn at all — which on screen is indistinguishable
+ * from broken.
  *
- * **A group of its own at the foot rather than rows mixed into the tree above.**
- * That reads well in a repository with five branches and badly in the one this
- * was asked for, where `origin` holds 87 against four local: the four somebody
- * actually works on would be scattered through a list twenty times longer, and
- * the ordering promise the file opens with — what was touched most recently
- * first — cannot survive rows that have no local reflog at all.
+ * **The paths carry no group prefix**, because there is no heading above them
+ * any more: a folder here is `feature`, not `origin/feature`. The field stays
+ * separate from `branchFolders` for the reason it was made separate — `feature`
+ * on this tab and `feature` on the other are two different rows — and no
+ * migration is needed for the entries the old shape left behind: an entry that
+ * matches nothing means a folder that is folded, which is the default anyway.
  *
- * **The order inside is left exactly as it arrived**, which is alphabetical.
- * The list above is ordered by reflog, because what somebody worked on here
- * most recently is what they are about to want; a remote-tracking ref's reflog
- * says when this machine last *fetched* it, which is a fact about the fetch and
- * not about anybody's work.
+ * **The order is left exactly as it arrived**, which is alphabetical. The Local
+ * tab is ordered by reflog, because what somebody worked on here most recently
+ * is what they are about to want; a remote-tracking ref's reflog says when this
+ * machine last *fetched* it, which is a fact about the fetch and not about
+ * anybody's work. Nothing is lifted to the top either — no current branch, no
+ * favourites — so the alphabet holds all the way down.
  *
- * Every path is written under the heading — `origin`, `origin/feature` — which
- * is what makes the stored list readable beside the local one. What keeps the
- * two apart is that they are two fields: a local branch may legally be called
- * `origin/spike`, which puts a local folder named `origin` in the tree above,
- * and one shared list would unfold both rows at once.
+ * A row carries `hasLocal`, and that is the whole of what the two gestures are
+ * chosen by: a name this repository already has is an ordinary `vcs_checkout`,
+ * and one it does not is `vcs_checkout_remote`, which creates the local branch
+ * and sets its upstream. The rule answers it rather than the component, for this
+ * family's reason. `current` rides beside it for the tick — the repository can
+ * only ever be on a branch it has, so `current` implies `hasLocal`.
  */
-export function remoteBranchRows(remote, local, expanded) {
+export function originBranchRows(remote, local, expanded) {
   const held = new Set((local ?? []).map((branch) => branch?.name).filter(Boolean))
-  const missing = (remote ?? []).filter((name) => name && !held.has(name))
-  if (missing.length === 0) return []
+  const current = (local ?? []).find((branch) => branch?.current)?.name ?? null
   const open = new Set(expanded ?? [])
-  const rows = [
-    {
-      kind: 'folder',
-      path: REMOTE_GROUP,
-      label: REMOTE_GROUP,
-      depth: 0,
-      count: missing.length,
-      expanded: open.has(REMOTE_GROUP)
-    }
-  ]
-  if (!open.has(REMOTE_GROUP)) return rows
-  /* One level of indent under the heading, and the paths carry it too, which is
-     what `build` cannot do for itself: it is a tree of branch names and knows
-     nothing about the group they are being drawn inside. */
+  const rows = []
   const walk = (nodes) => {
     for (const node of nodes) {
       if (node.kind === 'folder') {
         const { children, ...folder } = node
-        const path = `${REMOTE_GROUP}${SEPARATOR}${node.path}`
-        const isOpen = open.has(path)
-        rows.push({ ...folder, path, depth: node.depth + 1, expanded: isOpen })
+        const isOpen = open.has(node.path)
+        rows.push({ ...folder, expanded: isOpen })
         if (isOpen) walk(children)
-      } else {
-        rows.push({
-          kind: 'branch',
-          name: node.name,
-          label: node.label,
-          depth: node.depth + 1,
-          remote: true
-        })
+        continue
       }
+      rows.push({
+        kind: 'branch',
+        name: node.name,
+        label: node.label,
+        depth: node.depth,
+        hasLocal: held.has(node.name),
+        current: node.name === current
+      })
     }
   }
-  walk(build(missing.map((name) => ({ name }))))
+  walk(build((remote ?? []).filter(Boolean).map((name) => ({ name }))))
   return rows
 }
 
 /**
- * The list a press on one heading of that group leaves behind.
+ * The list a press on one folder of the Origin tab leaves behind.
  *
  * Simpler than `toggleFolder` above and deliberately so: there is no seed to
- * write out whole, because an empty list already means what it says — the group
- * is folded and so is everything in it. That is the one place this field parts
- * company with `branchFolders`, whose `null` unfolds the current branch's
- * folder; no branch in this group is the current one.
+ * write out whole, because an empty list already means what it says — every
+ * folder on this tab is folded. That is the one place this field parts company
+ * with `branchFolders`, whose `null` unfolds the current branch's folder; the
+ * branch a repository is on is one row among the alphabet here, with nothing
+ * about it worth opening a folder for.
+ *
+ * Named after the settings field it resolves, `remoteBranchFolders`, rather
+ * than after the tab that draws it — the field kept its name through the change
+ * of shape, and two names for one list is one more thing to hold in agreement.
  *
  * Always a new array: the caller assigns it into `settings.json`, and a list
  * mutated in place gives the store's watcher nothing to notice.
