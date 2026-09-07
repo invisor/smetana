@@ -393,7 +393,7 @@ saying something untrue about itself.
 
 **The branch the repository is on is the first row, always.** `branchTree.js` lifts it out of the
 tree before the tree is built, so it is on screen whatever the reflog said and whatever fold its name
-would otherwise put it behind — the row Pull and Push in the caption are about, and the one fact
+would otherwise put it behind — the row Pull and Push in the tab row are about, and the one fact
 somebody opens this section to read, was reachable only by unfolding a `feature/` heading before this.
 It draws its **whole** name, since there is no heading above it carrying the prefix. It is lifted
 rather than copied: the tree below never holds it, a heading it was the whole of is not drawn at all,
@@ -411,30 +411,58 @@ twice, because the two have to agree exactly: the tree is built from whatever th
 over, and a heading marking a row that is on screen anyway is the defect. A branch that is both
 current and marked is **one** row, the first, with the star on it.
 
+**A row drawing a whole name truncates in the middle**, not at the end. The last twelve characters
+are held whole and the head is ellipsised, because the tail is the half that identifies a branch:
+cut at the end, a column 252px wide draws `feat/nxc-204-kickbox-emai…` on every row of a naming
+convention and tells nobody which is which. The rule is `splitName` in `components/git/branchName.js`
+— that file already owns what a branch name is — and it is a pure string split with **no measurement
+in JS at all**: two spans in a `min-width: 0` flex line, the head `flex: 0 1 auto` with
+`overflow: hidden; text-overflow: ellipsis`, the tail `flex: 0 0 auto`, and the browser does the
+rest. A name no longer than the tail is all tail with an empty head, so nothing is ever drawn twice.
+It reaches only the rows that draw a whole name — the current branch and the marked ones. A leaf
+under a folder is untouched, since a leaf is already a tail and the heading above it carries the
+prefix.
+
 **The order inside the favourites is the order the list arrived in** — `by_recency`'s, like
 everything else here — and deliberately not the order they were marked in. This panel promises one
 ordering, and a second one nested inside it would also be invisible, since nothing on a row says when
 it was pinned. The stored list's own order decides one thing only: which name falls off first when
 `sane_list` trims the file at its ceiling.
 
-**The hairline moved off the current branch and onto the last row of that block.** It is
-`SectionHeader`'s own rule and it says one thing — the real list starts below — which is a fact about
-the bottom of the block rather than about which branch the repository is on. `branchTree.js` marks
-the row that carries it (`divider`) and `BranchList` draws it; with nothing marked, that is the
-current branch, exactly as before. It sits inside the row's `--row-h` and adds no height to it —
-`box-sizing: border-box` — so the arithmetic over `BRANCH_ROWS` is untouched.
+**The list is three surfaces, and that is what says where each group ends.** The current branch sits
+on `--surface-selected` between a `--border` rule above and one below; the branches somebody marked
+sit on `--surface` with a single `--border-subtle` hairline under the last of them; the tree sits on
+`--canvas`, which is the background of `BranchList`'s own root and not a declaration on each row.
+`branchTree.js` marks every lifted row with `block` — `'current'` or `'favourite'` — and rows of the
+tree carry none; the component derives the backgrounds and both rules from that, and from which
+marked row is last. It replaced one hairline under the last lifted row, which said only where the
+tree began and left the two groups above it reading as one. Every rule is drawn **inside** the row's
+`--row-h` and adds no height to it — `box-sizing: border-box` — so the arithmetic over `BRANCH_ROWS`
+is untouched and a row is exactly one row tall in every block and every state. Interaction stays a
+step of surface: hover is `--surface-hover` where there is something to press, and the current
+branch keeps its own surface under the pointer and takes `--surface-active` only under the press.
+On the Origin tab nothing is lifted, so no row has a block and the whole list is on the canvas — the
+branch the repository is on draws its tick there and not the selected surface, which is that tab's
+own "nothing lifted to the top of it" holding.
 
 **The mark is a star in the leading icon's place, not a sixth glyph.** It replaces `git-branch` at
 the same `MARK` size, and the reason is arithmetic rather than taste: an icon added in front of the
 name would put the marked rows' names out of line with every other row's in a column about 252px
-wide. What it does not share with the glyph it stands in for is the colour: the star is drawn
-filled, in `--branch-favorite-fg`, the one yellow in the system and the only colour this panel draws
-that is not about tracking. Both `color` and `fill` are set on it, because `Icon` strokes every
-glyph in `currentColor` over `fill="none"` and filling alone leaves a yellow body inside a grey
-outline. The token is in `tokens/color-surfaces.css` beside the system's other one-off colours, not
-in `color-status.css` — a marked branch is neither a status nor a step on the attention ladder — and
-its own comment carries the measurements, including why the light value has to be dark gold and why
-its hue sits inside the needs-you guard band on purpose. What was rejected with it: a star button
+wide. What it does not share with the glyph it stands in for is the **fill**: the star is drawn
+solid where every other glyph in this section is an outline, and being the one filled shape in the
+column is the whole of what makes it a mark. Both `color` and `fill` are set on it, because `Icon`
+strokes every glyph in `currentColor` over `fill="none"` and filling alone leaves a filled body
+inside a differently coloured outline.
+
+**It takes no hue at all** — `--text-secondary`, one step up from the `--text-muted` an unmarked
+row's glyph keeps. It was a yellow of its own for a while (`--branch-favorite-fg`, a token in
+`tokens/color-surfaces.css` with its contrast measurements in its comment), and both the token and
+the colour are gone: the one colour this section spends is `--git-modified`, which means distance
+from upstream, and a second hue on a bookmark spent that meaning in a section where everything else
+coloured is about the remote. The reasoning is in
+`.smetana/docs/superpowers/specs/2026-09-08-branches-section-direction-1a-design.md` §3, and the
+spec it overturns — `2026-08-31-favorite-branch-star-fill-design.md` — is left standing as history.
+What was rejected with the mark itself: a star button
 appearing on the row under the pointer, which is exactly the control-per-row-per-verb this section
 already took out once when merge and rebase went into the menu; and no mark at all, on the argument
 that the position says it — position says a row is at the top and says nothing about why, or about
@@ -499,11 +527,11 @@ labelled `Origin` showing half of `origin` would be lying in its own title. So i
 this task necessary.
 
 **The tab row is a row of its own, and it is `shell/SegmentedTabs.vue` — the same control both side
-columns draw.** Not three more controls in the caption: that caption already carries a chevron, a
-word, a count and Fetch, Pull and Push, and this panel is 252px wide. And not a row written here
-either, however tempting the pinned height below makes it: that component's own header names a second
-copy of its two style objects, obliged to match with nothing mechanical holding them together, as
-exactly the pair that drifts.
+columns draw.** Not two more controls in the caption: that caption is 252px wide and already carries
+a chevron, a word and a count, and the three verbs moved *down* into this row rather than the tabs
+moving up into it. And not a row written here either, however tempting the pinned height below makes
+it: that component's own header names a second copy of its two style objects, obliged to match with
+nothing mechanical holding them together, as exactly the pair that drifts.
 
 **It is deliberately *not* `--row-h` tall, and `headerRows` measures it rather than asserting it.**
 `SegmentedTabs` sizes itself from `--control-h-sm` plus `--space-2` above and below plus its own
@@ -598,10 +626,56 @@ built around, and the comparison already in the store answers the same question.
 caller of that loader, do not drop the equality check, and do not put an `await` between the guard and
 the copy.**
 
-**Each tab has its own empty sentence**, the rule the three sections above keep: `No local branches in
-this repository.` on one, `Nothing on origin for this repository.` on the other, which covers a
+**Each tab has its own empty state**, the rule the three sections above keep, and both are a
+`core/EmptyState.vue` in its `compact` form rather than the line of prose they used to be — a tab
+with nothing on it has to read as a state of the panel and not as a list that failed to draw. Local
+is `No local branches` over `The first commit creates one. Fetch to see what origin has.`; Origin is
+`Nothing on origin` over `Either the remote is empty or you have not fetched yet.`, which covers a
 repository with no remote, one whose `origin` is empty, and the moment the store's single list is
 about somebody else. A blank area for either would be a tab saying nothing.
+
+**Only the Origin one carries a button**, a `secondary` `sm` `Fetch` under the empty state, emitting
+the same event the check in the tab row emits — of that tab's three cases, "you have not fetched
+yet" is the one a person can do something about from here, and a first commit is not something this
+panel can make. It is drawn by `BranchList` **under** `EmptyState` and not through a new slot on it:
+one button in one place does not earn an API that a dozen other empty states would then have to go
+on ignoring.
+
+**While a run holds this repository, a strip under the tab row says so once.** It is `role="status"`
+at `--control-h-sm`, on `--status-running-bg` under a `--status-running-border` rule, with a turning
+`loader-circle` and `gitActions.js`'s own sentence followed by ` · read only`. The rows below go on
+muting, going inert and carrying that same sentence on a per-row `Tooltip`, and **the tooltip is
+kept**: the strip answers the eye of somebody glancing at a panel of grey rows, the tooltip answers
+the pointer and the keyboard, and neither does the other's job. It is drawn inside the same wrapper
+as the tab row, so `tabsPx` already measures it and a strip that comes and goes with a run moves the
+section arithmetic with it — no second observer, and no height asserted anywhere. Its sentence clips
+with an ellipsis rather than wrapping, since a strip that grew to two lines would move every section
+boundary under it. **It names no agent**: the verdict carries none, and the name in the design
+handoff was a fixture. The running palette rather than the needs-you amber, because what it describes
+is work happening somewhere else and nothing here is waiting on the person reading it.
+
+**The check stays pressable under that strip**, alone of the three verbs — `git fetch` writes
+remote-tracking refs and touches neither the working tree nor the index, the same argument that keeps
+the background sweep going under a batch and the commit box's sparkle alive. The handoff disables all
+three; this side of it wins. Pull and Push are refused by the verdict `tracking.js` folds in, exactly
+as before.
+
+**On a detached HEAD the current block draws a plate instead of a row.** `HEAD · <short sha>` in the
+same mono, on `--surface-selected` between the block's two rules, with the tick in the box at the end
+— the same fact the scope bar draws one level up, and the panel saying it is what stops the section
+reading as a repository whose branch failed to load. It answers nothing at all: no menu, no double
+click, no hover, because there is no branch here to check out, merge or rename, and Pull and Push are
+already off the tab row for that reason (`hasBranch`). `branchTree.js` is deliberately **not** told
+about it — no branch stands behind the plate, nothing in the tree changes, and `branchRows` still
+lifts nothing when no row is current, which is what its own test says. The hash is the **selected
+repository's**, off `vcsState.tree.detached` and handed down as a prop, not the project root's from
+`stores/git.js`: a project can hold several repositories, and this panel is about one of them.
+
+The reasoning behind this shape — the verbs in the tab row, the three surfaces, the neutral star, the
+uncoloured name, the middle truncation, the strip and the plate — is
+`.smetana/docs/superpowers/specs/2026-09-08-branches-section-direction-1a-design.md`, which also
+records where the design handoff it came from was overruled and why. It is outside the repository
+(`.smetana/` is not committed), so everything it settles is written down here as well.
 
 **Out of scope and staying there**: the run dialog's "merge into" field and the compare window keep
 offering local branches only, and deleting a branch on the remote, renaming one there, pushing one
@@ -1160,10 +1234,18 @@ means a person is needed. And **never colour alone** — `↓N` is drawn beside 
 token, so the mark survives a monochrome screen and anybody who does not separate those two hues.
 Ahead is `↑N` in the neutral `--type-plain-fg` and does **not** colour the row: what was asked for
 was the branch with something to bring in, and colouring both would leave the two indistinguishable
-at a glance. A branch both ahead and behind carries both marks and takes the colour. The counts keep
-their own token while a run mutes the rows — they are a fact about the remote rather than an offer —
-but the *name* gives its colour up with the row, since one name in orange over a panel nobody may
-press would be saying a press was possible.
+at a glance. A branch both ahead and behind carries both marks. The counts keep their own token
+while a run mutes the rows: they are a fact about the remote rather than an offer.
+
+**The name itself is never coloured, and that is the one thing here the design handoff was overruled
+on twice.** It took `--git-modified` with its mark once; in a repository where a hundred branches are
+behind that is a column of orange, and a hue on most of the rows has stopped saying anything the
+`↓N` beside each name did not. And the handoff's own answer — `--attn-loud` on the mark — was refused
+for the reason the paragraph above gives about `--status-needs-you`: that amber is budgeted at one or
+two rows on a screen and there can be a hundred behind. So the mark keeps `--git-modified` and the
+name keeps the colour every other name has. `trackingMark`'s `orange` flag stays in `tracking.js`
+unchanged — the folded heading's bare `↓` is made of it, and so are its tests — and what changed is
+only that `BranchList` no longer applies it to the name.
 
 **A folded folder carries a bare `↓` for the branches it is hiding**, with no number of its own.
 Without it the feature would be invisible in exactly the repositories that need it — one `feature/`
@@ -1172,24 +1254,36 @@ the heading already carries the count of what it holds and a second number besid
 subtotal of the first; what tells the two apart is that the count is `--text-muted` and the arrow is
 not.
 
-**Pull and Push belong to the branch the repository is on, so they live in the Branches caption and
+**Pull and Push belong to the branch the repository is on, so they live in the section's chrome and
 not in a row's menu**, which is where every other write in this panel lives. On nine rows out of ten
-the item would be refused, and a menu here answers about the row it was opened on. The caption also
-gives these two the one thing merge and rebase do without: something on screen saying they exist.
-The structural cost is real — `SectionHeader.vue` **is** a `<button>`, and a button inside a button
-is invalid HTML that also folds the section on the way through — so the caption grew an `actions`
-slot drawn **beside** the caption button inside a wrapper, and `--row-h`, `flexShrink: 0` and the
-`divided` hairline moved onto that wrapper, because the wrapper is the element `GitPanel` measures a
-row by (`sectionHeights.js` is untouched, and a drag still stops on a row boundary). Whether the
-slot was filled is a **function argument rather than a `computed` over `useSlots()`**: a slot's
-presence is not a reactive dependency, so a cached answer would go on insetting a caption whose
-controls have since gone.
+the item would be refused, and a menu here answers about the row it was opened on. Being on screen
+also gives these two the one thing merge and rebase do without: something saying they exist.
+
+**They sit at the right end of the tab row, not in the caption.** The caption is 252px wide and
+carries a chevron, a word and a count — and, from the filter stage, a search button of its own. The
+tab row beside them already exists, is already measured, and has a whole half of itself doing
+nothing, so the verbs went there: `size="sm"`, inside the height `SegmentedTabs` had already set, in
+one flex row where the tabs take `minWidth: 0` and the verbs take `flex: none`. Nothing about the
+measurement changed — **the row's height is still measured and never asserted**, which is the rule
+two sections down. `SectionHeader.vue` keeps its `actions` slot and the Branches caption simply
+stops filling it; the slot's own structure is still worth knowing, because it is what a caption with
+controls needs: `SectionHeader` **is** a `<button>`, a button inside a button is invalid HTML that
+also folds the section on the way through, so the slot is drawn **beside** the caption button inside
+a wrapper, and `--row-h`, `flexShrink: 0` and the `divided` hairline live on that wrapper because
+the wrapper is the element `GitPanel` measures a row by. Whether the slot was filled is a **function
+argument rather than a `computed` over `useSlots()`**: a slot's presence is not a reactive
+dependency, so a cached answer would go on insetting a caption whose controls have since gone.
+
+One consequence, stated because nothing on screen explains it: the three verbs are inside
+`tabBox`, so **folding the Branches section away takes them with it**. That is the fold meaning what
+it says — do not draw me this section — and it is the price of the row being measured rather than
+asserted, since a verb drawn outside that wrapper would be a height the arithmetic never sees.
 
 **Beside them is a third control, and it is about the repository rather than about the branch**: a
 `git fetch` somebody presses for, `Check the remote`, drawn first of the three. It is there because
 of what the other two do when there is nothing to do — Pull is refused when the branch is level and
 Push when it is ahead of nothing — so the state a person most wants to ask about is exactly the
-state in which the caption had nothing left to press. The count they are reading is only as fresh
+state in which the row had nothing left to press. The count they are reading is only as fresh
 as the last sweep that worked, and with `git.autoFetch` off there has been no sweep at all: a fact
 somebody decides on has to be a fact they can ask about again. It stays on a detached HEAD, where
 neither verb is drawn, since a repository is still a repository with no branch checked out in it.
@@ -1199,7 +1293,7 @@ than a preference: `Button` draws its slot as `<span v-if="$slots.default">`, an
 present whether or not a `v-if` inside it renders anything, so a single button carrying the spinner
 in its slot kept an empty span as a flex child — spending its `gap` on nothing, coming out 6px wider
 than the arrows beside it, and snapping back to their width the moment a fetch started, which slid
-the caption's count and both arrows sideways. Interaction is a surface step and never a shift. The
+both arrows sideways. Interaction is a surface step and never a shift. The
 glyph decides which of the two is drawn; `fetchAction`'s verdict decides `disabled` on both, so the
 rule stays in one place.
 
@@ -1208,7 +1302,7 @@ The three controls are `Button` in `ghost`, icon-only, each inside its own `Tool
 carries a `Tooltip` of its own around its `label`, and a refused button needs a wrapper tooltip — a
 native disabled button raises no pointer events of its own, so an explanation living inside it is
 the one thing a person cannot reach. Nested, the two opened together on hover: the name above the
-glyph and the reason beside it, two panels over a caption 152 pixels wide. So the wrapper is the
+glyph and the reason beside it, two panels over a strip 252 pixels wide. So the wrapper is the
 only tooltip, in both states — the control's own name when it may be pressed, the sentence saying
 why when it may not, with the 400 ms delay `Tooltip`'s own note reserves for prose somebody is
 crossing on the way to something else. The accessible name `IconButton` would have enforced is
@@ -1222,7 +1316,7 @@ the branch is level with its upstream**, in a sentence each, and that is one rul
 than two rules: a control offering an act with no effect is a control somebody presses to find out.
 Pull was live in that state once, on the argument that pressing it is how a person makes the count
 they are reading current — right about the need and wrong about the control, since what it
-describes is a fetch, and the fetch now has a button of its own in the same caption. **The check
+describes is a fetch, and the fetch now has a button of its own in the same row. **The check
 takes neither the tracking record nor the runs verdict**: `git fetch` writes remote-tracking refs
 and touches neither the working tree nor the index, which is the argument that already keeps the
 background sweep going under a batch, and the one state that refuses it is one already in flight —

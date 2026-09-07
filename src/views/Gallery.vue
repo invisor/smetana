@@ -3873,7 +3873,10 @@ const menuTargetStyle = {
         <!-- And the same tab with a run going, where the tab row is deliberately
              the one thing not dimmed with the rows: choosing which side of the
              repository to look at is reading, exactly as unfolding a heading
-             is. -->
+             is. Under it, on the Origin tab as on the Local one, is the freeze
+             strip — the verdict is one verdict and covers both sides, since a
+             checkout writes the working tree whichever list it was pressed
+             in. -->
         <div :style="{ display: 'flex', width: '252px', height: '300px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <GitPanel
@@ -3899,15 +3902,19 @@ const menuTargetStyle = {
           </Panel>
         </div>
       </div>
-      <!-- The Branches caption with its three buttons, which is the one place
-           in the app the remote can be reached from — and the states are the
-           branch the repository is *on*, since that is what the two verbs are
-           about. The check beside them is about the repository and is in every
-           frame, including the ones where both verbs are gone. What to check:
-           that three buttons do not crowd the count out of a caption 152
-           pixels wide, that a refused one is legible rather than invisible,
-           and that its reason opens on hover from the wrapper around it rather
-           than from the disabled control itself. -->
+      <!-- The Branches tab row with its three verbs at the right end of it,
+           which is the one place in the app the remote can be reached from —
+           and the states are the branch the repository is *on*, since that is
+           what the two arrows are about. The check beside them is about the
+           repository and is in every frame, including the ones where both
+           arrows are gone. What to check: that the three buttons and the two
+           tabs share one row 252 pixels wide without either half being crowded
+           out, that the row is still the height `SegmentedTabs` set on its own
+           (the sections below still stop on whole rows, in both densities),
+           that a refused button is legible rather than invisible, and that its
+           reason opens on hover from the wrapper around it rather than from the
+           disabled control itself. The caption above now carries a chevron, a
+           word and a count and nothing else. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
         <!-- The everyday pair: three commits waiting and nothing of ours to
              send, so Pull is live and Push is refused. Both are icon-only, so
@@ -3985,12 +3992,20 @@ const menuTargetStyle = {
             />
           </Panel>
         </div>
-        <!-- A run going: both verbs refused by the same verdict that mutes the
+        <!-- A run going: both arrows refused by the same verdict that mutes the
              rows, and both say so in `gitActions.js`'s own sentence. The check
              is live beside them, which is that rule drawn rather than merely
              stated: it writes remote-tracking refs and touches neither the
-             tree nor the index, so a batch mid-merge has nothing to lose by
-             it. -->
+             tree nor the index, so a batch mid-merge has nothing to lose by it.
+
+             Under the row is the strip that says it once for the eye, on
+             `--status-running-bg` with the same sentence and ` · read only` on
+             the end. What to check: that it is `--control-h-sm` and not a row,
+             that its text clips with an ellipsis rather than wrapping to a
+             second line, that the sections below still stop on whole rows with
+             it there (it is inside the measured wrapper), and that the per-row
+             tooltip still opens — the strip is for the eye and the tooltip for
+             the pointer, and both are wanted. -->
         <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <GitPanel
@@ -4003,17 +4018,19 @@ const menuTargetStyle = {
             />
           </Panel>
         </div>
-        <!-- A detached HEAD draws neither verb: there is no branch for an
-             upstream to be about, and two dead controls say less than the
-             caption does without them. The check stays — asking the remote
-             what it has is a question about the repository, and a detached
-             HEAD has not stopped it being one. -->
+        <!-- A detached HEAD draws neither arrow: there is no branch for an
+             upstream to be about, and two dead controls say less than the row
+             does without them. The check stays — asking the remote what it has
+             is a question about the repository, and a detached HEAD has not
+             stopped it being one. And the first row of the list is the plate:
+             `HEAD · a1b2c3d`, on the current block's surface, inert. -->
         <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <GitPanel
               :repos="REPOS"
               selected="/Users/you/dev/smetana"
               :tree="{ branch: null, detached: 'a1b2c3d', changes: CHANGES }"
+              detached="a1b2c3d"
               :branches="onBranch(null)"
               :tracking="TRACKING"
             />
@@ -4062,7 +4079,14 @@ const menuTargetStyle = {
              of a `<button>` and not its children, and both halves have to sit
              inside one `--row-h`. Beside it the same caption with nothing in
              the slot, so what the gutter does to the count is visible in one
-             glance. -->
+             glance.
+
+             **This frame is the only thing exercising that slot.** The Git
+             panel's own Fetch, Pull and Push moved down into the Branches tab
+             row, so no caption in the app fills it today — the two buttons here
+             are a fixture, and the frame is what keeps the shape checkable for
+             the caption that carries controls next. Do not delete it as
+             dead. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <SectionHeader
             label="Branches"
@@ -4144,10 +4168,13 @@ const menuTargetStyle = {
         <!-- The branch the repository is on, lifted to the top out of the order
              recency put it in and out of the folder its name puts it in: it is
              last here and in a `feature/` heading that is folded, and it is
-             still the first row, drawing its whole name with the hairline under
-             it. What to check is that the rule reads as a separator and not as
-             a row of its own, and that the row below it is not pushed a pixel
-             down by it. -->
+             still the first row, drawing its whole name.
+
+             What to check is the plate it sits on: `--surface-selected` with a
+             rule above and a rule below in `--border`, the tree under it on the
+             canvas, and both rules **inside** the row's own height — the row
+             below must not be pushed a pixel down, and the row itself must be
+             exactly as tall as every other row here. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList
             :branches="[
@@ -4159,9 +4186,11 @@ const menuTargetStyle = {
           />
         </div>
         <!-- The same list against its upstreams, which is every state a row can
-             be in: behind (orange, `↓3`), ahead (`↑2` and no colour), both at
+             be in: behind (`↓3` in orange), ahead (`↑2`, neutral), both at
              once, level with the remote, and a branch nobody has pushed, which
-             has no record and draws nothing at all. What to check is that the
+             has no record and draws nothing at all. **No name takes the
+             colour** — that is the whole of what changed here, and a repository
+             where every branch is behind is why. What to check is that the
              marks do not push a long name into an ellipsis it did not have
              before, and that the orange is legible on both themes. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
@@ -4181,11 +4210,10 @@ const menuTargetStyle = {
             :tracking="TRACKING"
           />
         </div>
-        <!-- A run going over the marks: the rows are muted and the names give
-             the colour up with them, since one name in orange over a panel
-             nobody may press would be saying a press was possible. The counts
-             keep their own token — they are a fact about the remote and not an
-             offer. -->
+        <!-- A run going over the marks: the rows are muted and inert. The
+             counts keep their own token whatever the row does — they are a fact
+             about the remote and not an offer — and the names are the same
+             colour as the names beside them, here as everywhere. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" :tracking="TRACKING" :actions="RUN_GOING" />
         </div>
@@ -4260,11 +4288,22 @@ const menuTargetStyle = {
         </div>
         <!-- The tab's own empty state, which is a repository with no remote, one
              whose `origin` is empty, and the moment while the store's single
-             remote list is about another repository. One sentence, never a blank
-             area — and deliberately not the local tab's, which is beside it two
-             frames down. -->
+             remote list is about another repository. Never a blank area — and
+             deliberately not the local tab's, which is beside it a few frames
+             down.
+
+             The one of those three cases a person can act on carries the one
+             control this component draws outside a row: `Fetch`, which leaves
+             as an event and goes dead while an answer is already out. The
+             second frame is that state. What to check is that the button sits
+             under `EmptyState` rather than inside it, centred, and that neither
+             the title nor the sentence wraps into the button in the compact
+             density. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
-          <BranchList tab="origin" :branches="FOLDER_BRANCHES" :remote="[]" />
+          <BranchList tab="origin" :branches="FOLDER_BRANCHES" :remote="[]" @fetch="() => {}" />
+        </div>
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList tab="origin" :branches="FOLDER_BRANCHES" :remote="[]" fetching />
         </div>
         <!-- The heading's own mark, which is the whole reason it exists: every
              folder is folded, `fix/legacy/depot-import` is behind, and both
@@ -4299,9 +4338,15 @@ const menuTargetStyle = {
              branch is marked too and is still **one** row, the first, carrying
              the star. The star sits where `git-branch` sits on every other row,
              so the names all start at the same x — the easiest way to see it is
-             to unmark a row and watch that nothing moves sideways. And the
-             hairline is under the **last** row of the block rather than under
-             the current branch. -->
+             to unmark a row and watch that nothing moves sideways — and it is
+             filled in `--text-secondary` and **no hue at all**, which is what
+             leaves `--git-modified` meaning one thing in this section.
+
+             And the three surfaces: the current branch on its own plate between
+             two rules, the marked ones under it on `--surface` with one
+             `--border-subtle` hairline under the **last** of them, the tree
+             below on the canvas. Mark and unmark a row and watch the middle
+             block and its hairline grow and shrink with it. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList
             :branches="FOLDER_BRANCHES"
@@ -4329,17 +4374,70 @@ const menuTargetStyle = {
         </div>
         <!-- A name nothing in this repository is called, which is the ordinary
              state of a project whose repositories have different branches: it
-             draws no row and changes nothing, and the block at the top is the
-             current branch alone with the hairline back under it. -->
+             draws no row and changes nothing, and the top of the list is the
+             current branch's plate alone, with no favourite block between it
+             and the tree. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" :favorites="['nothing-is-called-this']" />
         </div>
-        <!-- The fourth of the panel's empty sentences, which no `GitPanel`
-             frame can reach: a folder git can see nothing in has no branch to
-             list, and the section is gated on there being a repository, so this
-             is the only place it can be looked at. -->
+        <!-- The fourth of the panel's empty states, which no `GitPanel` frame
+             can reach: a folder git can see nothing in has no branch to list,
+             and the section is gated on there being a repository, so this is
+             the only place it can be looked at. An `EmptyState` rather than the
+             line of prose it used to be, `compact` because the box around it in
+             the app is capped at a handful of rows. No button under it: a first
+             commit is not something this panel can make. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="[]" />
+        </div>
+        <!-- A detached HEAD, where there is no current branch for the rule to
+             lift and the component draws a plate instead: `HEAD · <short sha>`
+             in the same mono, on the current block's surface between the
+             current block's two rules, with the tick in the box at the end of
+             the row. What to check — that it is exactly one row tall, that it
+             answers nothing at all (no hover, no menu on a right click, no
+             double click), and that the tree under it starts on the canvas the
+             way it does under a real current branch. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            detached="a1b2c3d"
+            :branches="[
+              { name: 'main', current: false },
+              { name: 'develop', current: false },
+              { name: 'feature/smetana-8ok.5-branch-folders', current: false }
+            ]"
+            :folders="[]"
+          />
+        </div>
+        <!-- The middle truncation, which needs a name too long for 252px to
+             show at all. Two of these are marked, so three rows here draw a
+             **whole** name: the last twelve characters are held whole and the
+             ellipsis falls in the middle, which is what makes
+             `…l-validation` and `…-geocode-precision` tell the two apart. The
+             leaf under the `feature/` heading is not cut in the middle — it is
+             already a tail, and the heading above it carries the prefix. What
+             to check is that the tail never wraps, that the ellipsis lands
+             between the two spans rather than inside the tail, and that the
+             `↓12` on the current branch does not push the tail off the row. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="[
+              { name: 'feat/nxc-204-kickbox-email-validation', current: true },
+              { name: 'fix/holiday-curb-w78w-warehouse-geocode-precision', current: false },
+              { name: 'main', current: false },
+              { name: 'feature/smetana-8ok.5-branch-folders', current: false }
+            ]"
+            :favorites="['fix/holiday-curb-w78w-warehouse-geocode-precision', 'main']"
+            :tracking="{
+              'feat/nxc-204-kickbox-email-validation': {
+                upstream: 'origin/feat/nxc-204-kickbox-email-validation',
+                ahead: 0,
+                behind: 12,
+                gone: false
+              }
+            }"
+            :folders="[]"
+          />
         </div>
         <!-- A checkout in flight: the pressed row spins in place of its mark
              and the rest of the list goes inert, since a second press would ask

@@ -5611,6 +5611,7 @@ const toastStackStyle = {
                 :unlisted="vcsState.unlisted"
                 :selected="vcsState.selected"
                 :tree="vcsState.tree"
+                :detached="vcsState.tree?.detached ?? null"
                 :branches="vcsState.branches"
                 :tracking="vcsState.tracking"
                 :actions="gitWrites"

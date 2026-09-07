@@ -104,3 +104,26 @@ export function canRename({ name, from, branches = [], allowed = true, busy = fa
   if (!wanted || !from || wanted === from || !allowed || busy) return false
   return renameError(wanted, from, branches) === null
 }
+
+/* Where a whole branch name is cut when the row runs out of width for it.
+
+   The tail is the half that identifies a branch — `…-kickbox-email-validation`
+   says what `feat/nxc-204-kickbox-emai…` does not — so a row keeps the last
+   `tail` characters whole and lets the browser ellipsise the head. Two spans
+   in a `min-width: 0` flex line, the head `flex: 0 1 auto` with
+   `overflow: hidden; text-overflow: ellipsis`, the tail `flex: 0 0 auto`; no
+   measurement in JS at all, which is what keeps this a rule a test can reach.
+
+   A name no longer than the tail is **all** tail with an empty head, so
+   nothing is ever drawn twice and a row that fits needs no special case.
+
+   Only a row drawing a whole name wants this — the current branch and the
+   marked ones. A leaf under a folder already draws its tail alone, because the
+   heading above it carries the prefix. */
+export const NAME_TAIL = 12
+
+export function splitName(name, tail = NAME_TAIL) {
+  const whole = String(name ?? '')
+  if (whole.length <= tail) return { head: '', tail: whole }
+  return { head: whole.slice(0, whole.length - tail), tail: whole.slice(whole.length - tail) }
+}
