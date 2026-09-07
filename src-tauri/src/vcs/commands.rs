@@ -265,6 +265,54 @@ pub async fn vcs_checkout(repo: String, branch: String) -> Result<(), VcsError> 
     .await
 }
 
+/// Check out a branch this repository does not have yet, from `origin`.
+///
+/// `git switch --create <branch> --track origin/<branch>` — the local branch is
+/// created at the remote's tip, its upstream is set, and HEAD moves onto it.
+///
+/// **A second command rather than a flag on [`vcs_checkout`].** That one passes
+/// `--no-guess` deliberately: git's DWIM would create a local branch from
+/// `origin/<name>` behind the back of somebody who asked only to switch to a
+/// branch they could see. That argument is untouched. What is different here is
+/// that the row pressed says `origin` on it, so creating the branch is the act
+/// asked for by name. Two acts, two commands, each with a header describing one
+/// of them; a boolean flag would leave one header trying to describe both.
+///
+/// `switch` and not `checkout -b`, the lesson [`vcs_create_branch`] records:
+/// `checkout` takes pathspecs, so a branch name that also names a file quietly
+/// restores that file instead. `switch` takes none, which is what it exists for,
+/// so there is no trailing `--` to remember.
+///
+/// The local name is stated (`--create`) rather than inferred, and the upstream
+/// is set explicitly rather than left to `branch.autoSetupMerge` in somebody's
+/// config: the two facts this command promises are the ones it should not be
+/// reading out of a configuration file it does not own.
+///
+/// **Never `--force`**, the same omission `vcs_checkout` documents. Nothing is
+/// pre-empted either: a local branch of that name created since the list was
+/// read (`fatal: a branch named '...' already exists`), a dirty tree the switch
+/// would overwrite, the branch already checked out in another worktree, an
+/// `origin/<name>` a prune has since removed — every one of them comes back at
+/// exit 128 in git's own words, which is what this module commits to everywhere.
+///
+/// `origin` and no other remote, and the prefix is built here rather than taken
+/// as an argument. There is no notion of a second one anywhere in this app: the
+/// remote's name is a parameter of [`git::remote_branches`] alone, and its one
+/// caller — [`vcs_remote_branches`] above, which takes a repository and nothing
+/// else — writes `origin` out. A command of this file has never been told which
+/// remote to use, and this one is not the place to start.
+#[tauri::command]
+pub async fn vcs_checkout_remote(repo: String, branch: String) -> Result<(), VcsError> {
+    off_the_runtime(move || {
+        let upstream = format!("origin/{branch}");
+        run::git_write(
+            Path::new(&repo),
+            &["switch", "--create", &branch, "--track", &upstream],
+        )
+    })
+    .await
+}
+
 /// Cut a new branch from an existing one.
 ///
 /// `start` is the branch the row was on, never HEAD: the whole point of the

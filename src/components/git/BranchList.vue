@@ -118,19 +118,63 @@
    What any of that means is `tracking.js`, pure and tested, of the
    `gitActions.js` family; this file draws its verdict and holds none of it.
 
-   Remote branches as rows of their own are still outside this epic, and so is
-   checking one out — a rename here is local and stops there too: no upstream is
-   renamed, nothing is pushed and nothing on the remote is deleted. So is every
-   flag and strategy a merge can take: this offers the merge and the rebase git
-   would do by itself, and nothing else. Creating one was outside it too until a
-   row's menu had somewhere to put it, and renaming followed the same way. */
+   ## The `origin` group at the foot
+
+   Under everything above sits a second group, headed `origin`, holding the
+   branches that remote has and this repository does **not** — the one question
+   the list above cannot answer. A branch with a local twin is not in it: it
+   already has a row one group up, and that row is the one worth pressing, since
+   it is the branch itself rather than a copy of it at whatever commit the last
+   fetch saw. With nothing left over the group is not drawn at all, heading
+   included.
+
+   A group of its own rather than rows mixed into the tree, because the
+   repository this was asked for holds 87 branches on `origin` against four
+   local: mixed in, the four somebody works on would be scattered through a list
+   twenty times longer, and the ordering promise above cannot survive rows that
+   have no local reflog at all. Inside it the order is the one
+   `vcs_remote_branches` answered in, which is alphabetical — a remote-tracking
+   ref's reflog says when this machine last fetched, which is a fact about the
+   fetch and not about anybody's work.
+
+   Its folds are their own settings field, `remoteBranchFolders`, and not
+   entries in the list the tree above uses: a local branch may legally be called
+   `origin/spike`, which puts a local folder named `origin` in that tree, and one
+   shared list would unfold two different rows at once. Empty means the whole
+   group folded, which is the default and is deliberately not `branchFolders`'
+   `null` — there is no current branch in here to seed a fold with.
+
+   A row of it draws `cloud` where the rows above draw `git-branch`, at the same
+   size and in the same one colour so the names stay in one column. No star:
+   `favoriteBranches` is about branches this repository has. No `↓N`/`↑N`
+   either, and that is structural rather than a filter — `vcs_tracking` walks
+   `refs/heads` and can never hold a record for a branch that is not in it. The
+   gesture is the same double click and it means `Check out from origin`: a
+   local branch is created, its upstream is set and HEAD moves onto it, after
+   which the row is in the list above and gone from here. It writes the working
+   tree, so it mutes and goes inert under a run with everything else — the one
+   `gitActions.js` verdict covers it unchanged — while the heading goes on
+   unfolding, since unfolding is reading.
+
+   A rename here is local and stops there: no upstream is renamed, nothing is
+   pushed and nothing on the remote is deleted. So is every flag and strategy a
+   merge can take: this offers the merge and the rebase git would do by itself,
+   and nothing else. Creating a branch was outside this list too until a row's
+   menu had somewhere to put it, and renaming followed the same way. */
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import Tooltip from '../core/Tooltip.vue'
 import PointerMenu from '../overlays/PointerMenu.vue'
 import { useInteractive } from '../core/interactive.js'
-import { branchMenuItems } from './branchMenu.js'
-import { branchRows, expandedFolders, toggleFavorite, toggleFolder } from './branchTree.js'
+import { branchMenuItems, remoteBranchMenuItems } from './branchMenu.js'
+import {
+  branchRows,
+  expandedFolders,
+  remoteBranchRows,
+  toggleFavorite,
+  toggleFolder,
+  toggleRemoteFolder
+} from './branchTree.js'
 import { AHEAD_TOKEN, BEHIND_TOKEN, folderBehind, trackingMark } from './tracking.js'
 
 const props = defineProps({
@@ -151,6 +195,20 @@ const props = defineProps({
      marked until somebody marks it. A name the selected repository does not
      have draws no row and breaks nothing. */
   favorites: { type: Array, default: () => [] },
+  /* What `origin` is known to have, as plain names in the order
+     `vcs_remote_branches` answered in — `vcsState.remoteBranches`, and only
+     while `remoteBranchesRepo` names the repository this list is about. That
+     guard is the caller's and it is load-bearing: the store holds one such list
+     for whichever repository was asked about last, and the branch review window
+     walks every repository of the project through it. An empty list draws no
+     group at all. */
+  remote: { type: Array, default: () => [] },
+  /* Which folders of that group are unfolded, as
+     `settings.project.remoteBranchFolders` keeps them — whole paths, the
+     group's own heading `origin` among them. A plain list where `folders` above
+     is nullable: empty means the whole group is folded, which is the default,
+     and there is no third state to tell apart. */
+  remoteFolders: { type: Array, default: () => [] },
   /* `{ allowed, reason }` from `gitActions.js`. The default is the answer for a
      project with no run going, which is what the gallery and every
      single-branch frame want. */
@@ -181,7 +239,16 @@ const emit = defineEmits([
   'new-branch',
   'rename',
   'delete',
-  'toggle-folder'
+  'toggle-folder',
+  /* The whole name of a branch only `origin` has. A second event and not
+     `checkout` with a flag, for the reason the Rust command it reaches is a
+     second command: what happens is a local branch being created, and a caller
+     that could not tell the two apart would be choosing between them by
+     accident. */
+  'checkout-remote',
+  /* The whole new list, resolved by `branchTree.js`, exactly as `toggle-folder`
+     carries one — and a second event because it is a second settings field. */
+  'toggle-remote-folder'
 ])
 
 /* Hover is per row and `useInteractive` tracks one control at a time, so an
@@ -204,6 +271,16 @@ const interactiveFor = (key) => {
    the identity of a row. */
 const keyOf = (row) => `${row.kind}:${row.kind === 'folder' ? row.path : row.name}`
 
+/* And the same identity for a row of the `origin` group, which is a second list
+   drawn from a second rule: a local folder may legally be called `origin` — the
+   tree above builds one for a branch named `origin/spike` — so without the
+   prefix that heading and this group's own would be one key, sharing a hover
+   and colliding as `v-for` keys. It is the same collision `remoteBranchFolders`
+   exists for, one layer up. It is also why `rowStyle` and `folderStyle` below
+   take a key rather than deriving one: the two lists share the drawing and not
+   the identity. */
+const remoteKeyOf = (row) => `remote:${keyOf(row)}`
+
 /* The menu, and which branch it is open on. The name is kept here because the
    items are built from it and because the row under an open panel has to keep
    its highlight — the panel is teleported to the body, so the pointer moving
@@ -222,26 +299,42 @@ const keyOf = (row) => `${row.kind}:${row.kind === 'folder' ? row.path : row.nam
  * of that one row. */
 const menu = ref(null)
 const menuFor = ref(null)
+/* Whether the open menu is on a row of the `origin` group, which decides which
+   rule builds its items. One `PointerMenu` for both and not two: only one menu
+   can be open, the panel is teleported to the body either way, and a second
+   instance would be a second thing to keep closed. A name cannot be in both
+   lists at once — the group holds exactly what the local list does not — so the
+   name alone still identifies the row for the hover. */
+const menuRemote = ref(false)
 const MENU_W = 280
 
 /* Read from the branches rather than from the drawn rows: what the menu asks is
    whether this is the branch the repository is on, which is a fact about the
    repository and not about how the list happens to be folded. */
 const items = computed(() =>
-  branchMenuItems({
-    current: props.branches.some((branch) => branch.name === menuFor.value && branch.current),
-    allowed: props.actions?.allowed !== false,
-    busy: Boolean(props.busy),
-    /* Read from the stored list rather than from the row the menu was opened
-       on, for the reason `current` above is read from the branches: what the
-       item's label is about is whether this name is marked, which is a fact
-       about `settings.json` and not about how the list happens to be drawn. */
-    favorite: (props.favorites ?? []).includes(menuFor.value)
-  })
+  menuRemote.value
+    ? remoteBranchMenuItems({
+        allowed: props.actions?.allowed !== false,
+        busy: Boolean(props.busy)
+      })
+    : branchMenuItems({
+        current: props.branches.some(
+          (branch) => branch.name === menuFor.value && branch.current
+        ),
+        allowed: props.actions?.allowed !== false,
+        busy: Boolean(props.busy),
+        /* Read from the stored list rather than from the row the menu was
+           opened on, for the reason `current` above is read from the branches:
+           what the item's label is about is whether this name is marked, which
+           is a fact about `settings.json` and not about how the list happens to
+           be drawn. */
+        favorite: (props.favorites ?? []).includes(menuFor.value)
+      })
 )
 
-const openMenu = (row, event) => {
+const openMenu = (row, event, remote = false) => {
   menuFor.value = row.name
+  menuRemote.value = remote
   menu.value?.open(event, row.name)
 }
 
@@ -263,10 +356,18 @@ const pick = (item, name) => {
   else if (item.kind === 'new-branch') emit('new-branch', name)
   else if (item.kind === 'rename') emit('rename', name)
   else if (item.kind === 'delete') emit('delete', name)
+  else if (item.kind === 'checkout-remote') emit('checkout-remote', name)
 }
 
 const rows = computed(() =>
   branchRows(props.branches, expandedFolders(props.folders, props.branches), props.favorites)
+)
+
+/* The `origin` group, drawn under everything above. `[]` for a repository whose
+   remote holds nothing this one lacks, which is a group not drawn rather than
+   an empty heading — the rule's own answer, not a condition written here. */
+const remoteRows = computed(() =>
+  remoteBranchRows(props.remote, props.branches, props.remoteFolders)
 )
 
 const MARK = 12
@@ -292,7 +393,7 @@ const target = (branch) => !branch.current && !blocked.value
    and neither is any row while a run is going, so hovering must not promise
    one. Muted with the rest of the row rather than dimmed as a group — the
    current branch is still worth reading while a run holds the panel. */
-const rowStyle = (branch) => ({
+const rowStyle = (branch, key = keyOf(branch)) => ({
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-3)',
@@ -312,8 +413,7 @@ const rowStyle = (branch) => ({
            on it may be pressed: the panel is teleported to the body, so the
            pointer moving into it leaves the row, and a menu explaining why a
            row is refused would be doing it over a row nothing points at. */
-        menuFor.value === branch.name ||
-          (target(branch) && interactiveFor(keyOf(branch)).hover.value)
+        menuFor.value === branch.name || (target(branch) && interactiveFor(key).hover.value)
         ? 'var(--surface-hover)'
         : 'transparent',
   cursor: blocked.value && !branch.current ? 'not-allowed' : 'default',
@@ -349,8 +449,8 @@ const rowStyle = (branch) => ({
    Unfolding is reading, and the whole meaning of the muted rows below is "this
    cannot be pressed now" — a heading that greyed out with them and then
    answered a press would spend that meaning. */
-const folderStyle = (row) => {
-  const { hover, active } = interactiveFor(keyOf(row))
+const folderStyle = (row, key = keyOf(row)) => {
+  const { hover, active } = interactiveFor(key)
   return {
     display: 'flex',
     alignItems: 'center',
@@ -627,6 +727,85 @@ const empty = computed(() => props.branches.length === 0)
               :title="OPERATIONS[operation(row)]"
             />
             <Icon v-else-if="row.current" name="check" :size="MARK" title="Current branch" />
+          </span>
+        </div>
+      </component>
+    </template>
+    <!-- The `origin` group, under everything above. Nothing at all is drawn for
+         a repository whose remote holds only branches this one already has —
+         the rule answers with no rows, heading included, so there is no
+         condition here about it. -->
+    <template v-for="row in remoteRows" :key="remoteKeyOf(row)">
+      <!-- The heading, the group's own included: pressed to unfold and nothing
+           else, so it stays live under a run exactly as the local headings do.
+           It carries its count folded and unfolded alike, which for the group's
+           own heading is how many branches `origin` has that this repository
+           does not. -->
+      <button
+        v-if="row.kind === 'folder'"
+        type="button"
+        :style="folderStyle(row, remoteKeyOf(row))"
+        :aria-expanded="row.expanded"
+        v-bind="interactiveFor(remoteKeyOf(row)).handlers"
+        @click="emit('toggle-remote-folder', toggleRemoteFolder(remoteFolders, row.path))"
+      >
+        <Icon
+          :name="row.expanded ? 'chevron-down' : 'chevron-right'"
+          :size="MARK"
+          :style="{ flex: 'none' }"
+        />
+        <Icon
+          :name="row.expanded ? 'folder-open' : 'folder'"
+          :size="MARK"
+          :style="{ flex: 'none', color: 'var(--text-muted)' }"
+        />
+        <span :style="nameStyle">{{ row.label }}</span>
+        <span :style="{ flex: 1 }" />
+        <!-- No `↓` here where a local heading may carry one: nothing in this
+             group has an upstream to be behind, so there is nothing a fold
+             could be hiding. -->
+        <span :style="countStyle">{{ row.count }}</span>
+      </button>
+      <component
+        :is="hint ? Tooltip : 'div'"
+        v-else
+        v-bind="hint ? { label: hint, side: 'right' } : {}"
+        :style="{ display: 'block' }"
+      >
+        <!-- The same row as above with two things taken away and one changed.
+             The gesture is the same double click and it checks out from
+             `origin`; the menu is `remoteBranchMenuItems`, which is two items;
+             and the glyph is `cloud` in the branch icon's place, at its size and
+             in its colour, so the names stay in one column with the list above.
+             What it never draws is the star and the `↓N`/`↑N` — the first is
+             about branches this repository has, and the second has no record to
+             read, since `vcs_tracking` walks `refs/heads`. -->
+        <div
+          :style="rowStyle(row, remoteKeyOf(row))"
+          :aria-disabled="blocked ? 'true' : undefined"
+          v-bind="blocked ? {} : interactiveFor(remoteKeyOf(row)).handlers"
+          @dblclick="!blocked && $emit('checkout-remote', row.name)"
+          @contextmenu.prevent="openMenu(row, $event, true)"
+        >
+          <Icon
+            name="cloud"
+            :size="MARK"
+            :style="{ flex: 'none', color: 'var(--text-muted)' }"
+            title="Only on origin"
+          />
+          <span :style="nameStyle" :title="fullName(row)">{{ row.label }}</span>
+          <span :style="{ flex: 1 }" />
+          <!-- The same box the rows above keep, holding the spinner while git
+               is switching to this branch. There is no tick to draw in it: this
+               group is what the repository is not on, by definition. -->
+          <span :style="markBox">
+            <Icon
+              v-if="operation(row)"
+              name="loader-circle"
+              :size="MARK"
+              :style="spinStyle"
+              :title="OPERATIONS[operation(row)]"
+            />
           </span>
         </div>
       </component>

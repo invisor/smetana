@@ -1380,6 +1380,36 @@ const gitFolders = ref(null)
    a thing that can be done here. */
 const foldedTracking = ref([])
 
+/* What `origin` holds, against `FOLDER_BRANCHES`: two names the local list
+   already has, which the group drops on purpose, and three it does not — two of
+   them under folders, so the tree inside the group is checkable here, and one
+   with no slash in it, which is the row that draws the `cloud` glyph directly
+   under the group's own heading. The order is alphabetical because that is how
+   `vcs_remote_branches` answers and nothing on the front end re-sorts it.
+
+   Named after the group it draws rather than "remote", which is taken above by
+   the list the caption's two buttons are checked against — a different
+   question, and the collision is worth avoiding now that this panel draws real
+   remote branches. */
+const ORIGIN_BRANCHES = [
+  'develop',
+  'feature/smetana-xbxc-origin-branches',
+  'hotfix/nxc-231',
+  'main',
+  'spike-origin-only'
+]
+
+/* The group open, and live: press the `origin` heading to fold it away and the
+   `feature` heading inside it to fold that. It starts open because a frame
+   drawn folded shows one row and hides the whole feature; the shipped default
+   is the opposite, an empty list, which the frame below this one draws. */
+const remoteFolders = ref(['origin', 'origin/feature'])
+
+/* The shipped default — everything folded, the group included — and live too,
+   so the rows under a run can be reached by pressing the heading that a run is
+   deliberately not allowed to refuse. */
+const foldedRemote = ref([])
+
 /* The branches somebody pinned, against `FOLDER_BRANCHES` — two that live
    inside folders, one that has no slash in it at all, and the branch the
    repository is on, which is marked as well. That last one is the case worth
@@ -4104,6 +4134,38 @@ const menuTargetStyle = {
              where recency put them rather than swept under a heading. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="FOLDER_BRANCHES" :folders="['feature', 'fix', 'fix/legacy']" />
+        </div>
+        <!-- The `origin` group, live and open. What to check: the heading sits
+             under the local tree and carries the number of branches `origin`
+             has that this repository does not — three, not five, since
+             `develop` and `main` are in the list above and are deliberately
+             left out. The `cloud` glyph is the same size as the `git-branch`
+             above it and the names below stay in one column with them; there is
+             no star and no `↓N` on any of these rows. Press the `origin`
+             heading to fold the group away, and `feature` inside it to fold
+             that; right-click a row for the two items it has. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="FOLDER_BRANCHES"
+            :folders="['feature']"
+            :remote="ORIGIN_BRANCHES"
+            :remote-folders="remoteFolders"
+            @toggle-remote-folder="remoteFolders = $event"
+          />
+        </div>
+        <!-- The same group as it ships: folded, which is what an empty
+             `remoteBranchFolders` means, with a run going over it. The heading
+             is live like every other heading here — unfolding is reading — and
+             the rows under it, once unfolded, are muted and inert with the
+             local ones, since checking one out writes the working tree. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="FOLDER_BRANCHES"
+            :remote="ORIGIN_BRANCHES"
+            :remote-folders="foldedRemote"
+            :actions="RUN_GOING"
+            @toggle-remote-folder="foldedRemote = $event"
+          />
         </div>
         <!-- The heading's own mark, which is the whole reason it exists: every
              folder is folded, `fix/legacy/depot-import` is behind, and both

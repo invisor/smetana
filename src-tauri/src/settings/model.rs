@@ -688,6 +688,26 @@ pub struct ProjectState {
     /// would be no way to fold the last folder away, because the empty list
     /// would read as the first case and come back unfolded on the next start.
     pub branch_folders: Option<Vec<String>>,
+    /// Which folders of the Git panel's `origin` group are unfolded, by whole
+    /// path — `origin`, `origin/feature`. The group's own heading is the entry
+    /// `origin`, so an empty list is the whole group folded, which is the
+    /// default: the group holds every branch this machine has not checked out,
+    /// which in a working repository is most of them.
+    ///
+    /// **Its own field rather than an entry in `branch_folders`, and that is the
+    /// collision it exists to avoid.** A local branch may legally be called
+    /// `origin/spike`, which puts a *local* folder named `origin` in the tree
+    /// above; one shared list would make one entry mean two different rows and
+    /// unfold both at once. A namespace inside the shared list — a prefix, or a
+    /// character git forbids in a ref name — buys the same separation at the
+    /// price of a rule somebody has to remember while reading `settings.json`.
+    ///
+    /// A plain `Vec` where its neighbour is an `Option`, because there is no
+    /// third state here. `branch_folders`' `None` means "nobody has chosen, so
+    /// unfold the folder the current branch is in", and no branch in this group
+    /// is the current one — by definition, since the group is what this
+    /// repository does not have.
+    pub remote_branch_folders: Vec<String>,
     /// Which branches the Git panel pins above the tree, by whole name. Per
     /// project and beside `branch_folders` on that field's own argument: which
     /// names are worth keeping in reach is a fact about a repository and its
@@ -834,6 +854,7 @@ impl Default for ProjectState {
             selected_repo: None,
             expanded: Vec::new(),
             branch_folders: None,
+            remote_branch_folders: Vec::new(),
             favorite_branches: Vec::new(),
             open_tabs: Vec::new(),
             preview_tab: None,
@@ -1606,6 +1627,12 @@ impl ProjectState {
         if let Some(folders) = self.branch_folders.as_mut() {
             sane_list(folders, MAX_BRANCH_FOLDERS, MAX_PATH_LEN);
         }
+        // The `origin` group's own folds, cleaned in place for the reason the
+        // local ones above are: the list records what somebody unfolded, and one
+        // junk entry is no reason to refold the rest. The same ceilings, since a
+        // folder path here is path-like too — and no `Option` to unwrap, because
+        // an empty list already means what it says.
+        sane_list(&mut self.remote_branch_folders, MAX_BRANCH_FOLDERS, MAX_PATH_LEN);
         // A branch name is path-like, so the path ceiling and not the
         // identifier one. Cleaned in place for the reason the folders above
         // are: the list is a record of what somebody marked, and one junk entry
@@ -2562,6 +2589,49 @@ mod tests {
             settings.projects["/q"].branch_folders,
             Some(Vec::new()),
             "folded on purpose is not the same as never chosen"
+        );
+    }
+
+    /// The `origin` group's folds have no third state, which is where the field
+    /// parts company with its neighbour: a file that has never heard of it opens
+    /// with the whole group folded, and that is also what somebody folding it
+    /// away by hand leaves behind.
+    #[test]
+    fn a_file_with_no_remote_branch_folders_has_the_whole_group_folded() {
+        let text = serde_json::json!({"version": 1, "projects": {"/p": {"expanded": []}}});
+
+        let settings = settings_of(&text.to_string());
+
+        assert_eq!(settings.projects["/p"].remote_branch_folders, Vec::<String>::new());
+    }
+
+    /// Cleaned in place like every other list of folder paths here, and kept
+    /// apart from `branchFolders`: a local branch called `origin/spike` puts a
+    /// local folder named `origin` in the tree above, and the two folds are two
+    /// facts.
+    #[test]
+    fn unfolded_remote_branch_folders_survive_the_trip_and_are_cleaned_in_place() {
+        let text = serde_json::json!({
+            "version": 1,
+            "projects": {
+                "/p": {
+                    "branchFolders": ["origin"],
+                    "remoteBranchFolders": ["origin", "origin/feature", "", "origin"]
+                }
+            }
+        });
+
+        let settings = settings_of(&text.to_string());
+
+        assert_eq!(
+            settings.projects["/p"].remote_branch_folders,
+            vec![String::from("origin"), String::from("origin/feature")],
+            "the blank and the duplicate fall out, the rest keeps its order"
+        );
+        assert_eq!(
+            settings.projects["/p"].branch_folders,
+            Some(vec![String::from("origin")]),
+            "the local folder called origin is a different fold and is untouched"
         );
     }
 
