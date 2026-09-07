@@ -734,9 +734,9 @@ since been reused, nor anything under a writer that is alive or unreadable. The 
 app is finishing its own interrupted shutdown rather than taking a new decision, and a modal about
 housekeeping after every rebuild would be the loudness budget spent on the opposite of a card needing
 a human. What was killed goes to the log, and the log is a file:
-`~/Library/Logs/com.invisor.smetana/smetana.log` on macOS, and on Linux
-`$XDG_DATA_HOME/com.invisor.smetana/logs/smetana.log` — which on most desktops means
-`~/.local/share/com.invisor.smetana/logs/smetana.log`, because that variable is usually unset and the
+`~/Library/Logs/com.invisor.smetana/Smetana.log` on macOS, and on Linux
+`$XDG_DATA_HOME/com.invisor.smetana/logs/Smetana.log` — which on most desktops means
+`~/.local/share/com.invisor.smetana/logs/Smetana.log`, because that variable is usually unset and the
 spec's own default is what fills in. It is written by every build since smetana-2tf and not only a
 debug one, and it rolls at 2 MiB and eleven files, so what a night wrote is still there in the
 morning; `lib.rs` holds that arithmetic, and the stamps in it are UTC where a run report's are local.

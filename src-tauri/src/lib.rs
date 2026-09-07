@@ -114,9 +114,23 @@ pub fn run() {
       // account of what a run did was written by the one build that never runs
       // a run. `TargetKind::LogDir` is `~/Library/Logs/<bundle identifier>/` on
       // macOS, `$XDG_DATA_HOME/<identifier>/logs` on Linux; `file_name: None`
-      // takes the product name, which is the `smetana.log` already sitting
-      // there empty. Stdout stays beside it, and that is the line
-      // `npm run tauri dev` prints.
+      // takes the product name, so the file is `Smetana.log`. On a machine
+      // that installed an earlier build the directory entry still reads
+      // `smetana.log`, and goes on doing so until the file first passes
+      // `LOG_FILE_SIZE`: APFS is case-insensitive and case-preserving by
+      // default, so the creating open finds the file already there rather than
+      // making a second one beside it — the same consequence the bundle
+      // directory has under an in-place update. The first rotation ends it:
+      // `rename_file_to_dated` moves the entry to `Smetana_<date>.log`, and the
+      // `open_file` after it creates a `Smetana.log` that does not exist yet,
+      // so the new spelling takes over and stays. One cosmetic cost is left
+      // behind: `remove_old_files` matches archives with
+      // `starts_with(&self.file_name)`, a case-sensitive comparison, so an
+      // archive rotated under the old spelling stops counting toward
+      // `KeepSome` and is never pruned. The set of those is bounded — after the
+      // switch every new archive carries the new spelling and is pruned as
+      // usual — and nothing here deletes a file it should not. Stdout stays
+      // beside it, and that is the line `npm run tauri dev` prints.
       //
       // `TargetKind::Webview` is deliberately not a third target: the front end
       // does not read this log, nothing in the tree calls `attachConsole`, and
@@ -125,7 +139,7 @@ pub fn run() {
       // The one plugin in this file whose failure is swallowed rather than
       // carried out on a `?`. Everything it does at registration is disk —
       // `create_dir_all` on the log directory, the creating open of
-      // `smetana.log`, the `read_dir` the rotation counts old files with — and
+      // `Smetana.log`, the `read_dir` the rotation counts old files with — and
       // a `?` here leaves the setup hook, comes back out of `build()` as
       // `Error::Setup` and lands on the `expect` at the bottom of this file. In
       // a bundled app that panic has nowhere to print, so what a person gets is

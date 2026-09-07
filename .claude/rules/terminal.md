@@ -67,7 +67,7 @@ checks it, and an agent that found some other bd first would be writing to the b
 version that handshake never verified.
 
 What that directory goes in *front of* is not the `PATH` this process inherited, and
-`src/shell_env.rs` is why. A bundled app on macOS is handed launchd's environment: `open smetana.app`
+`src/shell_env.rs` is why. A bundled app on macOS is handed launchd's environment: `open Smetana.app`
 gives it whatever `launchctl getenv PATH` says, which on a stock machine is nothing, so it falls back
 to `/usr/bin:/bin:/usr/sbin:/sbin`. Everything a person installs — `~/.local/bin`,
 `/opt/homebrew/bin`, nvm's shims — reaches `PATH` from `~/.zshrc` or `~/.zprofile`, which only a

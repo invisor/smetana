@@ -195,7 +195,7 @@ fn apply_environment(cmd: &mut CommandBuilder) {
 /// `relative_command_path` in tauri-plugin-shell is those two lines. Deriving
 /// the directory the same way is what makes it the same directory by
 /// construction rather than by a rule copied out of that crate: in a bundle it
-/// is `smetana.app/Contents/MacOS`, beside the app executable, where the
+/// is `Smetana.app/Contents/MacOS`, beside the app executable, where the
 /// bundler drops the external binary with its target triple stripped; under
 /// `npm run tauri dev` it is `src-tauri/target/debug`, where the Tauri CLI
 /// drops the same file.

@@ -42,12 +42,21 @@
    the arrow `README.md` and the release workflow already use for a route
    through those same settings. It is somebody else's interface, and a person
    reading this is going to look for those exact words on a screen that is not
-   ours — which is also why the app is named in lower case here: `productName`
-   is `smetana`, and lower case is what that list shows. */
+   ours — which is also why the app is named here exactly as `productName`
+   spells it rather than in this app's own prose: that list shows the app under
+   a name the bundle carries, so this sentence has to move whenever
+   `productName` does. Which of those names the pane reads is not established —
+   it resolves a display name, `CFBundleDisplayName` then `CFBundleName` then
+   the `.app` filename, and nobody has opened it to look. One case turns on
+   that, which is why the question is written down rather than left out: the
+   updater replaces a bundle's contents without renaming its directory, so a
+   copy updated in place rather than reinstalled still sits in `smetana.app`
+   while carrying `CFBundleName = Smetana`. Somebody reporting that the list
+   says `smetana` is that copy before it is a bug in this string. */
 const DESCRIPTION = {
   reset: 'macOS is refusing this app access to the folder — a permission, not the tracker or the data in it. Resetting it makes macOS ask again, and restarts the app.',
   'full-disk-access':
-    'macOS is refusing this app access to the folder — a permission, not the tracker or the data in it. This one cannot be asked for again: grant smetana Full Disk Access in System Settings → Privacy & Security, then open the project again.',
+    'macOS is refusing this app access to the folder — a permission, not the tracker or the data in it. This one cannot be asked for again: grant Smetana Full Disk Access in System Settings → Privacy & Security, then open the project again.',
   unavailable:
     'The system is refusing this app access to the folder — a permission, not the tracker or the data in it. Grant this app access to the folder, then open the project again.'
 }

@@ -908,7 +908,7 @@ static COMPLAINED: AtomicBool = AtomicBool::new(false);
 /// `refreshDirs` re-lists every open folder on every window focus, so a machine
 /// with no git at all would write a line per folder per focus for as long as the
 /// app is up — the least informative line in the tree, in the quantity that
-/// would roll a night's run history out of `smetana.log` (`lib.rs` counts the
+/// would roll a night's run history out of `Smetana.log` (`lib.rs` counts the
 /// budget). It is the one case that can flood, and it floods because a missing
 /// binary is an instant spawn failure with nothing rate-limiting it; the rest of
 /// what reaches here — a `READ_CEILING` timeout, an `Io`, a `Git { status }`

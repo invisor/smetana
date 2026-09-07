@@ -1,7 +1,7 @@
 //! The `PATH` and the locale a child process should actually be started with.
 //!
 //! A GUI application on macOS inherits launchd's environment, not the person's:
-//! `open smetana.app` gives the process whatever `launchctl getenv PATH` says,
+//! `open Smetana.app` gives the process whatever `launchctl getenv PATH` says,
 //! which on a stock machine is nothing at all, so the child falls back to
 //! `/usr/bin:/bin:/usr/sbin:/sbin`. Everything a developer installs —
 //! `~/.local/bin`, `/opt/homebrew/bin`, nvm's shims — reaches `PATH` from
