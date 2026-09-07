@@ -43,10 +43,22 @@ export const HARNESS_CHOOSES = 'Agent chooses'
    otherwise — the same four keys Rust serializes, so a spelling that drifted
    here would be a choice written into a key nothing reads.
 
-   The description is carried on one row only. Every other row's behaviour is
-   what the label already says; the Code row's is not, and saying it outright is
-   cheaper than a setting that quietly does half of what it looks like it
-   does. */
+   Every row carries a description, and what the labels leave out is why: which
+   calls fall into a row is `agents::role_of`'s to decide, and none of that
+   decision is legible in the words `Tasks` or `Run lead`. smetana-i5u4
+   overturns the earlier decision here, that a description belonged on the Code
+   row alone — a person cannot choose a model for work they cannot tell apart,
+   and three of the five rows left them guessing. A row would go without a
+   sentence only where it would be the label said a second time, and none of
+   these five is that. Each says what the sessions in it will do, in the voice
+   the Languages and Run limits groups are written in.
+
+   The Branch review row is the one to check against the code rather than
+   against a description of it: a review is **started from the `review-changes`
+   dialog**, never from the compare window, which starts no agent at all. The
+   two are deliberately separate — `.claude/rules/vcs-panel.md`, "Compare shows
+   and Review judges" — and a sentence here naming the wrong window would send
+   somebody to a window with no way in. */
 export const ROLE_ROWS = [
   {
     role: null,
@@ -54,15 +66,30 @@ export const ROLE_ROWS = [
     description:
       'Behind every row below, and what a session with no row of its own uses — a bare agent, project setup, a one-off question. Every row here reaches the next session started; the ones already running keep what they started with.'
   },
-  { role: 'tasks', label: 'Tasks', description: '' },
+  {
+    role: 'tasks',
+    label: 'Tasks',
+    description:
+      'This agent files a new task, edits one already filed, and answers the open questions on a parked one.'
+  },
   {
     role: 'code',
     label: 'Code',
     description:
       "This agent fixes merged work and finishes a conflicted merge. A run's workers are asked for the model only: they are started inside the run agent's own session, so nothing here can change which agent they are."
   },
-  { role: 'runLead', label: 'Run lead', description: '' },
-  { role: 'reviewBranch', label: 'Branch review', description: '' }
+  {
+    role: 'runLead',
+    label: 'Run lead',
+    description:
+      "This agent leads a run: it claims a batch of tasks, hands the work out, reviews what comes back and merges it. The model chosen here is the lead's own, never its workers'."
+  },
+  {
+    role: 'reviewBranch',
+    label: 'Branch review',
+    description:
+      'This agent takes a reference branch and the branch under review, in one repository or several at once, and writes a report on the difference. Started from Review this branch on a branch row, or New review in the + menu.'
+  }
 ]
 
 /* The pair one row currently stands for: its own where it named a harness, and
