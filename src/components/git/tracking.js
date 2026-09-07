@@ -1,5 +1,5 @@
 /* What a branch's standing against its upstream looks like: the marks on a row,
-   and the two buttons in the section header.
+   and the two buttons at the right end of the Branches tab row.
 
    Pure, with no Vue and no DOM in it — the family `gitActions.js`,
    `commitBox.js` and `branchTree.js` belong to, and for the reason that family
@@ -90,7 +90,7 @@ const NOTHING_TO_PULL = 'This branch already has everything the remote has.'
    the argument that pressing it is how a person makes the count they are
    reading current. That argument was right about the need and wrong about the
    control: what it describes is a *fetch*, and the panel now has one of its
-   own in the same caption. With somewhere else to ask the remote, a live Pull
+   own in the same row. With somewhere else to ask the remote, a live Pull
    over `behind: 0` was only a button whose whole answer was "nothing
    happened". */
 export function pullAction(tracking, actions) {
@@ -108,7 +108,7 @@ const NOTHING_TO_PUSH = 'This branch has nothing the remote does not already hav
    on the button and the arguments git is run with are both answers to.
 
    Exported, and read by `stores/vcs.js` as well as by `pushAction` below,
-   because those two are exactly the pair that must not disagree: the caption
+   because those two are exactly the pair that must not disagree: the control
    would otherwise say "Publish branch" while the store ran a plain `git push`
    that git then refuses, or say "Push 2" while the store re-pointed the
    branch's upstream. Neither would fail a test — `tracking.test.js` pins one
@@ -139,8 +139,10 @@ export function pushAction(tracking, actions) {
 
 const FETCHING = 'Asking the remote what it has…'
 
-/* The third control in the caption, and the only one of the three that is
-   about the repository rather than about the branch it is on.
+/* The third of the controls at the right end of the Branches tab row — where
+   all three are drawn, the caption above them carrying a chevron, a word and a
+   count and nothing else — and the only one of them that is about the
+   repository rather than about the branch it is on.
 
    It is live in every state the other two are refused in, and that is the
    whole reason it exists: with Pull dimmed when the branch is level and Push

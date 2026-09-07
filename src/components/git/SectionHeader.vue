@@ -24,15 +24,25 @@
    already on screen beats standing a throwaway element up beside it.
 
    **The caption is not the row any more, and the wrapper around it is.** The
-   `actions` slot puts controls in the header — the Git panel's Pull and Push —
-   and they cannot go inside the caption: it is a `<button>`, a button inside a
-   button is invalid HTML, and a press on Pull would fold the section on its way
-   through. So they are a sibling, and what moves with them is the height and
-   the hairline: `sectionHeights.js` learns what a row is by measuring the
-   element exposed here, and a rule that spanned only the caption would leave
-   the controls standing above the line. The caption keeps `height: 100%` so its
-   own hover surface is still the whole row and still reads as "press here to
-   fold", and `flex: 1` so it is everything the controls do not take.
+   `actions` slot puts controls in the header, and they cannot go inside the
+   caption: it is a `<button>`, a button inside a button is invalid HTML, and a
+   press on one of them would fold the section on its way through. So they are a
+   sibling, and what moves with them is the height and the hairline:
+   `sectionHeights.js` learns what a row is by measuring the element exposed
+   here, and a rule that spanned only the caption would leave the controls
+   standing above the line. The caption keeps `height: 100%` so its own hover
+   surface is still the whole row and still reads as "press here to fold", and
+   `flex: 1` so it is everything the controls do not take.
+
+   **Nothing in the app fills that slot today.** It carried the Git panel's
+   Fetch, Pull and Push until those moved down into the Branches tab row, where
+   there was width for them and a wrapper that was already measured
+   (`.claude/rules/vcs-panel.md`). It is kept rather than removed because the
+   shape above is the answer to a question a caption keeps asking — the
+   repositories may yet carry a control, and the filter stage is due to put a
+   search button on this very caption — and the one thing still exercising it is
+   the gallery frame that draws a caption with two controls beside one without,
+   which is how the gutter stays checkable at all.
 
    `divided` is the rule above the caption, and it is what makes a caption read
    as the start of a block rather than as one more row of the list above it: the
@@ -73,9 +83,13 @@ const { hover, active, handlers } = useInteractive()
 
    A function of whether the slot was filled rather than a `computed` over
    `useSlots()`: a slot's presence is not a reactive dependency, so a cached
-   answer would go on insetting a caption whose controls have since gone. Only
-   one of the Git panel's three captions fills it at all, which is the ordinary
-   case this guards. */
+   answer would go on insetting a caption whose controls have since gone —
+   which is exactly what happened to the Git panel's Branches caption when its
+   three verbs left for the tab row. **No caption in the app fills the slot at
+   present**, so an empty slot is not the guarded case any more but the only
+   one; the argument for the shape is unchanged, since what it is really about
+   is that the answer must not be cached across a caption gaining or losing its
+   controls, and a caption is about to gain some again. */
 const rowStyle = (hasActions) => ({
   display: 'flex',
   alignItems: 'center',

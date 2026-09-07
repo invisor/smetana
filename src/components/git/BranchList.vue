@@ -178,8 +178,9 @@
    ## The Origin tab
 
    Everything above is the **Local** tab. Beside it is `Origin`, and exactly one
-   of the two is on screen: the tab row is `GitPanel`'s, in the section's own
-   caption, and which side it names arrives here as `tab`.
+   of the two is on screen: the tab row is `GitPanel`'s, drawn under the
+   section's caption and carrying the three remote verbs at its right end, and
+   which side it names arrives here as `tab`.
 
    It draws the whole of `origin` — every branch that remote has, including the
    ones this repository also has locally. That is a change of mind about the
@@ -282,9 +283,9 @@ const props = defineProps({
   remoteFolders: { type: Array, default: () => [] },
   /* Which of the two sides to draw, `local` or `origin`, as
      `settings.project.branchTab` keeps it. The tab row itself is `GitPanel`'s,
-     in the section's caption; this component is handed the choice like every
-     other piece of state here. `branchTree.js` holds the closed list and the
-     default, which `settings/model.rs` mirrors. */
+     drawn under the section's caption; this component is handed the choice like
+     every other piece of state here. `branchTree.js` holds the closed list and
+     the default, which `settings/model.rs` mirrors. */
   tab: { type: String, default: DEFAULT_BRANCH_TAB },
   /* The short hash HEAD is sitting on when it is on no branch at all, or null
      for the ordinary case. It is handed down rather than derived here: this
@@ -492,9 +493,16 @@ const target = (branch) => !branch.current && !blocked.value
 /* Which rows have their pointer state tracked, which is a wider question than
    which rows can be pressed: the current branch answers no gesture and still
    takes `--surface-active` under the press, because a surface that does not
-   move under a finger reads as an element that is not there. Everything else
-   is `target`'s, so a row a run has frozen is tracked by nothing and cannot
-   promise a press it would refuse. */
+   move under a finger reads as an element that is not there. Everything else is
+   `target`'s, so a row a run has frozen is tracked by nothing.
+
+   The current branch is the one exception and keeps its handlers under a run —
+   `blocked` is not asked here. What stops it promising anything is `rowStyle`,
+   which gates that arm on `!blocked.value`, so the tracking goes on and the
+   surface does not move. The gate is there rather than here because the answer
+   this function gives is about which element listens, and the one below is
+   about what is drawn: a frozen row that stopped listening would also stop
+   clearing `hover` on the way out. */
 const tracked = (row) => target(row) || row.block === 'current'
 
 /* The last of the marked rows, which is the one carrying the hairline under

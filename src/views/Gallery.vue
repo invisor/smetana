@@ -4079,7 +4079,14 @@ const menuTargetStyle = {
              of a `<button>` and not its children, and both halves have to sit
              inside one `--row-h`. Beside it the same caption with nothing in
              the slot, so what the gutter does to the count is visible in one
-             glance. -->
+             glance.
+
+             **This frame is the only thing exercising that slot.** The Git
+             panel's own Fetch, Pull and Push moved down into the Branches tab
+             row, so no caption in the app fills it today — the two buttons here
+             are a fixture, and the frame is what keeps the shape checkable for
+             the caption that carries controls next. Do not delete it as
+             dead. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <SectionHeader
             label="Branches"
