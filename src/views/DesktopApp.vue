@@ -40,6 +40,11 @@ import {
   reviewForm,
   reviewPairs
 } from '../components/git/reviewRows.js'
+/* One of the two words `layout.branchSide` is allowed to be. The window sends
+   the side it was put on and this side writes it down; normalising here rather
+   than trusting the message keeps a value Rust would refuse out of the file in
+   the first place. */
+import { normalizeSide } from '../components/git/branchPicker.js'
 import {
   NO_VISIT,
   answeredCount,
@@ -1294,6 +1299,11 @@ async function openReviewChanges(branch = null) {
       fetchedAt: reviewFetchedAt.value,
       fetching: reviewFetching.value,
       fetchFailed: reviewFetchFailed.value,
+      /* Which side the branch list opens on, out of the settings this window
+         holds. The dialog seeds its own memory from it and reports a press
+         back through `branch-side` below; the file is written by the ordinary
+         debounced save, and never by the dialog. */
+      branchSide: layout.branchSide,
       busy: reviewStarting.value
     }),
     forget: () => {
@@ -1306,6 +1316,12 @@ async function openReviewChanges(branch = null) {
     onResult: (name, payload) => {
       if (name === 'close') closeDialog('review-changes')
       if (name === 'submit') startReview(payload?.form)
+      /* A press of one of the branch list's two toggles. It is remembered for
+         the machine rather than for the project — which side of a list somebody
+         reads is a habit of theirs, and it must not change under them when they
+         switch projects — so it goes into `layout` beside the panel widths and
+         not into the project's own state. */
+      if (name === 'branch-side') layout.branchSide = normalizeSide(payload?.side)
     }
   })
   /* Neither of these is waited for, and neither is on the way to anything the

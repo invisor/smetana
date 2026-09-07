@@ -1481,6 +1481,22 @@ kept on the way to the exit, and the exit itself did not move: `reviewPairs` sti
 anywhere in the window. `origin` and no other remote — there is no notion of a second one anywhere in
 this app, and inventing one for a case nobody has asked about would be a second vocabulary.
 
+**The branch list shows one side at a time, and that is a filter rather than half of an answer.**
+Every branch used to be drawn twice in a row, itself and then its `origin/` variant, which on a
+repository of 236 branches is 472 rows with an origin row standing between any two local ones. Two
+`IconButton`s in the filter row — `git-branch` and `cloud`, the glyphs the rows themselves carry —
+are a radio pair over `pickerRows`' `side`: exactly one is `selected`, a press on the lit one does
+nothing, and the row that is finally pressed still answers name and side together, which is what
+keeps this from being the rejected dropdown in another shape. Which side a list opens on is
+`openingSide(selected, remembered)` in `branchPicker.js`: **what is already picked outranks what was
+remembered**, because the picker opens its highlight on the current answer and cannot do that from
+the other side, and an opening decided that way never writes the memory back — only a press does.
+The memory is `layout.branchSide` in `settings.json`, `local` by default; `ReviewChangesDialog.vue`
+seeds its own ref from the prop rather than being driven by it, reports a press as
+`onResult('branch-side', { side })`, and `DesktopApp.vue` writes the setting. `BranchPicker.vue`
+knows none of that — the side is a prop and a press is an event, the shape `selected` / `select`
+already had.
+
 **Nothing hangs outside the window, and that is what fixes its height.** The branch list is
 `BranchPicker.vue`, with its rules in `branchPicker.js`, a block in the flow rather than a popover,
 and **while it is open the table is not drawn at all**. So

@@ -23,6 +23,11 @@ import { confirmUnsaved } from './tabs.js'
    defaults. Imported so that these two numbers do not end up with two copies in
    the front end. */
 import { LEFT_DEFAULT, RIGHT_DEFAULT } from '../views/panelWidths.js'
+/* Pure, no Vue and no DOM: the two sides the review window's branch list can be
+   showing. Imported for the same reason the widths above are — so the word this
+   store ships as its default and the word the picker draws a list from cannot
+   be two different words. */
+import { LOCAL_SIDE } from '../components/git/branchPicker.js'
 /* Pure, no Vue and no DOM: what the board's two view settings may be, and the
    shape of the two column lists beside them. Imported so this store and the
    settings tab cannot disagree about which values are legal — and so that what
@@ -124,6 +129,15 @@ const defaults = () => ({
     railOpen: true,
     leftWidth: LEFT_DEFAULT,
     rightWidth: RIGHT_DEFAULT,
+    /* Which side the review window's branch list is put on: `local` or
+       `origin`, and `local` is what it opens on before anybody has pressed
+       either. Here rather than under a project on `gitSections`' argument
+       exactly — which side of a list somebody reads is a habit of theirs and
+       not a fact about a repository, and a preference that changed under them
+       on a project switch would be one they never made. `Layout` in Rust
+       carries the same default and the same two legal words; a third spelling
+       on either side is a preference the app forgets on the next load. */
+    branchSide: LOCAL_SIDE,
     /* How the Git panel's three sections are folded, and how tall two of them
        were dragged to, in rows — `null` for "never dragged", which is a state
        and not a stand-in for a number: until there is a drag a section follows

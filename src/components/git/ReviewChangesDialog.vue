@@ -45,6 +45,7 @@ import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import Modal from '../overlays/Modal.vue'
 import BranchPicker from './BranchPicker.vue'
+import { LOCAL_SIDE, normalizeSide, openingSide } from './branchPicker.js'
 import { repoLabel, repoPath } from './repoLabel.js'
 import {
   PICK_HEAD,
@@ -112,10 +113,22 @@ const props = defineProps({
      without cancelling it. */
   fetching: { type: Array, default: () => [] },
   fetchFailed: { type: Array, default: () => [] },
+  /* Which side the branch list was last put on, out of `layout.branchSide` in
+     `settings.json`. **Seeded and not driven**, the same as the form above and
+     for the same reason: a press of one of the toggles has to be on screen at
+     once, and the announcement carrying it back is a round trip away. What is
+     seeded from it is the *memory*; which side the open list is showing is
+     `openingSide`'s answer, and the two are deliberately not the same ref. */
+  branchSide: { type: String, default: LOCAL_SIDE },
   busy: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['close', 'submit'])
+/* `branch-side` is the toggle being pressed, and it travels because the
+   preference belongs to the app window: this is a window of its own and writes
+   nothing to disk. It is a result of its own rather than part of `submit` —
+   somebody may look at the origin side and close the window without reviewing
+   anything, and that is still a choice they made. */
+const emit = defineEmits(['close', 'submit', 'branch-side'])
 
 /* The glyph sizes, which are the one kind of number this file is allowed to
    hold: the design system's own units, exactly as every other component here
@@ -141,6 +154,32 @@ const review = ref(EMPTY)
 const picker = ref(null)
 const addOpen = ref(false)
 const pickerBox = ref(null)
+
+/* The two halves of "which side", which are two refs because they answer two
+   different questions.
+
+   `remembered` is what the person last chose, seeded from the prop and moved by
+   nothing but a press. A watch on the prop's *value* is what seeds it, so the
+   announcement that comes back carrying the side just pressed changes nothing,
+   and one still carrying the old side — announced between the press and the
+   settings write — never fires at all.
+
+   `shownSide` is what the open list is drawing, decided at the moment the list
+   opens by `openingSide`: the side of the branch already picked outranks the
+   memory, because the list promises to open its highlight on what is chosen and
+   cannot do that from the other side. Deciding it there and not in a computed
+   is the point — a computed would move the list under somebody's hand the
+   moment they picked a branch on the other side. */
+const remembered = ref(LOCAL_SIDE)
+const shownSide = ref(LOCAL_SIDE)
+
+watch(
+  () => props.branchSide,
+  (next) => {
+    remembered.value = normalizeSide(next)
+  },
+  { immediate: true }
+)
 
 /* Adopted by contents and never by identity. Every announcement rebuilds these
    objects on the way through IPC, so an identity watch would fire on every
@@ -294,6 +333,12 @@ const openPicker = (side, repoId = null) => {
   if (props.busy) return
   addOpen.value = false
   picker.value = { side, repoId }
+  /* Read after `picker` is set, since that is what `pickerSide` is computed
+     from: the list opens on the side of whatever this half of the pair already
+     holds, and on the remembered side when it holds nothing. An opening never
+     writes the memory back — only a press does. */
+  const at = pickerSide.value
+  shownSide.value = openingSide({ name: at?.ref, origin: at?.remote }, remembered.value)
   /* The keyboard is handed over rather than taken: `BranchPicker` deliberately
      does not focus itself, because a block in a flow that did would steal the
      caret from whatever the window opened with. This window is the side that
@@ -303,6 +348,16 @@ const openPicker = (side, repoId = null) => {
 
 const closePicker = () => {
   picker.value = null
+}
+
+/* A toggle pressed. Both halves move at once and the app window is told, which
+   is what makes the choice outlive this window and the run of the app: the
+   memory is the app window's to write, through the ordinary debounced save, and
+   nothing here goes near the file. */
+const chooseSide = (side) => {
+  shownSide.value = side
+  remembered.value = side
+  emit('branch-side', { side })
 }
 
 const pick = ({ name, origin }) => {
@@ -758,8 +813,10 @@ const out = () => {
         :now="now"
         :selected="pickerSide?.ref ?? ''"
         :selected-origin="Boolean(pickerSide?.remote)"
+        :side="shownSide"
         :scope="scope"
         @select="pick"
+        @side="chooseSide"
         @close="closePicker"
       />
 

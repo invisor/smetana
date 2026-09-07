@@ -318,7 +318,13 @@ const EMITS = [
   'resolve',
   'rescope',
   'save',
-  'draft'
+  'draft',
+  /* The review window's other one, and the second name here that is not an
+     answer: it says which side the branch list was put on, so that the app
+     window can keep it in `layout.branchSide`. It travels for `draft`'s reason
+     one preference over — a choice about how a list is read outlives the window
+     it was made in, and only the side that is still there can hold it. */
+  'branch-side'
 ]
 
 /* And the four that deliberately do not travel: `new-task`'s images, answered
