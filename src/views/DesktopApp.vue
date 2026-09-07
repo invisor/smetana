@@ -1221,14 +1221,14 @@ async function loadReviewRemotes(path) {
   } finally {
     /* The loop walked every repository of the project through the one store
        field that holds a remote list, so what is in it now belongs to whichever
-       came last. The Git panel draws its `origin` group only while that field
-       names the repository it is showing, so without this the group stays away
-       until the next selection or the next window focus — with nothing on
-       screen to say it is missing rather than empty.
+       came last. The Git panel fills its Origin tab only while that field names
+       the repository it is showing, so without this the tab stays empty until
+       the next selection or the next window focus — drawing its own empty
+       sentence over a repository that certainly has branches on origin.
 
        **In a `finally`, because the loop has four ways out and three of them
        are ordinary.** Closing the review window while the sweep is still going
-       is a thing people do, and it used to leave the group gone; so did a
+       is a thing people do, and it used to leave the tab empty; so did a
        project switched under it, and so would anything thrown in here. The
        restore is owed on every one of them, and putting it after the loop said
        so only for the path where nothing interrupted.
@@ -1248,13 +1248,13 @@ async function loadReviewRemotes(path) {
        does not change under it, so both of that loader's own guards pass and it
        writes `remoteBranchesRepo` to a repository this project does not have.
        Nothing wrong is drawn for it — `panelRemoteBranches` compares that field
-       against `vcsState.selected`, so a stale write hides the group rather than
+       against `vcsState.selected`, so a stale write empties the tab rather than
        misattributing it, and the next selection or window focus reads it back —
        and declining to restore on top of that state is the honest thing to do
        rather than a fix for it. Do not read this check as a promise that the
        arriving project has already re-read its own list.
 
-       The dialog is deliberately not among the two: the group outlives the
+       The dialog is deliberately not among the two: the tab outlives the
        window this sweep was for, which is the whole case this covers. */
     if (mine === reviewRemoteRun && activePath.value === path && vcsState.selected) {
       await loadRemoteBranches(vcsState.selected)
@@ -1548,8 +1548,8 @@ const toggleBranchFolders = (folders) => {
    **The guard is load-bearing rather than defensive.** `loadReviewRemotes`
    below walks every repository of the project through that same single store
    field when the branch review window opens, so while its loop runs the field
-   holds somebody else's list. With the guard the group simply is not drawn for
-   a moment and comes back; without it the panel would offer branches this
+   holds somebody else's list. With the guard the tab is simply empty for a
+   moment and comes back; without it the panel would offer branches this
    repository has never had, and a checkout pressed on one would fail against a
    ref that is not here. A map keyed by repository in the store was rejected:
    the shape of that field is what the review window is built around, and the
@@ -1558,13 +1558,27 @@ const panelRemoteBranches = computed(() =>
   vcsState.remoteBranchesRepo === vcsState.selected ? vcsState.remoteBranches : []
 )
 
-/* And the same for the `origin` group's own folds, which is a second field
-   rather than more entries in the one above: a local branch may be called
-   `origin/spike`, and one list would make a single entry mean two different
-   rows and unfold both at once. What arrives is the whole new list, already
-   resolved by `branchTree.js`, exactly as its neighbour's is. */
+/* And the same for the Origin tab's own folds, which is a second field rather
+   than more entries in the one above: `feature` on one tab and `feature` on the
+   other are two different rows, and one list would unfold both at once. What
+   arrives is the whole new list, already resolved by `branchTree.js`, exactly
+   as its neighbour's is. */
 const toggleRemoteBranchFolders = (folders) => {
   project.remoteBranchFolders = folders
+}
+
+/* Which of the two sides of the branch list this project is looking at, `local`
+   or `origin`. Per project beside the folds and the favourites for their
+   argument: it is a way of looking at one repository rather than a habit of
+   reading, and it has to survive a restart for the reason a fold does.
+
+   The ids are `branchTree.js`'s closed list and are duplicated across the IPC
+   boundary as `BRANCH_TABS` in `src-tauri/src/settings/model.rs`, exactly as
+   `SIDE_TABS` and `RIGHT_TABS` are: a third tab added on one side alone would
+   work all session and come back as Local after a restart, with no error
+   anywhere. */
+const setBranchTab = (tab) => {
+  project.branchTab = tab
 }
 
 /* Which branches are pinned above the tree, and this one is under the project
@@ -5611,6 +5625,7 @@ const toastStackStyle = {
                 :favorite-branches="project.favoriteBranches"
                 :remote="panelRemoteBranches"
                 :remote-folders="project.remoteBranchFolders"
+                :branch-tab="project.branchTab"
                 :message="draftMessage()"
                 :suggesting="vcsState.suggesting"
                 :suggest-error="vcsState.suggestError"
@@ -5619,6 +5634,7 @@ const toastStackStyle = {
                 @toggle="toggleGitSection"
                 @toggle-folder="toggleBranchFolders"
                 @toggle-remote-folder="toggleRemoteBranchFolders"
+                @branch-tab="setBranchTab"
                 @favorite="setFavoriteBranches"
                 @resize="resizeGitSection"
                 @setup="openSetup(activePath, true)"

@@ -266,16 +266,29 @@ const defaults = () => ({
        in, while an empty list is somebody having folded them all. Written out
        whole on the first press — `branchTree.js` holds both halves of that. */
     branchFolders: null,
-    /* Which folders of the Git panel's `origin` group are unfolded, by whole
-       path, the group's own heading `origin` among them. A plain list where the
+    /* Which folders of the Git panel's Origin tab are unfolded, by whole path
+       and with no group prefix on them — `feature`, not `origin/feature`, since
+       there is no heading above them to prefix with. A plain list where the
        local folders above are nullable: there is no "nobody has chosen" state
-       here, since the group starts folded and stays that way until somebody
-       opens it. Its own key rather than entries in `branchFolders` — a local
-       branch may be called `origin/spike`, and one list would then unfold two
-       different rows at once. Listed here for the reason `runSettings` below
-       spells out: a key missing from this object is a key the defaults layer
-       cannot clear. */
+       here, since every folder starts folded and stays that way until somebody
+       opens it. Its own key rather than entries in `branchFolders` — `feature`
+       on one tab and `feature` on the other are two different rows, and one
+       list would unfold both at once. An entry left over from the old prefixed
+       shape matches nothing, which means a folded folder and needs no
+       migration. Listed here for the reason `runSettings` below spells out: a
+       key missing from this object is a key the defaults layer cannot clear. */
     remoteBranchFolders: [],
+    /* Which of the two sides of the Git panel's branch list is showing —
+       `local` or `origin`. A way of looking at a repository rather than a
+       one-off act, so it survives a restart the way a fold does, and per
+       project because a repository with 593 branches on `origin` and one with a
+       single `main` there are not looked at the same way. `BRANCH_TABS` in
+       `branchTree.js` is the closed list the value has to come off, and
+       `settings/model.rs` holds the same two words: a value Rust does not know
+       is rewritten to `local` on the way in, with nothing on screen saying why.
+       Listed here for the reason `runSettings` below spells out — a key missing
+       from this object is a key the defaults layer cannot clear. */
+    branchTab: 'local',
     /* Which branches the Git panel pins above the tree, by whole name. A plain
        list where the folders above are nullable, and that is the difference
        between the two: there is no third state here, since nothing is marked

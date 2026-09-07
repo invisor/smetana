@@ -36,6 +36,16 @@ const SIDE_TABS: [&str; 3] = ["files", "git", "agents"];
 /// of what that panel drew before there was a row over it, so it is the one a
 /// damaged value comes back as.
 const RIGHT_TABS: [&str; 2] = ["task", "sessions"];
+/// The Git panel's branch list has two sides and a row of tabs over them, and
+/// this is the third closed list doubled across the IPC boundary: the same two
+/// words are `BRANCH_TABS` in `src/components/git/branchTree.js`, with the
+/// default written out a third time in `src/stores/settings.js`'s project
+/// defaults. `local` is what the panel drew before the tab row existed, so it
+/// is what a damaged value comes back as — and a value the front end offers and
+/// this list does not know is rewritten here with nothing logged and nothing on
+/// screen, which a person only ever sees as the app forgetting a choice after a
+/// restart.
+const BRANCH_TABS: [&str; 2] = ["local", "origin"];
 /// The centre has no closed list of tabs and never will: file tabs come from
 /// the project. So we check sanity rather than membership.
 const MAX_ID_LEN: usize = 200;
@@ -713,26 +723,47 @@ pub struct ProjectState {
     /// would be no way to fold the last folder away, because the empty list
     /// would read as the first case and come back unfolded on the next start.
     pub branch_folders: Option<Vec<String>>,
-    /// Which folders of the Git panel's `origin` group are unfolded, by whole
-    /// path — `origin`, `origin/feature`. The group's own heading is the entry
-    /// `origin`, so an empty list is the whole group folded, which is the
-    /// default: the group holds every branch this machine has not checked out,
-    /// which in a working repository is most of them.
+    /// Which folders of the Git panel's Origin tab are unfolded, by whole path
+    /// and with no group prefix on them — `feature`, not `origin/feature`.
+    /// There is no heading over that tab to prefix with: it draws the whole of
+    /// `origin` and the tab row above it is what says where the branches come
+    /// from. An empty list is every folder on it folded, which is the default.
     ///
     /// **Its own field rather than an entry in `branch_folders`, and that is the
-    /// collision it exists to avoid.** A local branch may legally be called
-    /// `origin/spike`, which puts a *local* folder named `origin` in the tree
-    /// above; one shared list would make one entry mean two different rows and
-    /// unfold both at once. A namespace inside the shared list — a prefix, or a
-    /// character git forbids in a ref name — buys the same separation at the
-    /// price of a rule somebody has to remember while reading `settings.json`.
+    /// collision it exists to avoid.** A folder called `feature` on one tab and
+    /// one called `feature` on the other are two different rows, and one shared
+    /// list would unfold both at once. A namespace inside the shared list — a
+    /// prefix, or a character git forbids in a ref name — buys the same
+    /// separation at the price of a rule somebody has to remember while reading
+    /// `settings.json`.
+    ///
+    /// **No migration for the prefixed paths an older file holds.** An entry
+    /// that matches no folder means a folder that is folded, which is this
+    /// field's own default, so the worst an `origin/feature` left behind can do
+    /// is nothing at all.
     ///
     /// A plain `Vec` where its neighbour is an `Option`, because there is no
     /// third state here. `branch_folders`' `None` means "nobody has chosen, so
-    /// unfold the folder the current branch is in", and no branch in this group
-    /// is the current one — by definition, since the group is what this
-    /// repository does not have.
+    /// unfold the folder the current branch is in", and this tab has no such
+    /// seed to write: the branch a repository is on is one row of an alphabet
+    /// here, with nothing about it worth opening a folder for.
     pub remote_branch_folders: Vec<String>,
+    /// Which side of the Git panel's branch list is showing: `local`, the
+    /// branches this repository has, or `origin`, the branches that remote has.
+    /// `BRANCH_TABS` above is the closed list and `local` the default.
+    ///
+    /// Per project beside `branch_folders` and `favorite_branches` on their
+    /// argument, and not in `layout` beside the section heights: how tall
+    /// somebody likes their branch list is a habit of theirs, while which side
+    /// of a repository is worth looking at is a fact about that repository — a
+    /// checkout with 593 branches on `origin` and none of them local is not
+    /// read the way one with a single `main` there is.
+    ///
+    /// A `String` off a closed list rather than a `bool`, which is what
+    /// `side_tab` and `right_tab` are and for their reason: a third side is a
+    /// word added to two lists, where a flag would have to be replaced
+    /// everywhere it is read.
+    pub branch_tab: String,
     /// Which branches the Git panel pins above the tree, by whole name. Per
     /// project and beside `branch_folders` on that field's own argument: which
     /// names are worth keeping in reach is a fact about a repository and its
@@ -880,6 +911,7 @@ impl Default for ProjectState {
             expanded: Vec::new(),
             branch_folders: None,
             remote_branch_folders: Vec::new(),
+            branch_tab: "local".into(),
             favorite_branches: Vec::new(),
             open_tabs: Vec::new(),
             preview_tab: None,
@@ -1653,12 +1685,18 @@ impl ProjectState {
         if let Some(folders) = self.branch_folders.as_mut() {
             sane_list(folders, MAX_BRANCH_FOLDERS, MAX_PATH_LEN);
         }
-        // The `origin` group's own folds, cleaned in place for the reason the
+        // The Origin tab's own folds, cleaned in place for the reason the
         // local ones above are: the list records what somebody unfolded, and one
         // junk entry is no reason to refold the rest. The same ceilings, since a
         // folder path here is path-like too — and no `Option` to unwrap, because
         // an empty list already means what it says.
         sane_list(&mut self.remote_branch_folders, MAX_BRANCH_FOLDERS, MAX_PATH_LEN);
+        // The tab that list is drawn as, off its own closed list. The same
+        // doubling `SIDE_TABS` carries and the same obligation: a word the
+        // front end offers and this list does not know is rewritten to `local`
+        // here, silently, and the person watches the app forget their choice
+        // one restart later.
+        one_of(&mut self.branch_tab, &BRANCH_TABS, "local");
         // A branch name is path-like, so the path ceiling and not the
         // identifier one. Cleaned in place for the reason the folders above
         // are: the list is a record of what somebody marked, and one junk entry
@@ -2648,12 +2686,12 @@ mod tests {
         );
     }
 
-    /// The `origin` group's folds have no third state, which is where the field
+    /// The Origin tab's folds have no third state, which is where the field
     /// parts company with its neighbour: a file that has never heard of it opens
-    /// with the whole group folded, and that is also what somebody folding it
-    /// away by hand leaves behind.
+    /// with every folder on that tab folded, and that is also what somebody
+    /// folding them all away by hand leaves behind.
     #[test]
-    fn a_file_with_no_remote_branch_folders_has_the_whole_group_folded() {
+    fn a_file_with_no_remote_branch_folders_has_every_folder_folded() {
         let text = serde_json::json!({"version": 1, "projects": {"/p": {"expanded": []}}});
 
         let settings = settings_of(&text.to_string());
@@ -2662,17 +2700,19 @@ mod tests {
     }
 
     /// Cleaned in place like every other list of folder paths here, and kept
-    /// apart from `branchFolders`: a local branch called `origin/spike` puts a
-    /// local folder named `origin` in the tree above, and the two folds are two
-    /// facts.
+    /// apart from `branchFolders`: a folder called `feature` on the Origin tab
+    /// and one called `feature` on the Local tab are two different rows, and the
+    /// two folds are two facts. The paths carry no group prefix — `feature`, not
+    /// `origin/feature` — since there is no heading over that tab to prefix
+    /// with.
     #[test]
     fn unfolded_remote_branch_folders_survive_the_trip_and_are_cleaned_in_place() {
         let text = serde_json::json!({
             "version": 1,
             "projects": {
                 "/p": {
-                    "branchFolders": ["origin"],
-                    "remoteBranchFolders": ["origin", "origin/feature", "", "origin"]
+                    "branchFolders": ["feature"],
+                    "remoteBranchFolders": ["feature", "fix/legacy", "", "feature"]
                 }
             }
         });
@@ -2681,13 +2721,75 @@ mod tests {
 
         assert_eq!(
             settings.projects["/p"].remote_branch_folders,
-            vec![String::from("origin"), String::from("origin/feature")],
+            vec![String::from("feature"), String::from("fix/legacy")],
             "the blank and the duplicate fall out, the rest keeps its order"
         );
         assert_eq!(
             settings.projects["/p"].branch_folders,
-            Some(vec![String::from("origin")]),
-            "the local folder called origin is a different fold and is untouched"
+            Some(vec![String::from("feature")]),
+            "the local folder of the same name is a different fold and is untouched"
+        );
+    }
+
+    /// The tab the branch list is drawn as survives the trip, and a file
+    /// written before the tab row existed opens on the side that list has
+    /// always been: the local branches.
+    #[test]
+    fn the_branch_tab_survives_the_trip_and_defaults_to_local() {
+        let text = serde_json::json!({
+            "version": 1,
+            "projects": {
+                "/p": {"branchTab": "origin"},
+                "/old": {"expanded": []}
+            }
+        });
+
+        let settings = settings_of(&text.to_string());
+
+        assert_eq!(settings.projects["/p"].branch_tab, "origin");
+        assert_eq!(
+            settings.projects["/old"].branch_tab, "local",
+            "a file that has never heard of the field opens on the local branches"
+        );
+    }
+
+    /// The failure this closed list exists to make loud in the one place it can
+    /// be: a word the front end offers and Rust has never heard of is rewritten
+    /// here, with nothing logged and nothing on screen — so the two lists have
+    /// to hold the same words. One damaged field does not take its neighbour.
+    #[test]
+    fn an_unknown_branch_tab_falls_back_to_local() {
+        let text = serde_json::json!({
+            "version": 1,
+            "projects": {"/p": {"branchTab": "upstream", "sideTab": "git"}}
+        });
+
+        let settings = settings_of(&text.to_string());
+
+        assert_eq!(settings.projects["/p"].branch_tab, "local");
+        assert_eq!(
+            settings.projects["/p"].side_tab, "git",
+            "one damaged field does not take its neighbour"
+        );
+    }
+
+    /// The folds of that tab and the tab itself are two fields and neither
+    /// decides the other: a project left on `origin` with every folder folded is
+    /// an ordinary state and comes back exactly as it was.
+    #[test]
+    fn the_branch_tab_and_its_folds_are_two_fields() {
+        let text = serde_json::json!({
+            "version": 1,
+            "projects": {"/p": {"branchTab": "origin", "remoteBranchFolders": ["feature"]}}
+        });
+
+        let settings = settings_of(&text.to_string());
+
+        assert_eq!(settings.projects["/p"].branch_tab, "origin");
+        assert_eq!(
+            settings.projects["/p"].remote_branch_folders,
+            vec![String::from("feature")],
+            "a fold path on this tab carries no group prefix any more"
         );
     }
 

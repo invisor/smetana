@@ -204,6 +204,45 @@ export const isShellSession = (session) => session?.work?.kind === SHELL_WORK
 const agentSessions = () => terminalState.sessions.filter((s) => !isShellSession(s))
 export const shellSessions = computed(() => terminalState.sessions.filter(isShellSession))
 
+/* The offers worth drawing: the registry's records, minus the conversations
+   that are already on screen alive.
+
+   The registry is written at the spawn rather than at the exit (see the header
+   of `src-tauri/src/terminal/restore.rs`), which is what makes an offer survive
+   a kill, a panic or a machine switched off at the wall — and it also means a
+   running session has a record in the file the whole time it runs. The first
+   read of a project happens before anything has been started in it, so nothing
+   showed; a second read, which is what a switch away and back costs, comes back
+   holding the live sessions too, and each of them drew a dim `offline` row
+   underneath itself offering to resume the conversation already running in the
+   row above (smetana-psbb).
+
+   Matched on the conversation id and never on `id`: a live row's is the
+   worker's counter, a number that starts at 1 on every launch, while a
+   record's key *is* the conversation id. `record.sessionId` and
+   `session.conversation` are the same string for the same conversation, and
+   they are the only pair that is.
+
+   Derived here rather than filtered on the way in, because a read is a snapshot
+   and this question changes between two of them: a session started or ended
+   after `loadRestorable` answered would leave the stored list disagreeing with
+   the panel until the next project switch. `createSession` empties a resumed
+   record out of `restored` for this same reason and says so — this is that
+   conclusion made general, and the two are deliberately not one: that one is
+   about a record the worker has just rewritten, this one about every record the
+   file happens to hold.
+
+   Through `agentSessions` like everything else that asks what an agent is: a
+   shell has no row here and carries no conversation to match on. */
+const offeredRecords = () => {
+  const live = new Set(
+    agentSessions()
+      .map((s) => s.conversation)
+      .filter((id) => id != null)
+  )
+  return terminalState.restored.filter((record) => !live.has(record.sessionId))
+}
+
 /* Where the selection goes when what it named is gone: the newest agent, or
    nothing. The newest, because a new session always takes the highest id and so
    is the one most recently started; and never a shell, for the reason
@@ -541,8 +580,12 @@ export const agentRows = computed(() => [
      exited cleanly carries, through `toUiState` — a row for a dead process is
      a row for a dead process, whichever way the app learnt about it. The
      elapsed slot says what the row is rather than how long it has been going,
-     the way a start's says `starting`. */
-  ...terminalState.restored.map((record) => ({
+     the way a start's says `starting`.
+
+     Through `offeredRecords` and not `terminalState.restored`: the registry
+     holds a record for a live session too, and drawing that one here would put
+     an `offline` clone under the agent it is. */
+  ...offeredRecords().map((record) => ({
     id: record.sessionId,
     /* The record's key *is* the conversation id — it is what
        `.smetana/agents.json` is keyed by — so a row that comes back after a

@@ -477,92 +477,131 @@ against that seed and hands the panel a whole new list, which is what writes the
 first press. Nothing reopens a folder afterwards, and it does not need to: the only way to press a
 branch row is to see it, so a branch checked out from this panel was in a folder that was open.
 
-### The `origin` group, and taking a branch out of it
+### Two tabs over the branch list: Local and Origin
 
-**At the foot of the list sits a second group, headed `origin`, holding the branches that remote has
-and this repository does not.** It is the one question the list above cannot answer — a colleague
-pushed, this machine fetched, and there was no row anywhere in the app to get onto it, since
-`vcs_checkout`'s `--no-guess` exists precisely to stop git creating that local branch behind
-somebody's back. Everything needed was already there and free: `vcs_remote_branches` reads
-`refs/remotes/origin/` and `packed-refs` off the disk with no process at all, and the refs are kept
-fresh by the sweep and the `Check the remote` button above. What was missing was the rows and one
-verb.
+**The Branches caption carries a row of two tabs, `Local` and `Origin`, and exactly one side is on
+screen.** `Local` is everything above — the current branch, the favourites, the tree in
+`by_recency`'s order. `Origin` is the whole of what `origin` has, in the alphabetical order
+`vcs_remote_branches` answers in, with nothing lifted to the top of it.
 
-**Only the branches with no local twin, and no heading at all when there are none.** A remote branch
-that also exists here has a row one group up, and that is the row worth pressing — the branch itself
-rather than a copy of it at whatever commit the last fetch saw. GitLens draws the full list; that
-costs a duplicate of every row somebody already has, with no verb of its own behind it. Rejected with
-it: **mixing the rows into the tree above**, which reads well over five branches and badly over the
-repository this was asked for, where `origin` holds 87 against four local — the four somebody works
-on would be scattered through a list twenty times longer, and the ordering promise cannot survive
-rows that have no local reflog at all. The rule is `remoteBranchRows` in `branchTree.js`, pure and
-tested beside `branchRows`; the folders inside the group are the same rule as above, with every path
-written under the heading (`origin`, `origin/feature`). Inside it the order is the alphabetical one
-`vcs_remote_branches` answered in, which the review window's list already settled: a remote-tracking
-ref's reflog says when this machine last *fetched*, which is a fact about the fetch.
+**This replaces a group at the foot of the local list**, which held only the branches with no local
+twin, and it replaces it because that shape was unreachable in both directions. In the repository it
+was asked for — 346 local branches against 593 on `origin` with no twin — the group's heading sat 346
+rows down a scroller, and the person who checked the feature concluded it had not been built. In a
+repository where `origin` holds nothing extra, smetana's own, the group was not drawn at all, which
+on screen is indistinguishable from broken. The narrow question that group answered — what is on the
+server that is not here yet — was forced on it by its position: under the local list it would
+otherwise have been a duplicate of the list above. A tab of its own has no such obligation, and a tab
+labelled `Origin` showing half of `origin` would be lying in its own title. So it shows all of it.
 
-**The Branches caption's count stays the number of local branches**; the group carries its own on its
-heading, the way every folder here does. A count that jumped from 4 to 91 would be describing a
-different list.
+**The count in the caption is the count of the tab underneath it** — local branches on `Local`,
+`origin`'s branches on `Origin`. A caption describing the other list is the precise defect that made
+this task necessary.
 
-**The folds are their own settings field, `remoteBranchFolders`, and that is the collision the field
-exists for.** A local branch may legally be called `origin/spike`, which puts a *local* folder named
-`origin` in the tree above; one shared list would make one entry mean two rows and unfold both. A
-namespaced key inside `branchFolders` buys the same separation at the price of a rule somebody has to
-remember while reading `settings.json`. It is a plain `Vec` where its neighbour is an `Option`, and
-empty means the whole group folded, the group's own heading included — which is the **default**, and
-deliberately not `branchFolders`' `null`: that seed unfolds the current branch's folder, and no
-branch in this group is the current one. `toggleRemoteFolder` is the press, simpler than
-`toggleFolder` beside it because there is no seed to write out.
+**The tab row is a row of its own, and it is `shell/SegmentedTabs.vue` — the same control both side
+columns draw.** Not three more controls in the caption: that caption already carries a chevron, a
+word, a count and Fetch, Pull and Push, and this panel is 252px wide. And not a row written here
+either, however tempting the pinned height below makes it: that component's own header names a second
+copy of its two style objects, obliged to match with nothing mechanical holding them together, as
+exactly the pair that drifts.
 
-**The row draws `cloud` where the rows above draw `git-branch`**, at the same `MARK` size and in the
-same one colour, so the names stay in one column. No star — `favoriteBranches` is about branches this
-repository has, and pinning one of these starts with the checkout. No `↓N`/`↑N`, and that is
-structural rather than filtered: `vcs_tracking` walks `refs/heads` and can never hold a record for a
-branch that is not in it. Under a run the rows mute and go inert with the local ones, since checking
-one out writes the working tree and the one `gitActions.js` verdict covers it unchanged, while the
-heading goes on unfolding — unfolding is reading. The rows carry `remote:` in front of their key
-inside `BranchList.vue`, because a local folder called `origin` and this group's heading would
-otherwise be one key sharing one hover.
+**It is deliberately *not* `--row-h` tall, and `headerRows` measures it rather than asserting it.**
+`SegmentedTabs` sizes itself from `--control-h-sm` plus `--space-2` above and below plus its own
+`--border-w` rule — 33px against a 28px row comfortable, 27px against 22px compact, about 1.18 rows
+either way. So `GitPanel.vue` observes the wrapper with the `ResizeObserver` it already runs over the
+panel and the repositories header, and `headerRows` is the captions on screen plus `tabsPx / rowPx`.
+A fraction is at home there: `available` is already one, and `clampRows` floors the ceiling at the
+end. **Do not "simplify" this back into a count.** Pinning the row at `--row-h` to make the number
+whole means writing those style objects out here again, and dropping the measurement while the row
+stays this height puts every section's ceiling out by a fifth of a row. The measurement is the cheap
+half — it is one more `observe` on an observer that exists.
 
-**Two menu items and only two**, `remoteBranchMenuItems` in `branchMenu.js`: `Check out from origin`
-and `Copy branch name`, the second word for word the local row's. Merge, rebase, rename, delete and
-`New branch from this` are each a write against a ref this app does not own, and the honest first
-step for all of them is the checkout above. Compare is left off too — comparing against `origin` is
-what the branch review window is for, and that window already reaches every repository of the
-project rather than the one this panel selected. The refusal is `frozen`'s, unchanged: a run or an
-operation in flight greys the checkout under the same caption, and the copy stays live under it.
+The row is drawn only while the section is unfolded, and it stays live under a run: choosing which
+side to look at is reading, the same rule that keeps a folder heading pressable.
 
-**The verb is a second command and not a flag**: `vcs_checkout_remote(repo, branch)`, which runs
-`git switch --create <branch> --track origin/<branch>`. `vcs_checkout` does not change — its header's
-argument about `--no-guess` holds, and what is different here is that the row pressed says `origin`
-on it, so creating the local branch is the act somebody asked for by name. Two acts, two commands,
-each with a header describing one of them. `switch` and not `checkout -b`, the lesson
-`vcs_create_branch` records; `--create` and `--track` stated rather than inferred, so the local name
-and the upstream do not come out of `branch.autoSetupMerge` in somebody's config; and **never
-`--force`**. Nothing is pre-empted: a local branch of that name created since the list was read, a
-dirty tree, the branch held by another worktree, an `origin/<name>` a prune has removed — every one
-of them comes back at exit 128 in git's own words. `origin` and no other remote, since there is no
-notion of a second one anywhere in this app — the remote's name is a parameter of `git::remote_branches`
-and of nothing else, and its one caller, `vcs_remote_branches`, takes a repository and writes `origin`
-out itself. In the store it is `checkoutRemote`, through the same
-`write` helper with `op: 'checkout'` — what was pressed is a checkout either way, so the spinner and
-any refusal are drawn exactly as the local switch's are, and the refresh that follows is what moves
-the row into the list above.
+Rejected with the shape: a name filter over the list, which helps somebody who knows the name and
+does not answer "what is even on the server"; an `origin` heading moved to the top of the same list,
+which is cheaper but leaves two things in one scroller under one count; and a single toggle button
+with a `cloud` glyph, where the state of the list is legible only from the glyph on its rows, while a
+tab says what it is in a word.
+
+**`branchTree.js`'s `originBranchRows` is the rule**, pure and tested beside `branchRows`; folders
+are built by the same `build` the local tree uses, so `feature/two` is a `feature` heading here as
+well. **The fold paths carry no group prefix any more** — `feature`, not `origin/feature`. They are
+still `remoteBranchFolders` and still a field of their own, for the reason the field was made:
+`feature` on one tab and `feature` on the other are two different rows. No migration was written for
+the prefixed entries an older `settings.json` holds — an entry matching no folder means a folded
+folder, which is this field's default anyway.
+
+**A row draws one of two glyphs and answers one of two verbs, and one fact decides both.** A branch
+`origin` has and this repository does not draws `cloud`, and its double click is `vcs_checkout_remote`
+— the local branch is created, its upstream set, HEAD moved. A branch this repository already has
+draws `git-branch` at the same size and in the same colour, and its double click is an ordinary
+`vcs_checkout` onto the local branch of that name, which creates nothing. Which of the two a row is
+is `hasLocal`, answered by the rule and not by the component, so the glyph, the menu item and the
+gesture cannot come apart. The branch the repository is on carries the tick on the right here as it
+does on the other tab, and `current` can only ever be true of a row `hasLocal` is true of.
+
+**No stars and no `↓N`/`↑N` on this tab, on any row.** Both are answers about a local branch and its
+upstream, and the Local tab already carries them; the second could not be drawn anyway, since
+`vcs_tracking` walks `refs/heads`. Under a run the rows mute and go inert with the local ones — either
+checkout writes the working tree, and the one `gitActions.js` verdict covers both — while the headings
+and the tab row go on answering.
+
+**Two menu items and only two**, `originBranchMenuItems` in `branchMenu.js`, and which pair depends on
+the same `hasLocal`: `Check out from origin` / `Copy branch name` for a row without a twin,
+`Switch to this branch` / `Copy branch name` for one with. The second is word for word the Local
+tab's, deliberately — it is the same act. Merge, rebase, rename, delete and `New branch from this` are
+each about a local branch and live on the tab that has one; Compare is left off because comparing
+against `origin` is what the branch review window is for, and that window already reaches every
+repository of the project rather than the one this panel selected. The refusals are `frozen`'s,
+unchanged, plus `current` on the switch — a checkout of where you are standing is a row with nothing
+behind it, exactly as on the Local tab.
+
+**The verb behind the cloud row is a second command and not a flag**: `vcs_checkout_remote(repo,
+branch)`, which runs `git switch --create <branch> --track origin/<branch>`. `vcs_checkout` does not
+change — its header's argument about `--no-guess` holds, and what is different here is that the row
+pressed says so, so creating the local branch is the act somebody asked for by name. `switch` and not
+`checkout -b`, the lesson `vcs_create_branch` records; `--create` and `--track` stated rather than
+inferred, so the local name and the upstream do not come out of `branch.autoSetupMerge` in somebody's
+config; and **never `--force`**. Nothing is pre-empted: a local branch of that name created since the
+list was read, a dirty tree, the branch held by another worktree, an `origin/<name>` a prune has
+removed — every one of them comes back at exit 128 in git's own words. `origin` and no other remote,
+since there is no notion of a second one anywhere in this app. In the store it is `checkoutRemote`,
+through the same `write` helper with `op: 'checkout'` — what was pressed is a checkout either way, so
+the spinner and any refusal are drawn exactly as the local switch's are. What the refresh afterwards
+does is redraw rather than move: the row stays where the alphabet put it on this tab and is drawn from
+that moment as one with a local twin, and a row for it appears on the Local tab as the current branch.
+
+**Which tab is showing is remembered per project**, `settings.project.branchTab`, beside
+`branchFolders`, `remoteBranchFolders` and `favoriteBranches` and per project on their argument: a
+repository with 593 branches on `origin` is not looked at the way one with a single `main` there is.
+The two ids are a **closed list written down three times** — `BRANCH_TABS` in `branchTree.js`,
+`BRANCH_TABS` in `settings/model.rs`, and the default again in `stores/settings.js`'s project
+defaults — the same doubling `SIDE_TABS` and `RIGHT_TABS` carry and the same failure if they drift: a
+word the front end offers and Rust refuses is rewritten to `local` on load, with nothing logged, and
+the person watches the app forget a choice one restart later.
 
 **The list is loaded by `selectRepo`**, beside the local one, which makes the panel the second caller
 of a loader written for the review window. It costs no process, so it is affordable on every
 selection and on every refresh — and the refresh is how window focus reaches it, since `catchUp`
-calls `loadRepos`, which comes back through `selectRepo`. **The group is drawn only while
+calls `loadRepos`, which comes back through `selectRepo`. **The tab is filled only while
 `remoteBranchesRepo` names the selected repository**, and that guard is load-bearing rather than
 defensive: `loadReviewRemotes` walks every repository of the project through that same single field,
-so while its loop runs the field holds somebody else's list. With the guard the group is not drawn
-for a moment and comes back; without it the panel would offer branches this repository has never had.
-Two consequences went in with it: that loop **snapshots only while the field still names the
-repository it asked for**, since a focus landing mid-sweep can now move it, and it **re-reads the
-selected repository's list when it finishes**, so the group comes back without waiting for the next
-focus. A per-repository map in the store was rejected — the shape of that field is what the review
-window is built around, and the comparison already in the store answers the same question.
+so while its loop runs the field holds somebody else's list. With the guard the tab is empty for a
+moment and comes back; without it the panel would offer branches this repository has never had. Two
+consequences went in with it: that loop **snapshots only while the field still names the repository it
+asked for**, since a focus landing mid-sweep can now move it, and it **re-reads the selected
+repository's list when it finishes**, so the tab fills again without waiting for the next focus. A
+per-repository map in the store was rejected — the shape of that field is what the review window is
+built around, and the comparison already in the store answers the same question. **Do not add a fourth
+caller of that loader, do not drop the equality check, and do not put an `await` between the guard and
+the copy.**
+
+**Each tab has its own empty sentence**, the rule the three sections above keep: `No local branches in
+this repository.` on one, `Nothing on origin for this repository.` on the other, which covers a
+repository with no remote, one whose `origin` is empty, and the moment the store's single list is
+about somebody else. A blank area for either would be a tab saying nothing.
 
 **Out of scope and staying there**: the run dialog's "merge into" field and the compare window keep
 offering local branches only, and deleting a branch on the remote, renaming one there, pushing one
@@ -1215,8 +1254,9 @@ somebody else's commits.
 named explicitly rather than left to the config: with `pull.rebase` set in somebody's, one button
 would merge in one repository and rebase in the next, and the dialog would offer the abort of an
 operation that never started. Rejected: `--ff-only`, which is simplest and cannot conflict, but
-leaves a diverged branch with no move at all inside the app — the `origin` group at the foot of this
-list offers a checkout and nothing else, so there is still no remote branch here to merge from — and `--rebase`, whose stopped state is a detached HEAD, which is the state this
+leaves a diverged branch with no move at all inside the app — the Origin tab offers a checkout and
+nothing else, so there is still no remote branch here to merge from — and `--rebase`, whose stopped
+state is a detached HEAD, which is the state this
 panel draws worst. The store records the conflict with `op: 'merge'` for the same reason, since
 `OpKind` knows two words and `pull` is not one of them.
 
@@ -1613,12 +1653,11 @@ the list, and a form built from a list that has not arrived reads as a branch no
 lands, because that store field is a single list written for a caller looking at one repository;
 sequential and not parallel for exactly that reason, and it costs nothing worth parallelising since
 `vcs_remote_branches` spawns no process at all. The Git panel is a second caller of that loader now —
-it reads the selected repository's list on every selection and every refresh, for the `origin` group
-at the foot of its branch list — so the copy is taken **only while the field still names the
-repository this turn of the loop asked for**, and a repository whose answer was moved out from under
-it is left with no entry, which this window already reads as *not known*. The loop re-reads the
-selected repository's list on the way out, so the panel's group comes back without waiting for a
-focus. It answers one question here — whether a side reading
+it reads the selected repository's list on every selection and every refresh, to fill the Origin tab
+of its branch list — so the copy is taken **only while the field still names the repository this turn
+of the loop asked for**, and a repository whose answer was moved out from under it is left with no
+entry, which this window already reads as *not known*. The loop re-reads the selected repository's
+list on the way out, so the panel's tab fills again without waiting for a focus. It answers one question here — whether a side reading
 `origin` exists in a repository — and a repository whose list has not landed is read as *not known*
 rather than as *not there*, which falls through to the local answer. When each repository last fetched
 rides out of that same loop, keyed by path, and dates both the `origin` rows in the list and the

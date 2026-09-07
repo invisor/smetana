@@ -1380,14 +1380,14 @@ const gitFolders = ref(null)
    a thing that can be done here. */
 const foldedTracking = ref([])
 
-/* What `origin` holds, against `FOLDER_BRANCHES`: two names the local list
-   already has, which the group drops on purpose, and three it does not — two of
-   them under folders, so the tree inside the group is checkable here, and one
-   with no slash in it, which is the row that draws the `cloud` glyph directly
-   under the group's own heading. The order is alphabetical because that is how
-   `vcs_remote_branches` answers and nothing on the front end re-sorts it.
+/* What `origin` holds, against `FOLDER_BRANCHES`: two names the local list also
+   has — which the Origin tab draws like every other, marked as having a local
+   twin — and three it does not, two of them under folders so the tree is
+   checkable here, and one with no slash in it. The order is alphabetical
+   because that is how `vcs_remote_branches` answers and nothing on the front
+   end re-sorts it.
 
-   Named after the group it draws rather than "remote", which is taken above by
+   Named after the tab it draws rather than "remote", which is taken above by
    the list the caption's two buttons are checked against — a different
    question, and the collision is worth avoiding now that this panel draws real
    remote branches. */
@@ -1399,16 +1399,27 @@ const ORIGIN_BRANCHES = [
   'spike-origin-only'
 ]
 
-/* The group open, and live: press the `origin` heading to fold it away and the
-   `feature` heading inside it to fold that. It starts open because a frame
-   drawn folded shows one row and hides the whole feature; the shipped default
-   is the opposite, an empty list, which the frame below this one draws. */
-const remoteFolders = ref(['origin', 'origin/feature'])
+/* Its folders, unfolded, and live: press `feature` to fold it away. The paths
+   carry no group prefix — there is no heading above them any more — which is
+   also the difference an old `settings.json` shows, where `origin/feature`
+   matches nothing and simply leaves the folder folded. */
+const remoteFolders = ref(['feature', 'hotfix'])
 
-/* The shipped default — everything folded, the group included — and live too,
-   so the rows under a run can be reached by pressing the heading that a run is
-   deliberately not allowed to refuse. */
+/* The shipped default — every folder folded, which is what an empty list means
+   here — and live too, so the rows under a run can be reached by pressing a
+   heading that a run is deliberately not allowed to refuse. */
 const foldedRemote = ref([])
+
+/* Which side of the branch list the live `GitPanel` frame is showing, held here
+   the way the app holds it under the project. It starts on Local, which is what
+   a project starts on; press `Origin` and the count in the caption above has to
+   change with the list under it. */
+const gitBranchTab = ref('local')
+
+/* And the same under a run, live too — the claim that frame makes is that the
+   row goes on answering while every write in the panel is held, which a frame
+   whose press does nothing cannot show. */
+const gitRunTab = ref('origin')
 
 /* The branches somebody pinned, against `FOLDER_BRANCHES` — two that live
    inside folders, one that has no slash in it at all, and the branch the
@@ -3813,11 +3824,68 @@ const menuTargetStyle = {
               selected="/Users/you/dev/smetana"
               :tree="{ branch: 'feat/worktree-rename', detached: null, changes: CHANGES }"
               :branches="LONG_BRANCHES"
+              :remote="ORIGIN_BRANCHES"
               :sections="gitFolds"
               :branch-folders="gitFolders"
+              :remote-folders="remoteFolders"
+              :branch-tab="gitBranchTab"
               @toggle="toggleGitSection"
               @toggle-folder="gitFolders = $event"
+              @toggle-remote-folder="remoteFolders = $event"
+              @branch-tab="gitBranchTab = $event"
               @resize="resizeGitSection"
+            />
+          </Panel>
+        </div>
+        <!-- The tab row itself, which is the whole of this task, parked on
+             `Origin` so both sides are on the page at once without anybody
+             having to press anything.
+
+             What to check. The row is one control row, the same height as the
+             tab rows the side columns draw — deliberately **not** the height of
+             the caption above it or of the branch rows below it, since it is
+             `SegmentedTabs` and sizes itself from `--control-h-sm` and its own
+             padding. Its height is measured rather than asserted, so what
+             matters is what that measurement buys: the sections below still
+             stop on whole rows, with no half row peeking out from under a fold,
+             in both densities. The hairline under the row is the one
+             `SectionHeader` draws, at one pixel and not two. The active segment
+             is a fill and never a colour change, and the inactive one is
+             legible rather than invisible on both themes. And the count in the
+             caption is the count of the list underneath: five here, against the
+             eight local branches the frame beside this one counts. -->
+        <div :style="{ display: 'flex', width: '252px', height: '420px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <template #actions>
+              <IconButton icon="refresh-cw" label="Refresh git" size="sm" />
+            </template>
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="CLEAN_TREE"
+              :branches="LONG_BRANCHES"
+              :remote="ORIGIN_BRANCHES"
+              branch-tab="origin"
+              :remote-folders="['feature']"
+            />
+          </Panel>
+        </div>
+        <!-- And the same tab with a run going, where the tab row is deliberately
+             the one thing not dimmed with the rows: choosing which side of the
+             repository to look at is reading, exactly as unfolding a heading
+             is. -->
+        <div :style="{ display: 'flex', width: '252px', height: '300px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="CLEAN_TREE"
+              :branches="LONG_BRANCHES"
+              :remote="ORIGIN_BRANCHES"
+              :branch-tab="gitRunTab"
+              :remote-folders="['feature']"
+              :actions="RUN_GOING"
+              @branch-tab="gitRunTab = $event"
             />
           </Panel>
         </div>
@@ -4151,37 +4219,52 @@ const menuTargetStyle = {
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="FOLDER_BRANCHES" :folders="['feature', 'fix', 'fix/legacy']" />
         </div>
-        <!-- The `origin` group, live and open. What to check: the heading sits
-             under the local tree and carries the number of branches `origin`
-             has that this repository does not — three, not five, since
-             `develop` and `main` are in the list above and are deliberately
-             left out. The `cloud` glyph is the same size as the `git-branch`
-             above it and the names below stay in one column with them; there is
-             no star and no `↓N` on any of these rows. Press the `origin`
-             heading to fold the group away, and `feature` inside it to fold
-             that; right-click a row for the two items it has. -->
+        <!-- The Origin tab, live and open. What to check: every branch
+             `origin` has is here, the two that this repository also has drawn
+             with `git-branch` and the three it does not with `cloud`, at the
+             same size and in the same colour so the names stay in one column.
+             `main` is the branch the repository is on and carries the tick on
+             the right. There is no star and no `↓N` on any row, and no `origin`
+             heading over them — the tab is what says where these come from.
+             Press `feature` to fold it; right-click a row for the two items it
+             has, which are `Check out from origin` on a cloud row and `Switch
+             to this branch` on a branch one. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList
-            :branches="FOLDER_BRANCHES"
-            :folders="['feature']"
+            tab="origin"
+            :branches="[
+              { name: 'main', current: true },
+              { name: 'develop', current: false },
+              { name: 'fix/legacy/depot-import', current: false }
+            ]"
             :remote="ORIGIN_BRANCHES"
             :remote-folders="remoteFolders"
             @toggle-remote-folder="remoteFolders = $event"
           />
         </div>
-        <!-- The same group as it ships: folded, which is what an empty
-             `remoteBranchFolders` means, with a run going over it. The heading
-             is live like every other heading here — unfolding is reading — and
-             the rows under it, once unfolded, are muted and inert with the
-             local ones, since checking one out writes the working tree. -->
+        <!-- The same tab as it ships: every folder folded, which is what an
+             empty `remoteBranchFolders` means, with a run going over it. The
+             headings are live like every other heading here — unfolding is
+             reading — and the rows, once unfolded, are muted and inert with the
+             local ones, since checking one out writes the working tree either
+             way. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList
+            tab="origin"
             :branches="FOLDER_BRANCHES"
             :remote="ORIGIN_BRANCHES"
             :remote-folders="foldedRemote"
             :actions="RUN_GOING"
             @toggle-remote-folder="foldedRemote = $event"
           />
+        </div>
+        <!-- The tab's own empty state, which is a repository with no remote, one
+             whose `origin` is empty, and the moment while the store's single
+             remote list is about another repository. One sentence, never a blank
+             area — and deliberately not the local tab's, which is beside it two
+             frames down. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList tab="origin" :branches="FOLDER_BRANCHES" :remote="[]" />
         </div>
         <!-- The heading's own mark, which is the whole reason it exists: every
              folder is folded, `fix/legacy/depot-import` is behind, and both
