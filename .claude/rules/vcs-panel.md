@@ -726,14 +726,28 @@ side.
 **Opening moves the focus into the field and closing gives it back to the `search` button**, and that
 is one contract rather than two halves: closing unmounts the element holding the focus, so a close
 saying nothing drops it on `<body>` — after the opening half has taught somebody that this control
-moves their caret for them. All three exits come through `closeFilter`, so there is one answer and
-not three. The field keeps `base.css`'s own focus ring and **pulls it inside its own edge**
-(`outlineOffset: calc(var(--border-w-strong) * -1)`, `AttachmentStrip`'s line for the same clipping):
+moves their caret for them. Every way out goes through `closeFilter`, so there is one answer and not
+three, and **what earns the focus back is having had it rather than which line called**: the fourth
+caller is the watch that closes the field when the repository under the panel changes, and a restore
+there would pull the caret into this panel in answer to a press somewhere else entirely. The
+condition is `focusInside`, read before the state is cleared and asking about the caption row and the
+list rather than about the `<input>` — two of the three ways out are presses on buttons outside the
+field, and where the focus stands during a press on a button is the one thing WebKit and Blink
+disagree about.
+
+The field keeps `base.css`'s own focus ring and **pulls it inside its own edge**
+(`outlineOffset: calc(var(--border-w-strong) * -1)`, `AttachmentStrip`'s line for the same overflow):
 the ring is drawn a pixel outside by default and this input is the height of the row it sits in, so
-an outside ring overflows the caption and is clipped by the rows either side, worst in compact.
+an outside ring stands proud of the caption and **overlaps** the hairline above and the tab row
+beneath, worst in compact. Overlaps rather than is clipped — nothing near here has a non-visible
+overflow, so the ring draws whole and in the wrong place, which is the harder defect to notice.
 Suppressing it was tried and is wrong — the `x` sits inside the same plate, one Tab from the input
 and one Shift+Tab back, so a field with no ring, no border and a transparent ground is a caret
-nothing on screen accounts for.
+nothing on screen accounts for. **The two `sm` buttons beside it keep the default ring and are left
+alone**: they overlap the row in exactly the same way, and the inset here is bought by this element
+being the height of its row. Insetting generally means naming the ring's own width, there is no token
+for it — `--border-w-strong` matching `base.css`'s 2px is a coincidence leaned on knowingly — and one
+answer for every focusable control in the app is a design-system question rather than a component's.
 
 `x`, `Clear filter` and `Esc` on an empty field all do one thing — **clear and close**, since a field
 left open and empty is a caption that has stopped being one for no reason. `Esc` on a field with

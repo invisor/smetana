@@ -622,10 +622,20 @@ const branchInput = ref('')
 const branchQuery = ref('')
 const filterField = ref(null)
 /* The button the field replaces, held because closing has to give the focus
-   back to it — see `closeFilter`. It is `v-if`'d away while the field stands,
-   so this is null for exactly as long as the field is the thing that has the
-   focus. */
+   back to it — see `closeFilter`. It is `v-if`'d away for as long as the field
+   **stands**, which is not the same as for as long as the field **has the
+   focus**: one Tab reaches the `x` beside it and a press on a tab leaves the
+   caption altogether, with the field still there. So the `?.` is load-bearing
+   rather than defensive — the restore runs after the field has gone and the
+   button is back, but nothing here may assume where the focus was in between.
+   That question is `focusInside`'s. */
 const filterButton = ref(null)
+
+/* The caption row of the branches section, held for one question only: was the
+   focus inside what closing is about to take away. `SectionHeader` exposes its
+   own row element, the same way the repositories' header above is read for its
+   height. */
+const branchesHeader = ref(null)
 
 /* The step every change of state in this system is timed at, read off the root
    when it is wanted rather than once at import: the app-wide font size and
@@ -663,10 +673,36 @@ const openFilter = () => {
   nextTick(() => filterField.value?.focus())
 }
 
+/* Whether the focus is standing in something closing is about to take away:
+   the caption row, which holds the field and the `x` inside it, or the list
+   below, which holds the `Clear filter` button and is rebuilt from nothing the
+   moment the query goes.
+
+   **Deliberately not "is the focus in the `<input>`".** Two of the three ways
+   out are presses on buttons that are not inside it — the `x` is its sibling in
+   the plate and `Clear filter` is in the list — and where the focus stands
+   during a press on a button is the one thing the engines disagree about:
+   WebKit leaves it where it was, Blink moves it onto the button. A test written
+   against the input alone would hand the focus back on one engine and drop it
+   on `<body>` on the other, for the same press.
+
+   Read **before** the state is cleared, because by the time the restore runs
+   the elements this asks about have been unmounted. */
+const focusInside = () => {
+  const active = document.activeElement
+  if (!active) return false
+  return Boolean(
+    branchesHeader.value?.el?.contains(active) || branchBox.value?.contains(active)
+  )
+}
+
 /* Clearing and closing are one act, which is what the `x` does and what the
    `Clear filter` button under the empty state does: a field left open and empty
    is a caption that has stopped being one for no reason. */
 const closeFilter = () => {
+  /* Captured here and not in the callback: the answer is about the DOM as it
+     stands now, and the callback runs after the field has gone. */
+  const restore = branchSearching.value && focusInside()
   clearTimeout(debounce)
   branchInput.value = ''
   branchQuery.value = ''
@@ -679,15 +715,23 @@ const closeFilter = () => {
        a focus contract is worse than none: the opening half is what teaches
        somebody that this control moves their caret for them. It goes back to
        the button that opened the field, which is the element standing where the
-       field was and the one press away from opening it again. All three exits
-       come through here — `Esc` on an empty field, the `x`, and `Clear filter`
+       field was and the one press away from opening it again. Every way out
+       comes through here — `Esc` on an empty field, the `x`, `Clear filter`
        from under the empty state — so there is one answer and not three.
+
+       **And a fourth caller that must not restore anything**: the watch below,
+       which closes the field when the repository under the panel changes. That
+       is not somebody leaving the field, it is the ground moving while they are
+       somewhere else entirely, so a restore there would pull the caret into
+       this panel in answer to a press in another one. Hence `restore` rather
+       than a count of exits: what earns the focus back is having had it, not
+       which line called.
 
        `preventScroll`, `NewTaskModal`'s own line for reaching a control this
        way: focusing an element lets the browser scroll every ancestor to bring
        it into view, and the statement above this one has just put the branch
        list back where it was. */
-    filterButton.value?.$el?.focus({ preventScroll: true })
+    if (restore) filterButton.value?.$el?.focus({ preventScroll: true })
   })
 }
 
@@ -713,7 +757,12 @@ const onFilterKey = (event) => {
    this panel as exactly that — `selectedRepo` is per project, so the path under
    the panel changes whichever of the two moved. A filter carried across would
    be a field somebody left open over one repository, answering about another
-   with the same three letters in it. */
+   with the same three letters in it.
+
+   **This is the one caller of `closeFilter` that moves no focus**, and it is
+   why the restore is gated on a condition rather than on the call: nobody left
+   the field here, the ground moved under it, and the press that moved it was in
+   another panel. */
 watch(
   () => props.selected,
   () => {
@@ -798,15 +847,27 @@ const fieldRowStyle = {
    around it is the field, and a second box inside it would be two fields.
 
    **The focus ring is kept and pulled inside the element**, which is
-   `AttachmentStrip`'s line for the same clipping and the one workaround here.
+   `AttachmentStrip`'s line for the same overflow and the one workaround here.
    `base.css` draws the ring a pixel *outside*, and this input is the height of
-   the row it sits in — so an outside ring would overflow the caption top and
-   bottom and be clipped against the rows either side, worst in the compact
-   density where a row is at its shortest. Suppressing it instead was tried and
-   is wrong: the `x` button is inside this same plate, one Tab from here and one
-   Shift+Tab back, so a field with no ring, no border and a transparent ground
-   is a caret nothing on screen accounts for. Inset by the ring's own width it
-   is whole, and it touches nothing above or below. */
+   the row it sits in — so an outside ring stands proud of the caption top and
+   bottom and **overlaps** the hairline above and the tab row beneath, worst in
+   the compact density where a row is at its shortest. Overlaps rather than is
+   clipped: nothing near here has a non-visible overflow, so the ring draws
+   whole and in the wrong place, which is the harder defect to spot. Suppressing
+   it instead was tried and is wrong: the `x` button is inside this same plate,
+   one Tab from here and one Shift+Tab back, so a field with no ring, no border
+   and a transparent ground is a caret nothing on screen accounts for. Inset by
+   the ring's own width it is whole, and it touches nothing above or below.
+
+   **The two `sm` buttons beside it keep the stylesheet's default ring**, and
+   that is left alone deliberately. They overlap the row the same way — a
+   `--control-h-sm` control is 20px in a 22px compact row — and the inset here
+   is bought by this element being the height of its row, which is a fact about
+   this one field. Insetting a ring generally means naming the ring's own width,
+   and there is no token for it: `--border-w-strong` matching `base.css`'s 2px
+   is a coincidence this file leans on knowingly, not a rule. One answer for
+   every focusable control in the app is a design-system question and not a
+   component's to settle. */
 const fieldStyle = {
   flex: 1,
   minWidth: 0,
@@ -1302,6 +1363,7 @@ const onReset = (section) => emit('resize', { section, rows: null })
              a caption, which is why it takes the caption's place rather than
              standing beside it. -->
         <SectionHeader
+          ref="branchesHeader"
           divided
           label="Branches"
           :count="branchCount"
