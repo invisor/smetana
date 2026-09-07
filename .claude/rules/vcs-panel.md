@@ -498,12 +498,26 @@ labelled `Origin` showing half of `origin` would be lying in its own title. So i
 `origin`'s branches on `Origin`. A caption describing the other list is the precise defect that made
 this task necessary.
 
-**The tab row is a row of its own and is exactly `--row-h` tall.** Not three more controls in the
-caption: that caption already carries a chevron, a word, a count and Fetch, Pull and Push, and this
-panel is 252px wide. Being exactly one row is what keeps `sectionHeights.js` in rows —
-`headerRows` in `GitPanel.vue` counts it with the section captions, so the file itself needs no
-opinion about it. It is drawn only while the section is unfolded, and it stays live under a run:
-choosing which side to look at is reading, the same rule that keeps a folder heading pressable.
+**The tab row is a row of its own, and it is `shell/SegmentedTabs.vue` — the same control both side
+columns draw.** Not three more controls in the caption: that caption already carries a chevron, a
+word, a count and Fetch, Pull and Push, and this panel is 252px wide. And not a row written here
+either, however tempting the pinned height below makes it: that component's own header names a second
+copy of its two style objects, obliged to match with nothing mechanical holding them together, as
+exactly the pair that drifts.
+
+**It is deliberately *not* `--row-h` tall, and `headerRows` measures it rather than asserting it.**
+`SegmentedTabs` sizes itself from `--control-h-sm` plus `--space-2` above and below plus its own
+`--border-w` rule — 33px against a 28px row comfortable, 27px against 22px compact, about 1.18 rows
+either way. So `GitPanel.vue` observes the wrapper with the `ResizeObserver` it already runs over the
+panel and the repositories header, and `headerRows` is the captions on screen plus `tabsPx / rowPx`.
+A fraction is at home there: `available` is already one, and `clampRows` floors the ceiling at the
+end. **Do not "simplify" this back into a count.** Pinning the row at `--row-h` to make the number
+whole means writing those style objects out here again, and dropping the measurement while the row
+stays this height puts every section's ceiling out by a fifth of a row. The measurement is the cheap
+half — it is one more `observe` on an observer that exists.
+
+The row is drawn only while the section is unfolded, and it stays live under a run: choosing which
+side to look at is reading, the same rule that keeps a folder heading pressable.
 
 Rejected with the shape: a name filter over the list, which helps somebody who knows the name and
 does not answer "what is even on the server"; an `origin` heading moved to the top of the same list,

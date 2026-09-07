@@ -602,11 +602,14 @@ const drawn = computed(() => {
 const fills = computed(() => filler(drawn.value))
 
 /* The rows of chrome a section cannot give away: one per caption on screen,
-   plus the branch list's own tab row when there is one. That row is exactly
-   `--row-h` tall for this reason — counted here, `sectionHeights.js` needs no
-   opinion about it and the whole arithmetic stays in rows. Folded, the tabs are
-   not drawn and cost nothing, which is the same rule the captions keep about
-   the lists under them. */
+   plus the branch list's own tab row when there is one. That row is a
+   `SegmentedTabs` and is **not** `--row-h` — it sizes itself from
+   `--control-h-sm` and its own padding, which comes to about 1.18 rows in both
+   densities — so its height is measured above and divided by a row here rather
+   than counted as one. The fraction costs nothing: `available` is a fraction
+   already, and `clampRows` floors the ceiling. Folded, the tab row is not drawn
+   and `tabsPx` is 0, which is the same rule the captions keep about the lists
+   under them. */
 const branchTabsDrawn = computed(() => branchesDrawn.value && fold.value.branchesOpen)
 const headerRows = computed(
   () => drawn.value.length + (rowPx.value ? tabsPx.value / rowPx.value : 0)

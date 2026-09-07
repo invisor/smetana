@@ -2630,12 +2630,12 @@ mod tests {
         );
     }
 
-    /// The `origin` group's folds have no third state, which is where the field
+    /// The Origin tab's folds have no third state, which is where the field
     /// parts company with its neighbour: a file that has never heard of it opens
-    /// with the whole group folded, and that is also what somebody folding it
-    /// away by hand leaves behind.
+    /// with every folder on that tab folded, and that is also what somebody
+    /// folding them all away by hand leaves behind.
     #[test]
-    fn a_file_with_no_remote_branch_folders_has_the_whole_group_folded() {
+    fn a_file_with_no_remote_branch_folders_has_every_folder_folded() {
         let text = serde_json::json!({"version": 1, "projects": {"/p": {"expanded": []}}});
 
         let settings = settings_of(&text.to_string());
@@ -2644,17 +2644,19 @@ mod tests {
     }
 
     /// Cleaned in place like every other list of folder paths here, and kept
-    /// apart from `branchFolders`: a local branch called `origin/spike` puts a
-    /// local folder named `origin` in the tree above, and the two folds are two
-    /// facts.
+    /// apart from `branchFolders`: a folder called `feature` on the Origin tab
+    /// and one called `feature` on the Local tab are two different rows, and the
+    /// two folds are two facts. The paths carry no group prefix — `feature`, not
+    /// `origin/feature` — since there is no heading over that tab to prefix
+    /// with.
     #[test]
     fn unfolded_remote_branch_folders_survive_the_trip_and_are_cleaned_in_place() {
         let text = serde_json::json!({
             "version": 1,
             "projects": {
                 "/p": {
-                    "branchFolders": ["origin"],
-                    "remoteBranchFolders": ["origin", "origin/feature", "", "origin"]
+                    "branchFolders": ["feature"],
+                    "remoteBranchFolders": ["feature", "fix/legacy", "", "feature"]
                 }
             }
         });
@@ -2663,13 +2665,13 @@ mod tests {
 
         assert_eq!(
             settings.projects["/p"].remote_branch_folders,
-            vec![String::from("origin"), String::from("origin/feature")],
+            vec![String::from("feature"), String::from("fix/legacy")],
             "the blank and the duplicate fall out, the rest keeps its order"
         );
         assert_eq!(
             settings.projects["/p"].branch_folders,
-            Some(vec![String::from("origin")]),
-            "the local folder called origin is a different fold and is untouched"
+            Some(vec![String::from("feature")]),
+            "the local folder of the same name is a different fold and is untouched"
         );
     }
 

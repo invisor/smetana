@@ -3825,16 +3825,19 @@ const menuTargetStyle = {
              `Origin` so both sides are on the page at once without anybody
              having to press anything.
 
-             What to check. The row is exactly one row tall, the same height as
-             the caption above it and as every branch row below it, in both
-             densities — it is counted as a row by `headerRows`, so a row of any
-             other height puts the panel's whole arithmetic out. The hairline
-             under it is the one `SectionHeader` draws, at one pixel and not
-             two. The active segment is a fill and never a colour change, and
-             the inactive one is legible rather than invisible on both themes.
-             And the count in the caption is the count of the list underneath:
-             five here, against the eight local branches the frame beside this
-             one counts. -->
+             What to check. The row is one control row, the same height as the
+             tab rows the side columns draw — deliberately **not** the height of
+             the caption above it or of the branch rows below it, since it is
+             `SegmentedTabs` and sizes itself from `--control-h-sm` and its own
+             padding. Its height is measured rather than asserted, so what
+             matters is what that measurement buys: the sections below still
+             stop on whole rows, with no half row peeking out from under a fold,
+             in both densities. The hairline under the row is the one
+             `SectionHeader` draws, at one pixel and not two. The active segment
+             is a fill and never a colour change, and the inactive one is
+             legible rather than invisible on both themes. And the count in the
+             caption is the count of the list underneath: five here, against the
+             eight local branches the frame beside this one counts. -->
         <div :style="{ display: 'flex', width: '252px', height: '420px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <template #actions>
