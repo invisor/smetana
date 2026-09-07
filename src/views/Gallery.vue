@@ -4169,7 +4169,11 @@ const menuTargetStyle = {
              of the panel, and the `x` sits where the `search` button of the
              frame above sits. Type into it — the field is live here, and the
              caret and the placeholder are the two things worth looking at on
-             both themes. -->
+             both themes. Then Tab: the focus ring is `base.css`'s own, pulled
+             inside the input's own edge so it is whole rather than clipped
+             against the rows either side, and Tab again puts it on the `x`
+             inside the same plate — which is the pair of controls that makes
+             the ring load-bearing. Compact is the density to check it in. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <SectionHeader label="Branches" :count="9" searching>
             <template #editor>
@@ -4196,7 +4200,7 @@ const menuTargetStyle = {
                     minWidth: 0,
                     height: '100%',
                     border: 'none',
-                    outline: 'none',
+                    outlineOffset: 'calc(var(--border-w-strong) * -1)',
                     background: 'transparent',
                     color: 'var(--text-primary)',
                     font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'

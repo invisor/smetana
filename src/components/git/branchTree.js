@@ -523,9 +523,11 @@ export function branchTabLabels({
  * filter that answers on the keystroke — correct, and for free.
  *
  * The parse is here rather than in the component because `getPropertyValue`
- * hands back a **string in whatever unit the stylesheet was written in**, with
- * leading space and no normalisation: ` 90ms` today, ` .09s` after an edit
- * nobody would think of as behavioural. A unit this does not recognise, an
+ * hands back a **string in whatever unit the stylesheet was written in**, and
+ * nothing normalises it: `90ms` today, `.09s` after an edit nobody would think
+ * of as behavioural. Surrounding whitespace is tolerated rather than expected —
+ * a custom property's value is whatever was written after the colon, and this
+ * is not the place to find out which. A unit this does not recognise, an
  * unreadable value and a negative one all fall back to `FILTER_DELAY_MS`, which
  * is `--dur-fast`'s own value written out — a filter that never fires, or one
  * that fires 90 times a second, is worse than one that ignores the token.

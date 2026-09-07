@@ -746,7 +746,14 @@ describe('what the two tabs are called', () => {
    stylesheet happens to be written in. */
 describe('how long the field waits', () => {
   it('reads the token as the stylesheet writes it today', () => {
-    expect(filterDelay(' 90ms')).toBe(90)
+    expect(filterDelay('90ms')).toBe(90)
+  })
+
+  /* Tolerated rather than expected: nothing normalises a custom property's
+     value, and this rule is not the place to find out what the browser did
+     with the whitespace after the colon. */
+  it('tolerates whitespace around the value', () => {
+    expect(filterDelay(' 90ms ')).toBe(90)
   })
 
   it('reads seconds as seconds', () => {

@@ -684,8 +684,9 @@ the stylesheet's own step for a change of state, read off the root when it is wa
 import: the app-wide font size moves it, and `prefers-reduced-motion` zeroes it, which lands as a
 filter answering on the keystroke. `filterDelay` in `branchTree.js` is the parse and it is there
 rather than in the component because `getPropertyValue` answers in whatever unit the stylesheet was
-written in — ` 90ms` today, ` .09s` after an edit nobody would think of as behavioural — and an
-unrecognised unit falls back to 90.
+written in and nothing normalises it — `90ms` today, `.09s` after an edit nobody would think of as
+behavioural — with surrounding whitespace tolerated rather than expected, and an unrecognised unit,
+an unreadable value and a negative one all falling back to 90.
 
 **Matching is a case-insensitive substring over the whole name, prefix and all**, so `feat/nxc` and
 `nxc` both find `feat/nxc-204-…` and `feat/kick` finds nothing. Deliberately not fuzzy: the names in
@@ -721,6 +722,18 @@ about the wrong half of the repository. That empty state is `No local branch mat
 any and the query named back where nothing anywhere does, and a `Clear filter` button under it. The
 query is kept when the tab is switched, since the question is about the repository and not about the
 side.
+
+**Opening moves the focus into the field and closing gives it back to the `search` button**, and that
+is one contract rather than two halves: closing unmounts the element holding the focus, so a close
+saying nothing drops it on `<body>` — after the opening half has taught somebody that this control
+moves their caret for them. All three exits come through `closeFilter`, so there is one answer and
+not three. The field keeps `base.css`'s own focus ring and **pulls it inside its own edge**
+(`outlineOffset: calc(var(--border-w-strong) * -1)`, `AttachmentStrip`'s line for the same clipping):
+the ring is drawn a pixel outside by default and this input is the height of the row it sits in, so
+an outside ring overflows the caption and is clipped by the rows either side, worst in compact.
+Suppressing it was tried and is wrong — the `x` sits inside the same plate, one Tab from the input
+and one Shift+Tab back, so a field with no ring, no border and a transparent ground is a caret
+nothing on screen accounts for.
 
 `x`, `Clear filter` and `Esc` on an empty field all do one thing — **clear and close**, since a field
 left open and empty is a caption that has stopped being one for no reason. `Esc` on a field with

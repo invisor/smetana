@@ -107,8 +107,16 @@
 
    The Branches caption carries a `search` button, and pressing it turns that
    caption into a field: chevron, word and count out, glyph, `<input>` and `x`
-   in, inside the same `--row-h`. Everything about it lives **here**, in two
-   refs, and deliberately not in `settings.json` — a query is something somebody
+   in, inside the same `--row-h`. **Opening moves the focus into the field and
+   closing gives it back to the button**, which is one contract and not two
+   halves: closing unmounts the element holding the focus, so a close that said
+   nothing would drop it on `<body>` — after the opening half had taught
+   somebody that this control moves their caret for them. The field keeps the
+   stylesheet's own focus ring, pulled inside its own edge rather than
+   suppressed, because the `x` is one Tab away inside the same plate.
+
+   Everything about it lives **here**, in two refs, and deliberately not in
+   `settings.json` — a query is something somebody
    is doing this minute and not a preference, and a stored one would come back
    over a branch list they have since stopped looking for anything in. It does
    not survive a change of repository either, which is what the watch on
@@ -185,6 +193,7 @@ import {
   filterDelay,
   originBranches
 } from './branchTree.js'
+import { BRANCH_FILTER_LABEL } from './branchPicker.js'
 import { DEFAULT_ROWS as COMMIT_ROWS } from './commitBox.js'
 import { failureTextStyle, failureTitleStyle } from './failureStyle.js'
 import {
@@ -612,6 +621,11 @@ const branchSearching = ref(false)
 const branchInput = ref('')
 const branchQuery = ref('')
 const filterField = ref(null)
+/* The button the field replaces, held because closing has to give the focus
+   back to it — see `closeFilter`. It is `v-if`'d away while the field stands,
+   so this is null for exactly as long as the field is the thing that has the
+   focus. */
+const filterButton = ref(null)
 
 /* The step every change of state in this system is timed at, read off the root
    when it is wanted rather than once at import: the app-wide font size and
@@ -659,6 +673,21 @@ const closeFilter = () => {
   branchSearching.value = false
   nextTick(() => {
     if (branchBox.value) branchBox.value.scrollTop = savedScroll
+    /* **The other half of a contract this panel opened.** Opening the field
+       moves the focus into it, so closing has to put the focus somewhere — and
+       closing unmounts the element holding it, which drops it on `<body>`. Half
+       a focus contract is worse than none: the opening half is what teaches
+       somebody that this control moves their caret for them. It goes back to
+       the button that opened the field, which is the element standing where the
+       field was and the one press away from opening it again. All three exits
+       come through here — `Esc` on an empty field, the `x`, and `Clear filter`
+       from under the empty state — so there is one answer and not three.
+
+       `preventScroll`, `NewTaskModal`'s own line for reaching a control this
+       way: focusing an element lets the browser scroll every ancestor to bring
+       it into view, and the statement above this one has just put the branch
+       list back where it was. */
+    filterButton.value?.$el?.focus({ preventScroll: true })
   })
 }
 
@@ -702,8 +731,15 @@ watch(
 const localHits = computed(() =>
   filterBranches(props.branches, branchQuery.value, { favorites: props.favoriteBranches })
 )
+/* The query is checked here rather than left to `filterBranches`, and it is
+   not tidiness: the entry list is this call's *argument*, so it would be built
+   in full before the rule could answer `[]` for a blank one — 593 rows rebuilt
+   on every change of either branch list, with no filter anywhere on screen. The
+   Local side needs no such guard, since its argument is the prop itself. */
 const originHits = computed(() =>
-  filterBranches(originBranches(props.remote, props.branches), branchQuery.value)
+  branchQuery.value.trim()
+    ? filterBranches(originBranches(props.remote, props.branches), branchQuery.value)
+    : []
 )
 const branchHits = computed(() =>
   props.branchTab === 'origin' ? originHits.value : localHits.value
@@ -758,18 +794,25 @@ const fieldRowStyle = {
 }
 /* Mono, because what is being typed is half of an identifier — the same face
    the rows underneath draw their names in, so the query and the thing it is
-   matching are legibly the same kind of string. No border and no ring of its
-   own: the plate around it is the field, and a second box inside it would be
-   two fields. `outline: none` is the one thing given up, and it is given up
-   knowingly — the field is opened by a press that also focuses it, there is
-   nothing else inside the plate to move focus between, and the plate appearing
-   at all is what says where the caret is. */
+   matching are legibly the same kind of string. No border of its own: the plate
+   around it is the field, and a second box inside it would be two fields.
+
+   **The focus ring is kept and pulled inside the element**, which is
+   `AttachmentStrip`'s line for the same clipping and the one workaround here.
+   `base.css` draws the ring a pixel *outside*, and this input is the height of
+   the row it sits in — so an outside ring would overflow the caption top and
+   bottom and be clipped against the rows either side, worst in the compact
+   density where a row is at its shortest. Suppressing it instead was tried and
+   is wrong: the `x` button is inside this same plate, one Tab from here and one
+   Shift+Tab back, so a field with no ring, no border and a transparent ground
+   is a caret nothing on screen accounts for. Inset by the ring's own width it
+   is whole, and it touches nothing above or below. */
 const fieldStyle = {
   flex: 1,
   minWidth: 0,
   height: '100%',
   border: 'none',
-  outline: 'none',
+  outlineOffset: 'calc(var(--border-w-strong) * -1)',
   background: 'transparent',
   color: 'var(--text-primary)',
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
@@ -1275,10 +1318,11 @@ const onReset = (section) => emit('resize', { section, rows: null })
                  the list it is about. -->
             <Button
               v-if="!branchSearching"
+              ref="filterButton"
               variant="ghost"
               size="sm"
               icon="search"
-              aria-label="Filter branches"
+              :aria-label="BRANCH_FILTER_LABEL"
               @click="openFilter"
             />
           </template>
@@ -1293,8 +1337,8 @@ const onReset = (section) => emit('resize', { section, rows: null })
                 ref="filterField"
                 v-model="branchInput"
                 type="text"
-                placeholder="Filter branches"
-                aria-label="Filter branches"
+                :placeholder="BRANCH_FILTER_LABEL"
+                :aria-label="BRANCH_FILTER_LABEL"
                 :style="fieldStyle"
                 @keydown="onFilterKey"
               />
