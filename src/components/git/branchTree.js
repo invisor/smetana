@@ -310,6 +310,27 @@ export const BRANCH_TABS = ['local', 'origin']
 export const DEFAULT_BRANCH_TAB = 'local'
 
 /**
+ * The branches of the Origin tab as entries, before anything is done with them.
+ *
+ * One list, two readers: `originBranchRows` builds its tree out of it, and the
+ * filter runs over it directly. Both need the same two facts about a name, and
+ * both would otherwise work them out for themselves — `hasLocal` is what
+ * chooses the row's glyph, its menu and the verb behind its double click, so a
+ * second copy of it would be a filtered row that draws `cloud` and checks out
+ * as an ordinary switch, or the other way about.
+ *
+ * `current` rides beside it for the tick, and it can only ever be true of an
+ * entry `hasLocal` is true of: the repository is standing on a branch it has.
+ */
+export function originBranches(remote, local) {
+  const held = new Set((local ?? []).map((branch) => branch?.name).filter(Boolean))
+  const current = (local ?? []).find((branch) => branch?.current)?.name ?? null
+  return (remote ?? [])
+    .filter(Boolean)
+    .map((name) => ({ name, hasLocal: held.has(name), current: name === current }))
+}
+
+/**
  * The rows of the Origin tab, top to bottom, and `[]` when `origin` has nothing.
  *
  * `remote` is the plain names `vcs_remote_branches` answered — alphabetical,
@@ -350,8 +371,6 @@ export const DEFAULT_BRANCH_TAB = 'local'
  * only ever be on a branch it has, so `current` implies `hasLocal`.
  */
 export function originBranchRows(remote, local, expanded) {
-  const held = new Set((local ?? []).map((branch) => branch?.name).filter(Boolean))
-  const current = (local ?? []).find((branch) => branch?.current)?.name ?? null
   const open = new Set(expanded ?? [])
   const rows = []
   const walk = (nodes) => {
@@ -368,12 +387,16 @@ export function originBranchRows(remote, local, expanded) {
         name: node.name,
         label: node.label,
         depth: node.depth,
-        hasLocal: held.has(node.name),
-        current: node.name === current
+        hasLocal: Boolean(node.hasLocal),
+        current: Boolean(node.current)
       })
     }
   }
-  walk(build((remote ?? []).filter(Boolean).map((name) => ({ name }))))
+  /* The two facts a row of this tab is drawn by are `originBranches`' and are
+     already on the entry `build` spread into the leaf — the filter reads that
+     same list, and one answer for both is what keeps a filtered row's glyph and
+     its double click agreeing with an unfiltered one's. */
+  walk(build(originBranches(remote, local)))
   return rows
 }
 
@@ -397,4 +420,123 @@ export function originBranchRows(remote, local, expanded) {
 export function toggleRemoteFolder(stored, path) {
   const open = stored ?? []
   return open.includes(path) ? open.filter((folder) => folder !== path) : [...open, path]
+}
+
+/**
+ * The rows a name filter leaves, flat, in the order the list arrived in.
+ *
+ * **A case-insensitive substring over the whole name, prefix and all**, so
+ * `feat/nxc` and `nxc` both find `feat/nxc-204-…` and `feat/kick` finds
+ * nothing at all. Deliberately not fuzzy: the names in a branch list of a
+ * naming convention differ by a few characters over a shared prefix, and a
+ * fuzzy match over 346 of them answers with most of them.
+ *
+ * **Nothing is lifted and nothing is re-sorted.** The order is the tab's own —
+ * `by_recency`'s on Local, the alphabet on Origin — because a result list
+ * ranked some other way would be a second ordering inside a panel that
+ * promises one, and the rows a filter is drawn on are already few enough to
+ * read. The current branch and the marked ones keep their glyph and their tick
+ * and lose their block: three surfaces say where three groups end, and a flat
+ * list of hits has one group.
+ *
+ * A hit is the branch itself with `kind`, `label` (the whole name, since there
+ * is no heading above it), `depth: 0` and `pinned` added, plus the three things
+ * the drawing needs: `prefix` — everything up to and including the last slash,
+ * or `''` — `tail`, and `match`, the half-open range of the match in `name`.
+ * Anything else on the branch travels through the spread, which is how a hit of
+ * the Origin tab carries `hasLocal`.
+ *
+ * An empty or blank query answers `[]` rather than the whole list: what asks
+ * this question is a field somebody has opened and not yet typed into, and a
+ * filter that matched everything would flatten the list for no reason.
+ */
+export function filterBranches(branches, query, { favorites = [], current = null } = {}) {
+  const needle = String(query ?? '').trim().toLowerCase()
+  if (!needle) return []
+  const marked = new Set(favorites ?? [])
+  const hits = []
+  for (const branch of branches ?? []) {
+    const name = String(branch?.name ?? '')
+    const at = name.toLowerCase().indexOf(needle)
+    if (at < 0) continue
+    const cut = name.lastIndexOf(SEPARATOR)
+    hits.push({
+      ...branch,
+      kind: 'branch',
+      name,
+      label: name,
+      depth: 0,
+      pinned: true,
+      prefix: cut < 0 ? '' : name.slice(0, cut + 1),
+      tail: cut < 0 ? name : name.slice(cut + 1),
+      match: { start: at, end: at + needle.length },
+      favorite: marked.has(name),
+      current: Boolean(branch?.current) || name === current
+    })
+  }
+  return hits
+}
+
+/* The word each tab is called when there is no filter on. Here and not in
+   `GitPanel.vue` for this file's reason: the labels are half of what the filter
+   says about itself, and the half that is prose is the half worth pinning. */
+const TAB_WORD = { local: 'Local', origin: 'Origin' }
+
+/**
+ * What the two tabs are called, given the filter.
+ *
+ * With no filter they are the two words and nothing else — the caption above
+ * carries the count. With one, the caption is the field and the counts move
+ * here: the active tab reads `3 of 346`, and **the other tab reports its own
+ * hits** — `Origin 9`. That second number is the whole reason this rule exists.
+ * A filter that found nothing on the tab showing, over a list where the other
+ * side holds nine matches, would otherwise draw an empty state that is telling
+ * the truth about the wrong half of the repository.
+ *
+ * Both totals and both hit counts are asked for whichever tab is showing, so
+ * the caller cannot accidentally label a tab with the other one's numbers.
+ */
+export function branchTabLabels({
+  tab,
+  query,
+  localTotal = 0,
+  originTotal = 0,
+  localHits = 0,
+  originHits = 0
+} = {}) {
+  const on = String(query ?? '').trim().length > 0
+  return BRANCH_TABS.map((id) => {
+    if (!on) return { id, label: TAB_WORD[id] }
+    const total = id === 'local' ? localTotal : originTotal
+    const hits = id === 'local' ? localHits : originHits
+    return { id, label: id === tab ? `${hits} of ${total}` : `${TAB_WORD[id]} ${hits}` }
+  })
+}
+
+/**
+ * How long the field waits before the rule sees what was typed, in
+ * milliseconds, given whatever `--dur-fast` came back as.
+ *
+ * The delay is the stylesheet's own step and not a number this app invents
+ * twice: the same token times every surface change in the system, and
+ * `motion.css` zeroes it under `prefers-reduced-motion`, which lands here as a
+ * filter that answers on the keystroke — correct, and for free.
+ *
+ * The parse is here rather than in the component because `getPropertyValue`
+ * hands back a **string in whatever unit the stylesheet was written in**, with
+ * leading space and no normalisation: ` 90ms` today, ` .09s` after an edit
+ * nobody would think of as behavioural. A unit this does not recognise, an
+ * unreadable value and a negative one all fall back to `FILTER_DELAY_MS`, which
+ * is `--dur-fast`'s own value written out — a filter that never fires, or one
+ * that fires 90 times a second, is worse than one that ignores the token.
+ */
+export const FILTER_DELAY_MS = 90
+
+export function filterDelay(raw) {
+  const text = String(raw ?? '').trim()
+  const value = Number.parseFloat(text)
+  if (!Number.isFinite(value) || value < 0) return FILTER_DELAY_MS
+  if (text.endsWith('ms')) return value
+  if (text.endsWith('s')) return value * 1000
+  return FILTER_DELAY_MS
 }

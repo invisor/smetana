@@ -34,15 +34,30 @@
    surface is still the whole row and still reads as "press here to fold", and
    `flex: 1` so it is everything the controls do not take.
 
-   **Nothing in the app fills that slot today.** It carried the Git panel's
-   Fetch, Pull and Push until those moved down into the Branches tab row, where
-   there was width for them and a wrapper that was already measured
-   (`.claude/rules/vcs-panel.md`). It is kept rather than removed because the
-   shape above is the answer to a question a caption keeps asking — the
-   repositories may yet carry a control, and the filter stage is due to put a
-   search button on this very caption — and the one thing still exercising it is
-   the gallery frame that draws a caption with two controls beside one without,
-   which is how the gutter stays checkable at all.
+   **The Branches caption fills that slot**, with the one button that opens the
+   name filter. It carried the Git panel's Fetch, Pull and Push before that,
+   until those moved down into the Branches tab row where there was width for
+   them and a wrapper that was already measured (`.claude/rules/vcs-panel.md`);
+   between the two it stood empty for a release, and the gallery frame drawing a
+   caption with two controls beside one without is what kept the gutter
+   checkable through it.
+
+   **The row can be a field instead of a caption**, which is the other half of
+   that filter: with `searching` set, the `editor` slot is drawn **in place of**
+   the `<button>` and the fold is not reachable at all. That is deliberate
+   rather than a limitation — the person is typing into the row they would
+   otherwise press to fold, and a chevron beside a field would be a second
+   meaning for the same row. The wrapper keeps `--row-h` either way, so nothing
+   in `GitPanel`'s arithmetic notices that the caption became a field, and the
+   slot's content is expected to fill the row it is given.
+
+   The right inset moves with it. A caption whose controls are in `actions`
+   needs the gutter this row adds, and a row that is a field does not: the field
+   paints a surface, so it has to reach the panel's edge and draw its own inset
+   inside it. The two are not both true at once here — the button that opens the
+   filter is not drawn while the filter is open — and a caption that ever wants
+   a control beside an open field is where this would have to be looked at
+   again.
 
    `divided` is the rule above the caption, and it is what makes a caption read
    as the start of a block rather than as one more row of the list above it: the
@@ -62,6 +77,11 @@ const props = defineProps({
      caption would be the same fact stated twice, once in the wrong idiom. */
   count: { type: Number, default: null },
   open: { type: Boolean, default: true },
+  /* Whether the row is a field rather than a caption. While it is, the caption
+     button is not rendered at all — so there is nothing to fold by, which is
+     the point: the row somebody is typing into must not also be the row that
+     folds the section away under them. */
+  searching: { type: Boolean, default: false },
   /* Whether this caption carries the hairline that separates it from whatever
      is above. Off by default: a caption on its own is a caption, and only a
      stack of them wants the rule. */
@@ -85,11 +105,12 @@ const { hover, active, handlers } = useInteractive()
    `useSlots()`: a slot's presence is not a reactive dependency, so a cached
    answer would go on insetting a caption whose controls have since gone —
    which is exactly what happened to the Git panel's Branches caption when its
-   three verbs left for the tab row. **No caption in the app fills the slot at
-   present**, so an empty slot is not the guarded case any more but the only
-   one; the argument for the shape is unchanged, since what it is really about
-   is that the answer must not be cached across a caption gaining or losing its
-   controls, and a caption is about to gain some again. */
+   three verbs left for the tab row. **That caption fills the slot again**, with
+   the filter's `search` button, and the argument holds twice over now: the
+   answer must not be cached across a caption gaining or losing its controls,
+   and this one loses them every time somebody opens the field — the second
+   argument here is `!searching`, so the inset comes and goes within the life of
+   one caption. */
 const rowStyle = (hasActions) => ({
   display: 'flex',
   alignItems: 'center',
@@ -153,8 +174,9 @@ const countStyle = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mo
 </script>
 
 <template>
-  <div ref="el" :style="rowStyle(Boolean($slots.actions))">
+  <div ref="el" :style="rowStyle(Boolean($slots.actions) && !searching)">
     <button
+      v-if="!searching"
       type="button"
       :style="style"
       :aria-expanded="open"
@@ -166,6 +188,12 @@ const countStyle = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mo
       <span :style="{ flex: 1 }" />
       <span v-if="count" :style="countStyle">{{ count }}</span>
     </button>
+    <!-- In place of the caption and never beside it: the row is 252 pixels
+         wide, and a field sharing it with a chevron, a word and a count would
+         be a field nobody could type a branch name into. What fills it is the
+         caller's — this component only says that the row is a field now and
+         that it is still exactly one row tall. -->
+    <slot v-else name="editor" />
     <!-- Beside the caption and never inside it: a button inside a button is
          invalid, and a press on one of these would fold the section on its way
          through. -->

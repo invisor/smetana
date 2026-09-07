@@ -547,11 +547,14 @@ half — it is one more `observe` on an observer that exists.
 The row is drawn only while the section is unfolded, and it stays live under a run: choosing which
 side to look at is reading, the same rule that keeps a folder heading pressable.
 
-Rejected with the shape: a name filter over the list, which helps somebody who knows the name and
-does not answer "what is even on the server"; an `origin` heading moved to the top of the same list,
-which is cheaper but leaves two things in one scroller under one count; and a single toggle button
-with a `cloud` glyph, where the state of the list is legible only from the glyph on its rows, while a
-tab says what it is in a word.
+Rejected with the shape: a name filter **as the answer to that question**, which helps somebody who
+knows the name and does not answer "what is even on the server"; an `origin` heading moved to the top
+of the same list, which is cheaper but leaves two things in one scroller under one count; and a
+single toggle button with a `cloud` glyph, where the state of the list is legible only from the glyph
+on its rows, while a tab says what it is in a word. **The first of those is not the filter the
+caption carries now** — what was refused was a filter *instead of* the two tabs, and the section has
+both: the tabs say which half of the repository is on screen, and the filter narrows whichever half
+that is.
 
 **`branchTree.js`'s `originBranchRows` is the rule**, pure and tested beside `branchRows`; folders
 are built by the same `build` the local tree uses, so `feature/two` is a `feature` heading here as
@@ -660,6 +663,76 @@ the background sweep going under a batch and the commit box's sparkle alive. The
 three; this side of it wins. Pull and Push are refused by the verdict `tracking.js` folds in, exactly
 as before.
 
+### The name filter lives in the caption
+
+**Pressing the `search` button at the right end of the Branches caption turns that caption into a
+field**: the chevron, the word and the count go, and a `search` glyph, an `<input>` and an `x` take
+their place inside the same `--row-h`. It is the caption rather than a row of its own because a
+filter does not earn a permanent row in a strip 252px wide, and it *replaces* the caption rather than
+standing beside it for the same arithmetic — there is no room for both. `SectionHeader.vue` carries
+the shape: a `searching` prop and an `editor` slot drawn in place of the caption `<button>`. **The
+fold is unreachable while the field is open, deliberately** — the row somebody is typing into must
+not also be the row that folds the section away under them — and the caption draws no count, because
+the caption is not there.
+
+**The state is the panel's, in two refs, and nothing about it reaches `settings.json`.** A query is
+something somebody is doing this minute, not a preference: a stored one would come back over a branch
+list they have long since stopped looking for anything in. It does not survive a change of repository
+either, which is what the watch on `selected` is for — a project switch arrives in `GitPanel` as
+exactly that, since `selectedRepo` is per project. What the rule sees is debounced by `--dur-fast`,
+the stylesheet's own step for a change of state, read off the root when it is wanted rather than at
+import: the app-wide font size moves it, and `prefers-reduced-motion` zeroes it, which lands as a
+filter answering on the keystroke. `filterDelay` in `branchTree.js` is the parse and it is there
+rather than in the component because `getPropertyValue` answers in whatever unit the stylesheet was
+written in — ` 90ms` today, ` .09s` after an edit nobody would think of as behavioural — and an
+unrecognised unit falls back to 90.
+
+**Matching is a case-insensitive substring over the whole name, prefix and all**, so `feat/nxc` and
+`nxc` both find `feat/nxc-204-…` and `feat/kick` finds nothing. Deliberately not fuzzy: the names in
+a repository with a naming convention differ by a few characters over a shared prefix, and a fuzzy
+match over 346 of them answers with most of them. `filterBranches` in `branchTree.js` is the rule,
+pure and tested beside `branchRows`, and it returns hits in **the order the tab already used** —
+`by_recency` on Local, the alphabet on Origin — with nothing lifted and nothing ranked. Origin's
+input is `originBranches`, the same list `originBranchRows` builds its tree from, which is what stops
+a filtered row's `cloud`, its menu and the verb behind its double click coming apart from an
+unfiltered one's.
+
+**The result is one flat list on `--canvas`.** No folders, no headings and none of the three
+surfaces: those exist to say where three groups end, and a result is one group. A hit keeps
+everything else a row is — the star, the `cloud`, the tick, the `↓N`/`↑N`, the double click and the
+menu — and the name is drawn **in parts**: the prefix up to and including the last slash in
+`--text-muted`, the tail in `--text-primary`, and the matched run on `--selection-bg` at
+`--radius-1` with no change of weight or colour, so a row cannot move under the eye scanning it. As
+spans and never as a string of HTML, since a branch name is a string out of the repository.
+`splitName`'s middle truncation is deliberately **not** applied to a hit: that rule holds the last
+twelve characters because the tail identifies a branch, and a highlight already says which part is
+the interesting one — cutting the middle out from under it would hide exactly that. **The filter
+changes no fold**: the flat list ignores `branchFolders` and `remoteBranchFolders` rather than
+mutating them, so closing the field gives back the tree exactly as it was left, scrolled where it
+was — the `scrollTop` of the branch box is saved on open and restored on close.
+
+**The counts move into the tab labels, and the second of them is the point.** With the caption gone
+there is nowhere for a count to sit, so `branchTabLabels` — pure, beside `filterBranches` — puts them
+in the row underneath: the tab showing reads `3 of 346`, and **the other tab reports its own hits
+against the same query**, `Origin 9`. Without that number a filter matching nothing here, over a
+repository whose `origin` holds nine matches, would draw an empty state that is telling the truth
+about the wrong half of the repository. That empty state is `No local branch matches` /
+`No origin branch matches`, with `Origin has 9. Switch tabs to see them.` where the other side has
+any and the query named back where nothing anywhere does, and a `Clear filter` button under it. The
+query is kept when the tab is switched, since the question is about the repository and not about the
+side.
+
+`x`, `Clear filter` and `Esc` on an empty field all do one thing — **clear and close**, since a field
+left open and empty is a caption that has stopped being one for no reason. `Esc` on a field with
+something in it empties it and stops there, which is the two-press shape every filter field keeps.
+Under a run the field, the tabs and the filter all go on answering, because reading is not writing;
+the rows stay muted and inert exactly as they are without it.
+
+Rejected, and not to be re-proposed without new argument: `branchQuery` in `settings.json`; a palette
+over the list (direction 1c) and prefix chips (1d), both of which are their own round of design; and
+ranking the hits, which would be a second ordering inside a panel that promises one and would be
+invisible on the rows.
+
 **On a detached HEAD the current block draws a plate instead of a row.** `HEAD · <short sha>` in the
 same mono, on `--surface-selected` between the block's two rules, with the tick in the box at the end
 — the same fact the scope bar draws one level up, and the panel saying it is what stops the section
@@ -667,7 +740,9 @@ reading as a repository whose branch failed to load. It answers nothing at all: 
 click, no hover, because there is no branch here to check out, merge or rename, and Pull and Push are
 already off the tab row for that reason (`hasBranch`). `branchTree.js` is deliberately **not** told
 about it — no branch stands behind the plate, nothing in the tree changes, and `branchRows` still
-lifts nothing when no row is current, which is what its own test says. The hash is the **selected
+lifts nothing when no row is current, which is what its own test says. It is not drawn over a filter
+result either: the plate *is* the current block, and a flat list of hits has no blocks, so a plate
+above three matched rows would be claiming to be the first of them. The hash is the **selected
 repository's**, off `vcsState.tree.detached` and handed down as a prop, not the project root's from
 `stores/git.js`: a project can hold several repositories, and this panel is about one of them.
 

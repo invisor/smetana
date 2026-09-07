@@ -103,6 +103,32 @@
    under a batch. Pull and Push are refused by the verdict `tracking.js` folds
    in, exactly as before.
 
+   ## The name filter, which is the one piece of state this panel owns
+
+   The Branches caption carries a `search` button, and pressing it turns that
+   caption into a field: chevron, word and count out, glyph, `<input>` and `x`
+   in, inside the same `--row-h`. Everything about it lives **here**, in two
+   refs, and deliberately not in `settings.json` — a query is something somebody
+   is doing this minute and not a preference, and a stored one would come back
+   over a branch list they have since stopped looking for anything in. It does
+   not survive a change of repository either, which is what the watch on
+   `selected` is for: a project switch arrives here as exactly that.
+
+   What the rule sees is debounced by `--dur-fast`, the stylesheet's own step
+   for a change of state, read off the root at the moment it is wanted rather
+   than at import — the app-wide font size and `prefers-reduced-motion` both
+   move it, and the second zeroes it, which lands as a filter answering on the
+   keystroke. `filterDelay` in `branchTree.js` is the parse, because
+   `getPropertyValue` hands back the unit the stylesheet was written in and
+   that is a rule worth a test.
+
+   The counts move with the field. The caption cannot carry one while it is a
+   field, so `branchTabLabels` puts them in the tab row: the tab showing reads
+   `3 of 346`, and the other reads `Origin 9` — its own hits against the same
+   query. Without that second number a filter that matched nothing here would
+   draw an empty state that is telling the truth about the wrong half of the
+   repository.
+
    Which tab is showing is the caller's state, remembered per project
    (`settings.project.branchTab`); this panel emits the id and holds nothing.
    The two ids are `branchTree.js`'s closed list, mirrored in
@@ -139,7 +165,7 @@
    off the token: `--row-h` is a `calc()` over an unregistered custom property,
    so `getComputedStyle` hands back the calc unevaluated — the trap
    `terminal/theme.js` records. */
-import { computed, onBeforeUnmount, ref, watchPostEffect } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch, watchPostEffect } from 'vue'
 import BranchList from './BranchList.vue'
 import Button from '../core/Button.vue'
 import ChangeList from './ChangeList.vue'
@@ -152,7 +178,13 @@ import Resizer from '../shell/Resizer.vue'
 import SegmentedTabs from '../shell/SegmentedTabs.vue'
 import SectionHeader from './SectionHeader.vue'
 import Tooltip from '../core/Tooltip.vue'
-import { BRANCH_TABS, DEFAULT_BRANCH_TAB } from './branchTree.js'
+import {
+  DEFAULT_BRANCH_TAB,
+  branchTabLabels,
+  filterBranches,
+  filterDelay,
+  originBranches
+} from './branchTree.js'
 import { DEFAULT_ROWS as COMMIT_ROWS } from './commitBox.js'
 import { failureTextStyle, failureTitleStyle } from './failureStyle.js'
 import {
@@ -568,18 +600,182 @@ const check = computed(() => fetchAction(props.fetching))
 const SPIN = 13
 const spinStyle = { color: 'var(--attn-live)', animation: 'sm-spin var(--dur-pulse) linear infinite' }
 
+/* The name filter's own state, and the whole of it: what the field holds, what
+   the rule sees, and whether the caption is a field at all. Refs here rather
+   than anything reaching `settings.json`, for the reason this file's header
+   gives — a query is a thing somebody is doing, not a thing they prefer.
+
+   Two strings and not one, because they are two facts: `branchInput` is what
+   was typed and has to answer the next keystroke immediately, and `branchQuery`
+   is what 346 rows are rebuilt from. */
+const branchSearching = ref(false)
+const branchInput = ref('')
+const branchQuery = ref('')
+const filterField = ref(null)
+
+/* The step every change of state in this system is timed at, read off the root
+   when it is wanted rather than once at import: the app-wide font size and
+   `prefers-reduced-motion` both move it, and a value cached at module load
+   would be the value the app started in. The parse is `branchTree.js`'s, since
+   `getPropertyValue` answers in whatever unit the stylesheet was written in and
+   that is the half worth a test. */
+const filterWait = () =>
+  filterDelay(getComputedStyle(document.documentElement).getPropertyValue('--dur-fast'))
+
+let debounce = null
+const settle = (value, wait) => {
+  clearTimeout(debounce)
+  debounce = setTimeout(() => {
+    branchQuery.value = value
+  }, wait)
+}
+watch(branchInput, (value) => settle(value, filterWait()))
+/* A timer outliving the panel would write into a ref nothing is drawing any
+   more. Beside the observer's own teardown, which is the same case. */
+onBeforeUnmount(() => clearTimeout(debounce))
+
+/* Where the list was standing when the field opened. A filter flattens 346 rows
+   to three and then hands them back, and without this the list comes back at
+   the top with whatever somebody had scrolled to gone — the same complaint the
+   fold arithmetic above is careful about, one gesture down. */
+let savedScroll = 0
+
+const openFilter = () => {
+  /* A field over a folded list would be filtering something nobody can see. The
+     fold is the caller's state, so this asks for it rather than setting it. */
+  if (!fold.value.branchesOpen) emit('toggle', 'branches')
+  savedScroll = branchBox.value?.scrollTop ?? 0
+  branchSearching.value = true
+  nextTick(() => filterField.value?.focus())
+}
+
+/* Clearing and closing are one act, which is what the `x` does and what the
+   `Clear filter` button under the empty state does: a field left open and empty
+   is a caption that has stopped being one for no reason. */
+const closeFilter = () => {
+  clearTimeout(debounce)
+  branchInput.value = ''
+  branchQuery.value = ''
+  branchSearching.value = false
+  nextTick(() => {
+    if (branchBox.value) branchBox.value.scrollTop = savedScroll
+  })
+}
+
+/* Escape empties a field that has something in it and closes an empty one,
+   which is the two-press shape every filter field in every editor keeps: the
+   first press undoes the typing, the second undoes the opening. The clear is
+   written out rather than routed through the watch, so the list answers at once
+   — a debounce on the way out would leave the old rows standing after the
+   field they came from was empty. */
+const onFilterKey = (event) => {
+  if (event.key !== 'Escape') return
+  event.preventDefault()
+  if (branchInput.value) {
+    clearTimeout(debounce)
+    branchInput.value = ''
+    branchQuery.value = ''
+    return
+  }
+  closeFilter()
+}
+
+/* A query does not survive a change of repository, and a project switch reaches
+   this panel as exactly that — `selectedRepo` is per project, so the path under
+   the panel changes whichever of the two moved. A filter carried across would
+   be a field somebody left open over one repository, answering about another
+   with the same three letters in it. */
+watch(
+  () => props.selected,
+  () => {
+    if (branchSearching.value || branchQuery.value) closeFilter()
+  }
+)
+
+/* The hits of each side, both of them and always: the tab showing draws its
+   own, and the other one's count is what its tab label reports. Local reads the
+   branch list as it stands, so a hit carries `current` and takes its star from
+   the stored favourites; Origin reads `originBranches`, which is the same list
+   its unfiltered rows are built from — so a filtered row's `cloud`, its menu
+   and the verb behind its double click cannot come apart from an unfiltered
+   one's. */
+const localHits = computed(() =>
+  filterBranches(props.branches, branchQuery.value, { favorites: props.favoriteBranches })
+)
+const originHits = computed(() =>
+  filterBranches(originBranches(props.remote, props.branches), branchQuery.value)
+)
+const branchHits = computed(() =>
+  props.branchTab === 'origin' ? originHits.value : localHits.value
+)
+const otherHits = computed(() =>
+  props.branchTab === 'origin' ? localHits.value.length : originHits.value.length
+)
+
 /* The two sides of the branch list, labelled — `SegmentedTabs`' own shape,
    because that component is the row this app draws for a choice like this one
    and its own header says why a second copy of those style objects is the pair
    that drifts. The ids are `branchTree.js`'s closed list and are mirrored in
-   `settings/model.rs`; the words beside them are this panel's, sentence case
-   like every other label in the app.
+   `settings/model.rs`; the words beside them are `branchTabLabels`', sentence
+   case like every other label in the app — and it is that rule and not this
+   file that puts the counts in them while a filter is on.
 
    Drawn only while the section is unfolded: a folded section has no list for a
    tab to be about, and the caption's count goes on describing whichever side
    the folded list is still on — which is what that caption's own rule already
    promises about a fold. */
-const branchTabs = BRANCH_TABS.map((id) => ({ id, label: id === 'origin' ? 'Origin' : 'Local' }))
+const branchTabs = computed(() =>
+  branchTabLabels({
+    tab: props.branchTab,
+    query: branchQuery.value,
+    localTotal: props.branches.length,
+    originTotal: props.remote.length,
+    localHits: localHits.value.length,
+    originHits: originHits.value.length
+  })
+)
+
+/* The field itself, inside the caption's row. It is a plate rather than a
+   bordered control: `Input` is a `--control-h` box with a radius and a ring of
+   its own, and one of those inside a `--row-h` caption would be a control
+   standing in a row rather than the row having become a field. The surface is
+   what says it is a field, and it reaches both edges of the panel for the same
+   reason — a plate inset from an edge reads as something sitting on the row.
+
+   The right inset is this row's own, which is why `SectionHeader` drops the
+   gutter it adds for `actions` while the field is open: the `x` lands exactly
+   where the `search` button it replaced was, and the surface underneath still
+   reaches the panel's edge. */
+const fieldRowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-2)',
+  flex: 1,
+  minWidth: 0,
+  height: '100%',
+  padding: '0 var(--space-3) 0 var(--space-5)',
+  background: 'var(--surface-raised)'
+}
+/* Mono, because what is being typed is half of an identifier — the same face
+   the rows underneath draw their names in, so the query and the thing it is
+   matching are legibly the same kind of string. No border and no ring of its
+   own: the plate around it is the field, and a second box inside it would be
+   two fields. `outline: none` is the one thing given up, and it is given up
+   knowingly — the field is opened by a press that also focuses it, there is
+   nothing else inside the plate to move focus between, and the plate appearing
+   at all is what says where the caret is. */
+const fieldStyle = {
+  flex: 1,
+  minWidth: 0,
+  height: '100%',
+  border: 'none',
+  outline: 'none',
+  background: 'transparent',
+  color: 'var(--text-primary)',
+  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
+}
+const FIELD_MARK = 12
+const fieldGlyphStyle = { flex: 'none', color: 'var(--text-muted)' }
 
 /* The tab row and the three verbs in one line. The tabs take whatever the
    verbs leave and shrink to it — `minWidth: 0`, or a flex item refuses to go
@@ -656,8 +852,14 @@ const freezeLine = computed(() => `${props.actions?.reason ?? ''} · read only`)
    count on its heading while the caption above went on saying how many local
    branches there were, so `Branches 236` sat over a list of 593. Null below two
    for the reason `SectionHeader` refuses a zero — a section with one row says
-   everything about itself by drawing it. */
+   everything about itself by drawing it.
+
+   Null while the field is open, and that is not a hidden count but a caption
+   that is no longer there: the row is a field, the number would have nowhere to
+   sit, and the counts are in the tab labels underneath for exactly the length
+   of time this one is not drawn. */
 const branchCount = computed(() => {
+  if (branchSearching.value) return null
   const total = props.branchTab === 'origin' ? props.remote.length : props.branches.length
   return total > 1 ? total : null
 })
@@ -1049,19 +1251,63 @@ const onReset = (section) => emit('resize', { section, rows: null })
           @dragend="onDragEnd"
           @reset="onReset('branches')"
         />
-        <!-- The caption carries a chevron, a word and a count and nothing else.
-             The three verbs that used to be in its `actions` slot are one row
-             down, at the end of the tab row: this strip is 252 pixels wide, and
-             the row under it already exists and is already measured. The slot
-             itself stays on the component — the repositories may yet fill
-             it. -->
+        <!-- The caption carries a chevron, a word, a count and the one button
+             that turns the whole row into a field. The three verbs that used to
+             be in its `actions` slot are one row down, at the end of the tab
+             row: this strip is 252 pixels wide, and the row under it already
+             exists and is already measured — a filter field needs the width of
+             a caption, which is why it takes the caption's place rather than
+             standing beside it. -->
         <SectionHeader
           divided
           label="Branches"
           :count="branchCount"
           :open="fold.branchesOpen"
+          :searching="branchSearching"
           @toggle="emit('toggle', 'branches')"
-        />
+        >
+          <template #actions>
+            <!-- Gone while the field is open, and the `x` inside the field is
+                 what takes its place — two controls for opening and closing one
+                 thing, in one row, would be a row saying it twice. `Button` and
+                 not `IconButton` for the reason the three verbs below give: this
+                 sits in a 252px caption and a tooltip of its own would open over
+                 the list it is about. -->
+            <Button
+              v-if="!branchSearching"
+              variant="ghost"
+              size="sm"
+              icon="search"
+              aria-label="Filter branches"
+              @click="openFilter"
+            />
+          </template>
+          <!-- The row as a field: the glyph that says what it is, the input,
+               and the `x` that clears and closes in one press. All three inside
+               the caption's own `--row-h`, so nothing in the arithmetic over
+               this panel notices that a caption became a field. -->
+          <template #editor>
+            <div :style="fieldRowStyle">
+              <Icon name="search" :size="FIELD_MARK" :style="fieldGlyphStyle" />
+              <input
+                ref="filterField"
+                v-model="branchInput"
+                type="text"
+                placeholder="Filter branches"
+                aria-label="Filter branches"
+                :style="fieldStyle"
+                @keydown="onFilterKey"
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="x"
+                aria-label="Clear filter"
+                @click="closeFilter"
+              />
+            </div>
+          </template>
+        </SectionHeader>
         <!-- The two sides and the three verbs, in one row directly under the
              caption.
 
@@ -1168,6 +1414,9 @@ const onReset = (section) => emit('resize', { section, rows: null })
             :remote="remote"
             :remote-folders="remoteFolders"
             :tab="branchTab"
+            :query="branchQuery"
+            :hits="branchHits"
+            :other-hits="otherHits"
             :detached="detached"
             :fetching="fetching"
             :actions="actions"
@@ -1186,6 +1435,7 @@ const onReset = (section) => emit('resize', { section, rows: null })
             @toggle-folder="$emit('toggle-folder', $event)"
             @checkout-remote="$emit('checkout-remote', $event)"
             @toggle-remote-folder="$emit('toggle-remote-folder', $event)"
+            @clear-filter="closeFilter"
           />
         </div>
         <!-- **Outside the scroller above, and outside the fold, and that is the
