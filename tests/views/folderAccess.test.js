@@ -53,9 +53,10 @@ describe('the notice for a refused folder', () => {
     expect(description).toContain('Full Disk Access')
     /* The route as this tree writes one, with the arrow `README.md` and the
        release workflow use, and the app under the name macOS shows in that
-       list — `productName` is lower case. */
+       list — which is `productName`, currently `Smetana`, rather than this
+       app's own prose; it moves whenever `productName` does. */
     expect(description).toContain('System Settings → Privacy & Security')
-    expect(description).toContain('grant smetana Full Disk Access')
+    expect(description).toContain('grant Smetana Full Disk Access')
     expect(description).not.toContain('ask again')
   })
 

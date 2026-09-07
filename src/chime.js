@@ -7,7 +7,7 @@
    bring back a macOS permission dialog.** The account: an `HTMLMediaElement` in
    WKWebView plays through AVFoundation, which registers a Now Playing session;
    for an unsandboxed app macOS bills that as a reach for the person's media
-   library and raises the dialog somebody actually saw — "smetana" would like to
+   library and raises the dialog somebody actually saw — "Smetana" would like to
    access Apple Music, your music and video activity, and your media library —
    with no explaining sentence under it, since the bundle declares no
    `NSAppleMusicUsageDescription` and deliberately never will (smetana-i4w). It
