@@ -228,17 +228,22 @@ export const shellSessions = computed(() => terminalState.sessions.filter(isShel
    after `loadRestorable` answered would leave the stored list disagreeing with
    the panel until the next project switch.
 
-   Two places empty a record out of `restored` by hand, and neither is folded
-   into this filter: `createSession` on a resume, and `dropSession` on a
-   removal — the second reached from both `removeSession` and the
-   `terminal:removed` listener, so it is two writers and three call sites. Each
-   is about the one record the worker has just touched, rewritten under the same
-   id or deleted outright; this is about every record the file happens to hold,
-   which no snapshot can answer. They are not redundant with it either, and that
-   is the whole of smetana-q7sq: this filter hides a record only while a live
-   session carries its conversation, so the moment the row goes the same
-   conversation surfaces underneath it as an `offline` offer to resume what
-   somebody has just closed.
+   Other code empties a record out of `restored` by hand rather than leaving it
+   to this filter, and what those places have in common is a shape rather than a
+   number: each is about a record this filter was only ever *shadowing*. It
+   hides a record while a live session carries its conversation and not one
+   moment longer, so a record the worker has already rewritten (`createSession`
+   on a resume) or deleted outright (`dropSession` on a removal, from
+   `removeSession` and from the `terminal:removed` listener alike) has to go
+   with the row it was hidden behind. Leaving the second of those to this filter
+   is the whole of smetana-q7sq: the row went, the shadow went with it, and the
+   same conversation surfaced underneath as an `offline` offer to resume what
+   somebody had just closed.
+
+   `forgetRestored` empties the list by hand too and is deliberately not one of
+   these: there is no session behind an offline row and never was, so nothing
+   here was shadowing that record and there is nothing for this filter to
+   decide.
 
    Through `agentSessions` like everything else that asks what an agent is: a
    shell has no row here and carries no conversation to match on. */
