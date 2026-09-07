@@ -73,6 +73,28 @@ describe('the rows', () => {
     expect(code.description).toMatch(/workers are asked for the model only/)
     expect(code.description).toMatch(/conflicted merge/)
   })
+
+  /* A label names a row; it does not say which agent calls land in it, and
+     that is `agents::role_of`'s answer rather than anything a reader can get
+     from the word `Tasks`. So every row says it, and none of them says it at
+     more length than the row everything else falls back to. */
+  it('gives every row a sentence, and none longer than the default row', () => {
+    const byRole = Object.fromEntries(ROLE_ROWS.map((row) => [String(row.role), row.description]))
+    for (const [role, description] of Object.entries(byRole)) {
+      expect(description, `the ${role} row has no description`).toBeTruthy()
+      expect(description.length).toBeLessThanOrEqual(byRole.null.length)
+    }
+    /* One word per row rather than the phrase it sits in. A phrase-level
+       regex fails on an honest reword that changes no fact, so it pins the
+       wording instead of the meaning; each of these is a word the sentence
+       cannot lose without losing what the row is for. A parked task is the
+       case no label suggests, the lead-and-workers pair is the thing the Run
+       lead row is misread about, and a review is about branches. */
+    expect(byRole.tasks).toMatch(/parked/)
+    expect(byRole.runLead).toMatch(/lead/)
+    expect(byRole.runLead).toMatch(/workers/)
+    expect(byRole.reviewBranch).toMatch(/branch/)
+  })
 })
 
 describe('what a row stands for', () => {
