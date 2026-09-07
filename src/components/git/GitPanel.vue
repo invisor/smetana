@@ -127,6 +127,18 @@ const props = defineProps({
      the reason the folders above are: what a mark does to the order is
      `branchTree.js`, and this panel is presentational on it. */
   favoriteBranches: { type: Array, default: () => [] },
+  /* What `origin` is known to have, as plain names — the group at the foot of
+     the branch list is drawn from it. Passed straight through like everything
+     else here, including the decision that only the names with no local twin
+     get a row: that is `branchTree.js`'s. The caller is what guarantees the
+     list belongs to the repository this panel is showing, since the store holds
+     one such list for the whole project. */
+  remote: { type: Array, default: () => [] },
+  /* Which folders of that group are unfolded, as
+     `settings.project.remoteBranchFolders` keeps them. Its own prop and not the
+     `branchFolders` above, because it is its own settings field — a local
+     folder may be called `origin` too, and one list would unfold both. */
+  remoteFolders: { type: Array, default: () => [] },
   /* Where each branch stands against its upstream, keyed by name, as
      `vcsState.tracking` holds it. It draws the marks on the rows and it is what
      the two buttons in the Branches caption are made of — an empty object is a
@@ -246,6 +258,16 @@ const emit = defineEmits([
   'open',
   'toggle',
   'toggle-folder',
+  /* The whole name of a branch only `origin` has. It reaches
+     `vcs_checkout_remote`, whose refusal lands in `writeError` under
+     `WRITE_REFUSED`'s `checkout` title like the local switch's — the store gives
+     both the same `op`, since what was pressed is a checkout either way. */
+  'checkout-remote',
+  /* The whole new list for the group's folds, resolved by `branchTree.js`,
+     exactly as `toggle-folder` carries the local one. Absent from
+     `WRITE_REFUSED` below for `favorite`'s reason: it writes `settings.json`
+     and nothing else. */
+  'toggle-remote-folder',
   'resize'
 ])
 
@@ -905,6 +927,8 @@ const onReset = (section) => emit('resize', { section, rows: null })
             :tracking="tracking"
             :folders="branchFolders"
             :favorites="favoriteBranches"
+            :remote="remote"
+            :remote-folders="remoteFolders"
             :actions="actions"
             :busy="busy"
             @checkout="$emit('checkout', $event)"
@@ -918,6 +942,8 @@ const onReset = (section) => emit('resize', { section, rows: null })
             @rename="$emit('rename', $event)"
             @delete="$emit('delete', $event)"
             @toggle-folder="$emit('toggle-folder', $event)"
+            @checkout-remote="$emit('checkout-remote', $event)"
+            @toggle-remote-folder="$emit('toggle-remote-folder', $event)"
           />
         </div>
         <!-- **Outside the scroller above, and outside the fold, and that is the

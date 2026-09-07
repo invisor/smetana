@@ -279,3 +279,102 @@ export function toggleFolder(stored, branches, path) {
   const open = expandedFolders(stored, branches)
   return open.includes(path) ? open.filter((folder) => folder !== path) : [...open, path]
 }
+
+/* The name of the group's own heading, which is also its entry in
+   `settings.project.remoteBranchFolders`. One constant rather than the string
+   in four places: the panel, the rule and the stored list have to agree on it,
+   and this app knows exactly one remote. */
+export const REMOTE_GROUP = 'origin'
+
+/**
+ * The rows of the `origin` group, top to bottom, and `[]` when there is nothing
+ * to draw.
+ *
+ * `remote` is the plain names `vcs_remote_branches` answered — alphabetical,
+ * with `origin/` and `origin/HEAD` already off — `local` is `vcs_branches`' own
+ * list, and `expanded` is `settings.project.remoteBranchFolders`.
+ *
+ * **Only the branches this repository does not have.** A remote branch with a
+ * local twin has a row already, one group up, and that is the row worth
+ * pressing: it is the branch itself rather than a copy of it at whatever commit
+ * the last fetch saw. So the group answers the one question the list above
+ * cannot — what is on the server that is not here yet — and a repository level
+ * with `origin` draws no group at all rather than an empty heading.
+ *
+ * **A group of its own at the foot rather than rows mixed into the tree above.**
+ * That reads well in a repository with five branches and badly in the one this
+ * was asked for, where `origin` holds 87 against four local: the four somebody
+ * actually works on would be scattered through a list twenty times longer, and
+ * the ordering promise the file opens with — what was touched most recently
+ * first — cannot survive rows that have no local reflog at all.
+ *
+ * **The order inside is left exactly as it arrived**, which is alphabetical.
+ * The list above is ordered by reflog, because what somebody worked on here
+ * most recently is what they are about to want; a remote-tracking ref's reflog
+ * says when this machine last *fetched* it, which is a fact about the fetch and
+ * not about anybody's work.
+ *
+ * Every path is written under the heading — `origin`, `origin/feature` — which
+ * is what makes the stored list readable beside the local one. What keeps the
+ * two apart is that they are two fields: a local branch may legally be called
+ * `origin/spike`, which puts a local folder named `origin` in the tree above,
+ * and one shared list would unfold both rows at once.
+ */
+export function remoteBranchRows(remote, local, expanded) {
+  const held = new Set((local ?? []).map((branch) => branch?.name).filter(Boolean))
+  const missing = (remote ?? []).filter((name) => name && !held.has(name))
+  if (missing.length === 0) return []
+  const open = new Set(expanded ?? [])
+  const rows = [
+    {
+      kind: 'folder',
+      path: REMOTE_GROUP,
+      label: REMOTE_GROUP,
+      depth: 0,
+      count: missing.length,
+      expanded: open.has(REMOTE_GROUP)
+    }
+  ]
+  if (!open.has(REMOTE_GROUP)) return rows
+  /* One level of indent under the heading, and the paths carry it too, which is
+     what `build` cannot do for itself: it is a tree of branch names and knows
+     nothing about the group they are being drawn inside. */
+  const walk = (nodes) => {
+    for (const node of nodes) {
+      if (node.kind === 'folder') {
+        const { children, ...folder } = node
+        const path = `${REMOTE_GROUP}${SEPARATOR}${node.path}`
+        const isOpen = open.has(path)
+        rows.push({ ...folder, path, depth: node.depth + 1, expanded: isOpen })
+        if (isOpen) walk(children)
+      } else {
+        rows.push({
+          kind: 'branch',
+          name: node.name,
+          label: node.label,
+          depth: node.depth + 1,
+          remote: true
+        })
+      }
+    }
+  }
+  walk(build(missing.map((name) => ({ name }))))
+  return rows
+}
+
+/**
+ * The list a press on one heading of that group leaves behind.
+ *
+ * Simpler than `toggleFolder` above and deliberately so: there is no seed to
+ * write out whole, because an empty list already means what it says — the group
+ * is folded and so is everything in it. That is the one place this field parts
+ * company with `branchFolders`, whose `null` unfolds the current branch's
+ * folder; no branch in this group is the current one.
+ *
+ * Always a new array: the caller assigns it into `settings.json`, and a list
+ * mutated in place gives the store's watcher nothing to notice.
+ */
+export function toggleRemoteFolder(stored, path) {
+  const open = stored ?? []
+  return open.includes(path) ? open.filter((folder) => folder !== path) : [...open, path]
+}

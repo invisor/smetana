@@ -239,3 +239,47 @@ export function branchMenuItems({
     }
   ]
 }
+
+/**
+ * The menu on a row of the `origin` group — a branch this repository does not
+ * have yet. Two items, and the shortness is the decision rather than a first
+ * draft.
+ *
+ * Merge, rebase, rename, delete and `New branch from this` are every one of
+ * them a write against a ref this app does not own, and the honest first step
+ * for all of them is the checkout sitting above. Compare is left off too:
+ * comparing against `origin` is what the branch review window is for, and that
+ * window already reaches every repository of the project rather than the one
+ * this panel has selected. The favourite goes for a reason of its own —
+ * `favoriteBranches` names branches the repository *has*, and pinning is about
+ * what somebody returns to, which for one of these starts with the checkout.
+ *
+ * The refusal is `frozen`'s, unchanged and with the same caption: checking a
+ * remote branch out writes the working tree, so a run holding this panel or an
+ * operation already going refuses it exactly as it refuses the local switch.
+ * `current` is not a parameter at all — no branch in this group is the one the
+ * repository is on, by definition.
+ *
+ * Copying the name reads and writes nothing, so nothing refuses it: the third
+ * reach `branchMenuItems` describes, and the same one.
+ */
+export function remoteBranchMenuItems({ allowed = true, busy = false } = {}) {
+  const held = frozen({ allowed, busy })
+  return [
+    ...(held ? [{ type: 'label', label: held }] : []),
+    /* The one verb, and the label says where the branch comes from rather than
+       calling it a switch: what the press does is create a local branch here
+       and move onto it, and a row reading `Switch to this branch` would be
+       describing the act the list above offers. */
+    {
+      kind: 'checkout-remote',
+      label: 'Check out from origin',
+      icon: 'cloud',
+      disabled: Boolean(held)
+    },
+    /* Word for word the item the local row carries, deliberately: the two rows
+       are the same act and a second wording would read as a second act. The
+       **whole** name and never the leaf, for that item's own reason. */
+    { kind: 'copy-name', label: 'Copy branch name', icon: 'copy', disabled: false }
+  ]
+}
