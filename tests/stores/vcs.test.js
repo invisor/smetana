@@ -1,9 +1,22 @@
 import { describe, expect, it, vi } from 'vitest'
-import { loadStores } from '../support/stores.js'
+import { loadStores as buildStores } from '../support/stores.js'
 /* The very rule the button is drawn from, imported here so the two answers can
    be asserted to be one answer. Static rather than through `loadStores`: it is
    a pure module with no state to rebuild. */
 import { pushAction } from '../../src/components/git/tracking.js'
+
+/* The store graph, with the two reads every panel in this file now makes
+   answered by default: `selectRepo` reads what `origin` has beside the local
+   branch list, so a repository selected in any test at all asks these two, and
+   the mock throws for a command nobody registered. The default is the ordinary
+   answer for a repository nobody has fetched into — no branches and no fetch —
+   and a test that is *about* that list registers its own answer over it, since
+   the later `ipc.on` wins. */
+const loadStores = async () => {
+  const built = await buildStores()
+  built.ipc.on('vcs_remote_branches', []).on('vcs_last_fetch', null)
+  return built
+}
 
 /* One repository, named after the project it was asked for, so a response
    landing under the wrong project is visible in the assertion. */
@@ -399,8 +412,11 @@ describe('the git panel store', () => {
     const old = new Promise((resolve) => {
       releaseOld = () => resolve(remoteOf('old'))
     })
-    ipc.on('vcs_remote_branches', old)
-    ipc.on('vcs_last_fetch', fetchedIn('old'))
+    /* Only the repository of the project being left is held: the project
+       arrived at reads its own list through `selectRepo`, and a fixture that
+       held that one too would hang the switch rather than test it. */
+    ipc.on('vcs_remote_branches', (args) => (args.repo === '/p/.' ? old : remoteOf('new')))
+    ipc.on('vcs_last_fetch', (args) => fetchedIn(args.repo === '/p/.' ? 'old' : 'new'))
     const first = stores.vcs.loadRemoteBranches('/p/.')
 
     await stores.vcs.loadRepos('/new')
@@ -408,21 +424,22 @@ describe('the git panel store', () => {
     await first
     await nextTick()
 
-    expect(stores.vcs.vcsState.remoteBranches).toEqual([])
-    expect(stores.vcs.vcsState.remoteBranchesRepo).toBeNull()
-    expect(stores.vcs.vcsState.remoteBranchTimes).toEqual({})
-    expect(stores.vcs.vcsState.remoteFetchedAt).toBeNull()
+    /* The late answer lands nowhere: what the store holds is the list the
+       project arrived at read for itself, whole — the names, their stamps and
+       the fetch time are one answer, and a leaked one is a leak in all four. */
+    expect(stores.vcs.vcsState.remoteBranches).toEqual(remoteNames('new'))
+    expect(stores.vcs.vcsState.remoteBranchesRepo).toBe('/new/.')
+    expect(stores.vcs.vcsState.remoteFetchedAt).toBe(fetchedIn('new'))
   })
 
-  /* And the leak the guard cannot answer, because nothing arrives late in it:
-     a project switch that succeeds never calls this loader at all, so a list
-     read in the project being left would simply stay until somebody asked
-     again. `reset()` covers only a window left with no project. */
+  /* And the leak nothing arrives late in: a project switch that succeeds reads
+     the arriving project's own list, so what this pins is that no field of the
+     answer about the project being left survives into it. */
   it('the branches origin had go with the project they were about', async () => {
     const { stores, ipc } = await loadStores()
     await openPanel(stores, ipc, cleanTree)
-    ipc.on('vcs_remote_branches', remoteOf('p'))
-    ipc.on('vcs_last_fetch', fetchedIn('p'))
+    ipc.on('vcs_remote_branches', (args) => remoteOf(args.repo === '/p/.' ? 'p' : 'new'))
+    ipc.on('vcs_last_fetch', (args) => fetchedIn(args.repo === '/p/.' ? 'p' : 'new'))
     await stores.vcs.loadRemoteBranches('/p/.')
     expect(stores.vcs.vcsState.remoteBranches).toEqual(remoteNames('p'))
     expect(stores.vcs.vcsState.remoteFetchedAt).toBe(fetchedIn('p'))
@@ -430,13 +447,46 @@ describe('the git panel store', () => {
     await stores.vcs.loadRepos('/new')
 
     expect(stores.vcs.vcsState.project).toBe('/new')
-    expect(stores.vcs.vcsState.remoteBranches).toEqual([])
-    expect(stores.vcs.vcsState.remoteBranchesRepo).toBeNull()
-    /* The stamps and the fetch time go with the project they were about, the
-       same as the names: the leak this test is here for is a field nobody
-       cleared, and a fourth field would leak the same way. */
-    expect(stores.vcs.vcsState.remoteBranchTimes).toEqual({})
-    expect(stores.vcs.vcsState.remoteFetchedAt).toBeNull()
+    expect(stores.vcs.vcsState.remoteBranches).toEqual(remoteNames('new'))
+    expect(stores.vcs.vcsState.remoteBranchesRepo).toBe('/new/.')
+    /* The stamps and the fetch time move with the names, which is the leak this
+       test is here for: a field nobody replaced would hold one project's answer
+       under the next project's name, and a stamp is the half nothing on screen
+       could catch. */
+    expect(stores.vcs.vcsState.remoteBranchTimes).toEqual({
+      [remoteNames('new')[0]]: 1000 + 'new'.length,
+      [remoteNames('new')[1]]: null
+    })
+    expect(stores.vcs.vcsState.remoteFetchedAt).toBe(fetchedIn('new'))
+  })
+
+  /* The panel is the second caller of that loader, and this is the whole of
+     what it added: picking a repository reads what `origin` has in it beside
+     the local branch list, so the group at the foot of the panel has something
+     to draw without anybody opening the review window. */
+  it('picking a repository reads what origin has in it', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', answer(siblings))
+    ipc.on('vcs_status', (args) => treeOf(args.repo))
+    ipc.on('vcs_branches', (args) => branchesOf(args.repo))
+    ipc.on('vcs_tracking', [])
+    ipc.on('vcs_remote_branches', (args) =>
+      remoteOf(args.repo === '/p/admin' ? 'admin' : 'backend')
+    )
+    ipc.on('vcs_last_fetch', (args) => fetchedIn(args.repo === '/p/admin' ? 'admin' : 'backend'))
+
+    await stores.vcs.loadRepos('/p')
+
+    expect(stores.vcs.vcsState.remoteBranches).toEqual(remoteNames('admin'))
+    expect(stores.vcs.vcsState.remoteBranchesRepo).toBe('/p/admin')
+
+    await stores.vcs.selectRepo('/p/backend')
+
+    /* And it follows the selection, which is what makes the panel's own guard
+       — draw the group only while this field names the selected repository —
+       true again a moment after every switch. */
+    expect(stores.vcs.vcsState.remoteBranches).toEqual(remoteNames('backend'))
+    expect(stores.vcs.vcsState.remoteBranchesRepo).toBe('/p/backend')
   })
 
   /* A repository whose HEAD moves when git is told to move it, so a checkout
@@ -523,6 +573,89 @@ describe('the git panel store', () => {
     })
     expect(stores.vcs.vcsState.error).toBe(null)
     expect(stores.vcs.vcsState.tree).toEqual(before)
+    expect(stores.vcs.vcsState.branches.find((b) => b.current)?.name).toBe('main')
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  /* A repository with a branch on `origin` and not here: `spike` is in the
+     remote list and in no local one, and `vcs_checkout_remote` is what moves it
+     across — the local list gains it as the current branch and the remote list
+     stops offering it, which is the row leaving the group at the foot of the
+     panel and appearing in the list above. */
+  const takingFromOrigin = (ipc) => {
+    let branch = 'main'
+    const local = () => (branch === 'spike' ? ['main', 'spike'] : ['main'])
+    ipc.on('vcs_repos', () => answer([{ name: '.', path: '/p/.', branch, detached: null }]))
+    ipc.on('vcs_status', () => ({ branch, detached: null, changes: [] }))
+    ipc.on('vcs_branches', () => local().map((name) => ({ name, current: name === branch })))
+    ipc.on('vcs_tracking', [])
+    ipc.on('git_head', () => ({ branch, detached: null }))
+    ipc.on('vcs_remote_branches', () => [
+      { name: 'main', at: 1000 },
+      { name: 'spike', at: null }
+    ])
+    ipc.on('vcs_last_fetch', 2000)
+    ipc.on('vcs_checkout_remote', (args) => {
+      branch = args.branch
+      return null
+    })
+  }
+
+  it('checks a remote branch out by creating the local one that tracks it', async () => {
+    const { stores, ipc } = await loadStores()
+    takingFromOrigin(ipc)
+    await stores.vcs.loadRepos('/p')
+    await stores.git.loadHead('/p')
+
+    await stores.vcs.checkoutRemote('spike')
+
+    /* The plain name, with no `origin/` on it: the command builds the upstream
+       ref itself, since this app knows exactly one remote. */
+    expect(ipc.calls('vcs_checkout_remote')).toEqual([{ repo: '/p/.', branch: 'spike' }])
+    /* The local switch is not the command that ran, which is the whole reason
+       there are two of them. */
+    expect(ipc.commands()).not.toContain('vcs_checkout')
+    expect(stores.vcs.vcsState.branches.find((b) => b.current)?.name).toBe('spike')
+    /* And the refresh that follows every write here is what moves the row: the
+       remote list still holds the name, and the branch list beside it now does
+       too, so the rule at the foot of the panel has nothing left to draw for
+       it. */
+    expect(stores.vcs.vcsState.remoteBranches).toContain('spike')
+    expect(stores.vcs.vcsState.branches.map((b) => b.name)).toContain('spike')
+    expect(stores.git.gitState.branch).toBe('spike')
+    expect(stores.vcs.vcsState.writeError).toBe(null)
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  it('asks git for nothing at all without a branch', async () => {
+    const { stores, ipc } = await loadStores()
+    takingFromOrigin(ipc)
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.checkoutRemote('')
+
+    expect(ipc.calls('vcs_checkout_remote')).toEqual([])
+  })
+
+  /* Nothing is pre-empted in Rust, so every way this can be refused arrives as
+     git's own sentence — and it lands in the same block a refused local switch
+     does, under the same `op`: what was pressed is a checkout either way. */
+  it('a refused checkout from origin keeps git own words under the checkout title', async () => {
+    const { stores, ipc } = await loadStores()
+    takingFromOrigin(ipc)
+    await stores.vcs.loadRepos('/p')
+    ipc.fail('vcs_checkout_remote', {
+      kind: 'git',
+      message: "fatal: a branch named 'spike' already exists"
+    })
+
+    await stores.vcs.checkoutRemote('spike')
+
+    expect(stores.vcs.vcsState.writeError).toEqual({
+      kind: 'git',
+      op: 'checkout',
+      message: "fatal: a branch named 'spike' already exists"
+    })
     expect(stores.vcs.vcsState.branches.find((b) => b.current)?.name).toBe('main')
     expect(stores.vcs.vcsState.busy).toBe(null)
   })

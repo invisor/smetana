@@ -201,6 +201,7 @@ import {
   autoFetch,
   fetchNow,
   checkout,
+  checkoutRemote,
   commit,
   createBranch,
   deleteBranch,
@@ -1186,21 +1187,73 @@ async function loadReviewRemotes(path) {
   const mine = (reviewRemoteRun += 1)
   const answers = {}
   const stamps = {}
-  for (const repo of vcsState.repos) {
-    if (!repo?.path) continue
-    await loadRemoteBranches(repo.path)
-    /* A later opening of this window, a project switched under the read, or the
-       window closed: none of the three is worth filling a list about. */
-    if (mine !== reviewRemoteRun) return
-    if (activePath.value !== path || !openDialogs.has('review-changes')) return
-    answers[repo.path] = [...vcsState.remoteBranches]
-    reviewRemote.value = { ...answers }
-    /* The fetch time comes out of the same answer and in the same breath, for
-       the reason the store asks for both together: half of it is not a state
-       anybody keeps, and a stamp copied a moment later would be one
-       repository's age under another repository's name. */
-    if (vcsState.remoteFetchedAt != null) stamps[repo.path] = vcsState.remoteFetchedAt
-    reviewFetchedAt.value = { ...stamps }
+  try {
+    for (const repo of vcsState.repos) {
+      if (!repo?.path) continue
+      await loadRemoteBranches(repo.path)
+      /* A later opening of this window, a project switched under the read, or
+         the window closed: none of the three is worth filling a list about. */
+      if (mine !== reviewRemoteRun) return
+      if (activePath.value !== path || !openDialogs.has('review-changes')) return
+      /* And the field has to still be about the repository this turn of the
+         loop asked for. The Git panel is a second caller of that loader now —
+         it reads the selected repository's list on every selection and every
+         refresh — so a window focus landing mid-sweep can move the store's one
+         list out from under this line. The loop's own answer is dropped there
+         rather than written down under the wrong repository, and the window
+         reads a repository with no entry as *not known*, which is what it
+         already does for one whose answer has not landed. */
+      if (vcsState.remoteBranchesRepo !== repo.path) continue
+      answers[repo.path] = [...vcsState.remoteBranches]
+      reviewRemote.value = { ...answers }
+      /* The fetch time comes out of the same answer and in the same breath, for
+         the reason the store asks for both together: half of it is not a state
+         anybody keeps, and a stamp copied a moment later would be one
+         repository's age under another repository's name. */
+      if (vcsState.remoteFetchedAt != null) stamps[repo.path] = vcsState.remoteFetchedAt
+      reviewFetchedAt.value = { ...stamps }
+    }
+  } finally {
+    /* The loop walked every repository of the project through the one store
+       field that holds a remote list, so what is in it now belongs to whichever
+       came last. The Git panel draws its `origin` group only while that field
+       names the repository it is showing, so without this the group stays away
+       until the next selection or the next window focus — with nothing on
+       screen to say it is missing rather than empty.
+
+       **In a `finally`, because the loop has four ways out and three of them
+       are ordinary.** Closing the review window while the sweep is still going
+       is a thing people do, and it used to leave the group gone; so did a
+       project switched under it, and so would anything thrown in here. The
+       restore is owed on every one of them, and putting it after the loop said
+       so only for the path where nothing interrupted.
+
+       What is **not** in the `finally` is the deciding: the two checks below
+       are about who owns this store field now, not about which exit was taken.
+       A superseded sweep must not fire a read that would move the field under
+       the newer sweep already walking it, and it does not have to: that newer
+       sweep carries this same restore and is obliged to do it at its own end.
+
+       **The project check is a narrowing and not a guarantee, and it is worth
+       being exact about which.** This loop iterates the `vcsState.repos` array
+       it started with, and a project switch replaces that array rather than
+       emptying it — so a turn of the loop can still call the loader with a
+       repository of the project being left, after `loadRepos` for the new one
+       has entirely settled. `vcsState.project` is the new project by then and
+       does not change under it, so both of that loader's own guards pass and it
+       writes `remoteBranchesRepo` to a repository this project does not have.
+       Nothing wrong is drawn for it — `panelRemoteBranches` compares that field
+       against `vcsState.selected`, so a stale write hides the group rather than
+       misattributing it, and the next selection or window focus reads it back —
+       and declining to restore on top of that state is the honest thing to do
+       rather than a fix for it. Do not read this check as a promise that the
+       arriving project has already re-read its own list.
+
+       The dialog is deliberately not among the two: the group outlives the
+       window this sweep was for, which is the whole case this covers. */
+    if (mine === reviewRemoteRun && activePath.value === path && vcsState.selected) {
+      await loadRemoteBranches(vcsState.selected)
+    }
   }
 }
 
@@ -1471,6 +1524,31 @@ const resizeGitSection = ({ section, rows }) => {
    started from. */
 const toggleBranchFolders = (folders) => {
   project.branchFolders = folders
+}
+
+/* What `origin` has in the repository the Git panel is showing — and nothing at
+   all whenever the store's one remote list is about a different repository.
+
+   **The guard is load-bearing rather than defensive.** `loadReviewRemotes`
+   below walks every repository of the project through that same single store
+   field when the branch review window opens, so while its loop runs the field
+   holds somebody else's list. With the guard the group simply is not drawn for
+   a moment and comes back; without it the panel would offer branches this
+   repository has never had, and a checkout pressed on one would fail against a
+   ref that is not here. A map keyed by repository in the store was rejected:
+   the shape of that field is what the review window is built around, and the
+   comparison already in it answers the same question. */
+const panelRemoteBranches = computed(() =>
+  vcsState.remoteBranchesRepo === vcsState.selected ? vcsState.remoteBranches : []
+)
+
+/* And the same for the `origin` group's own folds, which is a second field
+   rather than more entries in the one above: a local branch may be called
+   `origin/spike`, and one list would make a single entry mean two different
+   rows and unfold both at once. What arrives is the whole new list, already
+   resolved by `branchTree.js`, exactly as its neighbour's is. */
+const toggleRemoteBranchFolders = (folders) => {
+  project.remoteBranchFolders = folders
 }
 
 /* Which branches are pinned above the tree, and this one is under the project
@@ -5515,6 +5593,8 @@ const toastStackStyle = {
                 :sections="resolvedGitSections"
                 :branch-folders="project.branchFolders"
                 :favorite-branches="project.favoriteBranches"
+                :remote="panelRemoteBranches"
+                :remote-folders="project.remoteBranchFolders"
                 :message="draftMessage()"
                 :suggesting="vcsState.suggesting"
                 :suggest-error="vcsState.suggestError"
@@ -5522,11 +5602,13 @@ const toastStackStyle = {
                 @resolve-conflicts="openConflict"
                 @toggle="toggleGitSection"
                 @toggle-folder="toggleBranchFolders"
+                @toggle-remote-folder="toggleRemoteBranchFolders"
                 @favorite="setFavoriteBranches"
                 @resize="resizeGitSection"
                 @setup="openSetup(activePath, true)"
                 @select="selectRepo"
                 @checkout="checkout"
+                @checkout-remote="checkoutRemote"
                 @compare="openCompareWindow(vcsState.selected, $event)"
                 @review="openReviewChanges($event)"
                 @merge="merge"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { branchMenuItems } from '../../../src/components/git/branchMenu.js'
+import { branchMenuItems, remoteBranchMenuItems } from '../../../src/components/git/branchMenu.js'
 
 const verbs = (items) => items.filter((it) => !it.type)
 const caption = (items) => items.find((it) => it.type === 'label')?.label ?? null
@@ -295,5 +295,46 @@ describe('branchMenuItems', () => {
   it('refuses the rename while a run is going and while git is working', () => {
     expect(disabledKinds(branchMenuItems({ allowed: false }))).toContain('rename')
     expect(disabledKinds(branchMenuItems({ busy: true }))).toContain('rename')
+  })
+})
+
+describe('remoteBranchMenuItems', () => {
+  it('offers the checkout and the name, and nothing else', () => {
+    expect(verbs(remoteBranchMenuItems()).map((it) => it.kind)).toEqual([
+      'checkout-remote',
+      'copy-name'
+    ])
+  })
+
+  it('draws the cloud the row itself draws, so the item and the row read as one', () => {
+    expect(verbs(remoteBranchMenuItems())[0].icon).toBe('cloud')
+  })
+
+  it('says nothing at the top while nothing refuses anything', () => {
+    expect(caption(remoteBranchMenuItems())).toBe(null)
+    expect(disabledKinds(remoteBranchMenuItems())).toEqual([])
+  })
+
+  it('refuses the checkout while a run holds the panel, and says so once', () => {
+    const items = remoteBranchMenuItems({ allowed: false })
+    expect(caption(items)).toBe('A run is going in this project')
+    expect(disabledKinds(items)).toEqual(['checkout-remote'])
+  })
+
+  it('refuses it again while git is already working in this repository', () => {
+    const items = remoteBranchMenuItems({ busy: true })
+    expect(caption(items)).toBe('Git is working in this repository')
+    expect(disabledKinds(items)).toEqual(['checkout-remote'])
+  })
+
+  it('leaves the name readable while everything else is refused', () => {
+    const items = remoteBranchMenuItems({ allowed: false, busy: true })
+    expect(verbs(items).find((it) => it.kind === 'copy-name').disabled).toBe(false)
+  })
+
+  it('copies the wording of the local row for the item the two share', () => {
+    const here = verbs(remoteBranchMenuItems()).find((it) => it.kind === 'copy-name')
+    const there = verbs(branchMenuItems()).find((it) => it.kind === 'copy-name')
+    expect(here).toEqual(there)
   })
 })

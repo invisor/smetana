@@ -77,10 +77,14 @@ export const vcsState = reactive({
      different things to check out or to read a diff against, and one list
      holding both could not say which a name was.
 
-     Loaded on request rather than with the panel, and by nothing on screen yet:
-     the branch review window is what asked for it, and the Git panel itself has
-     no use for a list of what the remote has. An empty list is the ordinary
-     answer for a repository nobody has fetched into. */
+     Loaded on request rather than with the panel, and by two callers now: the
+     branch review window, which asks about every repository of the project in
+     turn, and `selectRepo`, which asks about the one the panel is showing so
+     that the `origin` group at the foot of the branch list has something to
+     draw. `remoteBranchesRepo` beside it is what tells those two apart, and it
+     is why the panel draws that group only while the field names the repository
+     it is showing. An empty list is the ordinary answer for a repository nobody
+     has fetched into. */
   remoteBranches: [],
   /* When each of those branches was last moved here, keyed by name: epoch
      seconds, or null for a branch nothing on this machine has a record of —
@@ -386,9 +390,11 @@ export async function loadRepos(project) {
        somebody asks again, which is a leak across the very boundary the guard
        above exists to keep. `branches` is short of nothing here only because
        `selectRepo` → `loadBranchList` runs on every one of these and either
-       replaces that list or empties it; this path calls `loadRemoteBranches`
-       nowhere, by design — that loader is asked for a repository of somebody
-       else's choosing, not for the one the panel settled on. */
+       replaces that list or empties it. The remote list is in the same case now and
+       for the same reason — `selectRepo` reads it for whichever repository it
+       settles on — so what this line still buys is the gap between the two:
+       the old answer is dropped as the project is left rather than standing
+       under the new project's name until its own read lands. */
     forgetRemoteBranches()
     await selectRepo(pickRepo(vcsState.repos, settings.project.selectedRepo))
   } catch (err) {
@@ -433,7 +439,17 @@ export async function selectRepo(path) {
      selected, so clearing it here would only make the panel blink through a
      state it is about to answer properly. */
   vcsState.writeError = null
-  await Promise.all([loadStatus(), loadBranchList(), loadTracking()])
+  /* The remote list is read here beside the local one, and it is the panel's
+     own caller of a loader written for somebody else's choice of repository.
+     What it costs is a `read_dir`, a `packed-refs` read and one small reflog
+     file apiece — no process at all — which is what makes it affordable on
+     every selection and on every refresh, and the refresh is how window focus
+     reaches it: `catchUp` calls `loadRepos`, which comes back through here.
+
+     Last in the list rather than first, and not awaited ahead of anything: the
+     branch list above is what the panel draws first, and the group at the foot
+     of it can arrive a tick later. */
+  await Promise.all([loadStatus(), loadBranchList(), loadTracking(), loadRemoteBranches(path)])
 }
 
 /* The selected repository's working tree.
@@ -842,6 +858,26 @@ async function write(op, branch, call, theirs = branch, published = false) {
 export async function checkout(branch) {
   if (!branch) return
   await write('checkout', branch, (repo) => invoke('vcs_checkout', { repo, branch }))
+}
+
+/* Check out a branch only `origin` has, which means creating the local one that
+   tracks it — `vcs_checkout_remote`, whose header says why that is a second
+   command and not a flag on the first.
+
+   Through `write` like every other write here, so it takes the same `busy`, its
+   refusal lands in the same block under `GitPanel`, and the whole list comes
+   back afterwards. That last part is what moves the row: the branch is local
+   from this moment on, so the refresh draws it in the list above and the
+   `origin` group is one row shorter — the group is what `origin` has and this
+   repository does not, and it does not any more.
+
+   `op: 'checkout'` and not a fourth word. What the spinner and a refusal are
+   about is a checkout, and the row they are drawn on is the row that was
+   pressed — `busy.branch` is the plain name here as it is there, which is what
+   puts the spinner on the row of the group rather than nowhere. */
+export async function checkoutRemote(branch) {
+  if (!branch) return
+  await write('checkout', branch, (repo) => invoke('vcs_checkout_remote', { repo, branch }))
 }
 
 /* Bring another branch into the one this repository is on.

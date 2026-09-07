@@ -252,6 +252,16 @@ const defaults = () => ({
        in, while an empty list is somebody having folded them all. Written out
        whole on the first press — `branchTree.js` holds both halves of that. */
     branchFolders: null,
+    /* Which folders of the Git panel's `origin` group are unfolded, by whole
+       path, the group's own heading `origin` among them. A plain list where the
+       local folders above are nullable: there is no "nobody has chosen" state
+       here, since the group starts folded and stays that way until somebody
+       opens it. Its own key rather than entries in `branchFolders` — a local
+       branch may be called `origin/spike`, and one list would then unfold two
+       different rows at once. Listed here for the reason `runSettings` below
+       spells out: a key missing from this object is a key the defaults layer
+       cannot clear. */
+    remoteBranchFolders: [],
     /* Which branches the Git panel pins above the tree, by whole name. A plain
        list where the folders above are nullable, and that is the difference
        between the two: there is no third state here, since nothing is marked
