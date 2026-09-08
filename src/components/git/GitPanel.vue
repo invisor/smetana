@@ -878,7 +878,7 @@ const fieldRowStyle = computed(() => ({
   minWidth: 0,
   height: '100%',
   padding: '0 var(--space-3) 0 var(--space-5)',
-  background: filterFocused.value ? 'var(--surface-hover)' : 'var(--surface-raised)',
+  background: filterFocused.value ? 'var(--surface-active)' : 'var(--surface-raised)',
   transition: 'var(--transition-control)'
 }))
 /* Mono, because what is being typed is half of an identifier — the same face
@@ -888,7 +888,7 @@ const fieldRowStyle = computed(() => ({
 
    **The focus ring is suppressed here, and what accounts for the caret is the
    plate**: while this input has the focus the row it sits in steps from
-   `--surface-raised` to `--surface-hover`, so the field is lit end to end —
+   `--surface-raised` to `--surface-active`, so the field is lit end to end —
    glyph, input and `x` — rather than boxed. That is what interaction is
    everywhere else in this system, a step of surface and never a change of
    colour, and it is legible on a plate reaching both edges of the panel where a
@@ -910,11 +910,24 @@ const fieldRowStyle = computed(() => ({
    and 1.198:1; `--surface-selected` is 1.254:1 and 1.130:1 and is rejected on
    hue rather than on distance — in the light theme it is the blue-tinted
    surface, which is the blue box this field was changed to be rid of, only
-   quieter. `--surface-hover` is taken because it is the token that means "this
-   control is being interacted with", and its step here is the same order as the
-   one the segments of the tab row underneath already take (1.169/1.095).
-   `--surface-active` is the only alternative, for the case where the dark step
-   turns out not to read at the default font size; there is no third.
+   quieter.
+
+   **`--surface-active` is what is drawn, and `--surface-hover` is what was
+   tried first.** The first choice was the token that means "this control is
+   being interacted with", which is exactly what a caret in a field is, and its
+   light step is unambiguous — `#ffffff` to `#e4e9ea`, a white-to-grey band
+   nobody has to look for. It was dropped on the dark theme, where the same
+   token measures the 1.090:1 in the list above: `#1b2229` to `#202932` is
+   L* 12.8 to 16.1 and ΔE76 about 3.5, and abutted as one image and enlarged
+   three times the seam was still hard to find — while the two states are never
+   on screen together in the real case, so a person at the default font size
+   sees no change at all. With the ring gone that is dark-theme focus in this
+   field with nothing whatever saying where the caret is, which is a worse
+   defect than the one this replaced. `--surface-active` is the next stop of the
+   same scale and close to twice the step in the theme that failed — L* 12.8 to
+   19.4, ΔE76 about 6.8 — and there is no third: the ratios above are the whole
+   list. Both densities behaved alike throughout, as they must, since density
+   moves the row's height and never a colour.
 
    **The `x` inside the plate keeps the stylesheet's default ring**, and that is
    left alone deliberately: the plate follows this element's focus alone, so Tab
@@ -928,11 +941,20 @@ const fieldRowStyle = computed(() => ({
    focusable control in the app is a design-system question and not a
    component's to settle.
 
-   What the step costs, said once so nobody reads it as a defect: `ghost`'s own
-   hover is `--surface-hover` as well, so a pointer resting on the `x` while the
-   caret is in the field draws nothing new — the button is already standing on
-   the colour it would fill with. The press still steps to `--surface-active`,
-   and outside that one combination the hover is the ordinary one. */
+   That button is also the second reason the plate is not on `--surface-hover`,
+   and it is the one a pointer finds rather than a measurement: `ghost`'s own
+   hover fill is `--surface-hover`, so with the plate there a pointer resting on
+   the `x` while the caret was in the field drew nothing at all — the button
+   standing on the colour it was about to fill with, measured at
+   `rgb(32,41,50)` on `rgb(32,41,50)`. From `--surface-active` the button's
+   hover is a step **down** and visible again, and the whole of that collision
+   is gone.
+
+   One thing the move does take on, and it is small enough to name and leave:
+   `--surface-active` is also where a `ghost` button goes while it is held, so
+   the field's focused ground is the colour of a control being pressed. Nothing
+   here is pressed for as long as a field stands open, and the two are never the
+   same element — the plate is a row and a press is a control inside it. */
 const fieldStyle = {
   flex: 1,
   minWidth: 0,
