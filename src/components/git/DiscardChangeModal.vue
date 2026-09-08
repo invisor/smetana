@@ -59,9 +59,26 @@ const props = defineProps({
      takes the Discard button off the footer altogether — there is no forcing
      this and nothing else to try, so the only way out is Cancel. */
   refusal: { type: String, default: '' },
-  /* git is working. Both buttons go dead rather than the window closing: the
-     call can fail, and this is the window the answer belongs over. */
-  busy: { type: Boolean, default: false }
+  /* **Git is working somewhere in this repository**, and not necessarily on
+     this. It is the whole of what refuses the Discard button, because it is the
+     whole of what the store refuses: `write()` in `stores/vcs.js` declines any
+     call made while an operation is in flight, so a button left live under
+     somebody's pull is a button that goes dead on the press with nothing said.
+     It is the same fact that greys the menu row this window was opened from,
+     and the two have to be one answer. */
+  busy: { type: Boolean, default: false },
+  /* **This discard**, in flight. Narrower than `busy` on purpose, and the split
+     is the difference between refusing an act and taking away the way out: this
+     is what dims Cancel and what takes the cross off the frame, and neither may
+     be spent on an operation this window is not about. A merge running under
+     `WRITE_CEILING` has five minutes to finish, and there is no scrim here to
+     stop somebody starting one — a discard dialog whose Cancel went grey for
+     the length of it would be the one dialog in the app that can be held shut
+     by something it has nothing to do with.
+
+     While it is true, `busy` is true as well, so the Discard button is refused
+     by the wider fact and reads its label off this one. */
+  discarding: { type: Boolean, default: false }
 })
 
 defineEmits(['close', 'confirm'])
@@ -110,13 +127,20 @@ const refusalStyle = {
   marginTop: 'var(--space-4)'
 }
 
-const confirmLabel = computed(() => (props.busy ? 'Discarding…' : 'Discard'))
+/* `discarding` and not `busy`: the button says what **this** window is doing,
+   and "Discarding…" over somebody else's merge would be a sentence about the
+   wrong operation. Under that wider fact the button is simply refused, which is
+   what a control with nothing to say says. */
+const confirmLabel = computed(() => (props.discarding ? 'Discarding…' : 'Discard'))
 </script>
 
 <template>
+  <!-- `closable` and Cancel follow `discarding`, the Discard button follows
+       `busy`: the wider fact refuses the act, and only this window's own write
+       may take away the way out of it. -->
   <Modal
     :open="open"
-    :closable="!busy"
+    :closable="!discarding"
     :title="TITLE"
     :description="description"
     @close="$emit('close')"
@@ -130,7 +154,7 @@ const confirmLabel = computed(() => (props.busy ? 'Discarding…' : 'Discard'))
       <div :style="failureTextStyle">{{ refusal }}</div>
     </div>
     <template #footer>
-      <Button variant="ghost" :disabled="busy" @click="$emit('close')">Cancel</Button>
+      <Button variant="ghost" :disabled="discarding" @click="$emit('close')">Cancel</Button>
       <Button v-if="!refusal" variant="danger" :disabled="busy" @click="$emit('confirm')">
         {{ confirmLabel }}
       </Button>

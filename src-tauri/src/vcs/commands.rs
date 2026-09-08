@@ -781,8 +781,16 @@ fn commit_all(repo: &Path, message: &str) -> Result<(), VcsError> {
 /// (`--untracked-files=normal`, this panel's own default) and takes the same
 /// pair: it is not in HEAD, `rm --cached` matches nothing under it, and
 /// `clean -f -d` is what removes a directory at all. **The trailing slash is
-/// what `in_head` answers that record on**, and its own note says why asking
-/// git instead is wrong.
+/// what `at_head` answers that record on**, and its own note says why.
+///
+/// **A submodule is refused by name**, the second of this command's two named
+/// refusals and beside the conflict for the same reason: what the row asks for
+/// is genuinely two acts — the commit this repository records, or the work
+/// inside the other repository — and nothing else in this app has any notion of
+/// a submodule to choose between them with. Unlike the conflict it is **not**
+/// greyed in the menu first: a `git status` record for a dirty submodule is an
+/// ordinary `modified`, so the front end has nothing to grey on, and the window
+/// is where the sentence lands.
 ///
 /// **A conflicted path is refused**, and refused here rather than only by the
 /// greyed menu row: the window that asks is a window of its own with no scrim,
@@ -790,8 +798,8 @@ fn commit_all(repo: &Path, message: &str) -> Result<(), VcsError> {
 /// The probe is `git diff --name-only --diff-filter=U`, which is what
 /// `--porcelain=v2`'s unmerged records say in a form that needs no parser —
 /// `-z`, because a path may hold a newline, the rule this module keeps
-/// everywhere. It runs first, which is also what makes reading a non-zero
-/// `cat-file` as "not in HEAD" safe below: a repository git cannot read has
+/// everywhere. It runs first, which is also what makes reading a 128 from
+/// `ls-tree` as "there is no HEAD" safe below: a repository git cannot read has
 /// already refused here, in git's own words.
 ///
 /// **Every path is a `:(literal)` pathspec and never a bare one.** A pathspec
@@ -849,16 +857,24 @@ fn discard(repo: &Path, path: &str, orig_path: Option<&str>) -> Result<(), VcsEr
     if conflicted(repo)?.iter().any(|unmerged| unmerged == path) {
         return Err(VcsError::Conflicted(path.to_owned()));
     }
-    let tracked = in_head(repo, path)?;
+    // The command's two named refusals, side by side: both are states this
+    // panel can see and has no honest act for, and both are refused here rather
+    // than only on the front end.
+    let at = at_head(repo, path)?;
+    if at == AtHead::Submodule {
+        return Err(VcsError::Submodule(path.to_owned()));
+    }
+    let tracked = at == AtHead::Tracked;
     let mut restore = Vec::new();
     if tracked {
         restore.push(literal(path));
     }
-    // The other side of a rename, and only when HEAD really has it: `orig_path`
-    // is a field of a record the front end drew a while ago, and a path git
-    // cannot resolve would take the whole restore down with it.
+    // The other side of a rename, and only when HEAD really has it as something
+    // `restore` can put back: `orig_path` is a field of a record the front end
+    // drew a while ago, and a path git cannot resolve would take the whole
+    // restore down with it.
     if let Some(orig) = orig_path.filter(|orig| !orig.is_empty() && *orig != path) {
-        if in_head(repo, orig)? {
+        if at_head(repo, orig)? == AtHead::Tracked {
             restore.push(literal(orig));
         }
     }
@@ -898,43 +914,78 @@ fn conflicted(repo: &Path) -> Result<Vec<String>, VcsError> {
     Ok(out.split('\0').filter(|path| !path.is_empty()).map(str::to_owned).collect())
 }
 
-/// Whether the last commit has this path.
+/// What the last commit holds at this path.
 ///
-/// **A trailing slash answers `false` without asking git, and that is the whole
-/// of what makes this function mean what its name says.** git only ever reports
-/// a path that way for an *untracked directory*, so the record is by
-/// construction not something HEAD holds — while `git cat-file -e HEAD:dir/`
-/// exits **0** whenever HEAD has a tree at `dir`, which is the ordinary state
-/// of a folder somebody has just `git rm -r`'d and then put an untracked file
-/// back into. Asked bare, this answered `true` there and the row went down the
-/// restore branch: the file the window named was left on the disk and two
-/// staged deletions on rows nobody had touched were reverted, index and working
-/// tree both, under a sentence saying one untracked file would be deleted. The
-/// test below is that repository.
+/// Three answers rather than two, because git has three: nothing, something
+/// `git restore` can put back, and a **gitlink** — another repository, recorded
+/// here as one commit id, which is neither.
+#[derive(Debug, PartialEq, Eq)]
+enum AtHead {
+    /// An untracked path, one added since the commit, the new side of a rename,
+    /// an untracked directory record, or every path of a repository with no
+    /// commit at all.
+    Nothing,
+    /// A file or a symlink — both are blobs — and, unreachably from this panel,
+    /// a directory. Anything `restore` can write back.
+    Tracked,
+    /// A submodule. `discard` refuses it by name.
+    Submodule,
+}
+
+/// The one question this command asks git about a path, and it is
+/// `git ls-tree HEAD -- :(literal)<path>`.
 ///
-/// The rule is `isFolderRecord`'s in `components/git/changeMenu.js`, one side
-/// of the IPC over, and the same one `--untracked-files=normal` produces. It is
-/// deliberately not `cat-file -t` with a `blob` check, which answers the same
-/// for a directory and a different thing for a **submodule**: a gitlink is a
-/// `commit`, and reading that as "not in HEAD" would send a dirty submodule row
-/// to the branch that deletes.
+/// **A trailing slash answers `Nothing` without asking git at all, and that is
+/// what makes this function mean what its name says.** git reports a path that
+/// way **only** for an untracked directory, so the record is by construction
+/// not something HEAD holds — while every way of asking git resolves it against
+/// the tree instead: `cat-file -e HEAD:dir/` exits 0 whenever HEAD has a tree at
+/// `dir`, and `ls-tree -- ':(literal)dir/'` lists that tree's **contents**.
+/// Either answers "in HEAD" for the ordinary state of a folder somebody has
+/// `git rm -r`'d and then put an untracked file back into, and the row then went
+/// down the restore branch: the file the window named stayed on the disk and
+/// two staged deletions on rows nobody had touched were reverted, index and
+/// working tree both. The rule is `isFolderRecord`'s in
+/// `components/git/changeMenu.js`, one side of the IPC over, and the same one
+/// `--untracked-files=normal` produces. Answering it here costs no process,
+/// which is the whole of why it is not asked.
 ///
-/// Everything else is `git cat-file -e HEAD:<path>` — exit 0 for a path HEAD
-/// holds, and 128 for a path the commit does not have and for a repository with
-/// no commit at all. Both are the same answer here, and neither is a refusal.
-/// `cat-file` takes a revision rather than a pathspec, so the `:(literal)` the
-/// writes need has no place on it and no glob is possible.
+/// **`ls-tree` and not `cat-file -e`, which is what this asked first.** That
+/// probe answers with an exit code, and a **submodule** exits **1** with an
+/// empty stderr — the superproject holds the gitlink but not the commit object
+/// behind it — so a dirty submodule row reached `Git { status: 1, stderr: "" }`
+/// and the window drew its failed-red title over nothing at all. `ls-tree` never
+/// opens the object, so that class does not exist for it: it prints the tree
+/// entry, mode and type included, and the gitlink becomes an answer instead of a
+/// silence. Everything else it can do is a real refusal in git's own words.
+///
+/// Only the **type** field is read and the path never is
+/// (`<mode> SP <type> SP <object> TAB <path>`), which is what keeps
+/// `core.quotePath` and a name holding a newline out of this — both of them
+/// change the tail of the line and nothing before the first tab. An empty answer
+/// is a path HEAD does not have, and 128 is a repository with no commit; both
+/// are `Nothing`, and neither is a refusal.
 ///
 /// Reading 128 as an answer is safe **in this position alone**, exactly as
 /// `in_progress` reads it for `--show-current-patch`: `discard` asks the
 /// conflict probe above first, so a folder git cannot read has already come
 /// back in git's own words before this runs.
-fn in_head(repo: &Path, path: &str) -> Result<bool, VcsError> {
+fn at_head(repo: &Path, path: &str) -> Result<AtHead, VcsError> {
     if path.ends_with('/') {
-        return Ok(false);
+        return Ok(AtHead::Nothing);
     }
-    let object = format!("HEAD:{path}");
-    Ok(run::git_maybe(repo, &["cat-file", "-e", &object], 128)?.is_some())
+    let Some(out) = run::git_maybe(repo, &["ls-tree", "HEAD", "--", &literal(path)], 128)? else {
+        return Ok(AtHead::Nothing);
+    };
+    match out.lines().next().and_then(|line| line.split_whitespace().nth(1)) {
+        Some("commit") => Ok(AtHead::Submodule),
+        // A blob, a symlink, or a tree: everything `restore` can write back.
+        // Written this way round deliberately — an entry this build has never
+        // heard of falls to the branch that puts a file back rather than to the
+        // one that deletes.
+        Some(_) => Ok(AtHead::Tracked),
+        None => Ok(AtHead::Nothing),
+    }
 }
 
 /// A commit message for what is in the tree right now, written by the agent.
@@ -2485,6 +2536,59 @@ mod tests {
             ["dir/f.txt", "dir/g.txt"],
             "the two rows nobody touched are exactly as they were"
         );
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// **A submodule, refused by name rather than by silence.** A dirty
+    /// submodule is an ordinary `modified` row — nothing in a `git status`
+    /// record tells the front end to grey it — so this window is where the
+    /// person finds out, and what it draws has to be a sentence.
+    ///
+    /// The gitlink is written straight into the index rather than through
+    /// `git submodule add`, which wants a URL, a clone and
+    /// `protocol.file.allow` on a modern git. What `at_head` reads is the tree
+    /// entry's **type**, and a `160000 commit` entry is that whether or not
+    /// there is a working tree under it. One difference from a real submodule
+    /// is worth naming, since it is the difference that hid this for a while:
+    /// here the gitlink points at a commit this repository does hold, so the
+    /// `cat-file -e` probe this used to ask would have answered 0 and passed —
+    /// where a real superproject does **not** hold the submodule's commit and
+    /// that probe exits 1 with an empty stderr. `ls-tree` never opens the
+    /// object, so both shapes reach the same answer here.
+    #[test]
+    fn discarding_a_submodule_is_refused_with_something_to_read() {
+        let repo = discardable("discard-submodule");
+        let gitlink = sha(&repo, "HEAD");
+        run::git_write(&repo, &["update-index", "--add", "--cacheinfo", &format!("160000,{gitlink},sub")])
+            .expect("write the gitlink");
+        run::git_write(&repo, &["commit", "-m", "a submodule"]).expect("commit the gitlink");
+
+        assert_eq!(at_head(&repo, "sub").expect("ask git"), AtHead::Submodule);
+
+        let refused = discard(&repo, "sub", None).expect_err("a submodule");
+
+        assert_eq!(refused.kind(), "submodule");
+        // The whole point of the variant: the window draws this string under a
+        // failed-red title, and an empty one is the defect it replaced.
+        assert!(refused.to_string().contains("sub"), "the sentence names the path");
+        assert!(refused.to_string().len() > 20, "and it is a sentence rather than nothing");
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// The three answers `at_head` has, against one repository, so the enum is
+    /// pinned rather than only its two interesting arms. The folder record is
+    /// the one that is answered without asking git at all.
+    #[test]
+    fn at_head_tells_nothing_from_a_file_from_a_folder_record() {
+        let repo = discardable("at-head-answers");
+        fs::create_dir_all(repo.join("scratch")).expect("make the folder");
+        fs::write(repo.join("scratch/one.txt"), "a\n").expect("write one.txt");
+
+        assert_eq!(at_head(&repo, "m.txt").expect("ask git"), AtHead::Tracked);
+        assert_eq!(at_head(&repo, "never.txt").expect("ask git"), AtHead::Nothing);
+        assert_eq!(at_head(&repo, "scratch/").expect("ask git"), AtHead::Nothing);
 
         let _ = fs::remove_dir_all(&repo);
     }

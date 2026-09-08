@@ -1137,14 +1137,23 @@ function openDiscardChange(change) {
       path: discardingChange.value?.path ?? '',
       kind: discardingChange.value?.kind ?? '',
       refusal: discardRefusal.value,
-      /* Any operation and not this one, which is where this parts company with
-         `delete-branch`'s own `busy` above. `write()` refuses a call made while
-         git is working at all, and `discardIt` guards on the same thing — so a
-         Discard left live under somebody else's merge is a button that goes
-         dead on the press with nothing said in the window. It is the same fact
-         that greys the menu row this window was opened from, and it has to be
-         the same answer in both places. */
-      busy: Boolean(vcsState.busy)
+      /* **Two facts and not one**, which is where this parts company with
+         `delete-branch`'s single `busy` above.
+
+         `busy` is any operation at all, and it is what refuses the Discard
+         button: `write()` declines a call made while git is working on
+         anything, and `discardIt` guards on the same thing — so a button left
+         live under somebody's pull goes dead on the press with nothing said in
+         the window. It is the same fact that greys the menu row this window was
+         opened from, and it has to be one answer in both places.
+
+         `discarding` is this window's own write, and it is what dims Cancel and
+         takes the cross off the frame. Spending the wider fact on those was the
+         defect: there is no scrim here, a merge has five minutes under
+         `WRITE_CEILING`, and this would have been the one dialog in the app
+         whose way out can be taken away by something it is not about. */
+      busy: Boolean(vcsState.busy),
+      discarding: vcsState.busy?.op === 'discard'
     }),
     forget: () => {
       discardingChange.value = null

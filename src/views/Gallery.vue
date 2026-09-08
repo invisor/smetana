@@ -2951,8 +2951,29 @@ const menuTargetStyle = {
           @confirm="() => {}"
         />
       </div>
-      <!-- git working, where every way out is dead including the cross, exactly
-           as the delete above it. -->
+      <!-- This discard, in flight: every way out is dead including the cross,
+           exactly as the delete above it, and the button says what is
+           happening. `busy` rides with it, since a discard that is running is
+           git working by any reading. -->
+      <div :style="{ position: 'relative', height: '300px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DiscardChangeModal
+          :open="true"
+          path="src/components/git/DiscardChangeModal.vue"
+          kind="modified"
+          busy
+          discarding
+          @close="() => {}"
+          @confirm="() => {}"
+        />
+      </div>
+      <!-- And the state the two props exist to tell apart: git is working on
+           something else — a pull, a commit sitting on somebody's hooks — so
+           Discard is refused because the store would refuse it anyway, while
+           **Cancel stays live and the cross stays on the frame**. This window
+           has no scrim and a write has five minutes to finish; a way out that
+           an unrelated operation can take away is the thing to check is not
+           happening here. The button reads `Discard` and not `Discarding…`,
+           because nothing about this window is running. -->
       <div :style="{ position: 'relative', height: '300px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <DiscardChangeModal
           :open="true"

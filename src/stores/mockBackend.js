@@ -186,7 +186,8 @@ const DIALOG_PROPS = {
     path: 'src/stores/vcs.js',
     kind: 'modified',
     refusal: '',
-    busy: false
+    busy: false,
+    discarding: false
   },
   /* Every fixture carries a `title` beside what its dialog draws, because that
      string is the OS frame's caption in the app and there is no frame in a

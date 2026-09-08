@@ -288,19 +288,40 @@ added, or the new side of a rename — is `git rm -f --cached --ignore-unmatch` 
 path through. **A rename is both at once**: the old path is in HEAD and the new one is not, so the
 two go to `restore` in one call and the branch below takes the new name away.
 
-**"Is this path in HEAD" is not the same question as "does `git cat-file -e HEAD:<path>` exit zero",
-and the difference is a trailing slash.** `cat-file -e HEAD:dir/` exits **0** whenever HEAD holds a
-tree at `dir` — the ordinary state of a folder somebody has `git rm -r`'d and then put an untracked
-file back into, which the panel draws as two staged deletions and one `?? dir/`. Asked bare, the
-record went down the restore branch: the file the window named stayed on the disk and two deletions
-on rows nobody had touched were reverted, index and tree both. So a trailing slash answers `false`
-without asking git at all — `isFolderRecord`'s rule one side of the IPC over, since git reports a
-path that way **only** for an untracked directory. Deliberately not `cat-file -t` with a `blob`
-check, which would answer the same for a directory and something different for a **submodule**: a
-gitlink is a `commit`, and reading that as "not in HEAD" would send a dirty submodule row to the
-branch that deletes. Everything else is still `cat-file -e`, where 128 is an answer and not a refusal
-because the conflict probe above it has already come back in git's own words for a folder git cannot
-read.
+**What HEAD holds at a path is `at_head`, and it has three answers because git has three**: nothing,
+something `restore` can put back, and a **gitlink**. The call is
+`git ls-tree HEAD -- :(literal)<path>`, and only the **type** field of the first line is read — the
+path never is, which is what keeps `core.quotePath` and a name holding a newline out of it, since
+both change the tail of the line and nothing before the first tab. An empty answer is a path HEAD
+does not have and 128 is a repository with no commit; both are "nothing", and neither is a refusal.
+
+**A trailing slash answers "nothing" without asking git at all**, and that is what makes the function
+mean what its name says. git reports a path that way **only** for an untracked directory, so the
+record is by construction not something HEAD holds — while every way of *asking* git resolves it
+against the tree instead: `cat-file -e HEAD:dir/` exits 0 whenever HEAD has a tree at `dir`, and
+`ls-tree -- ':(literal)dir/'` lists that tree's contents. Either answers "in HEAD" for the ordinary
+state of a folder somebody has `git rm -r`'d and then put an untracked file back into — two staged
+deletions and one `?? dir/` on the panel — and the row then went down the restore branch: the file
+the window named stayed on the disk and two deletions on rows nobody had touched were reverted, index
+and tree both. The rule is `isFolderRecord`'s one side of the IPC over, and answering it here costs
+no process, which is the whole of why it is not asked.
+
+**`ls-tree` rather than `cat-file -e`, which is what this asked first, and the reason is a
+submodule.** That probe answers with an exit code, and a gitlink exits **1 with an empty stderr** —
+the superproject holds the gitlink but not the commit object behind it — so a dirty submodule row
+reached `VcsError::Git { status: 1, stderr: "" }` and the window drew its failed-red title over
+nothing at all. Nothing was written; what was missing was the sentence. `ls-tree` never opens the
+object, so that class does not exist for it, and the gitlink becomes an answer instead of a silence.
+An entry whose type this build has never heard of falls to the branch that puts a file back rather
+than to the one that deletes.
+
+**A submodule is then refused by name**, `VcsError::Submodule`, the second of this command's two
+named refusals. "Discard this submodule's changes" is two acts — putting back the commit this
+repository records, and throwing away the work inside the other repository — and nothing else in this
+app has any notion of a submodule to choose between them with, so guessing would be inventing a
+feature on the one verb that cannot be undone. Unlike the conflict it is **not** greyed in the menu
+first: a dirty submodule is an ordinary `modified` record, so the front end has nothing to grey on
+and the window is where the sentence lands.
 
 **Every path git is given is a `:(literal)` pathspec.** A pathspec is a glob, not a name, and `--`
 does nothing about that: measured on 2.34.1, `git clean -f -d -- 'pages/[id].tsx'` in a directory
@@ -328,6 +349,17 @@ the file or the folder on the disk with the app reporting success, and in the ig
 `rm --cached` has already taken a force-added file's index entry with it. Both are known and left,
 because `-ff` and `-x` are the two flags that turn this from "throw away what git is showing you"
 into "delete what git was deliberately not showing you".
+
+**The window is announced two facts about git working and not one**, which is where it parts company
+with `delete-branch`'s single `busy`. `busy` is any operation at all and refuses the **Discard
+button**, because that is what the store refuses — `write()` declines a call made while git is
+working on anything, so a button left live under somebody's pull goes dead on the press with nothing
+said — and it is the same fact that greys the menu row the window was opened from. `discarding` is
+this window's own write and is what dims **Cancel** and takes the cross off the frame. Spending the
+wider fact on those was a defect: there is no scrim here, a write has five minutes under
+`WRITE_CEILING`, and it made this the one dialog in the app whose way out could be taken away by
+something it is not about. The button's label follows the narrow one too — `Discarding…` over
+somebody else's merge would name the wrong operation.
 
 **In the store it is `discardChange(change)` through the same `write` helper**, `op: 'discard'`,
 shaped after `commit` because both are about the tree rather than a branch — so `busy` carries
