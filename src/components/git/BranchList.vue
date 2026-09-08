@@ -255,6 +255,33 @@
    it names the query back. Under it is the second control this component draws
    outside a row, `Clear filter`, which does what the `x` in the field does.
 
+   ## The keyboard
+
+   The list is a `role="tree"` of `role="treeitem"` rows — the headings among
+   them, which keep the `aria-expanded` being a `<button>` already gave them —
+   and it holds exactly **one** tab stop: the row `focusedKey` names, or the
+   first row when nothing has been focused yet and when what was focused is no
+   longer drawn. That is the file tree's roving tabindex one panel over and it
+   is here for that panel's reason: a section holding 346 branches must not be
+   346 presses of Tab to get past.
+
+   Which verb a press means is `branchKeys.js` and never this file, the split
+   the whole `gitActions.js` family keeps. **What a verb then does is the
+   gesture the pointer already had, called through the same function**: `switch`
+   is `activate`, which is the double click's own handler with the same refusal
+   on the current branch and under a run; `fold` and `unfold` are the heading's
+   own click; and `menu` opens the same `PointerMenu` at the row's own corner,
+   so the items, their refusals and `pick` are one path with the right click's
+   rather than a second one free to drift. `parent` is the only verb with
+   nowhere to go on some rows — the current branch and the marked ones are
+   lifted to depth 0 with no heading above them — and a press that finds no
+   heading moves nothing, which is what a tree does at its root.
+
+   The focus ring is `tokens/base.css`'s own and is deliberately neither
+   suppressed nor pulled inside: a row is the full width of a box that scrolls,
+   so the ring is what says which of a column of identical rows the keyboard is
+   on, and there is no token for its width to inset it by.
+
    A rename here is local and stops there: no upstream is renamed, nothing is
    pushed and nothing on the remote is deleted. So is every flag and strategy a
    merge can take: this offers the merge and the rebase git would do by itself,
@@ -267,6 +294,7 @@ import Icon from '../core/Icon.vue'
 import Tooltip from '../core/Tooltip.vue'
 import PointerMenu from '../overlays/PointerMenu.vue'
 import { useInteractive } from '../core/interactive.js'
+import { branchVerb } from './branchKeys.js'
 import { branchMenuItems, originBranchMenuItems } from './branchMenu.js'
 import { splitName } from './branchName.js'
 import {
@@ -426,6 +454,13 @@ const keyOf = (row) => `${row.kind}:${row.kind === 'folder' ? row.path : row.nam
    key rather than deriving one: the two lists share the drawing and not the
    identity. */
 const originKeyOf = (row) => `origin:${keyOf(row)}`
+
+/* The identity of a row on whichever list is drawn, which is the one both the
+   keyboard and `rowInteractive` are keyed on. The filtered list is deliberately
+   not a third space: a filtered `feature/two` and an unfiltered one are the
+   same row and share their hover, and the tab is the only thing that makes two
+   rows of one name two rows. */
+const navKey = (row) => (props.tab === 'origin' ? originKeyOf(row) : keyOf(row))
 
 /* The menu, and which branch it is open on. The name is kept here because the
    items are built from it and because the row under an open panel has to keep
@@ -596,6 +631,177 @@ const originCheckout = (row) => {
   else emit('checkout-remote', row.name)
 }
 
+/* Unfolding a heading, whichever tab it is on: two settings fields, two events
+   and one gesture, so the choice between them is made here rather than at each
+   of the four call sites — the two clicks and the two arrows. Only one tab is
+   ever on screen, so the tab is the whole of the question. */
+const foldToggle = (row) => {
+  if (props.tab === 'origin') {
+    emit('toggle-remote-folder', toggleRemoteFolder(props.remoteFolders, row.path))
+    return
+  }
+  emit('toggle-folder', toggleFolder(props.folders, props.branches, row.path))
+}
+
+/* **What a row does when it is acted on**, and there is one of these rather
+   than one per list: the double click on every row of all three lists comes
+   here, and so does Enter from the keyboard. That is the point of it — Enter is
+   the double click's keyboard spelling, and two functions would be two chances
+   for one of them to keep a refusal the other dropped.
+
+   A heading unfolds, since that is the whole of what a heading does. A branch
+   row is `target`'s question — not the branch already checked out, and not
+   while a run or an operation in flight holds the repository — and on the
+   Origin tab it is `originCheckout`'s pair, chosen by the `hasLocal` that
+   travels on the row. A hit needs no arm of its own: it carries the same
+   fields, since it came out of the same rule. */
+const activate = (row) => {
+  if (row.kind === 'folder') {
+    foldToggle(row)
+    return
+  }
+  if (props.tab === 'origin') {
+    originCheckout(row)
+    return
+  }
+  if (target(row)) emit('checkout', row.name)
+}
+
+/* ## The keyboard: which rows there are, which of them has the tab stop, and
+   where the elements are.
+
+   Whichever list is drawn, as one list: the rule builds the other two empty, so
+   exactly one of the three has anything in it and the keyboard walks it without
+   knowing which it is. */
+const navRows = computed(() => {
+  if (filtering.value) return hitRows.value
+  return props.tab === 'origin' ? originRows.value : rows.value
+})
+const navKeys = computed(() => navRows.value.map(navKey))
+
+/* Where the keyboard is, and the one row of the list that is in the tab order.
+
+   It is a key and not an index, because an index is a fact about a list that is
+   rebuilt on every fold, every filter and every refresh — the row under index 3
+   is a different branch a moment later, and the tab stop would wander without
+   anybody pressing anything. A key that no longer names a drawn row falls back
+   to the first, which is also the state the list mounts in: `focusedKey` is
+   null until something is focused, and the whole question is answered in one
+   computed rather than in a watcher that would have to fire after every one of
+   those rebuilds. */
+const focusedKey = ref(null)
+const tabStop = computed(() => {
+  const keys = navKeys.value
+  return focusedKey.value && keys.includes(focusedKey.value)
+    ? focusedKey.value
+    : (keys[0] ?? null)
+})
+
+/* The drawn elements, by the same key, so a press can move the focus to a row
+   the browser has no reason to move it to on its own. A plain `Map` and not a
+   ref: nothing here is drawn from it, and a reactive one would rebuild the list
+   it is a map of. Vue clears an entry by calling the ref with null on the way
+   out, which is what keeps this from holding elements that have left the
+   document. */
+const rowEls = new Map()
+const setRowEl = (key, el) => {
+  if (el) rowEls.set(key, el)
+  else rowEls.delete(key)
+}
+
+const focusRow = (key) => {
+  if (!key) return
+  focusedKey.value = key
+  rowEls.get(key)?.focus()
+}
+
+/* The heading a row sits under: the nearest folder above it at one less depth.
+   Nothing at all for a row at depth 0, which is every row of a filtered list
+   and both of the lifted blocks — the current branch and the marked ones are
+   drawn above the tree with no heading over them, so there is nowhere to go
+   out to and the press does nothing. */
+const parentKey = (at) => {
+  const list = navRows.value
+  const depth = list[at]?.depth ?? 0
+  for (let above = at - 1; above >= 0; above -= 1) {
+    const row = list[above]
+    if (row.kind === 'folder' && row.depth === depth - 1) return navKey(row)
+  }
+  return null
+}
+
+/* The menu, opened from the keyboard at the row's own bottom-left corner.
+   `PointerMenu.open` reads two numbers off the event it is given and nothing
+   else, so a rect is the whole of what a press has to hand it — and it goes
+   through the same `openMenu` the right click does, so the panel is about the
+   same row, carries the same items and picks through the same `pick`.
+
+   A heading has no menu on either gesture: there is no such thing as merging a
+   folder, and a panel of refusals over one would be offering a vocabulary about
+   something that is not a branch. */
+const openRowMenu = (row) => {
+  if (row.kind === 'folder') return
+  const rect = rowEls.get(navKey(row))?.getBoundingClientRect()
+  if (!rect) return
+  openMenu(row, { clientX: rect.left, clientY: rect.bottom })
+}
+
+/* The press itself, on the root rather than on the window — `FileTree`'s rule
+   and for its reason: the handler runs only when the focus is already inside
+   this list, which is a row, which is the thing every verb here is about.
+
+   `preventDefault` for a verb and never for anything else, so every other key
+   is left exactly as it was: Space still folds a heading through the button it
+   is, Tab still leaves, and the browser's own find is still the browser's until
+   `GitPanel` takes it. Enter is the one press that would otherwise be answered
+   twice — a `<button>` activates on it by itself — so cancelling the default is
+   also what keeps a heading from folding and unfolding in one press. */
+const onKeydown = (event) => {
+  const at = navKeys.value.indexOf(tabStop.value)
+  if (at < 0) return
+  const row = navRows.value[at]
+  const verb = branchVerb(event, {
+    folder: row.kind === 'folder',
+    expanded: Boolean(row.expanded)
+  })
+  if (!verb) return
+  event.preventDefault()
+  if (verb === 'up') focusRow(navKeys.value[at - 1])
+  else if (verb === 'down') focusRow(navKeys.value[at + 1])
+  else if (verb === 'parent') focusRow(parentKey(at))
+  else if (verb === 'fold' || verb === 'unfold') foldToggle(row)
+  else if (verb === 'switch') activate(row)
+  else if (verb === 'menu') openRowMenu(row)
+}
+
+/* **The focus ring, pulled inside the row's own edge.** `tokens/base.css` draws
+   it 2px wide a pixel *outside* the element, and a row here is flush with the
+   left, the right and — at the top of the list — the leading edge of the box
+   `GitPanel` scrolls (`overflow: auto`, no padding), so three pixels of ring on
+   each of those sides fall outside that box's padding box and are simply cut
+   away. Measured in Chromium rather than reasoned about: a focused current
+   branch drew one horizontal line under itself, sitting exactly where the
+   current block's own `--border` rule already is, which reads as a border and
+   not as a ring. And it is not only the first row — `.focus()` scrolls a row
+   that was out of view flush against the leading edge, so every arrow press
+   that scrolls would clip the ring of the row it just moved to.
+
+   The same line `AttachmentStrip.vue`'s thumbnail, the status footer's own
+   clipped row (`shell/StatusFooter.vue`) and `fieldStyle` in `GitPanel.vue`
+   carry, each for the same clipping, and it makes **four** readers of
+   `--border-w-strong` as a stand-in for a width that has no token: 2px is the
+   ring's width in `base.css` and this token's value, and the two matching is a
+   coincidence leaned on knowingly. One answer for every focusable control in
+   the app is a design-system question rather than a component's, and four call
+   sites are the argument for asking it rather than the answer. The number is
+   the argument, so it is worth keeping exact — anything moving that token, or
+   `base.css`'s own `outline: 2px`, has to visit all four.
+
+   Suppressing the ring was never on the table: a roving tabindex means the
+   keyboard is on exactly one of a column of identical rows, and the ring is the
+   only thing that says which. */
+const ringInset = 'calc(var(--border-w-strong) * -1)'
+
 /* A branch name is an identifier and stays mono. The row highlights only where
    there is something to press: the branch already checked out is not a target,
    and neither is any row while a run is going, so hovering must not promise
@@ -666,6 +872,7 @@ const rowStyle = (branch, key = keyOf(branch)) => ({
       : branch.block === 'favourite' && lastFavourite.value === branch.name
         ? 'var(--border-w) solid var(--border-subtle)'
         : 'none',
+  outlineOffset: ringInset,
   transition: 'var(--transition-control)'
 })
 
@@ -740,6 +947,7 @@ const folderStyle = (row, key = keyOf(row)) => {
         ? 'var(--surface-hover)'
         : 'transparent',
     cursor: 'default',
+    outlineOffset: ringInset,
     transition: 'var(--transition-control)'
   }
 }
@@ -878,6 +1086,21 @@ const OPERATIONS = {
 const operation = (branch) =>
   props.busy?.branch === branch.name && OPERATIONS[props.busy?.op] ? props.busy.op : null
 
+/* What the spinner is called, and it is **one name for all seven operations**
+   rather than the sentence `OPERATIONS` holds for each. That is the design
+   handoff's own wording and it is a trade rather than an oversight: a screen
+   reader hears `git is working` where it used to hear `Renaming this branch`,
+   which is less, and in exchange the one thing said on a row nobody can press
+   is the one thing that is true of every one of them. `OPERATIONS` is still
+   what decides that a spinner is drawn at all, so restoring the longer names is
+   one line here if the trade is ever re-weighed.
+
+   `Icon`'s `title` and not a bare attribute: that prop is what the glyph's
+   `aria-label` is drawn from, and it is also what stops the `aria-hidden` the
+   glyph would otherwise carry — an unnamed icon is decoration, and this one is
+   the only thing on the row saying git has not finished. */
+const SPINNER_LABEL = 'git is working'
+
 /* The mark's box is fixed at the glyph's size so a row does not shift sideways
    between the branch that is current and the ones that are not, or when one of
    them starts spinning — the same reason `ChangeList` fixes its own staged
@@ -975,12 +1198,6 @@ const markedParts = (row) => {
   return parts
 }
 
-/* A hit's identity, which is the tab's own — the two lists share the drawing
-   and not the identity, and `rowInteractive` is cached for the life of this
-   component. A filtered `feature/two` and an unfiltered one are the same row
-   and deliberately share their hover. */
-const hitKey = (row) => (props.tab === 'origin' ? originKeyOf(row) : keyOf(row))
-
 /* The same three glyphs the unfiltered rows draw, chosen the same way: the star
    where somebody marked the branch, the cloud where only `origin` has it, and
    the branch glyph otherwise. `favorite` and `hasLocal` both travel on the hit,
@@ -1000,18 +1217,6 @@ const hitGlyphTitle = (row) => {
    `vcs_tracking` walks `refs/heads`, so there is no record to read there, which
    is the same reason an unfiltered origin row draws no mark. */
 const hitMark = (row) => (props.tab === 'origin' ? { behind: 0, ahead: 0 } : mark(row))
-
-/* The double click on a hit, which is whichever verb that row's own tab would
-   have answered with: an ordinary switch on the Local tab, and on Origin the
-   pair `hasLocal` chooses between — the fact travels on the hit, so the two
-   lists cannot come apart. */
-const hitCheckout = (row) => {
-  if (props.tab === 'origin') {
-    originCheckout(row)
-    return
-  }
-  if (target(row)) emit('checkout', row.name)
-}
 
 /* Nothing matched, which is a state of the filter rather than of the tab, so it
    says both things: what was looked in, and what the other side found. The
@@ -1040,7 +1245,16 @@ const noMatchCopy = computed(() => {
        so a short list does not leave the panel's own `--surface` showing under
        the last row, where the block would read as ending somewhere nobody put
        an end to it. -->
-  <div :style="{ background: 'var(--canvas)', minHeight: '100%' }">
+  <!-- `role="tree"`, and the press handler that goes with it: one keydown for
+       the whole list rather than one per row, reading `branchKeys.js` about
+       whichever row holds the tab stop. It is here and not on the window for
+       `FileTree`'s reason — a verb about a row must not fire while the focus is
+       in a terminal two panels over. -->
+  <div
+    role="tree"
+    :style="{ background: 'var(--canvas)', minHeight: '100%' }"
+    @keydown="onKeydown"
+  >
     <!-- Where HEAD is when it is on no branch: the current block's surface and
          its two rules, with the tick in the box every row keeps at its end.
          Above the rows rather than among them, because that is where the branch
@@ -1072,11 +1286,15 @@ const noMatchCopy = computed(() => {
            what the tooltip explains is a refusal that does not reach it. -->
       <button
         v-if="row.kind === 'folder'"
+        :ref="(el) => setRowEl(navKey(row), el)"
         type="button"
+        role="treeitem"
         :style="folderStyle(row)"
         :aria-expanded="row.expanded"
+        :tabindex="tabStop === navKey(row) ? 0 : -1"
         v-bind="interactiveFor(keyOf(row)).handlers"
-        @click="emit('toggle-folder', toggleFolder(folders, branches, row.path))"
+        @focus="focusedKey = navKey(row)"
+        @click="foldToggle(row)"
       >
         <Icon
           :name="row.expanded ? 'chevron-down' : 'chevron-right'"
@@ -1119,10 +1337,15 @@ const noMatchCopy = computed(() => {
              refused one; `branchMenu.js` puts the refusal at the top of the
              panel instead, once, and greys what it is about. -->
         <div
+          :ref="(el) => setRowEl(navKey(row), el)"
+          role="treeitem"
           :style="rowStyle(row)"
           :aria-disabled="target(row) ? undefined : 'true'"
+          :aria-current="row.current ? 'true' : undefined"
+          :tabindex="tabStop === navKey(row) ? 0 : -1"
           v-bind="tracked(row) ? interactiveFor(keyOf(row)).handlers : {}"
-          @dblclick="target(row) && $emit('checkout', row.name)"
+          @focus="focusedKey = navKey(row)"
+          @dblclick="activate(row)"
           @contextmenu.prevent="openMenu(row, $event)"
         >
           <!-- The star stands **in** the branch glyph's place rather than
@@ -1159,10 +1382,18 @@ const noMatchCopy = computed(() => {
                is doing. `↓` takes `--git-modified` and `↑` stays neutral —
                what was asked for is a branch with something to pull — and
                neither of them reaches the name. -->
-          <span v-if="mark(row).behind" :style="behindStyle">
+          <span
+            v-if="mark(row).behind"
+            :style="behindStyle"
+            :aria-label="`${mark(row).behind} behind`"
+          >
             <Icon name="arrow-down" :size="MARK" />{{ mark(row).behind }}
           </span>
-          <span v-if="mark(row).ahead" :style="aheadStyle">
+          <span
+            v-if="mark(row).ahead"
+            :style="aheadStyle"
+            :aria-label="`${mark(row).ahead} ahead`"
+          >
             <Icon name="arrow-up" :size="MARK" />{{ mark(row).ahead }}
           </span>
           <span :style="{ flex: 1 }" />
@@ -1179,7 +1410,7 @@ const noMatchCopy = computed(() => {
               name="loader-circle"
               :size="MARK"
               :style="spinStyle"
-              :title="OPERATIONS[operation(row)]"
+              :title="SPINNER_LABEL"
             />
             <Icon v-else-if="row.current" name="check" :size="MARK" title="Current branch" />
           </span>
@@ -1195,11 +1426,15 @@ const noMatchCopy = computed(() => {
            and unfolded alike, for that heading's own reason. -->
       <button
         v-if="row.kind === 'folder'"
+        :ref="(el) => setRowEl(navKey(row), el)"
         type="button"
+        role="treeitem"
         :style="folderStyle(row, originKeyOf(row))"
         :aria-expanded="row.expanded"
+        :tabindex="tabStop === navKey(row) ? 0 : -1"
         v-bind="interactiveFor(originKeyOf(row)).handlers"
-        @click="emit('toggle-remote-folder', toggleRemoteFolder(remoteFolders, row.path))"
+        @focus="focusedKey = navKey(row)"
+        @click="foldToggle(row)"
       >
         <Icon
           :name="row.expanded ? 'chevron-down' : 'chevron-right'"
@@ -1235,10 +1470,15 @@ const noMatchCopy = computed(() => {
              where it is on the other tab: the repository can only be standing
              on a branch it has. -->
         <div
+          :ref="(el) => setRowEl(navKey(row), el)"
+          role="treeitem"
           :style="rowStyle(row, originKeyOf(row))"
           :aria-disabled="target(row) ? undefined : 'true'"
+          :aria-current="row.current ? 'true' : undefined"
+          :tabindex="tabStop === navKey(row) ? 0 : -1"
           v-bind="target(row) ? interactiveFor(originKeyOf(row)).handlers : {}"
-          @dblclick="originCheckout(row)"
+          @focus="focusedKey = navKey(row)"
+          @dblclick="activate(row)"
           @contextmenu.prevent="openMenu(row, $event)"
         >
           <Icon
@@ -1258,7 +1498,7 @@ const noMatchCopy = computed(() => {
               name="loader-circle"
               :size="MARK"
               :style="spinStyle"
-              :title="OPERATIONS[operation(row)]"
+              :title="SPINNER_LABEL"
             />
             <Icon v-else-if="row.current" name="check" :size="MARK" title="Current branch" />
           </span>
@@ -1270,17 +1510,22 @@ const noMatchCopy = computed(() => {
          question answered once, in the script. Flat on the canvas, with no
          folders and no block surfaces — three surfaces are there to say where
          three groups end, and this is one group. -->
-    <template v-for="row in hitRows" :key="hitKey(row)">
+    <template v-for="row in hitRows" :key="navKey(row)">
       <component
         :is="hint ? Tooltip : 'div'"
         v-bind="hint ? { label: hint, side: 'right' } : {}"
         :style="{ display: 'block' }"
       >
         <div
-          :style="rowStyle(row, hitKey(row))"
+          :ref="(el) => setRowEl(navKey(row), el)"
+          role="treeitem"
+          :style="rowStyle(row, navKey(row))"
           :aria-disabled="target(row) ? undefined : 'true'"
-          v-bind="tracked(row) ? interactiveFor(hitKey(row)).handlers : {}"
-          @dblclick="hitCheckout(row)"
+          :aria-current="row.current ? 'true' : undefined"
+          :tabindex="tabStop === navKey(row) ? 0 : -1"
+          v-bind="tracked(row) ? interactiveFor(navKey(row)).handlers : {}"
+          @focus="focusedKey = navKey(row)"
+          @dblclick="activate(row)"
           @contextmenu.prevent="openMenu(row, $event)"
         >
           <Icon
@@ -1300,10 +1545,18 @@ const noMatchCopy = computed(() => {
               part.text
             }}</span></span
           >
-          <span v-if="hitMark(row).behind" :style="behindStyle">
+          <span
+            v-if="hitMark(row).behind"
+            :style="behindStyle"
+            :aria-label="`${hitMark(row).behind} behind`"
+          >
             <Icon name="arrow-down" :size="MARK" />{{ hitMark(row).behind }}
           </span>
-          <span v-if="hitMark(row).ahead" :style="aheadStyle">
+          <span
+            v-if="hitMark(row).ahead"
+            :style="aheadStyle"
+            :aria-label="`${hitMark(row).ahead} ahead`"
+          >
             <Icon name="arrow-up" :size="MARK" />{{ hitMark(row).ahead }}
           </span>
           <span :style="{ flex: 1 }" />
@@ -1313,7 +1566,7 @@ const noMatchCopy = computed(() => {
               name="loader-circle"
               :size="MARK"
               :style="spinStyle"
-              :title="OPERATIONS[operation(row)]"
+              :title="SPINNER_LABEL"
             />
             <Icon v-else-if="row.current" name="check" :size="MARK" title="Current branch" />
           </span>

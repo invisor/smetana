@@ -3332,7 +3332,14 @@ const menuTargetStyle = {
            segmented strip under a side panel's header, drawn here at the width
            a panel gives it. Live rather than fixed, since the fill under the
            active segment and the fill under the pointer are the whole of what
-           it draws — press one, and hover the other. -->
+           it draws — press one, and hover the other.
+
+           It is a `tablist` and the keyboard is the other half of what to check
+           here: one Tab reaches the selected segment and one more leaves the row
+           altogether, and the left and right arrows walk it, wrapping at both
+           ends and taking the focus with the choice. The ring is the
+           stylesheet's own and has to stay legible over the fill of the segment
+           it is on. -->
       <div :style="rowStyle">
         <div :style="segmentedFrameStyle">
           <SegmentedTabs v-model="gallerySideTab" :tabs="GALLERY_SIDE_TABS" />
@@ -3791,7 +3798,14 @@ const menuTargetStyle = {
            component and each says something different: a repository with files
            in it, a clean one, a folder that holds no repository at all, and a
            machine with no git on it. The last one is the only one a person can
-           act on, and it names what was looked for. -->
+           act on, and it names what was looked for.
+
+           These are also where **⌘F inside the panel** can be tried: press it
+           with the focus anywhere in one of these frames and the Branches
+           caption becomes the filter field, unfolding the section first if it
+           was folded. The other half of that rule — the command palette
+           answering the same chord everywhere outside the panel — is only
+           checkable in the app itself, since this page draws no palette. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
         <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
@@ -3868,7 +3882,38 @@ const menuTargetStyle = {
              `Local 2` and `0 of 5` over the no-match state. Then
              `Esc` once to empty the field, `Esc` again to close it — and the
              list comes back scrolled where it was, with exactly the folders that
-             were open still open. -->
+             were open still open.
+
+             **The keyboard is live here and, for the ring, only here.** The
+             branch list is a `role="tree"` with one tab stop in it: Tab into it
+             and the focus lands on the current branch, the first row; the
+             vertical arrows walk the list, `ArrowRight` opens the heading under
+             the cursor and `ArrowLeft` closes it or goes out to it, Enter is
+             the double click (nothing is listening for a checkout in this
+             frame, so what it must do here is *nothing at all* on the row with
+             the tick), and `Shift+F10` opens the same menu the right click
+             does, at the row's own bottom-left corner. `⌘F` anywhere in this
+             frame opens the filter field, which is the panel taking that chord
+             inside itself.
+
+             **The ring is what this frame is for.** The branch box scrolls
+             (`overflow: auto`, no padding) and a row is flush with all three of
+             its edges, so a ring drawn outside the row would be cut away on the
+             left, the right and — on the first row — the top. It is pulled
+             inside instead: what to check is four whole sides, on the current
+             branch over `--surface-selected` where its own `--border` rules sit
+             a pixel away, and again on a row far enough down that arrowing to
+             it scrolls the box, since `.focus()` puts that row flush against
+             the leading edge. Both themes and both densities, and nothing may
+             move by a pixel as the ring appears.
+
+             **That second half rests on this frame's own geometry**, which is
+             the one thing about it that has to be said out loud: the height
+             here and `LONG_BRANCHES` between them leave the branch box shorter
+             than its rows — measured at 86px of box against 196px of rows — so
+             arrowing down the list actually scrolls it. Shorten the fixture or
+             the frame and the check goes quiet rather than failing, which is
+             exactly what happened to the frame this note was moved off. -->
         <div :style="{ display: 'flex', width: '252px', height: '420px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <template #actions>
@@ -3931,7 +3976,14 @@ const menuTargetStyle = {
              is. Under it, on the Origin tab as on the Local one, is the freeze
              strip — the verdict is one verdict and covers both sides, since a
              checkout writes the working tree whichever list it was pressed
-             in. -->
+             in.
+
+             It is also the frame for the focus ring under that strip: the first
+             row sits directly beneath it, muted and inert, and the ring around
+             it has to be whole and legible there too — a frozen row still takes
+             the keyboard, since reading a list is not writing to it. The
+             tooltip over the row opens with the focus as well as with the
+             pointer, which is the sentence saying why nothing can be pressed. -->
         <div :style="{ display: 'flex', width: '252px', height: '300px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <GitPanel
@@ -4273,6 +4325,11 @@ const menuTargetStyle = {
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <CommitBox :changes="6" branch="main" :conflicts="3" @resolve-conflicts="() => {}" />
         </div>
+        <!-- The plain list. **Not** the frame to check the keyboard in: this
+             one is a plain 252px block with no scroller and no listeners, so
+             the focus ring draws whole here where the app clips it, and the two
+             fold arrows emit into nothing. Both belong on the live `GitPanel`
+             frame above, which has the box that scrolls and the state to fold. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" />
         </div>
@@ -4343,7 +4400,14 @@ const menuTargetStyle = {
              the first row rather than a row inside that open heading, so what
              the seed is worth here is the branches beside it. `fix` holds a
              folder of its own, so the indentation of a second level is
-             checkable here too. -->
+             checkable here too.
+
+             The folds are wired, so this is also where the two horizontal
+             arrows can be seen doing something: walk down to a heading and
+             press `ArrowRight` to open it and `ArrowLeft` to close it, and
+             `ArrowLeft` from a leaf to go out to the heading above it. The ring
+             is not what this frame shows — there is no scroller here to clip
+             it; that is the live `GitPanel` frame's job. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList
             :branches="FOLDER_BRANCHES"

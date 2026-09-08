@@ -194,6 +194,7 @@ import {
   originBranches
 } from './branchTree.js'
 import { BRANCH_FILTER_LABEL } from './branchPicker.js'
+import { isFilterChord } from './branchKeys.js'
 import { DEFAULT_ROWS as COMMIT_ROWS } from './commitBox.js'
 import { failureTextStyle, failureTitleStyle } from './failureStyle.js'
 import {
@@ -717,6 +718,34 @@ const closeFilter = ({ restoreFocus = false } = {}) => {
   })
 }
 
+/* **⌘F inside this panel opens the field, and takes the chord off the command
+   palette while the focus is in here.** The palette is still the answer to that
+   key everywhere else in the window — `onFindKey` in `DesktopApp.vue` is where
+   the other half of this lives, and it steps aside for `[data-git-panel]` the
+   same way it already steps aside for the editor's own find. The split is by
+   focus rather than by taking the key outright: a person looking at 346 branch
+   names means this field, and a person looking at the board means the palette,
+   and neither reading is right for the other place.
+
+   `preventDefault` in both halves, because the webview's own find bar would
+   otherwise open over the panel and search the rendered page.
+
+   A second press while the field already stands does **not** go back through
+   `openFilter`: that function remembers where the list was scrolled to, and
+   asking it twice would remember the filtered list's own scroll position and
+   hand that back on the way out. What is left is the useful half — put the
+   caret back in the field, which is where somebody pressing this key is asking
+   to be. */
+const onPanelKey = (event) => {
+  if (!isFilterChord(event)) return
+  event.preventDefault()
+  if (branchSearching.value) {
+    filterField.value?.focus()
+    return
+  }
+  openFilter()
+}
+
 /* Escape empties a field that has something in it and closes an empty one,
    which is the two-press shape every filter field in every editor keeps: the
    first press undoes the typing, the second undoes the opening. The clear is
@@ -1191,7 +1220,14 @@ const onReset = (section) => emit('resize', { section, rows: null })
 </script>
 
 <template>
-  <div ref="panel" :style="rootStyle">
+  <!-- `data-git-panel` is read from outside this component and is the whole of
+       how the window-level ⌘F knows the focus is in here: `onFindKey` in
+       `DesktopApp.vue` asks the event's target for the nearest one and stands
+       down when it finds this. An attribute rather than a class, since this
+       system has no classes to hang it on, and on the root rather than on the
+       branch box, because the field the chord opens is in the caption above
+       that box and the two buttons beside it are in the row under it. -->
+  <div ref="panel" data-git-panel :style="rootStyle" @keydown="onPanelKey">
     <!-- Named rather than hinted at: the message carries what was looked for,
          which is the difference between a person installing git and a person
          wondering why a panel is blank. -->

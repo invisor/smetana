@@ -16,7 +16,26 @@
    column's edge, and a segmented row marks its active segment by fill. The
    focus ring stays — it was kept explicitly at the design review, and these are
    the one control in the left column that has one, so it is left to the
-   stylesheet's own `:focus-visible` rather than suppressed here. */
+   stylesheet's own `:focus-visible` rather than suppressed here.
+
+   **The row is a `tablist` and each segment a `tab`**, which is what it is in
+   all three of its callers: the left column's panels, the right column's, and
+   the two sides of the Git panel's branch list. There is no fourth kind of row
+   drawn with this and there is not meant to be — a row of segments that chose
+   something other than which panel is underneath would want its own component
+   rather than this one's roles.
+
+   The tab order holds **one** segment, the selected one, and the arrows move
+   between them — the tab pattern's own rule, and the reason it has one: a row
+   of three panels must not be three presses of Tab on the way past. They wrap
+   at both ends, since a row of two would otherwise answer only one of the two
+   keys. Switching is what the press does rather than something a second press
+   confirms: the panel underneath is already on screen, so there is nothing a
+   delayed activation would be protecting.
+
+   `event.key` and not `event.code`, which is `PointerMenu`'s line for the same
+   two keys: an arrow reads the same either way, and the discipline `code` is
+   for is a **letter** whose key changes under a Russian layout or Caps Lock. */
 import { ref } from 'vue'
 
 const props = defineProps({
@@ -30,6 +49,24 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue'])
 
 const hovered = ref(null)
+
+/* One step along the row, wrapping at both ends, with the keyboard following
+   the choice it just made — the segment that becomes selected is the one that
+   becomes the tab stop, so leaving the focus behind would put the ring on a
+   segment that is no longer either.
+
+   The sibling is reached through the row rather than through a list of refs
+   this component would then have to keep: the segments are the only children
+   `barStyle`'s element has, so the index into the tabs is the index into the
+   row. */
+const onKeydown = (event, at) => {
+  const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
+  if (!step || !props.tabs.length) return
+  event.preventDefault()
+  const next = (at + step + props.tabs.length) % props.tabs.length
+  emit('update:modelValue', props.tabs[next].id)
+  event.currentTarget?.parentElement?.children?.[next]?.focus?.()
+}
 
 const barStyle = {
   display: 'flex',
@@ -72,13 +109,14 @@ const segmentStyle = (tab) => {
 <template>
   <div role="tablist" :style="barStyle">
     <div
-      v-for="tab in tabs"
+      v-for="(tab, at) in tabs"
       :key="tab.id"
       role="tab"
       :aria-selected="modelValue === tab.id"
       :tabindex="modelValue === tab.id ? 0 : -1"
       :style="segmentStyle(tab)"
       @click="emit('update:modelValue', tab.id)"
+      @keydown="onKeydown($event, at)"
       @mouseenter="hovered = tab.id"
       @mouseleave="hovered = null"
     >
