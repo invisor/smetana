@@ -1499,8 +1499,14 @@ const headerFolds = ref({ withCount: true, bare: true, folded: false, withAction
 /* The caption as a field, live in its own frame: the row is a fixture of the
    real one — the whole field is `GitPanel`'s, since it owns the query — and
    what this frame is for is the swap itself, that the fold is unreachable while
-   it stands and that the row is still exactly `--row-h` in both densities. */
+   it stands and that the row is still exactly `--row-h` in both densities.
+
+   The second ref is the fixture's half of what says the field has the focus:
+   the plate steps up under the caret instead of the input drawing a ring, so
+   the frame has to carry the flag the panel carries. `GitPanel.vue`'s
+   `fieldStyle` holds the reasoning and the measurements. */
 const headerSearch = ref('')
+const headerSearchFocused = ref(false)
 /* The live commit box's own draft. Empty to start with, since that is the
    state the button's refusal is drawn in. */
 const commitDraft = ref('')
@@ -4240,11 +4246,14 @@ const menuTargetStyle = {
              of the panel, and the `x` sits where the `search` button of the
              frame above sits. Type into it — the field is live here, and the
              caret and the placeholder are the two things worth looking at on
-             both themes. Then Tab: the focus ring is `base.css`'s own, pulled
-             inside the input's own edge so it is whole rather than clipped
-             against the rows either side, and Tab again puts it on the `x`
-             inside the same plate — which is the pair of controls that makes
-             the ring load-bearing. Compact is the density to check it in. -->
+             both themes. Then Tab: **there is no ring on the input at all**,
+             and what says the caret is here is the plate, which steps from
+             `--surface-raised` to `--surface-hover` end to end, glyph and `x`
+             included. Tab again and the plate drops back to `--surface-raised`
+             while the `x` takes `base.css`'s own ring — the two states are the
+             pair worth checking together, and the dark theme is where the step
+             is smallest (1.090:1 against 1.225:1 light). Compact is the density
+             to check the height in. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <SectionHeader label="Branches" :count="9" searching>
             <template #editor>
@@ -4257,7 +4266,8 @@ const menuTargetStyle = {
                   minWidth: 0,
                   height: '100%',
                   padding: '0 var(--space-3) 0 var(--space-5)',
-                  background: 'var(--surface-raised)'
+                  background: headerSearchFocused ? 'var(--surface-hover)' : 'var(--surface-raised)',
+                  transition: 'var(--transition-control)'
                 }"
               >
                 <Icon name="search" :size="12" :style="{ flex: 'none', color: 'var(--text-muted)' }" />
@@ -4271,11 +4281,13 @@ const menuTargetStyle = {
                     minWidth: 0,
                     height: '100%',
                     border: 'none',
-                    outlineOffset: 'calc(var(--border-w-strong) * -1)',
+                    outline: 'none',
                     background: 'transparent',
                     color: 'var(--text-primary)',
                     font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
                   }"
+                  @focus="headerSearchFocused = true"
+                  @blur="headerSearchFocused = false"
                 />
                 <Button variant="ghost" size="sm" icon="x" aria-label="Clear filter" />
               </div>
