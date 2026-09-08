@@ -46,6 +46,7 @@ import {
   DeleteTaskModal,
   DependencyMark,
   DiffView,
+  DiscardChangeModal,
   Dropdown,
   DependencySpine,
   DraftInspector,
@@ -2226,6 +2227,21 @@ const GONE_CHANGE_MENU = changeMenuItems({
   kind: 'deleted',
   insideProject: false
 })
+/* The last group's own two refusals, which none of the three above can show:
+   they are about the sixth row alone and they are said in two different ways.
+   The conflicted row wears its reason as a suffix, because that fact is about
+   the row; a run holding the project puts `frozen`'s sentence in a caption over
+   the group, because that fact is about the repository — and the five rows
+   above it stay live under it, which is the thing to check here. */
+const CONFLICTED_CHANGE_MENU = changeMenuItems({
+  path: 'src/stores/tabs.js',
+  kind: 'conflicted'
+})
+const HELD_CHANGE_MENU = changeMenuItems({
+  path: 'src/stores/vcs.js',
+  kind: 'modified',
+  allowed: false
+})
 
 /* Room for the tree and room under it. The empty space below the last row is
    what opens the root's menu, and a box the height of its rows has none — at
@@ -2868,6 +2884,101 @@ const menuTargetStyle = {
         <DeleteBranchModal
           :open="true"
           branch="feature/smetana-8ok-git-panel-branches"
+          busy
+          @close="() => {}"
+          @confirm="() => {}"
+        />
+      </div>
+      <!-- Throwing one file's changes away, which is the one thing in the Git
+           panel that loses work with nothing to undo it. Three frames, one per
+           sentence, because the sentence is the whole of what this window
+           decides: what a person loses differs by what git says the change is,
+           and a single wording would be telling somebody a file is being
+           deleted when it is about to be restored.
+
+           The path is long and nested on purpose — it is in the sentence and
+           again in the mono line under it, and a short one would show neither
+           wrapping.
+
+           First: an ordinary edit, where the difference from the last commit
+           goes and the file stays. -->
+      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DiscardChangeModal
+          :open="true"
+          path="src/components/git/DiscardChangeModal.vue"
+          kind="modified"
+          @close="() => {}"
+          @confirm="() => {}"
+        />
+      </div>
+      <!-- Second: a path the last commit does not have, which is the only
+           sentence in this app that says a file will stop existing. An
+           untracked directory record, trailing slash and all, since that is the
+           row this reads worst on if the slash is ever dropped. -->
+      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DiscardChangeModal
+          :open="true"
+          path="src/components/git/"
+          kind="untracked"
+          @close="() => {}"
+          @confirm="() => {}"
+        />
+      </div>
+      <!-- Third: a deleted file, the one row where discarding puts something
+           back rather than taking it away. The red button over a sentence about
+           restoring is deliberate — the act is still the same act, and the
+           colour is about the row it came from. -->
+      <div :style="{ position: 'relative', height: '300px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DiscardChangeModal
+          :open="true"
+          path="src/views/desktopAppData.js"
+          kind="deleted"
+          @close="() => {}"
+          @confirm="() => {}"
+        />
+      </div>
+      <!-- git's refusal, in the same mono block under the same failed-red title
+           `GitPanel` and `DeleteBranchModal` draw one in. There is no Discard
+           button at all here, which is the whole point of the state: nothing
+           forces this, so the only way out is Cancel. -->
+      <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DiscardChangeModal
+          :open="true"
+          path="src/stores/tabs.js"
+          kind="modified"
+          refusal="error: unable to unlink old 'src/stores/tabs.js': Permission denied"
+          @close="() => {}"
+          @confirm="() => {}"
+        />
+      </div>
+      <!-- This discard, in flight: every way out is dead including the cross,
+           exactly as the delete above it, and the button says what is
+           happening. `busy` rides with it, since a discard that is running is
+           git working by any reading. -->
+      <div :style="{ position: 'relative', height: '300px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DiscardChangeModal
+          :open="true"
+          path="src/components/git/DiscardChangeModal.vue"
+          kind="modified"
+          busy
+          discarding
+          @close="() => {}"
+          @confirm="() => {}"
+        />
+      </div>
+      <!-- And the state the two props exist to tell apart: git is working on
+           something else — a pull, a commit sitting on somebody's hooks — so
+           Discard is refused because the store would refuse it anyway, while
+           **Cancel stays live and the cross stays on the frame**. This window
+           has no scrim and a write has five minutes to finish; a way out that
+           an unrelated operation can take away is the thing to check is not
+           happening here. The button reads `Discard` and not `Discarding…`,
+           because nothing about this window is running. -->
+      <div :style="{ position: 'relative', height: '300px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DiscardChangeModal
+          :open="true"
+          path="src/components/git/DiscardChangeModal.vue"
+          kind="modified"
           busy
           @close="() => {}"
           @confirm="() => {}"
@@ -4348,13 +4459,23 @@ const menuTargetStyle = {
           <ChangeList :changes="CHANGES" selected="src/stores/vcs.js" />
         </div>
         <!-- The same rows with no gesture in front of them. What has to be read
-             here: five labels and two separators at the widths a 440 ceiling
+             here: six labels and three separators at the widths a 440 ceiling
              allows, the `file` glyph in the gutter beside the four that were
-             already registered, and the three refusal sentences whole rather
-             than clipped. -->
+             already registered, and the refusal sentences whole rather than
+             clipped. `Discard changes` is last, alone under the third
+             separator, and it is the one row drawn in the danger tone — the
+             only thing this menu does that loses work. -->
         <ContextMenu :items="CHANGE_MENU" :width="CHANGE_MENU_W" />
         <ContextMenu :items="FOLDER_CHANGE_MENU" :width="CHANGE_MENU_W" />
         <ContextMenu :items="GONE_CHANGE_MENU" :width="CHANGE_MENU_W" />
+        <!-- The discard's own two refusals. On the left the conflicted row,
+             where the reason is a suffix on the label and the five rows above
+             are untouched; on the right a run holding the project, where
+             `frozen`'s sentence is a caption over a group of one and every row
+             above it is still live. Check that the red of the danger row is
+             gone in both — a refused row is grey, not a quieter red. -->
+        <ContextMenu :items="CONFLICTED_CHANGE_MENU" :width="CHANGE_MENU_W" />
+        <ContextMenu :items="HELD_CHANGE_MENU" :width="CHANGE_MENU_W" />
         <!-- The commit box in its several states, at the panel's own width.
              Live first: type into it and the button comes alive with the count of
              what it would take, press the sparkle and the fixture message

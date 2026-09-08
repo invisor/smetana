@@ -562,6 +562,38 @@ pub enum VcsError {
     /// matters, where `-D` fails exactly as `-d` did.
     #[error("{0} has commits that are not in the branch this repository is on. Deleting it loses them.")]
     NotMerged(String),
+    /// A discard was asked for a path git has left unmerged. Refused here and
+    /// not only by the greyed menu row, for `CurrentBranch`'s reason one write
+    /// over: the window that asks is a window of its own with no scrim, and the
+    /// tree can be left conflicted, resolved or aborted from a terminal or by
+    /// an agent while it stands.
+    ///
+    /// **A conflicted tree is the conflict dialog's business and not this
+    /// row's.** The way out of one is an abort or a resolution, both of which
+    /// are about the operation git stopped in the middle of; restoring one path
+    /// to HEAD behind its back would leave the merge half undone, with nothing
+    /// on screen saying which half.
+    #[error("{0} is conflicted. Resolve the conflict before discarding it.")]
+    Conflicted(String),
+    /// A discard was asked for a path the last commit holds as a **gitlink** —
+    /// another repository, recorded here as one commit id.
+    ///
+    /// Named rather than attempted, because "discard this submodule's changes"
+    /// is two different acts and this panel has no way to ask which was meant:
+    /// putting back the commit this repository records, and throwing away the
+    /// work inside the submodule, are a one-line index write and a whole
+    /// repository's worth of somebody's day. Nothing else in this app has any
+    /// notion of a submodule at all, so guessing would be inventing a feature
+    /// on the one verb that cannot be undone.
+    ///
+    /// It replaced a silence. `git cat-file -e HEAD:<submodule>` exits **1**
+    /// with an empty stderr — the superproject does not hold the submodule's
+    /// commit object — so the probe this command used to ask reached
+    /// `Git { status: 1, stderr: "" }`, and the window drew "Git did not
+    /// discard the changes" over an empty block. Nothing was written either
+    /// way; what was missing was the sentence.
+    #[error("{0} is a submodule. Putting back the commit this repository records and throwing away the work inside it are two different acts, and this panel offers neither.")]
+    Submodule(String),
     /// No commit in common, so there is no point they diverged from. Refused
     /// rather than quietly answered with the direct comparison: a diff computed
     /// from a base nobody asked for, drawn under a switch that says otherwise,
@@ -592,6 +624,8 @@ impl VcsError {
             Self::NoSuchBranch(_) => "noSuchBranch",
             Self::CurrentBranch(_) => "currentBranch",
             Self::NotMerged(_) => "notMerged",
+            Self::Conflicted(_) => "conflicted",
+            Self::Submodule(_) => "submodule",
             Self::Unrelated => "unrelated",
             Self::BadRevision(_) => "badRevision",
             Self::Io(_) => "io",

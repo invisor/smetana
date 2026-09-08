@@ -170,6 +170,25 @@ const DIALOG_PROPS = {
     refusal: '',
     busy: false
   },
+  /* Discarding one file's changes, in the state it opens in. The path is the
+     first `modified` row of the tree `vcs_status` answers below, so the window
+     in a browser is about a file the change list is drawing — and the sentence is the
+     third of the three, which is the one an ordinary edit gets. The other two
+     are chosen by `kind` alone and stand beside this one in `?view=gallery`,
+     with the refusal and the busy state, neither of which a browser can reach:
+     `vcs_discard` is absent from the writes below on purpose.
+
+     Its `title` is a constant in the component rather than a sentence built
+     from the path, so this is the one fixture caption that cannot drift from
+     what the window works out for itself. */
+  'discard-change': {
+    title: 'Discard changes?',
+    path: 'src/stores/vcs.js',
+    kind: 'modified',
+    refusal: '',
+    busy: false,
+    discarding: false
+  },
   /* Every fixture carries a `title` beside what its dialog draws, because that
      string is the OS frame's caption in the app and there is no frame in a
      browser to notice it missing. It is the same sentence the component works
@@ -1249,8 +1268,9 @@ export function installMockBackend() {
        branch worked on most recently first, the tail alphabetical. The current
        one is deliberately not the first, since a list where the two coincide
        could not show that the mark and the order are two different facts.
-       `vcs_checkout`, `vcs_checkout_remote`, `vcs_merge`, `vcs_rebase` and
-       `vcs_abort` are absent on purpose and fall through to the refusal at the
+       `vcs_checkout`, `vcs_checkout_remote`, `vcs_merge`, `vcs_rebase`,
+       `vcs_discard` and `vcs_abort` are absent on purpose and fall through to
+       the refusal at the
        bottom, like every other write: a merge that looked like it had happened
        would be the worst kind, since nothing here has a working tree to have
        changed. The remote checkout is named in that list rather than answered

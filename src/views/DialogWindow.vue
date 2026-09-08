@@ -35,6 +35,7 @@ import DeleteBranchModal from '../components/git/DeleteBranchModal.vue'
 import DeleteSessionModal from '../components/agent/DeleteSessionModal.vue'
 import EmptyState from '../components/core/EmptyState.vue'
 import DeleteTaskModal from '../components/kanban/DeleteTaskModal.vue'
+import DiscardChangeModal from '../components/git/DiscardChangeModal.vue'
 import NewBranchModal from '../components/git/NewBranchModal.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
 import ProjectSettingsModal from '../components/run/ProjectSettingsModal.vue'
@@ -98,6 +99,7 @@ const COMPONENTS = {
   'delete-task': DeleteTaskModal,
   'ready-task': ReadyTaskModal,
   'delete-session': DeleteSessionModal,
+  'discard-change': DiscardChangeModal,
   'review-changes': ReviewChangesDialog
 }
 

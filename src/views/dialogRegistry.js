@@ -46,6 +46,22 @@ const REGISTRY = {
      settings window, and the split is by subject rather than by file: this one
      is about one project, that one is about the machine. */
   'project-settings': { width: 440, ground: ['project'] },
+  /* Throwing away what one file has that the last commit does not — the last
+     row of a change's context menu, and the one thing in the Git panel that
+     destroys work with nothing to undo it.
+
+     **The project and the repository, and deliberately not the path.**
+     `discardChange` in `stores/vcs.js` resolves which repository it runs in
+     from `vcsState.selected` at the moment Discard is pressed, exactly as the
+     two branch windows above do, and with no scrim there is nothing stopping
+     somebody clicking another repository row while this stands — `src/main.js`
+     exists in both, so no clause about paths could have noticed. The path
+     itself is not ground and cannot be: this panel has no watcher, so a change
+     that has gone is not something the app can observe, and the answer to a
+     discard of a path git no longer knows about is git's own words in this
+     window rather than the window vanishing. That is `delete-session`'s
+     argument about a transcript, one dialog along. */
+  'discard-change': { width: 440, ground: ['project', 'repo'] },
   'delete-task': { width: 440, ground: ['project', 'issue'] },
   'ready-task': { width: 440, ground: ['project', 'issue'] },
   /* Deleting a Claude Code transcript. Its ground is the project and nothing
@@ -110,6 +126,7 @@ const DIALOG_NOUN = {
   'new-task': 'new task',
   'new-branch': 'new branch',
   'delete-branch': 'delete branch',
+  'discard-change': 'discard changes',
   'rename-branch': 'rename branch',
   'promote-column': 'promote column',
   'setup-project': 'project setup',

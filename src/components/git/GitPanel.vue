@@ -388,17 +388,26 @@ const emit = defineEmits([
   'resolveConflicts',
   'message',
   'open',
-  /* The four rows of a change's context menu that the click does not already
-     do, each carrying the change. `open` above is the fifth and is the click's
-     own — the menu's first row goes out through it rather than through a name
-     of its own, which is what makes the gesture and the row one act rather than
-     two that can drift. None of the four is in `WRITE_REFUSED` below: they open
-     a tab, ask the desktop to show a file, or write the clipboard, and not one
-     of them touches git. */
+  /* The rows of a change's context menu that the click does not already do,
+     each carrying the change. `open` above is the menu's first row and is the
+     click's own — it goes out through that name rather than through one of its
+     own, which is what makes the gesture and the row one act rather than two
+     that can drift.
+
+     The first four touch git not at all: they open a tab, ask the desktop to
+     show a file, or write the clipboard, so none of them is in `WRITE_REFUSED`
+     below. */
   'open-file',
   'reveal',
   'copy-path',
   'copy-relative-path',
+  /* The fifth is the exception and the only write this list has ever had: one
+     path put back to what the last commit holds, or taken off the disk when the
+     commit has no such path. It **is** in `WRITE_REFUSED` below, because what
+     comes back from git lands in `writeError` under a title of its own like
+     every other write — and the window that asked draws the same words, exactly
+     as `delete` above does. */
+  'discard',
   'toggle',
   'toggle-folder',
   /* The whole name of a branch only `origin` has. It reaches
@@ -577,6 +586,10 @@ const WRITE_REFUSED = {
   pull: 'Git did not pull',
   push: 'Git did not push',
   delete: 'Git did not delete the branch',
+  /* The change list's own write, and the only one in this table that names a
+     path rather than a branch or the tree. The window that asked draws the same
+     block, since `writeError` is set whatever that window does with it. */
+  discard: 'Git did not discard the changes',
   /* The one entry here for something that is not a write to the tree. It is in
      this table all the same, because a fetch somebody pressed for fails the way
      a pressed write fails — in this block, in git's own words — and the
@@ -1444,16 +1457,23 @@ const onReset = (section) => emit('resize', { section, rows: null })
           <div :style="failureTitleStyle">{{ failureTitle }}</div>
           <div :style="failureTextStyle">{{ failure }}</div>
         </div>
+        <!-- `actions` and `busy` reach this list for one row of its menu: the
+             discard is the only thing a change row does that writes, so it is
+             refused by the very pair every other write in this panel is
+             refused by. The five rows that read are untouched by either. -->
         <ChangeList
           v-else-if="repos.length && tree"
           :changes="changes"
           :selected="openPath"
           :inside-project="changesInsideProject"
+          :actions="actions"
+          :busy="busy"
           @open="$emit('open', $event)"
           @open-file="$emit('open-file', $event)"
           @reveal="$emit('reveal', $event)"
           @copy-path="$emit('copy-path', $event)"
           @copy-relative-path="$emit('copy-relative-path', $event)"
+          @discard="$emit('discard', $event)"
         />
       </div>
 
