@@ -3334,12 +3334,27 @@ const menuTargetStyle = {
            active segment and the fill under the pointer are the whole of what
            it draws — press one, and hover the other.
 
+           What the row is, since it is the design handoff's and every part of
+           it is load-bearing: one bordered, rounded group on `--surface-sunken`
+           with the segments flush inside it, a hairline between neighbours and
+           none after the last, and the selected segment a fill edge to edge
+           with no radius of its own — its outer corners are the group's, so
+           check them against the group's own rounding rather than for a plate
+           standing inside the box. Sentence case in sans; the row sets nothing
+           in uppercase and nothing in mono. A segment's mono half is its
+           optional count, which only the Git panel's tabs carry and only while
+           the filter is on — type into the branch filter in the frames further
+           down this page to see one, and check there that the figure is mono
+           against a sans word.
+
            It is a `tablist` and the keyboard is the other half of what to check
            here: one Tab reaches the selected segment and one more leaves the row
            altogether, and the left and right arrows walk it, wrapping at both
            ends and taking the focus with the choice. The ring is the
-           stylesheet's own and has to stay legible over the fill of the segment
-           it is on. -->
+           stylesheet's own, pulled inside the segment because the group clips
+           whatever hangs over its edge, so what to look for is **four whole
+           sides** — over the fill of the selected segment and over the sunken
+           ground of an unselected one, in both themes. -->
       <div :style="rowStyle">
         <div :style="segmentedFrameStyle">
           <SegmentedTabs v-model="gallerySideTab" :tabs="GALLERY_SIDE_TABS" />

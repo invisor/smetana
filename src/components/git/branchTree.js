@@ -493,6 +493,15 @@ const TAB_WORD = { local: 'Local', origin: 'Origin' }
  * side holds nine matches, would otherwise draw an empty state that is telling
  * the truth about the wrong half of the repository.
  *
+ * **Two strings and not one**, `{ id, label, count }`, and the split is where
+ * the face changes rather than a convenience for the caller: `SegmentedTabs`
+ * sets a label in sans, because it is prose, and a count in mono, because it is
+ * a figure — the same face the caption above carries that number in before the
+ * filter moves it down here. So the active tab hands over its whole `3 of 346`
+ * as the figure with no word beside it, and the other hands over its word and
+ * its own hit count separately. Neither field is ever absent: an empty string
+ * is a segment drawing nothing there, which is what the unfiltered row is.
+ *
  * Both totals and both hit counts are asked for whichever tab is showing, so
  * the caller cannot accidentally label a tab with the other one's numbers.
  */
@@ -506,10 +515,12 @@ export function branchTabLabels({
 } = {}) {
   const on = String(query ?? '').trim().length > 0
   return BRANCH_TABS.map((id) => {
-    if (!on) return { id, label: TAB_WORD[id] }
+    if (!on) return { id, label: TAB_WORD[id], count: '' }
     const total = id === 'local' ? localTotal : originTotal
     const hits = id === 'local' ? localHits : originHits
-    return { id, label: id === tab ? `${hits} of ${total}` : `${TAB_WORD[id]} ${hits}` }
+    return id === tab
+      ? { id, label: '', count: `${hits} of ${total}` }
+      : { id, label: TAB_WORD[id], count: String(hits) }
   })
 }
 
