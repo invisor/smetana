@@ -553,7 +553,9 @@ segments flush inside it and no gap between them; the seam is each segment's own
 the last one has none; the selected segment is `--surface-selected` edge to edge with **no radius of
 its own**, its outer corners being the group's. Labels are sentence case in sans at `--text-xs`, and
 the figure `branchTabLabels` puts beside one while the filter is on is the segment's second string,
-in mono. Both halves of that are load-bearing: without the group a seam is a line floating between
+in mono. **A hover over that sunken ground is `--surface`** and not `--surface-hover`, which is the
+step written for a control standing on `--surface` and came to three units of grey over this one —
+the component's own header carries the measurements and the reasoning. Both halves of that are load-bearing: without the group a seam is a line floating between
 two words rather than the join of one control, and a fill that rounded its own corners would be a
 plate standing inside the box instead of half of it. What stood here until then was uppercase
 `--text-2xs` mono with `--tracking-caps`, no group, no seam, and the selected segment a rounded plate

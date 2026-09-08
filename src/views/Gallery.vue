@@ -3332,7 +3332,11 @@ const menuTargetStyle = {
            segmented strip under a side panel's header, drawn here at the width
            a panel gives it. Live rather than fixed, since the fill under the
            active segment and the fill under the pointer are the whole of what
-           it draws — press one, and hover the other.
+           it draws — press one, and hover the other. **Hover the light theme
+           especially**: the segment stands on the group's sunken ground, so
+           its hover is a lift to `--surface` rather than the `--surface-hover`
+           written for a control on `--surface`, and that token over this ground
+           was three units of grey and read as nothing at all.
 
            What the row is, since it is the design handoff's and every part of
            it is load-bearing: one bordered, rounded group on `--surface-sunken`

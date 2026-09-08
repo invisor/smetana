@@ -8,14 +8,18 @@
    thousand lines away from the first — obliged to match, with nothing
    mechanical holding them together — is exactly the pair that drifts.
 
-   **The row is the design handoff's**, `1a`/`2a` of the Branches section
-   (`.trash/handoff/source/BranchPanel.dc.html`, the group at its lines 51-60),
-   and it is the whole component that was brought to it rather than a variant
-   for the one panel that noticed. The row it draws is the same row in all
-   three of its callers, so a shape for the Git panel alone would have been two
-   segmented controls in one app — the pair this component exists to prevent —
-   and the earlier row broke a rule of the product besides: it set its labels
-   in uppercase, and this app is sentence case everywhere.
+   **The row is the design handoff's**, direction `1a` of the Branches section
+   in the frame that carries every one of its states, `2a`. What that design
+   settles and where it was overruled is
+   `.smetana/docs/superpowers/specs/2026-09-08-branches-section-direction-1a-design.md`,
+   which is outside the repository — `.smetana/` is not committed, so on another
+   machine that path leads nowhere and this paragraph is what is left. It is the
+   whole component that was brought to it rather than a variant for the one
+   panel that noticed: the row it draws is the same row in all three of its
+   callers, so a shape for the Git panel alone would have been two segmented
+   controls in one app — the pair this component exists to prevent — and the
+   earlier row broke a rule of the product besides: it set its labels in
+   uppercase, and this app is sentence case everywhere.
 
    What the handoff draws, and what is here: **a group, and segments flush
    inside it.** The group is the bordered, rounded, sunken box
@@ -31,6 +35,30 @@
    The inset rule and the raised fill an earlier version had are gone with the
    position: a rule under a tab was that row's answer to sitting against the
    column's edge, and a segmented row marks its active segment by fill.
+
+   **A hover here is `--surface` and not `--surface-hover`, and the ground is
+   why.** `--surface-hover` is the step written for a control standing on
+   `--surface`, and measured where it belongs it is 1.137:1 in the light theme
+   and 1.175:1 in the dark. An unselected segment stands on the group's
+   `--surface-sunken` instead, and over *that* the same token comes to 1.028:1
+   light — three units per channel, which on screen is nothing at all: with the
+   group's ground sunken the row answered the pointer with a blank in one of the
+   two themes, and hover is the only pointer affordance it has, since the cursor
+   stays `default` and interaction here is never a transform. `--surface` over
+   the sunken ground is 1.169:1 light and 1.095:1 dark — the closest of the
+   surface tokens to the system's own step in **both** themes, where
+   `--surface-active` is half a step in the light theme and a press-sized 1.414
+   in the dark, and `--surface-raised` is white paper the row never sits on.
+   It is also the step that means something: over a sunken ground the segment
+   under the pointer rises to the surface the panel itself is drawn on, which is
+   `core/interactive.js`'s rule read literally.
+
+   One consequence, taken knowingly: in the light theme a hovered segment is
+   *lighter* than the selected one, because `--surface-selected` there is a
+   blue tint rather than a lightness step — 1.005:1 against the ground it sits
+   on. What tells the two apart in that theme is the tint and `--text-primary`,
+   not brightness, and that is the design system's arrangement rather than this
+   row's.
 
    **The focus ring is pulled inside the segment**, and that is the group's
    doing: `overflow: hidden` is what clips the active fill to the radius, and it
@@ -147,8 +175,9 @@ const segmentStyle = (tab, at) => {
     /* Square, and stated rather than left out: `base.css` gives a
        `:focus-visible` element `--radius-2`, which on a segment would round the
        fill for as long as the keyboard is on it and leave the group's ground
-       showing in four notches. */
-    borderRadius: 0,
+       showing in four notches. `--radius-0` and not a bare `0` — a radius is a
+       radius even when it is none, and the scale has a name for this one. */
+    borderRadius: 'var(--radius-0)',
     outlineOffset: 'calc(var(--border-w-strong) * -1)',
     /* The seam between two segments, and never after the last one — a border on
        the end segment would be a second line a pixel inside the group's own. */
@@ -157,7 +186,7 @@ const segmentStyle = (tab, at) => {
     background: active
       ? 'var(--surface-selected)'
       : hovered.value === tab.id
-        ? 'var(--surface-hover)'
+        ? 'var(--surface)'
         : 'transparent',
     cursor: 'default',
     transition: 'var(--transition-control)'
