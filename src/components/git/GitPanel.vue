@@ -291,6 +291,13 @@ const props = defineProps({
   /* The path of the change whose diff is open, marked in the list. Repository
      relative, the form every change carries. */
   openPath: { type: String, default: null },
+  /* Whether the selected repository sits inside the project root, which is what
+     refuses two rows of a change's own menu. Passed straight through to
+     `ChangeList`, which is where it means something; this panel does not read
+     it. It is one boolean and not one per row because it is a fact about the
+     repository — `[project].repos` may name a folder anywhere at all, and every
+     file in such a repository is outside the project together. */
+  changesInsideProject: { type: Boolean, default: true },
   /* The commit message somebody is part-way through, and the two facts about
      the agent being asked to write one. Held by the store per repository rather
      than by this panel, for the reason every other value here is: this
@@ -381,6 +388,17 @@ const emit = defineEmits([
   'resolveConflicts',
   'message',
   'open',
+  /* The four rows of a change's context menu that the click does not already
+     do, each carrying the change. `open` above is the fifth and is the click's
+     own — the menu's first row goes out through it rather than through a name
+     of its own, which is what makes the gesture and the row one act rather than
+     two that can drift. None of the four is in `WRITE_REFUSED` below: they open
+     a tab, ask the desktop to show a file, or write the clipboard, and not one
+     of them touches git. */
+  'open-file',
+  'reveal',
+  'copy-path',
+  'copy-relative-path',
   'toggle',
   'toggle-folder',
   /* The whole name of a branch only `origin` has. It reaches
@@ -1430,7 +1448,12 @@ const onReset = (section) => emit('resize', { section, rows: null })
           v-else-if="repos.length && tree"
           :changes="changes"
           :selected="openPath"
+          :inside-project="changesInsideProject"
           @open="$emit('open', $event)"
+          @open-file="$emit('open-file', $event)"
+          @reveal="$emit('reveal', $event)"
+          @copy-path="$emit('copy-path', $event)"
+          @copy-relative-path="$emit('copy-relative-path', $event)"
         />
       </div>
 
