@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolutePath, basename, dirname, relativeTo } from '../src/paths.js'
+import { absolutePath, basename, dirname, isUnder, relativeTo } from '../src/paths.js'
 
 describe('what a path is called', () => {
   it('is the last segment', () => {
@@ -133,5 +133,49 @@ describe('absolutePath', () => {
 
   it('is the path alone when there is no project to hang it off', () => {
     expect(absolutePath(null, 'src/main.rs')).toBe('src/main.rs')
+  })
+})
+
+/* One line lifted out of four callers: the delete and the move in
+   DesktopApp.vue, the paste refusal in fileClipboard.js and the focus sweep's
+   fold-away in stores/files.js. Two of the four are in a .vue file nothing here
+   can reach, which is the whole reason the rule is pinned at this end. */
+describe('isUnder', () => {
+  it('a folder holds itself and everything below it', () => {
+    expect(isUnder('src', 'src')).toBe(true)
+    expect(isUnder('src', 'src/stores')).toBe(true)
+    expect(isUnder('src', 'src/stores/files.js')).toBe(true)
+  })
+
+  it('the separator is the whole of the rule: a sibling with a longer name is not inside', () => {
+    // Without the trailing slash a delete of `src` would close the tabs of
+    // `src-tauri`, a folder nobody touched.
+    expect(isUnder('src', 'src-tauri')).toBe(false)
+    expect(isUnder('src', 'src-tauri/src/main.rs')).toBe(false)
+  })
+
+  it('neither a parent nor an unrelated path is inside', () => {
+    expect(isUnder('src/stores', 'src')).toBe(false)
+    expect(isUnder('src', 'docs/readme.md')).toBe(false)
+    expect(isUnder('src', '')).toBe(false)
+  })
+
+  it('the folder comes first, and the two orders are not the same question', () => {
+    expect(isUnder('src', 'src/stores')).toBe(true)
+    expect(isUnder('src/stores', 'src')).toBe(false)
+  })
+
+  it('one separator only, deliberately', () => {
+    // Every caller compares paths in the tree's own space, where files.js
+    // writes `/` on every platform. A backslash is an ordinary character in a
+    // name on macOS and Linux, and it must not divide one.
+    expect(isUnder('a', 'a\\b')).toBe(false)
+  })
+
+  it('the same paths spelled absolutely answer alike', () => {
+    // The paste refusal compares a system clipboard path against a folder,
+    // and both are absolute there.
+    expect(isUnder('/p/src', '/p/src/a.js')).toBe(true)
+    expect(isUnder('/p/src', '/p/src-tauri')).toBe(false)
   })
 })
