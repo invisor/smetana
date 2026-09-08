@@ -627,15 +627,10 @@ const filterField = ref(null)
    focus**: one Tab reaches the `x` beside it and a press on a tab leaves the
    caption altogether, with the field still there. So the `?.` is load-bearing
    rather than defensive — the restore runs after the field has gone and the
-   button is back, but nothing here may assume where the focus was in between.
-   That question is `focusInside`'s. */
+   button is back, and nothing here may assume anything about where the focus
+   was in between. `closeFilter`'s argument is what settles that, and it is an
+   argument for a reason worth reading before touching it. */
 const filterButton = ref(null)
-
-/* The caption row of the branches section, held for one question only: was the
-   focus inside what closing is about to take away. `SectionHeader` exposes its
-   own row element, the same way the repositories' header above is read for its
-   height. */
-const branchesHeader = ref(null)
 
 /* The step every change of state in this system is timed at, read off the root
    when it is wanted rather than once at import: the app-wide font size and
@@ -673,36 +668,28 @@ const openFilter = () => {
   nextTick(() => filterField.value?.focus())
 }
 
-/* Whether the focus is standing in something closing is about to take away:
-   the caption row, which holds the field and the `x` inside it, or the list
-   below, which holds the `Clear filter` button and is rebuilt from nothing the
-   moment the query goes.
-
-   **Deliberately not "is the focus in the `<input>`".** Two of the three ways
-   out are presses on buttons that are not inside it — the `x` is its sibling in
-   the plate and `Clear filter` is in the list — and where the focus stands
-   during a press on a button is the one thing the engines disagree about:
-   WebKit leaves it where it was, Blink moves it onto the button. A test written
-   against the input alone would hand the focus back on one engine and drop it
-   on `<body>` on the other, for the same press.
-
-   Read **before** the state is cleared, because by the time the restore runs
-   the elements this asks about have been unmounted. */
-const focusInside = () => {
-  const active = document.activeElement
-  if (!active) return false
-  return Boolean(
-    branchesHeader.value?.el?.contains(active) || branchBox.value?.contains(active)
-  )
-}
-
 /* Clearing and closing are one act, which is what the `x` does and what the
    `Clear filter` button under the empty state does: a field left open and empty
-   is a caption that has stopped being one for no reason. */
-const closeFilter = () => {
-  /* Captured here and not in the callback: the answer is about the DOM as it
-     stands now, and the callback runs after the field has gone. */
-  const restore = branchSearching.value && focusInside()
+   is a caption that has stopped being one for no reason.
+
+   **`restoreFocus` is the caller saying "this was a person leaving the field",
+   and it is a parameter rather than something read off the DOM.** The three
+   ways out — `Esc` on an empty field, the `x`, `Clear filter` under the empty
+   state — are all presses on this field's own controls and pass `true`; the
+   watch on `selected` closes the field because the ground moved and passes
+   nothing, so a project switch never pulls the caret into this panel.
+
+   The readable-looking version asks `document.activeElement` where the focus
+   was, and **it cannot be made to work**: during a real mouse press on a button
+   Blink has already moved the focus onto that button, while WebKit's Mac port
+   does not make a `<button>` mouse-focusable at all and clears the focus to
+   `<body>` — measured, on both engines. So a press on the `x` reads as "inside
+   the field" on neither of them, and on the engine this app ships in it reads
+   as `<body>`: the restore silently stops happening in WKWebView and WebKitGTK
+   while looking correct in `npm run dev`. Worse, WebKit's answer follows the
+   macOS Full Keyboard Access setting, so two machines running one build
+   disagree. Do not replace this argument with a predicate. */
+const closeFilter = ({ restoreFocus = false } = {}) => {
   clearTimeout(debounce)
   branchInput.value = ''
   branchQuery.value = ''
@@ -715,23 +702,15 @@ const closeFilter = () => {
        a focus contract is worse than none: the opening half is what teaches
        somebody that this control moves their caret for them. It goes back to
        the button that opened the field, which is the element standing where the
-       field was and the one press away from opening it again. Every way out
-       comes through here — `Esc` on an empty field, the `x`, `Clear filter`
-       from under the empty state — so there is one answer and not three.
-
-       **And a fourth caller that must not restore anything**: the watch below,
-       which closes the field when the repository under the panel changes. That
-       is not somebody leaving the field, it is the ground moving while they are
-       somewhere else entirely, so a restore there would pull the caret into
-       this panel in answer to a press in another one. Hence `restore` rather
-       than a count of exits: what earns the focus back is having had it, not
-       which line called.
+       field was and the one press away from opening it again. The three ways
+       out all come through here and all ask for it, so there is one answer and
+       not three — and the fourth caller, the watch below, asks for none.
 
        `preventScroll`, `NewTaskModal`'s own line for reaching a control this
        way: focusing an element lets the browser scroll every ancestor to bring
        it into view, and the statement above this one has just put the branch
        list back where it was. */
-    if (restore) filterButton.value?.$el?.focus({ preventScroll: true })
+    if (restoreFocus) filterButton.value?.$el?.focus({ preventScroll: true })
   })
 }
 
@@ -750,7 +729,7 @@ const onFilterKey = (event) => {
     branchQuery.value = ''
     return
   }
-  closeFilter()
+  closeFilter({ restoreFocus: true })
 }
 
 /* A query does not survive a change of repository, and a project switch reaches
@@ -759,10 +738,9 @@ const onFilterKey = (event) => {
    be a field somebody left open over one repository, answering about another
    with the same three letters in it.
 
-   **This is the one caller of `closeFilter` that moves no focus**, and it is
-   why the restore is gated on a condition rather than on the call: nobody left
-   the field here, the ground moved under it, and the press that moved it was in
-   another panel. */
+   **This is the one caller of `closeFilter` that asks for no focus**, and it is
+   the whole reason the restore is a parameter: nobody left the field here, the
+   ground moved under it, and the press that moved it was in another panel. */
 watch(
   () => props.selected,
   () => {
@@ -1363,7 +1341,6 @@ const onReset = (section) => emit('resize', { section, rows: null })
              a caption, which is why it takes the caption's place rather than
              standing beside it. -->
         <SectionHeader
-          ref="branchesHeader"
           divided
           label="Branches"
           :count="branchCount"
@@ -1409,7 +1386,7 @@ const onReset = (section) => emit('resize', { section, rows: null })
                 size="sm"
                 icon="x"
                 aria-label="Clear filter"
-                @click="closeFilter"
+                @click="closeFilter({ restoreFocus: true })"
               />
             </div>
           </template>
@@ -1541,7 +1518,7 @@ const onReset = (section) => emit('resize', { section, rows: null })
             @toggle-folder="$emit('toggle-folder', $event)"
             @checkout-remote="$emit('checkout-remote', $event)"
             @toggle-remote-folder="$emit('toggle-remote-folder', $event)"
-            @clear-filter="closeFilter"
+            @clear-filter="closeFilter({ restoreFocus: true })"
           />
         </div>
         <!-- **Outside the scroller above, and outside the fold, and that is the

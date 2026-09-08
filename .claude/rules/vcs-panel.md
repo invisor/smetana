@@ -727,13 +727,21 @@ side.
 is one contract rather than two halves: closing unmounts the element holding the focus, so a close
 saying nothing drops it on `<body>` — after the opening half has taught somebody that this control
 moves their caret for them. Every way out goes through `closeFilter`, so there is one answer and not
-three, and **what earns the focus back is having had it rather than which line called**: the fourth
-caller is the watch that closes the field when the repository under the panel changes, and a restore
-there would pull the caret into this panel in answer to a press somewhere else entirely. The
-condition is `focusInside`, read before the state is cleared and asking about the caption row and the
-list rather than about the `<input>` — two of the three ways out are presses on buttons outside the
-field, and where the focus stands during a press on a button is the one thing WebKit and Blink
-disagree about.
+three, and **the restore is gated on the calling site rather than on where the focus is** — a
+`restoreFocus` argument, passed by the three presses on the field's own controls and by nothing else.
+The fourth caller is the watch that closes the field when the repository under the panel changes, and
+a restore there would pull the caret into this panel in answer to a press somewhere else entirely.
+
+**The readable-looking version — asking `document.activeElement` who had the focus — cannot be made
+to work, and this is the clause that stops it being tried again.** During a real mouse press on a
+button Blink has already moved the focus onto that button, while WebKit's Mac port does not make a
+`<button>` mouse-focusable at all and clears the focus to `<body>`; both were measured. So a press on
+the `x` reads as "inside the field" on neither engine, and on the one this app ships in it reads as
+`<body>` — the restore stops happening in WKWebView and WebKitGTK while looking correct in
+`npm run dev`, which is exactly the defect no gate in this repository can see. WebKit's answer also
+follows the macOS Full Keyboard Access setting, so two machines running one build disagree. The
+calling site is the only signal here that is both exact and portable, and it is what the three exits
+have in common: a person acting on the field's own controls.
 
 The field keeps `base.css`'s own focus ring and **pulls it inside its own edge**
 (`outlineOffset: calc(var(--border-w-strong) * -1)`, `AttachmentStrip`'s line for the same overflow):
