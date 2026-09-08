@@ -2274,6 +2274,20 @@ const menuTargetStyle = {
         <Button variant="ghost">Cancel</Button>
         <Button variant="danger" icon="triangle-alert">Discard worktree</Button>
         <Button variant="secondary" disabled>Disabled</Button>
+        <!-- The same refusal with the reason for it beside it, which is the
+             one thing about a disabled button that cannot be checked without
+             this frame. `Button` states a refusal with `aria-disabled` rather
+             than the native attribute, so it keeps its place in the tab order
+             and the hint opens on focus as well as on hover: Tab onto this one
+             and the panel is the whole of what says why the press is refused.
+             What to check beside that — that Enter, Space and a press all do
+             nothing, that a press does not take the focus off whatever had it,
+             and that it is drawn exactly like the bare one to its left, which
+             is what the appearance is checked against. The label is the Git
+             panel's own sentence for a branch with nothing to send. -->
+        <Tooltip label="This branch has nothing the remote does not already have.">
+          <Button variant="secondary" disabled>Disabled with a reason</Button>
+        </Tooltip>
         <Button variant="secondary" size="sm">Small</Button>
         <Button variant="secondary" size="lg">Large</Button>
         <IconButton icon="bell" label="Notifications" />
