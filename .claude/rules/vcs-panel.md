@@ -553,14 +553,18 @@ segments flush inside it and no gap between them; the seam is each segment's own
 the last one has none; the selected segment is `--surface-selected` edge to edge with **no radius of
 its own**, its outer corners being the group's. Labels are sentence case in sans at `--text-xs`, and
 the figure `branchTabLabels` puts beside one while the filter is on is the segment's second string,
-in mono. **A hover over that sunken ground is `--surface`** and not `--surface-hover`, which is the
-step written for a control standing on `--surface` and came to three units of grey over this one —
-the component's own header carries the measurements and the reasoning. Both halves of that are load-bearing: without the group a seam is a line floating between
+in mono. Both halves of that are load-bearing: without the group a seam is a line floating between
 two words rather than the join of one control, and a fill that rounded its own corners would be a
 plate standing inside the box instead of half of it. What stood here until then was uppercase
 `--text-2xs` mono with `--tracking-caps`, no group, no seam, and the selected segment a rounded plate
 — the earlier spec for this section had listed "`SegmentedTabs` visual style" under what does not
 change, and that line is what this overturns.
+
+**A hover over that sunken ground is `--surface`**, and not `--surface-hover`: that token is the step
+written for a control standing on `--surface`, and over the group's ground it came to three units of
+grey — a row answering the pointer with a blank in the light theme. The component's own header
+carries the measurements, the three candidates that lost and the note that the scale has no hover
+step for a sunken ground at all, which is a design-system question rather than this row's.
 
 **It was changed in the component rather than in a variant for this panel**, and that is the half
 worth keeping. The same row is what both side columns draw (`SIDE_TABS` and `RIGHT_TABS` in

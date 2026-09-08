@@ -39,19 +39,51 @@
    **A hover here is `--surface` and not `--surface-hover`, and the ground is
    why.** `--surface-hover` is the step written for a control standing on
    `--surface`, and measured where it belongs it is 1.137:1 in the light theme
-   and 1.175:1 in the dark. An unselected segment stands on the group's
-   `--surface-sunken` instead, and over *that* the same token comes to 1.028:1
-   light — three units per channel, which on screen is nothing at all: with the
-   group's ground sunken the row answered the pointer with a blank in one of the
-   two themes, and hover is the only pointer affordance it has, since the cursor
-   stays `default` and interaction here is never a transform. `--surface` over
-   the sunken ground is 1.169:1 light and 1.095:1 dark — the closest of the
-   surface tokens to the system's own step in **both** themes, where
-   `--surface-active` is half a step in the light theme and a press-sized 1.414
-   in the dark, and `--surface-raised` is white paper the row never sits on.
-   It is also the step that means something: over a sunken ground the segment
-   under the pointer rises to the surface the panel itself is drawn on, which is
-   `core/interactive.js`'s rule read literally.
+   and 1.175:1 in the dark — that pair is the yardstick, and every figure below
+   is judged against it rather than against a threshold. An unselected segment
+   stands on the group's `--surface-sunken` instead, and over *that* the same
+   token comes to 1.028:1 light — three units per channel, which on screen is
+   nothing at all: with the group's ground sunken the row answered the pointer
+   with a blank in one of the two themes, and hover is the only pointer
+   affordance it has, since the cursor stays `default` and interaction here is
+   never a transform.
+
+   The four surface tokens over that ground, light then dark: `--surface-hover`
+   1.028 / 1.286, `--surface-active` 1.062 / 1.414, **`--surface` 1.169 /
+   1.095**, `--surface-raised` 1.259 / 1.181. One token has to serve both
+   themes, so what decides is how far a candidate strays from the yardstick
+   across the pair, and `--surface` strays least. `--surface-active` is half a
+   step in the light theme and a press-sized 1.414 in the dark. And
+   `--surface-raised` gets its numbers said out loud rather than an adjective,
+   because it is the one a reader could re-propose in good faith: in the dark
+   theme it is actually *nearer* the yardstick than the token chosen here,
+   1.181 against 1.175, and it loses on the light theme, where 1.259 is white
+   paper the row never sits on and comes out louder than the selected segment
+   beside it.
+
+   A floor under all four, since a ratio near 1 invites the question of whether
+   any of this can be seen at all: the distinction this app draws on every
+   screen, a panel's `--surface` against the `--canvas` behind it, is 1.084
+   light and 1.060 dark. The hover chosen here clears that in both themes, and
+   a step this palette leans on everywhere is not one that can be called
+   invisible.
+
+   `--surface` is also the step that means something: over a sunken ground the
+   segment under the pointer rises to the surface the panel itself is drawn on,
+   which is `core/interactive.js`'s rule read literally.
+
+   **That the choice fell to this file at all is a design-system question.**
+   The scale carries a hover step for a control on `--surface` and none for one
+   on `--surface-sunken`, and there are now two local answers to that one gap:
+   `ProjectTile` on the sunken rail hovers to `--surface-active`, this row to
+   `--surface`. Both are defensible on their own shapes — a tile is lifted onto
+   `--surface-raised` and steps *down* under the pointer, a segment is flush
+   with the ground and steps *up* — and that is exactly why neither is the
+   answer: the two are drawn side by side in the left column, and the gallery
+   pairs them on purpose. The ring paragraph below makes the same move about
+   the missing token for its own width, and for the same reason. **A count of
+   local answers is the argument for asking centrally, not the answer.** This
+   is the second.
 
    One consequence, taken knowingly: in the light theme a hovered segment is
    *lighter* than the selected one, because `--surface-selected` there is a
