@@ -226,11 +226,24 @@ export const shellSessions = computed(() => terminalState.sessions.filter(isShel
    Derived here rather than filtered on the way in, because a read is a snapshot
    and this question changes between two of them: a session started or ended
    after `loadRestorable` answered would leave the stored list disagreeing with
-   the panel until the next project switch. `createSession` empties a resumed
-   record out of `restored` for this same reason and says so — this is that
-   conclusion made general, and the two are deliberately not one: that one is
-   about a record the worker has just rewritten, this one about every record the
-   file happens to hold.
+   the panel until the next project switch.
+
+   Other code empties a record out of `restored` by hand rather than leaving it
+   to this filter, and what those places have in common is a shape rather than a
+   number: each is about a record this filter was only ever *shadowing*. It
+   hides a record while a live session carries its conversation and not one
+   moment longer, so a record the worker has already rewritten (`createSession`
+   on a resume) or deleted outright (`dropSession` on a removal, from
+   `removeSession` and from the `terminal:removed` listener alike) has to go
+   with the row it was hidden behind. Leaving the second of those to this filter
+   is the whole of smetana-q7sq: the row went, the shadow went with it, and the
+   same conversation surfaced underneath as an `offline` offer to resume what
+   somebody had just closed.
+
+   `forgetRestored` empties the list by hand too and is deliberately not one of
+   these: there is no session behind an offline row and never was, so nothing
+   here was shadowing that record and there is nothing for this filter to
+   decide.
 
    Through `agentSessions` like everything else that asks what an agent is: a
    shell has no row here and carries no conversation to match on. */
@@ -248,6 +261,44 @@ const offeredRecords = () => {
    is the one most recently started; and never a shell, for the reason
    `selected` below gives. */
 const lastAgent = () => agentSessions().at(-1)?.id ?? null
+
+/* Take a session out of the panel: the row, the offer standing behind it, and
+   the selection if it was on that row.
+
+   The offer is the part that is easy to miss, and it is why this is one
+   function rather than three lines written out twice. The registry holds a
+   record for a *live* session too — it is written at the spawn — so while the
+   row was on screen `offeredRecords` was hiding that record behind it. Take
+   the row away and leave the record and the same conversation comes back a
+   tick later as a dim `offline` row offering to resume what somebody has just
+   closed; the cross on that row goes to `terminal_forget`, which finds
+   nothing, since the worker deleted the record when it removed the session, so
+   closing an agent took two presses (smetana-q7sq).
+
+   The conversation is therefore read off the session *before* the list is
+   filtered — after it there is no session left to ask — and the record under
+   that id goes with the row. Matched on the conversation and never on `id`,
+   for the reason `offeredRecords` gives: a live row's id is the worker's
+   counter and a record's key is the conversation id.
+
+   A session carrying no conversation removes nothing, and that is an ordinary
+   case rather than a guard against a mistake: a fork, a run's batch and a
+   harness that cannot be told an id all have `null` here, and none of them ever
+   wrote a record to take away.
+
+   Both callers below fire for one removal and the second is a no-op by
+   construction: the row is already gone, so there is no conversation to find
+   and nothing left to filter. */
+function dropSession(id) {
+  const conversation = terminalState.sessions.find((s) => s.id === id)?.conversation ?? null
+  terminalState.sessions = terminalState.sessions.filter((s) => s.id !== id)
+  if (conversation != null) {
+    terminalState.restored = terminalState.restored.filter(
+      (record) => record.sessionId !== conversation
+    )
+  }
+  if (terminalState.activeId === id) terminalState.activeId = lastAgent()
+}
 
 /* Whether this project has an agent at all — a live one, or one still coming
    up. What hangs off it is the centre's Agent tab (`hasAgentTab` in tabs.js):
@@ -902,19 +953,17 @@ export async function initTerminals() {
        emitted state, `needs-you` with a question nobody can answer behind a
        process that is gone, and over a night those dead loud rows would
        accumulate past the 1–2 budget. After this window's own removeSession
-       the row is already gone and both steps below are no-ops, which is what
-       lets one event serve both callers. The selection repair mirrors
-       removeSession's for the same reason it exists there: a selection left
-       naming a vanished row would black the terminal out. */
+       the row is already gone and `dropSession` below is a no-op, which is what
+       lets one event serve both callers. It is the same removal either way, and
+       through the same function deliberately: the row, the offer a live
+       conversation was keeping hidden, and the selection repair without which a
+       name left pointing at a vanished row would black the terminal out. */
     const { id } = event.payload
-    /* Beside the filter below, and for every project rather than this one: the
-       worker announces a removal wherever it happened, and a mark left behind
-       would keep a dot lit on a tile whose process is gone. */
+    /* Beside `dropSession` below, and for every project rather than this one:
+       the worker announces a removal wherever it happened, and a mark left
+       behind would keep a dot lit on a tile whose process is gone. */
     marks.delete(id)
-    terminalState.sessions = terminalState.sessions.filter((s) => s.id !== id)
-    if (terminalState.activeId === id) {
-      terminalState.activeId = lastAgent()
-    }
+    dropSession(id)
   })
   await listen('terminal:output', (event) => {
     const { id, seq: next, data } = event.payload
@@ -1187,8 +1236,7 @@ export async function createShell(project, cwd = null) {
 export async function removeSession(id) {
   try {
     await invoke('terminal_remove', { id })
-    terminalState.sessions = terminalState.sessions.filter((s) => s.id !== id)
-    if (terminalState.activeId === id) terminalState.activeId = lastAgent()
+    dropSession(id)
     terminalState.lastError = null
   } catch (err) {
     report('write', err)

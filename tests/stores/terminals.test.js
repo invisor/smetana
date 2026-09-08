@@ -1550,6 +1550,71 @@ describe('the sessions a project offers back after a restart', () => {
     expect(rows[0].restored).toBeUndefined()
   })
 
+  /* The other end of that hiding, and the bug it produced. The filter above
+     covers the record only while a live session carries its conversation, so
+     closing the row uncovered it: the same conversation came straight back as
+     a dim `offline` offer to resume what somebody had just closed, and its
+     cross went to `terminal_forget`, which finds nothing — the worker deleted
+     the record when it removed the session. Closing an agent took two presses
+     (smetana-q7sq). `dropSession` takes the record with the row. */
+  it('takes the offer away with the row a person closes', async () => {
+    const loaded = await ready()
+    loaded.ipc.on('terminal_list', [session({ id: 4, conversation: offered().sessionId })])
+    loaded.ipc.on('terminal_restorable', [offered()])
+    loaded.ipc.on('terminal_remove', null)
+    await loaded.stores.terminals.loadSessions('/p')
+
+    await loaded.stores.terminals.removeSession(4)
+
+    expect(loaded.stores.terminals.agentRows.value).toEqual([])
+    expect(loaded.stores.terminals.terminalState.restored).toEqual([])
+  })
+
+  /* And when the removal was nobody's press here — a run killing the session of
+     a batch that stopped on a question. The worker's own event goes through the
+     same removal, or the row a run took away would be replaced by an offer to
+     resume it. */
+  it('takes it away when the worker is the one that removed the session', async () => {
+    const loaded = await ready()
+    loaded.ipc.on('terminal_list', [session({ id: 4, conversation: offered().sessionId })])
+    loaded.ipc.on('terminal_restorable', [offered()])
+    await loaded.stores.terminals.loadSessions('/p')
+
+    await loaded.emit('terminal:removed', { id: 4 })
+    await loaded.nextTick()
+
+    expect(loaded.stores.terminals.agentRows.value).toEqual([])
+    expect(loaded.stores.terminals.terminalState.restored).toEqual([])
+  })
+
+  /* Narrow, and both ways. A record belongs to one conversation, so closing a
+     row may take that one and no other; and a session carrying no conversation
+     — a fork, a run's batch, a harness that cannot be told an id — never wrote
+     a record and must take none away, which `null` matching a record's key
+     would be exactly the failure of. */
+  it('leaves the offers of every other conversation where they were', async () => {
+    const other = offered({ sessionId: 'a9e2b7d0-1111-4222-8333-444455556666' })
+    const loaded = await ready()
+    const ids = () =>
+      loaded.stores.terminals.terminalState.restored.map((record) => record.sessionId)
+    loaded.ipc.on('terminal_list', [
+      session({ id: 4, conversation: offered().sessionId }),
+      session({ id: 5, conversation: null })
+    ])
+    loaded.ipc.on('terminal_restorable', [offered(), other])
+    loaded.ipc.on('terminal_remove', null)
+    await loaded.stores.terminals.loadSessions('/p')
+
+    await loaded.stores.terminals.removeSession(5)
+    expect(ids()).toEqual([offered().sessionId, other.sessionId])
+
+    await loaded.stores.terminals.removeSession(4)
+    expect(ids()).toEqual([other.sessionId])
+    expect(loaded.stores.terminals.agentRows.value.map((row) => row.id)).toEqual([
+      other.sessionId
+    ])
+  })
+
   /* Derived and not consumed: the rule is re-asked every time the rows are
      drawn, so it holds for the second switch and the third the way it holds for
      the first. A filter applied once on the way in would not. */
