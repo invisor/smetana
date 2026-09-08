@@ -5,6 +5,7 @@
 import { computed, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { branchMenuItems } from '../components/git/branchMenu.js'
+import { CHANGE_MENU_W, changeMenuItems } from '../components/git/changeMenu.js'
 import { filterBranches, originBranches } from '../components/git/branchTree.js'
 import { FILE_MENU_W, fileMenuItems } from '../components/files/fileMenu.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
@@ -2203,6 +2204,29 @@ const REFUSED_BRANCH_MENU = branchMenuItems({ allowed: false })
    whose label changes: `Remove from favourites` is the longer of its two
    wordings and is what the 280px width has to hold. */
 const MARKED_BRANCH_MENU = branchMenuItems({ favorite: true })
+/* A change row's own menu, drawn straight into a `ContextMenu` for the reason
+   the branch menu's copy is: the panel itself is behind a right-click, which is
+   a gesture an automated pass cannot reliably raise and a person has to
+   remember to make, so the rows get a frame that is simply on the page. Live,
+   from the rule itself, so they cannot drift from what the menu offers.
+
+   Three and not two, which is one more than "one ordinary and one refused": the
+   menu has three refusals with three different sentences, and no single row can
+   carry more than one of them at a time. The ordinary one is what the gutter,
+   the two separators and the five labels are checked in; the folder is the
+   untracked-directory record, where the two rows that need a file go; and the
+   third is a deleted file in a repository outside the project, which is the
+   only arrangement that draws the other two sentences together. The width is
+   `CHANGE_MENU_W` and imported rather than written out, because what it has to
+   hold is the longest of those sentences. */
+const CHANGE_MENU = changeMenuItems({ path: 'src/stores/vcs.js', kind: 'modified' })
+const FOLDER_CHANGE_MENU = changeMenuItems({ path: 'src/components/git/', kind: 'untracked' })
+const GONE_CHANGE_MENU = changeMenuItems({
+  path: 'src/views/desktopAppData.js',
+  kind: 'deleted',
+  insideProject: false
+})
+
 /* Room for the tree and room under it. The empty space below the last row is
    what opens the root's menu, and a box the height of its rows has none — at
    320px this fixture overflowed in comfortable density and the second half of
@@ -4317,8 +4341,20 @@ const menuTargetStyle = {
           <RepoList :repos="REPOS" selected="/Users/you/dev/smetana" />
         </div>
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <!-- Live: right-click any row for its menu, and press Shift+F10 on a
+               focused one for the same panel at the row's own corner. The
+               fixture holds the two rows the refusals are about — the untracked
+               directory and the deleted file — so both can be tried here. -->
           <ChangeList :changes="CHANGES" selected="src/stores/vcs.js" />
         </div>
+        <!-- The same rows with no gesture in front of them. What has to be read
+             here: five labels and two separators at the widths a 440 ceiling
+             allows, the `file` glyph in the gutter beside the four that were
+             already registered, and the three refusal sentences whole rather
+             than clipped. -->
+        <ContextMenu :items="CHANGE_MENU" :width="CHANGE_MENU_W" />
+        <ContextMenu :items="FOLDER_CHANGE_MENU" :width="CHANGE_MENU_W" />
+        <ContextMenu :items="GONE_CHANGE_MENU" :width="CHANGE_MENU_W" />
         <!-- The commit box in its several states, at the panel's own width.
              Live first: type into it and the button comes alive with the count of
              what it would take, press the sparkle and the fixture message
