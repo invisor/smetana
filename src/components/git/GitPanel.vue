@@ -861,9 +861,15 @@ const branchTabs = computed(() =>
    **The surface is also what says the field has the focus**, which is why this
    is a computed and not the constant it was; the reasoning and the measurements
    are under `fieldStyle` below, with the ring they replace. The step is timed
-   at `--transition-control`, which is `core/Input.vue`'s own — the same change
-   of ground on the same event, in the one control in this system that is a
-   field with a border. */
+   at `--transition-control`, the token `core/Input.vue` and `core/Textarea.vue`
+   time their own focus change with, and it is driven off the same `@focus` and
+   `@blur` pair they listen on. **What that token carries here is not what it
+   carries there**, and the difference is the whole of this field: a bordered
+   field in this system — `Input`, `Textarea`, `Select` — answers focus by
+   taking its **border** to `--focus-ring`, which is the ring this one is
+   dropping; this field has no border, because the plate around it is the field,
+   so what answers is the plate's **ground**. Same event, same timing, a
+   different declaration underneath. */
 const fieldRowStyle = computed(() => ({
   display: 'flex',
   alignItems: 'center',
@@ -893,9 +899,10 @@ const fieldRowStyle = computed(() => ({
    **every** focus, a mouse press and the `.focus()` `openFilter` performs
    included, so the ring here says nothing about the keyboard — it burns for as
    long as the field stands rather than for as long as somebody is on it. And
-   what burns is `--focus-ring` filling a `--row-h` row in a 252px column: the
-   loudest patch in a panel whose loudness is spent on statuses and on
-   `--git-conflict`, drawn for a state that is merely somebody typing.
+   what it draws is a `--focus-ring` stroke around the whole of a `--row-h` row
+   in a 252px column: the loudest mark in a panel whose loudness is spent on
+   statuses and on `--git-conflict`, drawn for a state that is merely somebody
+   typing.
 
    Which step, against the plate's `--surface-raised` and by the WCAG formula
    over `tokens/color-surfaces.css`: `--surface-hover` is 1.225:1 light (a
@@ -909,11 +916,13 @@ const fieldRowStyle = computed(() => ({
    `--surface-active` is the only alternative, for the case where the dark step
    turns out not to read at the default font size; there is no third.
 
-   **The two `sm` buttons beside it keep the stylesheet's default ring**, and
-   that is left alone deliberately: the plate follows this element's focus
-   alone, so Tab off the input drops the plate back and lights the `x` in the
-   ordinary way. They stand proud of the row — a `--control-h-sm` control is
-   20px in a 22px compact row — and that is the design system's ring on the
+   **The `x` inside the plate keeps the stylesheet's default ring**, and that is
+   left alone deliberately: the plate follows this element's focus alone, so Tab
+   off the input drops the plate back and lights the `x` in the ordinary way. It
+   is the only `sm` button here for the whole life of the field — the `search`
+   button it stands in for is `v-if`'d away the moment the field opens — and it
+   stands proud of the row exactly as that one does, a 20px `--control-h-sm`
+   control in a 22px compact row. That is the design system's ring on the
    system's own controls, where the suppression above is one field with a row's
    whole surface underneath it to say the same thing with. One answer for every
    focusable control in the app is a design-system question and not a
