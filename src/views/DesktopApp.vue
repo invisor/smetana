@@ -1137,7 +1137,14 @@ function openDiscardChange(change) {
       path: discardingChange.value?.path ?? '',
       kind: discardingChange.value?.kind ?? '',
       refusal: discardRefusal.value,
-      busy: vcsState.busy?.op === 'discard'
+      /* Any operation and not this one, which is where this parts company with
+         `delete-branch`'s own `busy` above. `write()` refuses a call made while
+         git is working at all, and `discardIt` guards on the same thing — so a
+         Discard left live under somebody else's merge is a button that goes
+         dead on the press with nothing said in the window. It is the same fact
+         that greys the menu row this window was opened from, and it has to be
+         the same answer in both places. */
+      busy: Boolean(vcsState.busy)
     }),
     forget: () => {
       discardingChange.value = null

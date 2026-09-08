@@ -749,10 +749,25 @@ fn commit_all(repo: &Path, message: &str) -> Result<(), VcsError> {
 ///   working tree alone: a staged change left behind would be a discard that
 ///   emptied the row and put it straight back on the next refresh.
 /// - **Not in HEAD** — an untracked path, one added since the last commit, or
-///   the new side of a rename — `git rm -r -f --cached --ignore-unmatch` to take
+///   the new side of a rename — `git rm -f --cached --ignore-unmatch` to take
 ///   it out of the index, and then `git clean -f -d` to take it off the disk.
 ///   `--ignore-unmatch` is what makes the pair one branch rather than two: a
 ///   path that was never staged matches nothing and `rm` would exit 128 for it.
+///
+/// **There is deliberately no `-r` on that `rm`, and the omission is the safe
+/// direction rather than an oversight.** The only path this branch ever hands
+/// it that could name a directory is the untracked-directory record, and git
+/// reports one **only** when the index holds nothing under that directory:
+/// measured on 2.34.1, a directory with a tracked file still in the index has
+/// its untracked sibling reported individually (`?? dir/new.txt`), and the
+/// collapsed `?? dir/` record appears only once every entry under it is gone
+/// from the index. So `-r` matches nothing in every state this row can be in.
+/// What dropping it buys is the state nobody foresaw: without `-r`, a directory
+/// that really did hold index entries comes back as
+/// `fatal: not removing '...' recursively without -r` — a refusal drawn in the
+/// window in git's own words — where with it those entries would be unstaged
+/// and then deleted by the `clean` below, silently, on the one verb in this app
+/// that cannot be undone.
 ///
 /// **A rename is both at once**, and that is the one row that needs `orig_path`.
 /// git reports it as one record naming where the file arrived and where it came
@@ -765,7 +780,9 @@ fn commit_all(repo: &Path, message: &str) -> Result<(), VcsError> {
 /// An untracked *directory* arrives as one record with a trailing slash
 /// (`--untracked-files=normal`, this panel's own default) and takes the same
 /// pair: it is not in HEAD, `rm --cached` matches nothing under it, and
-/// `clean -f -d` is what removes a directory at all.
+/// `clean -f -d` is what removes a directory at all. **The trailing slash is
+/// what `in_head` answers that record on**, and its own note says why asking
+/// git instead is wrong.
 ///
 /// **A conflicted path is refused**, and refused here rather than only by the
 /// greyed menu row: the window that asks is a window of its own with no scrim,
@@ -777,9 +794,48 @@ fn commit_all(repo: &Path, message: &str) -> Result<(), VcsError> {
 /// `cat-file` as "not in HEAD" safe below: a repository git cannot read has
 /// already refused here, in git's own words.
 ///
-/// **Never `--force` anywhere and never a wider pathspec than the row.** Every
-/// call names exactly the one path the row was drawn from, after a `--`, so a
-/// path that begins with a dash is a path and not a flag.
+/// **Every path is a `:(literal)` pathspec and never a bare one.** A pathspec
+/// is a glob, not a name: `git clean -f -d -- 'pages/[id].tsx'` in a directory
+/// holding `[id].tsx`, `i.tsx` and `d.tsx` removes **all three** (measured on
+/// 2.34.1), and `star*.txt` takes `starOTHER.txt` with it. `[id].tsx` and
+/// `[...slug].tsx` are ordinary route files in two of the frameworks this app
+/// is pointed at, and a freshly generated one is exactly the untracked row this
+/// menu gets used on — so a bare pathspec here deletes files the person never
+/// saw named in the window that asked.
+///
+/// **The glob bites on the two calls that delete and — measured — not on the
+/// restore**, and the magic is on all three anyway. `restore --source=HEAD`
+/// matches its pathspec against a tree that holds the path exactly, by the very
+/// condition `in_head` established, and 2.34.1 takes the exact match rather
+/// than wildmatching: the bracketed name comes back and its siblings keep their
+/// edits. That is a behaviour to lean on nowhere — it is not a documented
+/// guarantee and it is one flag away from not applying — and it does not hold
+/// for **a name beginning with a colon**, where the bare form is unimplemented
+/// magic on every one of the three: `restore` refuses at exit 1 and `clean`
+/// does nothing at all at exit 0, which this command would report as a discard
+/// that worked. Both are pinned by a test.
+///
+/// `GIT_LITERAL_PATHSPECS` in the environment would do the same job; the prefix
+/// is preferred because it is visible at the call rather than three files away
+/// in `run.rs`, and because it leaves every other command in this module
+/// reading its arguments exactly as it always has.
+///
+/// **No override of a safety git offers**, which is the claim that matters here
+/// rather than a count of `-f`s: the two `--force`s below are what let `rm`
+/// touch the index and `clean` touch the disk at all, and neither widens what
+/// is reached. There is no `-D`-shaped forcing of a refusal, no `clean -x` or
+/// `-X` reaching ignored files, and no `-ff` reaching into a nested repository.
+///
+/// **What `clean` declines, it declines silently, and this command reports
+/// success anyway.** An untracked *nested git repository* is skipped without
+/// `-ff` and an **ignored** path is skipped without `-x`, both at exit 0 — so a
+/// row for either leaves the directory or the file on the disk with nothing
+/// said, and in the second case `rm --cached` has already taken a force-added
+/// file's index entry with it. Neither is worth changing: `-ff` and `-x` are
+/// the two flags that turn this from "throw away what git is showing you" into
+/// "delete things git was deliberately not showing you". It is recorded because
+/// the panel's own refresh is what a person will read as the answer, and after
+/// one of these the row simply stays.
 #[tauri::command]
 pub async fn vcs_discard(
     repo: String,
@@ -796,26 +852,40 @@ fn discard(repo: &Path, path: &str, orig_path: Option<&str>) -> Result<(), VcsEr
     let tracked = in_head(repo, path)?;
     let mut restore = Vec::new();
     if tracked {
-        restore.push(path);
+        restore.push(literal(path));
     }
     // The other side of a rename, and only when HEAD really has it: `orig_path`
     // is a field of a record the front end drew a while ago, and a path git
     // cannot resolve would take the whole restore down with it.
     if let Some(orig) = orig_path.filter(|orig| !orig.is_empty() && *orig != path) {
         if in_head(repo, orig)? {
-            restore.push(orig);
+            restore.push(literal(orig));
         }
     }
     if !restore.is_empty() {
         let mut args = vec!["restore", "--source=HEAD", "--staged", "--worktree", "--"];
-        args.extend_from_slice(&restore);
+        args.extend(restore.iter().map(String::as_str));
         run::git_write(repo, &args)?;
     }
     if !tracked {
-        run::git_write(repo, &["rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", path])?;
-        run::git_write(repo, &["clean", "-f", "-d", "--", path])?;
+        let spec = literal(path);
+        run::git_write(repo, &["rm", "-f", "--cached", "--ignore-unmatch", "--", &spec])?;
+        run::git_write(repo, &["clean", "-f", "-d", "--", &spec])?;
     }
     Ok(())
+}
+
+/// One path as a pathspec that means **that path** and nothing else.
+///
+/// `--` stops a leading dash being read as a flag and does nothing whatever
+/// about the rest: everything after it is still a pathspec, which is a glob
+/// with magic of its own. `:(literal)` is what turns a name back into a name —
+/// see the command's header for what a bracketed route file costs without it.
+/// It reaches a trailing-slash directory record unchanged
+/// (`clean -f -d -- ':(literal)scratch/'` removes the folder), which is the one
+/// shape this had to keep working.
+fn literal(path: &str) -> String {
+    format!(":(literal){path}")
 }
 
 /// The paths git has left unmerged, exactly as `vcs_status` would report them.
@@ -830,16 +900,39 @@ fn conflicted(repo: &Path) -> Result<Vec<String>, VcsError> {
 
 /// Whether the last commit has this path.
 ///
-/// `git cat-file -e HEAD:<path>` — exit 0 for a path HEAD holds, and 128 for
-/// everything else it is asked here: a path the commit does not have, a path
-/// with a trailing slash, and a repository with no commit at all. All three are
-/// the same answer for this question, and none of them is a refusal.
+/// **A trailing slash answers `false` without asking git, and that is the whole
+/// of what makes this function mean what its name says.** git only ever reports
+/// a path that way for an *untracked directory*, so the record is by
+/// construction not something HEAD holds — while `git cat-file -e HEAD:dir/`
+/// exits **0** whenever HEAD has a tree at `dir`, which is the ordinary state
+/// of a folder somebody has just `git rm -r`'d and then put an untracked file
+/// back into. Asked bare, this answered `true` there and the row went down the
+/// restore branch: the file the window named was left on the disk and two
+/// staged deletions on rows nobody had touched were reverted, index and working
+/// tree both, under a sentence saying one untracked file would be deleted. The
+/// test below is that repository.
+///
+/// The rule is `isFolderRecord`'s in `components/git/changeMenu.js`, one side
+/// of the IPC over, and the same one `--untracked-files=normal` produces. It is
+/// deliberately not `cat-file -t` with a `blob` check, which answers the same
+/// for a directory and a different thing for a **submodule**: a gitlink is a
+/// `commit`, and reading that as "not in HEAD" would send a dirty submodule row
+/// to the branch that deletes.
+///
+/// Everything else is `git cat-file -e HEAD:<path>` — exit 0 for a path HEAD
+/// holds, and 128 for a path the commit does not have and for a repository with
+/// no commit at all. Both are the same answer here, and neither is a refusal.
+/// `cat-file` takes a revision rather than a pathspec, so the `:(literal)` the
+/// writes need has no place on it and no glob is possible.
 ///
 /// Reading 128 as an answer is safe **in this position alone**, exactly as
 /// `in_progress` reads it for `--show-current-patch`: `discard` asks the
 /// conflict probe above first, so a folder git cannot read has already come
 /// back in git's own words before this runs.
 fn in_head(repo: &Path, path: &str) -> Result<bool, VcsError> {
+    if path.ends_with('/') {
+        return Ok(false);
+    }
     let object = format!("HEAD:{path}");
     Ok(run::git_maybe(repo, &["cat-file", "-e", &object], 128)?.is_some())
 }
@@ -2300,6 +2393,98 @@ mod tests {
 
         assert!(!repo.join("scratch").exists(), "the folder is gone");
         assert!(dirty(&repo).is_empty());
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// **A name a pathspec would read as a glob, and the siblings it would have
+    /// taken with it.** `[id].tsx` is an ordinary route file in two of the
+    /// frameworks this app is pointed at, and a bare pathspec makes it a
+    /// character class: measured on 2.34.1,
+    /// `git clean -f -d -- 'pages/[id].tsx'` removed `i.tsx` and `d.tsx` as
+    /// well. The assertion that matters is the two survivors, not the one that
+    /// went — the row was right about itself either way.
+    #[test]
+    fn discarding_a_bracketed_name_leaves_every_other_file_alone() {
+        let repo = discardable("discard-glob");
+        fs::create_dir_all(repo.join("pages")).expect("make pages");
+        for name in ["[id].tsx", "i.tsx", "d.tsx"] {
+            fs::write(repo.join("pages").join(name), "route\n").expect("write the route");
+        }
+
+        discard(&repo, "pages/[id].tsx", None).expect("discard the bracketed name");
+
+        assert!(!repo.join("pages/[id].tsx").exists(), "the row itself is gone");
+        assert!(repo.join("pages/i.tsx").exists(), "a glob would have taken this");
+        assert!(repo.join("pages/d.tsx").exists(), "and this");
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// **A name beginning with a colon, which is where both branches break**
+    /// and the reason the magic is on all three calls rather than on the two
+    /// that delete. A bare `:x` is read as pathspec magic git has never heard
+    /// of: measured on 2.34.1, `restore` refuses it at exit 1 with "did not
+    /// match any file(s) known to git" — a file the person asked to have put
+    /// back, drawn as a refusal — and `clean` does **nothing at all** at exit
+    /// 0, which this command then reports as success while the row stays
+    /// exactly where it was.
+    ///
+    /// Both halves are asserted here, since they fail in opposite directions
+    /// and only one of the two is visible on screen.
+    #[test]
+    fn a_name_beginning_with_a_colon_is_a_name_on_both_branches() {
+        let repo = discardable("discard-colon");
+        fs::write(repo.join(":tracked"), "one\n").expect("write :tracked");
+        run::git_write(&repo, &["add", "-A"]).expect("stage");
+        run::git_write(&repo, &["commit", "-m", "the odd name"]).expect("commit :tracked");
+        fs::write(repo.join(":tracked"), "edited\n").expect("edit :tracked");
+        fs::write(repo.join(":untracked"), "new\n").expect("write :untracked");
+
+        discard(&repo, ":tracked", None).expect("restore a name that starts with a colon");
+        discard(&repo, ":untracked", None).expect("delete a name that starts with a colon");
+
+        assert_eq!(fs::read_to_string(repo.join(":tracked")).expect("read"), "one\n");
+        assert!(!repo.join(":untracked").exists(), "clean is a silent no-op without the magic");
+        assert!(dirty(&repo).is_empty());
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// **An untracked directory record whose name HEAD also holds as a tree.**
+    /// `git rm -r dir` and then a new untracked file under `dir` is what the
+    /// panel draws as `D dir/f.txt`, `D dir/g.txt` and `?? dir/` — and
+    /// `git cat-file -e HEAD:dir/` exits 0 there, so asking git turned the row
+    /// into a restore: the file the window named stayed on the disk and two
+    /// staged deletions nobody had touched were put back. The record is
+    /// answered by its trailing slash instead, and this is that repository.
+    #[test]
+    fn an_untracked_folder_shadowing_a_committed_one_is_still_only_the_folder() {
+        let repo = discardable("discard-shadowed-dir");
+        fs::create_dir_all(repo.join("dir")).expect("make dir");
+        fs::write(repo.join("dir/f.txt"), "f\n").expect("write f.txt");
+        fs::write(repo.join("dir/g.txt"), "g\n").expect("write g.txt");
+        run::git_write(&repo, &["add", "-A"]).expect("stage");
+        run::git_write(&repo, &["commit", "-m", "the folder"]).expect("commit the folder");
+        run::git_write(&repo, &["rm", "-r", "-q", "dir"]).expect("delete the folder");
+        fs::create_dir_all(repo.join("dir")).expect("make it again");
+        fs::write(repo.join("dir/untracked.txt"), "new\n").expect("write the untracked file");
+        assert_eq!(
+            dirty(&repo),
+            ["dir/f.txt", "dir/g.txt", "dir/"],
+            "the three rows the panel draws"
+        );
+
+        discard(&repo, "dir/", None).expect("discard the untracked folder");
+
+        assert!(!repo.join("dir/untracked.txt").exists(), "what the window named is gone");
+        assert!(!repo.join("dir/f.txt").exists(), "and the deletions were left alone");
+        assert!(!repo.join("dir/g.txt").exists());
+        assert_eq!(
+            dirty(&repo),
+            ["dir/f.txt", "dir/g.txt"],
+            "the two rows nobody touched are exactly as they were"
+        );
 
         let _ = fs::remove_dir_all(&repo);
     }

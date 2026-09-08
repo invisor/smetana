@@ -170,6 +170,24 @@ const DIALOG_PROPS = {
     refusal: '',
     busy: false
   },
+  /* Discarding one file's changes, in the state it opens in. The path is the
+     first `modified` row of the tree `vcs_status` answers below, so the window
+     in a browser is about a file the change list is drawing — and the sentence is the
+     third of the three, which is the one an ordinary edit gets. The other two
+     are chosen by `kind` alone and stand beside this one in `?view=gallery`,
+     with the refusal and the busy state, neither of which a browser can reach:
+     `vcs_discard` is absent from the writes below on purpose.
+
+     Its `title` is a constant in the component rather than a sentence built
+     from the path, so this is the one fixture caption that cannot drift from
+     what the window works out for itself. */
+  'discard-change': {
+    title: 'Discard changes?',
+    path: 'src/stores/vcs.js',
+    kind: 'modified',
+    refusal: '',
+    busy: false
+  },
   /* Every fixture carries a `title` beside what its dialog draws, because that
      string is the OS frame's caption in the app and there is no frame in a
      browser to notice it missing. It is the same sentence the component works
