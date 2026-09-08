@@ -810,16 +810,38 @@ have it remember the *filtered* list's scroll position and hand that back on the
 chord to the filter globally was rejected: it breaks the palette everywhere for the sake of one
 panel.
 
+**The commit box is inside that reach, deliberately.** The handler sits on the panel's root, so ⌘F
+with the caret in the commit message pulls it into the branch filter — the panel owns this chord
+throughout itself rather than in the half of it that draws branches, which is what the one attribute
+on the one element says. Standing down there would buy nothing: the event would reach `onFindKey`
+instead and the palette would open, taking the caret out of that textarea just the same, and this way
+what the key does is one answer everywhere inside the panel rather than two that have to be told
+apart.
+
 `shell/SegmentedTabs.vue` carries the row's half of this, since the two sides of the list are reached
 the same way: `role="tablist"` over `role="tab"` segments with `aria-selected`, one tab stop, and the
 horizontal arrows switching to the neighbour and taking the focus with them. It is the same control
 both side columns draw, so that is true of every tab row in the app and not of this one.
 
-The focus ring is `tokens/base.css`'s own and is **not** suppressed and **not** inset. The field in
-the caption pulls its ring inside for a reason of its own, written above; a row does not, because a
-row is the full width of a box that scrolls and the ring is the only thing saying which of a column
-of identical rows the keyboard is on. What to look at when this changes: the ring over
-`--surface-selected` on the current branch, and over the run strip's own colours.
+The focus ring is `tokens/base.css`'s own and is **not** suppressed — a roving tabindex means the
+keyboard is on exactly one of a column of identical rows, and the ring is the only thing that says
+which. It **is** pulled inside the row's edge, `outlineOffset: calc(var(--border-w-strong) * -1)` in
+both `rowStyle` and `folderStyle`, and that is measured rather than tidy: the branch box is
+`overflow: auto` with no padding and a row is flush with its left, its right and — at `scrollTop` 0
+— its top, so the ring's 3px on each of those sides falls outside the padding box and is clipped
+away. Screenshotted in Chromium before it was inset, a focused current branch drew a single
+horizontal line under itself, exactly where the current block's own `--border` rule is, which reads
+as a border rather than as a ring. It is not the first row alone: `.focus()` scrolls a row that was
+out of view flush against the leading edge, so every arrow press that scrolls would clip the row it
+just arrived on.
+
+That makes **three** readers of `--border-w-strong` as the ring's width — `AttachmentStrip`'s
+thumbnail, `fieldStyle` in the caption above, and now a branch row — and all three lean knowingly on
+2px being both that token's value and `base.css`'s outline width. One answer for every focusable
+control in the app is a design-system question, and a third call site is the argument for asking it
+rather than the answer. What to look at when any of this changes: four whole sides of the ring over
+`--surface-selected` on the current branch, and again on a row under the run freeze strip, in both
+themes.
 
 The spinner on a row is named `git is working` rather than by the operation it is spinning for, which
 is the design handoff's wording and a trade recorded in `BranchList.vue` beside `OPERATIONS`: a

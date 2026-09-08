@@ -774,6 +774,31 @@ const onKeydown = (event) => {
   else if (verb === 'menu') openRowMenu(row)
 }
 
+/* **The focus ring, pulled inside the row's own edge.** `tokens/base.css` draws
+   it 2px wide a pixel *outside* the element, and a row here is flush with the
+   left, the right and — at the top of the list — the leading edge of the box
+   `GitPanel` scrolls (`overflow: auto`, no padding), so three pixels of ring on
+   each of those sides fall outside that box's padding box and are simply cut
+   away. Measured in Chromium rather than reasoned about: a focused current
+   branch drew one horizontal line under itself, sitting exactly where the
+   current block's own `--border` rule already is, which reads as a border and
+   not as a ring. And it is not only the first row — `.focus()` scrolls a row
+   that was out of view flush against the leading edge, so every arrow press
+   that scrolls would clip the ring of the row it just moved to.
+
+   The same line `AttachmentStrip.vue`'s thumbnail and `fieldStyle` in
+   `GitPanel.vue` carry, for the same clipping, and it makes three readers of
+   `--border-w-strong` as a stand-in for a width that has no token: 2px is the
+   ring's width in `base.css` and this token's value, and the two matching is a
+   coincidence leaned on knowingly. One answer for every focusable control in
+   the app is a design-system question rather than a component's, and a third
+   call site is the argument for it rather than the answer.
+
+   Suppressing the ring was never on the table: a roving tabindex means the
+   keyboard is on exactly one of a column of identical rows, and the ring is the
+   only thing that says which. */
+const ringInset = 'calc(var(--border-w-strong) * -1)'
+
 /* A branch name is an identifier and stays mono. The row highlights only where
    there is something to press: the branch already checked out is not a target,
    and neither is any row while a run is going, so hovering must not promise
@@ -844,6 +869,7 @@ const rowStyle = (branch, key = keyOf(branch)) => ({
       : branch.block === 'favourite' && lastFavourite.value === branch.name
         ? 'var(--border-w) solid var(--border-subtle)'
         : 'none',
+  outlineOffset: ringInset,
   transition: 'var(--transition-control)'
 })
 
@@ -918,6 +944,7 @@ const folderStyle = (row, key = keyOf(row)) => {
         ? 'var(--surface-hover)'
         : 'transparent',
     cursor: 'default',
+    outlineOffset: ringInset,
     transition: 'var(--transition-control)'
   }
 }
