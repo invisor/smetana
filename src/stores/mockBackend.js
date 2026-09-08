@@ -1249,8 +1249,9 @@ export function installMockBackend() {
        branch worked on most recently first, the tail alphabetical. The current
        one is deliberately not the first, since a list where the two coincide
        could not show that the mark and the order are two different facts.
-       `vcs_checkout`, `vcs_checkout_remote`, `vcs_merge`, `vcs_rebase` and
-       `vcs_abort` are absent on purpose and fall through to the refusal at the
+       `vcs_checkout`, `vcs_checkout_remote`, `vcs_merge`, `vcs_rebase`,
+       `vcs_discard` and `vcs_abort` are absent on purpose and fall through to
+       the refusal at the
        bottom, like every other write: a merge that looked like it had happened
        would be the worst kind, since nothing here has a working tree to have
        changed. The remote checkout is named in that list rather than answered

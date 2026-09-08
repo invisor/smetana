@@ -3,13 +3,14 @@
 
    Out here rather than in any one component that draws one, for
    `promoteTitle.js`'s reason one directory over — several places need the same
-   thing and none may guess at the others'. **Three components and four blocks**:
+   thing and none may guess at the others'. **Four components and five blocks**:
    `GitPanel.vue` draws it twice, for a read that failed and for a write git
    declined; `ConflictModal.vue` draws it over "Git did not abort";
    `DeleteBranchModal.vue` draws it inside the window that asked, where the
-   refusal is one `-D` would only repeat. A person who has seen one of these has
-   seen all of them, and three copies of five declarations were three places for
-   the mono to go sans in.
+   refusal is one `-D` would only repeat; and `DiscardChangeModal.vue` draws it
+   the same way, where the refusal is one nothing at all would repair. A person
+   who has seen one of these has seen all of them, and three copies of five
+   declarations were three places for the mono to go sans in.
 
    That count is the reason this header names its consumers instead of saying
    "wherever git's stderr is drawn". It was written naming two and was already

@@ -104,8 +104,17 @@
    itself rather than decided by a grey menu row. */
 
 /* What refuses the whole menu, in order of what is worth saying. Both mean "not
-   now" rather than "not this row", which is what puts either at the very top. */
-function frozen({ allowed, busy }) {
+   now" rather than "not this row", which is what puts either at the very top.
+
+   **Exported, and read by one file outside this one**: `changeMenu.js`'s
+   `Discard changes`, which is the only row of that menu that writes and is
+   refused by exactly these two facts. It is lifted rather than copied for the
+   reason every rule in this family is one function — two spellings of "a run is
+   going in this project" are two sentences a person would read as two different
+   states. The caption it heads there is over one group at the foot of the menu
+   rather than over the whole of it, which is a fact about where the greyed rows
+   are and not about what the sentence says. */
+export function frozen({ allowed, busy }) {
   if (!allowed) return 'A run is going in this project'
   if (busy) return 'Git is working in this repository'
   return null

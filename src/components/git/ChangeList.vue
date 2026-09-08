@@ -57,12 +57,16 @@
    The commit box is `CommitBox.vue` and it is **not** part of this list: what
    it takes is the whole tree rather than any row here, so a row that could be
    included or left out would be promising a choice nothing behind it can make.
-   That is also why there is still **no staging and no discard**. Staging is the
-   one this list looks closest to having — a change already carries `staged`,
-   and the tick draws it — but reading a flag git set is not the same as
+   That is also why there is still **no staging**: a change already carries
+   `staged` and the tick draws it, but reading a flag git set is not the same as
    offering to set it, and a commit that takes everything needs no such gesture.
-   Discard is the other kind of missing: it destroys work with nothing to undo
-   it, and it is out of this epic rather than merely unbuilt. */
+
+   **Discard is here, and it is the one thing this list does that loses work.**
+   It is the last row of the menu, in a group of its own, and it opens a window
+   that asks before anything happens — `changeMenu.js` carries why it sits where
+   it does and what refuses it, and `DiscardChangeModal.vue` is the question. It
+   is also the reason this component now takes `actions` and `busy`: the other
+   five rows read, so nothing about the repository reached this list before. */
 import { computed, ref, watch } from 'vue'
 import Icon from '../core/Icon.vue'
 import PointerMenu from '../overlays/PointerMenu.vue'
@@ -88,7 +92,17 @@ const props = defineProps({
      `relativeTo(filesState.root, repo) !== null` where it is computed. A
      repository named in `[project].repos` can sit anywhere at all, so `false`
      is an ordinary state here and not a failure. */
-  insideProject: { type: Boolean, default: true }
+  insideProject: { type: Boolean, default: true },
+  /* `{ allowed, reason }` from `gitActions.js`, and `{ op, branch }` or null
+     from the store — the pair every write in this panel is refused by, arriving
+     here because the menu's last row is a write. Only the *answer* is read: the
+     sentence over the group is `frozen`'s in `changeMenu.js`, so the rule and
+     the wording stay in the file a test can reach.
+
+     The defaults are a repository with nothing holding it, which is what the
+     gallery's own frames and every list-only frame want. */
+  actions: { type: Object, default: () => ({ allowed: true, reason: null }) },
+  busy: { type: Object, default: null }
 })
 
 /* Named events and never a bare `item.kind`, `BranchList.vue`'s line: the kinds
@@ -96,7 +110,17 @@ const props = defineProps({
    another verb must not be able to make this component emit something nobody
    declared. Each carries the whole change, since what the handler needs is the
    path and the kind together. */
-const emit = defineEmits(['open', 'open-file', 'reveal', 'copy-path', 'copy-relative-path'])
+const emit = defineEmits([
+  'open',
+  'open-file',
+  'reveal',
+  'copy-path',
+  'copy-relative-path',
+  /* The one that writes. It carries the whole change like the four above it,
+     and it has to: the window's sentence is chosen by `kind`, and Rust is given
+     `origPath` as well so that a rename's other half can be put back. */
+  'discard'
+])
 
 /* Read here rather than in the pure module, which is what keeps the choice of
    noun testable: `fileManagerName` is a function of this string. */
@@ -169,7 +193,13 @@ const items = computed(() =>
     path: menuChange.value?.path ?? '',
     kind: menuChange.value?.kind ?? '',
     insideProject: props.insideProject,
-    userAgent
+    userAgent,
+    /* Read at the moment the panel is drawn rather than when it opened, the
+       same reading `menuChange` above takes of the row: a run that starts or a
+       commit that lands while the menu stands greys the row under the pointer,
+       which is what every other control in this panel does. */
+    allowed: props.actions?.allowed !== false,
+    busy: Boolean(props.busy)
   })
 )
 
@@ -199,6 +229,7 @@ const pick = (item, change) => {
   else if (item.kind === 'reveal') emit('reveal', change)
   else if (item.kind === 'copy-path') emit('copy-path', change)
   else if (item.kind === 'copy-relative-path') emit('copy-relative-path', change)
+  else if (item.kind === 'discard') emit('discard', change)
 }
 
 /* Which verb a press means is `changeKeys.js`'s and not this file's, the shape

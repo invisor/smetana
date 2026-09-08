@@ -9,7 +9,7 @@
    already have, where a row renamed on one side draws perfectly and does
    nothing at all when pressed. The test pins this side.
 
-   **Five rows, and the first of them is the gesture the row already had.** A
+   **Six rows, and the first of them is the gesture the row already had.** A
    click on a change opens its diff, and that verb had no name anywhere on
    screen until this menu; `branchMenu.js` states the rule it is here for — a
    menu is where somebody goes to find out what a place can do, so a place whose
@@ -31,18 +31,39 @@
    cannot make, which `ChangeList.vue`'s own header already fixes. *Open file
    (HEAD)*: that is the left-hand pane of the diff `Open changes` opens. *Open
    with*, *Open on remote*, *Share*, *File history*, *Stash* and *Copy changes
-   (patch)*: there is no subsystem behind any of them. *Discard changes* is
-   taken and is a task of its own — it is the one row here that would lose work
-   and the one that needs Rust — and when it arrives it adds a separator and a
-   row at the **end**; nothing is laid in for it here.
+   (patch)*: there is no subsystem behind any of them.
 
-   **Nothing on this menu writes.** So the fourth reach of refusal
-   `branchMenu.js` describes is the only one this file has: a run in the
-   project and an operation already going refuse nothing at all, and the panel's
-   own `busy` reaches no row. What does refuse is three facts about the row
-   itself, and each is written into the label. */
+   **The sixth row is the one that loses work**, and it is the whole of what
+   this menu writes: *Discard changes*, in a group of its own at the very foot,
+   behind a separator. `Delete this branch` sits the same way in `branchMenu.js`
+   and for the same reason — a menu opened by a roughly aimed pointer must not
+   put its one destructive row against the edge of the group above it. It is the
+   only row here that reaches git at all, and the only one that needs a window
+   to ask first.
+
+   **So this menu now has two reaches of refusal rather than one.** Five rows
+   read, and the fourth reach `branchMenu.js` describes is still theirs: a run
+   in the project and an operation already going leave every one of them live.
+   The sixth writes the working tree, so it takes exactly the refusal every
+   write in this panel takes, in `frozen`'s own two sentences — lifted from
+   `branchMenu.js` rather than written again, because two spellings of the same
+   state read as two states.
+
+   **And the two reaches are said in two different ways, which is not an
+   inconsistency.** The five carry their reasons as a suffix on the label,
+   because they are refused for *different* facts about the row and no caption
+   can serve that. The sixth is refused by one fact about the whole repository,
+   which is exactly the case a caption is for, so `frozen`'s sentence stands
+   above its group and the row underneath says nothing about it. The one
+   exception is the conflicted row, whose reason **is** about the row, and it is
+   a suffix like the other five: a conflicted tree is the conflict dialog's
+   business — abort or resolve — and putting one path back to HEAD behind its
+   back would leave the merge half undone. Rust refuses it a second time, for
+   the reason `vcs_discard` records: this window has no scrim and the tree can
+   move while it stands. */
 
 import { fileManagerName } from '../files/fileMenu.js'
+import { frozen } from './branchMenu.js'
 
 /* The three reasons, in the form `fileMenu.js` chose and for its reason:
    `ContextMenu` clips a row rather than wrapping it and gives it no tooltip and
@@ -93,6 +114,13 @@ const GONE_FROM_TREE = 'the file is gone from the working tree'
    relative path there would be a lie rather than a refusal — `relativeTo`
    answers `null`, which is an ordinary answer here and not a failure. */
 const OUTSIDE_PROJECT = 'outside the project'
+/* The one refusal of the discard that is a fact about the row rather than about
+   the repository, which is why it is a suffix where `frozen`'s two are a
+   caption. A conflicted tree belongs to `ConflictModal` and its two doors — an
+   abort, or a resolution that finishes what git started — and a single path put
+   back to HEAD from under either would leave the operation half undone with
+   nothing on screen saying which half. */
+const RESOLVE_FIRST = 'resolve the conflict first'
 
 /* The label, with the first applicable reason on it and no reason at all when
    none applies. The order is stated rather than incidental: one row can be
@@ -115,16 +143,30 @@ const refuse = (label, reasons) => {
  * about the repository rather than about the row, since every file in a
  * repository is inside the project exactly when the repository is. `userAgent`
  * is read for one noun, the way `fileMenuItems` reads it.
+ *
+ * `allowed` and `busy` are the two facts every write in this panel is refused
+ * by — `gitActions(runs).allowed` and whether the store holds an operation —
+ * and they reach the **last row alone**. They arrive as the two booleans rather
+ * than as the verdict object and the `{ op, branch }` record, because the
+ * sentence is `frozen`'s and neither the reason nor the operation is drawn
+ * anywhere on this menu: what is wanted here is the answer, not the report.
  */
 export function changeMenuItems({
   path = '',
   kind = '',
   insideProject = true,
-  userAgent = ''
+  userAgent = '',
+  allowed = true,
+  busy = false
 } = {}) {
   const folder = isFolderRecord(path) ? NO_FILE_BEHIND_FOLDER : null
   const deleted = kind === 'deleted' ? GONE_FROM_TREE : null
   const outside = insideProject ? null : OUTSIDE_PROJECT
+  /* The last group's own two facts, and neither of them reaches a row above:
+     `held` is about the repository and is said once in a caption, `conflicted`
+     is about this row and rides on the label. */
+  const held = frozen({ allowed, busy })
+  const conflicted = kind === 'conflicted' ? RESOLVE_FIRST : null
 
   return [
     /* The click's own verb, named. It survives a deleted file deliberately: a
@@ -167,6 +209,29 @@ export function changeMenuItems({
       label: refuse('Copy relative path', [outside]),
       icon: 'copy',
       disabled: Boolean(outside)
+    },
+    /* A separator, and it is doing what `branchMenu.js`'s last one does: the
+       five rows above read and this one destroys, and a pointer that missed by
+       a row must not land on the only act in this panel with nothing to undo
+       it. */
+    { type: 'separator' },
+    /* The caption over that group, and only when there is one. It heads a group
+       of one row, so there is no question of how far it reaches — the greying
+       under it is the whole of what it is about. */
+    ...(held ? [{ type: 'label', label: held }] : []),
+    /* `undo-2` is the glyph the review window already spends on "put this back
+       the way the rule had it", which is the same sentence one subsystem over,
+       and `tone: 'danger'` is what says this row is not like the five above it.
+       Both halves matter: `Delete this branch` is red in `branchMenu.js` and
+       this row loses more than that one can — a branch's commits survive in the
+       repository until they are collected, and an uncommitted change does not
+       exist anywhere else at all. */
+    {
+      kind: 'discard',
+      label: refuse('Discard changes', [conflicted]),
+      icon: 'undo-2',
+      tone: 'danger',
+      disabled: Boolean(held || conflicted)
     }
   ]
 }

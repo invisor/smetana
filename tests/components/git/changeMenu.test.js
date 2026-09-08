@@ -22,16 +22,28 @@ const LINUX = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
 const modified = (extra = {}) => changeMenuItems({ path: 'src/main.js', kind: 'modified', ...extra })
 
 describe('changeMenuItems', () => {
-  it('offers five rows in three groups, the diff the click opens first', () => {
+  it('offers six rows in four groups, the diff the click opens first', () => {
     const items = modified({ userAgent: MAC })
     expect(kinds(items)).toEqual([
       'open-changes',
       'open-file',
       'reveal',
       'copy-path',
-      'copy-relative-path'
+      'copy-relative-path',
+      'discard'
     ])
-    expect(separators(items)).toBe(2)
+    expect(separators(items)).toBe(3)
+  })
+
+  it('keeps the one row that loses work alone at the foot, behind a separator', () => {
+    // `branchMenu.js`'s own shape for `Delete this branch`: a pointer that
+    // missed by a row must not land on the only act here with no undo.
+    const items = modified()
+    let at = -1
+    items.forEach((item, i) => {
+      if (item.type === 'separator') at = i
+    })
+    expect(items.slice(at + 1).map((item) => item.kind)).toEqual(['discard'])
   })
 
   it('keeps the two that open something apart from the one that leaves the window', () => {
@@ -45,7 +57,7 @@ describe('changeMenuItems', () => {
      the gutter every other row fills. */
   it('names a glyph for every row, and one this app has registered', () => {
     const icons = verbs(modified()).map((item) => item.icon)
-    expect(icons).toEqual(['git-compare', 'file', 'folder-open', 'copy', 'copy'])
+    expect(icons).toEqual(['git-compare', 'file', 'folder-open', 'copy', 'copy', 'undo-2'])
     for (const name of icons) expect(iconNodes[name]).toBeTruthy()
   })
 
@@ -60,9 +72,9 @@ describe('changeMenuItems', () => {
     expect(find(modified(), 'reveal').label).toBe('Reveal in file manager')
   })
 
-  it('says nothing about a run or an operation in flight, because nothing here writes', () => {
-    // The fourth reach of refusal `branchMenu.js` describes, and this whole
-    // menu has it: there is no caption row at all, ever.
+  it('says nothing about a run or an operation in flight while nothing is going', () => {
+    // The five rows that read have `branchMenu.js`'s fourth reach and keep it:
+    // with nothing holding the repository there is no caption row at all.
     expect(modified().some((item) => item.type === 'label')).toBe(false)
   })
 })
@@ -127,11 +139,66 @@ describe('the three refusals', () => {
     }
   })
 
-  it('closes on every pick, since no row here asks a second time', () => {
-    // `keepOpen` is the file tree Delete alone, and this menu has nothing that
-    // loses work. Discard, when it arrives, is a separate task.
+  it('closes on every pick, since no row here asks a second time in the panel', () => {
+    // `keepOpen` is the file tree's Delete alone. The discard asks twice as
+    // well, but in a window of its own rather than in a menu that stays up, so
+    // the panel closes on the pick like every other row here.
     expect(modified().some((item) => item.keepOpen)).toBe(false)
-    expect(modified().some((item) => item.tone)).toBe(false)
+  })
+
+  it('marks the discard as the one dangerous row and leaves the five readers plain', () => {
+    const tones = verbs(modified()).map((item) => item.tone ?? null)
+    expect(tones).toEqual([null, null, null, null, null, 'danger'])
+  })
+})
+
+describe('the discard, and the two things that refuse it', () => {
+  /* The one row of this menu that writes, so the one row the panel's own
+     refusals reach. The sentences are `frozen`'s in `branchMenu.js`, which is
+     where they are written, and they arrive here as a caption over the group
+     rather than as a suffix: one fact refuses the whole group, which is the
+     case a caption is for. */
+  it('heads its group with `frozen`\'s sentence while a run holds the project', () => {
+    const items = modified({ allowed: false })
+    const caption = items.find((item) => item.type === 'label')
+    expect(caption.label).toBe('A run is going in this project')
+    expect(find(items, 'discard').disabled).toBe(true)
+    // The row keeps its plain label: the reason is said once, above it.
+    expect(find(items, 'discard').label).toBe('Discard changes')
+  })
+
+  it('says the other sentence while git is already working in this repository', () => {
+    const items = modified({ busy: true })
+    expect(items.find((item) => item.type === 'label').label).toBe(
+      'Git is working in this repository'
+    )
+    expect(find(items, 'discard').disabled).toBe(true)
+  })
+
+  it('leaves the five rows that read live under that caption', () => {
+    // The caption is read as being true of whatever is greyed below it, which
+    // here is one row — the argument `branchMenu.js` records about its own
+    // menu having no unbroken run of greyed rows either.
+    expect(off(modified({ allowed: false, busy: true }))).toEqual(['discard'])
+  })
+
+  it('refuses a conflicted row in the label, since that fact is about the row', () => {
+    const items = changeMenuItems({ path: 'src/main.js', kind: 'conflicted', userAgent: MAC })
+    expect(off(items)).toEqual(['discard'])
+    expect(find(items, 'discard').label).toBe('Discard changes — resolve the conflict first')
+    // Nothing else on the row changes: a conflicted file still opens, still
+    // reveals and is still copied.
+    expect(items.some((item) => item.type === 'label')).toBe(false)
+  })
+
+  it('says the caption rather than the conflict when both are true', () => {
+    // Two different reaches at once. The caption is the group's and the suffix
+    // is the row's, so they do not compete: both are drawn, and the row is off
+    // either way.
+    const items = changeMenuItems({ path: 'src/main.js', kind: 'conflicted', allowed: false })
+    expect(items.find((item) => item.type === 'label').label).toBe('A run is going in this project')
+    expect(find(items, 'discard').label).toBe('Discard changes — resolve the conflict first')
+    expect(find(items, 'discard').disabled).toBe(true)
   })
 })
 
@@ -186,7 +253,9 @@ describe('CHANGE_MENU_W', () => {
       modified({ userAgent: LINUX }),
       changeMenuItems({ path: 'vendor/', kind: 'untracked', userAgent: LINUX }),
       changeMenuItems({ path: 'src/old.js', kind: 'deleted', userAgent: LINUX }),
-      modified({ insideProject: false, userAgent: LINUX })
+      modified({ insideProject: false, userAgent: LINUX }),
+      // The last group's own two sentences, the caption's and the suffix's.
+      changeMenuItems({ path: 'src/main.js', kind: 'conflicted', allowed: false, busy: true })
     ]
       .flat()
       .filter((item) => item.label)

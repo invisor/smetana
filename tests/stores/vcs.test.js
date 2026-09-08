@@ -2325,3 +2325,92 @@ describe('what a write leaves behind for the corner to say', () => {
     expect(stores.vcs.vcsState.lastWrite).toBe(null)
   })
 })
+/* Throwing away what one path has that the last commit does not — the last row
+   of a change's context menu, and the one write in this panel that is about a
+   file rather than a branch or the whole tree. */
+describe('discarding one path', () => {
+  const change = (extra = {}) => ({
+    path: 'src/main.js',
+    origPath: null,
+    kind: 'modified',
+    staged: false,
+    unstaged: true,
+    ...extra
+  })
+
+  /* A repository whose change list empties when git is told to discard one, so
+     the row going can be watched from the store. `refusal` makes the very next
+     discard fail with the shape Rust hands back. */
+  const discarding = (ipc, refusal = null) => {
+    let changes = [change()]
+    ipc.on('vcs_repos', () => answer([{ name: '.', path: '/p/.', branch: 'main', detached: null }]))
+    ipc.on('vcs_status', () => ({ branch: 'main', detached: null, changes }))
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [])
+    ipc.on('git_head', { branch: 'main', detached: null })
+    if (refusal) ipc.fail('vcs_discard', refusal)
+    else {
+      ipc.on('vcs_discard', (args) => {
+        changes = changes.filter((one) => one.path !== args.path)
+        return null
+      })
+    }
+  }
+
+  it('sends the path and the rename it came from, and the row goes', async () => {
+    const { stores, ipc } = await loadStores()
+    discarding(ipc)
+    await stores.vcs.loadRepos('/p')
+
+    expect(await stores.vcs.discardChange(change())).toBe(true)
+
+    expect(ipc.calls('vcs_discard')).toEqual([
+      { repo: '/p/.', path: 'src/main.js', origPath: null }
+    ])
+    expect(stores.vcs.vcsState.tree.changes).toEqual([])
+    expect(stores.vcs.vcsState.writeError).toBe(null)
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  /* A rename is one record naming both halves, and `vcs_discard` needs both:
+     the old name is in HEAD and comes back, the new one is not and goes. */
+  it('carries the other half of a rename', async () => {
+    const { stores, ipc } = await loadStores()
+    discarding(ipc)
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.discardChange(
+      change({ path: 'src/moved.js', origPath: 'src/main.js', kind: 'renamed' })
+    )
+
+    expect(ipc.calls('vcs_discard')).toEqual([
+      { repo: '/p/.', path: 'src/moved.js', origPath: 'src/main.js' }
+    ])
+  })
+
+  /* Unlike `deleteBranch`, this one does not throw: there is no second question
+     to ask about a discard git declined. The window reads the words off
+     `writeError` under this `op` and offers Cancel and nothing else. */
+  it('leaves a refusal in the panel under its own op and answers false', async () => {
+    const { stores, ipc } = await loadStores()
+    discarding(ipc, { kind: 'conflicted', message: 'src/main.js is conflicted.' })
+    await stores.vcs.loadRepos('/p')
+
+    expect(await stores.vcs.discardChange(change())).toBe(false)
+
+    expect(stores.vcs.vcsState.writeError).toMatchObject({ kind: 'conflicted', op: 'discard' })
+    expect(stores.vcs.vcsState.tree.changes).toHaveLength(1)
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  it('asks git nothing at all for a change with no path', async () => {
+    const { stores, ipc } = await loadStores()
+    discarding(ipc)
+    await stores.vcs.loadRepos('/p')
+
+    expect(await stores.vcs.discardChange(null)).toBe(false)
+    expect(await stores.vcs.discardChange({ path: '' })).toBe(false)
+
+    expect(ipc.calls('vcs_discard')).toEqual([])
+  })
+})

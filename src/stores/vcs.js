@@ -1112,6 +1112,41 @@ export async function commit() {
   if (committed) delete vcsState.messages[repo]
 }
 
+/* Throw away what one path has that the last commit does not.
+
+   Through `write` like every other write here — `commit` is the one it is
+   shaped after, since both are about the tree rather than about a branch — so
+   it takes the same `busy`, its refusal lands in the same block under
+   `GitPanel`'s "Git did not discard the changes", and the whole list comes back
+   afterwards, which is what makes the row disappear. `busy` carries
+   `currentBranch()` for the spinner's sake and may be null: a detached HEAD is
+   a tree somebody can still discard from, and `write` is deliberately written
+   not to need a branch.
+
+   **The whole change goes in and not the path alone.** `origPath` is the other
+   half of a rename — the name the file had in the commit — and `vcs_discard`
+   needs both to put one back and take the other away in one act. It is `null`
+   for every other kind, which is what the record already holds.
+
+   **What is not decided here.** Which git commands run is Rust's, from what git
+   says about the path now rather than from the `kind` this record carries: the
+   panel has no watcher, so a change read minutes ago can have been committed,
+   deleted or resolved since. This store does not read `kind` at all, which is
+   what keeps a stale row from becoming a wrong write.
+
+   The refusal is left in `writeError` and not handed back the way
+   `deleteBranch` hands its own out: there is no second question to ask about a
+   discard git declined — nothing forces it and nothing else is worth trying —
+   so the window that asked reads the words off `writeError` under this `op` and
+   offers Cancel and nothing else. The boolean is what that window closes on. */
+export async function discardChange(change) {
+  const path = change?.path
+  if (!path) return false
+  return write('discard', currentBranch(), (repo) =>
+    invoke('vcs_discard', { repo, path, origPath: change.origPath ?? null })
+  )
+}
+
 /* Ask the agent for a commit message and put it in the field.
 
    Its own flag rather than `busy`, because this reads: the tree is not touched,

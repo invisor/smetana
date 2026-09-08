@@ -562,6 +562,19 @@ pub enum VcsError {
     /// matters, where `-D` fails exactly as `-d` did.
     #[error("{0} has commits that are not in the branch this repository is on. Deleting it loses them.")]
     NotMerged(String),
+    /// A discard was asked for a path git has left unmerged. Refused here and
+    /// not only by the greyed menu row, for `CurrentBranch`'s reason one write
+    /// over: the window that asks is a window of its own with no scrim, and the
+    /// tree can be left conflicted, resolved or aborted from a terminal or by
+    /// an agent while it stands.
+    ///
+    /// **A conflicted tree is the conflict dialog's business and not this
+    /// row's.** The way out of one is an abort or a resolution, both of which
+    /// are about the operation git stopped in the middle of; restoring one path
+    /// to HEAD behind its back would leave the merge half undone, with nothing
+    /// on screen saying which half.
+    #[error("{0} is conflicted. Resolve the conflict before discarding it.")]
+    Conflicted(String),
     /// No commit in common, so there is no point they diverged from. Refused
     /// rather than quietly answered with the direct comparison: a diff computed
     /// from a base nobody asked for, drawn under a switch that says otherwise,
@@ -592,6 +605,7 @@ impl VcsError {
             Self::NoSuchBranch(_) => "noSuchBranch",
             Self::CurrentBranch(_) => "currentBranch",
             Self::NotMerged(_) => "notMerged",
+            Self::Conflicted(_) => "conflicted",
             Self::Unrelated => "unrelated",
             Self::BadRevision(_) => "badRevision",
             Self::Io(_) => "io",

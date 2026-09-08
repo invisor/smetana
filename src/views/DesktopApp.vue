@@ -211,6 +211,7 @@ import {
   createBranch,
   deleteBranch,
   dirtyCount,
+  discardChange,
   dismissConflict,
   draftMessage,
   fetchIn,
@@ -1095,6 +1096,106 @@ async function removeBranch(force) {
        title, since `writeError` is set whatever this window does with it. */
     else deleteBranchRefusal.value = refused?.message ?? ''
   }
+}
+
+/* Which change the discard window is asking about, and null for closed.
+
+   The whole record and not the path alone: the window's sentence is chosen by
+   `kind`, and `vcs_discard` is given `origPath` so that a rename's old name can
+   be put back in the same act the new one is taken away in. Held here as a
+   snapshot for `deletingBranch`'s reason one window up — the panel refreshes
+   under an open window, and a row that has gone from the list is exactly the
+   case this window has to be able to ask git about and hear an answer for.
+
+   Beside it, git's own words for a refusal. There is no second question to ask
+   about a discard git declined — nothing forces it — so this state has one way
+   out, and it is Cancel. */
+const discardingChange = ref(null)
+const discardRefusal = ref('')
+
+/* Throwing away one path's changes, in a window of its own rather than a modal
+   over the board — the last row of a change's context menu and the one thing in
+   the Git panel that loses work with nothing to undo it.
+
+   Its ground is the project and the repository, and the second is there for the
+   reason the two branch windows record: `discardChange` in `stores/vcs.js`
+   resolves which repository it runs in from `vcsState.selected` at the moment
+   Discard is pressed, and with no scrim there is nothing stopping somebody
+   clicking another repository row while this stands. The path is deliberately
+   not ground — `views/dialogRegistry.js` carries why. */
+function openDiscardChange(change) {
+  if (!change?.path) return
+  discardingChange.value = change
+  discardRefusal.value = ''
+  serveDialog('discard-change', {
+    ground: { project: activePath.value, repo: vcsState.selected },
+    props: () => ({
+      /* The frame's caption, in `DiscardChangeModal`'s own words — see the
+         comment beside its `TITLE`, which has to say them too because nothing
+         on the window's side of the wire knows what this dialog is called. */
+      title: 'Discard changes?',
+      path: discardingChange.value?.path ?? '',
+      kind: discardingChange.value?.kind ?? '',
+      refusal: discardRefusal.value,
+      busy: vcsState.busy?.op === 'discard'
+    }),
+    forget: () => {
+      discardingChange.value = null
+      discardRefusal.value = ''
+    },
+    onResult: (name) => {
+      if (name === 'close') closeDialog('discard-change')
+      if (name === 'confirm') discardIt()
+    }
+  })
+}
+
+/* The write behind that window, and the second one in this view that does not
+   close first — `removeBranch` above is the other, and the reason is the same
+   half of one: the window has to still be there for git's refusal to land in.
+   What is different is what happens next. A refused delete asks a second
+   question; a refused discard asks nothing, so the block is the end of this
+   window and Cancel is the whole way out.
+
+   The ground is not let go of the way `removeBranch` lets go of its branch:
+   this window stands on the project and the repository, and a successful
+   discard moves neither. What it moves is a row in a list, which is not ground
+   for exactly the reason the registry gives.
+
+   **The diff tab of that path closes with it**, and only on success. What the
+   tab was drawing is HEAD against a working copy that no longer differs from it
+   — or, for an untracked file, against nothing at all — so a tab left open
+   would be a diff of a file that is gone or of a change that is not there. The
+   tabs are found through `diffTabs` rather than by rebuilding the id, the way
+   `deleteEntry` finds them, and the ids are taken before anything closes, since
+   `diffTabs` is the very list `closeDiff` splices. The pair is matched directly
+   — `repo` is the repository the write ran in and `path` is relative to it,
+   which is exactly what a diff tab's record holds — so there is no conversion
+   to get wrong here. */
+async function discardIt() {
+  const change = discardingChange.value
+  const repo = vcsState.selected
+  /* A second press while the first is still out: `busy` reaches the window's
+     button through an announcement, so the guest's `:disabled` is one IPC hop
+     behind the flag. `write()` refuses the second call itself, and this is the
+     same guard one layer earlier, so nothing below runs twice. */
+  if (!change || !repo || vcsState.busy) return
+  const gone = await discardChange(change)
+  if (!gone) {
+    /* `false` with no refusal under this `op` is git already busy, or the
+       project or the repository having moved while the call was out — in every
+       one of which the window is either about to be closed by the ground
+       watcher or was never going to write anything. */
+    if (vcsState.writeError?.op === 'discard') {
+      discardRefusal.value = vcsState.writeError.message ?? ''
+    }
+    return
+  }
+  const closing = diffTabs
+    .filter((tab) => tab.repo === repo && tab.path === change.path)
+    .map((tab) => tab.id)
+  closeDialog('discard-change')
+  for (const id of closing) closeDiff(id)
 }
 
 /* Reviewing what a branch changed, in a window of its own.
@@ -5761,6 +5862,7 @@ const toastStackStyle = {
                 @reveal="onChangeMenu('reveal', $event)"
                 @copy-path="onChangeMenu('copy-path', $event)"
                 @copy-relative-path="onChangeMenu('copy-relative-path', $event)"
+                @discard="openDiscardChange"
               />
               <AgentList
                 v-else
@@ -5838,9 +5940,9 @@ const toastStackStyle = {
              repository, since the panel's selection can have moved since. -->
         <!-- Every dialog of this app but two is a window of its own now,
              opened above by `openRun`, `openNewTask`, `openNewBranch`,
-             `openRenameBranch`, `openDeleteBranch`, `openPromote`, `openSetup`,
-             `openProjectSettings`, `openDeleteTask`, `openReadyTask` and
-             `openDeleteSession` —
+             `openRenameBranch`, `openDeleteBranch`, `openDiscardChange`,
+             `openPromote`, `openSetup`, `openProjectSettings`,
+             `openDeleteTask`, `openReadyTask` and `openDeleteSession` —
              the whole of `REGISTRY` in `dialogRegistry.js`, which is what
              finishes the epic this comment was first written in the middle of.
              What each of them is a question about — a list of branches, the

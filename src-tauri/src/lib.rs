@@ -301,6 +301,7 @@ pub fn run() {
       vcs::commands::vcs_rebase,
       vcs::commands::vcs_abort,
       vcs::commands::vcs_commit,
+      vcs::commands::vcs_discard,
       vcs::commands::vcs_suggest_message,
       vcs::commands::vcs_file_at_head,
       vcs::commands::vcs_file_at_rev,

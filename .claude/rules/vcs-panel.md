@@ -142,10 +142,11 @@ is named — while an agent works, this list is as stale as the file tree beside
 
 ### A change row's own menu
 
-**A row of this list answers a secondary click with five verbs**, and the first of them is the click
+**A row of this list answers a secondary click with six verbs**, and the first of them is the click
 the row already had. `components/git/changeMenu.js` is the rule — pure, tested, of the
 `branchMenu.js` / `fileMenu.js` family — and the order is `Open changes`, `Open file`, a separator,
-`Reveal in Finder`, a separator, `Copy path`, `Copy relative path`. `Open changes` is in the menu for
+`Reveal in Finder`, a separator, `Copy path`, `Copy relative path`, a separator, `Discard changes`.
+`Open changes` is in the menu for
 `branchMenu.js`'s stated reason: a place whose main action is missing from its own menu reads as a
 place that cannot do it, and until this existed the diff was a gesture with no name anywhere on
 screen. It goes out through the very `open` event the click emits, so the two cannot come to mean
@@ -158,17 +159,16 @@ reached from two lists must not be two different sentences.
 and not to be proposed again: *Stage changes*, because `commit_all` runs `git add --all` and a row
 offering to stage one file would promise a choice the commit cannot make; *Open file (HEAD)*, which
 is the left-hand pane of the diff; and *Open with*, *Open on remote*, *Share*, *File history*,
-*Stash* and *Copy changes (patch)*, none of which has a subsystem behind it. *Discard changes* is
-taken and is a task of its own — the one row here that would lose work and the one that needs Rust —
-and it will add a separator and a row at the end, so nothing is laid in for it now. *Add to
-.gitignore* and selecting the file in the tree are candidates outside this.
+*Stash* and *Copy changes (patch)*, none of which has a subsystem behind it. *Add to .gitignore* and
+selecting the file in the tree are candidates outside this.
 
-**Nothing on this menu writes, so the panel's own refusals do not reach it**: a run in the project
-and an operation already going leave every row live, which is `branchMenu.js`'s fourth reach and the
-only one this file has. What refuses is three facts about the row, and each is written into the
-label in `fileMenu.js`'s `Label — reason` form rather than into a caption — `ContextMenu` clips a row
-and gives it no tooltip and no `title`, and a caption serves one fact refusing a whole group, which
-is the opposite of the case here. An untracked *directory* record refuses the two rows that need a
+**Five of the six read, and the sixth is the only thing in this panel that loses one file's work.**
+So the menu has two reaches of refusal rather than one. The five keep `branchMenu.js`'s fourth reach
+— a run in the project and an operation already going leave every one of them live — and what
+refuses them is three facts about the row, each written into the label in `fileMenu.js`'s
+`Label — reason` form rather than into a caption, because `ContextMenu` clips a row and gives it no
+tooltip and no `title`, and a caption serves one fact refusing a whole group, which is the opposite
+of the case here. An untracked *directory* record refuses the two rows that need a
 file (`no file behind a folder`); a deleted file refuses `Open file` and the reveal (`the file is
 gone from the working tree`) and keeps the diff, which is what shows the deletion; and a repository
 outside the project root refuses `Open file` and `Copy relative path` (`outside the project`), since
@@ -187,6 +187,77 @@ rather than about whether a file exists, and it must not move if what counts as 
 widens. Written out at each of those it is one character away from a menu row greyed over a click
 that is still live, or the reverse, with nothing on screen to say which is right — the care
 `BranchList.vue` records in its own words about Enter and the double click reaching one `activate`.
+
+### Discarding one file's changes
+
+**`Discard changes` is the last row of that menu, alone in a group behind a separator**, with the
+`undo-2` glyph and `tone: 'danger'`. It sits there for the reason `Delete this branch` sits at the
+foot of `branchMenu.js`: a menu opened by a roughly aimed pointer must not put its one destructive
+row against the edge of the group above it. It is refused by the pair every write in this panel is
+refused by — `gitActions(runs)`'s verdict and the store's `busy` — and the sentence is `frozen`'s,
+**exported from `branchMenu.js` and read there rather than copied**, since two spellings of "a run is
+going in this project" read as two different states. It arrives as a **caption over the group** and
+not as a suffix, because one fact about the repository refuses the whole group, which is exactly the
+case a caption is for; the five rows above stay live under it, the same thing `branchMenu.js` records
+about its own menu having no unbroken run of greyed rows.
+
+**The one refusal that is a suffix is the conflicted row** — `Discard changes — resolve the conflict
+first` — because that fact is about the row rather than about the repository. A conflicted tree
+belongs to `ConflictModal` and its two doors, an abort or a resolution that finishes what git
+started; one path put back to HEAD from under either would leave the operation half undone with
+nothing on screen saying which half. Rust refuses it a second time, and that is not belt and braces:
+the window that asks is an OS window with no scrim, so the tree can be resolved, aborted or newly
+conflicted while it stands.
+
+**The window is `discard-change`**, 440 wide, standing on the project and the repository —
+`new-branch`'s and `delete-branch`'s second reason and not their third: every write in
+`stores/vcs.js` resolves which repository it runs in at the moment it is pressed, and `src/main.js`
+exists in two of them, so no clause about paths could have caught it. **The path is deliberately not
+ground.** This panel has no watcher, so a change that has gone is not something the app can observe,
+and the honest answer to a discard of a path git no longer knows about is git's own words in this
+window rather than the window vanishing — `delete-session`'s argument about a transcript, one dialog
+along. `DiscardChangeModal.vue` follows `DeleteTaskModal.vue`'s shape and borrows
+`DeleteBranchModal.vue`'s refusal block; what it does **not** borrow is the second question, since
+nothing forces a discard and Cancel is the whole way out.
+
+**Three sentences, and the split is by what is lost rather than by how it is said.** A path the last
+commit does not have — untracked, and `added` with it, because the index is not history — is
+*deleted*, and that is the only sentence in this app saying a thing will stop existing. A path the
+commit has and the tree does not is *restored*, which is the one row where discarding undoes a
+deletion. Everything else loses the difference between the tree and the commit, with no undo, since
+this app has no stash. The component draws the kind and decides nothing from it.
+
+**Rust asks git rather than trusting the kind it was drawn from**, which is `vcs_discard`'s whole
+shape: the `kind` on a row came out of a `git status` this panel may have read minutes ago, and an
+agent committing into the same tree is the ordinary case here. One question settles it — is this path
+in HEAD, `git cat-file -e HEAD:<path>`, where 128 is an answer and not a refusal because the conflict
+probe above it has already come back in git's own words for a folder git cannot read. In HEAD is
+`git restore --source=HEAD --staged --worktree`, both flags named so a staged change is not left
+behind to put the row straight back on the next refresh. Not in HEAD — untracked, added, or the new
+side of a rename — is `git rm -r -f --cached --ignore-unmatch` and then `git clean -f -d`, one branch
+rather than two because `--ignore-unmatch` is what lets a never-staged path through. **A rename is
+both at once**: the old path is in HEAD and the new one is not, so the two go to `restore` in one
+call and the branch below takes the new name away. An untracked directory record, trailing slash and
+all, takes that same pair. Never `--force` anywhere, and every call names the one path after a `--`.
+
+**In the store it is `discardChange(change)` through the same `write` helper**, `op: 'discard'`,
+shaped after `commit` because both are about the tree rather than a branch — so `busy` carries
+`currentBranch()` and may be null on a detached HEAD, the refusal lands in `GitPanel`'s own block
+under `Git did not discard the changes`, and the refresh is what makes the row disappear. It does
+**not** hand its refusal back out the way `deleteBranch` does: there is no second question, so the
+window reads the words off `writeError` under that `op`. `DesktopApp.vue`'s `discardIt` is the second
+write in that file that does not close its window first, and for `removeBranch`'s half of the reason
+— the refusal has to land somewhere — without the other half, since a successful discard moves
+neither the project nor the repository and there is no ground to let go of.
+
+**A diff tab of that path closes on success**, and only on success: what it drew was HEAD against a
+working copy that no longer differs, or against a file that is gone. The tabs are found through
+`diffTabs` and the ids taken before anything closes, exactly as `deleteEntry` does it, and the pair
+is matched directly — `repo` and a path relative to it is what a diff tab's record already holds, so
+there is no conversion here to get wrong.
+
+**Out of scope and staying there**: staging, stashing, discarding several files at once, discarding
+the whole tree, an undo after a discard, and `Add to .gitignore`.
 
 `ChangeList.vue` holds one `PointerMenu` for the whole list, the shape `FileTree.vue` and
 `BranchList.vue` keep, and it opens on **every** row including the folder — a gesture that answers on

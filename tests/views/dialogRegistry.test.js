@@ -10,11 +10,12 @@ import {
 } from '../../src/views/dialogRegistry.js'
 
 describe('the dialog registry', () => {
-  it('holds the twelve kinds that became windows', () => {
+  it('holds the thirteen kinds that became windows', () => {
     expect([...DIALOG_KINDS].sort()).toEqual([
       'delete-branch',
       'delete-session',
       'delete-task',
+      'discard-change',
       'new-branch',
       'new-task',
       'project-settings',
@@ -46,6 +47,19 @@ describe('the dialog registry', () => {
     expect(isDialogKind('review-changes')).toBe(true)
     expect(dialogGround('review-changes')).toEqual(['project'])
     expect(dialogWidth('review-changes')).toBe(720)
+  })
+
+  /* The change list's own window. The repository is ground for the two branch
+     windows' reason — every write in `stores/vcs.js` resolves it at the moment
+     the button is pressed — and the path is deliberately not, since this panel
+     has no watcher and a change that has gone is not something the app can
+     see. */
+  it('stands the discard window on the repository and not on the path', () => {
+    expect(dialogGround('discard-change')).toEqual(['project', 'repo'])
+    expect(dialogWidth('discard-change')).toBe(440)
+    expect(stalenessMessage('discard-change', 'repo')).toBe(
+      'The discard changes dialog closed: the Git panel moved to another repository.'
+    )
   })
 
   it('refuses a name it has never heard of', () => {
