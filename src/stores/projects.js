@@ -111,8 +111,13 @@ async function moveTo(path) {
        `loadSessions` guards against its own stale response — which is the same
        trade the duplicated `loadConfig` beside it already makes. */
     const sessions = loadSessions(path)
-    await listDir('')
-    await Promise.all(settings.project.expanded.map((dir) => listDir(dir)))
+    /* The root first and the expanded folders only if it answered — the rule is
+       `refreshDirs`' and the reason is the same one: a project folder that is
+       gone answers `notFound` for every directory inside it, and each of those
+       would be folded out of `expanded` as if somebody had deleted it. */
+    if (await listDir('')) {
+      await Promise.all(settings.project.expanded.map((dir) => listDir(dir)))
+    }
     await sessions
     await restoreTabs()
   }

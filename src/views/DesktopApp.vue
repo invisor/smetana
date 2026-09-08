@@ -252,7 +252,7 @@ import { checkNewName } from '../components/files/newEntry.js'
    that hold them. `tabs.js` reaches for `relativeTo` for the same join, and
    `absolutePath` sat in `fileMenu.js` until the system clipboard wanted it
    too. */
-import { absolutePath, relativeTo } from '../paths.js'
+import { absolutePath, isUnder, relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { needsReady, promotesToReady } from '../components/run/readyPromote.js'
@@ -2373,9 +2373,14 @@ onMounted(async () => {
      lands, and nothing on this pass depends on it. */
   measureStorage(opened)
   await loadSessions(opened)
-  await listDir('')
+  /* The root's own answer decides whether the expanded folders are read at all,
+     which is `refreshDirs`' rule and is here for the same reason: a project
+     folder that is gone answers `notFound` for every directory inside it, and
+     each of those answers would be taken for a folder somebody deleted and
+     folded out of `project.expanded`. */
+  const rootRead = await listDir('')
   if (activePath.value !== opened) return
-  await Promise.all(project.expanded.map((dir) => listDir(dir)))
+  if (rootRead) await Promise.all(project.expanded.map((dir) => listDir(dir)))
   if (activePath.value !== opened) return
   await restoreTabs()
 })
@@ -4645,7 +4650,7 @@ async function deleteEntry(path) {
     })
     return
   }
-  const under = (other) => other === path || other.startsWith(`${path}/`)
+  const under = (other) => isUnder(path, other)
   const closing = tabList.value
     .filter((tab) => (tab.kind === 'file' || tab.kind === 'preview') && under(tab.id))
     .map((tab) => tab.id)
@@ -4733,7 +4738,7 @@ async function revealMade(path, dir) {
    what `dirs` already holds. The list is returned rather than read here because
    a paste has just read one of these folders itself. */
 function followMove(from, to) {
-  const under = (other) => other === from || other.startsWith(`${from}/`)
+  const under = (other) => isUnder(from, other)
   const moved = (other) => `${to}${other.slice(from.length)}`
   /* Taken before anything moves: `tabList` is computed off the very list
      `renameTab` splices, and `diffTabs` is the list `closeDiff` splices. */
