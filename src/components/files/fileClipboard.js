@@ -13,6 +13,12 @@
    are allowed to disagree in exactly that direction — this one may say yes
    where Rust says no, never the other way round. */
 
+/* The subtree test itself is `src/paths.js`'s, where it went on becoming the
+   fourth written-out copy of one line. Reaching a module at the top of `src/`
+   from here costs nothing this family minds: it is pure, with no Vue, no Tauri
+   and no DOM in it, which is the same test this file passes. */
+import { isUnder } from '../../paths.js'
+
 /* Whether a paste into `folder` is offered at all, and why not when it is not.
 
    `folder` is a path relative to the project root, `''` being the root itself —
@@ -35,7 +41,7 @@
 export function canPasteInto({ clipboard = null, folder = '' } = {}) {
   const paths = clipboard?.paths ?? []
   if (paths.length === 0) return { ok: false, reason: 'empty' }
-  const inside = paths.some((path) => folder === path || folder.startsWith(`${path}/`))
+  const inside = paths.some((path) => isUnder(path, folder))
   if (inside) return { ok: false, reason: 'intoSelf' }
   return { ok: true, reason: null }
 }

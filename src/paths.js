@@ -85,6 +85,41 @@ export function relativeTo(root, path) {
   return full.startsWith(`${base}/`) ? full.slice(base.length + 1) : null
 }
 
+/* Whether a path is a folder itself or something inside it — the question every
+   verb that acts on a subtree asks, and the fourth copy of it is what put it
+   here. The three it replaces are the delete and the move in `DesktopApp.vue`
+   (close the tabs under it, rewrite `expanded`, rewrite the selection), the
+   paste refusal in `components/files/fileClipboard.js`, and the sweep's
+   fold-away in `stores/files.js`. Written out, each was
+   `other === folder || other.startsWith(`${folder}/`)`, and the trailing
+   separator is the whole of the rule: a bare `startsWith` makes `src-tauri` a
+   child of `src`, so a delete of `src` would have closed the tabs of a folder
+   nobody touched.
+
+   **The folder comes first, the way `relativeTo` and `absolutePath` take their
+   root first**, and the argument order is the only thing about this that a
+   reader cannot check by looking at it.
+
+   One separator and deliberately not both, which is what marks it out from its
+   neighbours above: every caller compares paths in the tree's own space, where
+   `stores/files.js` writes `/` whatever the platform, or absolute paths against
+   each other in the platform's. A `\` accepted here would let `a\b` claim
+   `a\b\c` on a system where that is one ordinary filename, and no caller has
+   a mixed pair to reconcile — `relativeTo` is what converts, and it has already
+   run by the time this is asked.
+
+   The tree spells the root `''`, and one caller does reach this with it as the
+   **folder**: `pasteRecord` in `DesktopApp.vue` puts every absolute clipboard
+   path through `relativeTo`, which answers `''` for the project folder itself,
+   so copying that folder in Finder asks `canPasteInto` about an empty one. The
+   answer, for whatever path is asked about, is
+   `path === '' || path.startsWith('/')` — the root, and anything spelled
+   absolutely — which is what the written-out copy answered too, so the shape is
+   preserved rather than chosen. The other three never ask: nothing deletes or
+   moves the root, and the fold-away in `stores/files.js` refuses `''` in front
+   of this call for a reason of its own. */
+export const isUnder = (folder, path) => path === folder || path.startsWith(`${folder}/`)
+
 /* The whole path, given the project's root and a path inside it — `relativeTo`
    the other way round, and here for the same reason it is: two parts of the
    front end want it at once. The file tree's menu wants it for the verbs that

@@ -1,14 +1,16 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadStores } from '../support/stores.js'
 import { entry, fileText, listing } from '../support/fixtures.js'
 
 let ipc
 let files
+let settings
 
 beforeEach(async () => {
   const loaded = await loadStores()
   ipc = loaded.ipc
   files = loaded.stores.files
+  settings = loaded.stores.settings
   files.setRoot('/project')
   /* Cut and Copy write to the machine's clipboard as well as to the record, so
      every test that touches either goes through this one. It is registered here
@@ -198,6 +200,125 @@ describe('refreshDirs', () => {
     await files.refreshDirs(['', 'nobody-expanded-this'])
 
     expect(ipc.calls('files_list').map((call) => call.dir)).toEqual(['', ''])
+  })
+})
+
+/* The folder that went away while the app was not looking. `expanded` lives in
+   `settings.json`, so before this the sweep on every window focus re-read a
+   folder that was not there and toasted about it again, until a restart — and
+   after the restart too, since the dead path was still in the file. */
+describe('a folder that has gone from disk', () => {
+  const NOT_FOUND = { kind: 'notFound', message: 'no such file or directory' }
+
+  /* The tree as it stands with three folders open: the root and the three are
+     in `dirs`, and `expanded` names the three. The root is never in `expanded`
+     — nothing expands it, it is simply always read. */
+  const expandThree = async () => {
+    ipc.on('files_list', (args) => listing({ dir: args.dir }))
+    for (const dir of ['', 'src', 'src/stores', 'docs']) await files.listDir(dir)
+    settings.settings.project.expanded = ['src', 'src/stores', 'docs']
+  }
+
+  /* One folder deleted and everything under it gone with it, which is what a
+     disk answers when somebody removes a folder from a project that is still
+     there. A project whose own folder has gone does not look like this — see
+     the two tests about the root, where `files_list` refuses every `dir`. */
+  const diskWithout = (missing) => (args) => {
+    if (args.dir === missing || args.dir.startsWith(`${missing}/`)) throw NOT_FOUND
+    return listing({ dir: args.dir })
+  }
+
+  it('a vanished folder leaves dirs and expanded, with everything under it', async () => {
+    await expandThree()
+    ipc.on('files_list', diskWithout('src'))
+
+    await files.listDir('src')
+
+    expect([...files.filesState.dirs.keys()]).toEqual(['', 'docs'])
+    expect(settings.settings.project.expanded).toEqual(['docs'])
+  })
+
+  it('it raises no toast: the row leaves the tree when the parent is re-read', async () => {
+    await expandThree()
+    ipc.on('files_list', diskWithout('src'))
+
+    await files.listDir('src')
+
+    expect(files.filesState.lastError).toBe(null)
+  })
+
+  it('the full text still reaches the console, toast or no toast', async () => {
+    await expandThree()
+    ipc.on('files_list', diskWithout('src'))
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await files.listDir('src')
+
+    expect(logged).toHaveBeenCalledWith(
+      '[files] could not read the directory src:',
+      expect.objectContaining({ kind: 'notFound' })
+    )
+    logged.mockRestore()
+  })
+
+  it('a second sweep over the same project asks about the folder no more', async () => {
+    await expandThree()
+    ipc.on('files_list', diskWithout('src'))
+    await files.refreshDirs(['', ...settings.settings.project.expanded])
+    const asked = ipc.calls('files_list').length
+
+    await files.refreshDirs(['', ...settings.settings.project.expanded])
+
+    // The root goes first and alone, and `docs` is all that is left under it.
+    expect(ipc.calls('files_list').slice(asked).map((call) => call.dir)).toEqual(['', 'docs'])
+    expect(files.filesState.lastError).toBe(null)
+  })
+
+  /* The project itself is what has gone, and there is nothing to fold away: the
+     toast is the only thing on screen that could say so. */
+  it('the root is the exception — it toasts and touches nothing', async () => {
+    await expandThree()
+    ipc.fail('files_list', NOT_FOUND)
+
+    await files.listDir('')
+
+    expect(files.filesState.lastError).toBe('This folder is gone from disk.')
+    expect(settings.settings.project.expanded).toEqual(['src', 'src/stores', 'docs'])
+    expect([...files.filesState.dirs.keys()]).toEqual(['', 'src', 'src/stores', 'docs'])
+  })
+
+  /* The whole point of reading the root first. `resolve_within` canonicalizes
+     the root before the path inside it, so a project folder on an unmounted
+     volume — or a worktree removed while it was open as a project — refuses
+     every `dir` and not only `''`. Swept concurrently, each of those refusals
+     reads as a folder somebody deleted, and `expanded` is emptied to nothing
+     and written that way to `settings.json`: one toast, a flat tree forever,
+     and nothing saying a preference had been thrown away. */
+  it('a project root that has gone takes nothing of expanded with it', async () => {
+    await expandThree()
+    ipc.fail('files_list', NOT_FOUND)
+    const asked = ipc.calls('files_list').length
+
+    await files.refreshDirs(['', ...settings.settings.project.expanded])
+
+    expect(settings.settings.project.expanded).toEqual(['src', 'src/stores', 'docs'])
+    expect([...files.filesState.dirs.keys()]).toEqual(['', 'src', 'src/stores', 'docs'])
+    expect(files.filesState.lastError).toBe('This folder is gone from disk.')
+    // The children are never asked about: the root's refusal stopped the sweep.
+    expect(ipc.calls('files_list').slice(asked).map((call) => call.dir)).toEqual([''])
+  })
+
+  /* The folder is on disk and the trouble is a permission or the disk itself.
+     Folding it away silently would hide exactly the thing worth seeing. */
+  it('a refusal that is not about absence keeps the toast and removes nothing', async () => {
+    await expandThree()
+    ipc.fail('files_list', { kind: 'denied', message: 'permission denied' })
+
+    await files.listDir('src')
+
+    expect(files.filesState.lastError).toBe('No permission to read this folder.')
+    expect(settings.settings.project.expanded).toEqual(['src', 'src/stores', 'docs'])
+    expect([...files.filesState.dirs.keys()]).toEqual(['', 'src', 'src/stores', 'docs'])
   })
 })
 

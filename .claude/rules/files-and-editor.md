@@ -4,6 +4,20 @@ paths:
   - "src/components/files/**"
   - "src/stores/files.js"
   - "src/stores/tabs.js"
+  # `isUnder` and `basename` live here rather than under any one part of the
+  # interface, and this file is the only one that explains what the first is
+  # for. No other rule file names it.
+  - "src/paths.js"
+  # The next two are named by other rule files as well — `projects.js` by
+  # tracker.md, `DesktopApp.vue` by vcs-panel.md — and that is the arrangement
+  # rather than an accident: `paths:` says which files, when opened, want this
+  # prose, not which rule file owns them (`src-tauri/src/window.rs` already sits
+  # in two). Two of the three copies of the root-first rule are in these files,
+  # in `moveTo` and in `onMounted`, and so are `deleteEntry` and `followMove`,
+  # the tree verbs the sections below state as fact. Without these lines a
+  # session editing either starts with none of it.
+  - "src/stores/projects.js"
+  - "src/views/DesktopApp.vue"
 ---
 
 # Files: the tree and the editor
@@ -210,6 +224,45 @@ Freshness comes from window focus, not from a watcher: a second watcher subsyste
 own lifecycle and error reporting, costs more than the sweep in `catchUp` (`DesktopApp.vue`), which
 re-lists the open directories and re-stats the open tabs whenever the window is focused — plus the
 refresh button next to the project list.
+
+**A folder that sweep cannot find any more is folded away rather than reported**, and it is the one
+place where a refused read changes this store instead of only speaking about itself. An expanded
+folder deleted past the app — by an agent, a `cargo clean`, a worktree torn down, a branch switched —
+stays in `project.expanded`, which is `settings.json`, so before this the sweep re-read it on every
+window focus and raised the same toast every time, past a restart included. `listDir`'s error branch
+now drops the path and everything under its `path/` prefix from both `filesState.dirs` and
+`settings.project.expanded` — which is why `files.js` imports `settings.js`, the shape `tabs.js`,
+`vcs.js` and `terminals.js` already have, read inside functions only because the three modules form a
+cycle. **Narrowly `notFound`, and never on the root**: `denied`, `notAFile` and `io` mean the folder
+is there and the trouble is a permission or the disk, where folding it away silently would hide the
+one thing worth seeing, and `notFound` on `''` is the project itself having gone, where there is
+nothing to fold and the toast is all that could say so. No toast is raised for the case that folds,
+because the row leaves the tree as soon as the parent is re-read by the same sweep; the full text
+still reaches the console in every case, since the diagnostic is not what the toast was for.
+
+**The root is read first and alone, and the expanded folders only if it answered** — in
+`refreshDirs`, in `projects.js`'s project switch and in `DesktopApp.vue`'s `onMounted`, the three
+places that read a root and its open folders together. This is not tidiness: `resolve_within`
+canonicalizes the **root** before the path inside it, so a project folder that is gone — an unmounted
+volume, a `git worktree remove` on a worktree opened as a project — answers `notFound` for *every*
+`dir` and not only for `''`. Fired as one `Promise.all`, each of those children reads as a folder
+somebody deleted, and the fold-away above would empty the whole of `expanded` into `settings.json`
+behind a single toast. Sequenced, the root's own refusal is the only thing the person is told and
+nothing is forgotten. `listDir` answers `true` or `false` for those three and for nobody else —
+every other call site discards it — and standing down because the root was merely busy costs one
+sweep, which the next window focus makes again. `refreshDirs` asks `filesState.dirs` whether the root
+is known rather than looking for `''` in the list it was handed: gating on the argument would make
+the safety of a caller written later a property of what that caller happened to pass. Two of the
+three are pinned by a test — `tests/stores/files.test.js` for the sweep, `tests/stores/projects.test.js`
+for the switch — and `onMounted` is in a `.vue` file no runner here can reach, which is the whole
+reason the other two are pinned at all.
+
+The subtree test all of this turns on — a path being a folder or something inside it, the trailing
+separator being the whole of the rule, since a bare `startsWith` makes `src-tauri` a child of `src` —
+is `isUnder` in `src/paths.js`, beside `basename` and for the same reason: four parts of the
+interface want it at once (the delete and the move in `DesktopApp.vue`, `fileClipboard.js`'s paste
+refusal, the fold-away here), so there is no directory to file it under. It takes the folder first,
+the way `relativeTo` and `absolutePath` take their root first.
 
 What a row is drawn with comes from `src/catppuccinIcon.js` and not from this component — see
 `CLAUDE.md` for why it sits at the top of `src/` — and the tabs in the centre and the Git panel's
