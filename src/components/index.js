@@ -126,6 +126,7 @@ export {
   toggleFavorite,
   toggleFolder
 } from './git/branchTree.js'
+export { changeMenuItems } from './git/changeMenu.js'
 export { changeStatus } from './git/changeStatus.js'
 export {
   NO_VISIT,

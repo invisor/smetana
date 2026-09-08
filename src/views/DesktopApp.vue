@@ -244,6 +244,7 @@ import {
 import { initUpdates } from '../stores/updates.js'
 import { liveCheckBlock } from '../components/run/browserTools.js'
 import { folderOf, parentOf, relativePath } from '../components/files/fileMenu.js'
+import { isFolderRecord } from '../components/git/changeMenu.js'
 import { pasteSource } from '../components/files/fileClipboard.js'
 import { checkNewName } from '../components/files/newEntry.js'
 /* Two imports straight from `src/paths.js` rather than through a store: both
@@ -251,7 +252,7 @@ import { checkNewName } from '../components/files/newEntry.js'
    that hold them. `tabs.js` reaches for `relativeTo` for the same join, and
    `absolutePath` sat in `fileMenu.js` until the system clipboard wanted it
    too. */
-import { absolutePath, relativeTo } from '../paths.js'
+import { absolutePath, isUnder, relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { needsReady, promotesToReady } from '../components/run/readyPromote.js'
@@ -2372,9 +2373,14 @@ onMounted(async () => {
      lands, and nothing on this pass depends on it. */
   measureStorage(opened)
   await loadSessions(opened)
-  await listDir('')
+  /* The root's own answer decides whether the expanded folders are read at all,
+     which is `refreshDirs`' rule and is here for the same reason: a project
+     folder that is gone answers `notFound` for every directory inside it, and
+     each of those answers would be taken for a folder somebody deleted and
+     folded out of `project.expanded`. */
+  const rootRead = await listDir('')
   if (activePath.value !== opened) return
-  await Promise.all(project.expanded.map((dir) => listDir(dir)))
+  if (rootRead) await Promise.all(project.expanded.map((dir) => listDir(dir)))
   if (activePath.value !== opened) return
   await restoreTabs()
 })
@@ -4472,6 +4478,93 @@ async function copyPath(text, what) {
   )
 }
 
+/* The Git panel's change rows: the four verbs the click does not already do.
+   The rows themselves are `components/git/changeMenu.js`'s and the pair is
+   joined by hand, the same seam `fileMenu.js` and `onFileAction` above have —
+   a `kind` renamed on one side draws perfectly and does nothing at all when
+   pressed. The panel emits rather than acting because the stores live here.
+
+   **A change's path is relative to its repository and every store here takes
+   another space**, which is the whole of what these four have to get right.
+   `vcsState.selected` is the repository, absolute; `change.path` is inside it;
+   `filesState.root` is the project. So the absolute path is `absolutePath`, and
+   what the editor and the relative copy take is that answer put back through
+   `relativeTo` against the project root — the conversion `loadDiff` and
+   `deleteEntry` already make, for the same reason.
+
+   **`absolutePath` and never a joined pair**, which is not tidiness: the
+   repository arrives from Rust in the platform's own separator while everything
+   relative in these stores is written with `/`, so `${repo}/${path}` puts
+   `C:\Users\you\dev\app/src/main.js` on somebody's clipboard and hands the
+   same string to `revealItemInDir`. That is the defect `src/paths.js`'s own
+   header records, and it is the function that exists to prevent it — the very
+   one `onFileAction` below calls for these same two verbs. The joins at
+   `followMove` and `deleteEntry` are not a precedent for doing it by hand:
+   their one consumer is `relativeTo`, which normalises both separators, so no
+   separator ever leaves those expressions. Here the string leaves the app.
+
+   The trailing slash of an untracked directory record is cut before the join,
+   through `changeMenu.js`'s own `isFolderRecord` rather than a fourth spelling
+   of that test: a path ending in one names the same folder and reads as a
+   mistake in a toast.
+
+   `Open changes` is not here: it is the row's own click, and it goes out
+   through the same `open` event and the same `openDiff` call, which is what
+   keeps the gesture and the menu row one act. */
+const changeAbsolute = (change) => {
+  const repo = vcsState.selected
+  if (!repo || !change?.path) return null
+  const path = isFolderRecord(change.path) ? change.path.slice(0, -1) : change.path
+  return absolutePath(repo, path)
+}
+
+/* Whether the selected repository is inside the project at all, which is what
+   greys `Open file` and `Copy relative path` on every row at once. A
+   `[project].repos` entry may name a folder anywhere — `../shared` is a legal
+   one — so `null` from `relativeTo` is an ordinary answer here rather than a
+   failure, and it is asked about the repository rather than about a row because
+   the answer cannot differ between two files of one repository. */
+const changesInsideProject = computed(
+  () => vcsState.selected !== null && relativeTo(filesState.root, vcsState.selected) !== null
+)
+
+const onChangeMenu = async (kind, change) => {
+  const abs = changeAbsolute(change)
+  if (!abs) return
+  if (kind === 'open-file') {
+    /* The working copy as an ordinary editor tab, and **permanent** rather than
+       a preview: a file reached through a menu is one somebody asked for by
+       name, which is the same reading `onOpenFile` takes of a double click.
+       The selection follows it, again as `onOpenFile` does — the tree's own
+       keyboard verbs are about the selected path, and a tab opened with the
+       selection left somewhere else would leave the two disagreeing. */
+    const rel = relativeTo(filesState.root, abs)
+    if (rel === null) return
+    project.selectedPath = rel
+    openFile(rel, { permanent: true })
+  } else if (kind === 'reveal') {
+    const ok = await revealInFileManager(abs)
+    if (!ok) {
+      /* Word for word the sentence the file tree's own reveal says, because it
+         is the same refusal: a browser has no file manager to ask. */
+      sayFileMenu({
+        tone: 'error',
+        title: 'Could not show it',
+        description: 'This one needs the desktop app — a browser has no file manager to ask.'
+      })
+    }
+  } else if (kind === 'copy-path') {
+    await copyPath(abs, 'path')
+  } else if (kind === 'copy-relative-path') {
+    /* Relative to the **project** and not to the repository, which is what the
+       row of that name means everywhere else in this app. The menu greys it
+       when there is no such answer, so `null` here is a row that could not have
+       been picked. */
+    const rel = relativeTo(filesState.root, abs)
+    if (rel !== null) await copyPath(rel, 'relative path')
+  }
+}
+
 /* Making the entry the draft row was typed into, and the whole of what happens
    on screen after it exists.
 
@@ -4557,7 +4650,7 @@ async function deleteEntry(path) {
     })
     return
   }
-  const under = (other) => other === path || other.startsWith(`${path}/`)
+  const under = (other) => isUnder(path, other)
   const closing = tabList.value
     .filter((tab) => (tab.kind === 'file' || tab.kind === 'preview') && under(tab.id))
     .map((tab) => tab.id)
@@ -4645,7 +4738,7 @@ async function revealMade(path, dir) {
    what `dirs` already holds. The list is returned rather than read here because
    a paste has just read one of these folders itself. */
 function followMove(from, to) {
-  const under = (other) => other === from || other.startsWith(`${from}/`)
+  const under = (other) => isUnder(from, other)
   const moved = (other) => `${to}${other.slice(from.length)}`
   /* Taken before anything moves: `tabList` is computed off the very list
      `renameTab` splices, and `diffTabs` is the list `closeDiff` splices. */
@@ -5627,6 +5720,7 @@ const toastStackStyle = {
                 :error="vcsState.error"
                 :loading="vcsState.loading"
                 :open-path="activeDiff?.repo === vcsState.selected ? activeDiff.path : null"
+                :changes-inside-project="changesInsideProject"
                 :sections="resolvedGitSections"
                 :branch-folders="project.branchFolders"
                 :favorite-branches="project.favoriteBranches"
@@ -5663,6 +5757,10 @@ const toastStackStyle = {
                 @commit="commit"
                 @suggest="suggestMessage"
                 @open="openDiff(vcsState.selected, $event.path)"
+                @open-file="onChangeMenu('open-file', $event)"
+                @reveal="onChangeMenu('reveal', $event)"
+                @copy-path="onChangeMenu('copy-path', $event)"
+                @copy-relative-path="onChangeMenu('copy-relative-path', $event)"
               />
               <AgentList
                 v-else

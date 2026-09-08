@@ -79,6 +79,31 @@ describe('switchTo', () => {
     expect(ipc.calls('files_list').some((call) => call.dir === '')).toBe(true)
   })
 
+  /* The other half of the tree read above, and it is about a project folder that
+     is not there at all — an unmounted volume, or a worktree removed while it
+     was open here. `resolve_within` (`files/fs.rs`) canonicalizes the **root**
+     before the path inside it, so `files_list` refuses every `dir` and not only
+     `''`. Fired as one `Promise.all`, each of those refusals reads to
+     `stores/files.js` as a folder somebody deleted and is folded out of
+     `expanded` — a persistent setting, so the person would come back to a flat
+     tree for good, behind a single toast. The root is read first and the folders
+     inside it only if it answered, which is `refreshDirs`' rule and is copied
+     here; this test is what holds that copy in place. */
+  it('a project whose folder has gone keeps its expanded folders', async () => {
+    settings.settings.openProjects = ['/a', '/b']
+    settings.settings.activeProject = '/a'
+    ipc.on('settings_load', (args) =>
+      args.project === '/b' ? { project: { expanded: ['src', 'src/stores', 'docs'] } } : {}
+    )
+    ipc.fail('files_list', { kind: 'notFound', message: 'no such file or directory' })
+
+    await projects.switchTo('/b')
+
+    expect(settings.settings.project.expanded).toEqual(['src', 'src/stores', 'docs'])
+    // The three are never asked about: the root's own refusal stopped the read.
+    expect(ipc.calls('files_list').map((call) => call.dir)).toEqual([''])
+  })
+
   it('the departing project\'s state lands on disk before the board changes', async () => {
     settings.settings.activeProject = '/a'
     settings.settings.project.sideTab = 'agents'

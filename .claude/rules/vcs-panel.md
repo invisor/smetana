@@ -140,6 +140,96 @@ the refresh button in the panel header. **No watcher, and do not add one**: a th
 subsystem would fire on every write inside `node_modules` and `target`, and the price of the sweep
 is named — while an agent works, this list is as stale as the file tree beside it.
 
+### A change row's own menu
+
+**A row of this list answers a secondary click with five verbs**, and the first of them is the click
+the row already had. `components/git/changeMenu.js` is the rule — pure, tested, of the
+`branchMenu.js` / `fileMenu.js` family — and the order is `Open changes`, `Open file`, a separator,
+`Reveal in Finder`, a separator, `Copy path`, `Copy relative path`. `Open changes` is in the menu for
+`branchMenu.js`'s stated reason: a place whose main action is missing from its own menu reads as a
+place that cannot do it, and until this existed the diff was a gesture with no name anywhere on
+screen. It goes out through the very `open` event the click emits, so the two cannot come to mean
+different things. `Open file` is the working copy as an ordinary **permanent** editor tab, which this
+panel had no way of reaching at all. The reveal and the two copies are the file tree's own rows, word
+for word, through the same `fileManagerName` noun and relative to the **project** root — one file
+reached from two lists must not be two different sentences.
+
+**What was borrowed from VS Code's own menu on this row, and what was refused, is settled.** Refused
+and not to be proposed again: *Stage changes*, because `commit_all` runs `git add --all` and a row
+offering to stage one file would promise a choice the commit cannot make; *Open file (HEAD)*, which
+is the left-hand pane of the diff; and *Open with*, *Open on remote*, *Share*, *File history*,
+*Stash* and *Copy changes (patch)*, none of which has a subsystem behind it. *Discard changes* is
+taken and is a task of its own — the one row here that would lose work and the one that needs Rust —
+and it will add a separator and a row at the end, so nothing is laid in for it now. *Add to
+.gitignore* and selecting the file in the tree are candidates outside this.
+
+**Nothing on this menu writes, so the panel's own refusals do not reach it**: a run in the project
+and an operation already going leave every row live, which is `branchMenu.js`'s fourth reach and the
+only one this file has. What refuses is three facts about the row, and each is written into the
+label in `fileMenu.js`'s `Label — reason` form rather than into a caption — `ContextMenu` clips a row
+and gives it no tooltip and no `title`, and a caption serves one fact refusing a whole group, which
+is the opposite of the case here. An untracked *directory* record refuses the two rows that need a
+file (`no file behind a folder`); a deleted file refuses `Open file` and the reveal (`the file is
+gone from the working tree`) and keeps the diff, which is what shows the deletion; and a repository
+outside the project root refuses `Open file` and `Copy relative path` (`outside the project`), since
+`[project].repos` may name a folder anywhere and `relativeTo` answers `null` there. That last is a
+fact about the **repository** and not about a row, so it arrives as one boolean computed in
+`DesktopApp.vue` rather than being asked per row. A row refused twice over says the most specific
+reason: the folder, then the deletion, then where it is.
+
+**What counts as a directory record is one predicate and not one test per reader.** `isFolderRecord`
+is exported from `changeMenu.js` and read by the greying, by `ChangeList.vue`'s click, by
+`changeKeys.js`'s Enter through the caller, by the glyph and the drawn name in that same component,
+and by the absolute-path join in `DesktopApp.vue`. The one place that deliberately keeps its own
+trailing-slash test is `directory()`, which normalises a string before a lexical split and would do
+the same to a path naming no directory at all — `dirname`'s idiom in `src/paths.js`, about shape
+rather than about whether a file exists, and it must not move if what counts as a folder record ever
+widens. Written out at each of those it is one character away from a menu row greyed over a click
+that is still live, or the reverse, with nothing on screen to say which is right — the care
+`BranchList.vue` records in its own words about Enter and the double click reaching one `activate`.
+
+`ChangeList.vue` holds one `PointerMenu` for the whole list, the shape `FileTree.vue` and
+`BranchList.vue` keep, and it opens on **every** row including the folder — a gesture that answers on
+some rows and does nothing on others reads as a broken row rather than as a refused one. The row
+under the open panel takes the *hover* surface for as long as the panel stands, never the selected
+one: a secondary click is a question about a row and not a visit to it, and the selected surface here
+means the diff in the centre. That row also carries `aria-current` — not `aria-selected`, since what
+the surface says is that this row's diff is open in another column and not that this list has a
+selection, which it has not.
+
+Which press means which verb is `components/git/changeKeys.js` — pure, tested, of the
+`branchKeys.js` and `fileTreeKeys.js` family and there for its reason, with `ChangeList.vue` as the
+thin half. Enter is the click's own verb, `Shift+F10` and the context-menu key open the same panel at
+the row's bottom-left corner through the same `openMenu`, and every other press comes back `null`
+with nothing cancelled, which is what leaves Tab and Shift+Tab walking out of the list.
+
+**Every row is a plain `tabindex="0"` and there is no roving stop, and that is a debt rather than a
+shape this list earned.** The two are one feature — a roving stop is what the arrow keys move — and
+the arrows are a later task, so a single stop with nothing to move it would point at one row with no
+way to reach the next. What it costs is not bounded by anything: the list is `tree.changes` whole,
+nothing in `src-tauri/src/vcs/` truncates it, and a tree an agent has just swept is routinely dozens
+of rows, each a press of Tab to get past. Do not read this as "the section is short" — it is a long
+list whose keyboard is half built, and whoever adds the arrows adds the roving stop with them.
+
+**The rows declare a structure so that the fact above is heard**: a `role="list"` of
+`role="listitem"`s, with `aria-current` on the row whose diff is open. A focusable `<div>` with no
+role maps to a generic container, where `aria-current` support is inconsistent and can be dropped
+without a word, which would leave it as decoration. A flat list and not the tree both sibling lists
+declare, because that is what this is — no folders, no depth, nothing to expand.
+
+What the verbs actually do is `DesktopApp.vue`'s, because the stores live there,
+and the pair is joined by hand as `fileMenu.js` and `onFileAction` are — the test pins the producing
+side. A change's path is relative to its repository and every store there takes another space, so
+the absolute path is `absolutePath(vcsState.selected, path)` with an untracked directory's trailing
+slash cut off first, and the editor and the relative copy put that answer back through `relativeTo`
+against the project root. **`absolutePath` and never a hand-joined pair**: the repository arrives from
+Rust in the platform's own separator while a change's path is written with `/`, so `${repo}/${path}`
+puts `C:\Users\you\dev\app/src/main.js` on a Windows clipboard and hands the same string to
+`revealItemInDir` — the defect `src/paths.js`'s own header records, in a panel whose reveal row says
+"Explorer" there. The joins in `followMove` and `deleteEntry` are not a precedent: their one consumer
+is `relativeTo`, which normalises both separators, so nothing with a separator in it ever leaves those
+expressions, where this string leaves the app.
+
 The list is **read from outside this panel too**: `dirtyCount`, the status footer's uncommitted-files
 counter (`.claude/rules/git-head.md`). It is deliberately nothing more than `tree.changes.length` —
 every kind, staged and unstaged and untracked and conflicted alike — so that the number in the strip
@@ -869,17 +959,29 @@ just arrived on.
 
 That makes **five** readers of `--border-w-strong` as the ring's width — `AttachmentStrip`'s
 thumbnail, the status footer's clipped row (`shell/StatusFooter.vue`, which cites the first as its
-own precedent), `fieldStyle` in the caption above, a branch row, and a segment of the tab row
-(`shell/SegmentedTabs.vue`, clipped by its group's `overflow: hidden`) — and all five lean knowingly
-on 2px being both that token's value and `base.css`'s outline width. One answer for every focusable
-control in the app is a design-system question, and five call sites are the argument for asking it
-rather than the answer. **The number is the argument, so it is the thing in this paragraph worth
+own precedent), a segment of the tab row (`shell/SegmentedTabs.vue`, clipped by its group's
+`overflow: hidden`), a branch row, and a row of the change list above, which became focusable when it
+gained a menu and sits in a scroller with no padding of its own — and all five lean knowingly on 2px
+being both that token's value and `base.css`'s outline width. One answer for every focusable control
+in the app is a design-system question, and five readers of the token are the argument for asking it
+rather than the answer. **Readers and not applications**: `BranchList.vue` reads it once into
+`ringInset` and spends it on two style objects, the row and the folder heading, so the token is
+applied at six places and visited at five. Five is the number the miss-list below is keyed by, since
+visiting that file covers both of its uses.
+
+**The number is the argument, so it is the thing in this paragraph worth
 keeping exact**: it was written as three when this row was added, having missed the footer, and read
-at three the debt looks like it has just reached the threshold rather than passed it. The list is
-also the miss-list for a token change — anything moving `--border-w-strong`, or moving `base.css`'s
-own `outline: 2px`, has to visit every name in it, and a name left out is a control whose ring
-silently stops fitting. What to look at when any of this changes: four whole sides of the ring over
-`--surface-selected` on the current branch, again on a row under the run freeze strip, and again on
+at three the debt looks like it has just reached the threshold rather than passed it. It went the
+other way when the change list joined — incremented to six over a list that still named `fieldStyle`
+in the caption above, which had stopped insetting a ring at all and answers focus with a surface step
+instead, so the count was right about the arithmetic and wrong about the tree. **Count the readers
+when adding one; do not increment the number.**
+
+The list is also the miss-list for a token change — anything moving `--border-w-strong`, or moving
+`base.css`'s own `outline: 2px`, has to visit every name in it, and a name left out is a control
+whose ring silently stops fitting. What to look at when any of this changes: four whole sides of the
+ring over `--surface-selected` on the current branch, again on a row under the run freeze strip, and
+again on
 the selected segment of the tab row, in both themes.
 
 The spinner on a row is named `git is working` rather than by the operation it is spinning for, which

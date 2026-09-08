@@ -9,7 +9,14 @@
    button. */
 import { reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { absolutePath, STUB_MARK } from '../paths.js'
+/* The expanded folders are a persistent per-project setting, and a folder that
+   has gone from disk has to leave that list as well as this store's map —
+   otherwise the focus sweep re-reads it forever. Read only inside functions and
+   never at module scope: `settings.js` imports `tabs.js`, which imports this
+   file, so which of the three the bundler evaluates first is not this file's to
+   assume (the same cycle `tabs.js` carries a note about). */
+import { settings } from './settings.js'
+import { absolutePath, isUnder, STUB_MARK } from '../paths.js'
 
 export const filesState = reactive({
   /* The active project's absolute path. Every other path in this store is
@@ -268,13 +275,28 @@ function normalize(error) {
   return { kind: 'io', message: String(error?.message ?? error) }
 }
 
-/* A directory read refusal is visible to the person: at that moment the tree
-   shows whatever it managed to read, and with no words it simply looks like an
-   empty folder. The full error text stays in the console; a short phrase
-   travels outwards — the toast in DesktopApp.vue shows it. */
-function report(where, error) {
-  console.error(`[files] ${where}:`, error)
-  filesState.lastError = dirErrorText(error)
+/* A folder somebody expanded and something else then deleted — an agent, a
+   `cargo clean`, a worktree torn down, a branch switched underneath. Nothing
+   here has a watcher, so the app learns about it from the focus sweep, and
+   until this function existed it learned about it again on every focus: the
+   read failed, the toast said the folder was gone, and both `dirs` and the
+   project's `expanded` went on naming it — forever, since `expanded` is written
+   to `settings.json`. The dead entry is dropped instead, together with
+   everything under it, because a folder that is gone took its children with it.
+
+   The toast is deliberately not raised for this one: the row leaves the tree as
+   soon as the parent is re-read by the same sweep, which says the whole of it
+   without words. Every other refusal still toasts — there the folder is on
+   disk and the trouble is a permission or the disk itself, and folding it away
+   silently would hide that. */
+function forgetVanished(dir) {
+  for (const known of [...filesState.dirs.keys()]) {
+    if (isUnder(dir, known)) filesState.dirs.delete(known)
+  }
+  const { expanded } = settings.project
+  for (let i = expanded.length - 1; i >= 0; i -= 1) {
+    if (isUnder(dir, expanded[i])) expanded.splice(i, 1)
+  }
 }
 
 /* Moving to another project. The tree is reset entirely: showing the old
@@ -295,8 +317,23 @@ export function setRoot(path) {
   filesState.lastError = null
 }
 
+/* Answers whether the directory was read into the map on this call: `false`
+   covers a refusal, a read already in flight, no project at all, and an answer
+   that came back after the project was switched.
+
+   **Three callers read it, and the same rule is what each of them wants**: read
+   the root, and go on to the folders inside it only if the root vouched for
+   itself. They are `refreshDirs` just below, `moveTo` in `stores/projects.js`
+   and `onMounted` in `views/DesktopApp.vue` — named rather than counted,
+   because the count is what goes stale. Why the rule exists at all is written
+   out over `refreshDirs`; what matters here is that a `false` dropped on the
+   floor puts the whole of `settings.project.expanded` back within reach of a
+   project folder that is simply not mounted. Two of the three are pinned by a
+   test (`tests/stores/files.test.js`, `tests/stores/projects.test.js`); the
+   third is in a `.vue` file no runner here can reach. Every other call site
+   discards the value, and none of them wants it. */
 export async function listDir(dir = '') {
-  if (!filesState.root || filesState.loading.has(dir)) return
+  if (!filesState.root || filesState.loading.has(dir)) return false
   const root = filesState.root
   filesState.loading.add(dir)
   try {
@@ -304,13 +341,46 @@ export async function listDir(dir = '') {
     /* While the directory was being read, the project may have been switched:
        the answer belongs to the previous root and must not go into the new
        tree. The last move wins, not the last answer. */
-    if (filesState.root !== root) return
+    if (filesState.root !== root) return false
     filesState.dirs.set(listing.dir, {
       entries: listing.entries,
       truncated: listing.truncated
     })
+    return true
   } catch (err) {
-    report(`could not read the directory ${dir || '(root)'}`, normalize(err))
+    const error = normalize(err)
+    /* The full error text always goes to the console, and the line is written
+       once, above the branch: the branch decides only whether a person is told,
+       and a prefix changed in one place and not the other would leave the
+       silent case logging under a tag of its own. */
+    console.error(`[files] could not read the directory ${dir || '(root)'}:`, error)
+    /* A folder that is not there any more is the one refusal this store fixes
+       rather than reports, and only below the root: `notFound` on the root is
+       the project itself having gone, where there is nothing left to fold away
+       and the toast is the only thing that would say so.
+
+       The root is checked for the reason the success path checks it: the read
+       may have been answered after somebody switched projects, and folding then
+       would splice a path out of an `expanded` this answer knows nothing about.
+
+       Being exact about what that buys, because it is not the whole of the
+       question. `setRoot` is what this guard watches, and in `moveTo`
+       (`stores/projects.js`) `settings.project` has already become the new
+       project's one microtask earlier, when `loadProjectLayout` resolved. A
+       `notFound` whose continuation lands inside that sliver sees the old root
+       still standing and folds against the new project's list. It needs two IPC
+       answers in the same tick to happen at all and it costs one folder rather
+       than the list, so it is named here rather than closed: closing it means
+       checking against the project the layout belongs to instead of against the
+       root, which is a different guard from the one the success path makes.
+
+       Anything else is a refusal the person is owed a word about: at that
+       moment the tree shows whatever it managed to read, and with no words it
+       simply looks like an empty folder, so a short phrase travels outwards and
+       `DesktopApp.vue` raises the toast. */
+    if (error.kind === 'notFound' && dir && filesState.root === root) forgetVanished(dir)
+    else filesState.lastError = dirErrorText(error)
+    return false
   } finally {
     filesState.loading.delete(dir)
   }
@@ -318,10 +388,36 @@ export async function listDir(dir = '') {
 
 /* Re-reading directories that are already known — the window-focus sweep and
    the refresh button. Directories absent from the map are not read: nobody
-   asked to expand them. */
+   asked to expand them.
+
+   **The root is read first and alone, and the rest only if it answered**, which
+   is the one thing standing between a project that has gone and an `expanded`
+   list emptied to nothing. `resolve_within` (`files/fs.rs`) canonicalizes the
+   root before the path inside it, so a project folder that is not there answers
+   `notFound` for **every** `dir`, not only for `''` — and fired as one
+   `Promise.all`, each of those children would look like a folder somebody
+   deleted and be folded away, taking the whole of `settings.project.expanded`
+   with it. One toast, a permanently flat tree, and nothing on screen saying a
+   preference had been thrown away. Sequenced, the root's own refusal is the
+   only thing the person is told and nothing is forgotten.
+
+   Standing down when the root merely did not answer — a read of it already in
+   flight — costs one sweep, and the next window focus makes it again.
+
+   **The gate is on the map and deliberately not on what the caller passed.**
+   Both callers today put `''` at the head of their list, and gating on that
+   would make the safety of every future one a property of its argument: a sweep
+   of `['src', 'src/stores']` alone would fold away against a project that is
+   not there, which is the whole defect back. Asked of `filesState.dirs`
+   instead, it holds however the function is called. The root is in that map
+   from the moment a project opens and only `setRoot` takes it out, so this
+   reads the root on every sweep — one `files_list` the caller may not have
+   listed, which is the cost, and it is the one the sweep was going to make
+   anyway. */
 export async function refreshDirs(dirs) {
   const known = dirs.filter((dir) => filesState.dirs.has(dir))
-  await Promise.all(known.map((dir) => listDir(dir)))
+  if (filesState.dirs.has('') && !(await listDir(''))) return
+  await Promise.all(known.filter((dir) => dir !== '').map((dir) => listDir(dir)))
 }
 
 export async function readFile(path) {
