@@ -625,6 +625,17 @@ const branchSearching = ref(false)
 const branchInput = ref('')
 const branchQuery = ref('')
 const filterField = ref(null)
+/* Whether the caret is in the field, which is the whole of what the plate's
+   surface is drawn from — see `fieldStyle` for why the plate says it and not a
+   ring. It follows the `<input>` alone and never the plate: the `x` sits in the
+   same plate and keeps its own ring, so a plate stepping up under it would be
+   answering for a control that has already answered.
+
+   `closeFilter` puts it back rather than trusting a `blur`: closing unmounts
+   the element holding the focus, and an element removed from the document is
+   not obliged to fire one. Left true, the next open would draw the stepped-up
+   plate for the frame before `openFilter`'s own `focus()` lands. */
+const filterFocused = ref(false)
 /* The button the field replaces, held because closing has to give the focus
    back to it — see `closeFilter`. It is `v-if`'d away for as long as the field
    **stands**, which is not the same as for as long as the field **has the
@@ -701,6 +712,7 @@ const closeFilter = ({ restoreFocus = false } = {}) => {
   branchInput.value = ''
   branchQuery.value = ''
   branchSearching.value = false
+  filterFocused.value = false
   nextTick(() => {
     if (branchBox.value) branchBox.value.scrollTop = savedScroll
     /* **The other half of a contract this panel opened.** Opening the field
@@ -844,8 +856,21 @@ const branchTabs = computed(() =>
    The right inset is this row's own, which is why `SectionHeader` drops the
    gutter it adds for `actions` while the field is open: the `x` lands exactly
    where the `search` button it replaced was, and the surface underneath still
-   reaches the panel's edge. */
-const fieldRowStyle = {
+   reaches the panel's edge.
+
+   **The surface is also what says the field has the focus**, which is why this
+   is a computed and not the constant it was; the reasoning and the measurements
+   are under `fieldStyle` below, with the ring they replace. The step is timed
+   at `--transition-control`, the token `core/Input.vue` and `core/Textarea.vue`
+   time their own focus change with, and it is driven off the same `@focus` and
+   `@blur` pair they listen on. **What that token carries here is not what it
+   carries there**, and the difference is the whole of this field: a bordered
+   field in this system — `Input`, `Textarea`, `Select` — answers focus by
+   taking its **border** to `--focus-ring`, which is the ring this one is
+   dropping; this field has no border, because the plate around it is the field,
+   so what answers is the plate's **ground**. Same event, same timing, a
+   different declaration underneath. */
+const fieldRowStyle = computed(() => ({
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-2)',
@@ -853,41 +878,89 @@ const fieldRowStyle = {
   minWidth: 0,
   height: '100%',
   padding: '0 var(--space-3) 0 var(--space-5)',
-  background: 'var(--surface-raised)'
-}
+  background: filterFocused.value ? 'var(--surface-active)' : 'var(--surface-raised)',
+  transition: 'var(--transition-control)'
+}))
 /* Mono, because what is being typed is half of an identifier — the same face
    the rows underneath draw their names in, so the query and the thing it is
    matching are legibly the same kind of string. No border of its own: the plate
    around it is the field, and a second box inside it would be two fields.
 
-   **The focus ring is kept and pulled inside the element**, which is
-   `AttachmentStrip`'s line for the same overflow and the one workaround here.
-   `base.css` draws the ring a pixel *outside*, and this input is the height of
-   the row it sits in — so an outside ring stands proud of the caption top and
-   bottom and **overlaps** the hairline above and the tab row beneath, worst in
-   the compact density where a row is at its shortest. Overlaps rather than is
-   clipped: nothing near here has a non-visible overflow, so the ring draws
-   whole and in the wrong place, which is the harder defect to spot. Suppressing
-   it instead was tried and is wrong: the `x` button is inside this same plate,
-   one Tab from here and one Shift+Tab back, so a field with no ring, no border
-   and a transparent ground is a caret nothing on screen accounts for. Inset by
-   the ring's own width it is whole, and it touches nothing above or below.
+   **The focus ring is suppressed here, and what accounts for the caret is the
+   plate**: while this input has the focus the row it sits in steps from
+   `--surface-raised` to `--surface-active`, so the field is lit end to end —
+   glyph, input and `x` — rather than boxed. That is what interaction is
+   everywhere else in this system, a step of surface and never a change of
+   colour, and it is legible on a plate reaching both edges of the panel where a
+   step under a control the width of a word would not be.
 
-   **The two `sm` buttons beside it keep the stylesheet's default ring**, and
-   that is left alone deliberately. They overlap the row the same way — a
-   `--control-h-sm` control is 20px in a 22px compact row — and the inset here
-   is bought by this element being the height of its row, which is a fact about
-   this one field. Insetting a ring generally means naming the ring's own width,
-   and there is no token for it: `--border-w-strong` matching `base.css`'s 2px
-   is a coincidence this file leans on knowingly, not a rule. One answer for
-   every focusable control in the app is a design-system question and not a
-   component's to settle. */
+   Two things about this field are why it is a step and not the ring `base.css`
+   draws for everything else. `:focus-visible` on a text input is true of
+   **every** focus, a mouse press and the `.focus()` `openFilter` performs
+   included, so the ring here says nothing about the keyboard — it burns for as
+   long as the field stands rather than for as long as somebody is on it. And
+   what it draws is a `--focus-ring` stroke around the whole of a `--row-h` row
+   in a 252px column: the loudest mark in a panel whose loudness is spent on
+   statuses and on `--git-conflict`, drawn for a state that is merely somebody
+   typing.
+
+   Which step, against the plate's `--surface-raised` and by the WCAG formula
+   over `tokens/color-surfaces.css`: `--surface-hover` is 1.225:1 light (a
+   darker plate) and 1.090:1 dark (a lighter one); `--surface-active` is 1.338:1
+   and 1.198:1; `--surface-selected` is 1.254:1 and 1.130:1 and is rejected on
+   hue rather than on distance — in the light theme it is the blue-tinted
+   surface, which is the blue box this field was changed to be rid of, only
+   quieter.
+
+   **`--surface-active` is what is drawn, and `--surface-hover` is what was
+   tried first.** The first choice was the token that means "this control is
+   being interacted with", which is exactly what a caret in a field is, and its
+   light step is unambiguous — `#ffffff` to `#e4e9ea`, a white-to-grey band
+   nobody has to look for. It was dropped on the dark theme, where the same
+   token measures the 1.090:1 in the list above: `#1b2229` to `#202932` is
+   L* 12.8 to 16.1 and ΔE76 about 3.5, and abutted as one image and enlarged
+   three times the seam was still hard to find — while the two states are never
+   on screen together in the real case, so a person at the default font size
+   sees no change at all. With the ring gone that is dark-theme focus in this
+   field with nothing whatever saying where the caret is, which is a worse
+   defect than the one this replaced. `--surface-active` is the next stop of the
+   same scale and close to twice the step in the theme that failed — L* 12.8 to
+   19.4, ΔE76 about 6.8 — and there is no third: the ratios above are the whole
+   list. Both densities behaved alike throughout, as they must, since density
+   moves the row's height and never a colour.
+
+   **The `x` inside the plate keeps the stylesheet's default ring**, and that is
+   left alone deliberately: the plate follows this element's focus alone, so Tab
+   off the input drops the plate back and lights the `x` in the ordinary way. It
+   is the only `sm` button here for the whole life of the field — the `search`
+   button it stands in for is `v-if`'d away the moment the field opens — and it
+   stands proud of the row exactly as that one does, a 20px `--control-h-sm`
+   control in a 22px compact row. That is the design system's ring on the
+   system's own controls, where the suppression above is one field with a row's
+   whole surface underneath it to say the same thing with. One answer for every
+   focusable control in the app is a design-system question and not a
+   component's to settle.
+
+   That button is also the second reason the plate is not on `--surface-hover`,
+   and it is the one a pointer finds rather than a measurement: `ghost`'s own
+   hover fill is `--surface-hover`, so with the plate there a pointer resting on
+   the `x` while the caret was in the field drew nothing at all — the button
+   standing on the colour it was about to fill with, measured at
+   `rgb(32,41,50)` on `rgb(32,41,50)`. From `--surface-active` the button's
+   hover is a step **down** and visible again, and the whole of that collision
+   is gone.
+
+   One thing the move does take on, and it is small enough to name and leave:
+   `--surface-active` is also where a `ghost` button goes while it is held, so
+   the field's focused ground is the colour of a control being pressed. Nothing
+   here is pressed for as long as a field stands open, and the two are never the
+   same element — the plate is a row and a press is a control inside it. */
 const fieldStyle = {
   flex: 1,
   minWidth: 0,
   height: '100%',
   border: 'none',
-  outlineOffset: 'calc(var(--border-w-strong) * -1)',
+  outline: 'none',
   background: 'transparent',
   color: 'var(--text-primary)',
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
@@ -1423,6 +1496,8 @@ const onReset = (section) => emit('resize', { section, rows: null })
                 :aria-label="BRANCH_FILTER_LABEL"
                 :style="fieldStyle"
                 @keydown="onFilterKey"
+                @focus="filterFocused = true"
+                @blur="filterFocused = false"
               />
               <Button
                 variant="ghost"
