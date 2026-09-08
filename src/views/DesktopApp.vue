@@ -4068,6 +4068,12 @@ const onFindKey = (event) => {
   if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
   if (event.code !== 'KeyF') return
   if (event.target?.closest?.('.cm-editor')) return
+  // The Git panel owns this chord inside itself: its branch filter is the field
+  // this key means while the focus is in there, and `GitPanel.vue` has already
+  // opened it and cancelled the default by the time this runs. Checked before
+  // `preventDefault`, exactly as the editor above it is, so the panel's own
+  // handler is left entirely alone. Everywhere else the palette still answers.
+  if (event.target?.closest?.('[data-git-panel]')) return
   event.preventDefault()
   openPalette()
 }

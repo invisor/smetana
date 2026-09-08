@@ -770,6 +770,63 @@ over the list (direction 1c) and prefix chips (1d), both of which are their own 
 ranking the hits, which would be a second ordering inside a panel that promises one and would be
 invisible on the rows.
 
+### The keyboard, and the one chord this panel takes
+
+**The branch list is a `role="tree"` with one tab stop in it.** Every row is a `role="treeitem"` —
+the headings among them, which keep the `aria-expanded` being a real `<button>` already gave them —
+the branch the repository is on carries `aria-current`, and exactly one row is `tabindex="0"` at a
+time: the one `focusedKey` names, falling back to the first row before anybody has focused anything
+and whenever what was focused is no longer drawn. That is `files/FileTreeRow.vue`'s roving tabindex,
+and it is here for that panel's reason — a section holding 346 branches must not be 346 presses of
+Tab to get past. The two differ in what the tab stop follows: the tree has a selection to put it on,
+and this list deliberately has none, so it follows the focus itself.
+
+**Which verb a press means is `components/git/branchKeys.js`**, pure and tested, of the
+`gitActions.js` family and shaped after `files/fileTreeKeys.js` — `event.code` and never `event.key`,
+meta, control and alt refused rather than ignored, and shift carrying exactly one press. The verbs
+are the tree pattern's: the vertical arrows move the focus by a row, `ArrowLeft` closes an open
+folder and otherwise goes **out** to the heading the row sits under, `ArrowRight` opens a closed one
+and means nothing anywhere else, `Enter` switches, and `Shift+F10` or the context-menu key opens the
+row's menu.
+
+**What each verb does is the gesture the pointer already had, through the same function.** `Enter` is
+`activate`, which is the double click's own handler, so it carries the same refusal — the current
+branch, and every row while a run or an operation in flight holds the repository, exactly what
+`gitActions.js` says and never a second reading of it. The two arrows that fold are the heading's own
+click. `Shift+F10` opens the same `PointerMenu` at the row's bottom-left corner, so its items, their
+refusals and its `pick` are one path with the right click's rather than a second one free to drift; a
+heading has no menu on either gesture. Going out from a row with no heading above it — the current
+branch, the marked ones, every row of a flat filter result — moves nothing, which is what a tree does
+at its root.
+
+**⌘F is split by focus rather than taken from the palette.** The Git panel's root carries
+`data-git-panel` and answers the chord itself, opening the caption's filter field; `onFindKey` in
+`DesktopApp.vue` stands down for `[data-git-panel]` **before** its `preventDefault`, the same shape
+and the same place as the exemption it already carries for CodeMirror's own find. Everywhere else in
+the window the chord still opens the command palette. Both halves cancel the default, since the
+webview's own find bar would otherwise open over whichever of the two was meant. A second press with
+the field already standing only puts the caret back in it — going through `openFilter` again would
+have it remember the *filtered* list's scroll position and hand that back on the way out. Binding the
+chord to the filter globally was rejected: it breaks the palette everywhere for the sake of one
+panel.
+
+`shell/SegmentedTabs.vue` carries the row's half of this, since the two sides of the list are reached
+the same way: `role="tablist"` over `role="tab"` segments with `aria-selected`, one tab stop, and the
+horizontal arrows switching to the neighbour and taking the focus with them. It is the same control
+both side columns draw, so that is true of every tab row in the app and not of this one.
+
+The focus ring is `tokens/base.css`'s own and is **not** suppressed and **not** inset. The field in
+the caption pulls its ring inside for a reason of its own, written above; a row does not, because a
+row is the full width of a box that scrolls and the ring is the only thing saying which of a column
+of identical rows the keyboard is on. What to look at when this changes: the ring over
+`--surface-selected` on the current branch, and over the run strip's own colours.
+
+The spinner on a row is named `git is working` rather than by the operation it is spinning for, which
+is the design handoff's wording and a trade recorded in `BranchList.vue` beside `OPERATIONS`: a
+screen reader hears one name for all seven writes where it used to hear the sentence for each. The
+`↓N` and `↑N` marks are labelled `N behind` and `N ahead`, since an arrow and a number read aloud are
+two facts and neither says which upstream direction it is about.
+
 **On a detached HEAD the current block draws a plate instead of a row.** `HEAD · <short sha>` in the
 same mono, on `--surface-selected` between the block's two rules, with the tick in the box at the end
 — the same fact the scope bar draws one level up, and the panel saying it is what stops the section

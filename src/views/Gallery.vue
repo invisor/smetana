@@ -3332,7 +3332,14 @@ const menuTargetStyle = {
            segmented strip under a side panel's header, drawn here at the width
            a panel gives it. Live rather than fixed, since the fill under the
            active segment and the fill under the pointer are the whole of what
-           it draws — press one, and hover the other. -->
+           it draws — press one, and hover the other.
+
+           It is a `tablist` and the keyboard is the other half of what to check
+           here: one Tab reaches the selected segment and one more leaves the row
+           altogether, and the left and right arrows walk it, wrapping at both
+           ends and taking the focus with the choice. The ring is the
+           stylesheet's own and has to stay legible over the fill of the segment
+           it is on. -->
       <div :style="rowStyle">
         <div :style="segmentedFrameStyle">
           <SegmentedTabs v-model="gallerySideTab" :tabs="GALLERY_SIDE_TABS" />
@@ -3791,7 +3798,14 @@ const menuTargetStyle = {
            component and each says something different: a repository with files
            in it, a clean one, a folder that holds no repository at all, and a
            machine with no git on it. The last one is the only one a person can
-           act on, and it names what was looked for. -->
+           act on, and it names what was looked for.
+
+           These are also where **⌘F inside the panel** can be tried: press it
+           with the focus anywhere in one of these frames and the Branches
+           caption becomes the filter field, unfolding the section first if it
+           was folded. The other half of that rule — the command palette
+           answering the same chord everywhere outside the panel — is only
+           checkable in the app itself, since this page draws no palette. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
         <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
@@ -4273,6 +4287,16 @@ const menuTargetStyle = {
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <CommitBox :changes="6" branch="main" :conflicts="3" @resolve-conflicts="() => {}" />
         </div>
+        <!-- The plain list, and the frame to try the keyboard in: one Tab
+             lands on the first row and one more leaves the list, the vertical
+             arrows walk it, Enter switches to a row that is not the current one
+             — nothing happens here, since nothing is listening, but the row must
+             refuse it on the branch with the tick — and `Shift+F10` opens the
+             same menu the right click does, at the row's own bottom-left
+             corner. The ring around a focused row is the stylesheet's own and
+             is not inset: what to look at is that it is legible on the current
+             branch's `--surface-selected` as well as over the canvas, and that
+             it never moves a row by a pixel. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" />
         </div>
