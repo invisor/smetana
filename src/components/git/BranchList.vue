@@ -787,15 +787,16 @@ const onKeydown = (event) => {
    that scrolls would clip the ring of the row it just moved to.
 
    The same line `AttachmentStrip.vue`'s thumbnail, the status footer's own
-   clipped row (`shell/StatusFooter.vue`) and `fieldStyle` in `GitPanel.vue`
-   carry, each for the same clipping, and it makes **four** readers of
-   `--border-w-strong` as a stand-in for a width that has no token: 2px is the
-   ring's width in `base.css` and this token's value, and the two matching is a
-   coincidence leaned on knowingly. One answer for every focusable control in
-   the app is a design-system question rather than a component's, and four call
-   sites are the argument for asking it rather than the answer. The number is
-   the argument, so it is worth keeping exact — anything moving that token, or
-   `base.css`'s own `outline: 2px`, has to visit all four.
+   clipped row (`shell/StatusFooter.vue`), `fieldStyle` in `GitPanel.vue` and a
+   segment of the tab row (`shell/SegmentedTabs.vue`, clipped by its group's
+   `overflow: hidden`) carry, each for the same clipping, and it makes **five**
+   readers of `--border-w-strong` as a stand-in for a width that has no token:
+   2px is the ring's width in `base.css` and this token's value, and the two
+   matching is a coincidence leaned on knowingly. One answer for every focusable
+   control in the app is a design-system question rather than a component's, and
+   five call sites are the argument for asking it rather than the answer. The
+   number is the argument, so it is worth keeping exact — anything moving that
+   token, or `base.css`'s own `outline: 2px`, has to visit all five.
 
    Suppressing the ring was never on the table: a roving tabindex means the
    keyboard is on exactly one of a column of identical rows, and the ring is the

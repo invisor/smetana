@@ -547,6 +547,38 @@ half — it is one more `observe` on an observer that exists.
 The row is drawn only while the section is unfolded, and it stays live under a run: choosing which
 side to look at is reading, the same rule that keeps a folder heading pressable.
 
+**What the row looks like is the handoff's, and the component was brought to it whole.** One group —
+`--control-h-sm` tall, `--border` on `--surface-sunken`, `--radius-3`, `overflow: hidden` — with the
+segments flush inside it and no gap between them; the seam is each segment's own `border-right` and
+the last one has none; the selected segment is `--surface-selected` edge to edge with **no radius of
+its own**, its outer corners being the group's. Labels are sentence case in sans at `--text-xs`, and
+the figure `branchTabLabels` puts beside one while the filter is on is the segment's second string,
+in mono. Both halves of that are load-bearing: without the group a seam is a line floating between
+two words rather than the join of one control, and a fill that rounded its own corners would be a
+plate standing inside the box instead of half of it. What stood here until then was uppercase
+`--text-2xs` mono with `--tracking-caps`, no group, no seam, and the selected segment a rounded plate
+— the earlier spec for this section had listed "`SegmentedTabs` visual style" under what does not
+change, and that line is what this overturns.
+
+**A hover over that sunken ground is `--surface`**, and not `--surface-hover`: that token is the step
+written for a control standing on `--surface`, and over the group's ground it came to three units of
+grey — a row answering the pointer with a blank in the light theme. The component's own header
+carries the measurements, the three candidates that lost and the note that the scale has no hover
+step for a sunken ground at all, which is a design-system question rather than this row's.
+
+**It was changed in the component rather than in a variant for this panel**, and that is the half
+worth keeping. The same row is what both side columns draw (`SIDE_TABS` and `RIGHT_TABS` in
+`DesktopApp.vue`), so a shape for the Git panel alone would have put two segmented controls in one
+app — the exact pair this component was extracted to prevent — and their tabs moved with it. The
+uppercase was owed a change on its own account besides: it broke a rule of the product that has
+nothing to do with this panel, since the app is sentence case everywhere.
+
+**The ring on a segment is pulled inside it**, and the group is why: `overflow: hidden` is what
+rounds the selected fill's outer corners, and it clips an outside ring just as willingly — a segment
+is flush with the group's top and bottom, and the end ones with its left and right, so nothing of
+`base.css`'s ring at `outline-offset: 1px` would have survived. That makes `SegmentedTabs` the fifth
+reader of `--border-w-strong` as the ring's width; the list is below.
+
 Rejected with the shape: a name filter **as the answer to that question**, which helps somebody who
 knows the name and does not answer "what is even on the server"; an `origin` heading moved to the top
 of the same list, which is cheaper but leaves two things in one scroller under one count; and a
@@ -835,19 +867,20 @@ as a border rather than as a ring. It is not the first row alone: `.focus()` scr
 out of view flush against the leading edge, so every arrow press that scrolls would clip the row it
 just arrived on.
 
-That makes **four** readers of `--border-w-strong` as the ring's width — `AttachmentStrip`'s
+That makes **five** readers of `--border-w-strong` as the ring's width — `AttachmentStrip`'s
 thumbnail, the status footer's clipped row (`shell/StatusFooter.vue`, which cites the first as its
-own precedent), `fieldStyle` in the caption above, and now a branch row — and all four lean knowingly
+own precedent), `fieldStyle` in the caption above, a branch row, and a segment of the tab row
+(`shell/SegmentedTabs.vue`, clipped by its group's `overflow: hidden`) — and all five lean knowingly
 on 2px being both that token's value and `base.css`'s outline width. One answer for every focusable
-control in the app is a design-system question, and four call sites are the argument for asking it
+control in the app is a design-system question, and five call sites are the argument for asking it
 rather than the answer. **The number is the argument, so it is the thing in this paragraph worth
 keeping exact**: it was written as three when this row was added, having missed the footer, and read
 at three the debt looks like it has just reached the threshold rather than passed it. The list is
 also the miss-list for a token change — anything moving `--border-w-strong`, or moving `base.css`'s
 own `outline: 2px`, has to visit every name in it, and a name left out is a control whose ring
 silently stops fitting. What to look at when any of this changes: four whole sides of the ring over
-`--surface-selected` on the current branch, and again on a row under the run freeze strip, in both
-themes.
+`--surface-selected` on the current branch, again on a row under the run freeze strip, and again on
+the selected segment of the tab row, in both themes.
 
 The spinner on a row is named `git is working` rather than by the operation it is spinning for, which
 is the design handoff's wording and a trade recorded in `BranchList.vue` beside `OPERATIONS`: a

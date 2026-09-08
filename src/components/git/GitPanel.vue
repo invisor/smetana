@@ -135,7 +135,10 @@
    `3 of 346`, and the other reads `Origin 9` — its own hits against the same
    query. Without that second number a filter that matched nothing here would
    draw an empty state that is telling the truth about the wrong half of the
-   repository.
+   repository. The rule hands the word and the figure over as two fields, since
+   the row sets a label in sans and a count in mono: the caption carries that
+   number in mono before the filter moves it down here, and it does not change
+   face on the way.
 
    Which tab is showing is the caller's state, remembered per project
    (`settings.project.branchTab`); this panel emits the id and holds nothing.
@@ -813,7 +816,8 @@ const otherHits = computed(() =>
    that drifts. The ids are `branchTree.js`'s closed list and are mirrored in
    `settings/model.rs`; the words beside them are `branchTabLabels`', sentence
    case like every other label in the app — and it is that rule and not this
-   file that puts the counts in them while a filter is on.
+   file that puts the counts in them while a filter is on, as the second field
+   of each tab rather than inside its word.
 
    Drawn only while the section is unfolded: a folded section has no list for a
    tab to be about, and the caption's count goes on describing whichever side

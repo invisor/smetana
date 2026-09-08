@@ -683,12 +683,16 @@ describe('the entries behind the origin tab', () => {
 
 /* The tab labels, which is where the counts go while the caption is a field.
    The second number is the load-bearing one: without it a tab with no matches
-   is an empty state telling the truth about the wrong half of the repository. */
+   is an empty state telling the truth about the wrong half of the repository.
+
+   Every case asserts both halves of the pair, since the split is what the tab
+   row draws its two faces from: the word is sans and the figure is mono, and a
+   figure that came back inside `label` would silently be set in prose. */
 describe('what the two tabs are called', () => {
   it('names them plainly with no filter', () => {
     expect(branchTabLabels({ tab: 'local', query: '', localTotal: 346, originTotal: 593 })).toEqual([
-      { id: 'local', label: 'Local' },
-      { id: 'origin', label: 'Origin' }
+      { id: 'local', label: 'Local', count: '' },
+      { id: 'origin', label: 'Origin', count: '' }
     ])
   })
 
@@ -703,8 +707,8 @@ describe('what the two tabs are called', () => {
         originHits: 9
       })
     ).toEqual([
-      { id: 'local', label: '3 of 346' },
-      { id: 'origin', label: 'Origin 9' }
+      { id: 'local', label: '', count: '3 of 346' },
+      { id: 'origin', label: 'Origin', count: '9' }
     ])
     expect(
       branchTabLabels({
@@ -716,20 +720,20 @@ describe('what the two tabs are called', () => {
         originHits: 9
       })
     ).toEqual([
-      { id: 'local', label: 'Local 3' },
-      { id: 'origin', label: '9 of 593' }
+      { id: 'local', label: 'Local', count: '3' },
+      { id: 'origin', label: '', count: '9 of 593' }
     ])
   })
 
   /* Zero is drawn like any other count here, unlike the caption's own, which
-     refuses one: `0 of 346` beside `Origin 9` is the sentence the empty state
+     refuses one: `0 of 346` beside `Origin 0` is the sentence the empty state
      under it is about. */
   it('draws a zero rather than falling silent', () => {
     expect(
       branchTabLabels({ tab: 'local', query: 'zzz', localTotal: 346, originTotal: 593 })
     ).toEqual([
-      { id: 'local', label: '0 of 346' },
-      { id: 'origin', label: 'Origin 0' }
+      { id: 'local', label: '', count: '0 of 346' },
+      { id: 'origin', label: 'Origin', count: '0' }
     ])
   })
 
@@ -738,7 +742,11 @@ describe('what the two tabs are called', () => {
   })
 
   it('reads a blank query as no filter at all', () => {
-    expect(branchTabLabels({ tab: 'local', query: '   ', localTotal: 2 })[0].label).toBe('Local')
+    expect(branchTabLabels({ tab: 'local', query: '   ', localTotal: 2 })[0]).toEqual({
+      id: 'local',
+      label: 'Local',
+      count: ''
+    })
   })
 })
 
