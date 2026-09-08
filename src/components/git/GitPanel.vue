@@ -681,14 +681,17 @@ const openFilter = () => {
 
    The readable-looking version asks `document.activeElement` where the focus
    was, and **it cannot be made to work**: during a real mouse press on a button
-   Blink has already moved the focus onto that button, while WebKit's Mac port
-   does not make a `<button>` mouse-focusable at all and clears the focus to
-   `<body>` — measured, on both engines. So a press on the `x` reads as "inside
-   the field" on neither of them, and on the engine this app ships in it reads
-   as `<body>`: the restore silently stops happening in WKWebView and WebKitGTK
-   while looking correct in `npm run dev`. Worse, WebKit's answer follows the
-   macOS Full Keyboard Access setting, so two machines running one build
-   disagree. Do not replace this argument with a predicate. */
+   Blink has already moved the focus onto that button, while WebKit does not
+   make a `<button>` mouse-focusable at all and clears the focus to `<body>`.
+   Both were measured in WebKit, which is the port WKWebView runs, so this is
+   the macOS behaviour; the GTK port carves form controls out of that rule, so
+   Linux likely answers as Blink does. The caller gate is right on every engine
+   either way, which is the point of preferring it — where a predicate is right
+   on some of them and wrong on the one a person is sitting in front of, while
+   `npm run dev` goes on looking correct. And mouse-focusability in the Mac port
+   is a **setting** rather than a constant, Full Keyboard Access: a reason to
+   distrust the signal, not something watched moving. Do not replace this
+   argument with a predicate. */
 const closeFilter = ({ restoreFocus = false } = {}) => {
   clearTimeout(debounce)
   branchInput.value = ''

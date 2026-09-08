@@ -734,14 +734,16 @@ a restore there would pull the caret into this panel in answer to a press somewh
 
 **The readable-looking version — asking `document.activeElement` who had the focus — cannot be made
 to work, and this is the clause that stops it being tried again.** During a real mouse press on a
-button Blink has already moved the focus onto that button, while WebKit's Mac port does not make a
-`<button>` mouse-focusable at all and clears the focus to `<body>`; both were measured. So a press on
-the `x` reads as "inside the field" on neither engine, and on the one this app ships in it reads as
-`<body>` — the restore stops happening in WKWebView and WebKitGTK while looking correct in
-`npm run dev`, which is exactly the defect no gate in this repository can see. WebKit's answer also
-follows the macOS Full Keyboard Access setting, so two machines running one build disagree. The
-calling site is the only signal here that is both exact and portable, and it is what the three exits
-have in common: a person acting on the field's own controls.
+button Blink has already moved the focus onto that button, while WebKit does not make a `<button>`
+mouse-focusable at all and clears the focus to `<body>`. Measured in WebKit, which is the port
+WKWebView runs, so this is the macOS behaviour; the GTK port carves form controls out of that rule,
+so Linux likely answers as Blink does. The caller gate is right on every engine either way, which is
+the point of preferring it — a predicate here is right on some engines and wrong on the one somebody
+is sitting in front of, while `npm run dev` goes on looking correct, which is exactly the defect no
+gate in this repository can see. Mouse-focusability in the Mac port is a **setting** besides, Full
+Keyboard Access: a reason to distrust the signal rather than something watched moving. The calling
+site is the only signal here that is both exact and portable, and it is what the three exits have in
+common: a person acting on the field's own controls.
 
 The field keeps `base.css`'s own focus ring and **pulls it inside its own edge**
 (`outlineOffset: calc(var(--border-w-strong) * -1)`, `AttachmentStrip`'s line for the same overflow):
