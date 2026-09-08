@@ -835,11 +835,17 @@ as a border rather than as a ring. It is not the first row alone: `.focus()` scr
 out of view flush against the leading edge, so every arrow press that scrolls would clip the row it
 just arrived on.
 
-That makes **three** readers of `--border-w-strong` as the ring's width — `AttachmentStrip`'s
-thumbnail, `fieldStyle` in the caption above, and now a branch row — and all three lean knowingly on
-2px being both that token's value and `base.css`'s outline width. One answer for every focusable
-control in the app is a design-system question, and a third call site is the argument for asking it
-rather than the answer. What to look at when any of this changes: four whole sides of the ring over
+That makes **four** readers of `--border-w-strong` as the ring's width — `AttachmentStrip`'s
+thumbnail, the status footer's clipped row (`shell/StatusFooter.vue`, which cites the first as its
+own precedent), `fieldStyle` in the caption above, and now a branch row — and all four lean knowingly
+on 2px being both that token's value and `base.css`'s outline width. One answer for every focusable
+control in the app is a design-system question, and four call sites are the argument for asking it
+rather than the answer. **The number is the argument, so it is the thing in this paragraph worth
+keeping exact**: it was written as three when this row was added, having missed the footer, and read
+at three the debt looks like it has just reached the threshold rather than passed it. The list is
+also the miss-list for a token change — anything moving `--border-w-strong`, or moving `base.css`'s
+own `outline: 2px`, has to visit every name in it, and a name left out is a control whose ring
+silently stops fitting. What to look at when any of this changes: four whole sides of the ring over
 `--surface-selected` on the current branch, and again on a row under the run freeze strip, in both
 themes.
 

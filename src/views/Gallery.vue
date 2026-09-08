@@ -3905,7 +3905,15 @@ const menuTargetStyle = {
              a pixel away, and again on a row far enough down that arrowing to
              it scrolls the box, since `.focus()` puts that row flush against
              the leading edge. Both themes and both densities, and nothing may
-             move by a pixel as the ring appears. -->
+             move by a pixel as the ring appears.
+
+             **That second half rests on this frame's own geometry**, which is
+             the one thing about it that has to be said out loud: the height
+             here and `LONG_BRANCHES` between them leave the branch box shorter
+             than its rows — measured at 86px of box against 196px of rows — so
+             arrowing down the list actually scrolls it. Shorten the fixture or
+             the frame and the check goes quiet rather than failing, which is
+             exactly what happened to the frame this note was moved off. -->
         <div :style="{ display: 'flex', width: '252px', height: '420px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <template #actions>
