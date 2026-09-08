@@ -5,6 +5,7 @@
 import { computed, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { branchMenuItems } from '../components/git/branchMenu.js'
+import { filterBranches, originBranches } from '../components/git/branchTree.js'
 import { FILE_MENU_W, fileMenuItems } from '../components/files/fileMenu.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
 import {
@@ -1452,12 +1453,54 @@ const favoriteBranches = ref([
    branch was the whole of is not drawn at all. */
 const favoriteFolders = ref([])
 
+/* The name filter's frames, and what each of them is for.
+
+   The query is a constant per frame rather than a live field: what `BranchList`
+   is handed is the **answer** — `filterBranches`' hits, built by `GitPanel`
+   because the tab labels need both sides' counts anyway — and the field itself
+   is the caption of the live panel frame above, which is where it can be typed
+   into for real.
+
+   `depot` is two hits in two different folders, one of them marked and one of
+   them behind its upstream, so a filtered row is visibly still a row. `fix/le`
+   is the case a substring over the *whole* name exists for: the match runs
+   across the slash and lands inside the muted prefix, which is the thing to
+   look at — the highlight must not change the weight or the colour of what it
+   is over, only its ground. */
+const FILTER_QUERY = 'depot'
+const FILTER_FAVORITE = 'feature/holiday-curb-y5bt.8-drop-depot-columns'
+const FILTER_HITS = filterBranches(FOLDER_BRANCHES, FILTER_QUERY, {
+  favorites: [FILTER_FAVORITE]
+})
+const PREFIX_QUERY = 'fix/le'
+const PREFIX_HITS = filterBranches(FOLDER_BRANCHES, PREFIX_QUERY)
+
+/* The Origin tab filtered, over the same three local branches the unfiltered
+   origin frame uses: `in` finds the branch the repository is on, which keeps
+   its tick, and two `origin` has alone, which keep their `cloud`. */
+const ORIGIN_LOCAL = [
+  { name: 'main', current: true },
+  { name: 'develop', current: false },
+  { name: 'fix/legacy/depot-import', current: false }
+]
+const ORIGIN_QUERY = 'in'
+const ORIGIN_HITS = filterBranches(originBranches(ORIGIN_BRANCHES, ORIGIN_LOCAL), ORIGIN_QUERY)
+
+/* Nothing matched, which is two different sentences: the other tab has some and
+   says how many, or nothing anywhere has them and the query is named back. */
+const NO_MATCH_QUERY = 'kickbox'
+
 /* The caption on its own, in all three of the states it can be in: unfolded
    with a count, unfolded without one, and folded — which still carries its
    count, because somebody who folds the branches away is saying they do not
    want to read the list, not that they no longer want to know there are nine
    of them. */
 const headerFolds = ref({ withCount: true, bare: true, folded: false, withActions: true })
+/* The caption as a field, live in its own frame: the row is a fixture of the
+   real one — the whole field is `GitPanel`'s, since it owns the query — and
+   what this frame is for is the swap itself, that the fold is unreachable while
+   it stands and that the row is still exactly `--row-h` in both densities. */
+const headerSearch = ref('')
 /* The live commit box's own draft. Empty to start with, since that is the
    state the button's refusal is drawn in. */
 const commitDraft = ref('')
@@ -3813,7 +3856,19 @@ const menuTargetStyle = {
              list can all actually be worked. It is taller than its
              neighbours because a drag needs somewhere to go — the four above are
              sized to catch what a short panel does to the captions, and this one
-             is sized to catch what a drag does at all. -->
+             is sized to catch what a drag does at all.
+
+             **The name filter is live here and only here**, since the query is
+             this panel's own state: press the `search` button in the Branches
+             caption and the row becomes a field with the focus in it. Type
+             `git-panel`, and what to check is that the caption's count is gone,
+             the tab labels read `2 of 8` and `Origin 0`, the list has flattened
+             past its folders, and the highlight sits under the two matches.
+             Press `Origin` and the query holds, with the labels swapping to
+             `Local 2` and `0 of 5` over the no-match state. Then
+             `Esc` once to empty the field, `Esc` again to close it — and the
+             list comes back scrolled where it was, with exactly the folders that
+             were open still open. -->
         <div :style="{ display: 'flex', width: '252px', height: '420px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <template #actions>
@@ -4081,12 +4136,12 @@ const menuTargetStyle = {
              the slot, so what the gutter does to the count is visible in one
              glance.
 
-             **This frame is the only thing exercising that slot.** The Git
-             panel's own Fetch, Pull and Push moved down into the Branches tab
-             row, so no caption in the app fills it today — the two buttons here
-             are a fixture, and the frame is what keeps the shape checkable for
-             the caption that carries controls next. Do not delete it as
-             dead. -->
+             The two buttons here are a fixture: the Git panel's own Fetch,
+             Pull and Push moved down into the Branches tab row, and what fills
+             the slot in the app now is the Branches caption's single `search`
+             button. The pair is kept because a caption with *two* controls is
+             what the gutter arithmetic is about and nothing in the app draws
+             one. Do not delete it as dead. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <SectionHeader
             label="Branches"
@@ -4097,6 +4152,62 @@ const menuTargetStyle = {
             <template #actions>
               <IconButton icon="arrow-down" label="Pull 2" size="sm" />
               <IconButton icon="arrow-up" label="Push 1" size="sm" />
+            </template>
+          </SectionHeader>
+          <SectionHeader divided label="Branches" :count="9" :open="true" />
+        </div>
+        <!-- The row as a field, which is the other half of the filter: with
+             `searching` set the caption `<button>` is not drawn at all, so
+             there is nothing to fold by — deliberately, since the row somebody
+             is typing into must not also be the row that folds the section away
+             under them.
+
+             The plate inside it is a **fixture** of `GitPanel`'s own, which
+             owns the query and everything about it; what this frame is for is
+             the swap. What to check: the row is exactly the height of the
+             caption beside it in both densities, the plate reaches both edges
+             of the panel, and the `x` sits where the `search` button of the
+             frame above sits. Type into it — the field is live here, and the
+             caret and the placeholder are the two things worth looking at on
+             both themes. Then Tab: the focus ring is `base.css`'s own, pulled
+             inside the input's own edge so it is whole rather than clipped
+             against the rows either side, and Tab again puts it on the `x`
+             inside the same plate — which is the pair of controls that makes
+             the ring load-bearing. Compact is the density to check it in. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <SectionHeader label="Branches" :count="9" searching>
+            <template #editor>
+              <div
+                :style="{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 'var(--space-2)',
+                  flex: 1,
+                  minWidth: 0,
+                  height: '100%',
+                  padding: '0 var(--space-3) 0 var(--space-5)',
+                  background: 'var(--surface-raised)'
+                }"
+              >
+                <Icon name="search" :size="12" :style="{ flex: 'none', color: 'var(--text-muted)' }" />
+                <input
+                  v-model="headerSearch"
+                  type="text"
+                  placeholder="Filter branches"
+                  aria-label="Filter branches"
+                  :style="{
+                    flex: 1,
+                    minWidth: 0,
+                    height: '100%',
+                    border: 'none',
+                    outlineOffset: 'calc(var(--border-w-strong) * -1)',
+                    background: 'transparent',
+                    color: 'var(--text-primary)',
+                    font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
+                  }"
+                />
+                <Button variant="ghost" size="sm" icon="x" aria-label="Clear filter" />
+              </div>
             </template>
           </SectionHeader>
           <SectionHeader divided label="Branches" :count="9" :open="true" />
@@ -4304,6 +4415,87 @@ const menuTargetStyle = {
         </div>
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList tab="origin" :branches="FOLDER_BRANCHES" :remote="[]" fetching />
+        </div>
+        <!-- The filter's result, which is the same list with everything about
+             its arrangement taken away: no folders, no headings, no three
+             surfaces — flat on the canvas, in the order the tab already used.
+
+             What to check. The prefix up to and including the last slash is
+             muted and the tail is in ink, so the half that identifies a branch
+             is still the loud half with no heading above it. The matched run
+             sits on `--selection-bg` and changes nothing else — no weight, no
+             colour — and the row does not move under it. A hit is still a row:
+             the marked one keeps its star (and its tick, since it is also the
+             branch the repository is on), `fix/legacy/depot-import` keeps its
+             `↓2`, and both answer a double click and a right-click menu. The
+             name truncates at the **end** here rather than in the middle, which
+             is the one place `splitName` is deliberately not applied. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="FOLDER_BRANCHES"
+            :tracking="FOLDER_TRACKING"
+            :favorites="[FILTER_FAVORITE]"
+            :query="FILTER_QUERY"
+            :hits="FILTER_HITS"
+            :other-hits="0"
+          />
+        </div>
+        <!-- The case a substring over the **whole** name exists for: the query
+             runs across the slash, so the highlight lands inside the muted
+             prefix. What to check is that the prefix stays muted underneath it —
+             the ground changes and nothing else — and that `feat/kick` finding
+             nothing where `kick` finds two is the same rule seen from the other
+             side. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="FOLDER_BRANCHES"
+            :tracking="FOLDER_TRACKING"
+            :query="PREFIX_QUERY"
+            :hits="PREFIX_HITS"
+            :other-hits="0"
+          />
+        </div>
+        <!-- The same filter on the Origin tab. What to check: the two glyphs
+             still choose themselves — `main` has a local twin and draws
+             `git-branch` with the tick, the other two are only on `origin` and
+             draw `cloud` — and there is no star and no `↓N` on this side, under
+             a filter as without one. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            tab="origin"
+            :branches="ORIGIN_LOCAL"
+            :remote="ORIGIN_BRANCHES"
+            :query="ORIGIN_QUERY"
+            :hits="ORIGIN_HITS"
+            :other-hits="0"
+          />
+        </div>
+        <!-- Nothing matched, in both of its sentences, and the difference
+             between them is the whole reason the other tab's count is a prop.
+             First: the other side has some, so the state says how many and where
+             to go — without it a filter would be hiding nine branches behind a
+             true sentence. Second: nothing anywhere matched, so the query is
+             named back, since what there is to fix is what was typed. The button
+             under each does what the `x` in the field does — clears and closes,
+             one act — and it is drawn under `EmptyState` rather than through a
+             slot on it, exactly as the Origin tab's Fetch is. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="FOLDER_BRANCHES"
+            :query="NO_MATCH_QUERY"
+            :hits="[]"
+            :other-hits="9"
+          />
+        </div>
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            tab="origin"
+            :branches="FOLDER_BRANCHES"
+            :remote="ORIGIN_BRANCHES"
+            :query="NO_MATCH_QUERY"
+            :hits="[]"
+            :other-hits="0"
+          />
         </div>
         <!-- The heading's own mark, which is the whole reason it exists: every
              folder is folded, `fix/legacy/depot-import` is behind, and both

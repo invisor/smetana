@@ -2,11 +2,16 @@ import { describe, expect, it } from 'vitest'
 import {
   BRANCH_TABS,
   DEFAULT_BRANCH_TAB,
+  FILTER_DELAY_MS,
   MAX_FAVORITES,
   branchRows,
+  branchTabLabels,
   currentChain,
   expandedFolders,
+  filterBranches,
+  filterDelay,
   liftedOut,
+  originBranches,
   originBranchRows,
   toggleFavorite,
   toggleFolder,
@@ -551,5 +556,222 @@ describe('toggleRemoteFolder', () => {
     const stored = ['feature']
     expect(toggleRemoteFolder(stored, 'fix')).not.toBe(stored)
     expect(stored).toEqual(['feature'])
+  })
+})
+
+/* The filter, which is the whole of what a person types into the section's
+   caption. The list is the one the panel is looked at with: names that share a
+   prefix and differ by a few characters, which is what rules fuzzy matching out
+   and what makes the substring worth pinning in both directions. */
+describe('filtering the list by name', () => {
+  const list = branches(
+    '*develop-emerald',
+    'feat/nxc-204-kickbox-email-validation',
+    'fix/kickbox-timeout-retry',
+    'main'
+  )
+
+  it('matches a case-insensitive substring of the whole name', () => {
+    expect(filterBranches(list, 'KICK').map((hit) => hit.name)).toEqual([
+      'feat/nxc-204-kickbox-email-validation',
+      'fix/kickbox-timeout-retry'
+    ])
+  })
+
+  /* The prefix is part of the name and not a field beside it, which is what
+     lets somebody narrow a result by typing the folder they mean — and what
+     makes a query spanning the slash of a *different* name find nothing. */
+  it('matches across the slash, so a prefix narrows it', () => {
+    expect(filterBranches(list, 'feat/kick').map((hit) => hit.name)).toEqual([])
+    expect(filterBranches(list, 'feat/nxc').map((hit) => hit.name)).toEqual([
+      'feat/nxc-204-kickbox-email-validation'
+    ])
+  })
+
+  /* The order is the tab's own and the result is flat: nothing is ranked, and
+     the current branch is not lifted to the top of its own hits. */
+  it('keeps the order the list arrived in and lifts nothing', () => {
+    const hits = filterBranches(list, 'e')
+    expect(hits.map((hit) => hit.name)).toEqual([
+      'develop-emerald',
+      'feat/nxc-204-kickbox-email-validation',
+      'fix/kickbox-timeout-retry'
+    ])
+    expect(hits.every((hit) => hit.depth === 0 && !hit.block)).toBe(true)
+  })
+
+  it('splits the name at the last slash and says where the match is', () => {
+    const [hit] = filterBranches(list, 'kickbox-t')
+    expect(hit.prefix).toBe('fix/')
+    expect(hit.tail).toBe('kickbox-timeout-retry')
+    expect(hit.match).toEqual({ start: 4, end: 13 })
+  })
+
+  /* A name with no slash in it is all tail and no prefix, which is what stops
+     the drawing putting an empty muted span in front of half the rows. */
+  it('leaves a name with no slash entirely in the tail', () => {
+    const [hit] = filterBranches(list, 'main')
+    expect(hit.prefix).toBe('')
+    expect(hit.tail).toBe('main')
+    expect(hit.label).toBe('main')
+  })
+
+  it('carries the star and the tick through', () => {
+    const hits = filterBranches(list, 'e', {
+      favorites: ['main', 'fix/kickbox-timeout-retry']
+    })
+    expect(hits.map((hit) => Boolean(hit.favorite))).toEqual([false, false, true])
+    expect(hits[0].current).toBe(true)
+  })
+
+  /* The Origin tab has no `current` field on its entries when they are built by
+     hand, so the option is the way that tab's tick arrives. */
+  it('takes the current branch by name where the list does not carry one', () => {
+    const hits = filterBranches([{ name: 'release' }, { name: 'develop' }], 'e', {
+      current: 'develop'
+    })
+    expect(hits.map((hit) => [hit.name, Boolean(hit.current)])).toEqual([
+      ['release', false],
+      ['develop', true]
+    ])
+  })
+
+  /* Anything else on the entry travels, which is how an Origin hit knows
+     whether it is a `cloud` row or a `git-branch` one. */
+  it('carries the rest of the entry through untouched', () => {
+    const [hit] = filterBranches([{ name: 'spike', hasLocal: false }], 'spi')
+    expect(hit.hasLocal).toBe(false)
+    expect(hit.kind).toBe('branch')
+    expect(hit.pinned).toBe(true)
+  })
+
+  it('answers nothing for an empty or blank query', () => {
+    expect(filterBranches(list, '')).toEqual([])
+    expect(filterBranches(list, '   ')).toEqual([])
+    expect(filterBranches(list, null)).toEqual([])
+  })
+
+  it('reads a missing list as nothing rather than throwing', () => {
+    expect(filterBranches(undefined, 'main')).toEqual([])
+    expect(filterBranches([null, {}], 'main')).toEqual([])
+  })
+})
+
+/* The entries both readers of the Origin tab share. What the filter needs from
+   this is the pair of facts a row is drawn by, which is why it is one rule and
+   not a mapping written out at each of the two call sites. */
+describe('the entries behind the origin tab', () => {
+  const local = branches('*main', 'feature/one')
+
+  it('says which names this repository already has and which it is on', () => {
+    expect(originBranches(['develop', 'main'], local)).toEqual([
+      { name: 'develop', hasLocal: false, current: false },
+      { name: 'main', hasLocal: true, current: true }
+    ])
+  })
+
+  it('drops the names there is no row to draw for', () => {
+    expect(originBranches([null, '', 'main'], local)).toEqual([
+      { name: 'main', hasLocal: true, current: true }
+    ])
+  })
+
+  it('reads a missing list of either side as nothing', () => {
+    expect(originBranches(undefined, undefined)).toEqual([])
+  })
+})
+
+/* The tab labels, which is where the counts go while the caption is a field.
+   The second number is the load-bearing one: without it a tab with no matches
+   is an empty state telling the truth about the wrong half of the repository. */
+describe('what the two tabs are called', () => {
+  it('names them plainly with no filter', () => {
+    expect(branchTabLabels({ tab: 'local', query: '', localTotal: 346, originTotal: 593 })).toEqual([
+      { id: 'local', label: 'Local' },
+      { id: 'origin', label: 'Origin' }
+    ])
+  })
+
+  it('puts the hit count in the active tab and the other tab reports its own', () => {
+    expect(
+      branchTabLabels({
+        tab: 'local',
+        query: 'kick',
+        localTotal: 346,
+        originTotal: 593,
+        localHits: 3,
+        originHits: 9
+      })
+    ).toEqual([
+      { id: 'local', label: '3 of 346' },
+      { id: 'origin', label: 'Origin 9' }
+    ])
+    expect(
+      branchTabLabels({
+        tab: 'origin',
+        query: 'kick',
+        localTotal: 346,
+        originTotal: 593,
+        localHits: 3,
+        originHits: 9
+      })
+    ).toEqual([
+      { id: 'local', label: 'Local 3' },
+      { id: 'origin', label: '9 of 593' }
+    ])
+  })
+
+  /* Zero is drawn like any other count here, unlike the caption's own, which
+     refuses one: `0 of 346` beside `Origin 9` is the sentence the empty state
+     under it is about. */
+  it('draws a zero rather than falling silent', () => {
+    expect(
+      branchTabLabels({ tab: 'local', query: 'zzz', localTotal: 346, originTotal: 593 })
+    ).toEqual([
+      { id: 'local', label: '0 of 346' },
+      { id: 'origin', label: 'Origin 0' }
+    ])
+  })
+
+  it('answers the two ids in the order the tab row draws them', () => {
+    expect(branchTabLabels({}).map((tab) => tab.id)).toEqual(BRANCH_TABS)
+  })
+
+  it('reads a blank query as no filter at all', () => {
+    expect(branchTabLabels({ tab: 'local', query: '   ', localTotal: 2 })[0].label).toBe('Local')
+  })
+})
+
+/* How long the field waits, which is `--dur-fast` in whatever unit the
+   stylesheet happens to be written in. */
+describe('how long the field waits', () => {
+  it('reads the token as the stylesheet writes it today', () => {
+    expect(filterDelay('90ms')).toBe(90)
+  })
+
+  /* Tolerated rather than expected: nothing normalises a custom property's
+     value, and this rule is not the place to find out what the browser did
+     with the whitespace after the colon. */
+  it('tolerates whitespace around the value', () => {
+    expect(filterDelay(' 90ms ')).toBe(90)
+  })
+
+  it('reads seconds as seconds', () => {
+    expect(filterDelay('.09s')).toBe(90)
+    expect(filterDelay(' 1s ')).toBe(1000)
+  })
+
+  /* `motion.css` zeroes the token under `prefers-reduced-motion`, and a filter
+     that answers on the keystroke is the right reading of that. */
+  it('honours a zero rather than falling back to the default', () => {
+    expect(filterDelay('0ms')).toBe(0)
+  })
+
+  it('falls back where there is nothing readable, no unit, or a negative one', () => {
+    expect(filterDelay('')).toBe(FILTER_DELAY_MS)
+    expect(filterDelay(undefined)).toBe(FILTER_DELAY_MS)
+    expect(filterDelay('fast')).toBe(FILTER_DELAY_MS)
+    expect(filterDelay('90')).toBe(FILTER_DELAY_MS)
+    expect(filterDelay('-90ms')).toBe(FILTER_DELAY_MS)
   })
 })

@@ -224,6 +224,37 @@
    headings go on unfolding, since unfolding is reading, and so does the tab row
    above them.
 
+   ## The name filter
+
+   With a query on, everything above is put aside and the list is the hits,
+   flat, on the canvas: no folders, no headings, no three surfaces. The rows are
+   `GitPanel`'s — it has both tabs' hits already, since the tab labels report
+   each other's counts — so this component draws them rather than filtering
+   again, and the two cannot disagree about what matched.
+
+   A hit keeps everything a row is: its glyph, whether that is the star, the
+   branch or the cloud; its tick; its `↓N`/`↑N`; its double click and its menu.
+   What it loses is its block, because three surfaces are there to say where
+   three groups end and a result list is one group, and its folder, because a
+   filter that unfolded things would be editing a preference on the way past.
+   The flat list **ignores** the folds rather than changing them: come out of
+   the filter and the tree is exactly as it was left.
+
+   The name is drawn in parts and never as HTML — the prefix up to and including
+   the last slash muted, the tail in ink, and the matched run on
+   `--selection-bg` with no change of weight or colour, so a row does not move
+   under the match. `splitName`'s middle truncation is deliberately not applied
+   here: that rule holds the last twelve characters because the tail identifies
+   a branch, and a hit already says where the interesting part is by
+   highlighting it — cutting the middle out from under a highlight would be the
+   one thing a filter must not do.
+
+   Nothing matched is an `EmptyState` like every other nothing in this panel,
+   and its second line is the whole reason `otherHits` is a prop: with nine
+   matches on the other tab it says so and where to go, and with none anywhere
+   it names the query back. Under it is the second control this component draws
+   outside a row, `Clear filter`, which does what the `x` in the field does.
+
    A rename here is local and stops there: no upstream is renamed, nothing is
    pushed and nothing on the remote is deleted. So is every flag and strategy a
    merge can take: this offers the merge and the rebase git would do by itself,
@@ -287,6 +318,22 @@ const props = defineProps({
      every other piece of state here. `branchTree.js` holds the closed list and
      the default, which `settings/model.rs` mirrors. */
   tab: { type: String, default: DEFAULT_BRANCH_TAB },
+  /* What somebody typed into the caption's field, already debounced by
+     `GitPanel`. Blank means no filter at all and the two lists above are drawn;
+     anything else replaces them with `hits`. It is kept as a prop rather than
+     derived from `hits` being empty, because "no filter" and "a filter that
+     matched nothing" are two different screens. */
+  query: { type: String, default: '' },
+  /* The rows to draw while `query` is on — `filterBranches`' answer for the tab
+     showing, built by `GitPanel` because it needs both sides' counts anyway.
+     Filtering again here would be a second copy of the same call, free to
+     disagree with the number in the tab label above. */
+  hits: { type: Array, default: () => [] },
+  /* How many the **other** tab matched, which is the second line of the empty
+     state and nothing else: a filter that found nothing here, over a repository
+     where `origin` holds nine matches, must not draw a sentence that is true
+     about the wrong half of it. */
+  otherHits: { type: Number, default: 0 },
   /* The short hash HEAD is sitting on when it is on no branch at all, or null
      for the ordinary case. It is handed down rather than derived here: this
      component is given the branch list and would have to read a detached HEAD
@@ -343,7 +390,12 @@ const emit = defineEmits([
   'checkout-remote',
   /* The whole new list, resolved by `branchTree.js`, exactly as `toggle-folder`
      carries one — and a second event because it is a second settings field. */
-  'toggle-remote-folder'
+  'toggle-remote-folder',
+  /* From under the no-match state: put the filter away. It carries nothing —
+     the query is the caller's, and what this asks for is the same act the `x`
+     in the field performs, which is why it is one event and not "clear" and
+     "close". */
+  'clear-filter'
 ])
 
 /* Hover is per row and `useInteractive` tracks one control at a time, so an
@@ -455,8 +507,14 @@ const pick = (item, name) => {
   else if (item.kind === 'checkout-remote') emit('checkout-remote', name)
 }
 
+/* Whether a filter is on at all, which is one question answered once: three
+   lists are drawn from it and only ever one of them at a time. A blank query is
+   a field somebody has opened and not typed into, and that is the ordinary tree
+   rather than a filter matching everything. */
+const filtering = computed(() => props.query.trim().length > 0)
+
 const rows = computed(() =>
-  props.tab === 'origin'
+  props.tab === 'origin' || filtering.value
     ? []
     : branchRows(
         props.branches,
@@ -469,8 +527,16 @@ const rows = computed(() =>
    in the template: which of the two lists is built is one question and it is
    answered once, here. */
 const originRows = computed(() =>
-  props.tab === 'origin' ? originBranchRows(props.remote, props.branches, props.remoteFolders) : []
+  props.tab === 'origin' && !filtering.value
+    ? originBranchRows(props.remote, props.branches, props.remoteFolders)
+    : []
 )
+
+/* The hits, as a list of their own rather than as `props.hits` read in the
+   template: what is drawn is the filter's answer only while a filter is on, and
+   a stale list left standing behind a cleared query would be rows about nothing
+   somebody typed. */
+const hitRows = computed(() => (filtering.value ? props.hits : []))
 
 const MARK = 12
 
@@ -633,6 +699,11 @@ const detachedStyle = {
 const detachedPlate = computed(
   () =>
     props.tab !== 'origin' &&
+    /* Not over a filter result. The plate is the current block, and a flat list
+       of hits has no blocks at all — a plate above three matched rows would be
+       claiming to be the first of them. What it says is on the scope bar one
+       level up either way, and closing the filter brings it back. */
+    !filtering.value &&
     Boolean(props.detached) &&
     !props.branches.some((branch) => branch?.current)
 )
@@ -836,14 +907,18 @@ const spinStyle = { color: 'var(--attn-live)', animation: 'sm-spin var(--dur-pul
    and a repository whose `origin` this app knows nothing about — no remote, an
    empty one, or a list that has not landed for this repository yet. One blank
    area for both would be a tab saying nothing two different ways. */
-const empty = computed(() =>
+const empty = computed(() => {
+  /* Never under a filter, even where the tab is genuinely empty: "there are no
+     branches here" and "nothing matched what you typed" are two different
+     sentences, and the second one is `noMatch`'s below. */
+  if (filtering.value) return false
   /* Read off the rows on the Origin tab rather than off the list handed in: a
      name the rule drops — an empty string, a `/` on its own — leaves a tab with
      nothing on it, and a sentence is what this panel draws for nothing on it. A
      folded folder is still a row, so folding everything away never reaches
      here. */
-  props.tab === 'origin' ? originRows.value.length === 0 : props.branches.length === 0
-)
+  return props.tab === 'origin' ? originRows.value.length === 0 : props.branches.length === 0
+})
 /* An `EmptyState` rather than the line of prose this used to be, so a tab with
    nothing on it reads as a state of the panel rather than as a list that failed
    to draw. `compact`, because the box it sits in is capped at a handful of rows
@@ -862,6 +937,100 @@ const EMPTY_COPY = {
   }
 }
 const emptyCopy = computed(() => EMPTY_COPY[props.tab] ?? EMPTY_COPY.local)
+
+/* A matched name, in parts. The prefix — everything up to and including the
+   last slash — is muted and the tail is in ink, which is the same split the
+   folders make and the reason a flat list can go without headings at all: the
+   half that identifies a branch is still the loud half. Over both of them lies
+   the matched run, on `--selection-bg` and nothing else — no weight, no colour,
+   no border — because a row whose text got heavier under the match would move
+   under the eye that is scanning it, and this list is scanned.
+
+   **Parts and never a string of HTML.** A branch name is a string from the
+   repository, and building `<span>`s out of it by hand is how a list of names
+   becomes an injection. Vue draws these as text nodes; nothing is parsed.
+
+   The two ranges are pushed through one function because the match can straddle
+   the slash — `feat/nxc` is one of the queries this exists for — so each half
+   of the name is cut against the match rather than the other way about. */
+const markedParts = (row) => {
+  const parts = []
+  const push = (from, to, base) => {
+    if (from >= to) return
+    const start = Math.max(from, row.match.start)
+    const end = Math.min(to, row.match.end)
+    if (start >= end) {
+      parts.push({ text: row.name.slice(from, to), style: base })
+      return
+    }
+    if (from < start) parts.push({ text: row.name.slice(from, start), style: base })
+    parts.push({
+      text: row.name.slice(start, end),
+      style: { ...base, background: 'var(--selection-bg)', borderRadius: 'var(--radius-1)' }
+    })
+    if (end < to) parts.push({ text: row.name.slice(end, to), style: base })
+  }
+  push(0, row.prefix.length, { color: 'var(--text-muted)' })
+  push(row.prefix.length, row.name.length, { color: 'var(--text-primary)' })
+  return parts
+}
+
+/* A hit's identity, which is the tab's own — the two lists share the drawing
+   and not the identity, and `rowInteractive` is cached for the life of this
+   component. A filtered `feature/two` and an unfiltered one are the same row
+   and deliberately share their hover. */
+const hitKey = (row) => (props.tab === 'origin' ? originKeyOf(row) : keyOf(row))
+
+/* The same three glyphs the unfiltered rows draw, chosen the same way: the star
+   where somebody marked the branch, the cloud where only `origin` has it, and
+   the branch glyph otherwise. `favorite` and `hasLocal` both travel on the hit,
+   so this is a reading of the rule's answer rather than a second copy of it. */
+const hitGlyph = (row) => {
+  if (row.favorite) return 'star'
+  if (props.tab === 'origin' && !row.hasLocal) return 'cloud'
+  return 'git-branch'
+}
+const hitGlyphTitle = (row) => {
+  if (row.favorite) return 'A favourite branch'
+  if (props.tab !== 'origin') return undefined
+  return row.hasLocal ? 'Also a local branch' : 'Only on origin'
+}
+
+/* What the row's upstream is holding, and nothing at all on the Origin tab —
+   `vcs_tracking` walks `refs/heads`, so there is no record to read there, which
+   is the same reason an unfiltered origin row draws no mark. */
+const hitMark = (row) => (props.tab === 'origin' ? { behind: 0, ahead: 0 } : mark(row))
+
+/* The double click on a hit, which is whichever verb that row's own tab would
+   have answered with: an ordinary switch on the Local tab, and on Origin the
+   pair `hasLocal` chooses between — the fact travels on the hit, so the two
+   lists cannot come apart. */
+const hitCheckout = (row) => {
+  if (props.tab === 'origin') {
+    originCheckout(row)
+    return
+  }
+  if (target(row)) emit('checkout', row.name)
+}
+
+/* Nothing matched, which is a state of the filter rather than of the tab, so it
+   says both things: what was looked in, and what the other side found. The
+   second line is the one that matters — a filter answering "no origin branch
+   matches" over a Local tab holding three of them would be true and useless.
+   The query is named back only where there is nothing anywhere, since that is
+   the case where the thing to fix is what was typed. */
+const noMatch = computed(() => filtering.value && props.hits.length === 0)
+const noMatchCopy = computed(() => {
+  const here = props.tab === 'origin' ? 'origin' : 'local'
+  const other = props.tab === 'origin' ? 'Local' : 'Origin'
+  return {
+    title: `No ${here} branch matches`,
+    description:
+      props.otherHits > 0
+        ? `${other} has ${props.otherHits}. Switch tabs to see them.`
+        : `${props.query.trim()} is not in any ${here} branch name. ${other} has none either.`
+  }
+})
 </script>
 
 <template>
@@ -1096,6 +1265,81 @@ const emptyCopy = computed(() => EMPTY_COPY[props.tab] ?? EMPTY_COPY.local)
         </div>
       </component>
     </template>
+    <!-- The filter's answer, in place of both lists above: they are built as
+         empty while a query is on, so which of the three is drawn is one
+         question answered once, in the script. Flat on the canvas, with no
+         folders and no block surfaces — three surfaces are there to say where
+         three groups end, and this is one group. -->
+    <template v-for="row in hitRows" :key="hitKey(row)">
+      <component
+        :is="hint ? Tooltip : 'div'"
+        v-bind="hint ? { label: hint, side: 'right' } : {}"
+        :style="{ display: 'block' }"
+      >
+        <div
+          :style="rowStyle(row, hitKey(row))"
+          :aria-disabled="target(row) ? undefined : 'true'"
+          v-bind="tracked(row) ? interactiveFor(hitKey(row)).handlers : {}"
+          @dblclick="hitCheckout(row)"
+          @contextmenu.prevent="openMenu(row, $event)"
+        >
+          <Icon
+            :name="hitGlyph(row)"
+            :size="MARK"
+            :style="leadStyle(row)"
+            :title="hitGlyphTitle(row)"
+          />
+          <!-- The whole name in parts: the prefix muted, the tail in ink and
+               the matched run on `--selection-bg`. It truncates at the end like
+               any other row — `splitName`'s middle cut is deliberately not
+               applied here, since a highlight is already saying which part of
+               the name is the interesting one and cutting the middle out from
+               under it would hide exactly that. -->
+          <span :style="nameStyle" :title="fullName(row)"
+            ><span v-for="(part, at) in markedParts(row)" :key="at" :style="part.style">{{
+              part.text
+            }}</span></span
+          >
+          <span v-if="hitMark(row).behind" :style="behindStyle">
+            <Icon name="arrow-down" :size="MARK" />{{ hitMark(row).behind }}
+          </span>
+          <span v-if="hitMark(row).ahead" :style="aheadStyle">
+            <Icon name="arrow-up" :size="MARK" />{{ hitMark(row).ahead }}
+          </span>
+          <span :style="{ flex: 1 }" />
+          <span :style="markBox">
+            <Icon
+              v-if="operation(row)"
+              name="loader-circle"
+              :size="MARK"
+              :style="spinStyle"
+              :title="OPERATIONS[operation(row)]"
+            />
+            <Icon v-else-if="row.current" name="check" :size="MARK" title="Current branch" />
+          </span>
+        </div>
+      </component>
+    </template>
+    <!-- Nothing matched, which is a state of the filter and not of the tab: the
+         sentence under the title carries the other tab's hit count where it has
+         any, since a filter that found nothing here over nine matches on the
+         other side would otherwise be hiding them behind a true sentence. The
+         button under it does what the `x` in the field does — clears and
+         closes, one act — and it is drawn under `EmptyState` rather than
+         through a slot on it, for the reason the Fetch below it is. -->
+    <div v-if="noMatch" :style="{ padding: 'var(--space-5)' }">
+      <EmptyState
+        compact
+        icon="search"
+        :title="noMatchCopy.title"
+        :description="noMatchCopy.description"
+      />
+      <div :style="{ display: 'flex', justifyContent: 'center', marginTop: 'var(--space-4)' }">
+        <Button variant="secondary" size="sm" icon="x" @click="emit('clear-filter')">
+          Clear filter
+        </Button>
+      </div>
+    </div>
     <!-- One state per tab, like every other empty state in this panel, and
          deliberately narrow about what each can mean. A repository with no
          commit yet still offers one local branch — `git.rs` pushes HEAD's own
