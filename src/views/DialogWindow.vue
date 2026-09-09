@@ -29,7 +29,32 @@
    rides with it — and means nothing, and this page fills the window instead of
    being as tall as its content. `Modal.vue` is the other half, since it is what
    holds the body and the footer; `src-tauri/src/window.rs` carries the whole
-   argument and the one-way latch behind it. */
+   argument and the one-way latch behind it.
+
+   **Escape closes this window, and the handler is here rather than in
+   `overlays/Modal.vue`.** Both were candidates and the difference is reach.
+   This file's reach is exactly the kinds in `views/dialogRegistry.js` and
+   nothing beyond them, and the answer it sends already exists: `EMITS`' own
+   `close`, the very listener the guest's Cancel is wired to, so "Escape is the
+   same exit as Cancel" is a fact about one line rather than about two that
+   have to agree. `Modal.vue` is wider than the registry in one direction — the
+   same primitive draws `ConflictModal` and the overlays inside the app window,
+   where nothing is listening for a `close` — and narrower in the one that
+   matters most: a kind with no entry in `COMPONENTS` below draws no `Modal` at
+   all, and that is the window that has to be closable by construction, since it
+   is the symptom of a mechanism whose other failure is a window nobody can see.
+   So the empty state answers Escape too, and the rule the handler reads is
+   `views/dialogKeys.js`.
+
+   What this file cannot work out on its own is whether the dialog is offering a
+   way out at that moment. `closable` is the guest's own answer, computed from
+   what the app window announces — `discard-change` takes it off its discard
+   being in flight — and no announcement carries it. So `smDialogClosable` below
+   is provided the way `smDialogFill` is and written by `Modal.vue`, the one
+   component every guest draws and the one place that knows the answer already.
+   Announcing a second `closable` from the app window beside the fields the
+   guest computes it from was the version thrown away: one fact spelled twice,
+   and the copy is the half that drifts. */
 import { computed, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch, watchEffect } from 'vue'
 import DeleteBranchModal from '../components/git/DeleteBranchModal.vue'
 import DeleteSessionModal from '../components/agent/DeleteSessionModal.vue'
@@ -45,6 +70,7 @@ import RenameBranchModal from '../components/git/RenameBranchModal.vue'
 import ReviewChangesDialog from '../components/git/ReviewChangesDialog.vue'
 import RunModal from '../components/run/RunModal.vue'
 import SetupProjectModal from '../components/run/SetupProjectModal.vue'
+import { dialogVerb } from './dialogKeys.js'
 import { dialogWidth, isDialogKind } from './dialogRegistry.js'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
 import { paintRoot, usePrefersDark } from './useAppearance.js'
@@ -117,6 +143,19 @@ provide('smDialogWindow', true)
    the answer from `sizeDialogWindow` below raises it, never the other way. */
 const filled = ref(props.fill)
 provide('smDialogFill', filled)
+
+/* Whether the dialog in this window is offering a way out right now, and the
+   one thing this file is told by its guest rather than telling it. Written by
+   `Modal.vue` while it is drawn in a window, read by the Escape handler below
+   and by nothing else.
+
+   `true` until something says otherwise, which is deliberate and covers the two
+   states that draw no `Modal` at all: a kind with no component, whose empty
+   state exists precisely so that such a window can be seen and shut, and the
+   moment before the guest is mounted — nothing has been started from a dialog
+   that is not on screen yet, so there is nothing for a close to interrupt. */
+const closable = ref(true)
+provide('smDialogClosable', closable)
 
 /* The one store a dialog window holds, and it is held for one kind.
 
@@ -353,6 +392,68 @@ const listeners = {
   ...Object.fromEntries(HOSTED_EMITS.map((name) => [on(name), answerHere[name]]))
 }
 
+/* Escape, and it is Cancel's own exit rather than one beside it.
+
+   `dialogVerb` is the whole of the rule and this is the whole of the handler.
+   `close` goes out through the very listener the guest's Cancel is wired to, so
+   the two cannot come to mean different things — nothing is written, nothing is
+   confirmed, and in `discard-change` this can never be Discard. `null` is a
+   press that is not this window's, which is what leaves a dropdown, a pointer
+   menu or the review window's branch list to close on its own Escape first.
+
+   `refuse` is a press this window has decided about and is not acting on, and
+   the default is cancelled for it as well. What it guards is narrow, and worth
+   stating exactly because the obvious way to say it is wrong: **there is no
+   cross in a dialog window.** `Modal.vue` draws its header only when it is
+   *not* in one, so a guest's `closable` governs a button that is not on screen
+   here at all, and the only way out drawn beside Cancel is the OS frame's own.
+   So this is not Escape being held back from a door two other controls are
+   also holding shut — it is Escape not becoming a way out that Cancel is not.
+   A guest declares itself unclosable while it is writing — `discard-change` for
+   the length of its discard — and a key that closed the window then would be
+   walking round the refusal the disabled Cancel makes, in the one dialog in
+   this app whose write has no undo behind it.
+
+   **The frame's own button is still a way out in that state, and that is a hole
+   rather than a counter-argument.** Nothing takes it away: no window in this
+   app is ever made unclosable — there is no `set_closable` anywhere in
+   `src-tauri/` — `window.rs`'s `CloseRequested` arm records the size and
+   returns without preventing anything, and its `Destroyed` arm answers every
+   dialog window with a `close` unconditionally. So a discard in flight can
+   still be closed over with the frame's button while Escape refuses, which
+   leaves this key stricter than the chrome around it. Closing that is the Rust
+   side's and is filed separately; it is not this handler's to compensate for,
+   and levelling Escape down to match the button would be fixing the wrong
+   half.
+
+   **It cannot fall through to the app.** This is a webview of its own in a
+   window of its own: nothing of the app window's document is in this event's
+   path, and the `preventDefault` is about this page's own defaults and nothing
+   else. Bound on `document` rather than on the root because the press lands
+   wherever the focus is — a text field in `new-branch`, a row in
+   `review-changes`, `<body>` in a window whose guest is not mounted yet.
+
+   **An ordinary field is deliberately no exception.** Escape with the caret in
+   `new-branch`'s name closes the window rather than clearing the field or
+   dropping the focus, which is a decision and not an oversight: on some
+   platforms Escape in a text field means "undo what I typed", and here it
+   means the same thing one scope out, since the whole window is what was being
+   typed into. A field that answers the key *itself* still answers it first and
+   keeps this one press — `BranchSelect`'s naming field cancels the name it was
+   taking — because that is what `defaultPrevented` above is for.
+
+   Subscribed at setup rather than on mount, `ImageWindow.vue`'s line for its
+   reason: this window's first paint may be the empty state below, and a key
+   pressed before the first frame should still close it. */
+const onKeydown = (event) => {
+  const verb = dialogVerb(event, { closable: closable.value })
+  if (!verb) return
+  event.preventDefault()
+  if (verb === 'close') listeners.onClose()
+}
+
+document.addEventListener('keydown', onKeydown)
+
 /* How this window is painted, in the shape the app's windows speak in. The
    defaults are the shipped ones, so it paints itself correctly in the moment
    before the first answer arrives rather than flashing a light theme at
@@ -529,6 +630,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   clearTimeout(stopWaiting)
+  document.removeEventListener('keydown', onKeydown)
   window.removeEventListener('resize', readViewport)
   observer?.disconnect()
   for (const stop of stops) stop()
