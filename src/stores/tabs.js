@@ -74,6 +74,54 @@ export const hasAgentTab = computed(() => hasAgentSession.value)
    one. */
 export const buffers = reactive(new Map())
 
+/* Which open tabs are being shown as source rather than as the document they
+   are — the paths somebody has pressed the eye/code toggle on.
+
+   A set of paths and not a field on the buffer, because it is not a fact about
+   the file: an html tab with no buffer at all — one still loading, one whose
+   read refused — still has a mode, and a buffer replaced wholesale by
+   `discardTabs` or by a reload must not take the mode with it. What is in here
+   is the exception, so the empty set is "every document tab is a document",
+   which is the default the whole feature is built around.
+
+   **In module scope and therefore never in `settings.json`**, which is the
+   split this file's header states: the list of open tabs survives a restart and
+   the buffers do not, and the mode belongs with the buffers. Deciding otherwise
+   would be a field in the settings file and in the Rust model, plus a migration,
+   for a state whose whole life is one glance at the source of one document — and
+   a person who left a report open as markup last week is not asking to be shown
+   markup on Monday.
+
+   It holds only paths, and what makes that true is one clause in another file
+   rather than anything here: `isDocumentPath` refuses any string carrying the
+   zero byte, which is the mark `diffId` and `termTabId` below are built on, and
+   the toggle is drawn only for a tab that rule answered for. It was not true
+   when this was first written — a diff's id *ends* in the path it is about, so a
+   diff of any `.html` was offered the toggle and a press would have put a
+   synthetic id in here. Nothing guards it a second time: a set that quietly
+   swallowed an id the view should never have offered would hide the fault
+   instead of leaving it in the one place it can be fixed.
+
+   Kept in step by the three functions that make a path stop being the tab it
+   was — `closeTab`, `renameTab` and the preview replacement in `openFile` — and
+   emptied by `resetTabs` with the buffers. `restoreTabs` is a fourth that drops
+   a path, and it deliberately does not touch this set: the only road that
+   reaches it runs `resetTabs` first, so there is nothing left to drop. */
+const sourceTabs = reactive(new Set())
+
+/* Whether the tab at this path is drawn as source. Read by the view for the
+   toggle's own glyph and for the branch between the document and the editor, so
+   it answers for any path at all rather than only for an open one. */
+export const showsSource = (path) => sourceTabs.has(path)
+
+/* The toggle itself: one press, one tab. Nothing is checked about the path —
+   the button that calls this is drawn only on a tab `isDocumentPath` answered
+   for, and a set entry for anything else would simply never be read. */
+export function toggleSource(path) {
+  if (sourceTabs.has(path)) sourceTabs.delete(path)
+  else sourceTabs.add(path)
+}
+
 /* The diff tabs, which are not files and are deliberately not remembered.
 
    They live here, in module scope beside `buffers`, for exactly the reason
@@ -371,6 +419,10 @@ export function openFile(path, { permanent = false } = {}) {
        dirty, so there is nothing to ask about. */
     const previous = state.openTabs[previewAt]
     buffers.delete(previous)
+    /* The evicted preview's mode goes with its buffer: the tab is gone, and a
+       path left in the set would greet the next preview of that same file with
+       the source view of a choice made about a tab that no longer exists. */
+    sourceTabs.delete(previous)
     state.openTabs.splice(previewAt, 1, path)
     /* And in place in the arranged order too, by the index of the record rather
        than by the position in `openTabs` — the two are different lists and after
@@ -409,6 +461,10 @@ export function closeTab(path) {
   const next = neighbourIn(movableIds(), path)
   state.openTabs.splice(at, 1)
   buffers.delete(path)
+  /* And the mode with the buffer, for the reason the buffer goes: closing a tab
+     and opening the file again is the way back from anything, so a document
+     reopened must be a document. */
+  sourceTabs.delete(path)
   if (state.previewTab === path) state.previewTab = null
   if (state.activeTab === path) {
     /* The neighbour on the right becomes active, or the one on the left for
@@ -465,6 +521,16 @@ export function renameTab(from, to) {
        repair, and the window it covers is the milliseconds between opening a
        file and renaming it. */
     if (buffer.loading) load(to)
+  }
+  /* The mode travels with the tab, exactly as the buffer does and for the same
+     reason: the file is still there, and a person reading its source is still
+     reading its source a moment after somebody renamed it. A rename that also
+     changes the extension leaves an entry nothing will ever read — the toggle is
+     drawn off `isDocumentPath`, which the new name no longer answers — and it
+     costs one string until the tab closes. */
+  if (sourceTabs.has(from)) {
+    sourceTabs.delete(from)
+    sourceTabs.add(to)
   }
   if (state.previewTab === from) state.previewTab = to
   if (state.activeTab === from) state.activeTab = to
@@ -758,7 +824,9 @@ export function discardTabs(paths) {
    a single frame. The tab list is left alone — it will come from the new
    project's settings. The diffs go with the buffers rather than with the list:
    they name a repository of the project being left, and nothing brings them
-   back.
+   back. So does the eye/code mode, and for the same reason those two go: it is
+   keyed by a path relative to the project being left, and the incoming project
+   can hold a file at exactly that path.
 
    The Agent tab and the terminal tabs are not here and need nothing: they are
    derived from the session list, which `loadSessions` replaces with the new
@@ -766,6 +834,7 @@ export function discardTabs(paths) {
    — there is no third list to remember to clear. */
 export function resetTabs() {
   buffers.clear()
+  sourceTabs.clear()
   diffTabs.length = 0
 }
 

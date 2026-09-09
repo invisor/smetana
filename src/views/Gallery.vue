@@ -47,6 +47,7 @@ import {
   DependencyMark,
   DiffView,
   DiscardChangeModal,
+  DocumentModeToggle,
   Dropdown,
   DependencySpine,
   DraftInspector,
@@ -5543,6 +5544,44 @@ const menuTargetStyle = {
         }"
       >
         <ReportView html="" :theme="theme" />
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Html tab: document or source</div>
+      <!-- The one control an html tab has, in both of the places it appears and
+           in both of its states. Each box is `position: relative` because the
+           toggle places itself in a corner and needs one to be a corner of — in
+           the app that box is the centre column's content, under the tab row.
+
+           The top box is the ordinary case: the document drawn, the glyph
+           offering the source. The lower one is what a press gives you, the same
+           bytes in the editor with html highlighting, and the glyph offering the
+           page back. What to check in all four theme × density combinations is
+           the resting opacity — the control has to be findable over a light
+           document and over a dark one without being a blot on either — and that
+           the pointer brings it to full strength with nothing moving. -->
+      <div
+        :style="{
+          position: 'relative',
+          display: 'flex',
+          height: 'calc(var(--space-9) * 6)',
+          border: 'var(--border-w) solid var(--border)'
+        }"
+      >
+        <ReportView :html="REPORT_HTML" :theme="theme" />
+        <DocumentModeToggle mode="document" />
+      </div>
+      <div
+        :style="{
+          position: 'relative',
+          display: 'flex',
+          height: 'calc(var(--space-9) * 6)',
+          border: 'var(--border-w) solid var(--border)'
+        }"
+      >
+        <FileEditor :model-value="REPORT_HTML" path="docs/reviews-pr/review.html" read-only />
+        <DocumentModeToggle mode="source" />
       </div>
     </section>
 

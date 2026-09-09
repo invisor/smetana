@@ -2,11 +2,79 @@ import { describe, expect, it } from 'vitest'
 import {
   REPORTS_DIR,
   REVIEWS_DIR,
+  isDocumentPath,
   isReportPath,
   reportTabPath,
   reviewReportPath,
   reviewReportTabs
 } from '../../../src/components/run/reportTab.js'
+
+describe('isDocumentPath', () => {
+  it('accepts an html file wherever it sits', () => {
+    // The whole of the widening: the report of a branch review lands wherever
+    // the reviewed project's own conventions send it, and a rule keyed on a
+    // folder is wrong about every folder it has not heard of.
+    expect(isDocumentPath('docs/reviews-pr/review-NXC-239-2026-09-07.html')).toBe(true)
+    expect(isDocumentPath('src/index.html')).toBe(true)
+    expect(isDocumentPath('page.html')).toBe(true)
+  })
+
+  it('accepts the reports and reviews it used to be the only rule about', () => {
+    expect(isDocumentPath(`${REPORTS_DIR}2026-08-12-143155.html`)).toBe(true)
+    expect(isDocumentPath(`${REVIEWS_DIR}2026-08-31-1345-feature-x.html`)).toBe(true)
+  })
+
+  it('accepts .htm, and either extension in any case', () => {
+    expect(isDocumentPath('docs/page.htm')).toBe(true)
+    expect(isDocumentPath('docs/PAGE.HTML')).toBe(true)
+    expect(isDocumentPath('docs/Page.Htm')).toBe(true)
+  })
+
+  it('refuses every other extension, the review report\'s own Markdown included', () => {
+    expect(isDocumentPath('.smetana/reviews/2026-08-31-1345-feature-x.md')).toBe(false)
+    expect(isDocumentPath('src/main.js')).toBe(false)
+    expect(isDocumentPath('README.md')).toBe(false)
+  })
+
+  it('refuses a name that merely contains the extension', () => {
+    expect(isDocumentPath('docs/page.html.bak')).toBe(false)
+    expect(isDocumentPath('docs/html')).toBe(false)
+    expect(isDocumentPath('docs/.html-notes')).toBe(false)
+  })
+
+  it('refuses a diff tab id, which ends in the very path it is about', () => {
+    // The rule decides which branch the centre draws, and `project.activeTab` is
+    // not always a path: `diffId` builds `\u0000diff:<repo>\u0000<path>`. Read on
+    // the extension alone this answers true, the document branch is tried before
+    // the diff branch, and a synthetic id has no buffer — so a click on a
+    // changed `.html` in the Git panel drew an empty sandbox instead of the
+    // diff, with no error and no way back.
+    expect(isDocumentPath('\u0000diff:/Users/x/repo\u0000src/index.html')).toBe(false)
+    expect(isDocumentPath('\u0000diff:/Users/x/repo\u0000docs/page.htm')).toBe(false)
+  })
+
+  it('refuses a terminal tab id by the same clause', () => {
+    // This one does not end in a path and would have fallen through anyway. The
+    // rule worth writing is "this is not a path", not "not one of the two kinds
+    // of id that exist today".
+    expect(isDocumentPath('\u0000term:3')).toBe(false)
+  })
+
+  it('refuses the zero byte wherever it sits, which is what makes that true', () => {
+    expect(isDocumentPath('docs/\u0000/page.html')).toBe(false)
+    expect(isDocumentPath('\u0000page.html')).toBe(false)
+  })
+
+  it('refuses the pinned tabs and anything that is not a string', () => {
+    // Where the value comes from: project.activeTab is null before a project is
+    // open, and one of these two the rest of the time.
+    expect(isDocumentPath('kanban')).toBe(false)
+    expect(isDocumentPath('terminal')).toBe(false)
+    expect(isDocumentPath(null)).toBe(false)
+    expect(isDocumentPath(undefined)).toBe(false)
+    expect(isDocumentPath(42)).toBe(false)
+  })
+})
 
 describe('isReportPath', () => {
   it('accepts a report the run wrote', () => {
