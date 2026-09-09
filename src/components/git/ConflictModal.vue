@@ -14,8 +14,12 @@
    opened out of curiosity with no way out is a trap. It closes in **both**
    cases — the one that appears by itself after a merge and the one the button
    opens — because a window that sometimes closes and sometimes does not is one
-   nobody learns. `overlays/Modal.vue` still listens for neither Escape nor a
-   press on the scrim, so the cross is the whole of it.
+   nobody learns. `overlays/Modal.vue` itself listens for neither Escape nor a
+   press on the scrim, and this dialog is drawn over the app window rather than
+   in a window of its own — the Escape that closes a dialog window is
+   `views/DialogWindow.vue`'s and reaches exactly the kinds in
+   `views/dialogRegistry.js`, which this is not one of — so the cross is still
+   the whole of it here.
 
    The app cannot resolve a conflict either: there is no merge editor here and
    this epic does not add one. So the two doors are the only two things it can

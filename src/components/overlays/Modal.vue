@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject } from 'vue'
+import { computed, inject, onUnmounted, watchEffect } from 'vue'
 import IconButton from '../core/IconButton.vue'
 
 /* Destructive confirms state the consequence, not an apology:
@@ -53,6 +53,57 @@ const inWindow = inject('smDialogWindow', false)
    gallery — where the default answers and nothing changed. */
 const filled = inject('smDialogFill', null)
 const isFilled = computed(() => inWindow && Boolean(filled?.value))
+
+/* Whether this dialog is offering a way out, told to the window that holds it.
+
+   The one thing this component says upwards, and it is a `ref` handed down
+   rather than an emit because of who asks: `views/DialogWindow.vue` answers
+   Escape for every kind in the registry, and the fact it needs — is there a way
+   out of this dialog at this moment — is the guest's own, computed from props
+   the app window announces. Announcing a second `closable` beside those fields
+   was the version thrown away, one fact spelled twice with nothing holding the
+   two together.
+
+   `closable` means exactly what it has always meant, whether the dialog draws
+   its own way out; what is new is that in a window it has a reader at all,
+   since the cross it governs is the OS frame's there and this component draws
+   no header.
+
+   **This is a report and not a handler.** The listener stays in the one file,
+   which is what keeps thirteen dialogs behaving alike. Absent everywhere else —
+   the app window, the gallery — where `inject` answers `null` and this
+   component behaves exactly as it did.
+
+   **One `Modal` per dialog window, and that is the invariant this rests on.**
+   The report is last-writer-wins — a plain `ref` with no owner and no count —
+   and it is right today because a window has exactly one writer for its whole
+   life: each of the thirteen guests draws exactly one of these, `kind` comes
+   off the URL and never changes, and `told` latches, so the guest is mounted
+   once and never swapped. The restore below is unconditional for that same
+   reason — the only thing that unmounts it is the window going, and a guest
+   that has gone claims nothing.
+
+   What a second one would do is worth writing down, because it fails silently
+   and in one direction only. Vue runs an arriving instance's `watchEffect`
+   synchronously at setup while `onUnmounted` is a post-flush job, so a `Modal`
+   swapped behind a `v-if` — a nested confirm, a second dialog inside a guest —
+   has the departing instance's restore land *after* the arriving one wrote
+   `false`, leaving the window claiming a way out while its guest says there is
+   none: Escape closes it mid-write, with nothing on screen and no test in this
+   repository able to see it. A dialog that wants two of these needs an owner on
+   this channel first. */
+const closableHere = inject('smDialogClosable', null)
+if (closableHere) {
+  watchEffect(() => {
+    closableHere.value = props.closable
+  })
+  /* The window is left as closable as it was born, which is the safe direction:
+     the failure that has no symptom is a window nobody can shut, and the guest
+     that would have refused the key is by then not on screen to refuse it. */
+  onUnmounted(() => {
+    closableHere.value = true
+  })
+}
 
 /* In the app this is the scrim: the layer that dims the board and centres the
    dialog over it. In a window there is nothing to dim and nothing to centre
