@@ -2417,15 +2417,29 @@ const menuTargetStyle = {
           <ColumnHeader :status="col.status" :count="col.count" :addable="false" />
         </div>
       </div>
-      <!-- The header that can move its whole column into the queue, and the same
-           header with nothing to move: the button is drawn off the count, so an
-           empty column carries none — the 0 beside it already says why. -->
+      <!-- The header that can move its whole column into the queue, drawn every
+           way it can be. The button comes off the count, so an empty column
+           carries none — the 0 beside it already says why; which way its arrow
+           points is the note on the header that carries the other one. -->
       <div :style="{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-4)' }">
         <div :style="{ width: '176px' }">
           <ColumnHeader status="deferred" :count="12" :addable="false" promotable @promote="() => {}" />
         </div>
         <div :style="{ width: '176px' }">
           <ColumnHeader status="deferred" :count="0" :addable="false" promotable @promote="() => {}" />
+        </div>
+        <!-- The same header on a board where the queue has been dragged to the
+             left of it: the arrow is the mirrored glyph, everything else about
+             the button is the same. -->
+        <div :style="{ width: '176px' }">
+          <ColumnHeader
+            status="deferred"
+            :count="12"
+            :addable="false"
+            promotable
+            promote-side="left"
+            @promote="() => {}"
+          />
         </div>
       </div>
       <!-- The card at the width the board gives it, since the badge shares its

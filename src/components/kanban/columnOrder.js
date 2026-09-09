@@ -46,3 +46,28 @@ export function moveColumn(order, from, to) {
   next.splice(to, 0, next.splice(from, 1)[0])
   return next
 }
+
+/* Which way the "move this whole column into the queue" button points. The
+   queue is a column like any other and can be dragged to either side of the
+   one being emptied, so an arrow drawn always-right says "into pinned" on half
+   the boards there are — which is a lie about where the tasks go.
+
+   A rule about the order of the columns, so it lives here beside the other two
+   rather than in the header that draws it: a `.vue` file is the one thing no
+   test in this repository can reach.
+
+   `columns` is the drawn board, in the shape the rest of this file takes
+   (objects with a `status`). Either status missing is an ordinary outcome, not
+   an error — a project can hide the queue by a view setting, and a column that
+   is not on screen has no side to point at — so the answer is `'right'`, which
+   is what the button drew before this rule existed. */
+export function promoteSide(columns, from, to) {
+  if (!Array.isArray(columns)) return 'right'
+
+  const at = (status) => columns.findIndex((column) => column.status === status)
+  const source = at(from)
+  const target = at(to)
+  if (source < 0 || target < 0) return 'right'
+
+  return target < source ? 'left' : 'right'
+}
