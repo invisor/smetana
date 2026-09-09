@@ -665,6 +665,29 @@ struct DialogWindowState {
     /// dragged out on an external display would be quietly cut down to the
     /// laptop's by one open and close, and not come back.
     moved_by_hand: bool,
+    /// Whether the dialog in this window has declared itself unclosable — a
+    /// write with no undo behind it, in flight — which is what the frame's own
+    /// close button is refused for in the `CloseRequested` arm below.
+    ///
+    /// **Inverted against the word the front end uses**, and the friction is
+    /// bought for one property: the derive above is what makes a fresh entry
+    /// right. A window nobody has said anything about is a window that closes,
+    /// and every entry here starts as one — `open_entry`, and `or_default` in
+    /// four places. Spelled `closable` it would need a `Default` written out by
+    /// hand, listing every field of this struct, and the next field added would
+    /// be one somebody had to remember to add there as well.
+    refuses_close: bool,
+    /// Whether the **app** asked for this window to go, rather than the person:
+    /// the ground it stood on has gone (`dialog_window_close`), or the app
+    /// window feeding it has (`close_children_with_main`). Spent by the very
+    /// close it lets through.
+    ///
+    /// It exists because `CloseRequested` cannot say who asked, and the refusal
+    /// above is about the frame's button and nothing else. Without it a discard
+    /// in flight would hold its window open against a project switch that has
+    /// already put a toast on screen saying the window closed — and nothing
+    /// would ever ask a second time, since the app asks once.
+    asked_by_app: bool,
 }
 
 static DIALOG_WINDOWS: Mutex<BTreeMap<String, DialogWindowState>> = Mutex::new(BTreeMap::new());
@@ -755,6 +778,54 @@ fn was_moved_by_hand(kind: &str) -> bool {
 /// external display down to the laptop's, for good.
 fn keeps_its_size_on_close(state: &DialogWindowState) -> bool {
     state.moved_by_hand
+}
+
+/// Records what the guest in this kind's window has said about its own way out.
+/// The window may already be gone — the page reports on a watcher and a close
+/// races it — which is an ordinary outcome and leaves the record for a window
+/// that no longer exists, where `open_entry` clears it.
+fn note_closable(kind: &str, closable: bool) {
+    if let Ok(mut windows) = DIALOG_WINDOWS.lock() {
+        windows.entry(kind.to_string()).or_default().refuses_close = !closable;
+    }
+}
+
+/// Says that the next close of this kind's window is the app's own and must not
+/// be refused. `asked_by_app` records what that is for.
+fn let_the_app_close(kind: &str) {
+    if let Ok(mut windows) = DIALOG_WINDOWS.lock() {
+        windows.entry(kind.to_string()).or_default().asked_by_app = true;
+    }
+}
+
+/// Whether this close is refused, and the answer spends whatever it was allowed
+/// by — which is why the state arrives mutably rather than being read.
+///
+/// **The whole decision is here rather than in the event closure**, for
+/// `record_resize`'s reason one arm over: a closure needs an `AppHandle` and no
+/// test in this repository can reach one, so the rule a person would have to
+/// take a discard mid-flight to see is the half that lives in a function.
+///
+/// A lock nobody can take answers "not refused" in the caller below, and that
+/// direction is deliberate: a close that should have been held costs the state
+/// this feature exists to protect, and a close held that should not have been
+/// costs a window nobody in the world can shut.
+fn refuses_this_close(state: &mut DialogWindowState) -> bool {
+    if state.asked_by_app {
+        state.asked_by_app = false;
+        return false;
+    }
+    state.refuses_close
+}
+
+/// The same question against the map, for the one caller that has a kind rather
+/// than a state.
+fn refuses_close(kind: &str) -> bool {
+    DIALOG_WINDOWS
+        .lock()
+        .ok()
+        .map(|mut windows| refuses_this_close(windows.entry(kind.to_string()).or_default()))
+        .unwrap_or(false)
 }
 
 /// A physical size in whole logical points. A scale factor of zero is not a
@@ -1028,7 +1099,20 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
             // close it, and the preference would be gone for good. An untouched
             // dialog must leave no entry behind at all: a kind with no entry
             // opens fitted, and that is today's behaviour to the letter.
-            WindowEvent::CloseRequested { .. } => {
+            WindowEvent::CloseRequested { api, .. } => {
+                // The frame's own close button, held for as long as the guest
+                // says there is no way out of this dialog — a discard in
+                // flight, which is the one write in this app with no undo
+                // behind it. `dialog_window_closable` carries the whole
+                // argument, including why the button is greyed as well.
+                //
+                // First, and before the size is read: a window that is not
+                // closing has nothing to write, and the size it would have
+                // written is the same one the debounce below already holds.
+                if refuses_close(&resized_kind) {
+                    api.prevent_close();
+                    return;
+                }
                 if !was_moved_by_hand(&resized_kind) {
                     return;
                 }
@@ -1320,15 +1404,74 @@ fn center_over_main(app: &AppHandle, window: &tauri::WebviewWindow) {
     }
 }
 
+/// Whether the dialog in this window is offering a way out right now, told to
+/// the window itself.
+///
+/// **This is the outward end of `smDialogClosable`**, and it is one channel
+/// rather than a second source of the same fact: `overlays/Modal.vue` computes
+/// `closable` from the props the app window announces and writes it into the
+/// `ref` `views/DialogWindow.vue` provides, the Escape handler reads it there,
+/// and that same `ref` is what this call carries out of the webview. Announcing
+/// a `closable` from the app window beside the fields the guest computes it
+/// from was refused on that side for the reason it would be refused here: one
+/// fact spelled twice, and the copy is the half that drifts.
+///
+/// **Both halves of the refusal are done, and neither is enough on its own.**
+/// `set_closable(false)` is what a person can see — the frame's button draws
+/// dead, so the refusal is legible before it is discovered by pressing — and
+/// `prevent_close` in the `CloseRequested` arm above is what makes it true.
+/// Taking either alone was considered and both are worse. The button alone is
+/// a promise this app cannot keep: tauri documents `set_closable` as
+/// unsupported on iOS and Android and, on Linux, as GTK+ doing "its best to
+/// convince the window manager not to show a close button", which "may not have
+/// any effect when called on a window that is already visible" — and a dialog
+/// window here is always already visible, since `dialog_window_size` shows it
+/// at the first measurement and a guest declares itself unclosable long after
+/// that. The refusal alone is a button that presses and does nothing, with the
+/// discard it is protecting saying so nowhere on the frame.
+///
+/// **The record is the truth and the window is not asked.** `is_closable` is
+/// unsupported on Linux at all, so what `CloseRequested` reads is this map
+/// rather than the window — which also keeps the answer right on a platform
+/// where the button was never dimmed.
+///
+/// Rust's call rather than the page's, the reason `dialog_window_size` records:
+/// `core:default` grants no `set_closable`, and adding it would publish that
+/// verb to every window in the app for the sake of one call.
+///
+/// A window that is not there is an ordinary outcome — the page reports on a
+/// watcher and a close races it — and the record is left for `open_entry` to
+/// clear.
+#[tauri::command]
+pub fn dialog_window_closable(app: AppHandle, kind: String, closable: bool) -> Result<(), String> {
+    let kind = kind_query(&kind).ok_or_else(|| format!("not a dialog kind: {kind}"))?;
+    note_closable(&kind, closable);
+    if let Some(window) = app.get_webview_window(&format!("{DIALOG_PREFIX}{kind}")) {
+        // Unchecked deliberately: this is the visible half, and the half that
+        // holds is the record above. A platform that declines to dim the button
+        // is a refusal somebody does not see coming rather than one that fails.
+        let _ = window.set_closable(closable);
+    }
+    Ok(())
+}
+
 /// Closes one dialog window, if it is open.
 ///
 /// The app window calls this when the ground a dialog stood on has gone — the
 /// project changed, the task was deleted, the column emptied. A window that is
 /// not there is the ordinary case, not a failure: the person may have closed it
 /// themselves a moment earlier.
+///
+/// **A guest that has declared itself unclosable does not refuse this**, and
+/// `asked_by_app` is what tells the two apart. What that flag protects is the
+/// person's own press on the frame; this call is the app saying the window is
+/// about something that no longer exists, it says so in a toast at the same
+/// moment, and it says it once — so a refusal here would leave a window
+/// standing against a sentence claiming it had gone.
 #[tauri::command]
 pub fn dialog_window_close(app: AppHandle, kind: String) -> Result<(), String> {
     let kind = kind_query(&kind).ok_or_else(|| format!("not a dialog kind: {kind}"))?;
+    let_the_app_close(&kind);
     if let Some(window) = app.get_webview_window(&format!("{DIALOG_PREFIX}{kind}")) {
         return window.close().map_err(|err| err.to_string());
     }
@@ -1383,7 +1526,16 @@ pub fn close_children_with_main(app: &AppHandle) {
         // by the app window, so once that window is gone it is a question
         // nothing can answer and a confirm nothing can carry out.
         for (label, window) in app.webview_windows() {
-            if label.starts_with(DIALOG_PREFIX) {
+            if let Some(kind) = label.strip_prefix(DIALOG_PREFIX) {
+                // Including one that has declared itself unclosable, and that
+                // is the same judgement `dialog_window_close` makes: the
+                // refusal is about the person's press on the frame, and what
+                // it holds the window open for — a write this window is
+                // watching — has nothing to watch any more. A dialog left
+                // standing here would be a window nobody can shut, fed by a
+                // window that is gone, keeping the app from exiting on its
+                // last window.
+                let_the_app_close(kind);
                 let _ = window.close();
             }
         }
@@ -1554,9 +1706,9 @@ mod tests {
     use super::{
         compare_query, compare_show, drag_drop_space, forget_show, hand_moved, height_to_set,
         image_query, image_show, keeps_its_size_on_close, kind_query, open_entry, record_resize,
-        remember_show, remembered_size, resize_is_the_hand, settings_show, show_event, tab_query,
-        take_show, window_chrome, window_title, COMPARE_LABEL, DialogWindowState, IMAGE_LABEL,
-        SETTINGS_LABEL,
+        refuses_this_close, remember_show, remembered_size, resize_is_the_hand, settings_show,
+        show_event, tab_query, take_show, window_chrome, window_title, COMPARE_LABEL,
+        DialogWindowState, IMAGE_LABEL, SETTINGS_LABEL,
     };
     use serde_json::{json, Value};
     use std::collections::BTreeMap;
@@ -1949,6 +2101,8 @@ mod tests {
                 expecting: 1,
                 latched: true,
                 moved_by_hand: true,
+                refuses_close: true,
+                asked_by_app: true,
             },
         );
 
@@ -1959,6 +2113,48 @@ mod tests {
         assert!(!state.moved_by_hand);
         assert_eq!(state.expecting, 0, "no event is owed to a window that has not been sized");
         assert_eq!(state.baseline, (0, 0), "and nothing of this window's size is known yet");
+        assert!(
+            !state.refuses_close,
+            "a refusal left by a window that is gone would be a window nobody can shut"
+        );
+        assert!(!state.asked_by_app, "and nobody has asked for this one to go yet");
+    }
+
+    /// A dialog nobody has said anything about is what every one of the
+    /// thirteen kinds in the registry is: the frame's button closes it exactly
+    /// as it did before any of this existed.
+    #[test]
+    fn a_dialog_that_declared_nothing_closes_on_the_frame() {
+        let mut state = DialogWindowState::default();
+        assert!(!refuses_this_close(&mut state));
+    }
+
+    /// The whole of the fix, in the one state it is about: a discard in flight
+    /// takes the way out, and the frame's button is one of the ways out.
+    #[test]
+    fn a_guest_with_no_way_out_refuses_the_frame() {
+        let mut state = DialogWindowState { refuses_close: true, ..DialogWindowState::default() };
+        assert!(refuses_this_close(&mut state));
+        assert!(
+            refuses_this_close(&mut state),
+            "and it goes on refusing for as long as the write is in flight"
+        );
+    }
+
+    /// The app asking is not the person pressing, and the ground going is the
+    /// case: the window closes, and the toast that says so stays true.
+    #[test]
+    fn a_close_the_app_asked_for_is_not_refused() {
+        let mut state = DialogWindowState {
+            refuses_close: true,
+            asked_by_app: true,
+            ..DialogWindowState::default()
+        };
+        assert!(!refuses_this_close(&mut state));
+        assert!(
+            refuses_this_close(&mut state),
+            "and the leave is spent by that one close rather than standing"
+        );
     }
 
     /// The other half: a window that *is* opening at a remembered size starts

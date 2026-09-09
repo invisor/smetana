@@ -196,6 +196,29 @@ export async function sizeDialogWindow(kind, height, viewport, title) {
   }
 }
 
+/* Whether the dialog in that window is offering a way out right now.
+   `window::dialog_window_closable` carries the whole argument — both what it
+   does with the answer and why the answer comes from here rather than from a
+   `closable` announced beside the props.
+
+   Here rather than in `views/DialogWindow.vue` for this store's own reason: it
+   is a window, and this is the file that knows the desktop exists. The view
+   holds the `ref` its guest writes and watches it; the `invoke` is this
+   file's.
+
+   A warning and not an error, `closeDialogWindow`'s split: what a failed call
+   costs is the frame's button behaving as it did before any of this — an
+   ordinary close, which is what every other dialog gets — where the error
+   above is a window that never opened. In a browser the mock answers and
+   nothing is said at all. */
+export async function setDialogWindowClosable(kind, closable) {
+  try {
+    await invoke('dialog_window_closable', { kind, closable })
+  } catch (err) {
+    console.warn('[app] the dialog window was not told whether it may be closed:', err)
+  }
+}
+
 /* The app window's half: these are the props now. Sent on every change and
    again whenever a dialog window says hello — which is what makes a window
    opened at any moment learn the state it missed, and what makes a live `busy`

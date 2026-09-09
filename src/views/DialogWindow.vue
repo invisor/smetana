@@ -54,7 +54,13 @@
    component every guest draws and the one place that knows the answer already.
    Announcing a second `closable` from the app window beside the fields the
    guest computes it from was the version thrown away: one fact spelled twice,
-   and the copy is the half that drifts. */
+   and the copy is the half that drifts.
+
+   That answer does not stop at the page. The third way out of a dialog window
+   is the frame's own cross, which is the desktop's rather than this document's,
+   so the same `ref` is carried out to Rust — one channel continued rather than
+   a second source of the same truth, and `window::dialog_window_closable` is
+   where it lands and what it costs. */
 import { computed, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch, watchEffect } from 'vue'
 import DeleteBranchModal from '../components/git/DeleteBranchModal.vue'
 import DeleteSessionModal from '../components/agent/DeleteSessionModal.vue'
@@ -77,6 +83,7 @@ import { paintRoot, usePrefersDark } from './useAppearance.js'
 import {
   emitDialogResult,
   openImageWindow,
+  setDialogWindowClosable,
   sizeDialogWindow,
   watchDialogProps
 } from '../stores/app.js'
@@ -147,7 +154,7 @@ provide('smDialogFill', filled)
 /* Whether the dialog in this window is offering a way out right now, and the
    one thing this file is told by its guest rather than telling it. Written by
    `Modal.vue` while it is drawn in a window, read by the Escape handler below
-   and by nothing else.
+   and by the frame's own close button, through the watch under it.
 
    `true` until something says otherwise, which is deliberate and covers the two
    states that draw no `Modal` at all: a kind with no component, whose empty
@@ -156,6 +163,33 @@ provide('smDialogFill', filled)
    that is not on screen yet, so there is nothing for a close to interrupt. */
 const closable = ref(true)
 provide('smDialogClosable', closable)
+
+/* And the same answer, out to the desktop, which is the whole of what makes the
+   frame's cross keep the promise the two exits inside the page already keep.
+   `window::dialog_window_closable` is what happens to it — the button is dimmed
+   *and* the close is refused, and that file carries why it takes both.
+
+   **This is the one channel continued, not a second source of the same truth.**
+   The value is the guest's own, computed from the props the app window
+   announces; nothing new is announced, nothing else is asked, and Rust is told
+   by the same `ref` the key above provides. A `closable` announced from the app
+   window beside the fields the guest computes it from was refused for that
+   reason when the key was written, and it would be the same refusal here.
+
+   Not `immediate`, because the two sides already agree at birth: this `ref` is
+   born `true`, a window is built closable, and a fresh entry in Rust's map
+   means a window that closes. What would be bought by saying so is one IPC call
+   per dialog window opened, to change nothing.
+
+   The kind is checked once rather than watched, `HOSTED_EMITS`' line: it comes
+   off the URL and never changes, and a bare `?view=dialog` reached by hand in
+   the dev server would otherwise send a name Rust refuses on every keystroke
+   that moved this flag. */
+if (isDialogKind(props.kind)) {
+  watch(closable, (may) => {
+    setDialogWindowClosable(props.kind, may)
+  })
+}
 
 /* The one store a dialog window holds, and it is held for one kind.
 
@@ -414,17 +448,16 @@ const listeners = {
    walking round the refusal the disabled Cancel makes, in the one dialog in
    this app whose write has no undo behind it.
 
-   **The frame's own button is still a way out in that state, and that is a hole
-   rather than a counter-argument.** Nothing takes it away: no window in this
-   app is ever made unclosable — there is no `set_closable` anywhere in
-   `src-tauri/` — `window.rs`'s `CloseRequested` arm records the size and
-   returns without preventing anything, and its `Destroyed` arm answers every
-   dialog window with a `close` unconditionally. So a discard in flight can
-   still be closed over with the frame's button while Escape refuses, which
-   leaves this key stricter than the chrome around it. Closing that is the Rust
-   side's and is filed separately; it is not this handler's to compensate for,
-   and levelling Escape down to match the button would be fixing the wrong
-   half.
+   **The frame's own button is held in that state too, and this key is no
+   longer stricter than the chrome around it.** It was, and the note that stood
+   here called it a hole: nothing took the button away, so a discard in flight
+   could be closed over with the frame's cross while Escape refused. What
+   closes it is `smDialogClosable` carried one step further out, by the watch
+   beside that key above — `window::dialog_window_closable` dims the button and
+   `window.rs`'s `CloseRequested` arm refuses the close behind it. So the three
+   ways out of a dialog window now answer alike, and the reason this handler
+   holds is still its own rather than borrowed from that one: Escape must not
+   become a way out that Cancel is not.
 
    **It cannot fall through to the app.** This is a webview of its own in a
    window of its own: nothing of the app window's document is in this event's
