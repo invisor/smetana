@@ -467,6 +467,32 @@ a not-yet-read buffer would otherwise become the whole file on the next save), `
 of choosing when the file moved under a dirty tab, and `error` locks the field without throwing away
 anything already typed.
 
+**An html tab draws the page and not the markup**, and the rule is the extension alone:
+`isDocumentPath` in `components/run/reportTab.js` answers for `.html` and `.htm` in any case,
+wherever the file sits. The folder used to be the rule and stopped being one because a review's
+report is written by an agent following its own project's conventions — `docs/reviews-pr/` rather
+than the `.smetana/reviews/` path named in the prompt — and nothing keyed on a folder can be right
+about a folder it has never heard of. It refuses a string carrying a zero byte first, which is
+load-bearing rather than defensive: a diff's id *ends* in the path it is about, so the extension test
+alone claimed a diff of any `.html` and drew an empty sandbox over an id with no buffer.
+`isReportPath` beside it keeps the narrow question — is this one of *this project's own* documents —
+for `reportTabPath` and `reviewReportPath`, where what is decided is belonging rather than drawing.
+
+Which of the two a tab shows is `sourceTabs` in `tabs.js`, a set of paths in module scope beside the
+buffers and deliberately **not** in `settings.json`: the default is the document, the set holds the
+exceptions, and it goes with the buffers on a restart because a person who read a report's markup
+last week is not asking for markup on Monday. `closeTab`, `renameTab` and the preview eviction in
+`openFile` keep it in step with the row; `resetTabs` empties it with the buffers. The press is
+`components/files/DocumentModeToggle.vue`, in the corner of the centre column and translucent at
+rest. In source mode the tab *is* an ordinary file tab — field, undo history, `dirty`, Cmd+S — and
+switching back shows the unsaved text, since the frame is built from that same buffer. An html file
+`files_read` refused is not a document at all: it falls through to the editor with its notice, and no
+toggle is drawn over an error a press cannot change. What shuts that frame is **two** things and not
+one: `sandbox=""` stops scripts and navigation but has never stopped a document *loading* a
+stylesheet, an image or a font, so `components/run/reportTheme.js` writes a content policy into the
+same string it stamps the theme on — `csp` in `tauri.conf.json` is `null` and there is nothing to
+inherit.
+
 **The row is dragged into whatever order somebody wants, and the order is one row rather than four
 lists.** A terminal tab can stand between two files and a diff in front of all of them; the pinned
 run — the board, and the Agent tab while it exists — does not move and nothing can be put to the left
