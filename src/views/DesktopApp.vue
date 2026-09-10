@@ -253,7 +253,7 @@ import { checkNewName } from '../components/files/newEntry.js'
    that hold them. `tabs.js` reaches for `relativeTo` for the same join, and
    `absolutePath` sat in `fileMenu.js` until the system clipboard wanted it
    too. */
-import { absolutePath, isUnder, relativeTo } from '../paths.js'
+import { absolutePath, ancestors, isUnder, relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { needsReady, promotesToReady } from '../components/run/readyPromote.js'
@@ -4327,6 +4327,148 @@ const onOpenFile = (path) => {
   project.selectedPath = path
   openFile(path, { permanent: true })
 }
+
+/* The tree follows the centre: whichever file is active in the tab row is the
+   selected row in the Files panel, with every folder above it open, the way VS
+   Code's explorer does it. Two places used to agree only because the file had
+   been opened from the tree in the first place; a click on a tab left the tree
+   where it was.
+
+   **Here and deliberately not in `stores/tabs.js`.** That store owns the row and
+   knows nothing about the tree — not `expanded`, not the selection, not how a
+   folder is read — and joining stores is this view's whole job.
+
+   A path and not a tab, which is the one thing this has to decide: the row holds
+   five kinds and only one of them names a file. The board and the Agent tab are
+   the two fixed ids; a diff and a shell carry a zero byte no path can have and
+   are asked about through the store's own tests, the same two `fileTabActive`
+   and `restoreTabs` ask. What is deliberately **not** excluded is a document —
+   an html tab draws the page rather than its markup, and it is an ordinary file
+   in `openTabs` with an ordinary row in the tree, so `fileTabActive` (which
+   subtracts the documents, because CodeMirror must not draw one) is the wrong
+   question here and a second computed is the right one. */
+const activeFilePath = computed(() => {
+  const id = project.activeTab
+  if (typeof id !== 'string' || !id) return null
+  if (id === 'kanban' || id === 'terminal') return null
+  if (isDiffTab(id) || isTerminalTab(id)) return null
+  return id
+})
+
+/* The reveal itself: the selection moves, every folder above the file opens, and
+   a folder whose listing has never been read is read.
+
+   **This is the fourth place the root-first rule is written out**, beside
+   `refreshDirs` in `stores/files.js`, `moveTo` in `stores/projects.js` and
+   `onMounted` above, and it is here for exactly the reason they carry it.
+   `resolve_within` canonicalizes the root before the path inside it, so a
+   project folder that has gone — an unmounted volume, a `git worktree remove` on
+   a worktree opened as a project — answers `notFound` for *every* directory in
+   it and not only for `''`. Each of those answers reads as a folder somebody
+   deleted, and `forgetVanished` splices it and everything under it out of
+   `project.expanded`, which is `settings.json`. Reached from here the trigger is
+   a click on any file tab, or a report tab the app opens by itself when a run
+   ends: the tree would come back flatter past a restart with nothing on screen
+   having said so. So the root is read **on the spot** and the ancestors only if
+   it answered — that the root answered once, which is what `filesState.dirs`
+   records, says nothing about whether it answers now.
+
+   **Standing down when the root merely did not answer costs this reveal, and
+   mid-session nothing picks it up.** `listDir` answers `false` for a read of the
+   root already in flight, which at startup is `onMounted`'s own — that one goes
+   on to read `project.expanded`, by then holding the folders pushed below, the
+   moment it lands. Two reveals overlapping is the other way to reach it: tab one
+   in an unread folder, then tab two in a different unread folder inside the one
+   `files_list` round trip the first is waiting on. The second stands down with
+   its folders in `expanded` and absent from `filesState.dirs`, and that pair is
+   the state this view documents elsewhere as the one nothing repairs on its own:
+   `treeNodes` gives such a folder `children: undefined`, so it draws closed while
+   `expanded` says it is open, and `toggleDir` on it collapses instead of reading.
+   The focus sweep does not fix it — `refreshDirs` re-reads only folders already
+   in the map. What does is activating that tab again, which runs this function
+   over the same path with nothing in flight, or collapsing the folder by hand and
+   opening it a second time. Narrow, recoverable and named here rather than
+   papered over: the alternative is reading the ancestors against a root that may
+   have been refused, which is the defect this whole gate exists for.
+
+   **The two writes happen before any await, and that is load-bearing**: the
+   selection and the `expanded` pushes are what the startup path needs to find,
+   synchronously, and the reads are the only part that waits. A reveal at setup
+   makes no read at all — `filesState.root` is still null there — and leaves both
+   for `onMounted`.
+
+   `filesState.root` against the active project is the other half of the gate and
+   is about a different failure: `moveTo` sets the project one await before it
+   sets the root, so for that gap the map still holds the previous project's
+   folders, and a read fired then would go out against the old root with a new
+   project's path.
+
+   **The project is captured on entry and compared after the await**, the shape
+   the other three sites keep, and comparing `filesState.root` against
+   `activePath.value` a second time would not do: a move that *completed* while
+   the root was being read has moved both of them, so the two are equal again and
+   the check passes — and the ancestors of the tab that was active in the project
+   just left would be read against the new project's root. Two questions after the
+   await, then, and they are not the same one: whether this is still the project
+   this reveal was asked about, and whether the tree has caught up with it.
+
+   The reads are issued root first and deliberately not awaited one by one.
+   Nothing depends on the order: `treeNodes` builds the tree from
+   `filesState.dirs`, which is reactive, so a child's listing that lands before
+   its parent's is simply not reachable yet and becomes reachable the moment the
+   parent's arrives. What awaiting each would buy is a deep path filling in one
+   row at a time instead of at once.
+
+   `sideTab` is deliberately untouched. The panel a person is reading is theirs —
+   a tab click that threw the Git panel away to show a tree would be this
+   feature taking the window over — so with Git or Agents open the tree opens
+   quietly and the selection is there when they come back. */
+async function revealInTree(path) {
+  project.selectedPath = path
+  const unread = []
+  for (const dir of ancestors(path)) {
+    if (!project.expanded.includes(dir)) project.expanded.push(dir)
+    if (!filesState.dirs.has(dir)) unread.push(dir)
+  }
+  /* Nothing to read is the ordinary case — a file in a folder already open — and
+     it is also the case that must not cost a root listing. */
+  if (!unread.length) return
+  const opened = activePath.value
+  if (filesState.root !== opened) return
+  if (!(await listDir(''))) return
+  if (activePath.value !== opened) return
+  if (filesState.root !== opened) return
+  for (const dir of unread) {
+    if (!filesState.dirs.has(dir)) listDir(dir)
+  }
+}
+
+/* `immediate`, and that is the startup case rather than tidiness: `activeTab` is
+   restored from `settings.json` before this view is rendered at all — `App.vue`
+   awaits `loadSettings` — so a watcher that only fired on a change would never
+   fire for the file somebody was last looking at, and the tree would come back
+   flat with the tab open above it.
+
+   Nothing is cleared for a tab that is not a file: the board, a terminal and a
+   diff say nothing about which file is selected, and a selection dropped on the
+   way to the board would be a row un-highlighted for no reason anybody could
+   see.
+
+   The promise is deliberately dropped. Everything a later pass depends on —
+   the selection, the folders in `expanded` — is written before `revealInTree`'s
+   first await, and what is left is directory reads whose answers land in a
+   reactive map: there is nothing here to sequence and nobody to report to. What
+   two overlapping passes cost is not nothing, though, and it is written out over
+   `revealInTree` itself rather than claimed away here: the second stands down on
+   the root read the first has in flight, and the folder it opened is left drawn
+   closed until that tab is activated again. */
+watch(
+  activeFilePath,
+  (path) => {
+    if (path && !isStubPath(path)) revealInTree(path)
+  },
+  { immediate: true }
+)
 
 /* The file tree's context menu: which verb does what. The rows themselves are
    `components/files/fileMenu.js`'s, and the pair is joined by hand — a `kind`

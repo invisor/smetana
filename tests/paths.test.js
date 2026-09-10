@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolutePath, basename, dirname, isUnder, relativeTo } from '../src/paths.js'
+import { absolutePath, ancestors, basename, dirname, isUnder, relativeTo } from '../src/paths.js'
 
 describe('what a path is called', () => {
   it('is the last segment', () => {
@@ -101,6 +101,48 @@ describe('what folder a path sits in', () => {
     expect(dirname('')).toBe(null)
     expect(dirname(null)).toBe(null)
     expect(dirname(undefined)).toBe(null)
+  })
+})
+
+describe('every folder a path sits under', () => {
+  it('is the folders above it, from the root down', () => {
+    // Root first, which is the order the caller walks them in. It is not a
+    // safety property — the reads it issues are not awaited one at a time — and
+    // the order is pinned here because the answer is a list and a list has one.
+    expect(ancestors('a/b/c.txt')).toEqual(['a', 'a/b'])
+    expect(ancestors('docs/reviews-pr/review-NXC-239.html')).toEqual([
+      'docs',
+      'docs/reviews-pr'
+    ])
+  })
+
+  it('a name with no folder above it has none, and so does the root', () => {
+    // An empty answer is the ordinary case for a file at the top of a project,
+    // not a failure: the root is expanded by construction.
+    expect(ancestors('README.md')).toEqual([])
+    expect(ancestors('')).toEqual([])
+    expect(ancestors(null)).toEqual([])
+    expect(ancestors(undefined)).toEqual([])
+  })
+
+  it('a trailing separator gives no empty ancestor', () => {
+    // `''` is the root in this path space, and a row nothing draws: pushed into
+    // `project.expanded` it would be an entry in settings.json naming the
+    // project itself.
+    expect(ancestors('a/b/')).toEqual(['a'])
+    expect(ancestors('a/b//')).toEqual(['a'])
+    expect(ancestors('a/')).toEqual([])
+  })
+
+  it('a double separator inside the path is not a folder either', () => {
+    expect(ancestors('a//b/c.txt')).toEqual(['a', 'a/b'])
+  })
+
+  it('one separator only, deliberately, as in isUnder', () => {
+    // Every path here is the tree's own: relative to the project and written
+    // with `/` whatever the platform. A backslash is an ordinary character in a
+    // name on macOS and Linux and must not cut one into folders.
+    expect(ancestors('a\\b.txt')).toEqual([])
   })
 })
 

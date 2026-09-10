@@ -241,21 +241,30 @@ because the row leaves the tree as soon as the parent is re-read by the same swe
 still reaches the console in every case, since the diagnostic is not what the toast was for.
 
 **The root is read first and alone, and the expanded folders only if it answered** — in
-`refreshDirs`, in `projects.js`'s project switch and in `DesktopApp.vue`'s `onMounted`, the three
-places that read a root and its open folders together. This is not tidiness: `resolve_within`
-canonicalizes the **root** before the path inside it, so a project folder that is gone — an unmounted
-volume, a `git worktree remove` on a worktree opened as a project — answers `notFound` for *every*
-`dir` and not only for `''`. Fired as one `Promise.all`, each of those children reads as a folder
-somebody deleted, and the fold-away above would empty the whole of `expanded` into `settings.json`
-behind a single toast. Sequenced, the root's own refusal is the only thing the person is told and
-nothing is forgotten. `listDir` answers `true` or `false` for those three and for nobody else —
-every other call site discards it — and standing down because the root was merely busy costs one
-sweep, which the next window focus makes again. `refreshDirs` asks `filesState.dirs` whether the root
-is known rather than looking for `''` in the list it was handed: gating on the argument would make
-the safety of a caller written later a property of what that caller happened to pass. Two of the
-three are pinned by a test — `tests/stores/files.test.js` for the sweep, `tests/stores/projects.test.js`
-for the switch — and `onMounted` is in a `.vue` file no runner here can reach, which is the whole
-reason the other two are pinned at all.
+`refreshDirs`, in `projects.js`'s project switch, and in `DesktopApp.vue`'s `onMounted` and
+`revealInTree`, the four places that read a root and its open folders together. This is not tidiness:
+`resolve_within` canonicalizes the **root** before the path inside it, so a project folder that is
+gone — an unmounted volume, a `git worktree remove` on a worktree opened as a project — answers
+`notFound` for *every* `dir` and not only for `''`. Fired as one `Promise.all`, each of those
+children reads as a folder somebody deleted, and the fold-away above would empty the whole of
+`expanded` into `settings.json` behind a single toast. Sequenced, the root's own refusal is the only
+thing the person is told and nothing is forgotten. `listDir` answers `true` or `false` for those four
+and for nobody else — every other call site discards it — and standing down because the root was
+merely busy costs one sweep, which the next window focus makes again. `refreshDirs` asks
+`filesState.dirs` whether the root is known rather than looking for `''` in the list it was handed:
+gating on the argument would make the safety of a caller written later a property of what that caller
+happened to pass. Two of the four are pinned by a test — `tests/stores/files.test.js` for the sweep,
+`tests/stores/projects.test.js` for the switch — and the other two are in a `.vue` file no runner
+here can reach, which is the whole reason the first two are pinned at all.
+
+`revealInTree` is the fourth and arrives at the rule from the other end, which is why it is worth
+naming rather than counting. The other three read a root because they are about to re-read the
+folders already open under it; this one is about **one folder that has usually never been read**, and
+it is triggered by a click on a tab in the centre column rather than by a sweep or a switch — so the
+defect it would reach is the same fold-away by a path nothing else in this subsystem takes. It is
+also the one of the four that writes to `expanded` **before** the gate: the folders above the active
+file are pushed in synchronously and the reads are what waits, so a reveal that stands down has still
+left `onMounted`'s own pass something to find.
 
 The subtree test all of this turns on — a path being a folder or something inside it, the trailing
 separator being the whole of the rule, since a bare `startsWith` makes `src-tauri` a child of `src` —
