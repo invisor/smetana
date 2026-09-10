@@ -12,3 +12,4 @@
 pub mod driver;
 pub mod journal;
 pub mod model;
+pub mod permission;

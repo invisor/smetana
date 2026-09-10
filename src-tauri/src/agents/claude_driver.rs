@@ -13,26 +13,108 @@
 //! `claude::tool_detail` is the reference formatter's table of which field of
 //! which tool says so, and it is borrowed rather than copied.
 
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
 use serde_json::Value;
 
 use super::claude::{clip, one_line, tool_detail, Claude, MAX_DETAIL};
 use crate::agents::Launch;
 use crate::session::driver::{Driver, Input, LineBuffer};
 use crate::session::model::{Actor, Decision, EventKind};
+use crate::session::permission::{permission_tool, PermissionTicket};
 
 pub struct ClaudeDriver {
     lines: LineBuffer,
+    /// The `--mcp-config` file naming this session's permission listener, or
+    /// `None` for a session that has no ticket — a codec test, and a session
+    /// started on a machine where the file could not be written.
+    permission: Option<McpConfig>,
+}
+
+/// The config file handed to the child, alive for as long as the driver is.
+///
+/// A temporary deleted on the way out of `start` would be gone before the child
+/// had opened it, and the failure is silent: the harness would simply never
+/// connect to the server and never ask about anything.
+struct McpConfig {
+    path: PathBuf,
+}
+
+impl Drop for McpConfig {
+    fn drop(&mut self) {
+        // The session is over, so the child that was reading this is too. The
+        // file holds the session's bearer token, and leaving it in a shared
+        // temporary directory for the life of the machine is the one thing
+        // worth doing something about here.
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// A path nothing else is going to pick: this process, a counter within it, and
+/// the clock. The same shape the rest of this tree uses for scratch state
+/// (`smetana-git-…`, `smetana-shell-…`), with the clock added because a config
+/// file outlives nothing and a recycled pid must not meet a stale one.
+fn config_path() -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("smetana-mcp-{}-{n}-{nanos}.json", std::process::id()))
+}
+
+/// Create the file readable by nobody but this user, and refuse a path that is
+/// already there.
+///
+/// Both halves are about the same thing and neither is ceremony: what goes in
+/// here is the bearer token for a socket that answers questions about running
+/// `rm -rf`, and the directory it goes in is shared with every other user of the
+/// machine. `create_new` is what stops another process pre-planting a symlink at
+/// the path; the mode is what stops it simply reading the file afterwards.
+fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
+fn write_mcp_config(ticket: &PermissionTicket) -> Option<McpConfig> {
+    let path = config_path();
+    let body = serde_json::to_vec(&ticket.mcp_config()).ok()?;
+    match create_private(&path).and_then(|mut file| file.write_all(&body)) {
+        Ok(()) => Some(McpConfig { path }),
+        Err(error) => {
+            // Loud, and then the session goes on without a permission channel:
+            // the harness declines what it would have asked about, which is a
+            // session that gets less done rather than one that does something
+            // nobody agreed to.
+            log::error!("the permission config could not be written to {}: {error}", path.display());
+            None
+        }
+    }
 }
 
 impl ClaudeDriver {
-    pub fn new() -> Self {
-        Self { lines: LineBuffer::new() }
+    /// `None` for the ticket is a driver with no permission channel: the codec
+    /// tests, which exercise the stream and never spawn anything.
+    pub fn new(permission: Option<PermissionTicket>) -> Self {
+        Self {
+            lines: LineBuffer::new(),
+            permission: permission.as_ref().and_then(write_mcp_config),
+        }
     }
 }
 
 impl Default for ClaudeDriver {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
@@ -244,6 +326,21 @@ impl Driver for ClaudeDriver {
         {
             cmd.arg(arg);
         }
+        // Where this session asks about permissions. Both flags or neither:
+        // `--permission-prompt-tool` names a tool on a server that only
+        // `--mcp-config` puts there, so a line carrying one of them alone is a
+        // harness that fails every tool call it would have asked about.
+        //
+        // The file is **not** deleted here. It is held by `McpConfig` for the
+        // driver's whole life, because the child opens it some way into its own
+        // start and a temporary released at the end of this function would be
+        // gone by then.
+        if let Some(config) = &self.permission {
+            cmd.arg("--mcp-config");
+            cmd.arg(&config.path);
+            cmd.arg("--permission-prompt-tool");
+            cmd.arg(permission_tool());
+        }
         // The opening prompt, on the one channel this mode leaves open. The
         // probe establishes that the text reaches the model and that the flag
         // is accepted silently beside `--session-id`; it does **not** establish
@@ -396,7 +493,7 @@ mod tests {
 
     #[test]
     fn an_init_event_opens_the_agents_turn() {
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         assert_eq!(events(&mut driver, INIT), vec![EventKind::TurnStart { by: Actor::Agent }]);
     }
 
@@ -404,7 +501,7 @@ mod tests {
     fn a_text_block_becomes_one_paragraph_with_its_markdown_intact() {
         // Unlike the terminal's renderer, newlines are kept: the front end
         // parses markdown, and flattening here would destroy every list.
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, TEXT),
             vec![EventKind::Text { text: "Reading the file now.".into() }]
@@ -413,7 +510,7 @@ mod tests {
 
     #[test]
     fn a_tool_call_carries_the_one_line_the_reference_formatter_shows() {
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, TOOL),
             vec![EventKind::ToolUse {
@@ -428,7 +525,7 @@ mod tests {
     fn a_tool_result_says_how_it_went_and_never_what_it_said() {
         // A result routinely carries a whole file. The panel wants the outcome;
         // the content would be the wall of output this design exists to remove.
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, TOOL_RESULT),
             vec![EventKind::ToolResult { id: "t1".into(), ok: true, summary: "3 lines".into() }]
@@ -440,7 +537,7 @@ mod tests {
         // `content` is `string | ContentBlock[]` and the list form is ordinary:
         // reading only the string form reported "no output" for about a fifth
         // of the tool results in a real transcript.
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, TOOL_RESULT_BLOCKS),
             vec![EventKind::ToolResult { id: "t2".into(), ok: true, summary: "2 lines".into() }]
@@ -452,7 +549,7 @@ mod tests {
         // A `Read` of a PNG answers with one image block and no text at all.
         // "no output" would be false, and the summary is the whole of what this
         // event says.
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, TOOL_RESULT_IMAGE),
             vec![EventKind::ToolResult { id: "t3".into(), ok: true, summary: "1 image".into() }]
@@ -463,7 +560,7 @@ mod tests {
     fn prose_and_a_picture_in_one_result_are_counted_apart() {
         // A block that is not prose has no lines, so folding it into the line
         // count would be wrong about both halves.
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, TOOL_RESULT_MIXED),
             vec![EventKind::ToolResult {
@@ -476,7 +573,7 @@ mod tests {
 
     #[test]
     fn a_thinking_block_is_the_agents_reasoning() {
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, THINKING),
             vec![EventKind::Reasoning { text: "The file is read before it is written.".into() }]
@@ -488,13 +585,13 @@ mod tests {
         // The guard in the `thinking` arm is what this pins, and nothing else
         // in the suite would notice its removal: such a block arrives on nearly
         // every turn, and each one would draw an empty reasoning row.
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         assert!(events(&mut driver, THINKING_SIGNED_ONLY).is_empty());
     }
 
     #[test]
     fn a_result_closes_the_turn_with_its_tokens_and_its_clock() {
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, RESULT),
             vec![EventKind::Result {
@@ -512,7 +609,7 @@ mod tests {
         // `input_tokens` alone: on a cached turn that field is 19 against the
         // 53 355 the turn actually consumed, and this event is rendered as what
         // the turn cost rather than printed into a pane.
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, RESULT_CACHED),
             vec![EventKind::Result {
@@ -526,7 +623,7 @@ mod tests {
 
     #[test]
     fn an_api_retry_is_an_error_a_person_should_see() {
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, RETRY),
             vec![EventKind::Error { text: "api retry (overloaded), attempt 2".into() }]
@@ -535,7 +632,7 @@ mod tests {
 
     #[test]
     fn an_event_type_this_build_has_never_heard_of_produces_nothing() {
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         assert!(events(&mut driver, r#"{"type":"something_new","payload":42}"#).is_empty());
     }
 
@@ -543,7 +640,7 @@ mod tests {
     fn a_line_that_is_not_json_produces_nothing_rather_than_an_error_row() {
         // A harness that prints a warning to stdout must not put a red row in
         // somebody's conversation.
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         assert!(events(&mut driver, "warning: something").is_empty());
     }
 
@@ -553,7 +650,7 @@ mod tests {
         // serde_json decodes those into live bytes. A bell would turn a row
         // needs-you; colour would be escape codes on a panel that is no longer
         // a terminal.
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"red \u001b[31mhere\u0007"}]}}"#;
         let EventKind::Text { text } = &events(&mut driver, line)[0] else {
             panic!("a text block is a Text event");
@@ -563,7 +660,7 @@ mod tests {
 
     #[test]
     fn a_newline_inside_a_paragraph_is_kept_because_markdown_needs_it() {
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         let line =
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"- one\n- two"}]}}"#;
         assert_eq!(
@@ -577,7 +674,7 @@ mod tests {
         // Both halves are required together: --input-format stream-json is
         // refused without --output-format stream-json, and --verbose is what
         // makes the output one event per line rather than one blob at the end.
-        let args = argv(&ClaudeDriver::new().start(&launch()));
+        let args = argv(&ClaudeDriver::new(None).start(&launch()));
         for flag in ["-p", "--verbose"] {
             assert!(args.iter().any(|arg| arg == flag), "{flag} is missing from {args:?}");
         }
@@ -593,7 +690,7 @@ mod tests {
 
     #[test]
     fn the_conversation_id_this_app_chose_is_on_the_line() {
-        let args = argv(&ClaudeDriver::new().start(&launch()));
+        let args = argv(&ClaudeDriver::new(None).start(&launch()));
         let at =
             args.iter().position(|arg| arg == "--session-id").expect("the flag is on the line");
         assert_eq!(args[at + 1], CHOSEN);
@@ -607,7 +704,7 @@ mod tests {
         // would have passed throughout the defect.
         let launch = launch();
         let text = Claude.prompt_text(&launch).expect("a bare launch opens on a prompt");
-        let args = argv(&ClaudeDriver::new().start(&launch));
+        let args = argv(&ClaudeDriver::new(None).start(&launch));
         let at = args
             .iter()
             .position(|arg| arg == "--append-system-prompt")
@@ -634,7 +731,7 @@ mod tests {
         // prompt appended as a positional — which is what `Profile::command`
         // produces and what this harness throws away — puts a bare argument on
         // the line and fails here.
-        let args = argv(&ClaudeDriver::new().start(&launch()));
+        let args = argv(&ClaudeDriver::new(None).start(&launch()));
         for (at, arg) in args.iter().enumerate().skip(1) {
             if arg.starts_with('-') {
                 continue;
@@ -653,7 +750,7 @@ mod tests {
         // refusal is load-bearing: somebody's words are already in that
         // conversation and the app must not talk over them. An empty flag would
         // be doing it quietly rather than not doing it.
-        let args = argv(&ClaudeDriver::new().start(&resume_launch()));
+        let args = argv(&ClaudeDriver::new(None).start(&resume_launch()));
         assert!(
             !args.iter().any(|arg| arg == "--append-system-prompt"),
             "a resume carries no opening prompt: {args:?}"
@@ -662,7 +759,7 @@ mod tests {
 
     #[test]
     fn a_persons_message_goes_out_as_one_json_line_the_protocol_understands() {
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         let bytes = driver.send(Input::Message { text: "hello".into(), attachments: vec![] });
         let text = String::from_utf8(bytes).expect("the codec writes utf-8");
         assert!(text.ends_with('\n'), "a line the child can read ends: {text:?}");
@@ -677,12 +774,78 @@ mod tests {
     fn an_attachment_reaches_the_agent_as_a_path_in_the_message() {
         // The default every profile has for images: a path named in the prompt
         // is the one channel every harness has. See `Profile::images`.
-        let mut driver = ClaudeDriver::new();
+        let mut driver = ClaudeDriver::new(None);
         let bytes = driver.send(Input::Message {
             text: "look at this".into(),
             attachments: vec!["/tmp/shot.png".into()],
         });
         let text = String::from_utf8(bytes).expect("the codec writes utf-8");
         assert!(text.contains("/tmp/shot.png"), "{text:?}");
+    }
+
+    fn ticket() -> PermissionTicket {
+        PermissionTicket { url: "http://127.0.0.1:4321/mcp/7".into(), token: "a-token".into() }
+    }
+
+    /// The path `--mcp-config` was given, or a panic naming what was there
+    /// instead.
+    fn config_arg(args: &[String]) -> PathBuf {
+        let at = args.iter().position(|arg| arg == "--mcp-config").expect(&format!("{args:?}"));
+        PathBuf::from(&args[at + 1])
+    }
+
+    #[test]
+    fn a_session_with_a_ticket_is_told_where_to_ask_and_what_to_ask_with() {
+        let driver = ClaudeDriver::new(Some(ticket()));
+        let args = argv(&driver.start(&launch()));
+        let config = config_arg(&args);
+        // The whole point of holding the file on the driver: the child opens it
+        // some way into its own start, so it has to still be there afterwards.
+        assert!(config.exists(), "the config outlives the start: {}", config.display());
+        let written: Value =
+            serde_json::from_slice(&std::fs::read(&config).expect("the config reads back"))
+                .expect("the config is JSON");
+        let entry = &written["mcpServers"]["smetana"];
+        assert_eq!(entry["type"], "http", "{written}");
+        assert_eq!(entry["url"], "http://127.0.0.1:4321/mcp/7");
+        assert_eq!(entry["headers"]["Authorization"], "Bearer a-token");
+        assert!(entry.get("timeout").is_none(), "no timeout, ever: {entry}");
+
+        let at = args
+            .iter()
+            .position(|arg| arg == "--permission-prompt-tool")
+            .expect("the tool flag stands beside the config one");
+        assert_eq!(args[at + 1], "mcp__smetana__approve");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_config_is_readable_by_nobody_but_this_user() {
+        // It holds the session's bearer token, and the directory it sits in is
+        // shared with every other user of the machine.
+        use std::os::unix::fs::PermissionsExt;
+        let driver = ClaudeDriver::new(Some(ticket()));
+        let config = config_arg(&argv(&driver.start(&launch())));
+        let mode = std::fs::metadata(&config).expect("the config is there").permissions().mode();
+        assert_eq!(mode & 0o077, 0, "mode {mode:o}");
+    }
+
+    #[test]
+    fn the_config_goes_when_the_session_does() {
+        let config = {
+            let driver = ClaudeDriver::new(Some(ticket()));
+            config_arg(&argv(&driver.start(&launch())))
+        };
+        assert!(!config.exists(), "left behind: {}", config.display());
+    }
+
+    #[test]
+    fn a_session_with_no_ticket_carries_neither_flag() {
+        // A codec test, and any session started where the config could not be
+        // written: one flag without the other would be a harness failing every
+        // tool call it would have asked about.
+        let args = argv(&ClaudeDriver::new(None).start(&launch()));
+        assert!(!args.iter().any(|arg| arg == "--mcp-config"), "{args:?}");
+        assert!(!args.iter().any(|arg| arg == "--permission-prompt-tool"), "{args:?}");
     }
 }

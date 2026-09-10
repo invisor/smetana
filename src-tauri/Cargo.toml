@@ -53,7 +53,19 @@ tauri-plugin-shell = "2"
 tauri-plugin-window-state = "2"
 thiserror = "2"
 notify = "8"
-tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
+tokio = { version = "1", features = [
+  "sync",
+  "time",
+  "rt",
+  "macros",
+  # The three the permission listener adds. `net` is its `TcpListener`; the
+  # other two are what a driven session's child is run and read through, since
+  # that worker lives on this runtime rather than on the PTY thread the
+  # terminal's sessions use.
+  "net",
+  "process",
+  "io-util",
+] }
 chrono = "0.4"
 vt100 = "0.16.2"
 portable-pty = "0.9.0"
@@ -219,6 +231,54 @@ tauri-plugin-updater = "2.10.1"
 # flow is documented as the pair, and a front-end-driven restart is the obvious
 # next thing to want. If that never arrives, this is the line to delete.
 tauri-plugin-process = "2.3.1"
+
+# The permission listener (`session/permission.rs`): the HTTP server this app
+# hosts so that a driven Claude Code session can ask it whether to run a tool.
+# Outside its own SDK that harness has exactly one documented way to route a
+# permission to a client — `--permission-prompt-tool`, naming a tool on an MCP
+# server — so the app has to be one, and an MCP server over HTTP is an HTTP
+# server. Writing the parser by hand to save the line was considered and
+# refused: a hand-rolled HTTP parser on the socket that answers questions about
+# running `rm -rf` is the worst place in this tree to save a dependency.
+#
+# The price, counted against `Cargo.lock` the way every other line in this file
+# counts one: **five `[[package]]` entries**, 602 to 607, and one of them is
+# axum. Traced with `cargo tree -i` rather than guessed at, the other four are
+# `axum-core` (its own split-out traits), `matchit` (the router's path matcher),
+# `serde_path_to_error` (what the `json` feature answers a malformed body with)
+# and `httpdate` — which is **`hyper`'s** rather than axum's, and is the one
+# entry that says something: hyper 1.11 was already in this tree as a client,
+# and this is the first thing here to turn its server half on. The rest of the
+# HTTP stack is not part of the bill for exactly that reason — `hyper`, `tower`,
+# `tower-http`, `http-body-util` and `futures-core` were all already in the lock
+# file through Tauri itself. Nothing is removed and no other crate moves
+# version: the diff over `Cargo.lock` is 75 insertions and no deletions.
+#
+# `default-features = false` because the default set is a web framework's and
+# this is one route: `form`, `query`, `matched-path`, `original-uri`, `tracing`
+# and `tower-log` are all for an application with a surface. What is named is
+# what the listener actually uses — `http1` for the protocol, `tokio` for
+# `axum::serve`, and `json` for both the `Json` response and
+# `sse::Event::json_data`.
+axum = { version = "0.8", default-features = false, features = [
+  "http1",
+  "json",
+  "tokio",
+] }
+
+# The `Stream` trait, and nothing else. `axum::response::sse::Sse` is generic
+# over one and axum does not re-export the trait, so the listener's own
+# heartbeat stream — which polls a `oneshot` for the person's answer and an
+# interval for the next `notifications/progress` — cannot name what it
+# implements without this line.
+#
+# It is **not** a second dependency in the sense the spec forbids: axum depends
+# on `futures-core` itself, so this crate was already in `Cargo.lock` before
+# axum arrived, and naming it here adds no `[[package]]` entry and no download.
+# What is deliberately not taken is `futures-util`, the combinator half, which
+# is where the weight of that family is; a hand-written `poll_next` over two
+# things is smaller than the reason to pull it in.
+futures-core = "0.3"
 
 # Process control the standard library does not expose, and it is described
 # here by subject rather than by call site on purpose: a comment that counts
