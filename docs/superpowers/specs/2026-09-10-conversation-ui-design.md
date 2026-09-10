@@ -280,12 +280,38 @@ goes with it.
 
 ## Failure
 
-**The first thing the branch must measure is how long Claude Code waits for a permission
-answer.** `--permission-prompt-tool` is documented with `MCP_TIMEOUT` — 30 seconds — for the
-server to *connect*; how long a tool *call* may take before the harness gives up is not
-documented, and a person thinking about `rm -rf` takes longer than thirty seconds. If that
-answer is bounded, the whole interactive model meets its ceiling there, and it has to be
-known on day one rather than day five.
+**The first thing the branch had to measure was how long Claude Code waits for a permission
+answer, and the answer is half an hour — renewable, but only over a transport that can carry
+the renewal.** `--permission-prompt-tool` is documented with `MCP_TIMEOUT` — 30 seconds — for
+the server to *connect*; the wait on the call itself is documented nowhere, so it was measured
+on **Claude Code 2.1.267** against a stdio server that answers `initialize` and `tools/list`
+at once and never answers `tools/call`. Rechecking it needs one thing beside the version: the
+prompt has to name work the harness actually gates, since `echo hello` is waved through as
+safe and never reaches the permission tool at all — what was used is `rm -rf` on a scratch
+directory. The harness waits **1800 seconds** — 30 minutes and 17 seconds of wall clock from
+the call arriving to the process exiting — then sends `notifications/cancelled` to the server
+and hands the model a `tool_use_error` reading "sent no response or progress for 1800s;
+aborting". Nothing dies for it: the session lives, the turn goes on, and only that one tool
+call fails. The escape is in the wording — the request arrives carrying a `progressToken` in
+`params._meta`, and a `notifications/progress` against it restarts the clock: with the bound
+lowered to 20 seconds so the test was cheap, a heartbeat every five seconds held one call open
+for three minutes, six times the bound, and it was still open when the test was stopped. **That
+renewal was measured over stdio, where a server writes a notification whenever it likes, and
+this design ships HTTP**, where a POST is answered either with one JSON object or with an SSE
+stream and there is no third channel for a notification to take. So the heartbeat is a
+requirement on `permission.rs` rather than a fact already in hand: while a request is pending
+the listener must answer the POST as an SSE stream that emits `notifications/progress` and
+terminates with the decision, not as the single `application/json` body that "completes the
+still-open HTTP request" otherwise reads as. Met, and only if met, it is what lets a person
+take as long as a person takes, and `PermissionRequest` needs neither a countdown nor an
+automatic deny. One knob must therefore never be set, and it is **ours** rather than the
+operator's: the per-server `timeout` in the `mcpServers` entry this app writes itself, per
+session, at spawn. It is the one bound a heartbeat does not extend — measured at 20 seconds,
+with progress every five, and aborted at 20 all the same. The generated entry carries `type`,
+`url` and `headers`, and must not carry `timeout`.
+`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` is the operator's and is harmless beside it, moving an
+idle bound a heartbeat renews just the same; the harness's own error text says `0` switches it
+off, which is read rather than measured.
 
 Everything else:
 
