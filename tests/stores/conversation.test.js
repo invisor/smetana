@@ -272,7 +272,14 @@ describe('the conversation store', () => {
     })
     await stores.conversation.attach(1)
 
-    expect(stores.conversation.conversationState.lastError).toBeTruthy()
+    /* Which refusal was reported, and not merely that one was. `sentence` falls
+       through to `error.message` for a plain `Error`, so the words above land
+       here — and a `toBeTruthy` would be satisfied by the `session_attach` that
+       follows if `register` ever stopped rethrowing, which is the other road to
+       a filled `lastError` and a different fault entirely. */
+    expect(stores.conversation.conversationState.lastError).toContain(
+      'the second subscription is refused'
+    )
     // The half that did go up came back down, so a retry starts from nothing.
     expect(dropped).toEqual(['session:events'])
 
@@ -283,9 +290,16 @@ describe('the conversation store', () => {
     await emit('session:events', { id: 1, events: [text(1, 'a')] })
     await nextTick()
 
-    /* One subscription, said in the only way it can be seen from outside: the
-       batch is absorbed once, so nothing reads its own second pass as a gap and
-       asks for a fresh snapshot. The retry's own attach is the only one. */
+    /* **`expect(dropped).toEqual(['session:events'])` above is what pins the
+       rule.** The pair below is the production consequence written down, and it
+       cannot fail here: `installIpc` re-installs `mockIPC`, whose
+       `listeners`/`callbacks` maps are its own, so a handler registered through
+       the transport it replaced is orphaned and can never be delivered to. Both
+       of these hold identically with the disposal removed — in the app, where
+       one transport lives for the window, they are exactly what a second live
+       subscription would break. Do not read `dropped` as arrangement and this
+       as the assertion: delete it and the rule is unpinned with the test still
+       green. */
     expect(stores.conversation.conversationFor(1).events.map((e) => e.text)).toEqual(['a'])
     expect(ipc.calls('session_attach')).toHaveLength(1)
   })
