@@ -6,6 +6,7 @@ mod git;
 mod project;
 mod rlimit;
 mod runs;
+mod session;
 mod sessions;
 mod settings;
 mod shell_env;
