@@ -40,50 +40,26 @@ const MODELS: &[(&str, &str)] = &[
 
 pub struct Claude;
 
-impl Profile for Claude {
-    fn id(&self) -> &'static str {
-        "claude"
-    }
-
-    fn label(&self) -> &'static str {
-        "Claude Code"
-    }
-
-    fn binary(&self) -> &'static str {
-        "claude"
-    }
-
-    fn delivery(&self) -> SkillDelivery {
-        SkillDelivery::PluginDir
-    }
-
-    /// The aliases, never the full names. `MODELS` carries the reasoning.
-    fn models(&self) -> &'static [(&'static str, &'static str)] {
-        MODELS
-    }
-
-    /// `--model <model>`, read off this CLI's own help at 2.1.263: "Model for
-    /// the current session. Provide an alias for the latest model (e.g.
-    /// 'fable', 'opus', or 'sonnet') or a model's full name."
-    ///
-    /// **This is Claude Code's grammar and nobody else's**, exactly as
-    /// `resume_args` is: `codex.rs` answers with its own short flag rather than
-    /// this one, because a wrong flag here is a session that dies at spawn — at
-    /// night, inside a run, which is the one place this app cannot afford a
-    /// surprise.
-    fn model_args<'a>(&self, model: &'a str) -> Vec<&'a str> {
-        vec!["--model", model]
-    }
-
-    /// `--plugin-dir` loads a plugin for this session only: nothing is
-    /// installed and the person's own configuration is not touched.
-    ///
-    /// The vendored superpowers copy keeps its own name rather than being
-    /// folded into ours, which is what lets the prompt say
-    /// `superpowers:brainstorming` in both cases. It is withheld when the
-    /// person has their own — two plugins of the same name is a choice the
-    /// agent would make for us.
-    fn command(&self, launch: &Launch) -> CommandBuilder {
+/// The command line in two halves, and the reason the seam exists.
+///
+/// `Profile::command` is the whole of it and behaves exactly as it always has.
+/// What is split out is the **positional prompt**: a driven session
+/// (`agents::claude_driver`) runs this harness under `--input-format
+/// stream-json`, and in that mode the CLI reads the turn off stdin and
+/// **discards the positional argument entirely** — measured against 2.1.267,
+/// where a positional saying one thing and a stdin turn saying another produced
+/// only the stdin answer. So a driven session needs the line without that
+/// argument, and the prompt text separately, to put behind
+/// `--append-system-prompt` instead.
+///
+/// Two `pub(crate)` methods rather than a copy of this command line in the
+/// driver: everything here — the batch arguments, the resume rule, the chosen
+/// session id, the plugins, the autonomy arguments, the model flag — is this
+/// profile's knowledge, and the whole point of the seam is that none of it is
+/// written a second time anywhere.
+impl Claude {
+    /// Everything `command` puts on the line except the positional prompt.
+    pub(crate) fn command_without_prompt(&self, launch: &Launch) -> CommandBuilder {
         let mut cmd = CommandBuilder::new(self.binary());
         // First of all, and before the plugins: this is what makes the batch
         // end by itself. See `agents::is_batch` for which sessions get it.
@@ -163,6 +139,18 @@ impl Profile for Claude {
                 }
             }
         }
+        cmd
+    }
+
+    /// The prompt this launch opens on, or `None` where it opens on nothing.
+    ///
+    /// `None` is not only the empty case: `prompt::build` refuses
+    /// `Intent::ResumeSession` outright, and that refusal is load-bearing
+    /// rather than an omission — a resumed conversation already has somebody's
+    /// words in it, and this app arriving with a paragraph of its own would be
+    /// talking over the person whose session it is. A caller putting this
+    /// behind a flag must add no flag at all when it answers `None`.
+    pub(crate) fn prompt_text(&self, launch: &Launch) -> Option<String> {
         // Nothing is read from disk here: both plugins are loaded, so the
         // prompt names the skills and Claude Code fetches them on demand.
         // Attached images are not on this command line either, and for a
@@ -176,7 +164,7 @@ impl Profile for Claude {
             plans: None,
             reviewing_branch: None,
         };
-        if let Some(built) = prompt::build(
+        prompt::build(
             &launch.intent,
             self.delivery(),
             self.images(),
@@ -186,7 +174,59 @@ impl Profile for Claude {
             &launch.languages,
             &launch.agent_prompt,
             launch.worker_model.as_deref(),
-        ) {
+        )
+    }
+}
+
+impl Profile for Claude {
+    fn id(&self) -> &'static str {
+        "claude"
+    }
+
+    fn label(&self) -> &'static str {
+        "Claude Code"
+    }
+
+    fn binary(&self) -> &'static str {
+        "claude"
+    }
+
+    fn delivery(&self) -> SkillDelivery {
+        SkillDelivery::PluginDir
+    }
+
+    /// The aliases, never the full names. `MODELS` carries the reasoning.
+    fn models(&self) -> &'static [(&'static str, &'static str)] {
+        MODELS
+    }
+
+    /// `--model <model>`, read off this CLI's own help at 2.1.263: "Model for
+    /// the current session. Provide an alias for the latest model (e.g.
+    /// 'fable', 'opus', or 'sonnet') or a model's full name."
+    ///
+    /// **This is Claude Code's grammar and nobody else's**, exactly as
+    /// `resume_args` is: `codex.rs` answers with its own short flag rather than
+    /// this one, because a wrong flag here is a session that dies at spawn — at
+    /// night, inside a run, which is the one place this app cannot afford a
+    /// surprise.
+    fn model_args<'a>(&self, model: &'a str) -> Vec<&'a str> {
+        vec!["--model", model]
+    }
+
+    /// `--plugin-dir` loads a plugin for this session only: nothing is
+    /// installed and the person's own configuration is not touched.
+    ///
+    /// The vendored superpowers copy keeps its own name rather than being
+    /// folded into ours, which is what lets the prompt say
+    /// `superpowers:brainstorming` in both cases. It is withheld when the
+    /// person has their own — two plugins of the same name is a choice the
+    /// agent would make for us.
+    fn command(&self, launch: &Launch) -> CommandBuilder {
+        // The line, then the prompt as its positional argument. Byte for byte
+        // what this method has always produced; the split above it exists for
+        // the one caller that needs the two halves apart.
+        let mut cmd = self.command_without_prompt(launch);
+        if let Some(built) = self.prompt_text(launch) {
             cmd.arg(built);
         }
         cmd
@@ -322,7 +362,7 @@ impl Profile for Claude {
 /// ceilings, kept because they were chosen against real output. A `Task` call
 /// carries a whole briefing in its input, and unclipped it fills the pane.
 const MAX_TEXT: usize = 200;
-const MAX_DETAIL: usize = 140;
+pub(crate) const MAX_DETAIL: usize = 140;
 
 /// Whitespace collapsed and the whole thing on one line — a pane row is a row —
 /// and every other control character dropped.
@@ -338,7 +378,7 @@ const MAX_DETAIL: usize = 140;
 /// one or two loud rows the whole design budgets for a screen. `char::is_control`
 /// covers C0, DEL and C1, and C1 is worth taking with them: U+009B is a CSI in
 /// its own right.
-fn one_line(text: &str) -> String {
+pub(crate) fn one_line(text: &str) -> String {
     text.split_whitespace()
         .map(|word| word.chars().filter(|c| !c.is_control()).collect::<String>())
         // A word that was nothing but control bytes leaves no gap of its own.
@@ -347,7 +387,7 @@ fn one_line(text: &str) -> String {
         .join(" ")
 }
 
-fn clip(text: &str, max: usize) -> String {
+pub(crate) fn clip(text: &str, max: usize) -> String {
     // Counted in characters rather than bytes: a Russian task title is two
     // bytes a letter, and slicing a string mid-character panics.
     if text.chars().count() <= max {
@@ -360,7 +400,7 @@ fn clip(text: &str, max: usize) -> String {
 /// Which field of a tool's input says what that call is actually doing. The
 /// table is the reference formatter's; a tool it has never heard of still gets
 /// its name shown, because the point of the line is that something happened.
-fn tool_detail(name: &str, input: &serde_json::Value) -> String {
+pub(crate) fn tool_detail(name: &str, input: &serde_json::Value) -> String {
     let field = |key: &str| input.get(key).and_then(serde_json::Value::as_str).unwrap_or("");
     let detail = match name {
         "Bash" => field("command").to_string(),

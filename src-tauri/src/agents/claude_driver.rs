@@ -1,0 +1,688 @@
+//! Claude Code's protocol, as this app's vocabulary.
+//!
+//! A port of what `claude::transcript_line` already does for a terminal pane,
+//! with one difference that runs through the whole file: this produces typed
+//! events for components to draw, not strings for a terminal to print. So a
+//! paragraph keeps its newlines — the front end parses markdown, and flattening
+//! a list here would destroy it — while control bytes are still stripped, for
+//! the reason `claude::one_line` records: the agent routinely quotes somebody
+//! else's output, CSI sequences and a bell arrive inside it, and a bell would
+//! turn the session's row `needs-you`.
+//!
+//! What a tool's call is doing is not decided again in here.
+//! `claude::tool_detail` is the reference formatter's table of which field of
+//! which tool says so, and it is borrowed rather than copied.
+
+use serde_json::Value;
+
+use super::claude::{clip, one_line, tool_detail, Claude, MAX_DETAIL};
+use crate::agents::Launch;
+use crate::session::driver::{Driver, Input, LineBuffer};
+use crate::session::model::{Actor, Decision, EventKind};
+
+pub struct ClaudeDriver {
+    lines: LineBuffer,
+}
+
+impl ClaudeDriver {
+    pub fn new() -> Self {
+        Self { lines: LineBuffer::new() }
+    }
+}
+
+impl Default for ClaudeDriver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Control bytes go; everything else, newlines included, stays. The one place
+/// this file differs from `claude::one_line`, and the difference is the whole
+/// reason it is a separate function: a pane row is a row, a paragraph is not.
+fn prose(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control() || *c == '\n').collect()
+}
+
+fn str_at<'a>(value: &'a Value, key: &str) -> &'a str {
+    value.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+fn u64_at(value: &Value, pointer: &str) -> u64 {
+    value.pointer(pointer).and_then(Value::as_u64).unwrap_or(0)
+}
+
+/// How many lines of prose, as the one thing a result event says.
+fn lines_summary(lines: usize) -> String {
+    match lines {
+        0 => "no output".to_string(),
+        1 => "1 line".to_string(),
+        many => format!("{many} lines"),
+    }
+}
+
+/// How a tool's result went, and never what it said. A result routinely carries
+/// a whole file, and that wall of output is what this design exists to remove.
+///
+/// The shape being read is `string | ContentBlock[]`, and the array form is
+/// ordinary rather than exotic — a `Read` of an image produces one, and it is
+/// roughly a fifth of the tool results in a real transcript. A version reading
+/// only the string form calls every one of them "no output", which is worse
+/// than a missing row: the summary is the whole of what this event carries,
+/// since the content is deliberately thrown away, so there is nothing beside it
+/// to correct the impression.
+///
+/// A block that is not prose has no lines to count, so it is said in its own
+/// word. Folding it into the line count would be wrong about both halves.
+fn result_summary(content: Option<&Value>) -> String {
+    let Some(content) = content else {
+        return lines_summary(0);
+    };
+    if let Some(text) = content.as_str() {
+        return lines_summary(text.lines().count());
+    }
+    let Some(blocks) = content.as_array() else {
+        return lines_summary(0);
+    };
+    let mut text = String::new();
+    let mut others: Vec<(&str, usize)> = Vec::new();
+    for block in blocks {
+        match str_at(block, "type") {
+            "text" => {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(str_at(block, "text"));
+            }
+            kind => {
+                // Its own type is the word, so a block this build has never
+                // heard of is still counted and named rather than dropped.
+                let kind = if kind.is_empty() { "block" } else { kind };
+                match others.iter_mut().find(|(name, _)| *name == kind) {
+                    Some((_, count)) => *count += 1,
+                    None => others.push((kind, 1)),
+                }
+            }
+        }
+    }
+    let mut parts = Vec::new();
+    if !text.is_empty() {
+        parts.push(lines_summary(text.lines().count()));
+    }
+    for (kind, count) in others {
+        parts.push(format!("{count} {kind}{}", if count == 1 { "" } else { "s" }));
+    }
+    if parts.is_empty() {
+        lines_summary(0)
+    } else {
+        parts.join(", ")
+    }
+}
+
+/// One decoded line of the stream, as events.
+///
+/// Zero events is an ordinary answer and the commonest one: hook chatter, a
+/// content block this build has never heard of, and every event type outside
+/// the match below. That is the choice `claude::transcript_line` already made,
+/// for the reason it records — a missing row costs a person nothing the CLI's
+/// own logs do not still hold, while a wall of raw protocol costs them the
+/// panel.
+fn one_event(event: &Value) -> Vec<EventKind> {
+    match str_at(event, "type") {
+        "system" => match str_at(event, "subtype") {
+            "init" => vec![EventKind::TurnStart { by: Actor::Agent }],
+            "api_retry" => {
+                let error = clip(&one_line(str_at(event, "error")), MAX_DETAIL);
+                let error = if error.is_empty() { "error".to_string() } else { error };
+                let attempt = event.get("attempt").and_then(Value::as_i64).unwrap_or(0);
+                vec![EventKind::Error { text: format!("api retry ({error}), attempt {attempt}") }]
+            }
+            _ => Vec::new(),
+        },
+        "assistant" => event
+            .pointer("/message/content")
+            .and_then(Value::as_array)
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter_map(|block| match str_at(block, "type") {
+                        "text" => {
+                            let text = prose(str_at(block, "text"));
+                            (!text.trim().is_empty()).then_some(EventKind::Text { text })
+                        }
+                        "thinking" => {
+                            // The emptiness guard is load-bearing rather than
+                            // tidiness, and a refactor that drops it will not
+                            // fail anywhere else: an extended-thinking block
+                            // routinely arrives as `{"thinking":"","signature":
+                            // "..."}`, where the signature is the whole of the
+                            // payload and there is no reasoning to show. Without
+                            // it every one of those draws an empty row.
+                            let text = prose(str_at(block, "thinking"));
+                            (!text.trim().is_empty()).then_some(EventKind::Reasoning { text })
+                        }
+                        "tool_use" => Some(EventKind::ToolUse {
+                            id: str_at(block, "id").to_string(),
+                            name: str_at(block, "name").to_string(),
+                            detail: tool_detail(
+                                str_at(block, "name"),
+                                block.get("input").unwrap_or(&Value::Null),
+                            ),
+                        }),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        // A tool's result arrives as a user message, which is the protocol's
+        // shape rather than ours: nobody typed it.
+        "user" => event
+            .pointer("/message/content")
+            .and_then(Value::as_array)
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter(|block| str_at(block, "type") == "tool_result")
+                    .map(|block| EventKind::ToolResult {
+                        id: str_at(block, "tool_use_id").to_string(),
+                        ok: !block.get("is_error").and_then(Value::as_bool).unwrap_or(false),
+                        summary: result_summary(block.get("content")),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        "result" => vec![EventKind::Result {
+            // Every input token the turn was billed for, cached ones included,
+            // and this **deliberately diverges from `claude::transcript_line`**,
+            // which reads `input_tokens` alone. That convention was set for a
+            // cosmetic pane row, where being low is a cosmetic problem; this is
+            // structured data the front end renders as what the turn cost. A
+            // real turn reports 19 uncached input tokens beside 43 336 read from
+            // the cache and 10 000 written to it, so the unsummed figure is
+            // three orders of magnitude out — and a number that wrong reads as a
+            // working feature rather than as a stale one.
+            tokens_in: u64_at(event, "/usage/input_tokens")
+                + u64_at(event, "/usage/cache_read_input_tokens")
+                + u64_at(event, "/usage/cache_creation_input_tokens"),
+            tokens_out: u64_at(event, "/usage/output_tokens"),
+            cost_usd: event.get("total_cost_usd").and_then(Value::as_f64),
+            ms: event.get("duration_ms").and_then(Value::as_u64).unwrap_or(0),
+        }],
+        _ => Vec::new(),
+    }
+}
+
+impl Driver for ClaudeDriver {
+    fn start(&self, launch: &Launch) -> portable_pty::CommandBuilder {
+        // The profile still builds the line: the plugins, the skills directory,
+        // the model flag, `--session-id` and the rule that it never stands
+        // beside `--resume` are all its knowledge, and none of it is written
+        // twice here. What this adds is the shape of the conversation, which is
+        // the driver's own business.
+        //
+        // `command_without_prompt` rather than `command`, and that is the whole
+        // reason `claude.rs` has a seam in it. Under `--input-format
+        // stream-json` this harness reads the turn off stdin and **throws the
+        // positional argument away** — measured against 2.1.267, where a
+        // positional and a stdin turn saying different things produced only the
+        // stdin answer. `command`'s positional is the prompt, so a driven
+        // session built on it opened with the conversation-language paragraph
+        // reaching nothing at all.
+        let mut cmd = Claude.command_without_prompt(launch);
+        // Both halves of the stream are required together: `--input-format
+        // stream-json` is refused without `--output-format stream-json`, and
+        // `--verbose` is what makes the output one event per line rather than
+        // one blob at the end.
+        //
+        // Appended rather than put in front the way `batch_args` is.
+        // `CommandBuilder` can only be pushed to, so leading the line would mean
+        // rebuilding one out of `get_argv` and carrying `cwd` and the extra
+        // environment across by hand — a real risk of dropping something, to buy
+        // tidiness the parser does not care about: the same probe showed both
+        // orderings parse identically.
+        for arg in
+            ["-p", "--verbose", "--output-format", "stream-json", "--input-format", "stream-json"]
+        {
+            cmd.arg(arg);
+        }
+        // The opening prompt, on the one channel this mode leaves open. The
+        // probe establishes that the text reaches the model and that the flag
+        // is accepted silently beside `--session-id`; it does **not** establish
+        // that the text outranks anything else the model is told, and nothing
+        // here should be read as promising that it does.
+        //
+        // **Only `Intent::Bare` is expected to reach this today**, and what it
+        // brings is the conversation-language sentence: a standing instruction
+        // about how to talk, which is exactly what a system-prompt clause is
+        // for. A launch carrying a real brief is a different thing on the same
+        // wire. `Intent::Run`'s prompt is the whole of the work — the task, the
+        // project's facts, the person's standing instruction — and routing it
+        // through here would silently reclassify somebody's opening turn as an
+        // appended system-prompt clause, on a channel established as carrying
+        // text to the model and **not** as outranking anything else the model
+        // is told. Whoever first drives a session on another intent should stop
+        // at this line and decide it, rather than find that it appears to work.
+        //
+        // No flag at all when there is no prompt, which is `Intent::ResumeSession`
+        // and is the case that matters: `prompt::build` refuses that intent a
+        // prompt because a resumed conversation already has somebody's words in
+        // it, and an empty `--append-system-prompt` would be this app talking
+        // over them in a quieter voice rather than not talking over them.
+        if let Some(text) = Claude.prompt_text(launch) {
+            cmd.arg("--append-system-prompt");
+            cmd.arg(text);
+        }
+        cmd
+    }
+
+    fn feed(&mut self, bytes: &[u8]) -> Vec<EventKind> {
+        // A line that does not parse as JSON produces nothing rather than an
+        // error row: a harness printing a warning to stdout must not put a red
+        // row in somebody's conversation.
+        self.lines
+            .feed(bytes)
+            .iter()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .flat_map(|event| one_event(&event))
+            .collect()
+    }
+
+    fn send(&mut self, input: Input) -> Vec<u8> {
+        let Input::Message { text, attachments } = input;
+        // A path named in the prose is the one channel every harness has, and
+        // it is what `ImageDelivery::InPrompt` — the delivery this profile
+        // keeps — already means elsewhere.
+        let body = if attachments.is_empty() {
+            text
+        } else {
+            format!("{text}\n\n{}", attachments.join("\n"))
+        };
+        let message = serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": body },
+        });
+        let mut bytes = serde_json::to_vec(&message).unwrap_or_default();
+        bytes.push(b'\n');
+        bytes
+    }
+
+    fn answer(&mut self, _id: &str, _decision: Decision) -> Option<Vec<u8>> {
+        // This harness answers through the permission listener, not over stdin,
+        // so there are no bytes for the worker to write here.
+        None
+    }
+
+    fn interrupt(&mut self) -> Option<Vec<u8>> {
+        // A known loss rather than an unfinished job: outside its own SDK,
+        // Claude Code has no documented way of being asked to stop a turn.
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::{library::Skills, Intent, Languages};
+    use std::path::PathBuf;
+
+    /// Lines as Claude Code 2.1 writes them under `--output-format stream-json`.
+    /// Captured rather than invented: an invented fixture tests the fixture.
+    const INIT: &str =
+        r#"{"type":"system","subtype":"init","model":"claude-opus-5","session_id":"abc"}"#;
+    const TEXT: &str = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Reading the file now."}]}}"#;
+    const TOOL: &str = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cargo test"}}]}}"#;
+    const TOOL_RESULT: &str = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"ok\nok\nok"}]}}"#;
+    const RESULT: &str = r#"{"type":"result","subtype":"success","duration_ms":4200,"total_cost_usd":0.031,"usage":{"input_tokens":120,"output_tokens":40}}"#;
+    const RETRY: &str = r#"{"type":"system","subtype":"api_retry","error":"overloaded","attempt":2}"#;
+    /// The other half of `content`'s `string | ContentBlock[]`, which the string
+    /// fixture above does not reach: a list of blocks, with and without prose
+    /// in it. The image block is a `Read` of a PNG, as that tool really answers.
+    const TOOL_RESULT_BLOCKS: &str = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","is_error":false,"content":[{"type":"text","text":"one\ntwo"}]}]}}"#;
+    const TOOL_RESULT_IMAGE: &str = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t3","is_error":false,"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}]}}"#;
+    const TOOL_RESULT_MIXED: &str = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t4","is_error":false,"content":[{"type":"text","text":"one\ntwo"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}]}}"#;
+    const THINKING: &str = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"The file is read before it is written.","signature":"EqQBCkYIBRgC"}]}}"#;
+    /// An extended-thinking block whose whole payload is its signature. Roughly
+    /// every turn produces one.
+    const THINKING_SIGNED_ONLY: &str = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"","signature":"EqQBCkYIBRgCKkBd"}]}}"#;
+    /// A turn that mostly hit the cache, which is the ordinary case rather than
+    /// the exception once a session has any length to it.
+    const RESULT_CACHED: &str = r#"{"type":"result","subtype":"success","duration_ms":4200,"total_cost_usd":0.031,"usage":{"input_tokens":19,"cache_read_input_tokens":43336,"cache_creation_input_tokens":10000,"output_tokens":40}}"#;
+
+    const CHOSEN: &str = "11111111-2222-3333-4444-555555555555";
+
+    fn events(driver: &mut ClaudeDriver, line: &str) -> Vec<EventKind> {
+        driver.feed(format!("{line}\n").as_bytes())
+    }
+
+    /// A `Bare` launch carrying the conversation id this app chose, which is
+    /// what the worker hands a driver for an ordinary session.
+    fn launch() -> Launch {
+        Launch {
+            profile: &Claude,
+            cwd: PathBuf::from("/tmp/project"),
+            intent: Intent::Bare,
+            skills: Skills {
+                smetana: PathBuf::from("/app/resources/smetana"),
+                superpowers: PathBuf::from("/app/resources/superpowers"),
+                superpowers_installed: true,
+            },
+            facts: None,
+            session_id: Some(CHOSEN.to_owned()),
+            languages: Languages::default(),
+            agent_prompt: String::new(),
+            model: None,
+            worker_model: None,
+        }
+    }
+
+    /// The one intent that opens on no prompt at all.
+    fn resume_launch() -> Launch {
+        Launch {
+            intent: Intent::ResumeSession {
+                id: "9f1c0a2e-0000-4000-8000-000000000000".into(),
+                cwd: "/tmp/project".into(),
+                title: None,
+                fork: false,
+            },
+            // A resume is never told a chosen id either: `--resume` already
+            // carries the conversation's own.
+            session_id: None,
+            ..launch()
+        }
+    }
+
+    fn argv(builder: &portable_pty::CommandBuilder) -> Vec<String> {
+        builder.get_argv().iter().map(|arg| arg.to_string_lossy().to_string()).collect()
+    }
+
+    #[test]
+    fn an_init_event_opens_the_agents_turn() {
+        let mut driver = ClaudeDriver::new();
+        assert_eq!(events(&mut driver, INIT), vec![EventKind::TurnStart { by: Actor::Agent }]);
+    }
+
+    #[test]
+    fn a_text_block_becomes_one_paragraph_with_its_markdown_intact() {
+        // Unlike the terminal's renderer, newlines are kept: the front end
+        // parses markdown, and flattening here would destroy every list.
+        let mut driver = ClaudeDriver::new();
+        assert_eq!(
+            events(&mut driver, TEXT),
+            vec![EventKind::Text { text: "Reading the file now.".into() }]
+        );
+    }
+
+    #[test]
+    fn a_tool_call_carries_the_one_line_the_reference_formatter_shows() {
+        let mut driver = ClaudeDriver::new();
+        assert_eq!(
+            events(&mut driver, TOOL),
+            vec![EventKind::ToolUse {
+                id: "t1".into(),
+                name: "Bash".into(),
+                detail: "cargo test".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_tool_result_says_how_it_went_and_never_what_it_said() {
+        // A result routinely carries a whole file. The panel wants the outcome;
+        // the content would be the wall of output this design exists to remove.
+        let mut driver = ClaudeDriver::new();
+        assert_eq!(
+            events(&mut driver, TOOL_RESULT),
+            vec![EventKind::ToolResult { id: "t1".into(), ok: true, summary: "3 lines".into() }]
+        );
+    }
+
+    #[test]
+    fn a_tool_result_whose_content_is_a_list_of_blocks_counts_its_prose() {
+        // `content` is `string | ContentBlock[]` and the list form is ordinary:
+        // reading only the string form reported "no output" for about a fifth
+        // of the tool results in a real transcript.
+        let mut driver = ClaudeDriver::new();
+        assert_eq!(
+            events(&mut driver, TOOL_RESULT_BLOCKS),
+            vec![EventKind::ToolResult { id: "t2".into(), ok: true, summary: "2 lines".into() }]
+        );
+    }
+
+    #[test]
+    fn a_result_carrying_no_prose_is_named_rather_than_called_empty() {
+        // A `Read` of a PNG answers with one image block and no text at all.
+        // "no output" would be false, and the summary is the whole of what this
+        // event says.
+        let mut driver = ClaudeDriver::new();
+        assert_eq!(
+            events(&mut driver, TOOL_RESULT_IMAGE),
+            vec![EventKind::ToolResult { id: "t3".into(), ok: true, summary: "1 image".into() }]
+        );
+    }
+
+    #[test]
+    fn prose_and_a_picture_in_one_result_are_counted_apart() {
+        // A block that is not prose has no lines, so folding it into the line
+        // count would be wrong about both halves.
+        let mut driver = ClaudeDriver::new();
+        assert_eq!(
+            events(&mut driver, TOOL_RESULT_MIXED),
+            vec![EventKind::ToolResult {
+                id: "t4".into(),
+                ok: true,
+                summary: "2 lines, 1 image".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_thinking_block_is_the_agents_reasoning() {
+        let mut driver = ClaudeDriver::new();
+        assert_eq!(
+            events(&mut driver, THINKING),
+            vec![EventKind::Reasoning { text: "The file is read before it is written.".into() }]
+        );
+    }
+
+    #[test]
+    fn a_thinking_block_carrying_only_its_signature_draws_no_row() {
+        // The guard in the `thinking` arm is what this pins, and nothing else
+        // in the suite would notice its removal: such a block arrives on nearly
+        // every turn, and each one would draw an empty reasoning row.
+        let mut driver = ClaudeDriver::new();
+        assert!(events(&mut driver, THINKING_SIGNED_ONLY).is_empty());
+    }
+
+    #[test]
+    fn a_result_closes_the_turn_with_its_tokens_and_its_clock() {
+        let mut driver = ClaudeDriver::new();
+        assert_eq!(
+            events(&mut driver, RESULT),
+            vec![EventKind::Result {
+                tokens_in: 120,
+                tokens_out: 40,
+                cost_usd: Some(0.031),
+                ms: 4200
+            }]
+        );
+    }
+
+    #[test]
+    fn the_tokens_a_turn_cost_include_the_ones_it_read_from_the_cache() {
+        // Deliberately unlike `claude::transcript_line`, which reads
+        // `input_tokens` alone: on a cached turn that field is 19 against the
+        // 53 355 the turn actually consumed, and this event is rendered as what
+        // the turn cost rather than printed into a pane.
+        let mut driver = ClaudeDriver::new();
+        assert_eq!(
+            events(&mut driver, RESULT_CACHED),
+            vec![EventKind::Result {
+                tokens_in: 53_355,
+                tokens_out: 40,
+                cost_usd: Some(0.031),
+                ms: 4200
+            }]
+        );
+    }
+
+    #[test]
+    fn an_api_retry_is_an_error_a_person_should_see() {
+        let mut driver = ClaudeDriver::new();
+        assert_eq!(
+            events(&mut driver, RETRY),
+            vec![EventKind::Error { text: "api retry (overloaded), attempt 2".into() }]
+        );
+    }
+
+    #[test]
+    fn an_event_type_this_build_has_never_heard_of_produces_nothing() {
+        let mut driver = ClaudeDriver::new();
+        assert!(events(&mut driver, r#"{"type":"something_new","payload":42}"#).is_empty());
+    }
+
+    #[test]
+    fn a_line_that_is_not_json_produces_nothing_rather_than_an_error_row() {
+        // A harness that prints a warning to stdout must not put a red row in
+        // somebody's conversation.
+        let mut driver = ClaudeDriver::new();
+        assert!(events(&mut driver, "warning: something").is_empty());
+    }
+
+    #[test]
+    fn control_bytes_in_the_agents_own_prose_do_not_survive() {
+        // Such a string routinely carries the JSON escapes for ESC and BEL, and
+        // serde_json decodes those into live bytes. A bell would turn a row
+        // needs-you; colour would be escape codes on a panel that is no longer
+        // a terminal.
+        let mut driver = ClaudeDriver::new();
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"red \u001b[31mhere\u0007"}]}}"#;
+        let EventKind::Text { text } = &events(&mut driver, line)[0] else {
+            panic!("a text block is a Text event");
+        };
+        assert!(!text.contains('\u{1b}') && !text.contains('\u{7}'), "{text:?}");
+    }
+
+    #[test]
+    fn a_newline_inside_a_paragraph_is_kept_because_markdown_needs_it() {
+        let mut driver = ClaudeDriver::new();
+        let line =
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"- one\n- two"}]}}"#;
+        assert_eq!(
+            events(&mut driver, line),
+            vec![EventKind::Text { text: "- one\n- two".into() }]
+        );
+    }
+
+    #[test]
+    fn the_command_line_asks_for_a_two_way_stream() {
+        // Both halves are required together: --input-format stream-json is
+        // refused without --output-format stream-json, and --verbose is what
+        // makes the output one event per line rather than one blob at the end.
+        let args = argv(&ClaudeDriver::new().start(&launch()));
+        for flag in ["-p", "--verbose"] {
+            assert!(args.iter().any(|arg| arg == flag), "{flag} is missing from {args:?}");
+        }
+        // Each format flag against its own value, rather than both words
+        // somewhere on the line: the pairing is the load-bearing half, and a
+        // test looking only for the words would pass a line reading
+        // `--input-format --output-format stream-json`.
+        for flag in ["--input-format", "--output-format"] {
+            let at = args.iter().position(|arg| arg == flag).expect("the flag is on the line");
+            assert_eq!(args.get(at + 1).map(String::as_str), Some("stream-json"), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn the_conversation_id_this_app_chose_is_on_the_line() {
+        let args = argv(&ClaudeDriver::new().start(&launch()));
+        let at =
+            args.iter().position(|arg| arg == "--session-id").expect("the flag is on the line");
+        assert_eq!(args[at + 1], CHOSEN);
+    }
+
+    #[test]
+    fn the_opening_prompt_reaches_the_agent_as_an_appended_system_prompt() {
+        // The channel, and the exact text: under `--input-format stream-json`
+        // the positional argument this text used to ride on is discarded by the
+        // harness, so asserting merely that something non-empty is on the line
+        // would have passed throughout the defect.
+        let launch = launch();
+        let text = Claude.prompt_text(&launch).expect("a bare launch opens on a prompt");
+        let args = argv(&ClaudeDriver::new().start(&launch));
+        let at = args
+            .iter()
+            .position(|arg| arg == "--append-system-prompt")
+            .expect("the flag is on the line");
+        assert_eq!(args.get(at + 1), Some(&text), "{args:?}");
+        // Once on the whole line, and there. Unlike the positional walk in the
+        // test below, this statement has no false-negative window, and it is
+        // what catches the shape nobody has had to think about yet: the text
+        // behind the flag *and* still trailing as a positional, which is what a
+        // careless merge of this seam with `command`'s old body produces.
+        let carried: Vec<usize> = args
+            .iter()
+            .enumerate()
+            .filter(|(_, arg)| *arg == &text)
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(carried, vec![at + 1], "{args:?}");
+    }
+
+    #[test]
+    fn no_argument_on_the_line_is_a_positional() {
+        // The regression test for the whole defect. Every argument after the
+        // program is either a flag or the value directly behind one, so a
+        // prompt appended as a positional — which is what `Profile::command`
+        // produces and what this harness throws away — puts a bare argument on
+        // the line and fails here.
+        let args = argv(&ClaudeDriver::new().start(&launch()));
+        for (at, arg) in args.iter().enumerate().skip(1) {
+            if arg.starts_with('-') {
+                continue;
+            }
+            let flag = &args[at - 1];
+            assert!(
+                flag.starts_with('-'),
+                "{arg:?} follows {flag:?} rather than a flag, so nothing carries it: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_resumed_conversation_is_told_nothing_at_all() {
+        // `prompt::build` refuses `Intent::ResumeSession` a prompt, and the
+        // refusal is load-bearing: somebody's words are already in that
+        // conversation and the app must not talk over them. An empty flag would
+        // be doing it quietly rather than not doing it.
+        let args = argv(&ClaudeDriver::new().start(&resume_launch()));
+        assert!(
+            !args.iter().any(|arg| arg == "--append-system-prompt"),
+            "a resume carries no opening prompt: {args:?}"
+        );
+    }
+
+    #[test]
+    fn a_persons_message_goes_out_as_one_json_line_the_protocol_understands() {
+        let mut driver = ClaudeDriver::new();
+        let bytes = driver.send(Input::Message { text: "hello".into(), attachments: vec![] });
+        let text = String::from_utf8(bytes).expect("the codec writes utf-8");
+        assert!(text.ends_with('\n'), "a line the child can read ends: {text:?}");
+        let sent: serde_json::Value =
+            serde_json::from_str(text.trim_end()).expect("one JSON object");
+        assert_eq!(sent["type"], "user");
+        assert_eq!(sent["message"]["role"], "user");
+        assert_eq!(sent["message"]["content"], "hello");
+    }
+
+    #[test]
+    fn an_attachment_reaches_the_agent_as_a_path_in_the_message() {
+        // The default every profile has for images: a path named in the prompt
+        // is the one channel every harness has. See `Profile::images`.
+        let mut driver = ClaudeDriver::new();
+        let bytes = driver.send(Input::Message {
+            text: "look at this".into(),
+            attachments: vec!["/tmp/shot.png".into()],
+        });
+        let text = String::from_utf8(bytes).expect("the codec writes utf-8");
+        assert!(text.contains("/tmp/shot.png"), "{text:?}");
+    }
+}
