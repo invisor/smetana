@@ -12,6 +12,7 @@ import {
   Anchor,
   ArrowDown,
   ArrowDownToLine,
+  ArrowLeftToLine,
   ArrowRight,
   ArrowRightToLine,
   ArrowUp,
@@ -27,6 +28,7 @@ import {
   ClipboardPaste,
   Clock,
   Cloud,
+  Code,
   Columns3,
   Copy,
   CopyPlus,
@@ -35,6 +37,7 @@ import {
   Ellipsis,
   Eraser,
   ExternalLink,
+  Eye,
   File,
   FileCode,
   FilePen,
@@ -170,6 +173,15 @@ export const iconNodes = {
      entirely. */
   'file-plus': FilePlus,
   'folder-plus': FolderPlus,
+  /* The pair the html tab's corner toggles between, and they are one control
+     rather than two: each glyph names what the press *gives* you, never what is
+     on screen — `code` while the document is drawn, `eye` while its source is.
+     `file-code` above is deliberately not reused for it. That one says "this is
+     a file of code", which is a fact about a thing in a list; these say "show me
+     the code" and "show me the page", which are verbs, and the angle brackets
+     with no page around them are what makes the difference legible at 15px. */
+  code: Code,
+  eye: Eye,
   /* The same menu's clipboard group. The scissors and the clipboard with an
      arrow into it are what every file manager on every platform draws for cut
      and paste, and this menu is not the place to be original about either.
@@ -236,6 +248,11 @@ export const iconNodes = {
   // status. The line at the end is what makes it "all the way into the queue"
   // rather than a nudge in some direction.
   'arrow-right-to-line': ArrowRightToLine,
+  // The same glyph mirrored, for when the queue is the column on the left. The
+  // board's column order is dragged by hand and stored per project, so which
+  // side the queue stands on is not a fact this vocabulary can assume — the
+  // rule picking between the two is `kanban/columnOrder.js`.
+  'arrow-left-to-line': ArrowLeftToLine,
   /* The direction of a comparison, between the two sides of the review
      window's pair: what it reads from on the left, what it is judging on the
      right. A bare arrow and not `chevrons-right` or `git-compare` — this is not

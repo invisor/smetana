@@ -31,7 +31,10 @@ const props = defineProps({
   runBlockedReason: { type: String, default: '' },
   /* Passed through to the header, which draws the button and decides on the
      count whether there is anything to draw it for. */
-  promotable: { type: Boolean, default: false }
+  promotable: { type: Boolean, default: false },
+  /* Passed through to the header too, and decided by the board: which side of
+     this column the queue is drawn on today. */
+  promoteSide: { type: String, default: 'right' }
 })
 
 /* A card's own `runnable` rides in the task object and reaches TaskCard through
@@ -81,6 +84,7 @@ const emptyDescription = computed(() => `Nothing in ${String(props.status).repla
       :runnable="runnable"
       :run-blocked-reason="runBlockedReason"
       :promotable="promotable"
+      :promote-side="promoteSide"
       @add="$emit('add', status)"
       @run="$emit('run', status)"
       @promote="$emit('promote', status)"

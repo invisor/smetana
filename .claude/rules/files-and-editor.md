@@ -467,6 +467,60 @@ a not-yet-read buffer would otherwise become the whole file on the next save), `
 of choosing when the file moved under a dirty tab, and `error` locks the field without throwing away
 anything already typed.
 
+**An html tab draws the page and not the markup**, and the rule is the extension alone:
+`isDocumentPath` in `components/run/reportTab.js` answers for `.html` and `.htm` in any case,
+wherever the file sits. The folder used to be the rule and stopped being one because a review's
+report is written by an agent following its own project's conventions — `docs/reviews-pr/` rather
+than the `.smetana/reviews/` path named in the prompt — and nothing keyed on a folder can be right
+about a folder it has never heard of. It refuses a string carrying a zero byte first, which is
+load-bearing rather than defensive: a diff's id *ends* in the path it is about, so the extension test
+alone claimed a diff of any `.html` and drew an empty sandbox over an id with no buffer.
+`isReportPath` beside it keeps the narrow question — is this one of *this project's own* documents —
+for `reportTabPath` and `reviewReportPath`, where what is decided is belonging rather than drawing.
+
+Which of the two a tab shows is `sourceTabs` in `tabs.js`, a set of paths in module scope beside the
+buffers and deliberately **not** in `settings.json`: the default is the document, the set holds the
+exceptions, and it goes with the buffers on a restart because a person who read a report's markup
+last week is not asking for markup on Monday. `closeTab`, `renameTab` and the preview eviction in
+`openFile` keep it in step with the row; `resetTabs` empties it with the buffers. The press is
+`components/files/DocumentModeToggle.vue`, in the top-right corner of the centre column and
+translucent at rest. In source mode the tab *is* an ordinary file tab — field, undo history, `dirty`,
+Cmd+S — and switching back shows the unsaved text, since the frame is built from that same buffer. An
+html file `files_read` refused is not a document at all: it falls through to the editor with its
+notice, and no toggle is drawn over an error a press cannot change.
+
+**That corner is reserved rather than shared**, and the arithmetic is
+`components/files/documentToggle.js`: the centre's content box takes `TOGGLE_LANE` of right-hand
+padding for as long as the toggle is drawn, and the button — absolutely positioned, so placed against
+the padding box — lands in the strip that leaves. Laid straight over the corner it covered the right
+end of `FileEditor`'s stale-file band, whose `Reload` and `Keep mine` are the *only* way out of a
+file that changed on disk under an unsaved buffer, and the close button `@codemirror/search` pins to
+the top-right of its panel. Lowering the button under one band would not have held — the notice wraps
+on a long path and the search panel wraps by its own theme — where a reserved lane is right whatever
+the bands do, and clears the editor's scrollbar with them.
+
+What shuts that frame is **two** things and not one: `sandbox=""` stops scripts and navigation but
+has never stopped a document *loading* a stylesheet, an image or a font, so
+`components/run/reportTheme.js` writes a content policy into the same string it stamps the theme on —
+`csp` in `tauri.conf.json` is `null` and there is nothing to inherit. **Where both marks go is a walk
+over the document's prologue and never a search of the string**: a leading conditional comment, which
+is what an HTML5 Boilerplate header opens with, holds a `<html` of its own, and a policy written into
+a comment is inert with nothing anywhere to say so.
+
+Two things have to be true of where the meta lands, and they are worth keeping apart, because the
+second is what has been wrong twice. The walk consumes only what can neither fetch nor open a
+raw-text context, so nothing that fetches is ever *before* the meta — that half is a property of the
+list. The other half is that the anchor is a place the parser is between tokens at, and that holds
+only while each token matches the tokenizer: a comment ended late swallows real content, and a tag
+read as ending at a `>` inside a quoted attribute value puts the meta *inside the tag*, where a
+measurement in a sandboxed frame found no `<meta>` in the document at all, `head` wearing the policy
+as an attribute, and the stylesheet fetched. Those two are closed and pinned by tests, and **two more
+are known to be open** — a quote inside an *unquoted* attribute value and an `=` standing where an
+attribute name goes — pinned beside them as they behave today rather than as they should, with the
+reason they were not closed. **State it as measured against the forms those tests carry, never as
+"whatever the file does"** — this is a scanner and not a parser, and the residual is named in
+`reportTheme.js`'s own header.
+
 **The row is dragged into whatever order somebody wants, and the order is one row rather than four
 lists.** A terminal tab can stand between two files and a diff in front of all of them; the pinned
 run — the board, and the Agent tab while it exists — does not move and nothing can be put to the left

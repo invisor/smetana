@@ -1,5 +1,11 @@
 <script setup>
-/* A run's report, drawn as the document it is.
+/* An html document, drawn as the document it is.
+
+   It began as a run's report and is now every `.html` in the project — see
+   `reportTab.js` for why the folder stopped being the rule. Nothing in this file
+   changed for that, and the paragraph on the sandbox below is why: it was
+   already written for a file that had been sitting on somebody's disk since last
+   night, and the widening only makes it load-bearing where it had been prudent.
 
    `srcdoc` and not a `file://` URL. The alternative is Tauri's asset protocol,
    which costs a new capability scope and a new ACL entry for what is at bottom
@@ -9,17 +15,44 @@
    handling with nothing added — including the 2 MiB ceiling in
    `files::model::MAX_FILE_BYTES`, which a text report will not approach.
 
-   The `sandbox` attribute is empty, which is every restriction on at once: no
-   scripts, no same-origin, no forms, no navigation. `report.rs` writes no
-   script and reaches no network, and a test there pins both — this attribute is
-   what makes that a guarantee rather than a habit, for a document that has been
-   sitting on somebody's disk since last night and can be hand-edited between
-   then and now.
+   **It takes two things to shut this frame, and the sandbox is only one of
+   them.** `sandbox=""` is every restriction that attribute has: no scripts, no
+   same-origin, no forms, no navigation — and it stops a `<meta http-equiv=
+   refresh>` firing at all, which was measured rather than assumed. What it has
+   never stopped is the document *loading* things. Driven against a local server
+   logging every request, a `srcdoc` frame with an empty sandbox fetched a
+   `<link rel=stylesheet>`, an `<img>` and an `@font-face` — all three, from the
+   person's own machine. This comment used to claim otherwise, in bold, which is
+   the worst kind of wrong a header can be.
 
-   The document carries its own CSS, because it has to be readable in a browser
-   with nothing of ours loaded — which is exactly why `report.rs` is a documented
-   exception to the token rule. There are still no tokens inside the frame to
-   reach for, and none is offered.
+   The other half is `reportTheme.js`'s content policy, written into the string
+   the frame is built from because the empty sandbox is exactly what puts the
+   frame's DOM out of reach. `default-src 'none'` with inline styles and
+   `data:` images allowed, and the same probe afterwards logged nothing at all.
+   Nothing was inherited to lean on instead: `csp` in `tauri.conf.json` is
+   `null`.
+
+   That mattered little while the only writers were this app and its own agent.
+   It matters now: one click on any `.html` in the tree renders a file from a
+   repository somebody is supervising rather than one they wrote, and every URL
+   in it would otherwise be a beacon fired at an address its author chose.
+   Scripts still do not run and the origin is still opaque, so this was never
+   code execution — but a beacon is precisely what this feature's design
+   forbids. Rendering "properly, like a browser" — scripts, external
+   stylesheets, fonts, images — was considered and turned down for the same
+   reason: a different feature with a different threat model, not this one grown
+   a little.
+
+   A document that wants a stylesheet, a font or a picture therefore gets none,
+   and that is visible rather than hidden — a page written against a CDN
+   stylesheet draws as unstyled text here. That is the accepted outcome: the
+   document this frame exists for carries its own CSS, because it has to be
+   readable in a browser with nothing of ours loaded, which is exactly why
+   `report.rs` is a documented exception to the token rule. That document was
+   checked against the policy rather than reasoned about — the same report
+   rendered with and without it is pixel-identical, since it reaches nowhere and
+   its whole appearance is one inline `<style>`. There are still no tokens inside
+   the frame to reach for, and none is offered.
 
    **It does follow this app's palette, though, and the empty sandbox is what
    decides how.** Nothing on this side can reach the frame's own DOM to set an
@@ -36,9 +69,13 @@
 
 import { computed } from 'vue'
 
-import { themed } from './reportTheme.js'
+import { documentFor } from './reportTheme.js'
 
 const props = defineProps({
+  /* The buffer's current text and never the bytes on disk, which is what makes
+     the source mode's unsaved edits visible the moment somebody switches back:
+     `srcdoc` is rebuilt from this string, so there is nothing to save and
+     nothing to refresh. */
   html: { type: String, default: '' },
   /* Already resolved to one of the two painted themes: `system` is `App.vue`'s to
      answer, since it is the machine's answer rather than a stored one. A value
@@ -49,8 +86,13 @@ const props = defineProps({
 
 /* Computed, which is the whole of "the tab repaints on a theme change": the frame
    is built from this string, so a new theme is a new document with no reopening
-   and nothing to remember. */
-const page = computed(() => themed(props.html, props.theme))
+   and nothing to remember.
+
+   One call and not two: `documentFor` is the theme stamp and the content policy
+   composed in `reportTheme.js`, where a test can reach the pair. Composing them
+   here would put half of "themed, and cannot reach the network" in a file no
+   runner in this repository opens. */
+const page = computed(() => documentFor(props.html, props.theme))
 
 /* `minWidth: 0` beside `minHeight: 0`, and it is the load-bearing one. A flex
    item defaults to `min-width: auto` and so refuses to shrink below its own
@@ -82,6 +124,6 @@ const frameStyle = {
 
 <template>
   <div :style="hostStyle">
-    <iframe :srcdoc="page" sandbox="" title="Report" :style="frameStyle" />
+    <iframe :srcdoc="page" sandbox="" title="Document" :style="frameStyle" />
   </div>
 </template>

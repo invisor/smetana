@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import KanbanColumn from './KanbanColumn.vue'
 import EmptyState from '../core/EmptyState.vue'
-import { moveColumn, orderColumns } from './columnOrder.js'
+import { moveColumn, orderColumns, promoteSide } from './columnOrder.js'
 
 /* Columns come from the tracker's status set, which users extend — the board
    never assumes four fixed columns. */
@@ -45,6 +45,13 @@ const props = defineProps({
      out of the queue and does it; this only puts work into the queue and stops
      there. */
   promoteFrom: { type: String, default: null },
+  /* Where that press puts them — the queue, the same column `addTo` names, and
+     bound to that same constant by the caller rather than to a second one for
+     the one status. Read for one thing only: which way the button's arrow
+     points, since the queue can be dragged to either side of the column being
+     emptied. Null, or a column the board is not drawing, leaves it pointing
+     right, which is what it always did. */
+  promoteTo: { type: String, default: null },
   reorderable: { type: Boolean, default: true },
   /* Whether the board *has* columns that are simply not being drawn — the view
      settings hid every one of them. Only read when `columns` is empty, and only
@@ -77,6 +84,11 @@ const held = ref(null)
 const view = computed(() =>
   draft.value ? orderColumns(props.columns, draft.value) : props.columns
 )
+
+/* Off `view` and deliberately not off `props.columns`: the arrow has to turn
+   while the drag is still in the hand, the moment the two columns cross, and
+   the stored order does not hear about a drag until it is let go. */
+const promoteArrow = computed(() => promoteSide(view.value, props.promoteFrom, props.promoteTo))
 
 const movable = computed(() => props.reorderable && props.columns.length > 1)
 
@@ -260,6 +272,7 @@ const style = {
       :runnable="runFrom != null && c.status === runFrom"
       :run-blocked-reason="runBlockedReason"
       :promotable="promoteFrom != null && c.status === promoteFrom"
+      :promote-side="promoteArrow"
       :movable="movable"
       :moving="c.status === held"
       @select="$emit('select', $event)"

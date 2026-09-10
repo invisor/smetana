@@ -367,6 +367,7 @@ const BROKEN_CONFIG_PROJECT = '/Users/you/dev/holiday-curb'
    colour that is defined once per theme. */
 export const MOCK_TREE = {
   '': [
+    { name: 'docs', path: 'docs', kind: 'dir' },
     { name: 'src', path: 'src', kind: 'dir' },
     { name: 'target', path: 'target', kind: 'dir', ignored: true },
     { name: '.gitignore', path: '.gitignore', kind: 'file' },
@@ -375,6 +376,16 @@ export const MOCK_TREE = {
     { name: 'README.md', path: 'README.md', kind: 'file' },
     { name: 'tauri.conf.json', path: 'tauri.conf.json', kind: 'file' }
   ],
+  /* One html file, and it is here for a reason no other entry in this fixture
+     has: the centre column's document branch cannot be reached in a browser
+     without one. `?view=gallery` checks the component, but which branch
+     `DesktopApp.vue` draws is decided in a `.vue` file no runner in this project
+     opens — so without a row to click, the frame, the eye/code toggle and the
+     way back were checkable only in `npm run tauri dev`. It sits outside
+     `.smetana/` deliberately: the rule that draws it is the extension, and a
+     fixture in the reports folder would pass under the older, narrower rule and
+     prove nothing about the widening. */
+  docs: [{ name: 'page.html', path: 'docs/page.html', kind: 'file' }],
   src: [
     { name: 'agent.rs', path: 'src/agent.rs', kind: 'file' },
     { name: 'app-icon.png', path: 'src/app-icon.png', kind: 'file' },
@@ -406,6 +417,37 @@ const MOCK_IMAGE_BASE64 =
 
 const MOCK_FILE = `fn main() {\n    println!("hello from the mock backend");\n}\n`
 const MOCK_MTIME = 1754006400000
+
+/* What `docs/page.html` reads as, and it has to be a real document rather than
+   `MOCK_FILE`: a tab drawing Rust source inside a sandboxed frame would exercise
+   the branch and show nothing about whether the branch is right.
+
+   It carries its own colours and its own measure, which is the **second** thing
+   this fixture is for. Every other document reaching that frame today is written
+   by this app or its agent and declares a palette under `[data-theme]` for
+   `reportTheme.js` to select with; this one declares none, because a file from
+   somebody else's repository has never heard of that attribute — so it stays
+   light in a dark window, and that is the accepted outcome of the theme decision
+   rather than a defect to report. `color-scheme: light` is what keeps it legible
+   at all, since the frame is transparent and the app's canvas is behind it.
+
+   The literal values in it are this fixture's, not this app's: like
+   `REPORT_HTML` in `views/Gallery.vue`, it stands in for a document written
+   somewhere else, and a version built from tokens would be a document this
+   design system had chosen the look of — which is the one thing it is not. */
+const MOCK_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Coverage summary</title>
+<style>:root{color-scheme:light}body{font-family:system-ui,sans-serif;margin:2rem;max-width:40rem;line-height:1.5}</style>
+</head><body><h1>Coverage summary</h1>
+<p>Written by a tool that has never heard of this app, in a folder its own
+conventions chose.</p>
+<ul><li>statements 92%</li><li>branches 81%</li><li>functions 88%</li></ul>
+</body></html>
+`
+
+/* The files whose text is not `MOCK_FILE`. A map rather than a branch, so a
+   second document costs a line. */
+const MOCK_TEXT = new Map([['docs/page.html', MOCK_PAGE]])
 
 /* The same file one commit ago, for the Git panel's diff. It differs from
    `MOCK_FILE` in one line rather than wholesale, since what a diff is for is
@@ -1155,7 +1197,7 @@ export function installMockBackend() {
       if (MOCK_BINARY.has(path)) {
         throw { kind: 'binary', message: `mockBackend: ${path} is not text` }
       }
-      return { path, text: MOCK_FILE, mtime: MOCK_MTIME }
+      return { path, text: MOCK_TEXT.get(path) ?? MOCK_FILE, mtime: MOCK_MTIME }
     }
     /* Nothing changed: there is nowhere for files to change in a browser. */
     if (command === 'files_stat') {

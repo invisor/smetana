@@ -34,7 +34,13 @@ const props = defineProps({
      those two the button also needs something to move, so an empty column
      draws none: the count beside it is already 0, and a control whose only
      possible answer is "nothing to do" says less than the number does. */
-  promotable: { type: Boolean, default: false }
+  promotable: { type: Boolean, default: false },
+  /* Which way that button's arrow points — the side of this column the queue
+     currently stands on. Decided by the board, which is what holds the drawn
+     order, and worked out there by `columnOrder.js`; the header only draws it.
+     The default is what the button always drew, so a caller that knows nothing
+     about the board's order is unchanged. */
+  promoteSide: { type: String, default: 'right' }
 })
 
 const emit = defineEmits(['add', 'grab', 'move', 'run', 'promote'])
@@ -197,6 +203,14 @@ const promoteLabel = computed(() =>
   `Move ${props.count} ${props.count === 1 ? 'task' : 'tasks'} to ready`
 )
 
+/* The label above stays put while this flips: the words are about the action,
+   and the glyph is about where on this board the tasks are going. Two glyphs
+   rather than one turned by CSS — a transform is forbidden here, and lucide
+   ships the mirrored one. */
+const promoteGlyph = computed(() =>
+  props.promoteSide === 'left' ? 'arrow-left-to-line' : 'arrow-right-to-line'
+)
+
 /* The wrapper stands where the three items used to stand, so it has to shrink
    the way they did: without `min-width: 0` a flex item refuses to go below its
    own content, and a long custom status would stop ellipsising and push the
@@ -272,7 +286,7 @@ const wipStyle = computed(() => ({
            left to which of them a board happens to switch on. -->
       <IconButton
         v-if="promotable && count > 0"
-        icon="arrow-right-to-line"
+        :icon="promoteGlyph"
         :label="promoteLabel"
         size="sm"
         @click="$emit('promote')"
