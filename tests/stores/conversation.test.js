@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mockIPC } from '@tauri-apps/api/mocks'
 import { loadStores } from '../support/stores.js'
+import { installIpc } from '../support/ipc.js'
 
 /* One journal event as the worker writes it: `seq`, `at`, and the kind's own
    fields flattened in beside a kebab-case `kind` — the serde shape of
@@ -13,10 +15,18 @@ const permission = (seq, id = 'q1') =>
 
 /* A graph with the one read every test here needs already answered. The
    snapshot is the argument, since what `session_attach` hands back is the whole
-   of what a conversation starts as. */
+   of what a conversation starts as.
+
+   Copied per answer, and that is not tidiness. Registered as a value, the
+   router hands back one array instance to every attach, and the store assigns
+   it straight to `held.events` and pushes into it — so a test appending an
+   event would be mutating its own fixture, and the assertion that a re-attach
+   replaces the journal rather than splicing onto it would be passing on the
+   aliasing rather than on the rule. A real reply is a fresh object every
+   time. */
 async function ready(snapshot = { events: [], seq: 0, state: 'ready' }) {
   const loaded = await loadStores()
-  loaded.ipc.on('session_attach', snapshot)
+  loaded.ipc.on('session_attach', () => ({ ...snapshot, events: [...snapshot.events] }))
   return loaded
 }
 
@@ -162,6 +172,25 @@ describe('the conversation store', () => {
     expect(stores.conversation.conversationFor(1).draft).toBe('')
   })
 
+  /* The other half of the same rule, and the road it arrives by is the one a
+     slow worker opens: the reply to the message that went must not carry off
+     the words typed while it was travelling. */
+  it('keeps words typed while the message was in flight', async () => {
+    const { ipc, stores } = await ready()
+    let release
+    ipc.on('session_send', () => new Promise((resolve) => (release = resolve)))
+    await stores.conversation.attach(1)
+
+    const held = stores.conversation.conversationFor(1)
+    held.draft = 'sent words'
+    const sending = stores.conversation.sendMessage(1, 'sent words', [])
+    held.draft = 'sent words, and more of them'
+    release(null)
+    await sending
+
+    expect(held.draft).toBe('sent words, and more of them')
+  })
+
   it('carries a failure to answer into lastError rather than swallowing it', async () => {
     const { ipc, stores } = await ready({ events: [permission(1)], seq: 1, state: 'needs-you' })
     /* The worker's own refusal, in the shape `SessionError` serialises to: a
@@ -173,6 +202,34 @@ describe('the conversation store', () => {
     await stores.conversation.answerQuestion(1, 'q1', 'allow')
 
     expect(stores.conversation.conversationState.lastError).toContain('q1')
+  })
+
+  /* Subscribing is an `invoke` too — `plugin:event|listen` — so it can be
+     refused, and `attach` is the function a component calls from `onMounted`
+     with nothing to catch it. The refusal has to reach `lastError` rather than
+     an unhandled rejection, and it must not be remembered: the subscription is
+     held for the life of the window, so a cached rejection would wedge the
+     panel until somebody reloaded it.
+
+     Installed here rather than through `ipc.on`, and it is the one test that
+     does: the router never sees an event-plugin command, `mockIPC` handling
+     those itself. What is mocked is still only the transport, and still through
+     the official function. */
+  it('reports a refused subscription, and lets the next attach try again', async () => {
+    const { stores } = await ready()
+    mockIPC(() => {
+      throw new Error('the event plugin is not there')
+    })
+    await stores.conversation.attach(1)
+
+    expect(stores.conversation.conversationState.lastError).toBeTruthy()
+    expect(stores.conversation.conversationFor(1).events).toHaveLength(0)
+
+    const ipc = installIpc()
+    ipc.on('session_attach', () => ({ events: [text(1, 'hello')], seq: 1, state: 'ready' }))
+    await stores.conversation.attach(1)
+
+    expect(stores.conversation.conversationFor(1).events).toHaveLength(1)
   })
 
   it('follows the state the worker reports', async () => {

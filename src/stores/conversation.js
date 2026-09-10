@@ -14,7 +14,7 @@
    enforced: an out-of-sequence event takes a fresh snapshot rather than
    stitching a hole, `question` is derived and never stored, and a draft
    survives a send that failed. */
-import { reactive } from 'vue'
+import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
@@ -92,9 +92,12 @@ function hold(id) {
        snapshot, which is what the worker's own counter starts at. */
     seq: 0,
     state: 'starting',
-    get question() {
-      return openQuestion(this.events)
-    },
+    /* Derived, and derived once per change rather than once per read. A getter
+       here read the same and refolded the whole journal every time a render
+       touched it — against `journal::BUDGET`, four thousand events, while
+       `events` is being pushed to on every batch. `reactive` unwraps a ref held
+       as a property, so `held.question` is the same read it always was. */
+    question: computed(() => openQuestion(fresh.events)),
     get draft() {
       return drafts.get(id) ?? ''
     },
@@ -107,7 +110,13 @@ function hold(id) {
 }
 
 /* What a component draws: `{ events, state, question, draft }`, reactive, with
-   `draft` writable. Never null — see `hold`. */
+   `draft` writable. Never null — see `hold`.
+
+   **Called from `setup`, not from a template.** It makes the record if this
+   window has none, and creating state as a side effect of a read is a write
+   during a render: a component that called it in its own template would cost a
+   wasted render every time the session changed under it. Take the record once
+   and hold it. */
 export function conversationFor(id) {
   return hold(id)
 }
@@ -177,8 +186,20 @@ const attaching = new Map()
    and there is nothing a component could usefully do about that but remember to
    call the init. */
 export async function attach(id) {
-  await initConversation()
   const held = hold(id)
+  /* Its own try, in front of the snapshot's rather than around it. `listen` is
+     an `invoke` like anything else and can be refused, and this function is the
+     one a component calls from `onMounted` with nothing to catch it: left
+     outside, that refusal left the panel wedged with one console line to show
+     for it and nothing in `lastError`. There is no snapshot to ask for if
+     nothing is listening for what comes after it, so this returns rather than
+     going on. */
+  try {
+    await initConversation()
+  } catch (err) {
+    report('subscribing to the session events', err)
+    return
+  }
   const current = invoke('session_attach', { id })
   attaching.set(id, current)
   try {
@@ -189,7 +210,7 @@ export async function attach(id) {
        it. */
     held.events = events ?? []
     held.seq = seq ?? 0
-    held.state = state
+    held.state = state ?? 'starting'
     conversationState.lastError = null
   } catch (err) {
     // A newer attach has already overtaken this one; its outcome is what the
@@ -217,7 +238,15 @@ export function detach(id) {
 let registering = null
 
 export function initConversation() {
-  registering ??= register()
+  /* A subscription that failed is deliberately **not** what gets kept. The
+     promise is held for the life of the window, so caching a rejection would
+     make one refusal permanent: every later attach would reject on this same
+     settled promise without anything being tried again, and a window would need
+     reloading to recover from a hiccup it could have retried out of. */
+  registering ??= register().catch((err) => {
+    registering = null
+    throw err
+  })
   return registering
 }
 
@@ -282,7 +311,12 @@ export async function sendMessage(id, text, attachments = []) {
   try {
     await invoke('session_send', { id, text, attachments })
     conversationState.lastError = null
-    drafts.set(id, '')
+    /* Cleared only while it is still the words that went. A slow worker invites
+       somebody to go on typing during the round trip, and an unconditional
+       clear here would wipe those keystrokes with the reply to the message
+       before them — the same loss the failed-send rule above refuses, arriving
+       by the other road. */
+    if (drafts.get(id) === text) drafts.set(id, '')
   } catch (err) {
     report('sending a message', err)
   }

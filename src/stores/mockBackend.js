@@ -1579,14 +1579,21 @@ export function installMockBackend() {
        off the disk, and these two are one live conversation the worker is
        driving — `src-tauri/src/session/`.
 
-       An empty journal in a `ready` session, which is the honest picture of a
-       browser: there is no worker, so there is no conversation, and the panel
-       draws its empty state rather than logging a failure on every open of
-       `npm run dev`. `session_since` answers the same emptiness in the shape
-       that command takes — an array, never `null`, since `null` is the worker
-       saying "the journal no longer reaches back that far, take a fresh
-       snapshot", which would send the store round a repair loop over a gap that
-       does not exist.
+       An empty journal, and `ready` rather than the `starting` that
+       `session::model::state_of` answers for one — a deliberate departure and
+       not a mismatch. That function reads `starting` as "this session has not
+       produced anything *yet*", which is a promise about a child that is coming
+       up; a browser has no child and never will, so the session is idle rather
+       than starting, and answering `starting` would leave the panel waiting for
+       ever on the one verification this project has for a component.
+
+       `session_since` answers the same emptiness in the shape that command
+       takes — an array, never `null`, since `null` is the worker saying "the
+       journal no longer reaches back that far, take a fresh snapshot", which
+       would send the store round a repair loop over a gap that does not exist.
+       Nothing calls it yet: the store takes a whole snapshot on a gap and never
+       stitches one, so this arm is here for the command's own sake, answered
+       before a caller arrives rather than after somebody meets the rejection.
 
        The four that write — `session_start`, `session_send`, `session_answer`
        and `session_stop` — are deliberately not answered here and fall through
