@@ -257,6 +257,13 @@ flags never appear together holds unchanged.
 The stored record gains one field: which transport the session ran under. Without it, a
 restore after the migration would try to raise an old session by the new path.
 
+**Restore itself is not built in the first two stages, and that is deliberate.** The
+vertical those stages prove is spawn → talk → answer → draw; coming back to a session after
+the app has been closed is a path of its own, with the restorable list, the offline row and
+`--resume` in it, and it is worth its own stage rather than a corner of another. Until then
+a driven session lives only as long as the app does, which is an honest limit for a branch
+nobody ships from.
+
 The sessions browser over `~/.claude/projects/*.jsonl` is untouched — those are somebody
 else's files on disk, not our stream.
 
