@@ -9,5 +9,6 @@
 // after that, dead code in here means dead code.
 #![allow(dead_code)]
 
+pub mod driver;
 pub mod journal;
 pub mod model;
