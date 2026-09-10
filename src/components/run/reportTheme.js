@@ -52,12 +52,102 @@
    guessing — the document then reads `prefers-color-scheme` and lands where it
    lands. */
 
-/* The opening tag of the document's root element, wherever it sits after the
-   doctype. Deliberately without `g`: `replace` then touches the first one only,
-   and a second `<html` can exist solely in a document somebody has edited by
-   hand — `report.rs` escapes every `<` it writes — where the first is still the
-   real root. */
-const ROOT = /<html\b[^>]*>/i
+/* Where a mark of ours may go: the end of the document's prologue, walked token
+   by token from the first byte rather than searched for anywhere in the string.
+
+   **The insertion point may not be steerable by the document, and searching for
+   a tag made it exactly that.** `html.match(/<html\b[^>]*>/i)` finds the first
+   root tag *text*, and in a document that opens with a conditional comment —
+   the HTML5 Boilerplate header, still under saved pages and old templates
+   everywhere — that text is inside the comment:
+
+       <!--[if lt IE 7]> <html class="no-js lt-ie7"> <![endif]-->
+       <!--[if gt IE 8]><!--> <html class="no-js"> <!--<![endif]-->
+       <head><link rel="stylesheet" href="https://cdn.example.com/a.css">
+
+   Both marks landed in there, measured by running this module rather than by
+   reading it. A theme lost in a comment is a document that does not follow the
+   app; a **policy** lost in a comment is the whole of what this file is for,
+   gone with nothing on screen or in the console to say so — and the only visible
+   symptom, a document ignoring the app's theme, is what an honest foreign
+   document looks like anyway. It is the same defect `guarded` already carried
+   once in `html.includes(CSP_META)`, one step earlier: a rule that reads the
+   document's *text* is a rule the document's author gets to decide.
+
+   So the scan consumes tokens instead, and consumes **only what can neither
+   fetch anything nor open a raw-text context**: whitespace, comments, the bogus
+   comments a browser makes of `<?xml …?>` and `<!…>`, one doctype, the root tag
+   and the head tag. Anything else stops it where it stands. That is the property
+   to keep whole — a `<link>`, a `<script>`, a `<style>` or an `<img>` is not
+   consumable, so the anchor lies in front of every one of them whatever the file
+   does, and the worst a crafted document can force is an anchor *earlier* than
+   it needed to be: the meta at the very front, which is live and first. There is
+   no content that moves it later.
+
+   The comment token is the one that has to follow the tokenizer rather than
+   approximate it, since ending a comment late would swallow real content into
+   it. All of the spec's endings are here: `-->`, the incorrectly closed `--!>`,
+   the abrupt `<!-->` and `<!--->`, and end of input, which closes a comment the
+   document never did.
+
+   Sticky rather than global: each is asked "do you match *here*", which is what
+   makes this a walk over the prologue and not a search through the document. */
+const WHITESPACE = /\s+/y
+const COMMENT = /<!--(?:>|->|[\s\S]*?--!?>|[\s\S]*$)/y
+const DOCTYPE = /<!doctype[^>]*>/iy
+const BOGUS = /<[!?/][^>]*>/y
+const ROOT = /<html\b[^>]*>/iy
+const HEAD = /<head\b[^>]*>/iy
+
+const at = (re, html, index) => {
+  re.lastIndex = index
+  return re.exec(html)
+}
+
+/* The walk: `{ root, anchor }`, where `root` is the real root tag with the index
+   it sits at — `null` when the prologue holds none — and `anchor` is the index
+   the policy goes in front of.
+
+   The anchor is the end of the root tag, or of the head tag, or of the doctype,
+   or the very start, in that order, and the order falls out of the document
+   rather than out of a list here: whichever of the three the walk reaches, it
+   reaches in the order a document writes them.
+
+   `COMMENT` is tried before `BOGUS` because `<!--` also fits `<!…>` whenever the
+   comment holds a `>`, and `DOCTYPE` before `BOGUS` for the same reason. A
+   second doctype is left to `BOGUS` and skipped, which is what a parser does
+   with one too. */
+function prologue(html) {
+  let index = 0
+  let anchor = 0
+  let doctype = false
+  for (;;) {
+    const skip = at(WHITESPACE, html, index) ?? at(COMMENT, html, index)
+    if (skip) {
+      index += skip[0].length
+      continue
+    }
+    if (!doctype) {
+      const found = at(DOCTYPE, html, index)
+      if (found) {
+        doctype = true
+        index += found[0].length
+        anchor = index
+        continue
+      }
+    }
+    const bogus = at(BOGUS, html, index)
+    if (bogus) {
+      index += bogus[0].length
+      continue
+    }
+    const root = at(ROOT, html, index)
+    if (root) return { root: { index, tag: root[0] }, anchor: index + root[0].length }
+    const head = at(HEAD, html, index)
+    if (head) return { root: null, anchor: index + head[0].length }
+    return { root: null, anchor }
+  }
+}
 
 /* A `data-theme` the tag already carries, in any of the three quotings HTML
    allows. Stripped rather than left beside the new one: two of the same attribute
@@ -74,7 +164,13 @@ const OWN_THEME = /\s+data-theme\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi
    from a hand edit or a future writer, and honouring it would leave one tab
    light in a dark window, which is the whole of the fault being fixed. It also
    makes the rule idempotent, so it can be applied to its own output without
-   accumulating anything. */
+   accumulating anything.
+
+   The tag it marks is the prologue's, never the first `<html` in the text: a
+   root tag hidden inside a leading conditional comment is a comment, and
+   stamping a theme in there both loses the theme and edits somebody's comment.
+   The rule that finds it is one walk above, shared with `guarded` so the two
+   marks cannot land in two different places. */
 export function themed(html, theme) {
   /* The prop defaults to `''`, but the buffer behind it belongs to a store and
      may be absent while a tab is still loading or after a failed read. A rule
@@ -83,17 +179,20 @@ export function themed(html, theme) {
   if (typeof html !== 'string') return ''
   if (theme !== 'dark' && theme !== 'light') return html
 
-  const found = html.match(ROOT)
-  /* Nothing to mark: an empty buffer, a failed read, or a file mangled since it
-     was written. Inventing a root would be rewriting somebody's document, and a
-     document with no root is still one a browser will draw. */
-  if (!found) return html
+  const { root } = prologue(html)
+  /* Nothing to mark: an empty buffer, a failed read, a file mangled since it was
+     written, or a document whose root tag exists only inside a comment.
+     Inventing a root would be rewriting somebody's document, and a document with
+     no root of its own is still one a browser will draw. */
+  if (!root) return html
 
-  const inner = found[0].slice(1, -1).replace(OWN_THEME, '').trimEnd()
-  /* A function replacer rather than a string one: `$&` and its relatives are
-     substitution patterns in the string form, and the tag being spliced back in
-     came out of a document rather than out of this file. */
-  return html.replace(ROOT, () => `<${inner} data-theme="${theme}">`)
+  const inner = root.tag.slice(1, -1).replace(OWN_THEME, '').trimEnd()
+  /* Spliced by index rather than through `replace`: the tag being put back came
+     out of a document rather than out of this file, and in the string form of
+     `replace` a `$&` inside it would be a substitution pattern. */
+  return `${html.slice(0, root.index)}<${inner} data-theme="${theme}">${html.slice(
+    root.index + root.tag.length
+  )}`
 }
 
 /* What the frame is allowed to reach, which is nothing.
@@ -136,35 +235,19 @@ export function themed(html, theme) {
 const CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
 const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${CSP}">`
 
-/* Where the meta may be put, in the order they are tried, and the order is the
-   whole of the correctness: a policy only binds what the parser meets after it,
-   and a `<meta>` whose parent is not the head is ignored outright.
-
-   **The root tag first, and the `<head>` only as a fallback** — which is the
-   opposite of the order this was written with, and the swap was measured. The
-   head branch matches the first `<head` in the *string*, and a document that
-   opens no head of its own but carries an unescaped `<head>` somewhere in its
-   body puts that match in the middle of the content: the meta lands with the
-   body as its parent, the policy is dropped without a single console message,
-   and the frame is back to a bare sandbox. Driven at a probe server, exactly
-   that document fetched its stylesheet.
-
-   After the root tag the parser opens an implicit head, puts the meta in it and
-   ignores the explicit `<head>` that follows — the spec's own behaviour rather
-   than a trick, and pinned by a test below. So root-first is right for every
-   well-formed document and cannot be fooled by content, and it is the same
-   exposure `themed` already takes on `ROOT` and already accounts for, rather
-   than a second, different one.
-
-   The head branch still earns its place: `<html>` is an optional tag, so
-   `<!doctype html><head>…` is a valid document with no root tag to sit behind.
-   Failing both, the doctype, and never before one: a doctype with anything in
-   front of it is not a doctype, and the document would fall into quirks mode
-   over a security header. */
-const HEAD = /<head\b[^>]*>/i
-const DOCTYPE = /<!doctype[^>]*>/i
-
 /* The same document with this app's policy in front of everything in it.
+
+   Where it goes is the whole of the correctness, and it is the walk above that
+   decides: a policy binds only what the parser meets after it, and a `<meta>`
+   whose parent is not the head is ignored outright. Behind the root tag the
+   parser opens an implicit head, puts the meta in it and ignores the explicit
+   `<head>` that follows — the spec's own behaviour rather than a trick, and
+   pinned by a test. Behind the head tag for a document that omits the root,
+   `<html>` being an optional tag. Behind the doctype for a fragment with
+   neither, and never in front of one: a doctype with anything before it is not a
+   doctype, and the document would fall into quirks mode over a security header.
+   In front of everything for a fragment that has no doctype either — a buffer
+   still loading, a read that refused, a snippet somebody saved.
 
    **Unconditional, and the shortcut that used to stand here was the whole of the
    protection handed to the author of the file.** It read `if
@@ -180,18 +263,12 @@ const DOCTYPE = /<!doctype[^>]*>/i
    frame is bounded by exactly the same policy — the shortcut bought a byte count
    and cost the guarantee. A *different* policy the document brought itself is
    left alone for the same arithmetic: an intersection can only be stricter, so
-   there is no ordering, and now no content, by which a file can talk its way out
-   of this one. */
+   there is no ordering, and no content, by which a file can talk its way out of
+   this one. */
 export function guarded(html) {
   if (typeof html !== 'string') return ''
-  for (const at of [ROOT, HEAD, DOCTYPE]) {
-    const found = html.match(at)
-    if (found) return html.replace(at, () => `${found[0]}${CSP_META}`)
-  }
-  /* A fragment with no root, no head and no doctype — a buffer still loading, a
-     read that refused, a snippet somebody saved. There is nothing to sit behind,
-     so the policy goes first and the whole of it is covered. */
-  return `${CSP_META}${html}`
+  const { anchor } = prologue(html)
+  return `${html.slice(0, anchor)}${CSP_META}${html.slice(anchor)}`
 }
 
 /* The string the frame is actually built from, and the one thing `ReportView`

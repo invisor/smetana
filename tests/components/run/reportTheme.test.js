@@ -7,6 +7,17 @@ import { documentFor, guarded, themed } from '../../../src/components/run/report
 const doc = (root = '<html lang="en">') =>
   `<!doctype html>${root}<head><title>Task report</title></head><body><h1>Task report</h1></body></html>`
 
+/* The HTML5 Boilerplate header, kept whole because every part of it is what
+   trips a rule that searches the string: a root tag inside a downlevel-hidden
+   comment, a second one inside a downlevel-revealed comment that closes
+   abruptly, and the real root between them — with a stylesheet off a CDN right
+   after, which is what a lost policy costs. */
+const BOILERPLATE = `<!doctype html>
+<!--[if lt IE 7]> <html class="no-js lt-ie7"> <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js"> <!--<![endif]-->
+<head><link rel="stylesheet" href="https://cdn.example.com/a.css"></head>
+<body><p>hi</p></body></html>`
+
 describe('themed', () => {
   it('names the dark theme on the document root', () => {
     expect(themed(doc(), 'dark')).toContain('<html lang="en" data-theme="dark">')
@@ -77,6 +88,24 @@ describe('themed', () => {
     const out = themed(twice, 'dark')
     expect(out).toContain('<html lang="en" data-theme="dark">')
     expect(out).toContain('<html lang="ru">')
+  })
+
+  it('marks the root a conditional comment reveals and not the one it hides', () => {
+    // The HTML5 Boilerplate header, which is under saved pages and old
+    // templates everywhere. Searching the string for the first `<html` found
+    // the one inside the downlevel-hidden comment, so the theme was written
+    // into a comment — and the same search put the content policy there too,
+    // which is the half that mattered.
+    const out = themed(BOILERPLATE, 'dark')
+    expect(out).toContain('<html class="no-js" data-theme="dark">')
+    expect(out).toContain('<!--[if lt IE 7]> <html class="no-js lt-ie7"> <![endif]-->')
+  })
+
+  it('leaves a document whose only root tag is inside a comment alone', () => {
+    // There is no root element here at all: the tag is comment text. Marking it
+    // would edit somebody's comment and theme nothing.
+    const hidden = '<!doctype html><!--[if IE]><html class="ie"><![endif]--><head></head>'
+    expect(themed(hidden, 'dark')).toBe(hidden)
   })
 
   it('answers with the empty string for html that is not a string at all', () => {
@@ -178,6 +207,66 @@ describe('guarded', () => {
     const out = guarded(own)
     expect(out).toContain(`content="default-src 'self'"`)
     expect(out).toContain(`content="${POLICY}"`)
+  })
+
+  it('states a live policy in front of the stylesheet a boilerplate header hides it behind', () => {
+    // The defect this replaced, and the reason the anchor is a walk over the
+    // prologue rather than a search of the string: the first `<html` in this
+    // document is comment text, so the meta went into the comment, where it is
+    // inert — and the frame was back to a bare sandbox with nothing on screen
+    // or in the console to say so.
+    const out = guarded(BOILERPLATE)
+    expect(live(out)).toBe(1)
+    expect(out.indexOf(CSP)).toBeLessThan(out.indexOf('<link'))
+  })
+
+  it('is not steered by a comment the document closes with --!>', () => {
+    // The tokenizer ends a comment at `--!>` as well as at `-->`. A scan that
+    // knew only the second would read the stylesheet as comment text and put
+    // the policy behind it.
+    const early = '<!doctype html><!-- x --!><link rel="stylesheet" href="https://cdn.example.com/a.css">'
+    const out = guarded(early)
+    expect(live(out)).toBe(1)
+    expect(out.indexOf(CSP)).toBeLessThan(out.indexOf('<link'))
+  })
+
+  it('is not steered by an abruptly closed <!-->', () => {
+    // `<!-->` is a whole comment. Scanning for the next `-->` instead would
+    // swallow everything up to the one at the end of the document.
+    const abrupt = '<!doctype html><!--><link rel="stylesheet" href="x.css"><!-- and a real comment -->'
+    const out = guarded(abrupt)
+    expect(live(out)).toBe(1)
+    expect(out.indexOf(CSP)).toBeLessThan(out.indexOf('<link'))
+  })
+
+  it('stops at anything that is not prologue, so a script cannot move the anchor', () => {
+    // `<html>` inside a script is text, not a tag. The walk consumes only what
+    // can neither fetch nor open a raw-text context, so it stops at the script
+    // and the policy goes in front of the whole document — earlier than it
+    // needed to be, which is the only direction content can push it.
+    const trap = '<script>var s = "<html>"</script><link rel="stylesheet" href="x.css">'
+    const out = guarded(trap)
+    expect(live(out)).toBe(1)
+    expect(out.startsWith(policy())).toBe(true)
+  })
+
+  it('steps over an XML declaration to the root tag behind it', () => {
+    // A browser makes a bogus comment of `<?xml …?>`, and so does the walk —
+    // otherwise every XHTML file would take the fragment branch and lose its
+    // doctype to quirks mode over a security header.
+    const xhtml =
+      '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="x.css">'
+    const out = guarded(xhtml)
+    expect(live(out)).toBe(1)
+    expect(out).toContain(`"><meta ${CSP}`)
+    expect(out.indexOf(CSP)).toBeLessThan(out.indexOf('<link'))
+  })
+
+  it('falls back to the head when the only root tag is inside a comment', () => {
+    const hidden = '<!doctype html><!--[if IE]><html class="ie"><![endif]--><head><link href="x.css"></head>'
+    const out = guarded(hidden)
+    expect(live(out)).toBe(1)
+    expect(out).toContain(`<head><meta ${CSP}`)
   })
 
   it('states the policy even for an empty buffer, since the rule has no exceptions', () => {
