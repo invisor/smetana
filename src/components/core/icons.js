@@ -12,6 +12,7 @@ import {
   Anchor,
   ArrowDown,
   ArrowDownToLine,
+  ArrowLeftToLine,
   ArrowRight,
   ArrowRightToLine,
   ArrowUp,
@@ -247,6 +248,11 @@ export const iconNodes = {
   // status. The line at the end is what makes it "all the way into the queue"
   // rather than a nudge in some direction.
   'arrow-right-to-line': ArrowRightToLine,
+  // The same glyph mirrored, for when the queue is the column on the left. The
+  // board's column order is dragged by hand and stored per project, so which
+  // side the queue stands on is not a fact this vocabulary can assume — the
+  // rule picking between the two is `kanban/columnOrder.js`.
+  'arrow-left-to-line': ArrowLeftToLine,
   /* The direction of a comparison, between the two sides of the review
      window's pair: what it reads from on the left, what it is judging on the
      right. A bare arrow and not `chevrons-right` or `git-compare` — this is not

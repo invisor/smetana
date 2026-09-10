@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { moveColumn, orderColumns } from '../../../src/components/kanban/columnOrder.js'
+import { moveColumn, orderColumns, promoteSide } from '../../../src/components/kanban/columnOrder.js'
 
 const board = (...statuses) => statuses.map((status) => ({ status, tasks: [] }))
 const names = (columns) => columns.map((column) => column.status)
@@ -95,5 +95,30 @@ describe('moveColumn', () => {
   it('does not mutate what it was given', () => {
     moveColumn(order, 0, 2)
     expect(order).toEqual(['ready', 'running', 'done'])
+  })
+})
+
+describe('promoteSide', () => {
+  it('points at the queue when it sits to the left', () => {
+    expect(promoteSide(board('ready', 'running', 'deferred'), 'deferred', 'ready')).toBe('left')
+  })
+
+  it('points at the queue when it sits to the right', () => {
+    expect(promoteSide(board('deferred', 'running', 'ready'), 'deferred', 'ready')).toBe('right')
+  })
+
+  /* A view setting can hide the queue, and a column that is not on the board
+     has no side to point at — so the arrow keeps the direction it always had. */
+  it('falls back to the right when the target column is not drawn', () => {
+    expect(promoteSide(board('running', 'deferred'), 'deferred', 'ready')).toBe('right')
+  })
+
+  it('falls back to the right when the source column is not drawn', () => {
+    expect(promoteSide(board('ready', 'running'), 'deferred', 'ready')).toBe('right')
+  })
+
+  it('falls back to the right when there are no columns at all', () => {
+    expect(promoteSide([], 'deferred', 'ready')).toBe('right')
+    expect(promoteSide(undefined, 'deferred', 'ready')).toBe('right')
   })
 })

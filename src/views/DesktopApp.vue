@@ -6206,6 +6206,7 @@ const toastStackStyle = {
             :run-from="runOffered ? ADD_TO : null"
             :run-blocked-reason="runBlockedReason"
             :promote-from="PROMOTE_FROM"
+            :promote-to="ADD_TO"
             @select="selectFromBoard"
             @add="newTask()"
             @run="openRun({ kind: 'queue' })"
