@@ -60,6 +60,60 @@ export function dirname(path) {
   return head === '' || head.endsWith(':') ? head + trimmed[cut] : head
 }
 
+/* Every folder a path sits under, from the root down: `a/b/c.txt` answers
+   `['a', 'a/b']`, and a bare name with no folder above it answers `[]`.
+
+   Here rather than beside either of its callers for this file's own test: the
+   tree's reveal wants it in `DesktopApp.vue`, where the stores live, and the
+   rule itself is pure string work that a `.vue` file is the one thing no runner
+   here can reach. `dirname` directly above answers the same question one step
+   at a time and is deliberately not what this is built on — that one takes both
+   separators and keeps a root's own, which is a different path space from this
+   one's.
+
+   **The closer neighbour is `parentOf` in `components/files/fileMenu.js`** — one
+   separator, the tree's own space, this very question one step at a time — and
+   naming it is the point, because it is the unification somebody will reach for
+   later and the answer is not in either body. The reason that settles it is the
+   layering: this file cannot import from `components/`, which imports from here —
+   `fileMenu.js` re-exports `absolutePath` off this very module — so building on
+   it would be a cycle. And the reason it is not the other way round either, with
+   `parentOf` lifted up here and this built on it, is that the two disagree where
+   it shows: `parentOf` answers `''` for a top-level path, the root, because the
+   folder to re-read after a delete is a real place; this one drops the root from
+   its answer entirely, because the root is expanded by construction and `''` in
+   `project.expanded` would be an entry in `settings.json` naming the project
+   itself. Two functions in two directories, then, and what keeps them apart is
+   that one answer, not a count of callers.
+
+   **The tree's space, and one separator only** — the mark this shares with
+   `isUnder` rather than with its two neighbours above. Every path that reaches
+   this is relative to the project and written with `/`, whatever the platform,
+   because that is what `stores/files.js` writes and what `project.expanded`
+   holds; the answers go straight into that list. A `\` accepted here would cut
+   `a\b.txt` into a folder nobody has on a system where that is one ordinary
+   filename.
+
+   Order is the root first, which is the order the one caller walks them in. It is
+   not a safety property and must not be read as one: that caller issues the
+   directory reads without awaiting them one by one, and what makes the
+   interleaving harmless is the tree being rebuilt from a reactive map rather than
+   anything about this list — `revealInTree` in `views/DesktopApp.vue` carries
+   that reasoning.
+
+   `filter(Boolean)` is what keeps a trailing separator from producing an empty
+   ancestor — `''` is the root, which is expanded by construction and would be a
+   row nothing draws — and it is also what makes the answer the same for `a/b`
+   and `a/b/`: the folders above the thing named, never the thing itself. */
+export function ancestors(path) {
+  if (!path) return []
+  const parts = path.split('/').filter(Boolean)
+  parts.pop()
+  const out = []
+  for (const part of parts) out.push(out.length ? `${out[out.length - 1]}/${part}` : part)
+  return out
+}
+
 /* What a path is called from inside a folder, and `null` when it is not inside
    it at all.
 

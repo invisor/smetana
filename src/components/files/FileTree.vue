@@ -14,7 +14,7 @@
 
    What a verb does is `DesktopApp.vue`'s: the stores live there, and a component
    that imported one would be the second exception to a rule with exactly one. */
-import { computed, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import FileTreeRow from './FileTreeRow.vue'
 import FileTreeDraftRow from './FileTreeDraftRow.vue'
 import PointerMenu from '../overlays/PointerMenu.vue'
@@ -162,6 +162,224 @@ const rows = computed(() => {
   }
   walk(props.nodes, 0, '')
   return out
+})
+
+/* The tree's root element, for the one thing this component reads out of the
+   DOM: where the selected row is, so it can be scrolled to. */
+const root = ref(null)
+
+/* The scrolling box the rows are inside, which belongs to whatever this
+   component was put in rather than to this component: the tree's own root is as
+   tall as its rows on purpose (`minHeight: 100%`, so the space below the last
+   one still answers a secondary click), and the `overflow: auto` is one level up
+   — in `DesktopApp.vue`'s left column, and in a box of the gallery's own. Walked
+   for rather than taken as a prop for that reason; nothing found is an ordinary
+   answer and means there is nothing to scroll and nothing to listen to.
+
+   `overflowY` and not `overflow`: the one above the tree in the app is written
+   as `overflow: 'auto'`, which computes to `auto` on both axes, and a panel that
+   scrolled only downwards would be missed by a test on the shorthand. */
+const scrollBoxOf = (el) => {
+  for (let at = el?.parentElement; at; at = at.parentElement) {
+    const { overflowY } = getComputedStyle(at)
+    if (overflowY === 'auto' || overflowY === 'scroll') return at
+  }
+  return null
+}
+
+/* Found once, on mount, and from the tree's root rather than from a row: it is
+   an ancestor of every row, so the answer is the same and it is available before
+   there is any row to ask about — which is what lets the gesture listeners below
+   be attached and taken away with the component rather than with a selection. */
+let pane = null
+
+/* The path the tree still owes a scroll to, or null.
+
+   It starts owed rather than empty, and that is this panel's own shape rather
+   than a guess: the left column draws the tree with `v-if`, so a person who
+   switches a tab with Git or Agents open — which deliberately does not bring the
+   tree forward — comes back to a freshly mounted component, and the selection it
+   mounts with is the one thing it has to honour. */
+let owed = props.selectedPath ?? null
+
+/* What `scrollIntoView({ block: 'nearest' })` would do, confined to that one
+   box, and written out here for the reason `Dropdown.vue` and `BranchPicker.vue`
+   already adjust a `scrollTop` by hand: that call is free to scroll **every**
+   scrollable ancestor it has. In the app the cost of the wider version is
+   nothing, since nothing outside this panel scrolls — but `?view=gallery` is
+   where a component change is checked, and it hangs four trees down a single
+   scrolling page, so the wider call would carry that page to the last of them
+   the moment it loaded.
+
+   Measured in window coordinates rather than through `offsetTop`, which is
+   relative to whichever ancestor happens to be positioned. A row already inside
+   the box is not moved by a pixel, which is what makes this safe to run as often
+   as it is run below. */
+const bringIntoView = (row) => {
+  if (!pane) return
+  const rowAt = row.getBoundingClientRect()
+  const paneAt = pane.getBoundingClientRect()
+  const by =
+    rowAt.top < paneAt.top
+      ? rowAt.top - paneAt.top
+      : rowAt.bottom > paneAt.bottom
+        ? rowAt.bottom - paneAt.bottom
+        : 0
+  if (!by) return
+  pane.scrollTop += by
+}
+
+/* The selected row is brought into view, which is the half of "the tree follows
+   the active tab" that cannot be done by `DesktopApp.vue`: the press happens in
+   the centre column, and the row it is about may be anywhere in a list of a
+   thousand, including inside a folder that was closed until a moment ago.
+
+   **The debt is not discharged by the first row that carries the selection**, and
+   that is the whole of this function's shape. The folders above the file are
+   opened together and their listings come back one tick at a time, in no order —
+   at startup `onMounted` fires them as one `Promise.all` — so the row appears
+   early, at whatever position the listings that have landed put it, and a
+   listing that arrives afterwards for a folder *above* it inserts rows and
+   pushes it down. Paid once, the tree would sit at the top with the row the
+   whole feature exists to show out of sight. So the path stays owed and every
+   rebuild of `rows` is another chance to pay it — and a rebuild that changes
+   nothing about the row's position costs exactly one `querySelector` and two
+   rectangles, since a row already in the box is never moved.
+
+   What closes the debt instead is **the person moving the box themselves**
+   (`onPaneGesture`), which is the one thing that says the position on screen is
+   theirs rather than ours. Without that half this would pull the view back to
+   the selection on every window-focus sweep for as long as the app was open.
+
+   The element is found by `aria-selected`, which `FileTreeRow` already sets and
+   only one row can carry, rather than by a ref per row: the rows are rebuilt
+   from `files_list` on every sweep, and an array of refs would be a second copy
+   of that list to keep in step with it. `owed` cannot name a row other than that
+   one — every write to it comes from `selectedPath`, and the watcher below
+   replaces it whenever the selection moves. */
+const payScroll = async () => {
+  const path = owed
+  if (!path) return
+  /* The rows are rendered from the same reactive state that brought us here, so
+     the element cannot be asked about until Vue has drawn it. */
+  await nextTick()
+  /* Another selection arrived while that resolved: it is the later one that is
+     owed, and its own call is already on the way. */
+  if (owed !== path) return
+  /* Never while either menu is up. `PointerMenu` listens for `scroll` in capture
+     on the window, so a `scrollTop` written from here closes the panel, and with
+     the selection off-screen it would shut under the person's hand.
+
+     **What reaches this guard is a selection that moves with no pointer and no
+     key in this pane at all**, which is the one way a debt is open while a menu
+     is: opening either menu takes a `contextmenu`, and that is preceded by a
+     `pointerdown` or a keydown inside the pane, so a debt the person could have
+     been part of is already closed by `onPaneGesture` and this function has
+     returned at `if (!path)`. The app opening a tab by itself is the case that
+     gets past that — a run's report when the run ends, a review's document
+     landing — and then the selection moves under an open panel with nothing
+     having been pressed here.
+
+     Skipped rather than cancelled: the debt stays owed and the first rebuild
+     after the panel has gone pays it.
+
+     `!== null` and deliberately not a truthiness test: `openRootMenu` sets
+     `menuFor.value = ''` for the menu about the project's root, which is a panel
+     like any other and must suppress a scroll like any other. `if (menuFor.value)`
+     would let that one through.
+
+     `menuFor` is declared with the menu further down; this function only ever
+     runs after setup — from `onMounted` and from the two watchers — so reading it
+     here is safe. */
+  if (menuFor.value !== null) return
+  /* No row yet — the folder above it has not answered. Still owed, and the next
+     rebuild of the list asks again. */
+  const row = root.value?.querySelector('[aria-selected="true"]')
+  if (row) bringIntoView(row)
+}
+
+/* The person taking the box over, and from then on the position is theirs: a
+   scroll away from the selected row is something somebody did on purpose, and
+   undoing it on the next listing would be this panel arguing with them. What
+   reopens a debt is the selection **moving** — a different file's tab — so this is
+   "theirs for now" rather than "never again".
+
+   **It watches the gesture and never the scroll it causes**, and that is the one
+   decision in this file paid for by a measurement. The version before it compared
+   `pane.scrollTop` against the value this component had written, which reads a
+   clamp as a gesture: any layout change that shortens the scroll range below where
+   the box stands makes the browser move it — a folder collapsed, a listing that
+   came back shorter, and far more often the window or the left panel's splitter
+   resized. Measured in the left column at a pane of 143px, a reveal to 109.5 and
+   a window grown past the scroll range clamped the box to 0, the debt closed on
+   that event, and the row never came back: no rebuild, no Refresh, no return to
+   the tab would pay it again. Tolerating the clamp in the comparison and spending
+   the written value as a one-shot token are each right about one case and cannot
+   both hold — the token is spent by the write's own event, one frame before the
+   clamp arrives — which is what moved this to the cause instead of the symptom.
+
+   Three events, and they are the three ways a person can move this box: the
+   wheel or a trackpad, a key while the focus is inside it, and a press — which
+   covers the scrollbar as well as a row, and a touch drag, which opens with a
+   `pointerdown` of its own. A clamp is none of the three, and neither is our own
+   write, so neither needs telling apart from anything.
+
+   **The scrollbar half is measured, and the measurement cannot reach the two
+   webviews that ship.** A press on the box's own scrollbar arrives as a
+   `pointerdown` on the element in Chromium 152 and in Playwright's WebKit, with a
+   classic 10px scrollbar and with a 0px overlay one, and end to end in the app
+   against the left column's 11px bar; WKWebView and WebKitGTK are not reachable
+   from here and are taken on that evidence. Written down because of what it would
+   cost if one of them ever differs: a drag of the bar would not close the debt,
+   and the next listing would pull the view back to the selection once — so the
+   thing to re-measure is named rather than left as a flat claim.
+
+   Four things it reads as the person's that strictly are not, and all four are the
+   harmless direction. A wheel or a key that scrolls nothing — at the end of the
+   list, or in the rename field — still says somebody is working in this panel and
+   would rather it held still. A keystroke that is merely passing through says the
+   same: the selected row is the tree's one tab stop, so Cmd+K for the palette, and
+   Cmd+S and Cmd+F, all bubble out through this pane on their way to the window's
+   own handlers and close a debt none of them is about. And pressing the row that
+   is **already** selected closes the debt without reopening it — the click emits
+   `select`, `revealInTree` writes `project.selectedPath` the value it already
+   holds, the prop never changes and the watcher never fires — which is the other
+   half of the limit above: what reopens a debt is the selection *moving*.
+   Harmless in every one of the four, for the same reason: the row somebody just
+   pressed, or typed next to, is on screen by definition.
+
+   `passive` is for the wheel; the other two take it along for one list. */
+const PANE_GESTURES = ['wheel', 'keydown', 'pointerdown']
+
+const onPaneGesture = () => {
+  owed = null
+}
+
+watch(
+  () => props.selectedPath,
+  (path) => {
+    owed = path ?? null
+    payScroll()
+  }
+)
+
+/* `rows` and not `nodes`: what is watched has to be the list that is drawn, so
+   that a row appearing because its folder was expanded counts the same as one
+   appearing because the folder's listing arrived, and a row pushed down by a
+   folder above it counts as either. */
+watch(rows, () => {
+  if (owed) payScroll()
+})
+
+onMounted(() => {
+  pane = scrollBoxOf(root.value)
+  for (const kind of PANE_GESTURES) pane?.addEventListener(kind, onPaneGesture, { passive: true })
+  payScroll()
+})
+
+onBeforeUnmount(() => {
+  for (const kind of PANE_GESTURES) pane?.removeEventListener(kind, onPaneGesture)
+  pane = null
 })
 
 const menu = ref(null)
@@ -418,7 +636,7 @@ const rootStyle = {
 </script>
 
 <template>
-  <div role="tree" :style="rootStyle" @contextmenu="openRootMenu" @keydown="onKeydown">
+  <div ref="root" role="tree" :style="rootStyle" @contextmenu="openRootMenu" @keydown="onKeydown">
     <template v-for="r in rows" :key="r.key ?? r.path">
       <!-- The draft is a row of the same list rather than something drawn over
            it: that is what puts it at the depth of the folder it is going into

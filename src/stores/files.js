@@ -321,17 +321,21 @@ export function setRoot(path) {
    covers a refusal, a read already in flight, no project at all, and an answer
    that came back after the project was switched.
 
-   **Three callers read it, and the same rule is what each of them wants**: read
+   **Four callers read it, and the same rule is what each of them wants**: read
    the root, and go on to the folders inside it only if the root vouched for
-   itself. They are `refreshDirs` just below, `moveTo` in `stores/projects.js`
-   and `onMounted` in `views/DesktopApp.vue` — named rather than counted,
-   because the count is what goes stale. Why the rule exists at all is written
-   out over `refreshDirs`; what matters here is that a `false` dropped on the
-   floor puts the whole of `settings.project.expanded` back within reach of a
-   project folder that is simply not mounted. Two of the three are pinned by a
-   test (`tests/stores/files.test.js`, `tests/stores/projects.test.js`); the
-   third is in a `.vue` file no runner here can reach. Every other call site
-   discards the value, and none of them wants it. */
+   itself. They are `refreshDirs` just below, `moveTo` in `stores/projects.js`,
+   and `onMounted` and `revealInTree` in `views/DesktopApp.vue` — named rather
+   than counted, because the count is what goes stale. Why the rule exists at all
+   is written out over `refreshDirs`; what matters here is that a `false` dropped
+   on the floor puts the whole of `settings.project.expanded` back within reach of
+   a project folder that is simply not mounted. The fourth is the newest and
+   reaches the rule from the other end: it opens the folders above whichever file
+   the centre column has active, so its trigger is a click on a tab rather than a
+   sweep, and the folder it is about has usually never been read at all. Two of
+   the four are pinned by a test (`tests/stores/files.test.js`,
+   `tests/stores/projects.test.js`); the other two are in a `.vue` file no runner
+   here can reach. Every other call site discards the value, and none of them
+   wants it. */
 export async function listDir(dir = '') {
   if (!filesState.root || filesState.loading.has(dir)) return false
   const root = filesState.root

@@ -3541,7 +3541,21 @@ const menuTargetStyle = {
 
       <!-- Taller than the other boxes on this page, and the file tree is why:
            at 160px the shell showed five rows of it, so half the tree's glyph
-           vocabulary sat below a fold in the one place it can be checked. -->
+           vocabulary sat below a fold in the one place it can be checked.
+
+           Which is also why the selected row here is the third one and not
+           `Cargo.toml`, the row the three boxes in the "File tree menu" section
+           below are all about. The tree brings its selected row into the
+           scrolling box it is in, and `Panel`'s body is one: `Cargo.toml` is row
+           12 of these 15, so at `--row-h` 28 its foot sits about 80px past the
+           fold of this box and the panel would open already scrolled, with
+           `docs`, `src` and `src/agent.rs` above it — undoing the whole reason
+           this box is 320px tall. Row 3's foot is 84px in comfortable and 66 in
+           compact, well inside the shortest this body gets, so nothing moves and
+           the selected row is still plainly selected. The three boxes below are
+           420px against the same 15 rows, where `Cargo.toml`'s own foot lands at
+           336 and stays inside the fold at the shipped `--ui-scale`, so they do
+           not move either and their fixture is left exactly as it was. -->
       <div :style="{ height: '320px', border: 'var(--border-w) solid var(--border)' }">
         <AppShell :height="320" :left-width="180" :right-width="180">
           <template #left>
@@ -3549,7 +3563,7 @@ const menuTargetStyle = {
               <FileTree
                 :nodes="galleryTree"
                 :expanded="galleryTreeExpanded"
-                selected-path="Cargo.toml"
+                selected-path="src/agent.rs"
               />
             </Panel>
           </template>
