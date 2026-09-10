@@ -134,6 +134,31 @@ pub fn state_of(events: &[Event], child_alive: bool) -> SessionState {
     }
 }
 
+/// Is this session holding this question open — a `Permission` with that id and
+/// no `PermissionAnswered` for it since?
+///
+/// The narrow half of `state_of`'s fold, and it exists because a question id
+/// alone identifies nothing: they are minted from one counter for the whole
+/// app, and the permission listener looks them up in one map across every
+/// session. The journal is the only place that knows which session was asked,
+/// so this is the check that has to stand between an answer off the wire and
+/// both the journal and that listener.
+///
+/// Reads forward for the reason `state_of` does, and agrees with it by
+/// construction: a question this answers `false` for is one `state_of` does not
+/// count as pending either.
+pub fn is_open_question(events: &[Event], question: &str) -> bool {
+    let mut open = false;
+    for event in events {
+        match &event.kind {
+            EventKind::Permission { id, .. } if id == question => open = true,
+            EventKind::PermissionAnswered { id, .. } if id == question => open = false,
+            _ => {}
+        }
+    }
+    open
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,5 +236,29 @@ mod tests {
     #[test]
     fn a_session_that_has_produced_nothing_yet_is_starting() {
         assert_eq!(state_of(&[], true), SessionState::Starting);
+    }
+
+    #[test]
+    fn a_question_this_journal_never_held_is_not_one_to_answer() {
+        // The one that matters: ids are minted from a single counter for the
+        // whole app, so `q1` exists in some session — just not this one.
+        // Without this check an answer aimed at the wrong session would release
+        // the other one's tool call and leave its journal asking for good.
+        let events = vec![ev(1, EventKind::TurnStart { by: Actor::Agent })];
+        assert!(!is_open_question(&events, "q1"));
+        assert!(!is_open_question(&[], "q1"));
+    }
+
+    #[test]
+    fn a_question_that_is_standing_is_one_to_answer_exactly_once() {
+        let asked = vec![ev(1, permission("q1"))];
+        assert!(is_open_question(&asked, "q1"));
+        let mut answered = asked.clone();
+        answered.push(ev(2, EventKind::PermissionAnswered {
+            id: "q1".into(),
+            decision: Decision::Allow,
+        }));
+        assert!(!is_open_question(&answered, "q1"), "a second answer has nothing to settle");
+        assert!(!is_open_question(&answered, "q2"), "and it settled only its own question");
     }
 }

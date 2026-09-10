@@ -223,6 +223,14 @@ pub fn run() {
       let terminal = terminal::service::start(app.handle().clone());
       app.manage(terminal.clone());
 
+      // The session worker: the driven half of the same idea, one tokio task
+      // beside the terminal's and sharing nothing with it. It knows no project
+      // of its own either — a session carries the directory it was started in.
+      // What it owns that the terminal does not is the in-app permission
+      // listener, which it binds once when it starts.
+      let session = session::service::start(app.handle().clone());
+      app.manage(session);
+
       // The run worker drives the other two rather than owning anything of its
       // own: it reads the board from the tracker and starts one session per
       // batch through the terminal. Handed clones of both, so it queues behind
@@ -353,6 +361,12 @@ pub fn run() {
       terminal::commands::terminal_run_capture,
       terminal::commands::terminal_restorable,
       terminal::commands::terminal_forget,
+      session::commands::session_start,
+      session::commands::session_attach,
+      session::commands::session_since,
+      session::commands::session_send,
+      session::commands::session_answer,
+      session::commands::session_stop,
     ])
     // build + run instead of .run(context): we need the exit event. This is
     // exactly what Builder::run does — build, then run — plus our callback.
@@ -364,6 +378,11 @@ pub fn run() {
       // The callback runs before cleanup_before_exit, so the app is still whole.
       if let tauri::RunEvent::Exit = event {
         terminal::service::shutdown(app_handle);
+        // The driven sessions' children are agents too, and an app that left
+        // them running would leave a `claude` in the process list every time it
+        // closed. Beside the terminal's rather than inside it: the two workers
+        // share no state, and each kills what it started.
+        session::service::shutdown(app_handle);
       }
     });
 }
