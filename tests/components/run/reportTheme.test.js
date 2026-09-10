@@ -39,6 +39,14 @@ describe('themed', () => {
     expect(themed(doc('<html>'), 'light')).toContain('<html data-theme="light">')
   })
 
+  it('does not cut a root tag at a `>` inside a quoted attribute value', () => {
+    // The cosmetic half of the same defect: read as `[^>]*>`, this tag ended
+    // inside `data-x`, and the stamp rewrote a foreign document's attribute —
+    // `<html lang="en" data-x="a data-theme="dark">`.
+    const out = themed(doc('<html lang="en" data-x="a>b">'), 'dark')
+    expect(out).toContain('<html lang="en" data-x="a>b" data-theme="dark">')
+  })
+
   it('replaces a theme the document already named, so the app tab follows the app', () => {
     // Inside this app's tab the app is the one showing the document. An
     // attribute found in a file could only come from a hand edit or a future
@@ -260,6 +268,52 @@ describe('guarded', () => {
     expect(live(out)).toBe(1)
     expect(out).toContain(`"><meta ${CSP}`)
     expect(out.indexOf(CSP)).toBeLessThan(out.indexOf('<link'))
+  })
+
+  it('is not steered by a `>` inside a quoted attribute value', () => {
+    // The tag ends at the first *unquoted* `>`. Read as `[^>]*>`, this head tag
+    // ended in the middle of `data-x`, so the meta was spliced into an unclosed
+    // tag: measured in a sandboxed frame, the document then had no `<meta>` in
+    // it at all, `head` wore `content="default-src 'none'…"` as an attribute,
+    // and the stylesheet went out to the network. A document with no root tag,
+    // because that is the case where `themed` does not run and nothing else
+    // closes the tag by accident.
+    const quoted =
+      '<!doctype html><head data-x="a>b"><link rel=stylesheet href="https://cdn.example.com/a.css"></head>'
+    const out = guarded(quoted)
+    expect(live(out)).toBe(1)
+    expect(out).toContain(`<head data-x="a>b"><meta ${CSP}`)
+    expect(out.indexOf(CSP)).toBeLessThan(out.indexOf('<link'))
+  })
+
+  it('leaves a quoted `>` in the doctype alone, where the tokenizer ends it', () => {
+    // The opposite rule, and the reason the doctype scanner is deliberately not
+    // quote-aware: `>` ends a DOCTYPE even inside an identifier — the abrupt
+    // parse errors emit the token there — so the anchor belongs at the first
+    // one. Driven through a parser, `<!doctype html SYSTEM "a>b"><p>x</p>`
+    // leaves `b">x` as text, which is the doctype having ended in the quotes.
+    const out = guarded('<!doctype html SYSTEM "a>b"><link href="x.css">')
+    expect(live(out)).toBe(1)
+    expect(out).toContain(`<!doctype html SYSTEM "a><meta ${CSP}`)
+    expect(out.indexOf(CSP)).toBeLessThan(out.indexOf('<link'))
+  })
+
+  it('refuses a tag whose quote is never closed, which keeps the anchor earlier', () => {
+    // No match rather than a match up to the next `>`: the parser is still
+    // reading that `>` as attribute value, so a meta placed after it would be
+    // inside the value. Falling back to the doctype puts the policy in front of
+    // everything, which is the safe direction. It is also the form that cannot
+    // backtrack — `[^"'>]` and the two quoted branches are mutually exclusive,
+    // where an overlapping `[^>]` took 41 seconds over a tag of 22 attributes.
+    const out = guarded('<!doctype html><html a="b><link href="x.css">')
+    expect(live(out)).toBe(1)
+    expect(out).toBe(`<!doctype html>${policy()}<html a="b><link href="x.css">`)
+  })
+
+  it('takes a root tag whose quoted value holds a `>` whole', () => {
+    const out = guarded('<!doctype html><html data-x="a>b"><head><link href="x.css">')
+    expect(out).toContain(`<html data-x="a>b"><meta ${CSP}`)
+    expect(live(out)).toBe(1)
   })
 
   it('falls back to the head when the only root tag is inside a comment', () => {

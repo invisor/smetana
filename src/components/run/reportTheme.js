@@ -77,27 +77,86 @@
    So the scan consumes tokens instead, and consumes **only what can neither
    fetch anything nor open a raw-text context**: whitespace, comments, the bogus
    comments a browser makes of `<?xml …?>` and `<!…>`, one doctype, the root tag
-   and the head tag. Anything else stops it where it stands. That is the property
-   to keep whole — a `<link>`, a `<script>`, a `<style>` or an `<img>` is not
-   consumable, so the anchor lies in front of every one of them whatever the file
-   does, and the worst a crafted document can force is an anchor *earlier* than
-   it needed to be: the meta at the very front, which is live and first. There is
-   no content that moves it later.
+   and the head tag. Anything else stops it where it stands.
 
-   The comment token is the one that has to follow the tokenizer rather than
-   approximate it, since ending a comment late would swallow real content into
-   it. All of the spec's endings are here: `-->`, the incorrectly closed `--!>`,
-   the abrupt `<!-->` and `<!--->`, and end of input, which closes a comment the
-   document never did.
+   **Two things have to be true of the anchor, and only the first is a property
+   of that list.** Nothing consumable can fetch, so no `<link>`, `<script>`,
+   `<style>` or `<img>` is ever *before* the meta, and the worst a crafted
+   document can force is an anchor earlier than it needed to be — the meta at the
+   very front, which is live and first. The second is that the anchor is a
+   position the parser is between tokens at, and that one is a property of every
+   token *matching the tokenizer*, which is where this was wrong twice: once in
+   the comment endings, and once in a tag's `>` inside a quoted attribute value,
+   where the meta stopped being a meta and became attributes on somebody's
+   `<head>`. Each token below carries which of the spec's states it is written
+   against.
+
+   So the honest statement is measured rather than absolute: **against every form
+   below it has been driven through a real parser, both halves hold** — the forms
+   are the boilerplate header, a quoted `>` in a tag and in a doctype, the four
+   comment endings, an unterminated comment, a raw-text trap, an XML declaration,
+   a CDATA section, a BOM and a bare fragment. This is a scanner and not a
+   parser, so a construct nobody has thought of could still put the anchor
+   somewhere the parser is not; the failure would be what it was here, a meta
+   that is not one, with nothing on screen to say so. That is the residual, and
+   it is named rather than promised away. A new form found is a test below and a
+   token fixed here — never a note that it usually works.
+
+   The comment token is one of the two that have to follow the tokenizer rather
+   than approximate it, since ending a comment late would swallow real content
+   into it. All of the spec's endings are here: `-->`, the incorrectly closed
+   `--!>`, the abrupt `<!-->` and `<!--->`, and end of input, which closes a
+   comment the document never did. The tag scanners below are the other, and
+   their note carries the rest of it.
 
    Sticky rather than global: each is asked "do you match *here*", which is what
    makes this a walk over the prologue and not a search through the document. */
 const WHITESPACE = /\s+/y
 const COMMENT = /<!--(?:>|->|[\s\S]*?--!?>|[\s\S]*$)/y
+
+/* **A tag ends at the first `>` that is not inside a quoted attribute value**,
+   and `[^>]*>` did not know that. `<head data-x="a>b">` was read as ending at
+   the `>` in the middle of the value, so the anchor was *inside an unclosed
+   tag* — and a meta put there is not a late meta, it is not a meta at all. What
+   the browser built out of it, measured in a `srcdoc` frame with this app's
+   sandbox: no `<meta http-equiv>` anywhere in the document, `head` wearing
+   `content="default-src 'none'…"` as an attribute, and the stylesheet on the
+   next line going out to the network. Nothing about the rest of the walk was
+   wrong; the token was.
+
+   The three alternatives are mutually exclusive — a `"` can only open the
+   double-quoted branch, a `'` only the single-quoted, and the unquoted branch
+   takes neither — which is a correctness rule twice over. It is faithful, since
+   the tokenizer refuses a quote inside an unquoted value as a parse error. And
+   it is what keeps the match **linear**: with `[^>]` as the third branch, as
+   this was first written for review, a `"` is matched by two branches at once,
+   so a tag whose quote is never closed can be split exponentially many ways
+   while the engine looks for a `>` that is not there. Measured on
+   `<html ` + `a="b" `×n + `"`: 1.7 ms at n=10, 130 ms at n=16, 6 s at n=20, 41 s
+   at n=22, and this walks a file of up to 2 MiB on the render thread. The
+   exclusive form answers the same inputs in 0.1 ms.
+
+   What the exclusive form gives up is matching a tag with an **unterminated**
+   quote at all, and that is the safe direction: no match means the walk stops
+   there and the anchor stays wherever it already was — at the doctype, or in
+   front of the whole document — which is live and first. The other form would
+   match up to the next `>`, which the parser is still reading as attribute
+   value, and put the meta inside it.
+
+   **The doctype deliberately does not take this treatment.** A `>` ends a
+   doctype even inside quotes — the tokenizer's abrupt-doctype-public-identifier
+   and abrupt-doctype-system-identifier states emit the token there — so
+   `[^>]*>` *is* the faithful reading, and a quote-aware version would put the
+   anchor past a point the parser has already left. Checked rather than
+   inherited from the spec text: parsing `<!doctype html SYSTEM "a>b"><p>x</p>`
+   leaves `b">x` as document text, so the doctype did end inside the quotes.
+   `BOGUS` is left alone for the same reason — a bogus comment ends at the first
+   `>` whatever is around it. */
+const TAG_TAIL = '(?:"[^"]*"|\'[^\']*\'|[^"\'>])*>'
 const DOCTYPE = /<!doctype[^>]*>/iy
 const BOGUS = /<[!?/][^>]*>/y
-const ROOT = /<html\b[^>]*>/iy
-const HEAD = /<head\b[^>]*>/iy
+const ROOT = new RegExp(`<html\\b${TAG_TAIL}`, 'iy')
+const HEAD = new RegExp(`<head\\b${TAG_TAIL}`, 'iy')
 
 const at = (re, html, index) => {
   re.lastIndex = index
@@ -263,8 +322,16 @@ const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${CSP}">`
    frame is bounded by exactly the same policy — the shortcut bought a byte count
    and cost the guarantee. A *different* policy the document brought itself is
    left alone for the same arithmetic: an intersection can only be stricter, so
-   there is no ordering, and no content, by which a file can talk its way out of
-   this one. */
+   there is no **ordering** by which a file talks its way out of this one.
+
+   That is deliberately narrower than what stood here, which added "and no
+   content". Content is exactly how a file talked its way out twice — a `<html`
+   inside a leading conditional comment, and then a `>` inside a quoted attribute
+   value, each of which put this meta somewhere it was not a meta. Both are
+   closed and both are pinned by tests, and what holds them closed is the walk
+   above agreeing with the tokenizer, which is a thing measured against a list of
+   forms rather than a thing proved. The header above carries that list and the
+   residual it leaves. */
 export function guarded(html) {
   if (typeof html !== 'string') return ''
   const { anchor } = prologue(html)

@@ -17,8 +17,11 @@ import {
    fail. */
 
 describe('the toggle lane', () => {
-  it('reserves the control and its inset on both sides', () => {
-    expect(TOGGLE_LANE).toBe(`calc(${TOGGLE_BOX} + ${TOGGLE_INSET} * 2)`)
+  it('is built from the token the button draws its own box with', () => {
+    // The one way these can really drift: somebody gives the button another
+    // size and the reserved width stays where it was.
+    expect(TOGGLE_LANE).toContain('var(--control-h-sm)')
+    expect(TOGGLE_LANE).toContain(TOGGLE_INSET)
   })
 
   it('is built from the control the toggle actually draws', () => {

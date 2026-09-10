@@ -505,9 +505,18 @@ has never stopped a document *loading* a stylesheet, an image or a font, so
 `csp` in `tauri.conf.json` is `null` and there is nothing to inherit. **Where both marks go is a walk
 over the document's prologue and never a search of the string**: a leading conditional comment, which
 is what an HTML5 Boilerplate header opens with, holds a `<html` of its own, and a policy written into
-a comment is inert with nothing anywhere to say so. The walk consumes only what can neither fetch nor
-open a raw-text context, so the meta is in front of every `<link>`, `<script>` and `<img>` whatever
-the file does.
+a comment is inert with nothing anywhere to say so.
+
+Two things have to be true of where the meta lands, and they are worth keeping apart, because the
+second is what has been wrong twice. The walk consumes only what can neither fetch nor open a
+raw-text context, so nothing that fetches is ever *before* the meta — that half is a property of the
+list. The other half is that the anchor is a place the parser is between tokens at, and that holds
+only while each token matches the tokenizer: a comment ended late swallows real content, and a tag
+read as ending at a `>` inside a quoted attribute value puts the meta *inside the tag*, where a
+measurement in a sandboxed frame found no `<meta>` in the document at all, `head` wearing the policy
+as an attribute, and the stylesheet fetched. Both are closed and pinned by tests. **State it as
+measured against the forms those tests carry, never as "whatever the file does"** — this is a scanner
+and not a parser, and the residual is named in `reportTheme.js`'s own header.
 
 **The row is dragged into whatever order somebody wants, and the order is one row rather than four
 lists.** A terminal tab can stand between two files and a diff in front of all of them; the pinned
