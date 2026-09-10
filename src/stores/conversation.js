@@ -251,7 +251,40 @@ export function initConversation() {
 }
 
 async function register() {
-  await listen('session:events', (event) => {
+  /* The handles are held here, where `terminals.js` discards its own, and the
+     retry above is the whole of the difference rather than a change of taste.
+     These two subscriptions are awaited in sequence, so a refusal of the second
+     leaves the first one live — and a retry that started from there would
+     subscribe `session:events` a second time on top of it. Every batch would
+     then be absorbed twice; the second pass would find its `seq` already taken,
+     read that as a gap and fire a full `session_attach` — up to
+     `journal::BUDGET` events over the wire per batch, for the life of the
+     window, with the panel drawing correctly the whole time and nothing on
+     screen to point at it. A retry has to start from nothing subscribed, so
+     half a subscription is undone before the refusal is passed on. */
+  const made = []
+  try {
+    made.push(await listenToEvents())
+    made.push(await listenToState())
+  } catch (err) {
+    for (const dispose of made) {
+      /* Unsubscribing is itself an `invoke`, and can be refused in exactly the
+         state that brought us here. There is nothing to do about that but say
+         so: a rejection let out would replace the refusal being reported, which
+         is the one a person can act on. */
+      try {
+        await dispose()
+      } catch (undoing) {
+        console.error('[conversation] dropping a half-made subscription failed:', undoing)
+      }
+    }
+    throw err
+  }
+  conversationState.ready = true
+}
+
+function listenToEvents() {
+  return listen('session:events', (event) => {
     const { id, events } = event.payload
     /* **Dropped, not buffered.** A session this window is not holding has
        nowhere for these to be drawn, and if it ever is held, `session_attach`
@@ -267,13 +300,15 @@ async function register() {
       attach(id).catch(() => {})
     }
   })
-  await listen('session:state', (event) => {
+}
+
+function listenToState() {
+  return listen('session:state', (event) => {
     const { id, state } = event.payload
     const held = conversations.get(id)
     if (!held) return
     held.state = state
   })
-  conversationState.ready = true
 }
 
 /* Start a driven session and hold it. The id is the answer; `null` means it did

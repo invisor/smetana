@@ -17,13 +17,14 @@ const permission = (seq, id = 'q1') =>
    snapshot is the argument, since what `session_attach` hands back is the whole
    of what a conversation starts as.
 
-   Copied per answer, and that is not tidiness. Registered as a value, the
-   router hands back one array instance to every attach, and the store assigns
-   it straight to `held.events` and pushes into it — so a test appending an
-   event would be mutating its own fixture, and the assertion that a re-attach
-   replaces the journal rather than splicing onto it would be passing on the
-   aliasing rather than on the rule. A real reply is a fresh object every
-   time. */
+   Copied per answer, and that is hygiene rather than a rule being pinned.
+   Registered as a value, the router hands back one array instance to every
+   attach, and the store assigns it straight to `held.events` and pushes into
+   it — so a test appending an event was quietly editing the fixture the next
+   attach would answer with, and a snapshot in this file has to mean what a
+   worker's reply means: a fresh object every time. No assertion below rests on
+   the copying; what it removes is a test able to change another one's
+   arrangement out from under it. */
 async function ready(snapshot = { events: [], seq: 0, state: 'ready' }) {
   const loaded = await loadStores()
   loaded.ipc.on('session_attach', () => ({ ...snapshot, events: [...snapshot.events] }))
@@ -71,7 +72,16 @@ describe('the conversation store', () => {
        test uses. */
     await vi.waitFor(() => expect(ipc.calls('session_attach')).toHaveLength(2))
 
-    // The fresh snapshot whole, and never it spliced onto what was drawn before.
+    /* The two halves of what this pins, and neither is more than it says. The
+       `waitFor` above is the discriminating one: the repair happened at all.
+       This is the end state the rule promises — the journal afterwards is the
+       snapshot the worker handed back, with nothing of the gap in it.
+
+       It is deliberately not an assertion about a splice, which would be a
+       different test: `absorb` appends a batch's good prefix before it meets
+       the event that is out of sequence, by design and said so where it does
+       it, and the snapshot replacing the journal whole is what makes that
+       transient harmless. */
     expect(stores.conversation.conversationFor(1).events.map((e) => e.text)).toEqual(['fresh'])
   })
 
@@ -226,10 +236,58 @@ describe('the conversation store', () => {
     expect(stores.conversation.conversationFor(1).events).toHaveLength(0)
 
     const ipc = installIpc()
+    /* What `settleStores` would have registered had it known about this router:
+       it never went through `loadStores`, so no graph the harness holds names
+       it, and a debounced `settings_save` draining in the afterEach goes
+       wherever the transport points — here. Nothing in this file touches a
+       setting, so this is for whoever adds the line that does, and gets the
+       unregistered-command error out of a hook rather than out of their
+       test. */
+    ipc.on('settings_save', null)
     ipc.on('session_attach', () => ({ events: [text(1, 'hello')], seq: 1, state: 'ready' }))
     await stores.conversation.attach(1)
 
     expect(stores.conversation.conversationFor(1).events).toHaveLength(1)
+  })
+
+  /* The failure the retry above made reachable. These two subscriptions are
+     awaited one after the other, so the second being refused leaves the first
+     live — and a retry starting from there would hold two of them, absorb every
+     batch twice and read its own second pass as a gap, asking for a whole
+     journal per batch for the life of the window with the panel looking
+     perfectly right throughout. */
+  it('undoes half a subscription rather than retrying on top of it', async () => {
+    const { stores, emit, nextTick } = await ready()
+    const dropped = []
+    mockIPC((cmd, args) => {
+      if (cmd === 'plugin:event|listen') {
+        if (args.event === 'session:state') throw new Error('the second subscription is refused')
+        return args.handler
+      }
+      if (cmd === 'plugin:event|unlisten') {
+        dropped.push(args.event)
+        return null
+      }
+      throw new Error(`[test] command ${cmd} is not registered`)
+    })
+    await stores.conversation.attach(1)
+
+    expect(stores.conversation.conversationState.lastError).toBeTruthy()
+    // The half that did go up came back down, so a retry starts from nothing.
+    expect(dropped).toEqual(['session:events'])
+
+    const ipc = installIpc()
+    ipc.on('settings_save', null)
+    ipc.on('session_attach', () => ({ events: [], seq: 0, state: 'ready' }))
+    await stores.conversation.attach(1)
+    await emit('session:events', { id: 1, events: [text(1, 'a')] })
+    await nextTick()
+
+    /* One subscription, said in the only way it can be seen from outside: the
+       batch is absorbed once, so nothing reads its own second pass as a gap and
+       asks for a fresh snapshot. The retry's own attach is the only one. */
+    expect(stores.conversation.conversationFor(1).events.map((e) => e.text)).toEqual(['a'])
+    expect(ipc.calls('session_attach')).toHaveLength(1)
   })
 
   it('follows the state the worker reports', async () => {
