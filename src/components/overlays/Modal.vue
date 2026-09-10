@@ -67,7 +67,10 @@ const isFilled = computed(() => inWindow && Boolean(filled?.value))
    `closable` means exactly what it has always meant, whether the dialog draws
    its own way out; what is new is that in a window it has a reader at all,
    since the cross it governs is the OS frame's there and this component draws
-   no header.
+   no header. **Two readers, and the second is that cross itself**: the view
+   carries what is written here out to Rust, which dims the frame's button and
+   refuses the close behind it, so what is reported here reaches every way out
+   of a dialog window rather than the key alone.
 
    **This is a report and not a handler.** The listener stays in the one file,
    which is what keeps thirteen dialogs behaving alike. Absent everywhere else —

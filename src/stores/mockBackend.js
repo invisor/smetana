@@ -770,12 +770,17 @@ export function installMockBackend() {
       return null
     }
     /* The dialog windows, for the same reason and with the same answer. All
-       three are about a window and none of them is a write: opening one, closing
-       one and giving one the height its content came to. Every dialog is
-       reachable in a browser at `?view=dialog&kind=<name>`, which is how each is
-       checked by eye, and a refusal here would put an error in the console every
-       time somebody pressed the menu item that opens one — and, for the sizing,
-       once per measurement, which is on every keystroke that changes the height.
+       four are about a window and none of them is a write: opening one, closing
+       one, giving one the height its content came to, and telling one whether
+       the dialog in it is offering a way out. A browser has no frame of ours to
+       dim and no close of its own to refuse, which makes the last of them the
+       plainest no-op of the four — answered rather than refused all the same,
+       since a dialog that takes its way out mid-write sends it in `npm run dev`
+       exactly as it does in the app. Every dialog is reachable in a browser at
+       `?view=dialog&kind=<name>`, which is how each is checked by eye, and a
+       refusal here would put an error in the console every time somebody
+       pressed the menu item that opens one — and, for the sizing, once per
+       measurement, which is on every keystroke that changes the height.
 
        Said once rather than per call, which is what the counter is for: the
        three are pressed and measured often enough that a line each would bury
@@ -788,7 +793,8 @@ export function installMockBackend() {
     if (
       command === 'dialog_window_open' ||
       command === 'dialog_window_close' ||
-      command === 'dialog_window_size'
+      command === 'dialog_window_size' ||
+      command === 'dialog_window_closable'
     ) {
       if (!saidAboutDialogWindows) {
         saidAboutDialogWindows = true

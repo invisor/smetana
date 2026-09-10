@@ -69,15 +69,27 @@ const props = defineProps({
   busy: { type: Boolean, default: false },
   /* **This discard**, in flight. Narrower than `busy` on purpose, and the split
      is the difference between refusing an act and taking away the way out: this
-     is what dims Cancel and what takes the cross off the frame, and neither may
-     be spent on an operation this window is not about. A merge running under
+     is what dims Cancel, what makes Escape answer with a refusal, and what
+     takes the cross off the frame — and none of the three may be spent on an
+     operation this window is not about.
+
+     A merge running under
      `WRITE_CEILING` has five minutes to finish, and there is no scrim here to
      stop somebody starting one — a discard dialog whose Cancel went grey for
      the length of it would be the one dialog in the app that can be held shut
      by something it has nothing to do with.
 
      While it is true, `busy` is true as well, so the Discard button is refused
-     by the wider fact and reads its label off this one. */
+     by the wider fact and reads its label off this one.
+
+     **The third of those three is the desktop's rather than this page's, and
+     nothing here draws it.** `closable` below reaches `overlays/Modal.vue`,
+     which writes it into the `ref` `views/DialogWindow.vue` provides; that view
+     carries the same `ref` out to `window::dialog_window_closable`, which dims
+     the frame's button and refuses the close behind it. This comment claimed
+     the cross before any of that existed and was untrue for a while
+     (smetana-an3v), so it is worth saying where the claim is cashed: if that
+     chain is ever cut, this sentence goes with it. */
   discarding: { type: Boolean, default: false }
 })
 
@@ -137,7 +149,9 @@ const confirmLabel = computed(() => (props.discarding ? 'Discarding…' : 'Disca
 <template>
   <!-- `closable` and Cancel follow `discarding`, the Discard button follows
        `busy`: the wider fact refuses the act, and only this window's own write
-       may take away the way out of it. -->
+       may take away the way out of it. In a window of its own there is no cross
+       here to govern — the frame's is the one `closable` reaches, by the road
+       the prop's own comment names. -->
   <Modal
     :open="open"
     :closable="!discarding"

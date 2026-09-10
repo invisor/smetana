@@ -332,6 +332,7 @@ pub fn run() {
       window::dialog_window_open,
       window::dialog_window_close,
       window::dialog_window_size,
+      window::dialog_window_closable,
       window::window_show_ready,
       autostart::autostart_state,
       autostart::autostart_set,
