@@ -67,7 +67,7 @@ import { canRestore, draftIsEmpty } from '../components/kanban/taskDraft.js'
 import Button from '../components/core/Button.vue'
 import RunBar from '../components/run/RunBar.vue'
 import ReportView from '../components/run/ReportView.vue'
-import { isReportPath, reportTabPath, reviewReportTabs } from '../components/run/reportTab.js'
+import { isDocumentPath, reportTabPath, reviewReportTabs } from '../components/run/reportTab.js'
 import { deliveryFor } from '../components/run/reportDelivery.js'
 import TaskInspector from '../components/kanban/TaskInspector.vue'
 import DraftInspector from '../components/kanban/DraftInspector.vue'
@@ -324,11 +324,15 @@ import {
   saveTab,
   saveTabs,
   setText,
+  showsSource,
   tabList,
   terminalTab,
-  terminalTabFor
+  terminalTabFor,
+  toggleSource
 } from '../stores/tabs.js'
 import FileEditor from '../components/files/FileEditor.vue'
+import DocumentModeToggle from '../components/files/DocumentModeToggle.vue'
+import { TOGGLE_LANE } from '../components/files/documentToggle.js'
 import DiffView from '../components/files/editor/DiffView.vue'
 import { keepOnly } from '../components/files/editor/states.js'
 
@@ -4093,11 +4097,48 @@ const healthNotice = computed(() => {
   return HEALTH_NOTICE[trackerState.health.state] ?? HEALTH_NOTICE.error
 })
 
-/* A run's document, drawn as the page it is rather than as its source. It is an
-   ordinary path in `openTabs` — no storage of its own, and it closes and comes
-   back after a restart like every other tab — so where it sits is the whole of
-   what makes it one, and that rule is `reportTab.js`. */
-const reportTabActive = computed(() => isReportPath(project.activeTab))
+/* An html tab: a document, drawn as the page it is rather than as its source.
+   It is an ordinary path in `openTabs` — no storage of its own, and it closes
+   and comes back after a restart like every other tab — so what makes it one is
+   its name, and that rule is `reportTab.js`'s `isDocumentPath`.
+
+   **The folder used to be the rule and is not any more.** A run's own report and
+   a branch review's are still drawn this way, but so is every other `.html` in
+   the project, because a document written to be read is one wherever it landed —
+   and an agent following its own project's conventions puts a review's report in
+   that project's folder rather than at the path this app named in the prompt.
+   Nothing here can be right about a folder it has never heard of, and the
+   extension is the fact that travels. */
+const htmlTabActive = computed(() => isDocumentPath(project.activeTab))
+
+/* An html tab whose file this app could actually read.
+
+   `files_read` refuses a file over `MAX_FILE_BYTES` (2 MiB) and anything that is
+   not UTF-8, and a refused buffer is an empty string with an `error` on it.
+   `ReportView` has no error branch and cannot grow one usefully — it draws a
+   document, and there is no document — so a refused html file would be a blank
+   sandbox with nothing on it saying why, where before this feature it was a
+   `FileEditor` carrying `editorNotice`'s sentence. That is not a corner: the
+   documents this rule was widened for — coverage summaries, saved pages, an
+   agent's own transcript — are routinely over two megabytes.
+
+   So a refused buffer is not a document, and the tab falls through to the editor
+   branch below with its notice and its way back. It is also what the toggle
+   hangs off, and that half matters as much: a control offered over an error the
+   press cannot change is a control that does nothing, twice. */
+const htmlTabReadable = computed(() => htmlTabActive.value && !activeBuffer.value?.error)
+
+/* Which of the two the tab is showing, which is the html tab's own state and the
+   only thing the corner toggle changes. It is `stores/tabs.js`'s, in memory and
+   never in `settings.json` — that file's header says why — and the default is
+   the document, so the set holds the exceptions.
+
+   Derived rather than stored, the way `rightPanel` is: the document branch is
+   "this is an html tab and nobody asked for its source", which cannot disagree
+   with the toggle's own glyph because both read the same one line. */
+const documentTabActive = computed(
+  () => htmlTabReadable.value && !showsSource(project.activeTab)
+)
 
 /* A changed file open as a diff. The record is the store's — the two texts and
    whatever refused to be read — and `null` is both "not a diff tab" and "a diff
@@ -4109,17 +4150,21 @@ const activeDiff = computed(() => diffTab(project.activeTab))
 /* A file tab is anything that isn't terminal or kanban. There is no closed
    list in the centre and there won't be: the project brings the tabs.
 
-   Minus the reports, which are a third kind of tab: the two computeds are
-   never both true, and a report opened in CodeMirror would show a person the
-   markup of a document written for them to read. This is also what keeps Cmd+S
-   off it below — there is nothing to save on a tab nobody can type into. And
+   Minus the documents, which are a third kind of tab: the two computeds are
+   never both true, and an html file opened in CodeMirror by default would show a
+   person the markup of a document written for them to read. It is
+   `documentTabActive` and deliberately not `htmlTabActive` — an html tab
+   somebody has pressed the toggle on *is* a file tab, with the field, the undo
+   history, `dirty` and Cmd+S that any other file has, which is the whole of what
+   the source mode means. The reverse is what keeps Cmd+S off the document below:
+   there is nothing to save on a tab nobody can type into. And
    minus the diffs, which are a fourth: they name no file in `openTabs`, so a
    `FileEditor` on one would ask the disk for a path built out of a tab id. */
 const fileTabActive = computed(
   () =>
     project.activeTab !== 'terminal' &&
     project.activeTab !== 'kanban' &&
-    !reportTabActive.value &&
+    !documentTabActive.value &&
     !isDiffTab(project.activeTab) &&
     /* And minus the terminals, which are a fifth kind, and for the same reason
        the diffs are excluded: a shell's tab names no file in `openTabs`, so a
@@ -5387,7 +5432,7 @@ const actOnNotification = (notification) => {
 /* A run's report opened from its card. The document is an ordinary file under
    the project root, so this is the same call the file tree makes and there is
    no second way of opening a tab to keep in step with the first — `openFile`
-   puts it in `openTabs`, makes it active and reads it, and `reportTabActive`
+   puts it in `openTabs`, makes it active and reads it, and `documentTabActive`
    above decides that what the centre draws is a report rather than an editor.
    Permanent rather than a preview: this is a document somebody asked for by
    name, and the next click in the tree must not evict it.
@@ -5491,7 +5536,7 @@ watch(stoppedRuns, () => {
 
    `openFile` is the file tree's own call, so the tab lands in `openTabs` as an
    ordinary project-relative path and survives a restart like every other one,
-   and `reportTabActive` above is what makes the centre draw the document rather
+   and `documentTabActive` above is what makes the centre draw the document rather
    than its source. Permanent rather than a preview, for the reason `showReport`
    gives: this is a document somebody asked for by name.
 
@@ -5591,6 +5636,35 @@ const panelFootStyle = {
   wordBreak: 'break-all'
 }
 const centerStyle = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }
+/* Everything under the tab row, and the two reasons it is a box of its own are
+   the html tab's toggle. `position: relative` is the first: the toggle places
+   itself in a corner, and without an ancestor saying which box that corner is,
+   it would find the window.
+
+   **The padding is the second, and it is what keeps the toggle off the controls
+   underneath it.** An absolutely positioned child is placed against the padding
+   box, so a right-hand padding of `TOGGLE_LANE` puts the button in a strip
+   outside the content rather than over it — and over it was not a corner case:
+   `FileEditor`'s stale-file band pins `Reload` and `Keep mine` to that exact
+   corner, and they are the only way out of a file that changed on disk under an
+   unsaved buffer. `components/files/documentToggle.js` carries the measurements
+   and the arithmetic; what belongs here is that the lane is reserved for as long
+   as the toggle is drawn and never a moment longer, on the same `htmlTabReadable`
+   the button hangs off, so no other tab pays a pixel for it.
+
+   The rest is what the branches inside already had as children of the column — a
+   column of one item that takes the height left over — with `minHeight: 0`
+   added, which a flex item needs before it will let its own content scroll
+   rather than growing past the window. */
+const centerContentStyle = computed(() => ({
+  flex: 1,
+  minWidth: 0,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  position: 'relative',
+  paddingRight: htmlTabReadable.value ? TOGGLE_LANE : undefined
+}))
 
 /* Collapsed, the column is the same rail AppShell reserves for one. */
 const rightStyle = computed(() => ({
@@ -5997,137 +6071,166 @@ const toastStackStyle = {
             <Button variant="primary" size="sm" @click="answerUnsaved('save')">Save</Button>
           </template>
         </Modal>
-        <!-- A run's report, before the editor branch and not beside it: the
-             buffer is the one tabs.js already loads for any open path, so the
-             document needs no second read path and inherits the same loading
-             and error handling every other tab has. What it does not inherit is
-             the field — a report is read, never edited, which is why this is a
-             branch of its own rather than a mode of FileEditor. -->
-        <ReportView v-if="reportTabActive" :html="activeBuffer?.text ?? ''" :theme="theme" />
-        <!-- A changed file, HEAD against the working tree. Before the editor
-             branch for the same reason the report is: it is a tab of its own
-             kind, with no buffer behind it and nothing to save. -->
-        <DiffView
-          v-else-if="activeDiff"
-          :path="activeDiff.path"
-          :head="activeDiff.head"
-          :work="activeDiff.work"
-          :missing-at-head="activeDiff.missingAtHead"
-          :notice="diffNotice"
-        />
-        <!-- A file tab: the board and the chat have nothing to do with it. -->
-        <!-- There is no :key here any more: the field survives a tab switch
-             deliberately. editor/states.js keeps the caret, the scroll position
-             and the edit history per tab, and FileEditor switches state by
-             :path. -->
-        <FileEditor
-          v-else-if="fileTabActive"
-          :path="absoluteEditorPath(project.activeTab)"
-          :model-value="activeBuffer?.text ?? ''"
-          :read-only="!!activeBuffer?.error || !!activeBuffer?.loading"
-          :word-wrap="settings.editor.wordWrap"
-          :notice="editorNotice"
-          @update:model-value="setText(project.activeTab, $event)"
-          @reload="reloadTab(project.activeTab)"
-          @keep-mine="keepMine(project.activeTab)"
-        />
-        <!-- The Agent tab shows the agent a person picked; a terminal tab shows
-             its own shell. Two branches over one component, and the session is a
-             prop rather than something the pane reads for itself: see the note
-             on `sessionId` in TerminalView.vue. -->
-        <TerminalView
-          v-else-if="project.activeTab === 'terminal'"
-          :session-id="terminalState.activeId"
-        />
-        <TerminalView v-else-if="activeTerminal" :session-id="activeTerminal.session" />
-        <!-- bd init is the one wait that keeps its EmptyState: the skeleton
-             would replace the very sentence that explains what is happening,
-             and the busy button says it better than six grey lines. Every
-             other switch shows the skeleton — there the board is what is
-             being replaced. -->
-        <div
-          v-else-if="trackerState.switching && !initing && !repairing"
-          :style="{ padding: 'var(--panel-pad)' }"
-        >
-          <Skeleton :lines="6" :height="12" />
+        <!-- Everything the centre draws under its tab row, in one positioned
+             box. The box exists for the one thing that is drawn *over* the
+             content rather than instead of it: the html tab's eye/code toggle,
+             which places itself in a corner and needs one to be a corner of.
+             Before it there was nothing in this column to position against and
+             the branches were the column's own children; they are unchanged
+             below, one step further in. -->
+        <div :style="centerContentStyle">
+          <!-- An html file drawn as the document it is, before the editor
+               branch and not beside it: the buffer is the one tabs.js already
+               loads for any open path, so the document needs no second read path
+               and inherits the same loading and error handling every other tab
+               has — including the unsaved edits of the source mode, since the
+               frame is built from that same buffer. What it does not inherit is
+               the field, which is why this is a branch of its own rather than a
+               mode of FileEditor: the way to type into an html file is the
+               corner toggle below, which sends the tab down the editor branch
+               with everything an ordinary file tab has. -->
+          <ReportView v-if="documentTabActive" :html="activeBuffer?.text ?? ''" :theme="theme" />
+          <!-- A changed file, HEAD against the working tree. Before the editor
+               branch for the same reason the report is: it is a tab of its own
+               kind, with no buffer behind it and nothing to save. -->
+          <DiffView
+            v-else-if="activeDiff"
+            :path="activeDiff.path"
+            :head="activeDiff.head"
+            :work="activeDiff.work"
+            :missing-at-head="activeDiff.missingAtHead"
+            :notice="diffNotice"
+          />
+          <!-- A file tab: the board and the chat have nothing to do with it. -->
+          <!-- There is no :key here any more: the field survives a tab switch
+               deliberately. editor/states.js keeps the caret, the scroll position
+               and the edit history per tab, and FileEditor switches state by
+               :path. -->
+          <FileEditor
+            v-else-if="fileTabActive"
+            :path="absoluteEditorPath(project.activeTab)"
+            :model-value="activeBuffer?.text ?? ''"
+            :read-only="!!activeBuffer?.error || !!activeBuffer?.loading"
+            :word-wrap="settings.editor.wordWrap"
+            :notice="editorNotice"
+            @update:model-value="setText(project.activeTab, $event)"
+            @reload="reloadTab(project.activeTab)"
+            @keep-mine="keepMine(project.activeTab)"
+          />
+          <!-- The Agent tab shows the agent a person picked; a terminal tab shows
+               its own shell. Two branches over one component, and the session is a
+               prop rather than something the pane reads for itself: see the note
+               on `sessionId` in TerminalView.vue. -->
+          <TerminalView
+            v-else-if="project.activeTab === 'terminal'"
+            :session-id="terminalState.activeId"
+          />
+          <TerminalView v-else-if="activeTerminal" :session-id="activeTerminal.session" />
+          <!-- bd init is the one wait that keeps its EmptyState: the skeleton
+               would replace the very sentence that explains what is happening,
+               and the busy button says it better than six grey lines. Every
+               other switch shows the skeleton — there the board is what is
+               being replaced. -->
+          <div
+            v-else-if="trackerState.switching && !initing && !repairing"
+            :style="{ padding: 'var(--panel-pad)' }"
+          >
+            <Skeleton :lines="6" :height="12" />
+          </div>
+          <EmptyState v-else-if="healthNotice" v-bind="healthNotice">
+            <!-- What bd said, under the sentence about it: the diagnostic used to
+                 go to the console alone, which asked a person to open developer
+                 tools to find out why their board was empty. -->
+            <!-- And the same line under a refused folder, where it is the path
+                 that was refused: "this folder" is one folder too few the moment
+                 a project's own directory and its `.beads` can be refused apart. -->
+            <template
+              v-if="
+                (trackerState.health.state === 'error' ||
+                  trackerState.health.state === 'folder-refused') &&
+                healthSaid
+              "
+              #detail
+            >
+              {{ healthSaid }}
+            </template>
+            <template v-if="trackerState.health.state === 'not-a-beads-repo'" #action>
+              <Button variant="primary" size="sm" :disabled="initing" @click="initHere">
+                {{ initing ? 'Initializing…' : 'Initialize bd' }}
+              </Button>
+            </template>
+            <template v-else-if="trackerState.health.state === 'no-project'" #action>
+              <Button variant="primary" size="sm" @click="onAddProject">Add project…</Button>
+            </template>
+            <!-- The deterministic door and the open-ended one, in that order and
+                 in that weighting: repairing costs four seconds and fixes the
+                 failure this screen was built for, while an agent costs a run and
+                 tokens, so it is the second button rather than the only one. It
+                 is offered on any failure, since there is nothing here that
+                 classifies one. -->
+            <template v-else-if="trackerState.health.state === 'error'" #action>
+              <div :style="{ display: 'flex', gap: 'var(--space-3)' }">
+                <Button variant="primary" size="sm" :disabled="repairing" @click="repairHere">
+                  {{ repairing ? 'Repairing…' : 'Repair tracker' }}
+                </Button>
+                <Button variant="ghost" size="sm" :disabled="repairing" @click="askAgentAboutTracker">
+                  Ask an agent
+                </Button>
+              </div>
+            </template>
+            <!-- One button and no "Ask an agent" beside it: an agent cannot reach
+                 the permission database, and a folder this app may not read is a
+                 folder an agent started in it could not read either. Drawn only
+                 where there is something to press — elsewhere the sentence above
+                 carries the whole of what to do. -->
+            <template
+              v-else-if="
+                trackerState.health.state === 'folder-refused' &&
+                folderRefusedHasReset(trackerState.folderAccessRepair)
+              "
+              #action
+            >
+              <Button variant="primary" size="sm" :disabled="resettingAccess" @click="resetAccessHere">
+                {{ resettingAccess ? 'Resetting…' : 'Reset and restart' }}
+              </Button>
+            </template>
+          </EmptyState>
+          <KanbanBoard
+            v-else
+            :columns="drawnColumns"
+            :filtered="orderedColumns.length > 0"
+            :selected-id="highlightedTask"
+            :copied-id="copiedTaskId"
+            :copy-state="taskIdCopyState"
+            :add-to="ADD_TO"
+            :run-from="runOffered ? ADD_TO : null"
+            :run-blocked-reason="runBlockedReason"
+            :promote-from="PROMOTE_FROM"
+            @select="selectFromBoard"
+            @add="newTask()"
+            @run="openRun({ kind: 'queue' })"
+            @promote="openPromote"
+            @task-action="onTaskAction"
+            @copy-id="copyTaskId"
+            @reorder="project.columnOrder = mergeOrder($event, projectColumns)"
+          />
+          <!-- The one control an html tab has, in the strip the box above keeps
+               clear for it — beside whichever of the two branches is drawing,
+               never over it, which is what `paddingRight` up there buys. Its
+               `v-if` is the wider question — is this an html file this app could
+               read — while the mode it is handed is the narrow one, so the button
+               is there in both states and only its glyph changes. The two share
+               that one condition deliberately: the lane and the button appear
+               and go together, and a strip reserved for a control that is not
+               drawn would be a margin nobody asked for. It is absent over a read
+               that refused, where the tab is an editor with a notice and there is
+               no document for a press to reach. -->
+          <DocumentModeToggle
+            v-if="htmlTabReadable"
+            :mode="documentTabActive ? 'document' : 'source'"
+            @toggle="toggleSource(project.activeTab)"
+          />
         </div>
-        <EmptyState v-else-if="healthNotice" v-bind="healthNotice">
-          <!-- What bd said, under the sentence about it: the diagnostic used to
-               go to the console alone, which asked a person to open developer
-               tools to find out why their board was empty. -->
-          <!-- And the same line under a refused folder, where it is the path
-               that was refused: "this folder" is one folder too few the moment
-               a project's own directory and its `.beads` can be refused apart. -->
-          <template
-            v-if="
-              (trackerState.health.state === 'error' ||
-                trackerState.health.state === 'folder-refused') &&
-              healthSaid
-            "
-            #detail
-          >
-            {{ healthSaid }}
-          </template>
-          <template v-if="trackerState.health.state === 'not-a-beads-repo'" #action>
-            <Button variant="primary" size="sm" :disabled="initing" @click="initHere">
-              {{ initing ? 'Initializing…' : 'Initialize bd' }}
-            </Button>
-          </template>
-          <template v-else-if="trackerState.health.state === 'no-project'" #action>
-            <Button variant="primary" size="sm" @click="onAddProject">Add project…</Button>
-          </template>
-          <!-- The deterministic door and the open-ended one, in that order and
-               in that weighting: repairing costs four seconds and fixes the
-               failure this screen was built for, while an agent costs a run and
-               tokens, so it is the second button rather than the only one. It
-               is offered on any failure, since there is nothing here that
-               classifies one. -->
-          <template v-else-if="trackerState.health.state === 'error'" #action>
-            <div :style="{ display: 'flex', gap: 'var(--space-3)' }">
-              <Button variant="primary" size="sm" :disabled="repairing" @click="repairHere">
-                {{ repairing ? 'Repairing…' : 'Repair tracker' }}
-              </Button>
-              <Button variant="ghost" size="sm" :disabled="repairing" @click="askAgentAboutTracker">
-                Ask an agent
-              </Button>
-            </div>
-          </template>
-          <!-- One button and no "Ask an agent" beside it: an agent cannot reach
-               the permission database, and a folder this app may not read is a
-               folder an agent started in it could not read either. Drawn only
-               where there is something to press — elsewhere the sentence above
-               carries the whole of what to do. -->
-          <template
-            v-else-if="
-              trackerState.health.state === 'folder-refused' &&
-              folderRefusedHasReset(trackerState.folderAccessRepair)
-            "
-            #action
-          >
-            <Button variant="primary" size="sm" :disabled="resettingAccess" @click="resetAccessHere">
-              {{ resettingAccess ? 'Resetting…' : 'Reset and restart' }}
-            </Button>
-          </template>
-        </EmptyState>
-        <KanbanBoard
-          v-else
-          :columns="drawnColumns"
-          :filtered="orderedColumns.length > 0"
-          :selected-id="highlightedTask"
-          :copied-id="copiedTaskId"
-          :copy-state="taskIdCopyState"
-          :add-to="ADD_TO"
-          :run-from="runOffered ? ADD_TO : null"
-          :run-blocked-reason="runBlockedReason"
-          :promote-from="PROMOTE_FROM"
-          @select="selectFromBoard"
-          @add="newTask()"
-          @run="openRun({ kind: 'queue' })"
-          @promote="openPromote"
-          @task-action="onTaskAction"
-          @copy-id="copyTaskId"
-          @reorder="project.columnOrder = mergeOrder($event, projectColumns)"
-        />
       </div>
 
       <Resizer

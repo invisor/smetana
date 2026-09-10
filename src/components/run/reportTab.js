@@ -1,4 +1,5 @@
-/* Which centre tabs are rendered documents rather than files to edit.
+/* Which centre tabs are rendered documents rather than files to edit, and which
+   of them are documents this project wrote for itself.
 
    Another of the `branchChoice.js` family — the whole of one rule, pure, with no
    Vue, no DOM and no Tauri in it. A `.vue` file is the one thing no test in this
@@ -18,7 +19,75 @@
    prompt. The two folders are kept apart because the documents are about
    different things and a person looking for one is not looking for the other;
    what they share is everything this file says about them, so the rule below
-   takes a list of folders rather than growing a second copy of itself. */
+   takes a list of folders rather than growing a second copy of itself.
+
+   **There are two rules here now, and they answer two different questions.**
+   `isDocumentPath` decides how a tab is *drawn*, and it asks nothing but the
+   extension: a `.html` file is a document wherever it sits, because a document
+   written to be read is one whether it landed in `.smetana/reviews/` or in the
+   `docs/` folder a project's own conventions sent it to. That second case is
+   what this rule was widened for — the report of a branch review opened as
+   markup in front of somebody, because the agent that wrote it followed its
+   project's rules rather than the path in the prompt, and no rule keyed on a
+   folder can be right about a folder it has never heard of.
+
+   `isReportPath` keeps the old, narrow question — is this one of *this
+   project's own* documents — and it has two callers left, both of which are
+   about belonging rather than about drawing: `reportTabPath`, which translates
+   a run's absolute path into a tab, and `reviewReportPath`, which composes the
+   path a review was told to write to. Neither may open an arbitrary file off
+   the disk, so neither may use the wide rule. */
+
+/* The byte no path on any filesystem may contain, and therefore the mark every
+   tab id that is *not* a path carries.
+
+   `diffId` and `termTabId` in `stores/tabs.js` are both built on it, and so is
+   `STUB_MARK` in `src/paths.js`; the literal is repeated here rather than
+   imported from any of the three, because what this file needs is the property
+   and not any one of their meanings — a report rule that imported the file
+   tree's stub marker would be borrowing a name for a different thing that
+   happens to use the same byte. What all four rely on is one sentence: an id in
+   `project.activeTab` that is not a path has a zero byte in it. */
+const NOT_A_PATH = '\u0000'
+
+/* Whether a tab is drawn as the document it is rather than as its source.
+
+   The extension and nothing else, upper case included — a file named `.HTML`
+   by a Windows tool or by a hand is the same document. `.htm` beside `.html`
+   for the same reason: the two have meant one thing since the eight-character
+   filename stopped being a constraint, and a person who has one of each in a
+   folder does not think of them as two kinds of file.
+
+   **The zero byte is refused first, and that clause is load-bearing rather than
+   defensive.** `project.activeTab` is not always a path: a diff's id is
+   `\u0000diff:<repo>\u0000<path>`, which *ends in the path*, so the extension test on
+   its own answers `true` for a diff of any `.html` — `src/index.html` in this
+   very repository. What follows from that is not a cosmetic fault: the document
+   branch is tried before the diff branch, a synthetic id has no buffer, and the
+   person gets an empty sandbox where their diff should be, with no error and
+   nothing to press. The old folder rule refused these ids as a side effect of
+   demanding a folder prefix; this one has to refuse them on purpose.
+
+   A terminal's id (`\u0000term:<n>`) does not end in a path and would have fallen
+   through anyway. It is covered by the same clause regardless, because the rule
+   worth writing is "this is not a path", not "this is not one of the two kinds
+   of id that exist today".
+
+   Anything that is not a string answers `false` rather than throwing. The value
+   is `null` before a project is open and `'terminal'` or `'kanban'` the rest of
+   the time.
+
+   No folder is consulted and no separator is refused, which is the whole
+   difference from `isReportPath`: this rule does not care where the file sits,
+   so there is nothing about its position for it to be wrong about. What draws
+   it is a sandboxed frame over the buffer this app already read, so a path it
+   answers `true` for is not a path it grants anything. */
+export function isDocumentPath(path) {
+  if (typeof path !== 'string') return false
+  if (path.includes(NOT_A_PATH)) return false
+  const name = path.toLowerCase()
+  return name.endsWith('.html') || name.endsWith('.htm')
+}
 
 /* Where `runs::service` writes a run's document. Project-relative, with the
    trailing slash, because that is the shape `openTabs` carries and comparing
@@ -37,18 +106,21 @@ export const REVIEWS_DIR = '.smetana/reviews/'
    no prefix. */
 const FOLDERS = [REPORTS_DIR, REVIEWS_DIR]
 
-/* True only for a document directly inside one of those folders.
+/* True only for a document directly inside one of those folders — one of *this
+   project's own* reports, which is a narrower question than how to draw it.
 
    Three things are refused and each for its own reason, and the three hold for
    both folders alike. Anything outside them, however it is named, is somebody's
-   own file — `src/index.html` opens in the editor like any other text. Anything
-   in one of them that is not `.html` is not a document to render — a stray note
-   there is text, and drawing it as a page would show a person their own words
-   with the markup eaten, which is precisely the `<report>.md` a review writes
-   beside its document. And a name carrying a separator at all is refused rather
-   than resolved: `files_read` already confines every path to the project root,
-   so this is not the boundary, but a path that climbs out of the folder is not
-   a report and this rule has no business pretending it can tell where it lands.
+   own file — `src/index.html` is not a report, though it is still drawn as a
+   document, because `isDocumentPath` above answers that and this does not.
+   Anything in one of them that is not `.html` is not a document to render — a
+   stray note there is text, and drawing it as a page would show a person their
+   own words with the markup eaten, which is precisely the `<report>.md` a
+   review writes beside its document. And a name carrying a separator at all is
+   refused rather than resolved: `files_read` already confines every path to the
+   project root, so this is not the boundary, but a path that climbs out of the
+   folder is not a report and this rule has no business pretending it can tell
+   where it lands.
 
    Anything that is not a string answers `false` rather than throwing. The value
    comes from `project.activeTab`, which is `null` before a project is open and
@@ -112,9 +184,13 @@ export function reportTabPath(report, root) {
    running has written nothing yet. A session doing anything else has no report
    to open, and the `kind` is the wire's own word — `SessionWork::ReviewBranch`
    under `#[serde(tag = "kind", rename_all = "camelCase")]`. And a composed path
-   that does not answer `isReportPath` is refused rather than opened: the rule
-   above is what decides the tab draws a document instead of an editor, so a
-   path it declines would open a page of HTML source in front of somebody. */
+   that does not answer `isReportPath` is refused rather than opened: `report` is
+   a field off the wire, so the arithmetic that produced it happened in another
+   process and could have produced anything, and a tab opened for it would be
+   this app reading a file somebody else named. It is `isReportPath` here and
+   deliberately not the wider `isDocumentPath`: what is being checked is that the
+   path is one this app itself composed for this project, not that it would draw
+   nicely. */
 export function reviewReportPath(session) {
   if (session?.state !== 'exited') return null
   const work = session?.work
