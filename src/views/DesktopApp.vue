@@ -332,6 +332,7 @@ import {
 } from '../stores/tabs.js'
 import FileEditor from '../components/files/FileEditor.vue'
 import DocumentModeToggle from '../components/files/DocumentModeToggle.vue'
+import { TOGGLE_LANE } from '../components/files/documentToggle.js'
 import DiffView from '../components/files/editor/DiffView.vue'
 import { keepOnly } from '../components/files/editor/states.js'
 
@@ -5635,21 +5636,35 @@ const panelFootStyle = {
   wordBreak: 'break-all'
 }
 const centerStyle = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }
-/* Everything under the tab row, and the only reason it is a box of its own is
-   `position: relative`: the html tab's toggle places itself in a corner, and
-   without an ancestor saying which box that corner belongs to it would find the
-   window. The rest is what the branches inside already had as children of the
-   column — a column of one item that takes the height left over — with
-   `minHeight: 0` added, which a flex item needs before it will let its own
-   content scroll rather than growing past the window. */
-const centerContentStyle = {
+/* Everything under the tab row, and the two reasons it is a box of its own are
+   the html tab's toggle. `position: relative` is the first: the toggle places
+   itself in a corner, and without an ancestor saying which box that corner is,
+   it would find the window.
+
+   **The padding is the second, and it is what keeps the toggle off the controls
+   underneath it.** An absolutely positioned child is placed against the padding
+   box, so a right-hand padding of `TOGGLE_LANE` puts the button in a strip
+   outside the content rather than over it — and over it was not a corner case:
+   `FileEditor`'s stale-file band pins `Reload` and `Keep mine` to that exact
+   corner, and they are the only way out of a file that changed on disk under an
+   unsaved buffer. `components/files/documentToggle.js` carries the measurements
+   and the arithmetic; what belongs here is that the lane is reserved for as long
+   as the toggle is drawn and never a moment longer, on the same `htmlTabReadable`
+   the button hangs off, so no other tab pays a pixel for it.
+
+   The rest is what the branches inside already had as children of the column — a
+   column of one item that takes the height left over — with `minHeight: 0`
+   added, which a flex item needs before it will let its own content scroll
+   rather than growing past the window. */
+const centerContentStyle = computed(() => ({
   flex: 1,
   minWidth: 0,
   minHeight: 0,
   display: 'flex',
   flexDirection: 'column',
-  position: 'relative'
-}
+  position: 'relative',
+  paddingRight: htmlTabReadable.value ? TOGGLE_LANE : undefined
+}))
 
 /* Collapsed, the column is the same rail AppShell reserves for one. */
 const rightStyle = computed(() => ({
@@ -6199,15 +6214,17 @@ const toastStackStyle = {
             @copy-id="copyTaskId"
             @reorder="project.columnOrder = mergeOrder($event, projectColumns)"
           />
-          <!-- The one control an html tab has, over whichever of the two
-               branches above is drawing it. Its `v-if` is the wider question —
-               is this an html file this app could read — while the mode it is
-               handed is the narrow one, so the button is there in both states
-               and only its glyph changes. It is absent over a read that refused,
-               where the tab is an editor with a notice and there is no document
-               for a press to reach. Last among the siblings and carrying its own
-               `--z-sticky`, so it paints over the frame and over the field
-               whatever order a browser would otherwise choose. -->
+          <!-- The one control an html tab has, in the strip the box above keeps
+               clear for it — beside whichever of the two branches is drawing,
+               never over it, which is what `paddingRight` up there buys. Its
+               `v-if` is the wider question — is this an html file this app could
+               read — while the mode it is handed is the narrow one, so the button
+               is there in both states and only its glyph changes. The two share
+               that one condition deliberately: the lane and the button appear
+               and go together, and a strip reserved for a control that is not
+               drawn would be a margin nobody asked for. It is absent over a read
+               that refused, where the tab is an editor with a notice and there is
+               no document for a press to reach. -->
           <DocumentModeToggle
             v-if="htmlTabReadable"
             :mode="documentTabActive ? 'document' : 'source'"

@@ -111,6 +111,7 @@ import {
   Toast,
   ToolCall,
   Tooltip,
+  TOGGLE_LANE,
   WindowControls
 } from '../components/index.js'
 import { gitActions } from '../components/git/gitActions.js'
@@ -5550,22 +5551,32 @@ const menuTargetStyle = {
     <section :style="sectionStyle">
       <div :style="headStyle">Html tab: document or source</div>
       <!-- The one control an html tab has, in both of the places it appears and
-           in both of its states. Each box is `position: relative` because the
-           toggle places itself in a corner and needs one to be a corner of — in
-           the app that box is the centre column's content, under the tab row.
+           in both of its states. Each box is what the centre column's content is
+           in the app: `position: relative`, because the toggle places itself in a
+           corner and needs one to be a corner of, and `paddingRight: TOGGLE_LANE`,
+           because that corner is reserved rather than shared — the constant is
+           `files/documentToggle.js`'s, read here for the same reason
+           `DesktopApp.vue` reads it, so the demo cannot drift from the app.
 
            The top box is the ordinary case: the document drawn, the glyph
            offering the source. The lower one is what a press gives you, the same
            bytes in the editor with html highlighting, and the glyph offering the
-           page back. What to check in all four theme × density combinations is
-           the resting opacity — the control has to be findable over a light
-           document and over a dark one without being a blot on either — and that
-           the pointer brings it to full strength with nothing moving. -->
+           page back — and it is drawn with the stale-file notice up, because that
+           band is what the toggle used to cover: its `Reload` and `Keep mine` sit
+           at the right end of the row the button is in, and they are the only way
+           out of a file that changed on disk. Nothing may overlap them in any of
+           the four combinations.
+
+           What else to check there: the resting opacity — the control has to be
+           findable beside a light document and beside a dark editor without being
+           a mark on either — and that the pointer brings it to full strength with
+           nothing moving. -->
       <div
         :style="{
           position: 'relative',
           display: 'flex',
           height: 'calc(var(--space-9) * 6)',
+          paddingRight: TOGGLE_LANE,
           border: 'var(--border-w) solid var(--border)'
         }"
       >
@@ -5577,10 +5588,16 @@ const menuTargetStyle = {
           position: 'relative',
           display: 'flex',
           height: 'calc(var(--space-9) * 6)',
+          paddingRight: TOGGLE_LANE,
           border: 'var(--border-w) solid var(--border)'
         }"
       >
-        <FileEditor :model-value="REPORT_HTML" path="docs/reviews-pr/review.html" read-only />
+        <FileEditor
+          :model-value="REPORT_HTML"
+          path="docs/reviews-pr/review.html"
+          read-only
+          :notice="{ tone: 'stale', text: 'This file changed on disk since it was opened.' }"
+        />
         <DocumentModeToggle mode="source" />
       </div>
     </section>

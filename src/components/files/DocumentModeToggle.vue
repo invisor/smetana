@@ -1,25 +1,35 @@
 <script setup>
 /* The one control on an html tab: the page, or the markup it is made of.
 
-   It sits in the top-right corner of whatever the tab is drawing — over the
-   sandboxed document, over the editor — because there is nowhere else for it to
-   go. The tab row above belongs to the tabs and is dragged; a toolbar strip
-   under it would be a permanent band of chrome across every file tab in the app
-   for the sake of one control that is right about `.html` and about nothing
-   else. So the corner, and so the position lives here rather than at the call
-   site: where this control is is part of what it is, and a second caller placing
-   it somewhere else would be a second answer to a question that has one.
-   Whatever draws it therefore has to be a positioned box — in the app that is
-   the centre column's content, in the gallery it is a box made for the purpose.
+   It sits in the top-right corner of whatever the tab is drawing, because there
+   is nowhere else for it to go. The tab row above belongs to the tabs and is
+   dragged; a toolbar strip under it would be a permanent band of chrome across
+   every file tab in the app for the sake of one control that is right about
+   `.html` and about nothing else. So the corner, and so the position lives here
+   rather than at the call site: where this control is is part of what it is, and
+   a second caller placing it somewhere else would be a second answer to a
+   question that has one.
+
+   **In the corner, and not over what is in it.** Whatever draws this has to be a
+   positioned box that keeps `TOGGLE_LANE` of its right side clear — as padding,
+   since an absolutely positioned child is placed against the padding box and so
+   lands in the strip rather than over the content. That is a rule about the
+   caller and it is written down in `documentToggle.js`, with the defect that
+   bought it: laid straight over the corner, this button covered the right end of
+   `FileEditor`'s stale-file band, whose `Reload` and `Keep mine` are the only
+   way out of a file that changed under an unsaved buffer, and the close button
+   of the search panel `editor/extensions.js` opens at the top.
 
    **Translucent at rest and whole under the pointer**, which is the whole of its
-   manners. It is drawn on top of somebody's document, so at full strength it
-   would be a permanent blot on the corner of every report; at
-   `--attn-quiet-opacity` it is legible enough to be found and quiet enough to be
-   forgotten, which is the same standing the cut rows in the file tree take under
-   that same token. Opacity and not a colour: the ground behind it is an
-   arbitrary document nothing here chose, so a value picked to recede against
-   `--surface` would be picked against the wrong thing.
+   manners. It stands at the edge of somebody's document and is the only thing of
+   the app's inside the tab's content, so at full strength it would be a
+   permanent mark in the corner of every report; at `--attn-quiet-opacity` it is
+   legible enough to be found and quiet enough to be forgotten, which is the same
+   standing the cut rows in the file tree take under that same token. Opacity and
+   not a colour, and that outlived the lane: the strip it sits in shows whatever
+   the centre column's ground is, while the document a hand's width away chose
+   its own, so a value mixed against `--surface` would be picked against one of
+   the two grounds and read wrongly beside the other.
 
    Nothing else about it moves. There is no transform and no scale on hover —
    `core/interactive.js`'s rule, which this file keeps by leaving the surface step
@@ -29,6 +39,7 @@ import { computed, ref } from 'vue'
 
 import IconButton from '../core/IconButton.vue'
 import { useInteractive } from '../core/interactive.js'
+import { TOGGLE_INSET } from './documentToggle.js'
 
 const props = defineProps({
   /* `document` while the sandboxed page is on screen, `source` while the editor
@@ -61,12 +72,19 @@ const label = computed(() => (showsDocument.value ? 'Show source' : 'Show docume
 
 const style = computed(() => ({
   position: 'absolute',
-  top: 'var(--space-3)',
-  right: 'var(--space-3)',
-  /* Over the document and under anything that opens on top of the app. The
-     frame and the editor are ordinary content, so `--z-sticky` is the step that
-     says "stays put over what scrolls" without reaching into the dropdown and
-     modal range. */
+  /* The same inset on both axes, and the horizontal one is the caller's too:
+     `TOGGLE_LANE` is this width plus this inset twice, so the button's left edge
+     comes to rest exactly one inset clear of the content. Both come out of the
+     one file, because two copies of that arithmetic is how the button gets back
+     on top of somebody's `Keep mine`. */
+  top: TOGGLE_INSET,
+  right: TOGGLE_INSET,
+  /* Nothing is drawn under it any more — the lane is the caller's to keep clear
+     — so this is no longer what makes it reachable. It is kept for what still
+     can reach the strip: content that overflows its own box, a CodeMirror
+     tooltip opening at the right-hand edge among it. `--z-sticky` is the step
+     that says "stays put over what scrolls" without reaching into the dropdown
+     and modal range. */
   zIndex: 'var(--z-sticky)',
   display: 'flex',
   /* Its own ground and border, which the button inside deliberately does not

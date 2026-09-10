@@ -483,15 +483,31 @@ buffers and deliberately **not** in `settings.json`: the default is the document
 exceptions, and it goes with the buffers on a restart because a person who read a report's markup
 last week is not asking for markup on Monday. `closeTab`, `renameTab` and the preview eviction in
 `openFile` keep it in step with the row; `resetTabs` empties it with the buffers. The press is
-`components/files/DocumentModeToggle.vue`, in the corner of the centre column and translucent at
-rest. In source mode the tab *is* an ordinary file tab — field, undo history, `dirty`, Cmd+S — and
-switching back shows the unsaved text, since the frame is built from that same buffer. An html file
-`files_read` refused is not a document at all: it falls through to the editor with its notice, and no
-toggle is drawn over an error a press cannot change. What shuts that frame is **two** things and not
-one: `sandbox=""` stops scripts and navigation but has never stopped a document *loading* a
-stylesheet, an image or a font, so `components/run/reportTheme.js` writes a content policy into the
-same string it stamps the theme on — `csp` in `tauri.conf.json` is `null` and there is nothing to
-inherit.
+`components/files/DocumentModeToggle.vue`, in the top-right corner of the centre column and
+translucent at rest. In source mode the tab *is* an ordinary file tab — field, undo history, `dirty`,
+Cmd+S — and switching back shows the unsaved text, since the frame is built from that same buffer. An
+html file `files_read` refused is not a document at all: it falls through to the editor with its
+notice, and no toggle is drawn over an error a press cannot change.
+
+**That corner is reserved rather than shared**, and the arithmetic is
+`components/files/documentToggle.js`: the centre's content box takes `TOGGLE_LANE` of right-hand
+padding for as long as the toggle is drawn, and the button — absolutely positioned, so placed against
+the padding box — lands in the strip that leaves. Laid straight over the corner it covered the right
+end of `FileEditor`'s stale-file band, whose `Reload` and `Keep mine` are the *only* way out of a
+file that changed on disk under an unsaved buffer, and the close button `@codemirror/search` pins to
+the top-right of its panel. Lowering the button under one band would not have held — the notice wraps
+on a long path and the search panel wraps by its own theme — where a reserved lane is right whatever
+the bands do, and clears the editor's scrollbar with them.
+
+What shuts that frame is **two** things and not one: `sandbox=""` stops scripts and navigation but
+has never stopped a document *loading* a stylesheet, an image or a font, so
+`components/run/reportTheme.js` writes a content policy into the same string it stamps the theme on —
+`csp` in `tauri.conf.json` is `null` and there is nothing to inherit. **Where both marks go is a walk
+over the document's prologue and never a search of the string**: a leading conditional comment, which
+is what an HTML5 Boilerplate header opens with, holds a `<html` of its own, and a policy written into
+a comment is inert with nothing anywhere to say so. The walk consumes only what can neither fetch nor
+open a raw-text context, so the meta is in front of every `<link>`, `<script>` and `<img>` whatever
+the file does.
 
 **The row is dragged into whatever order somebody wants, and the order is one row rather than four
 lists.** A terminal tab can stand between two files and a diff in front of all of them; the pinned
