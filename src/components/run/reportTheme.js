@@ -81,26 +81,39 @@
 
    **Two things have to be true of the anchor, and only the first is a property
    of that list.** Nothing consumable can fetch, so no `<link>`, `<script>`,
-   `<style>` or `<img>` is ever *before* the meta, and the worst a crafted
-   document can force is an anchor earlier than it needed to be — the meta at the
-   very front, which is live and first. The second is that the anchor is a
-   position the parser is between tokens at, and that one is a property of every
-   token *matching the tokenizer*, which is where this was wrong twice: once in
-   the comment endings, and once in a tag's `>` inside a quoted attribute value,
-   where the meta stopped being a meta and became attributes on somebody's
-   `<head>`. Each token below carries which of the spec's states it is written
+   `<style>` or `<img>` is ever *before* the meta. That half is unconditional and
+   it is the whole of what the list buys.
+
+   The second is that the anchor is a position the parser is between tokens at,
+   and that one is a property of every token *matching the tokenizer* — which is
+   where this has been wrong twice, once in the comment endings and once in a
+   tag's `>` inside a quoted attribute value. **The failure it produces is a
+   third outcome and not a late anchor**: the meta lands *inside a tag*, where it
+   is not a meta at all but a run of attributes on somebody's `<head>`, or lands
+   past a tag the parser has already closed, where it is a meta in the body and
+   ignored. Where the tokens do agree, the anchor can only ever be *earlier* than
+   it needed to be — the meta at the very front, live and first — and never
+   later. Each token below carries which of the spec's states it is written
    against.
 
    So the honest statement is measured rather than absolute: **against every form
-   below it has been driven through a real parser, both halves hold** — the forms
-   are the boilerplate header, a quoted `>` in a tag and in a doctype, the four
-   comment endings, an unterminated comment, a raw-text trap, an XML declaration,
-   a CDATA section, a BOM and a bare fragment. This is a scanner and not a
-   parser, so a construct nobody has thought of could still put the anchor
-   somewhere the parser is not; the failure would be what it was here, a meta
-   that is not one, with nothing on screen to say so. That is the residual, and
-   it is named rather than promised away. A new form found is a test below and a
-   token fixed here — never a note that it usually works.
+   in the tests, driven through a real parser, both halves hold** — the boilerplate
+   header, a quoted `>` in a tag and in a doctype, the four comment endings, an
+   unterminated comment, a raw-text trap, an XML declaration, a CDATA section, a
+   BOM and a bare fragment. Two forms are known **not** to hold and are pinned
+   there as they behave today rather than as they should: a quote inside an
+   *unquoted* attribute value (`<html a=b"c>d"e>`) and an `=` standing where an
+   attribute name goes (`<html = "a>b">`). Both make the scanner run past the
+   tokenizer's end of the tag, and Chromium then has the meta in the body with
+   the stylesheet fetched. Neither is closed here because a second pattern buys
+   one of the two — measured — and the honest fix is a small walk over the
+   attribute states, which is a task of its own.
+
+   This is a scanner and not a parser, so a construct nobody has thought of can
+   still put the anchor somewhere the parser is not, and the failure is silent.
+   That is the residual, and it is named rather than promised away. A new form
+   found is a test beside those two and a token fixed here — never a note that it
+   usually works.
 
    The comment token is one of the two that have to follow the tokenizer rather
    than approximate it, since ending a comment late would swallow real content
@@ -327,8 +340,10 @@ const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${CSP}">`
    That is deliberately narrower than what stood here, which added "and no
    content". Content is exactly how a file talked its way out twice — a `<html`
    inside a leading conditional comment, and then a `>` inside a quoted attribute
-   value, each of which put this meta somewhere it was not a meta. Both are
-   closed and both are pinned by tests, and what holds them closed is the walk
+   value, each of which put this meta somewhere it was not a meta. Those two are
+   closed and pinned by tests; **two more are known to be open** and are pinned
+   beside them as they behave today, a quote inside an unquoted attribute value
+   and an `=` where an attribute name goes. So what holds any of it is the walk
    above agreeing with the tokenizer, which is a thing measured against a list of
    forms rather than a thing proved. The header above carries that list and the
    residual it leaves. */

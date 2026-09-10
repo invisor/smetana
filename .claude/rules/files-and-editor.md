@@ -514,9 +514,12 @@ list. The other half is that the anchor is a place the parser is between tokens 
 only while each token matches the tokenizer: a comment ended late swallows real content, and a tag
 read as ending at a `>` inside a quoted attribute value puts the meta *inside the tag*, where a
 measurement in a sandboxed frame found no `<meta>` in the document at all, `head` wearing the policy
-as an attribute, and the stylesheet fetched. Both are closed and pinned by tests. **State it as
-measured against the forms those tests carry, never as "whatever the file does"** — this is a scanner
-and not a parser, and the residual is named in `reportTheme.js`'s own header.
+as an attribute, and the stylesheet fetched. Those two are closed and pinned by tests, and **two more
+are known to be open** — a quote inside an *unquoted* attribute value and an `=` standing where an
+attribute name goes — pinned beside them as they behave today rather than as they should, with the
+reason they were not closed. **State it as measured against the forms those tests carry, never as
+"whatever the file does"** — this is a scanner and not a parser, and the residual is named in
+`reportTheme.js`'s own header.
 
 **The row is dragged into whatever order somebody wants, and the order is one row rather than four
 lists.** A terminal tab can stand between two files and a diff in front of all of them; the pinned

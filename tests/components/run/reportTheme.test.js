@@ -337,6 +337,58 @@ describe('guarded', () => {
   })
 })
 
+/* Two forms where the scanner and the tokenizer disagree, pinned as they behave
+   **today** rather than as they should behave.
+
+   Both are the same fault: the tag scanner matches *past* the tokenizer's end of
+   the tag, so the meta lands after a `>` the parser has already left the tag on.
+   Measured in Chromium — `meta.parentElement === BODY`,
+   `document.head.contains(meta) === false`, and the stylesheet reaching the
+   socket, against a control document beside it answering `csp`. A policy in the
+   body is ignored outright, so for a document of either shape this module's one
+   guarantee is not in force.
+
+   **Neither is closed, and that is a decision.** A candidate regex was built for
+   the first and driven through Chromium: it closes form 1 and leaves form 2
+   byte-identical to what ships, so a second pattern buys one of the two and the
+   next form is found the same way. What honestly closes the class is a small
+   walk over the attribute states — name, `=`, then a value quoted three ways —
+   which is a task of its own rather than a patch here. Both need a document
+   written on purpose: `a=b"c>d"e` is a quote inside an *unquoted* value, and
+   `= "a>b"` is an `=` where an attribute name goes.
+
+   These assertions are here to be **found**, not to be satisfied. Whoever
+   changes the scanner will see them fail, and a failure is the news: it means
+   the disagreement moved. Read the sentence above before deciding which way to
+   rewrite them. */
+describe('where the walk is known to disagree with the tokenizer', () => {
+  const link = '<link rel=stylesheet href="https://cdn.example.com/a.css">'
+
+  it('runs past a quote inside an unquoted attribute value', () => {
+    // The tokenizer ends this tag at the first `>` — in the DOM the root
+    // carries `a="b\"c"` — while the pair of quotes reads `"c>d"` as a string
+    // and carries on to the second. So the meta goes after `e>`, which is body.
+    expect(guarded(`<!doctype html><html a=b"c>d"e>${link}`)).toBe(
+      `<!doctype html><html a=b"c>d"e>${policy()}${link}`
+    )
+    expect(guarded(`<!doctype html><head a=b"c>d"e>${link}`)).toBe(
+      `<!doctype html><head a=b"c>d"e>${policy()}${link}`
+    )
+  })
+
+  it('runs past an `=` standing where an attribute name goes', () => {
+    // `=` becomes the name, the space closes it, and the `"` is a parse error
+    // inside the next name — so the tag ends at the first `>`. The scanner
+    // reads `= "a>b"` as a quoted value instead.
+    expect(guarded(`<!doctype html><html = "a>b">${link}`)).toBe(
+      `<!doctype html><html = "a>b">${policy()}${link}`
+    )
+    expect(guarded(`<!doctype html><head = "a>b">${link}`)).toBe(
+      `<!doctype html><head = "a>b">${policy()}${link}`
+    )
+  })
+})
+
 describe('documentFor', () => {
   it('is the theme and the policy at once, which is what ReportView calls', () => {
     const out = documentFor(doc(), 'dark')
