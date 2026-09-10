@@ -1574,6 +1574,39 @@ export function installMockBackend() {
     if (command === 'sessions_list') {
       return mockSessions(payload?.project ?? MOCK_PROJECTS[0])
     }
+    /* The driven session's two reads. Nothing here is `sessions_list` above,
+       despite the neighbouring name: that one lists Claude Code's transcripts
+       off the disk, and these two are one live conversation the worker is
+       driving — `src-tauri/src/session/`.
+
+       An empty journal, and `ready` rather than the `starting` that
+       `session::model::state_of` answers for one — a deliberate departure and
+       not a mismatch. That function reads `starting` as "this session has not
+       produced anything *yet*", which is a promise about a child that is coming
+       up; a browser has no child and never will, so the session is idle rather
+       than starting, and answering `starting` would leave the panel waiting for
+       ever on the one verification this project has for a component.
+
+       `session_since` answers the same emptiness in the shape that command
+       takes — an array, never `null`, since `null` is the worker saying "the
+       journal no longer reaches back that far, take a fresh snapshot", which
+       would send the store round a repair loop over a gap that does not exist.
+       Nothing calls it yet: the store takes a whole snapshot on a gap and never
+       stitches one, so this arm is here for the command's own sake, answered
+       before a caller arrives rather than after somebody meets the rejection.
+
+       The four that write — `session_start`, `session_send`, `session_answer`
+       and `session_stop` — are deliberately not answered here and fall through
+       to the rejection below, exactly as `terminal_create` and `terminal_shell`
+       do and for the same reason: there is no child process in a browser, and a
+       message that looked as though it had reached an agent would be worse than
+       one that plainly did not. */
+    if (command === 'session_attach') {
+      return { events: [], seq: 0, state: 'ready' }
+    }
+    if (command === 'session_since') {
+      return []
+    }
     /* The session row's four verbs that leave this window — `sessions_open_log`,
        `sessions_open_cwd`, `sessions_reveal` and `sessions_delete` — are
        deliberately not answered here either, and for a plainer reason than the
