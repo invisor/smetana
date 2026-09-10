@@ -28,6 +28,7 @@ import {
   ClipboardPaste,
   Clock,
   Cloud,
+  Code,
   Columns3,
   Copy,
   CopyPlus,
@@ -36,6 +37,7 @@ import {
   Ellipsis,
   Eraser,
   ExternalLink,
+  Eye,
   File,
   FileCode,
   FilePen,
@@ -171,6 +173,15 @@ export const iconNodes = {
      entirely. */
   'file-plus': FilePlus,
   'folder-plus': FolderPlus,
+  /* The pair the html tab's corner toggles between, and they are one control
+     rather than two: each glyph names what the press *gives* you, never what is
+     on screen — `code` while the document is drawn, `eye` while its source is.
+     `file-code` above is deliberately not reused for it. That one says "this is
+     a file of code", which is a fact about a thing in a list; these say "show me
+     the code" and "show me the page", which are verbs, and the angle brackets
+     with no page around them are what makes the difference legible at 15px. */
+  code: Code,
+  eye: Eye,
   /* The same menu's clipboard group. The scissors and the clipboard with an
      arrow into it are what every file manager on every platform draws for cut
      and paste, and this menu is not the place to be original about either.

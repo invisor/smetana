@@ -13,6 +13,13 @@ plus `src/components/run/`. It sits on top of the other two workers rather than 
 no board and no PTY, and `lib.rs` hands it clones of both handles so it queues behind them like every
 other caller.
 
+**Three files under `src/components/run/` are not about runs at all any more, and their prose lives
+elsewhere.** `ReportView.vue`, `reportTheme.js` and `reportTab.js` draw every `.html` in the project
+now, not only a run's own document — what decides that a tab is a document, where the theme stamp and
+the content policy are put into the string, and why the sandbox alone does not shut the frame are all
+in `.claude/rules/files-and-editor.md`, whose `paths:` do not cover this directory. Read that before
+touching any of the three.
+
 | file | what it does |
 |---|---|
 | `model.rs` | `Run`, `RunSettings`, `RunScope`, `RunMode`, `RunState`, `StopReason`, `RunError` — the vocabulary, and the settings rules that are not the dialog's to keep |

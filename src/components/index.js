@@ -83,6 +83,8 @@ export { parseAnsi } from './agent/ansi.js'
 
 // files
 export { default as DiffView } from './files/editor/DiffView.vue'
+export { default as DocumentModeToggle } from './files/DocumentModeToggle.vue'
+export { TOGGLE_BOX, TOGGLE_INSET, TOGGLE_LANE } from './files/documentToggle.js'
 export { default as FileEditor } from './files/FileEditor.vue'
 export { default as FileTree } from './files/FileTree.vue'
 export { default as FileTreeDraftRow } from './files/FileTreeDraftRow.vue'
