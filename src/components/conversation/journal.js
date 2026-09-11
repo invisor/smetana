@@ -93,10 +93,19 @@ export function journalRows(events = []) {
    green. Here, the list is one grep and one test away from whoever renames it.
 
    `needs-you` counts as busy: the turn is open and what to do about it is the
-   permission card above the field, not another message. `ready`, `exited` and
-   `failed` are the three that are not, and a word this front end has never
-   heard of is not either — the honest reading of "we do not know that the agent
-   is working" is to leave the person able to type. */
-const BUSY = ['starting', 'running', 'needs-you']
+   permission card above the field, not another message. `starting`, `ready`,
+   `exited` and `failed` are the four that are not, and a word this front end
+   has never heard of is not either — the honest reading of "we do not know that
+   the agent is working" is to leave the person able to type.
+
+   **`starting` is on that side, and the reason is worth keeping written down.**
+   A driven session is started with `--input-format stream-json`, and a harness
+   parked on its own stdin says nothing whatever: the journal stays empty, which
+   is what `state_of` in `session::model` calls `starting`. Counted as a turn in
+   flight, that state closed the only road out of itself — it ends at the first
+   event, the first event is the `TurnStart` the worker appends when a message
+   is sent, and the button that sends one had become Stop. A new agent sat at an
+   empty panel with a composer that refused every key, for good. */
+const BUSY = ['running', 'needs-you']
 
 export const isBusy = (state) => BUSY.includes(state)

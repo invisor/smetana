@@ -133,8 +133,19 @@ describe('the journal as rows', () => {
    whole of a turn — somebody could fire messages into a working agent with no
    way to stop it, and every gate in this repository would stay green. */
 describe('whether the agent is working', () => {
-  it('counts a session coming up, one in a turn, and one holding a question', () => {
-    expect(['starting', 'running', 'needs-you'].map(isBusy)).toEqual([true, true, true])
+  it('counts one in a turn, and one holding a question', () => {
+    expect(['running', 'needs-you'].map(isBusy)).toEqual([true, true])
+  })
+
+  /* **A session that has yet to say anything is waiting, not working**, and it
+     is waiting for the person. The harness this app drives is started with
+     `--input-format stream-json` and says nothing at all until it is sent a
+     message, so a new session's journal is empty and `state_of` calls that
+     `starting`. Counted as a turn in flight, it left the composer's one button
+     on Stop — and the only thing that ends the state is the message that button
+     refuses to send, so nobody could say the first word to a new agent. */
+  it('does not count a session that has yet to say anything', () => {
+    expect(isBusy('starting')).toBe(false)
   })
 
   it('does not count a session waiting on a person, or one that has ended', () => {

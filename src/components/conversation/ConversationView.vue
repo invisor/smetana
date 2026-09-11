@@ -401,15 +401,20 @@ const refusal = {
         title="No conversation"
         description="Start an agent to open one."
       />
+      <!-- One sentence and not two. `starting` used to draw "Starting the
+           agent" here, on the assumption that a session says something of its
+           own accord and the panel is waiting on it. It is the other way round:
+           a driven session is spawned with `--input-format stream-json` and
+           waits on the person, so every empty panel this app can open is one
+           nobody has spoken into yet. The sentence that told somebody to wait
+           was the visible half of the deadlock `journal.js`'s `BUSY` describes
+           — it named the agent as the one still to move while the composer
+           refused the only move there was. -->
       <EmptyState
         v-else-if="!rows.length"
         icon="message-square"
-        :title="state === 'starting' ? 'Starting the agent' : 'Nothing said yet'"
-        :description="
-          state === 'starting'
-            ? 'The first words appear here as soon as it has any.'
-            : 'Send a message to begin.'
-        "
+        title="Nothing said yet"
+        description="Send a message to begin."
       />
       <template v-else>
         <template v-for="row in rows" :key="row.key">
