@@ -85,20 +85,31 @@ const HTTP_SCHEME = /^(https?):\/\//i
    colon never opens the string, and a Windows absolute path reaching this
    parser is not a case any fixture in this project has needed yet.
 
-   **The lookahead is not the whole answer, and it is worth being exact about
-   the piece it leaves open.** It separates a dotted scheme from a dotted
-   *file name* only when the two differ in what follows the colon — a `/`
-   against a digit. A dotted scheme with a digit directly after its own colon
-   and no `/` anywhere, `com.example.app:41`, has the identical shape
-   `LOOKS_LIKE_PATH` accepts a real one by (a dot, a short alphanumeric run,
-   a line-shaped suffix), and nothing in either regex can tell the two apart
-   without a dictionary of real extensions or real scheme names — which
-   this module deliberately does not keep, for the same reason it refuses by
-   shape rather than by a list two paragraphs up. It reads as local, the same
-   as `tauri.conf.json:41` does and must. This is not the residual gap
-   `LOOKS_LIKE_PATH`'s own header names (`foo:1/bar`, which needs a `/` as
-   well) — it is a second, narrower one, worth naming here rather than
-   discovering by surprise. */
+   **What this closes and what it does not, stated plainly so the second
+   half is not rediscovered as a bug.** Closed: `com.example.app://…`, the
+   realistic shape of a reverse-DNS deep link, `//` after the colon and
+   declined like any other scheme. **Not closed**: `com.example.app:41` — a
+   dotted scheme followed by a bare number, no `/` anywhere. The lookahead
+   separates a dotted scheme from a dotted *file name* only by what follows
+   the colon, a `/` against a digit, and `com.example.app:41` has the digit,
+   so it passes the lookahead and reaches `LOOKS_LIKE_PATH` below with the
+   identical shape a real file and a line number has — a dot, a short
+   alphanumeric run, a line-shaped suffix — and reads as local, the same as
+   `tauri.conf.json:41` does and must: nothing in either regex can tell the
+   two apart, and nothing should try to. An allow-list of real extensions was
+   considered and refused for the reason `LOOKS_LIKE_PATH`'s own header
+   already gives for reading "any short alphanumeric run" rather than a
+   list — this repository alone holds `.js`, `.vue`, `.rs`, `.toml`, `.json`,
+   `.md`, `.css`, `.mjs` and `.py`, a list a person keeps by hand goes stale
+   the first time somebody adds a file type nobody thought of, and at that
+   point a real path stops being a link with nothing on screen to say why.
+   `com.example.app:41` is not a construct anybody writes by accident either
+   — it only becomes a link at all inside an explicit `[label](target)`,
+   which somebody has to type on purpose — so the realistic case is closed
+   and this one is left as a documented, accepted gap rather than chased.
+   This is not the residual gap `LOOKS_LIKE_PATH`'s own header names
+   (`foo:1/bar`, which needs a `/` as well) — it is a second, narrower one,
+   worth naming here rather than discovering by surprise. */
 const OTHER_SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d)/
 
 /* The positive shape a scheme-less target has to have before it is read as
