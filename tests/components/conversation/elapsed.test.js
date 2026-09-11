@@ -1,25 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { formatDuration, formatElapsedClock } from '../../../src/components/conversation/elapsed.js'
+import { formatReceiptDuration, formatElapsedClock } from '../../../src/components/conversation/elapsed.js'
 
 describe('the receipt duration', () => {
   it('spells anything under a second in milliseconds', () => {
-    expect(formatDuration(840)).toBe('840 ms')
-    expect(formatDuration(0)).toBe('0 ms')
+    expect(formatReceiptDuration(840)).toBe('840 ms')
+    expect(formatReceiptDuration(0)).toBe('0 ms')
   })
 
   it('spells a second up to a minute to a tenth of a second', () => {
-    expect(formatDuration(4200)).toBe('4.2 s')
-    expect(formatDuration(13000)).toBe('13.0 s')
+    expect(formatReceiptDuration(4200)).toBe('4.2 s')
+    expect(formatReceiptDuration(13000)).toBe('13.0 s')
   })
 
   it('spells a minute and over as minutes and whole seconds', () => {
-    expect(formatDuration(124300)).toBe('2 m 04 s')
-    expect(formatDuration(134000)).toBe('2 m 14 s')
+    expect(formatReceiptDuration(124300)).toBe('2 m 04 s')
+    expect(formatReceiptDuration(134000)).toBe('2 m 14 s')
   })
 
   it('reads a missing or non-numeric value as zero', () => {
-    expect(formatDuration(undefined)).toBe('0 ms')
-    expect(formatDuration(null)).toBe('0 ms')
+    expect(formatReceiptDuration(undefined)).toBe('0 ms')
+    expect(formatReceiptDuration(null)).toBe('0 ms')
   })
 })
 

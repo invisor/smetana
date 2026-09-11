@@ -35,7 +35,7 @@
    guessed zero — the same omission `TurnResult.vue` gives a cost the harness
    did not report. The spelling is `elapsed.js`'s `formatElapsedClock`, the
    same compact, whole-second voice the strip's own `waiting` and `failed`
-   moments use, and deliberately not `formatDuration`'s decimal one: this is a
+   moments use, and deliberately not `formatReceiptDuration`'s decimal one: this is a
    number read once, after the fact, the way `waiting`'s ticking clock is read
    while it moves, not the receipt's own tenth-of-a-second precision.
 

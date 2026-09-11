@@ -114,9 +114,15 @@ onBeforeUnmount(() => {
   if (attached !== null) detach(attached)
 })
 
+const state = computed(() => held.value?.state ?? 'starting')
+const busy = computed(() => isBusy(state.value))
+
 /* The journal as rows to draw — `journal.js`, which is where the fold and the
-   translation are written and tested. */
-const rows = computed(() => journalRows(held.value?.events ?? []))
+   translation are written and tested. `state` is the second argument for one
+   row alone: a turn the events never closed (`Chunk::Eof` with no `Error`,
+   which is what `Stop` itself reaches) is read against it rather than left
+   `waiting` forever next to a header that already reads `failed`. */
+const rows = computed(() => journalRows(held.value?.events ?? [], state.value))
 
 /* The question the session is waiting on, derived by the store and never stored
    there — see its own note. Drawn at the foot of the panel rather than in the
@@ -130,9 +136,6 @@ const ourRefusal = computed(() =>
     ? conversationState.lastError.text
     : ''
 )
-
-const state = computed(() => held.value?.state ?? 'starting')
-const busy = computed(() => isBusy(state.value))
 
 /* Who is on the other end. None of this is on the wire — `session_attach`
    answers with the journal, the sequence number and the state, and nothing

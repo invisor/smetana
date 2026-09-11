@@ -27,8 +27,17 @@
    and leaves the clock running, because the clock is not motion for its own
    sake — it is the one question this element answers.
 
+   **`role="status"` on `waiting` is an implicit `aria-live="polite"`, and the
+   ticking `<time>` inside it is the one thing that must not be read out
+   every second** — a screen reader would otherwise say "Claude Code is
+   thinking 5s", "… 6s", "… 7s" for the length of the turn, drowning the one
+   sentence the region exists to announce. `aria-hidden="true"` on `waiting`'s
+   `<time>` (contract section 9's own allowlist) leaves the sentence announced
+   once, on mount, and the clock a purely visual one from then on — `done` and
+   `failed` carry no `role`, so their own `<time>` needs no such hiding.
+
    **The two clocks are deliberately not the same clock.** `done`'s `<time>`
-   is `elapsed.js`'s `formatDuration`, the wire's own `ms` read to a tenth of a
+   is `elapsed.js`'s `formatReceiptDuration`, the wire's own `ms` read to a tenth of a
    second — a number worth that precision once, after the fact. `waiting` and
    `failed` read `formatElapsedClock` instead, whole seconds spelled the way a
    clock somebody is watching move is spelled: `4s`, `2m 14s`. `waiting` is the
@@ -51,7 +60,7 @@
    is the journal `ConversationView.vue` draws, and that landing is
    smetana-e3mc's, not this task's. */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { formatDuration, formatElapsedClock } from './elapsed.js'
+import { formatReceiptDuration, formatElapsedClock } from './elapsed.js'
 
 const props = defineProps({
   /* `waiting`, `done` or `failed` — `journal.js`'s own three words, and the
@@ -135,7 +144,7 @@ const primaryText = computed(() => {
 const timeText = computed(() => {
   if (props.state === 'waiting') return formatElapsedClock(waitingElapsedMs.value)
   if (props.state === 'failed') return formatElapsedClock(props.ms)
-  return formatDuration(props.ms)
+  return formatReceiptDuration(props.ms)
 })
 </script>
 
@@ -144,7 +153,7 @@ const timeText = computed(() => {
     <div :data-activity="state" :role="state === 'waiting' ? 'status' : undefined">
       <span v-if="state !== 'done'" data-mark></span>
       <span>{{ primaryText }}</span>
-      <time>{{ timeText }}</time>
+      <time :aria-hidden="state === 'waiting' ? 'true' : undefined">{{ timeText }}</time>
     </div>
   </div>
 </template>

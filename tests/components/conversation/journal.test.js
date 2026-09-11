@@ -80,12 +80,17 @@ describe('the journal as rows', () => {
      yet draws one row, at the very end, keyed by the `turn-start` itself since
      there is no closing event to mint a key under. `startedAt` is the
      `turn-start`'s own `at` — the ticking clock is `TurnResult.vue`'s to build
-     from it, since nothing pure can know "now". */
-  it('draws the strip waiting while a turn is still open', () => {
-    const rows = journalRows([
-      event(1, 'turn-start', { by: 'person', at: '2026-09-10T12:00:04Z' }),
-      event(2, 'user-message', { text: 'hello' })
-    ])
+     from it, since nothing pure can know "now". Only reachable while the
+     session's own `state` still counts as a turn in flight — `running` here,
+     `needs-you` in the fixture below — which is the second argument. */
+  it('draws the strip waiting while a turn is still open and the session is busy', () => {
+    const rows = journalRows(
+      [
+        event(1, 'turn-start', { by: 'person', at: '2026-09-10T12:00:04Z' }),
+        event(2, 'user-message', { text: 'hello' })
+      ],
+      'running'
+    )
 
     expect(rows.at(-1)).toEqual({
       key: 1,
@@ -93,6 +98,48 @@ describe('the journal as rows', () => {
       state: 'waiting',
       startedAt: '2026-09-10T12:00:04Z'
     })
+  })
+
+  /* **A turn the events never closed is not always `waiting`.** `Chunk::Eof`
+     — a shell window closing, or `Stop` itself, since `ClaudeDriver::interrupt`
+     always answers `None` and the worker reaches for `start_kill()` — sets the
+     session `failed` while appending no `Error` at all. Read against the
+     events alone this would stay `waiting` forever, ticking beside a header
+     that already reads `failed`; `state` says otherwise, so the strip closes
+     too, with no words of its own and an elapsed figure off the last event
+     this batch still holds. */
+  it('closes the strip failed when the session already has, and the events never did', () => {
+    const rows = journalRows(
+      [
+        event(1, 'turn-start', { by: 'person', at: '2026-09-10T12:00:00Z' }),
+        event(2, 'user-message', { text: 'rename the worktree', at: '2026-09-10T12:00:00Z' }),
+        event(3, 'text', { text: 'working on it', at: '2026-09-10T12:03:41Z' })
+      ],
+      'failed'
+    )
+
+    expect(rows.at(-1)).toEqual({ key: 1, kind: 'activity', state: 'failed', text: '', ms: 221000 })
+  })
+
+  /* The two `SessionState`s that keep a turn `waiting` — `running` and
+     `needs-you` — against everything else, which closes it. `starting` is
+     included on the safe side: the honest reading of "we do not know the
+     agent is working" is the same one `isBusy` itself gives. */
+  it('closes the strip failed for every state that is not busy', () => {
+    const at = (state) =>
+      journalRows(
+        [event(1, 'turn-start', { by: 'person', at: '2026-09-10T12:00:00Z' })],
+        state
+      ).at(-1).state
+
+    expect(['ready', 'exited', 'failed', 'starting', undefined].map(at)).toEqual([
+      'failed',
+      'failed',
+      'failed',
+      'failed',
+      'failed'
+    ])
+    expect(['running', 'needs-you'].map(at)).toEqual(['waiting', 'waiting'])
   })
 
   /* **The strip's `failed` moment**: an `error` closes an *open* turn `failed`
@@ -166,11 +213,14 @@ describe('the journal as rows', () => {
      foot of the panel — once, where they are answered — and produce no row of
      their own here, open turn or not. */
   it('draws no row for either half of a permission, leaving the open turn waiting', () => {
-    const rows = journalRows([
-      event(1, 'turn-start', { by: 'person', at: '2026-09-10T12:00:00Z' }),
-      event(2, 'permission', { id: 'q1', tool: 'Bash', detail: 'ls', options: ['allow'] }),
-      event(3, 'permission-answered', { id: 'q1', decision: 'allow' })
-    ])
+    const rows = journalRows(
+      [
+        event(1, 'turn-start', { by: 'person', at: '2026-09-10T12:00:00Z' }),
+        event(2, 'permission', { id: 'q1', tool: 'Bash', detail: 'ls', options: ['allow'] }),
+        event(3, 'permission-answered', { id: 'q1', decision: 'allow' })
+      ],
+      'needs-you'
+    )
 
     expect(rows).toEqual([
       { key: 1, kind: 'activity', state: 'waiting', startedAt: '2026-09-10T12:00:00Z' }

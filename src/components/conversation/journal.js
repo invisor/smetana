@@ -45,10 +45,24 @@
    also uses `EventKind::Error` for a message that never reached a session with
    nothing open at all (`Request::Send` against a dead child), and that one is
    not a turn ending, it is the worker saying where the words went instead; it
-   keeps the old bare `error` row a turn's fold has no share in. A turn still
-   open when the batch ends draws `waiting`, carrying the `turn-start`'s own
-   `at` rather than a duration — nothing pure can compute how long "now" is,
-   which is `TurnResult.vue`'s own clock to tick.
+   keeps the old bare `error` row a turn's fold has no share in.
+
+   **A turn still open when the batch ends is not always `waiting`.** The
+   commoner of the two is a live one — `waiting`, carrying the `turn-start`'s
+   own `at` rather than a duration, since nothing pure can compute how long
+   "now" is, which is `TurnResult.vue`'s own clock to tick. But `Chunk::Eof`
+   (`session::service`, an agent process ending on its own) sets the session's
+   own state `failed` while appending **no** `Error` at all — closing a shell
+   window, and `Stop` itself, both end there, since `ClaudeDriver::interrupt`
+   answers `None` and `Request::Stop` reaches for `start_kill()` outright. A
+   turn read against the events alone would stay `waiting` forever in that
+   case, its clock still climbing next to a header that already reads
+   `failed` and a composer already reading Send again — which is why `state`
+   is the second argument here: `!isBusy(state)` on a turn the events never
+   closed closes it `failed` too, with an elapsed figure off the last event's
+   own `at` in place of one `Error` never sent, and no words, since none were
+   given. This is the strip's only reader of `state` — every other row is the
+   events alone.
 
    `Error` carries no duration of its own — `session::model::EventKind::Error`
    is `{ text }`, full stop — so a `failed` turn's elapsed time is the one this
@@ -62,10 +76,41 @@
    rather than a guess at zero.
 
    `key` is the event's own `seq`, which the worker mints from one counter per
-   session and never reuses — except `waiting`, keyed by the `turn-start` that
-   opened the turn it is still describing, since no closing event exists yet to
-   mint one under. */
-export function journalRows(events = []) {
+   session and never reuses — except the trailing `waiting` or crash-closed
+   `failed`, both keyed by the `turn-start` that opened the turn they are
+   still describing, since neither has a closing event of its own to mint a
+   key under. */
+
+/* Whether the agent is working, which is what turns the composer's one button
+   into Stop — moved above `journalRows` because its trailing branch is now a
+   second reader of it.
+
+   **A closed list of `session::model::SessionState`'s wire words, and the
+   sharpest reason anything here is outside the component.** Rename `Running` on
+   the Rust side and a `.vue` file holding this list would stop showing the Stop
+   button for the whole of a turn — a person could fire messages into a working
+   agent with no way to stop it, and every gate in this repository would stay
+   green. Here, the list is one grep and one test away from whoever renames it.
+
+   `needs-you` counts as busy: the turn is open and what to do about it is the
+   permission card above the field, not another message. `starting`, `ready`,
+   `exited` and `failed` are the four that are not, and a word this front end
+   has never heard of is not either — the honest reading of "we do not know that
+   the agent is working" is to leave the person able to type.
+
+   **`starting` is on that side, and the reason is worth keeping written down.**
+   A driven session is started with `--input-format stream-json`, and a harness
+   parked on its own stdin says nothing whatever: the journal stays empty, which
+   is what `state_of` in `session::model` calls `starting`. Counted as a turn in
+   flight, that state closed the only road out of itself — it ends at the first
+   event, the first event is the `TurnStart` the worker appends when a message
+   is sent, and the button that sends one had become Stop. A new agent sat at an
+   empty panel with a composer that refused every key, for good. */
+const BUSY = ['running', 'needs-you']
+
+export const isBusy = (state) => BUSY.includes(state)
+
+export function journalRows(events = [], state) {
   const rows = []
   const calls = new Map()
   /* The turn open right now, if any — never more than one, since a person
@@ -74,7 +119,10 @@ export function journalRows(events = []) {
      the loop if nothing did. */
   let openAt = null
   let openSeq = null
-  const elapsedSince = (at) => (openAt == null ? null : Date.parse(at) - Date.parse(openAt))
+  /* `null` rather than `NaN` where either stamp is missing — the wire always
+     sends one, but a `NaN` would pass `TurnResult`'s `type: Number` check and
+     draw `0s`, indistinguishable from a turn that genuinely took none. */
+  const elapsedSince = (at) => (openAt == null || at == null ? null : Date.parse(at) - Date.parse(openAt))
 
   for (const event of events) {
     if (event.kind === 'turn-start') {
@@ -128,36 +176,24 @@ export function journalRows(events = []) {
   }
 
   if (openAt != null) {
-    rows.push({ key: openSeq, kind: 'activity', state: 'waiting', startedAt: openAt })
+    if (isBusy(state)) {
+      rows.push({ key: openSeq, kind: 'activity', state: 'waiting', startedAt: openAt })
+    } else {
+      /* The events said nothing closed this turn, but the session's own state
+         already has — `Chunk::Eof` with nothing journalled, which is `Stop`,
+         a shell window closing, or any other end that rang no `Error`. `text`
+         is blank rather than invented, since the worker gave none; `ms` is the
+         gap to the last event this batch actually holds, in place of the one
+         a real `error` would have closed on. */
+      rows.push({
+        key: openSeq,
+        kind: 'activity',
+        state: 'failed',
+        text: '',
+        ms: elapsedSince(events[events.length - 1].at)
+      })
+    }
   }
 
   return rows
 }
-
-/* Whether the agent is working, which is what turns the composer's one button
-   into Stop.
-
-   **A closed list of `session::model::SessionState`'s wire words, and the
-   sharpest reason anything here is outside the component.** Rename `Running` on
-   the Rust side and a `.vue` file holding this list would stop showing the Stop
-   button for the whole of a turn — a person could fire messages into a working
-   agent with no way to stop it, and every gate in this repository would stay
-   green. Here, the list is one grep and one test away from whoever renames it.
-
-   `needs-you` counts as busy: the turn is open and what to do about it is the
-   permission card above the field, not another message. `starting`, `ready`,
-   `exited` and `failed` are the four that are not, and a word this front end
-   has never heard of is not either — the honest reading of "we do not know that
-   the agent is working" is to leave the person able to type.
-
-   **`starting` is on that side, and the reason is worth keeping written down.**
-   A driven session is started with `--input-format stream-json`, and a harness
-   parked on its own stdin says nothing whatever: the journal stays empty, which
-   is what `state_of` in `session::model` calls `starting`. Counted as a turn in
-   flight, that state closed the only road out of itself — it ends at the first
-   event, the first event is the `TurnStart` the worker appends when a message
-   is sent, and the button that sends one had become Stop. A new agent sat at an
-   empty panel with a composer that refused every key, for good. */
-const BUSY = ['running', 'needs-you']
-
-export const isBusy = (state) => BUSY.includes(state)

@@ -3,7 +3,7 @@
    reason every module in this family sits outside the component that draws
    it: a `.vue` file is the one thing no runner in this repository can reach.
 
-   `formatDuration` is the receipt's own voice: a number somebody reads once,
+   `formatReceiptDuration` is the receipt's own voice: a number somebody reads once,
    after the fact, so it is worth a tenth of a second under a minute. It moved
    here from `TurnResult.vue` unchanged — the strip's `done` moment still
    spells `13.0 s` this way, and past a minute `2 m 14 s`, with a space either
@@ -20,7 +20,7 @@
    ticking clock printed with one would flicker a digit that means nothing at
    a whole-second refresh. */
 
-export function formatDuration(ms) {
+export function formatReceiptDuration(ms) {
   const value = Number(ms) || 0
   if (value < 1000) return `${Math.round(value)} ms`
   if (value < 60000) return `${(value / 1000).toFixed(1)} s`
