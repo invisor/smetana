@@ -109,6 +109,28 @@ function hold(id) {
   return fresh
 }
 
+/* `session::model::SessionState` in the design system's status vocabulary.
+
+   The translation lives in a store for the reason the terminal's own lives in
+   `terminals.js` — `toUiState` there is the shape this follows rather than a
+   second reading of the same question — and it is deliberately not a copy of
+   that function: the two vocabularies differ, since a driven session has no
+   exit code to read and `state_of` has already decided which of the two endings
+   this was.
+
+   `starting` is a session that has not spoken yet, which is a live thing and so
+   `running`; `exited` is a turn that was closed when the child went, which is
+   an ordinary end and so `done`. `ready`, `running`, `needs-you` and `failed`
+   are already this system's words and pass through. So does a word this front
+   end has never heard of, which `status/status.js` answers with a generated
+   colour and a two-letter code — the honest outcome for a state added to Rust
+   and not yet to this list. */
+export function statusOf(state) {
+  if (state === 'starting') return 'running'
+  if (state === 'exited') return 'done'
+  return state
+}
+
 /* What a component draws: `{ events, state, question, draft }`, reactive, with
    `draft` writable. Never null — see `hold`.
 
@@ -311,6 +333,35 @@ function listenToState() {
   })
 }
 
+/* Which driven sessions this window has started, and in which project.
+
+   Kept beside the conversations rather than read out of them, because the two
+   answer different questions. `conversations` above is what this window is
+   drawing *right now*, and `detach` empties it the moment a panel goes away;
+   this says which sessions a project has at all, which is what the centre's
+   Agent tab is derived from (`hasAgentTab` in `stores/tabs.js`). Derived from
+   the other, that tab would disappear the moment somebody looked at the board
+   and take the way back to their agent with it.
+
+   **Nothing takes an entry out, and that is the terminal's behaviour rather
+   than an omission.** A session whose child has gone keeps its row and its tab
+   there until somebody closes it, on the grounds that the last words of
+   whatever was running are worth reading; here there is not even a process to
+   close, only a journal the worker still holds. A restart empties this, driven
+   sessions deliberately not surviving one — the same repair `restoreTabs`
+   already makes for a remembered `activeTab: "terminal"`.
+
+   The project is the path `startConversation` was given, which is the same
+   string the terminal store keys its own sessions by: the project's own
+   folder. */
+const started = reactive([])
+
+/* The driven sessions of one project, oldest first. An array of ids rather than
+   of records, because that is the whole of what a caller wants — the tab is
+   derived from whether there are any, and the panel from which one is picked. */
+export const conversationsIn = (project) =>
+  started.filter((session) => session.project === project).map((session) => session.id)
+
 /* Start a driven session and hold it. The id is the answer; `null` means it did
    not start, and the sentence saying why is in `lastError`.
 
@@ -323,6 +374,12 @@ export async function startConversation(project, intent = { kind: 'bare' }) {
   try {
     const id = await invoke('session_start', { project, intent })
     conversationState.lastError = null
+    /* Before the attach rather than after it: the Agent tab is derived from
+       this list, and a session held only once its snapshot had come back would
+       leave the button somebody pressed with no visible effect for the length
+       of a spawn — the same reason `terminalState.starting` exists one
+       subsystem over. */
+    started.push({ id, project })
     await attach(id)
     return id
   } catch (err) {

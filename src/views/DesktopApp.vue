@@ -83,7 +83,7 @@ import Skeleton from '../components/core/Skeleton.vue'
 import Icon from '../components/core/Icon.vue'
 import Tooltip from '../components/core/Tooltip.vue'
 import IconButton from '../components/core/IconButton.vue'
-import { CommandPalette, TaskSearchButton, TerminalView } from '../components/index.js'
+import { CommandPalette, ConversationView, TaskSearchButton, TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import { agentKey, conversationsOf, orderAgents } from '../components/agent/agentOrder.js'
 import SessionRow from '../components/agent/SessionRow.vue'
@@ -129,6 +129,13 @@ import {
   send,
   terminalState
 } from '../stores/terminals.js'
+/* The other half of the Agent tab. A `Bare` session is driven now — the worker
+   parses the harness's protocol and the app draws typed events — while every
+   other intent is still a PTY under `terminals.js` above. Two stores and one
+   tab, deliberately: this is a union of two kinds of session rather than an
+   abstraction over two back ends, because the terminal is going away and a seam
+   built to outlive that migration would. */
+import { conversationsIn, startConversation } from '../stores/conversation.js'
 import {
   boardColumns,
   clearSemantic,
@@ -585,7 +592,21 @@ async function newAgent() {
   try {
     project.sideTab = 'agents'
     project.activeTab = 'terminal'
-    await createSession(activePath.value, { kind: 'bare' })
+    /* The one start in this file that is a driven session rather than a PTY,
+       and the whole of the seam: `Intent::Bare` is what the conversation worker
+       supports, every other intent still goes through `createSession` above.
+       The id is what the Agent tab draws a conversation for — `null` is a start
+       that did not happen, and the sentence saying why is the store's. */
+    const id = await startConversation(activePath.value, { kind: 'bare' })
+    pickedConversation.value = id
+    /* A start that did not happen must not leave somebody standing on a tab the
+       row does not draw. There is no start ticket on this road — the tab is
+       derived from the sessions this window holds, and a refused start adds
+       none — so `hasAgentTab` never changes and the watcher below never fires.
+       This is the landing that watcher would have made, and it is guarded
+       because the project may have other agents, whose tab is not this start's
+       to take away. */
+    if (id === null && !hasAgentTab.value) dropAgentTab()
   } catch {
     // already reported — see comment above
   }
@@ -2470,6 +2491,49 @@ watch(hasAgentTab, (has) => {
    hangs off the record rather than off `isTerminalTab`. The same shape
    `activeDiff` has, for the same reason. */
 const activeTerminal = computed(() => terminalTab(project.activeTab))
+
+/* Which driven session the Agent tab is showing, and `null` when it is showing
+   a PTY agent instead.
+
+   One tab and two kinds of session, so something has to say which of the two is
+   in front, and the rule is **the last one somebody asked for**. Starting a
+   conversation is the line in `newAgent`; every road to a PTY agent — a row in
+   the panel, a run's first session, "Ask agent to edit", a shell of the
+   person's own — ends in `terminalState.activeId`, so one watcher over that
+   field covers all of them and there is no line to remember at every call site
+   that sets it.
+
+   The pick is validated against the project rather than cleared on a switch,
+   which is what makes a switch away and back free: the tab is derived per
+   project (`hasAgentTab`), the session belongs to the project it was started
+   in, and an id that is not among that project's driven sessions is simply not
+   the one on screen. Coming back finds it again, still held by the worker, with
+   its whole journal. */
+const pickedConversation = ref(null)
+
+const conversationId = computed(() => {
+  const held = conversationsIn(activePath.value)
+  if (!held.length) return null
+  const picked = pickedConversation.value
+  if (picked !== null && held.includes(picked)) return picked
+  /* Nothing picked that belongs to this project, which is what a project switch
+     leaves behind: the pick is one field for the window while the sessions are
+     per project. The newest conversation is the landing place rather than the
+     terminal's empty state, and that is a rule about not stranding anybody —
+     this tab exists *because* of that session, so "No agent selected" drawn
+     over a live conversation would be a way in with no way back. A PTY agent
+     selected in this project still wins, because it is the more recent thing
+     somebody asked for and `terminalState.activeId` is per project too
+     (`loadSessions` repairs it on every switch). */
+  return terminalState.activeId ? null : held[held.length - 1]
+})
+
+watch(
+  () => terminalState.activeId,
+  (id) => {
+    if (id) pickedConversation.value = null
+  }
+)
 
 /* The tree and the tabs open together with the project. By this point settings
    have already read the active project — App.vue awaits loadSettings before it
@@ -6260,9 +6324,20 @@ const toastStackStyle = {
             @keep-mine="keepMine(project.activeTab)"
           />
           <!-- The Agent tab shows the agent a person picked; a terminal tab shows
-               its own shell. Two branches over one component, and the session is a
-               prop rather than something the pane reads for itself: see the note
-               on `sessionId` in TerminalView.vue. -->
+               its own shell. Three branches over two components, and the session is
+               a prop rather than something either pane reads for itself: see the
+               note on `sessionId` in TerminalView.vue and the one in
+               ConversationView.vue.
+
+               The first of them is the whole of the seam between the two kinds of
+               agent session: one `v-if` on which kind the Agent tab is showing,
+               and no abstraction over the two back ends behind them. The terminal
+               is going away when the last intent moves, and a seam built to
+               outlive that migration would. -->
+          <ConversationView
+            v-else-if="project.activeTab === 'terminal' && conversationId !== null"
+            :session-id="conversationId"
+          />
           <TerminalView
             v-else-if="project.activeTab === 'terminal'"
             :session-id="terminalState.activeId"

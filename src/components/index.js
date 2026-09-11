@@ -95,6 +95,11 @@ export { parseAnsi } from './agent/ansi.js'
    `views/Gallery.vue` imports either of them, so either could be renamed for
    two lines — which is worth knowing before treating this as settled. */
 export { default as AgentMessage } from './conversation/AgentMessage.vue'
+export { default as Composer } from './conversation/Composer.vue'
+/* The panel itself, and the one export here that imports a store —
+   `TerminalView` below is the other, and the two are the same exception for the
+   same reason: a session's pane is the one component that owns what it draws. */
+export { default as ConversationView } from './conversation/ConversationView.vue'
 export { default as ConversationToolCall } from './conversation/ToolCall.vue'
 export { default as PermissionRequest } from './conversation/PermissionRequest.vue'
 export { default as Reasoning } from './conversation/Reasoning.vue'

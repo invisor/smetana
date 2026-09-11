@@ -312,4 +312,75 @@ describe('the conversation store', () => {
 
     expect(stores.conversation.conversationFor(1).state).toBe('needs-you')
   })
+
+  /* Which driven sessions this window is holding, and for which project. The
+     centre's Agent tab is derived from this list (`hasAgentTab` in
+     `stores/tabs.js`), which is what makes each of the three below a rule about
+     the app rather than about a getter. */
+  describe('the sessions this window holds', () => {
+    it('holds a started session against the project it was started in', async () => {
+      const { ipc, stores } = await ready()
+      ipc.on('session_start', 7)
+
+      expect(await stores.conversation.startConversation('/p')).toBe(7)
+      expect(stores.conversation.conversationsIn('/p')).toEqual([7])
+      expect(stores.conversation.conversationsIn('/elsewhere')).toEqual([])
+    })
+
+    /* A start that was refused is not a session. The tab would otherwise appear
+       for a conversation that does not exist and stay for the life of the
+       window — nothing takes an entry out of this list. */
+    it('holds nothing when the start was refused', async () => {
+      const { ipc, stores } = await ready()
+      ipc.fail('session_start', new Error('claude could not be started'))
+
+      expect(await stores.conversation.startConversation('/p')).toBe(null)
+      expect(stores.conversation.conversationsIn('/p')).toEqual([])
+    })
+
+    /* **The list outlives `detach`.** The two answer different questions: the
+       conversations are what this window is drawing right now, and this is what
+       the project has at all. Derived from the other, the Agent tab would go
+       away the moment somebody looked at the board — taking with it the only
+       way back to their agent. */
+    it('goes on holding a session whose panel has been closed', async () => {
+      const { ipc, stores } = await ready()
+      ipc.on('session_start', 7)
+      await stores.conversation.startConversation('/p')
+      stores.conversation.detach(7)
+
+      expect(stores.conversation.conversationsIn('/p')).toEqual([7])
+    })
+  })
+
+  /* `session::model::SessionState` in the design system's words. The two that
+     are translated are the whole of the rule; the rest are already this
+     system's and pass through, a word from a Rust that has moved on ahead of
+     this list included. */
+  describe('the state in the status vocabulary', () => {
+    it('draws a session that has not spoken yet as live', async () => {
+      const { stores } = await ready()
+
+      expect(stores.conversation.statusOf('starting')).toBe('running')
+    })
+
+    it('draws an ordinary end as done', async () => {
+      const { stores } = await ready()
+
+      expect(stores.conversation.statusOf('exited')).toBe('done')
+    })
+
+    it('passes through the words this system already has', async () => {
+      const { stores } = await ready()
+      const { statusOf } = stores.conversation
+
+      expect(['ready', 'running', 'needs-you', 'failed'].map((state) => statusOf(state))).toEqual([
+        'ready',
+        'running',
+        'needs-you',
+        'failed'
+      ])
+      expect(statusOf('hibernating')).toBe('hibernating')
+    })
+  })
 })

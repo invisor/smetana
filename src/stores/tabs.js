@@ -15,6 +15,12 @@ import { fileAtHead } from './vcs.js'
    first is not this file's to assume (the same cycle `notifications.js` carries
    a note about). */
 import { hasAgentSession, removeSession, shellSessions } from './terminals.js'
+/* The other half of the same tab. An agent session is a PTY today and a driven
+   conversation tomorrow, and during the migration it is either — so the tab is
+   derived from both stores rather than from the one that happens to be older.
+   Read inside the computed below and never at module scope, for the reason the
+   import above carries. */
+import { conversationsIn } from './conversation.js'
 import { relativeTo } from '../paths.js'
 /* The theme is read from the document root rather than from settings.js beside
    this file: a tab's icon is about what is painted, and the gallery paints a
@@ -48,7 +54,20 @@ export const PINNED = [{ id: 'kanban', kind: 'pinned', label: 'Kanban' }]
    sides for the sake of one word. */
 const AGENT_TAB = { id: 'terminal', kind: 'pinned', label: 'Agent' }
 
-export const hasAgentTab = computed(() => hasAgentSession.value)
+/* The tab exists exactly while the project has an agent, of either kind: a PTY
+   session or a start still coming up (`hasAgentSession`), or a driven
+   conversation this window has opened (`conversationsIn`). One tab and not two,
+   because to a person it is one thing — where the agent is — and the terminal
+   is what is going away rather than a second kind of agent that will stay.
+
+   The two halves are asked about the same project by different means, and that
+   is the stores' difference rather than an inconsistency: `terminalState`
+   already holds the sessions of the open project alone, replaced on every
+   switch, while the driven ones are kept for the window and carry the project
+   each was started in. */
+export const hasAgentTab = computed(
+  () => hasAgentSession.value || conversationsIn(settings.activeProject).length > 0
+)
 
 /* Path → { text, original, mtime, error, saveError, stale, loading }.
    text/original differ exactly when the tab is dirty.
