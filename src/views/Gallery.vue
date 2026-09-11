@@ -5892,15 +5892,19 @@ const menuTargetStyle = {
            both grounds, and the filled permission card carries readable text in
            the light theme, where its ink inverts to `var(--surface-raised)`.
 
-           The two columns below carry `class="sm-prose"` themselves: since
+           The two columns below carry `class="sm-prose"` themselves, with
+           `--panel-pad` left to the class rather than zeroed: since
            smetana-e3mc, `UserMessage`, `AgentMessage` and `Reasoning` emit
            their bare `article`/`details` and expect an ancestor root to space
-           them apart, exactly as `ConversationView.vue`'s journal is that root
-           in the app. `ToolCall` and `TurnResult` are not part of the
-           contract and paint themselves regardless — they only take the
-           class's flex gap like any other sibling would. -->
+           and inset them, exactly as `ConversationView.vue`'s journal is that
+           root in the app — a demo column with the padding zeroed would teach
+           a panel inset the real one does not draw. `ToolCall` and
+           `TurnResult` are not part of the contract, and paint themselves
+           with no horizontal inset of their own any more (their own headers
+           say why) so they line up with the prose rather than doubling this
+           root's `--panel-pad`. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
-        <div class="sm-prose" :style="{ width: '360px', padding: 'var(--space-0)' }">
+        <div class="sm-prose" :style="{ width: '360px' }">
           <UserMessage
             :text="CONVERSATION_USER_TEXT"
             :attachments="CONVERSATION_ATTACHMENTS"
@@ -5910,7 +5914,7 @@ const menuTargetStyle = {
           <TurnResult :tokens-in="12480" :tokens-out="416" :cost-usd="0.0312" :ms="4200" />
         </div>
 
-        <div class="sm-prose" :style="{ width: '360px', padding: 'var(--space-0)', gap: 'var(--space-4)' }">
+        <div class="sm-prose" :style="{ width: '360px', gap: 'var(--space-4)' }">
           <!-- The three states a tool call has: still open, done, and failed.
                The first two carry a path, so the glyph comes from
                `catppuccinIcon.js`; the third carries a command, so it does
@@ -5973,7 +5977,7 @@ const menuTargetStyle = {
              sessions to sit either side of. This is the markup and the
              styling the contract asks for, stood up here rather than
              invented in `ConversationView.vue` against nothing. -->
-        <div class="sm-prose" :style="{ width: '360px', padding: 'var(--space-0)' }">
+        <div class="sm-prose" :style="{ width: '360px' }">
           <article data-turn="agent">
             <p>Notarization is failing intermittently. I'll pull the last run's log.</p>
           </article>

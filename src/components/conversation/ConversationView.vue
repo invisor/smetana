@@ -30,9 +30,14 @@
    `overflow` pair. `UserMessage.vue`, `AgentMessage.vue` and `Reasoning.vue`
    used to carry a `.sm-prose` of their own, one turn per root, because this
    shared one did not exist yet; each now emits its turn bare and this div is
-   the only root the class appears on. `ToolCall.vue` and `TurnResult.vue`
-   are not part of the contract — they take the flex gap like any other
-   sibling and paint themselves in `:style`, same as before.
+   the only root the class appears on. `ToolCall.vue` and `TurnResult.vue` are
+   not part of the contract — they take the flex gap like any other sibling —
+   but they are not unchanged either: both used to carry their own horizontal
+   `--panel-pad` to line up with the per-turn `.sm-prose` that no longer wraps
+   their neighbours, and now that this root spends the inset once for the
+   whole column, a second copy on either row would double it against the prose
+   beside it. Their own headers carry the fix; the `failure` row a few screens
+   down, drawn inside this same journal, got the identical correction.
 
    **`hr[data-session]` has no live trigger here, and that is a fact about the
    wire rather than a gap in this file.** The contract draws it as a break
@@ -347,10 +352,14 @@ const sep = {
 }
 
 /* The scrolling viewport, and — via `class="sm-prose"` on the same element in
-   the template — the contract's own root. Nothing here repeats what the class
-   already spends (`gap`, `padding`, the font); an inline style only ever wins
-   over a class for the properties it actually sets, so the two coexist on one
-   element without either overriding the other's half. */
+   the template — the contract's own root. `display` and `flexDirection` are
+   left to the class, which already spends them (`gap`, `padding` and the font
+   go the same way); an inline style only ever wins over a class for the
+   properties it actually sets, so leaving one out here is what lets the
+   class's own value reach the element rather than being silently shadowed by
+   a copy of it that could drift the day the class changes. `alignItems` stays
+   inline because the class does not spend it — flex's own default is already
+   `stretch`, but writing it down is what the comment below is about. */
 const journal = {
   flex: 1,
   minWidth: 0,
@@ -360,8 +369,6 @@ const journal = {
   /* The end of a short conversation sits at the top of the panel rather than
      floating in the middle of it: a journal is read from its first line down,
      and centring it would move every row as the second one arrived. */
-  display: 'flex',
-  flexDirection: 'column',
   alignItems: 'stretch'
 }
 
@@ -380,12 +387,17 @@ const questionPad = { padding: 'var(--panel-pad) var(--panel-pad) 0' }
 /* An `Error` event, which is the worker saying what happened where an answer
    would have gone — a message that did not reach the agent, a line the harness
    wrote to stderr. Prose, so sans; the failed hue and the status glyph, so it
-   is not mistaken for the agent's own words. */
+   is not mistaken for the agent's own words.
+
+   No horizontal `--panel-pad` of its own: this row is drawn inside the
+   journal, a direct child of its `.sm-prose` root, which already insets the
+   whole column. Unlike `refusal` below — drawn in `foot`, outside that root,
+   and still owing its own inset — a second one here would double it. */
 const failure = {
   display: 'flex',
   alignItems: 'flex-start',
   gap: 'var(--space-3)',
-  padding: 'var(--space-4) var(--panel-pad)',
+  padding: 'var(--space-4) 0',
   color: 'var(--status-failed-fg)',
   font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-sans)'
 }
