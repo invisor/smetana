@@ -46,14 +46,23 @@
    has ever heard of, and handing it to `openExternal` would ask the scope to
    pass a string it was never meant to see. It gets its own event,
    `open-local`, carrying `{ path, kind }` — `kind` being `file` or `dir`,
-   markdown.js's own `targetKind` — and only the primary click raises it, with
-   `click.prevent` alone: unlike the external case there is no `@auxclick`
-   handler here, on purpose, because the contract's own acceptance criteria
-   ask for the *native* middle-click and "copy link" to keep working, which
-   is exactly what leaving `href` alone and `auxclick` unbound buys. `href` on
-   a local anchor is a `file://` URI built by `./links.js`'s `localHref`
-   rather than anything this file constructs by hand, so there is one place
-   that decides what such a URI looks like. */
+   markdown.js's own `targetKind`. `href` on a local anchor is a `file://` URI
+   built by `./links.js`'s `localHref` rather than anything this file
+   constructs by hand, so there is one place that decides what such a URI
+   looks like — and it is a **real, navigable** one, which is exactly why
+   `auxclick` is bound here too, on both breeds and for the same reason: a
+   middle click left to its own default would navigate this webview straight
+   to that URI, in place, with nothing here or in `main.js`, `nativeMenu.js`
+   or `tauri.conf.json` to catch it — the same hole a local anchor with no
+   `href` at all would not have opened, and the one an anchor with a real one
+   does. "Middle-click and copy-link keep working" is `href` staying put for
+   the browser's own reading of it — native focus and "copy link" both come
+   from the attribute alone — and does not require leaving the click itself
+   live: `onLocalAuxClick` narrows to the middle button the same way
+   `onAuxClick` does and answers it with the very `open-local` payload the
+   primary click already sends, so a middle click on a local path opens it
+   exactly as a primary click does, without ever reaching the default
+   navigation. */
 import { localHref } from './links.js'
 
 defineProps({
@@ -70,10 +79,18 @@ const emit = defineEmits(['open', 'open-local'])
    instead of it, and it also fires for a browser's back/forward buttons on a
    mouse that has them — `event.button === 1` is what narrows it to the
    middle button alone, the one a person actually means by "open this
-   without leaving where I am". Bound only on the external anchor — see the
-   header above for why a local one carries no handler here at all. */
+   without leaving where I am". */
 function onAuxClick(event, href) {
   if (event.button === 1) emit('open', href)
+}
+
+/* The local anchor's own version — see the header above for why it exists at
+   all rather than being left unbound the way a local link's `href` almost
+   suggests it could be. Same narrowing, same shape of payload as the click
+   handler in the template below, so the two can never answer a middle click
+   and a primary click with two different objects. */
+function onLocalAuxClick(event, path, kind) {
+  if (event.button === 1) emit('open-local', { path, kind })
 }
 </script>
 
@@ -116,6 +133,7 @@ function onAuxClick(event, href) {
       :data-kind="node.targetKind"
       :href="localHref(root, node.path)"
       @click.prevent="emit('open-local', { path: node.path, kind: node.targetKind })"
+      @auxclick.prevent="onLocalAuxClick($event, node.path, node.targetKind)"
     ><span data-head>{{ node.head }}</span><span data-tail>{{ node.tail }}</span></a>
     <!-- The same node with nowhere to act on it — the task inspector's case,
          which has no session and no working tree (see this file's header).

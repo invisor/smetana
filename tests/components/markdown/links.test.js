@@ -119,6 +119,61 @@ describe('classifyLink: local', () => {
   })
 })
 
+/* "No scheme" used to be the whole rule, and it was too wide: a football
+   score, an aspect ratio and a time of day carry no scheme either, and none
+   of them is a path. Local is a positive shape now — a `/` somewhere, or an
+   extension optionally followed by a line reference — tested against the
+   whole target before anything is stripped off it. */
+describe('classifyLink: local is a positive shape, not "everything else"', () => {
+  it('declines a bare number pair that merely contains a colon, a score', () => {
+    expect(classifyLink('2:1')).toBeNull()
+  })
+
+  it('declines an aspect ratio the same way', () => {
+    expect(classifyLink('16:9')).toBeNull()
+  })
+
+  it('declines a time of day, which is the same shape again', () => {
+    expect(classifyLink('12:30')).toBeNull()
+  })
+
+  it('declines a bare word with no slash and no extension', () => {
+    expect(classifyLink('docs')).toBeNull()
+    expect(classifyLink('notes')).toBeNull()
+  })
+
+  /* The shape is tested against the target as written, before the line
+     suffix is stripped — stripping first and then judging what is left
+     would read `'2'` off `'2:1'` as an extension-less one-character name,
+     which is exactly the shape this rule exists to keep out. */
+  it('still reads a bare file name with a line number as local, extension and all', () => {
+    expect(classifyLink('tauri.conf.json:41')).toEqual({
+      kind: 'local',
+      targetKind: 'file',
+      path: 'tauri.conf.json',
+      display: 'tauri.conf.json:41'
+    })
+  })
+
+  it('still reads a path with a slash as local, whatever else it lacks', () => {
+    expect(classifyLink('src/paths.js')).toEqual({
+      kind: 'local',
+      targetKind: 'file',
+      path: 'src/paths.js',
+      display: 'src/paths.js'
+    })
+  })
+
+  it('still reads a directory target as local off its trailing slash alone', () => {
+    expect(classifyLink('docs/')).toEqual({
+      kind: 'local',
+      targetKind: 'dir',
+      path: 'docs',
+      display: 'docs'
+    })
+  })
+})
+
 describe('splitPath', () => {
   it('cuts at the last slash, keeping it on the head', () => {
     expect(splitPath('src-tauri/tauri.conf.json:41')).toEqual({

@@ -1748,19 +1748,30 @@ const MARKDOWN_SAMPLE = [
 
 /* The two breeds of link, section 5 of the markup contract: an external one,
    leaving for the person's own browser, and a local one, opened in this app.
-   The local target is about 90 characters — the length this file's own
-   header asks for, so the head-truncation is checkable at the 420px column
-   the specimen below is drawn at — and it carries a line number, which is
-   what the tail is for: the file name and the line survive whatever the head
-   loses to the ellipsis. The directory link beside it has no line, and no
-   trailing slash of its own — `sm-prose.css` draws that glyph, and a slash
-   already in the markup would draw two. */
+
+   The first two local links write the target as its own label — `[path](path)`,
+   the markup contract's own example, a path written twice over — which is
+   what `markdown.js`'s `link()` reads as "nothing here but the path" and
+   splits into a head and a tail rather than showing the label whole. The
+   file one is about 90 characters, so the head-truncation is checkable at
+   the 420px column the specimen below is drawn at, and it carries a line
+   number, which is what the tail is for: the file name and the line survive
+   whatever the head loses to the ellipsis. The directory link beside it has
+   no line, and no trailing slash of its own — `sm-prose.css` draws that
+   glyph, and a slash already in the markup would draw two.
+
+   The third is the other half of the same rule: a label that says something
+   the target does not (`markdown.js`'s own fixed BLOCKING finding) is kept
+   whole rather than replaced by the path — no head, the label as the tail,
+   unsplit and unparsed. `data-path` still carries the real target underneath
+   it, which is what a click and a copy-link both answer to. */
 const MARKDOWN_LINKS_SAMPLE = [
   'See [the design system](https://claude.ai/design) for the source of truth.',
   '',
   'The replay is stitched in',
-  '[claude_driver](src-tauri/src/session/claude_driver/conversation_history_replay_and_stitching_logic.rs:184),',
-  'read from [components/markdown](src/components/markdown/).'
+  '[src-tauri/src/session/claude_driver/conversation_history_replay_and_stitching_logic.rs:184](src-tauri/src/session/claude_driver/conversation_history_replay_and_stitching_logic.rs:184),',
+  'read from [src/components/markdown/](src/components/markdown/) — see also',
+  '[the manifest](src-tauri/tauri.conf.json).'
 ].join('\n')
 
 /* The active project's absolute path this page pretends to have, so the
@@ -3469,12 +3480,13 @@ const menuTargetStyle = {
            `ConversationView.vue` does, and draws the local links as the
            interactive anchors the contract shows: mono, a hairline
            underline, the head ellipsised and the tail — the file name and
-           its line — whole. The right one carries none, `TaskInspector.vue`'s
-           own case (no session, no working tree — its own out-of-scope note
-           says the local breed does not arise there), and the same source
-           draws the same two paths as plain text: no anchor, no underline,
-           nothing that looks pressable over a click nothing here could
-           answer. `@open-local` has nowhere real to go in this harness — there
+           its line, or a distinct label kept whole — never lost. The right
+           one carries none, `TaskInspector.vue`'s own case (no session, no
+           working tree — its own out-of-scope note says the local breed does
+           not arise there), and the same source draws the same three links
+           as plain text: no anchor, no underline, nothing that looks
+           pressable over a click nothing here could answer. `@open-local`
+           has nowhere real to go in this harness — there
            is no file tree behind `?view=gallery` — so it is a no-op, the same
            standing every other event this page cannot wire for real already
            takes. -->

@@ -23,11 +23,15 @@
    `data:`, and the literal `file:` a person might paste by hand — is refused
    and falls through to literal text, which is the invariant `markdown.js` is
    built on: an unrecognised construct costs nothing more than looking exactly
-   as it did before this module existed. Everything else — a bare relative or
-   absolute path, with no scheme in front of it at all — is local. That last
-   arm is the whole of what changed: before this module, `[label](src/foo.js)`
-   fell through the same door `javascript:` still falls through today, and
-   nothing on screen said a path was a path.
+   as it did before this module existed. **Local is not "everything else"** —
+   a scheme-less target still has to look like a path before it is read as
+   one, which is the whole of `LOOKS_LIKE_PATH` below. `[label](src/foo.js)`
+   used to fall through the same door `javascript:` still falls through
+   today, and nothing on screen said a path was a path; a bare
+   `[two nil](2:1)` used to fall through it too, and has to go on doing so —
+   a scheme-less string with no slash and no extension is ordinary prose this
+   module cannot tell from a path, and its job when it cannot tell is to
+   leave the characters alone.
 
    **A trailing slash is the only signal this module has for "this names a
    folder", and it is spent rather than kept.** `sm-prose.css` appends the
@@ -55,19 +59,59 @@ import { absolutePath } from '../../paths.js'
 
 const HTTP_SCHEME = /^(https?):\/\//i
 
-/* RFC 3986's own scheme grammar (`ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`
-   followed by `:`), used only to recognise — and then decline — every scheme
-   this app does not open. It is deliberately not narrowed to the handful of
-   names in this file's own header: a scheme neither this app nor the header
-   above has ever heard of is exactly as unopenable as `mailto:`, and refusing
-   by shape rather than by a list is what keeps a local path with a genuine
-   colon in it (a Windows drive letter, `C:\Users\x`) from slipping through
-   unrefused — a single letter in front of a colon matches this grammar too,
-   which is a known, accepted gap: this app's local links are written as
-   repository-relative paths, where a colon never opens the string, and a
-   Windows absolute path reaching this parser is not a case any fixture in
-   this project has needed yet. */
-const OTHER_SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:/
+/* RFC 3986's own scheme grammar is `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`
+   followed by `:`, and the dot in it is why this is narrower than that by one
+   character on purpose. Taken literally, `tauri.conf.json:41` — a bare file
+   name with a line number and no folder in front of it, no `/` anywhere —
+   reads as a scheme named `tauri.conf.json` exactly as validly as `mailto`
+   reads as one, and was declined before `LOOKS_LIKE_PATH` below ever got to
+   judge it: a real, previously-passing local target failed only because this
+   regex is more permissive than any scheme this app or a person actually
+   writes. No scheme in this file's own header, and none this app has ever
+   been asked to open, carries a literal dot — `mailto`, `javascript`, `data`,
+   `file`, `ftp`, `tel` — so refusing it here costs nothing real and stops it
+   colliding with an extension, which always does carry one.
+
+   It is deliberately not narrowed to that handful of names, though: a scheme
+   neither this app nor the list above has ever heard of is exactly as
+   unopenable as `mailto:`, and refusing by shape rather than by a list is
+   what keeps a local path with a genuine colon in it (a Windows drive
+   letter, `C:\Users\x`) from slipping through unrefused — a single letter in
+   front of a colon matches this grammar too, which is a known, accepted gap:
+   this app's local links are written as repository-relative paths, where a
+   colon never opens the string, and a Windows absolute path reaching this
+   parser is not a case any fixture in this project has needed yet. */
+const OTHER_SCHEME = /^[a-zA-Z][a-zA-Z0-9+-]*:/
+
+/* The positive shape a scheme-less target has to have before it is read as
+   local at all — without this, "everything that is not a scheme" swallowed
+   ordinary prose that happens to carry a colon: a football score written
+   `[two nil](2:1)`, an aspect ratio `16:9`, a time `12:30`. None of those has
+   a scheme (`OTHER_SCHEME` only refuses a string that *starts* with a
+   letter), so all of them used to reach `classifyLink`'s local branch, and
+   `LINE_SUFFIX` then chewed `2:1` down to the single character `'2'` — a
+   construct this parser used to leave as text quietly becoming a link with
+   most of what was typed gone.
+
+   Two shapes count as a path, tested against the **whole target exactly as
+   it arrived**, before anything below strips a trailing slash or a line
+   suffix off it: a `/` anywhere (a relative or absolute path, or a
+   directory's own trailing one), or a dot followed by a short run of letters
+   and digits — an extension — optionally followed by a line reference,
+   `.rs`, `.json:41`, `.rs:12:3`. Testing the stripped-down string instead
+   would have let `2:1` back in by a different door: strip the line suffix
+   first and `'2'` is what is left to judge, which looks exactly like a
+   one-character extension-less name — the very shape this rule exists to
+   keep out.
+
+   A bare word with no slash and no extension — `docs`, `notes` — fails both
+   and falls through to text, and that is the honest answer rather than a
+   gap: this module cannot tell it from an ordinary word, and it is not this
+   module's business to guess. The Windows drive-letter gap `OTHER_SCHEME`'s
+   own comment names is untouched by this — a path like `C:\Users\x\a.rs` is
+   declined earlier, as an unrecognised scheme, and never reaches this
+   check. */
+const LOOKS_LIKE_PATH = /\/|\.[A-Za-z0-9]{1,10}(?::\d+(?::\d+)?)?$/
 
 /* A line, or a line and a column, glued onto the end of a file target with a
    colon — never applied to a directory target, since a folder has no line to
@@ -104,6 +148,12 @@ export function classifyLink(href) {
      falling through to text rather than being read as a very short relative
      path. */
   if (href.startsWith('#')) return null
+
+  /* The positive shape check, against the whole target as written — before
+     the slash or the line suffix below is touched, for the reason
+     `LOOKS_LIKE_PATH`'s own comment gives. Anything that does not look like a
+     path is an ordinary word this module cannot tell from prose. */
+  if (!LOOKS_LIKE_PATH.test(href)) return null
 
   const isDir = href.endsWith('/')
   const trimmed = isDir ? href.slice(0, -1) : href

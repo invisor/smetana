@@ -37,15 +37,18 @@
    browser, which bare path is a local one, and the split of a local path into
    a head and a tail are all questions that module answers, kept out of this
    one so there is exactly one place in the tree that classifies a link target
-   rather than two that could disagree. A **local** link node is the one
-   deliberate exception to the paragraph above about a recognised construct
-   keeping its own content: `link()` below shows the target's own text — a
-   path names itself, the same standing an autolink's `<https://…>` already
-   holds where its label is its own href — and not whatever words a person or
-   an agent put between the brackets, because a path split into a head and a
-   tail is what the markup contract's local link actually is. Nothing is lost
-   by the source's own invariant either way: every character of the target
-   itself survives, in the head or in the tail. */
+   rather than two that could disagree. A **local** link node still keeps the
+   paragraph above's promise about a recognised construct's own content, and
+   it is worth being exact about how: `[label](target)` is two independent
+   pieces of what somebody typed, unlike an autolink's `<https://…>`, whose
+   label *is* its href by construction and loses nothing by favouring one.
+   `link()` below reads the label first — empty, or the same string as the
+   target (the markup contract's own example, a path written twice over) —
+   and only then falls back to splitting the target itself into a head and a
+   tail; a distinct label is shown whole, verbatim, as the tail of an empty
+   head, exactly as typed, never discarded and never run back through this
+   parser. Nothing is lost either way: every character of whichever string is
+   shown survives, in the head or in the tail. */
 import { classifyLink, splitPath } from './links.js'
 
 /* The closing run of hashes is optional and must have whitespace before it.
@@ -484,10 +487,22 @@ const WORD = /[\p{L}\p{N}_]/u
    construction: the rest of the URL is left exactly as written, because case
    is meaningful in a path.
 
-   **Local** does not touch `rawLabel` at all — see this file's own header for
-   why the target's own text is what is shown, split by `classifyLink`'s
-   `display` into the head and the tail `MarkdownInline.vue` draws as two
-   spans. */
+   **Local** answers to the label before it ever asks `splitPath` anything —
+   see this file's own header for the invariant this keeps and the shape a
+   distinct label takes. `label` here is `rawLabel` trimmed, compared against
+   `href` as written (never `classified.path` or `.display`, both of which
+   `classifyLink` may already have trimmed a slash or a line off): a person
+   who wrote `[docs/](docs/)` typed the same string twice, and comparing
+   against a version this module has since edited would call that a distinct
+   label by accident. An empty label (`[](target)`) and a matching one both
+   mean "nothing here but the path", and only then is `classifyLink`'s
+   `display` split into a head and a tail the way it always was. Anything
+   else is shown whole, as `tail` on an empty `head` — two spans either way,
+   which is what the markup contract asks for and what the acceptance
+   criteria call for literally, and an empty `head` draws nothing at all (see
+   `sm-prose.css`'s `a[data-path] > span[data-head]`: no content, no border,
+   no padding, so `text-overflow: ellipsis` has nothing to clip and nothing
+   is on screen to say the span is there). */
 function link(href, rawLabel, { verbatim = false } = {}) {
   const classified = classifyLink(href)
   if (!classified) return null
@@ -495,7 +510,9 @@ function link(href, rawLabel, { verbatim = false } = {}) {
     const children = verbatim ? [{ type: 'text', value: rawLabel }] : parseInline(rawLabel)
     return { type: 'link', href: classified.href, children }
   }
-  const { head, tail } = splitPath(classified.display)
+  const label = rawLabel.trim()
+  const { head, tail } =
+    label && label !== href ? { head: '', tail: label } : splitPath(classified.display)
   return {
     type: 'link',
     local: true,
