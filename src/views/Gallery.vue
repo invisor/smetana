@@ -2,7 +2,7 @@
 /* Dev harness: renders every component in the library once, so a broken port
    shows up here rather than in the product. Not part of the shipped app —
    reachable at ?view=gallery. */
-import { computed, ref, watchEffect } from 'vue'
+import { computed, provide, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { branchMenuItems } from '../components/git/branchMenu.js'
 import { CHANGE_MENU_W, changeMenuItems } from '../components/git/changeMenu.js'
@@ -144,6 +144,16 @@ import { agents } from '../stores/agents.js'
 import { settings } from '../stores/settings.js'
 import { fileIconUrl } from '../catppuccinIcon.js'
 import { documentTheme } from '../documentTheme.js'
+
+/* `Markdown.vue`'s code blocks inject `smCopyText` for their copy button
+   rather than importing a store themselves, the same shape `overlays/Modal.vue`
+   reaches `views/DialogWindow.vue` through. This page is this project's only
+   verification of anything under `src/components/`, so without this the
+   button below would copy through the browser fallback alone and the app's
+   own `copyText` — the one path this button takes in the packaged build —
+   would go unchecked here exactly as the hazard `useCopyFeedback`'s own
+   header warns about. */
+provide('smCopyText', copyText)
 
 /* Two attachments for the strip and for the dialog above it. Eight-pixel PNGs
    written out as data URLs, which is exactly the shape `attachments.js` builds
@@ -1734,6 +1744,21 @@ const MARKDOWN_SAMPLE = [
   '',
   '```sh',
   'npm test -- tests/components/kanban/boardView.test.js',
+  '```',
+  '',
+  'A fence with no language declared, so the figure carries no `figcaption` and',
+  'no `data-lang`:',
+  '',
+  '```',
+  'no language on this fence',
+  '```',
+  '',
+  'And one whose first line is long enough to prove the figure scrolls the code',
+  'sideways instead of growing to fit it, with the copy button staying put in',
+  'the header band rather than sliding off with the line:',
+  '',
+  '```sh',
+  'xcrun notarytool submit build/App.dmg --keychain-profile "notarytool-password" --team-id ABCDE12345WXYZ --wait --timeout 30m --output json',
   '```',
   '',
   'See [the design system](https://claude.ai/design) and',

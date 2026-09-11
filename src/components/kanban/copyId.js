@@ -47,10 +47,9 @@ export function copyLabel(state) {
 }
 
 /* How long a confirmation stands before the control goes back to inviting the
-   press again.
-
-   **One number for every copy in the app**, and it was three until this line
-   existed: `COPIED_ID_MS` in `views/DesktopApp.vue`, a bare `1200` in
+   press again — for a copy that names what it copied by **id**: a task's id,
+   a branch name, a session's own identifiers. It was three numbers until this
+   line existed: `COPIED_ID_MS` in `views/DesktopApp.vue`, a bare `1200` in
    `views/Gallery.vue`, and a third in the session menu's own rule. Nothing
    mechanical joined them, and the gallery is this project's only verification of
    anything under `src/components/` — so a duration that moved in the app alone
@@ -60,5 +59,20 @@ export function copyLabel(state) {
    Long enough to be read without being looked for, short enough that a second
    copy a moment later is not waiting on the first. It is a duration rather than
    a token because nothing in `tokens/motion.css` is about how long a *sentence*
-   stays on screen — those are transitions, and this is a dwell. */
+   stays on screen — those are transitions, and this is a dwell.
+
+   **It is no longer the only duration `useCopyFeedback` waits out, and that is
+   deliberate rather than a second number left to drift.** The prose code
+   block's copy button (`markdown/Markdown.vue`, contract section 4) holds to
+   the markup contract's own 1600ms instead, passed as that composable's
+   optional second argument rather than reassigned here. The two answer
+   different questions: this number is for a control naming an identifier
+   somebody reads once and moves on from, tuned against the id-copying
+   controls that share it; the code block's is the design handoff's own figure
+   for a whole block of text somebody may still be glancing back at. Widening
+   this constant to 1600 for everybody would slow down every id copy in the
+   app to match one control's own number; a third constant declared beside it
+   would be the drift this file exists to stop. Change 1200 only for the
+   controls that read it, and leave the code block's 1600 where `Markdown.vue`
+   passes it. */
 export const COPIED_MS = 1200
