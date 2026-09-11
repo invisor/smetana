@@ -940,6 +940,28 @@ const agentRows = [
      Above the offline row below and under the live ones, which is where the
      merge puts it: the project's past keeps the bottom of the column. */
   { id: 'conversation:1', conversation: null, clearable: false, label: 'Agent', tasks: [], state: 'needs-you', elapsed: '4m' },
+  /* And the ordinary driven row the one above is the exception to: a
+     conversation picked up again from its transcript. Three things are here to
+     be looked at and nowhere else in the app can they be, this page being the
+     only verification anything under `src/components/` has. It carries a real
+     conversation id, so `Pin to top` is live on it where its neighbour's is
+     greyed — the row above and this one are the pair to open the menu on, one
+     after the other. It is captioned `Resumed session: …`, the caption
+     `drivenRows.js` builds out of the work the store reduced the intent to, and
+     the title is deliberately long enough to reach the ellipsis: a person's own
+     sentence inside a 236px row is the case that decides whether this reads at
+     all. And `Clear session` is still refused, because that is about the road
+     rather than about the conversation — there is no PTY to write the line
+     into, whichever transcript this one came from. */
+  {
+    id: 'conversation:2',
+    conversation: 'c7d8e9f0-1a2b-4c3d-8e4f-5a6b7c8d9e0f',
+    clearable: false,
+    label: 'Resumed session: Rename the worktree when the branch changes',
+    tasks: [],
+    state: 'running',
+    elapsed: '12m'
+  },
   /* A session the last run of the app left behind, off `.smetana/agents.json`.
      The row that answers "the agent is gone after a restart", and the whole of
      what it is worth is how it is drawn: quiet, so it reads as the project's

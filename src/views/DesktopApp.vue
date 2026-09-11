@@ -3891,13 +3891,29 @@ async function resumeSession(session, { fork = false } = {}) {
       showAgentTab(id, path)
       return
     }
+    /* **A refusal about the directory ends it here, and the sentence stands.**
+       The fall-through exists for one thing — `agents::pick` substitutes the
+       first installed harness silently, so `canDrive` can answer `true` on a
+       machine whose driver then refuses — and that is a question about which
+       harness is on the machine. This one is not: both workers ask
+       `sessions::model::resume_cwd` of the same path, so the second road can
+       only refuse again, a round trip later, and put a second corner toast on
+       screen saying the very sentence already there. That doubling is what
+       `lastError`'s shape was reshaped to prevent. */
+    if (conversationState.lastError?.kind === 'badCwd') return
     // Off the screen for the fallback, and back again below if that fails too.
     refused = conversationState.lastError
     conversationState.lastError = null
   }
 
   try {
-    showAgentTab()
+    /* `path` and not the default, which would be `activePath` read *after* the
+       await above. `newAgent` passes it for this reason and `showAgentTab`'s own
+       header names the case: a person who switched project inside the second
+       that start took would have this aim written under the project they are
+       now looking at, and its Agent tab brought forward over nothing, while the
+       session starts in the one they pressed in. */
+    showAgentTab(null, path)
     await createSession(path, intent)
   } catch {
     // already reported — see comment above

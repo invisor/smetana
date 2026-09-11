@@ -317,19 +317,21 @@ fn driver_for(
 /// Claude Code has never heard of — and a worktree session reopened there would
 /// be an agent reading a tree its own conversation never mentions.
 ///
-/// **The rule is `sessions::model::resume_cwd` and the sentence is the
-/// terminal's**, borrowed rather than written again: the two roads refuse the
-/// same worktree, and a person who switched their agent between one attempt and
-/// the next must not be told two different things about one missing folder.
+/// **The rule is `sessions::model::resume_cwd`**, asked rather than restated:
+/// the two roads refuse the same worktree, and a person who switched their
+/// agent between one attempt and the next must not be told two different things
+/// about one missing folder.
+///
+/// The refusal is `SessionError::BadCwd` and never a `Spawn`. A `Spawn`'s text
+/// reaches a person unchanged, and this one's would be an internal sentence
+/// with an absolute path in it; the tag is what lets
+/// `stores/conversation.js` answer in the same words `stores/terminals.js`
+/// answers the terminal's `BadCwd` with.
 fn session_cwd(project: &str, intent: &Intent) -> Result<PathBuf, SessionError> {
     let root = PathBuf::from(project);
     let Intent::ResumeSession { cwd, .. } = intent else { return Ok(root) };
-    let real = root.canonicalize().ok().filter(|real| *real != root);
-    crate::sessions::model::resume_cwd(&root, real.as_deref(), cwd).ok_or_else(|| {
-        SessionError::Spawn(
-            crate::terminal::model::TerminalError::BadCwd(cwd.to_owned()).to_string(),
-        )
-    })
+    crate::sessions::model::resume_cwd(&root, cwd)
+        .ok_or_else(|| SessionError::BadCwd(cwd.to_owned()))
 }
 
 /// Start a child for this session, or say why not.

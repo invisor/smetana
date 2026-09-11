@@ -29,8 +29,8 @@ export const conversationState = reactive({
      the reason `terminalState.ready` is — a panel that draws before the events
      are subscribed to would be drawing a conversation that cannot move. */
   ready: false,
-  /* The last refusal, as `{ session, text }`, or null — **one sentence for a
-     person and the session it is about**.
+  /* The last refusal, as `{ session, kind, text }`, or null — **one sentence
+     for a person, the session it is about, and the worker's own tag for it**.
 
      Two readers, and the session is what decides which of them says it. A line
      inside the conversation panel, drawn only by the panel holding *that*
@@ -39,7 +39,15 @@ export const conversationState = reactive({
      conversation at all — a start that never made one — and the corner is the
      only reader such a sentence can have.
 
-     The pair is `{ session, text }` and not `terminals.js`'s `{ title,
+     `kind` is the third and is for a caller rather than for a reader:
+     `SessionError`'s own serde tag, or `null` for a refusal that never came
+     from the worker. One caller reads it — `resumeSession` in
+     `views/DesktopApp.vue`, which does not fall back to the PTY road on a
+     `badCwd`, both workers asking one function about one path — and it is here
+     rather than worked out from the text, because a sentence is what a person
+     reads and never what code decides on.
+
+     The rest is `{ session, text }` and not `terminals.js`'s `{ title,
      description }`, because the title is the one part that does not vary: every
      refusal on this road is one thing failing to be reached, so it is a
      constant at the toast's own call site rather than a field every `report`
@@ -177,6 +185,26 @@ export function conversationFor(id) {
    is not a function and be called with an id. */
 const ERRORS = {
   spawn: (text) => text,
+  /* `SessionError::BadCwd` — the directory a recorded conversation was to be
+     reopened in is not a folder inside the project any more. **The ordinary
+     case rather than an exotic one**: a worktree is removed once its task is
+     merged and the transcript stays behind, so this is what an offline row from
+     a finished task answers with.
+
+     **The sentence is `terminals.js`'s own, copied**, and the copy is the point
+     rather than the cost: the same press under a harness this app cannot drive
+     goes to the PTY worker, which refuses in `TerminalError::BadCwd` and words
+     it there, and a person who switched their agent between two attempts must
+     not be told two different things about one missing folder. The two tables
+     are a pair to change together — there is nothing mechanical between them.
+
+     It has to be a `kind` of its own rather than a `spawn`, because `spawn`
+     hands the worker's own text to a person unchanged: this one would arrive as
+     `that folder cannot be a working directory: /Users/…/.worktrees/…`, which
+     is lower case, has an absolute path in it and is written for whoever fixes
+     things. */
+  badCwd: () =>
+    'Smetana could not start a shell there. The tree may be out of date — refresh it.',
   noSuchSession: (id) => `Session ${id} is not running any more.`,
   noSuchQuestion: (id) =>
     `That question is not waiting for an answer any more (${id}) — it was answered already, or the agent stopped asking.`
@@ -198,7 +226,11 @@ function sentence(error) {
    below has one to hand, and the only `null` is written as `null`. */
 function report(session, what, error) {
   console.error(`[conversation] ${what} failed:`, error)
-  conversationState.lastError = { session, text: sentence(error) }
+  /* `kind` is the worker's own tag and `null` for anything that did not come
+     from it — a plain transport error, a refusal this store has no words for.
+     It travels beside the sentence rather than instead of it: a caller that
+     branched on the text would be reading copy. */
+  conversationState.lastError = { session, kind: error?.kind ?? null, text: sentence(error) }
 }
 
 /* Append a batch, or say that it cannot be appended.

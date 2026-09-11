@@ -356,19 +356,23 @@ pub fn belongs_to(cwd: &str, project: &Path) -> bool {
 /// `Path::starts_with` is lexical and would otherwise wave through
 /// `<project>/../../elsewhere`, and it has to be a directory that is there now.
 ///
-/// `also` is the project's canonical path when it has one, and it is here for
-/// the reason [`super::read::list_in`] carries it: `/tmp` on macOS is
+/// **The project's other spelling is this function's own business**, and it is
+/// here for the reason [`super::read::list_in`] carries it: `/tmp` on macOS is
 /// `/private/tmp`, so a transcript records whichever spelling Claude Code was
 /// started with while the front end holds whichever the project was opened
 /// with. Comparing against both is cheaper than refusing a session the list
-/// itself was happy to draw.
+/// itself was happy to draw. It used to be a second argument, derived by the
+/// caller — and it was then derived identically in both workers, which left the
+/// acceptance criterion about this rule living in one place true only of half
+/// of it.
 ///
 /// **The refusal is a bare `None` and the sentence is the caller's**, because
 /// the two callers answer in two different error vocabularies —
-/// `TerminalError::BadCwd` and `SessionError::Spawn` — and a rule this pure has
-/// no business knowing either. That they say the same words to a person is
-/// `session::service`'s doing, where it borrows the terminal's own sentence.
-pub fn resume_cwd(root: &Path, also: Option<&Path>, cwd: &str) -> Option<PathBuf> {
+/// `TerminalError::BadCwd` and `SessionError::BadCwd` — and a rule this pure has
+/// no business knowing either. Those two are a pair with one wording, kept in
+/// step by the front end rather than here: each store's own `ERRORS` table has
+/// a `badCwd` entry, and they carry the same sentence.
+pub fn resume_cwd(root: &Path, cwd: &str) -> Option<PathBuf> {
     if cwd.is_empty() {
         return None;
     }
@@ -376,8 +380,9 @@ pub fn resume_cwd(root: &Path, also: Option<&Path>, cwd: &str) -> Option<PathBuf
     if path.components().any(|part| matches!(part, Component::ParentDir)) {
         return None;
     }
+    let also = root.canonicalize().ok().filter(|real| real != root);
     let ours =
-        belongs_to(cwd, root) || also.is_some_and(|other| belongs_to(cwd, other));
+        belongs_to(cwd, root) || also.is_some_and(|other| belongs_to(cwd, &other));
     (ours && path.is_dir()).then_some(path)
 }
 

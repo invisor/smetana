@@ -317,6 +317,54 @@ describe('the conversation store', () => {
     expect(stores.conversation.conversationFor(1).state).toBe('needs-you')
   })
 
+  /* The refusal the ordinary resume meets: a worktree removed once its task
+     merged, with the transcript still on disk. Both stores answer `badCwd` with
+     one sentence, and `views/DesktopApp.vue` reads the tag rather than the
+     sentence to decide that the PTY road has nothing left to try. */
+  describe('a refusal about the directory', () => {
+    it('is worded as the terminal store words it, not as the worker wrote it', async () => {
+      const { ipc, stores } = await ready()
+      ipc.fail('session_start', {
+        kind: 'badCwd',
+        message: '/p/.worktrees/smetana-merged-long-ago'
+      })
+      await stores.conversation.startConversation('/p', {
+        kind: 'resumeSession',
+        id: '9f1c',
+        cwd: '/p/.worktrees/smetana-merged-long-ago',
+        title: null,
+        fork: false
+      })
+
+      const { text } = stores.conversation.conversationState.lastError
+      expect(text).toBe(
+        'Smetana could not start a shell there. The tree may be out of date — refresh it.'
+      )
+      /* The whole reason it is not a `spawn`: that kind hands the worker's own
+         text straight through, absolute path and all. */
+      expect(text).not.toContain('/p/.worktrees')
+    })
+
+    it('carries the worker\u2019s own tag, so a caller can tell it from the rest', async () => {
+      const { ipc, stores } = await ready()
+      ipc.fail('session_start', { kind: 'badCwd', message: '/p/gone' })
+      await stores.conversation.startConversation('/p')
+
+      expect(stores.conversation.conversationState.lastError.kind).toBe('badCwd')
+    })
+
+    /* Anything that did not come from the worker has no tag, and must not be
+       mistaken for one: a plain transport error is not a refusal about a
+       directory. */
+    it('leaves the tag empty for a refusal the worker never made', async () => {
+      const { ipc, stores } = await ready()
+      ipc.fail('session_start', new Error('the session worker is not running'))
+      await stores.conversation.startConversation('/p')
+
+      expect(stores.conversation.conversationState.lastError.kind).toBe(null)
+    })
+  })
+
   /* Which driven sessions this window is holding, and for which project. The
      centre's Agent tab is derived from this list (`hasAgentTab` in
      `stores/tabs.js`), which is what makes each of the three below a rule about
@@ -516,6 +564,11 @@ describe('the conversation store', () => {
 
     expect(stores.conversation.conversationState.lastError).toEqual({
       session: null,
+      /* A plain transport error carries no tag of the worker's, which is what
+         `null` says: the one caller that reads this field is deciding whether
+         a second road is worth trying, and "we do not know" must not read as
+         any particular refusal. */
+      kind: null,
       text: 'claude could not be started'
     })
   })

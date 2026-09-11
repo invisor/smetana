@@ -95,13 +95,14 @@ const SIDECHAIN: &str = "\"isSidechain\":true";
 
 /// One line of a transcript, and what it cost to get here.
 pub(crate) struct Line {
-    /// The line was longer than [`MAX_LINE`] and only its start was kept. It is
-    /// still counted — the record type is at the front of the record — but it
-    /// is not offered to the JSON parser, which would fail on half an object.
+    /// The line was longer than the caller's `limit` and only its start was
+    /// kept. It is still counted — the record type is at the front of the
+    /// record — but it is not offered to the JSON parser, which would fail on
+    /// half an object.
     pub(crate) truncated: bool,
 }
 
-/// The next line, into a buffer that never grows past [`MAX_LINE`].
+/// The next line, into a buffer that never grows past `limit`.
 ///
 /// `BufRead::read_until` would do this in one call and is not usable here for
 /// exactly one reason: it grows the buffer to the length of the line, so a
@@ -109,13 +110,17 @@ pub(crate) struct Line {
 /// memory. Everything past the cap is read and dropped rather than skipped, so
 /// the reader still ends up on the next line.
 ///
-/// `pub(crate)` for one reader outside this module: `session::history` streams
-/// the same files, under the same ceiling, for the same reason. A second
-/// bounded reader written beside it would be a second chance to get the
-/// interrupted-read and the over-long-line cases exactly right.
+/// **The ceiling is the caller's and not this module's**, which is the whole
+/// reason it is a parameter. This module reads the *head* of a record —
+/// [`MAX_LINE`], and its comment says why a few hundred bytes would nearly do —
+/// while `session::history` replays the whole of one and holds itself to the
+/// live codec's ceiling instead. What is shared is the reading, not the budget:
+/// a second bounded reader written beside this one would be a second chance to
+/// get the interrupted-read and the over-long-line cases exactly right.
 pub(crate) fn next_line(
     reader: &mut impl BufRead,
     line: &mut Vec<u8>,
+    limit: usize,
 ) -> std::io::Result<Option<Line>> {
     line.clear();
     let mut seen = 0usize;
@@ -135,7 +140,7 @@ pub(crate) fn next_line(
                 None => (available.len(), false),
             };
             let chunk = &available[..used];
-            let room = MAX_LINE.saturating_sub(line.len()).min(chunk.len());
+            let room = limit.saturating_sub(line.len()).min(chunk.len());
             if room < chunk.len() {
                 truncated = true;
             }
@@ -185,7 +190,7 @@ fn scan_forward(file: File, project: &Path, also: Option<&Path>) -> Option<Facts
     let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024);
     let mut facts = Facts::default();
     let mut index = 0usize;
-    while let Ok(Some(line)) = next_line(&mut reader, &mut buf) {
+    while let Ok(Some(line)) = next_line(&mut reader, &mut buf, MAX_LINE) {
         let text = String::from_utf8_lossy(&buf);
         let is_user = text.contains(USER);
         let is_assistant = text.contains(ASSISTANT);
@@ -1193,14 +1198,14 @@ mod tests {
         let mut reader = BufReader::new(long.as_bytes());
         let mut buf = Vec::new();
 
-        let first = next_line(&mut reader, &mut buf).unwrap().expect("the long line");
+        let first = next_line(&mut reader, &mut buf, MAX_LINE).unwrap().expect("the long line");
         assert!(first.truncated);
         assert_eq!(buf.len(), MAX_LINE, "the cap is the whole of the memory it costs");
 
-        let second = next_line(&mut reader, &mut buf).unwrap().expect("the line after it");
+        let second = next_line(&mut reader, &mut buf, MAX_LINE).unwrap().expect("the line after it");
         assert!(!second.truncated);
         assert_eq!(String::from_utf8_lossy(&buf), "short\n");
-        assert!(next_line(&mut reader, &mut buf).unwrap().is_none());
+        assert!(next_line(&mut reader, &mut buf, MAX_LINE).unwrap().is_none());
     }
 
     #[test]
@@ -1280,9 +1285,9 @@ mod tests {
     fn a_file_that_does_not_end_in_a_newline_still_gives_up_its_last_line() {
         let mut reader = BufReader::new("one\ntwo".as_bytes());
         let mut buf = Vec::new();
-        assert!(next_line(&mut reader, &mut buf).unwrap().is_some());
-        assert!(next_line(&mut reader, &mut buf).unwrap().is_some());
+        assert!(next_line(&mut reader, &mut buf, MAX_LINE).unwrap().is_some());
+        assert!(next_line(&mut reader, &mut buf, MAX_LINE).unwrap().is_some());
         assert_eq!(String::from_utf8_lossy(&buf), "two");
-        assert!(next_line(&mut reader, &mut buf).unwrap().is_none());
+        assert!(next_line(&mut reader, &mut buf, MAX_LINE).unwrap().is_none());
     }
 }

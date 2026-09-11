@@ -601,7 +601,21 @@ very same `conversation_for`, writes through the very same `terminal::restore::r
 record at the end of its child's stdout where this one drops it at `Chunk::Gone`. A record on disk
 deliberately does **not** say which of the two wrote it — an offline row is taken up by whichever road
 the project's harness can take *now*, and a field saying how the session was recorded would be one
-more thing to disagree with. `RunEvent::Exit` calls `terminal::service::shutdown`, and the worker ends every session the way closing a terminal window
+more thing to disagree with.
+
+**Stop takes the record with it, and that is the honest reading rather than a third removal.** The
+spec named two — a session that left on its own, and the cross on the row — and the driven panel's
+Stop is neither by name: `Driver::interrupt` answers `None` for Claude Code, which outside its own SDK
+has no documented way of being asked to stop one turn, so `Request::Stop` kills the child. That child
+*is* the session. What follows is `Chunk::Eof`, the same arrival a self-exit makes, and the
+conversation is over either way — so it is offered back no more than any other finished agent is,
+which is exactly the rule the terminal worker keeps at `Chunk::Gone` for a PTY child killed by
+anything at all. The thing to know before changing it: **the worker cannot tell the three apart and is
+not meant to.** The cross is two acts on the front end, `stopConversation` then `forget`, and no
+command of its own reaches Rust — so a drop moved off `Eof` onto "the two paths the spec names" would
+have no second path to move onto.
+
+`RunEvent::Exit` calls `terminal::service::shutdown`, and the worker ends every session the way closing a terminal window
 does: `SIGHUP` to the session's process group — which reaches whatever the
 agent itself started, as `SIGKILL` to the direct child would not — then a short wait, then a kill for
 what is left. The two seconds `shutdown` itself waits are the ceiling on a *wedged worker*, the same
@@ -1181,12 +1195,21 @@ resolves an id against the directory it is run in, so the same id somewhere else
 Code has never heard of, and a worktree session started at the root would be an agent reading a tree
 its own transcript never mentions. `sessions::model::resume_cwd` is the guard and it refuses rather
 than substitutes: the path has to lie inside the project (`belongs_to` beside it, the very rule that
-decided the session was this project's), hold no `..`, and be a directory that is there now. It lives
-there rather than in either worker because **both** ask it — a resume goes down whichever road the
-project's harness can take — and the refusal is a bare `None` so that each can put its own error type
-on it. The sentence is not each's own, though: `session::service` builds
-`TerminalError::BadCwd`'s very text, so a person told a worktree has gone is told it in the same words
-whichever road they were on. This is the one intent for which a session's `cwd` and its `project` differ — the same
+decided the session was this project's), hold no `..`, and be a directory that is there now — and the
+project's second spelling, `/tmp` against `/private/tmp`, is that function's own to derive rather than
+an argument, since a caller deriving it was a caller deriving it twice. It lives there rather than in
+either worker because **both** ask it: a resume goes down whichever road the project's harness can
+take.
+
+**The refusal is a bare `None`, each worker puts its own error type on it, and the sentence is
+neither's.** `TerminalError::BadCwd` and `SessionError::BadCwd` are two tags for one fact, and what a
+person reads is the `badCwd` entry in each store's `ERRORS` table — `terminals.js` has one and
+`conversation.js` carries a copy of it, which is a **pair to change together with nothing mechanical
+between them**. A `Spawn` would have done neither: that variant's text reaches a person unchanged, so
+a driven refusal would have arrived as `that folder cannot be a working directory: /Users/…`, lower
+case, with an absolute path in it. And the front end does not fall back to the PTY road on this one
+refusal at all — both workers ask one function about one path, so the second attempt can only refuse
+again and put a second toast on screen saying the sentence already there. This is the one intent for which a session's `cwd` and its `project` differ — the same
 divergence a shell opened from a folder in the tree has.
 
 A directory that has gone is the **ordinary** case, not an exotic one: a worktree is removed once its

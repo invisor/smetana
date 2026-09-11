@@ -111,6 +111,21 @@ pub enum SessionError {
     NoSuchSession(SessionId),
     #[error("there is no question {0} waiting for an answer")]
     NoSuchQuestion(String),
+    /// A directory a resumed session was asked to open in that is not a folder
+    /// inside the project: outside the root, gone from disk, or a file.
+    ///
+    /// **Its own variant rather than a `Spawn`, and that is about what a person
+    /// reads.** A `Spawn` carries its own text to the front end unchanged
+    /// (`ERRORS.spawn` is the identity), which is right for a sentence written
+    /// for whoever fixes things and wrong for this one: a removed worktree is
+    /// the ordinary outcome here, not a fault, and the store has words for it.
+    /// `stores/conversation.js` keys `badCwd` on this tag and answers with the
+    /// same sentence `stores/terminals.js` answers `TerminalError::BadCwd`
+    /// with, which is what makes one refusal read the same on either road.
+    ///
+    /// The payload is the path, unused by that sentence and kept for the log.
+    #[error("that folder cannot be a working directory: {0}")]
+    BadCwd(String),
 }
 
 /// The whole of what a session's state is: a fold over its journal.

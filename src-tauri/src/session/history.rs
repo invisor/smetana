@@ -40,6 +40,7 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::driver;
 use super::journal::BUDGET;
 use super::model::EventKind;
 use crate::agents::claude_driver::one_event;
@@ -138,21 +139,33 @@ pub fn read(cwd: &Path, id: &str) -> Vec<Past> {
 
 /// One transcript file, streamed.
 ///
-/// Two ceilings, and both are about a file this app did not write. The line
-/// buffer never grows past `sessions::read::MAX_LINE`, which is that module's
-/// discipline borrowed whole rather than restated — a single tool result
-/// carrying a file is one line of megabytes. And the history itself is capped
-/// at [`BUDGET`], the journal's own ceiling, by dropping from the front as it
-/// fills: a year-old transcript is longer than a journal may be, the tail is
-/// the half a person is coming back to, and feeding the whole of it to
-/// `Journal::append` would have that function's trim walk the events once per
-/// appended row.
+/// Two ceilings, and both are about a file this app did not write.
+///
+/// The line buffer never grows past [`driver::MAX_LINE`], **the live half's own
+/// ceiling and deliberately not `sessions::read`'s**. That module caps a line at
+/// 64 KB because it needs only the head of a record — its comment says `type`,
+/// `cwd` and the start of a message all sit in the first few hundred bytes —
+/// and this needs the whole of one. A line over the cap is dropped, and a
+/// dropped `tool_result` is worse than a missing row: its `tool_use` decoded
+/// perfectly well, so `journalRows` leaves the pair at `result: null` and
+/// `ToolCall.vue` draws that as a call still running, for ever, with nothing in
+/// the log. A `Read` of a large file is one such line and an ordinary turn. At
+/// the driver's ceiling the two halves of one codec agree about what a line is
+/// worth, which is the only answer that cannot make history and live disagree.
+///
+/// The history itself is capped at [`BUDGET`], the journal's own ceiling, by
+/// dropping from the front as it fills: a year-old transcript is longer than a
+/// journal may be, the tail is the half a person is coming back to, and feeding
+/// the whole of it to `Journal::append` would have that function's trim walk the
+/// events once per appended row.
 fn read_file(path: &Path, at: &str) -> std::io::Result<Vec<Past>> {
     let file = std::fs::File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut line: Vec<u8> = Vec::new();
     let mut past: VecDeque<Past> = VecDeque::new();
-    while let Some(read) = crate::sessions::read::next_line(&mut reader, &mut line)? {
+    while let Some(read) =
+        crate::sessions::read::next_line(&mut reader, &mut line, driver::MAX_LINE)?
+    {
         // Half an object parses as nothing, which is the answer this would
         // have reached anyway — the flag only saves the parse.
         if read.truncated {
@@ -264,6 +277,37 @@ mod tests {
     fn a_transcript_that_is_not_there_is_a_conversation_with_no_history() {
         let dir = std::env::temp_dir();
         assert!(read(&dir, "0f7a5f2e-0000-4000-8000-000000000000").is_empty());
+    }
+
+    /// A `Read` of a large file is one enormous `tool_result` line and an
+    /// ordinary turn in this repository. Dropped, its `tool_use` still decodes,
+    /// and `journalRows` leaves the pair at `result: null` — which
+    /// `ToolCall.vue` draws as a call still in flight, for ever. The ceiling is
+    /// the live codec's, so history and live agree about what a line is worth.
+    #[test]
+    fn a_large_tool_result_is_replayed_rather_than_dropped() {
+        let dir = std::env::temp_dir()
+            .join(format!("smetana-history-long-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let path = dir.join("transcript.jsonl");
+        // Well past `sessions::read::MAX_LINE`, which this module used to
+        // borrow, and well inside `driver::MAX_LINE`, which it holds itself to.
+        let payload = "x".repeat(300 * 1024);
+        let lines = [
+            TRANSCRIPT[3].to_owned(),
+            format!(
+                r#"{{"type":"user","timestamp":"2026-09-10T10:00:04Z","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t1","content":"{payload}"}}]}}}}"#
+            ),
+        ];
+        std::fs::write(&path, format!("{}\n", lines.join("\n"))).expect("write the fixture");
+
+        let events: Vec<EventKind> =
+            read_file(&path, AT).expect("read it back").into_iter().map(|(k, _)| k).collect();
+        assert!(
+            events.iter().any(|kind| matches!(kind, EventKind::ToolResult { id, .. } if id == "t1")),
+            "the call must not be left drawn as one still running: {events:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
