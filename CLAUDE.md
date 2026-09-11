@@ -273,7 +273,7 @@ bound with `:style`, and every value in it is a `var(--token)` reference (see `c
 - Never hardcode a colour, radius, spacing or font value. If a token does not exist for what you
   need, that is a design-system question, not a licence to write `#hex` or `8px`.
 
-Three exceptions, and exactly three. The first is `components/files/editor/theme.js`: CodeMirror
+Four exceptions, and exactly four. The first is `components/files/editor/theme.js`: CodeMirror
 renders its own DOM and the only way to reach it is CSS rules, so this one file is allowed to produce
 them through `EditorView.theme()`. The rule is narrowed, not lifted — every value inside is still a
 `var(--token)` reference, and no `#hex`, no `px` and no gradient belongs there.
@@ -295,6 +295,15 @@ browser with nothing of ours loaded, so there is no stylesheet around it and a t
 simply be an unresolved variable. What replaces the rule rather than lifting it: no external
 stylesheet, no font off a network, no script and no image — the document reaches nowhere at all,
 which is also what makes it safe to hand to a sandboxed frame.
+
+The fourth is `styles/sm-prose.css`, scoped entirely under `.sm-prose`, for the conversation panel.
+The reason is mechanical rather than a taste for CSS: `::marker`, `::-webkit-scrollbar`,
+`:focus-visible`, `:hover` and `@media (prefers-reduced-motion)` have no computed-style-object
+equivalent, and without them the design ships incomplete. The rule is narrowed the same way as the
+other three — every value inside is still a `var(--token)` reference, backed by `tokens/prose.css`
+for the handful with no existing alias, with no `#hex`, no `px` and no gradient anywhere in it — and
+it licenses only those five selector shapes on that one root class. It does not license `v-html`:
+the panel's markup is still emitted by Vue's own templates, the same as everywhere else in the tree.
 
 `styles/styles.css` is an `@import` list only; the tokens live in `styles/tokens/`. `tokens/base.css`
 holds element defaults (focus ring, selection, scrollbar) and the only three global classes in the

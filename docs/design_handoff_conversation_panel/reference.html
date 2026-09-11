@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Conversation panel — rendered reference</title>
+<link rel="stylesheet" href="ds/tokens.css">
+<link rel="stylesheet" href="sm-prose-tokens.css">
+<link rel="stylesheet" href="sm-prose.css">
+<link rel="stylesheet" href="sm-prose-turns.css">
+<style>
+  /* Page chrome only. Nothing here styles the conversation: that is sm-prose.css. */
+  body{margin:0;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+  #bar{flex:none;display:flex;align-items:center;gap:var(--space-5);padding:var(--space-4) var(--space-6);
+       border-bottom:var(--border-w) solid var(--border);background:var(--surface);font-size:var(--text-sm)}
+  #bar label{display:flex;align-items:center;gap:var(--space-3);color:var(--text-secondary)}
+  #bar select{height:var(--control-h-sm);background:var(--surface-raised);color:var(--text-primary);
+       border:var(--border-w) solid var(--border);border-radius:var(--radius-3);font:var(--text-sm)/1 var(--font-sans);padding:0 var(--space-3)}
+  #bar b{font-family:var(--font-mono);font-size:var(--text-xs);font-weight:var(--weight-medium);color:var(--text-muted)}
+  #stage{flex:1;min-height:0;display:flex;justify-content:center;padding:var(--space-7);overflow:hidden;background:var(--surface-sunken)}
+  #panel{width:420px;display:flex;flex-direction:column;min-height:0;background:var(--canvas);
+       border:var(--border-w) solid var(--border);border-radius:var(--radius-4);overflow:hidden}
+  #panel > header{flex:none;display:flex;align-items:center;gap:var(--space-4);height:var(--tab-h);
+       padding:0 var(--panel-pad);border-bottom:var(--border-w) solid var(--border-subtle);background:var(--surface);
+       font-family:var(--font-mono);font-size:var(--text-xs);color:var(--text-muted)}
+  #panel > header strong{font-size:var(--text-sm);font-weight:var(--weight-medium);color:var(--text-primary)}
+  #scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden}
+  #panel > footer{flex:none;display:flex;align-items:center;gap:var(--space-4);padding:var(--space-4) var(--panel-pad);
+       border-top:var(--border-w) solid var(--border-subtle);background:var(--surface);
+       font-size:var(--text-sm);color:var(--text-muted)}
+</style>
+</head>
+<body>
+<div id="bar">
+  <b>sm-prose reference</b>
+  <label>theme
+    <select id="theme"><option value="dark">dark</option><option value="light">light</option></select>
+  </label>
+  <label>density
+    <select id="density"><option value="comfortable">comfortable</option><option value="compact">compact</option></select>
+  </label>
+  <label>turn style
+    <select id="turn">
+      <option value="">bubble-right (default, shipped)</option>
+      <option value="bubble-left">bubble-left</option>
+      <option value="sliver-right">sliver-right</option>
+      <option value="ledger">ledger</option>
+      <option value="rail">rail (previous)</option>
+    </select>
+  </label>
+</div>
+<div id="stage">
+  <div id="panel">
+    <header><strong>claude-1</strong><span>opus · smetana · feat/notarise</span></header>
+    <div id="scroll">
+<div class="sm-prose">
+
+  <article data-turn="person">
+    <p>Notarisation fails on CI only. The same command signs and staples fine on my machine — where do the two runs diverge?</p>
+    <ul data-attachments>
+      <li>ci-notarize.log<span>12 KB</span></li>
+      <li>tauri.conf.json<span>4 KB</span></li>
+    </ul>
+  </article>
+
+  <article data-turn="agent">
+    <details data-reasoning>
+      <summary>Reasoning<time>18s</time></summary>
+      <p>Two candidates. Either the runner has no identity in its keychain and <code>codesign</code> silently falls back to ad-hoc, or the bundle identifier differs and the notary service rejects the submission. The log ends at the submission, so the second is testable first.</p>
+      <p>The log line <code>The signature does not include a secure timestamp</code> only appears for ad-hoc signatures, so it is the first.</p>
+    </details>
+
+    <h2>Where it diverges</h2>
+    <p>The runner never sees your keychain. <code>codesign</code> still <em>succeeds</em> — it falls back to an <strong>ad-hoc signature</strong>, which notarisation refuses. <del>Not an entitlements problem.</del> The fallback is configured at <a data-path="src-tauri/tauri.conf.json" data-kind="file" href="file:///Users/flexo/Desktop/Projects/smetana/src-tauri/tauri.conf.json"><span data-head>src-tauri/</span><span data-tail>tauri.conf.json:41</span></a>, and Apple documents the failure in <a href="https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution">notarizing macOS software</a>.</p>
+
+    <p>Two things differ between the runs:</p>
+    <ul>
+      <li>The signing identity
+        <ul>
+          <li>local reads <code>Developer ID Application</code> from the login keychain</li>
+          <li>CI has no keychain unlocked, so <code>codesign</code> resolves the identity to ad-hoc
+            <ol>
+              <li>import the .p12 into a temporary keychain</li>
+              <li>unlock it for the length of the job</li>
+              <li>delete it in a step that runs on failure too</li>
+            </ol>
+          </li>
+        </ul>
+      </li>
+      <li>The <code>--timeout</code> passed to <code>notarytool</code>, which CI leaves at its default</li>
+    </ul>
+
+    <p>The secrets the workflow expects are here:</p>
+    <p><a data-path=".github/workflows/release" data-kind="dir" href="file:///Users/flexo/Desktop/Projects/smetana/.github/workflows/release"><span data-head>/Users/flexo/Desktop/Projects/smetana/.github/workflows/</span><span data-tail>release</span></a></p>
+
+    <div data-activity="done"><span>72 515 in · 1 204 out · $0.81</span><time>13.0 s</time></div>
+  </article>
+
+  <article data-turn="person">
+    <p>Show me what each run actually used.</p>
+  </article>
+
+  <article data-turn="agent">
+    <h1>Signing</h1>
+    <p>Read from both logs, same commit:</p>
+    <div data-table-scroll>
+      <table>
+        <thead>
+          <tr><th>Step</th><th>Local</th><th data-align="right">ms</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>identity</td><td><code>Developer ID Application</code></td><td data-align="right">12</td></tr>
+          <tr><td>entitlements</td><td><code>entitlements.plist</code></td><td data-align="right">3</td></tr>
+          <tr><td>cdhash</td><td><code>a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4</code></td><td data-align="right">409</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Both runners, every target</h3>
+    <div data-table-scroll>
+      <table data-wide>
+        <thead>
+          <tr><th>Target</th><th>Identity</th><th>Sign</th><th>Notarise</th><th data-align="right">Total</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>macos-arm64 · local</td><td>Developer ID</td><td>ok</td><td>ok</td><td data-align="right">4m 02s</td></tr>
+          <tr><td>macos-arm64 · ci</td><td>ad-hoc</td><td>ok</td><td>rejected</td><td data-align="right">1m 11s</td></tr>
+          <tr><td>macos-x64 · ci</td><td>ad-hoc</td><td>ok</td><td>rejected</td><td data-align="right">1m 09s</td></tr>
+          <tr><td>windows-x64 · ci</td><td>n/a</td><td>ok</td><td>n/a</td><td data-align="right">2m 48s</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>The three commands</h3>
+    <figure data-code data-lang="bash">
+      <figcaption>bash</figcaption>
+      <button type="button" data-copy data-state="idle" aria-label="Copy code"><svg data-icon="copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="14" height="14" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg><svg data-icon="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg><span>Copy</span></button>
+      <pre><code>xcrun notarytool submit target/release/bundle/macos/Smetana.app.zip --keychain-profile "AC_PASSWORD" --wait --timeout 30m
+xcrun stapler staple target/release/bundle/macos/Smetana.app
+codesign -dv --verbose=2 target/release/bundle/macos/Smetana.app</code></pre>
+    </figure>
+
+    <blockquote>
+      <p>A build without notarisation runs locally, but Gatekeeper will not let it start on anyone else's machine.</p>
+      <blockquote>
+        <p>— <code>RELEASING.md</code>, written when the first release was blocked by exactly this.</p>
+      </blockquote>
+    </blockquote>
+
+    <h4>Left to do</h4>
+    <ul data-task>
+      <li data-checked>Reproduce the ad-hoc fallback locally</li>
+      <li data-checked>Confirm the notary rejection message</li>
+      <li>Import the .p12 into a temporary keychain on the runner</li>
+      <li>Re-run the release workflow on this branch</li>
+    </ul>
+
+    <h5>Flags worth pinning</h5>
+    <dl>
+      <dt>--keychain-profile</dt>
+      <dd>Reads the stored notary credentials instead of prompting. Must be created inside the same keychain the job unlocks.</dd>
+      <dt>--timeout 30m</dt>
+      <dd>Notarisation has queued for 22 minutes twice this month; the default gives up first.</dd>
+    </dl>
+
+    <h6>Version pin</h6>
+    <figure data-code data-lang="rust">
+      <figcaption>rust</figcaption>
+      <button type="button" data-copy data-state="idle" aria-label="Copy code"><svg data-icon="copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="14" height="14" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg><svg data-icon="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg><span>Copy</span></button>
+      <pre><code>pub const EXPECTED_BD_VERSION: &amp;str = "1.1.2";</code></pre>
+    </figure>
+
+    <hr>
+
+    <p>Nothing here needs a decision from you yet.</p>
+    <div data-activity="done"><span>73 940 in · 2 118 out · $0.96</span><time>21.4 s</time></div>
+  </article>
+
+  <article data-turn="person">
+    <p>Draw the pipeline, and chart the timings.</p>
+  </article>
+
+  <article data-turn="agent">
+    <figure data-figure>
+      <svg viewBox="0 0 320 60" role="img" aria-label="Pipeline: build, sign, notarise, staple. Notarise is the failing step.">
+        <g fill="none" stroke="currentColor" stroke-width="1">
+          <rect x="0.5" y="22.5" width="66" height="30" rx="3"></rect>
+          <rect x="84.5" y="22.5" width="66" height="30" rx="3"></rect>
+          <rect x="168.5" y="22.5" width="66" height="30" rx="3"></rect>
+          <rect x="252.5" y="22.5" width="66" height="30" rx="3"></rect>
+          <path d="M67 37.5h13M151 37.5h13M235 37.5h13"></path>
+          <path d="M76 34l4 3.5-4 3.5M160 34l4 3.5-4 3.5M244 34l4 3.5-4 3.5"></path>
+        </g>
+        <g text-anchor="middle">
+          <text x="33" y="41">build</text>
+          <text x="117" y="41">sign</text>
+          <text x="201" y="41">notarise</text>
+          <text x="285" y="41">staple</text>
+          <text x="201" y="14" stroke="none">fails here</text>
+        </g>
+        <g stroke="currentColor" stroke-width="1" fill="none">
+          <path d="M201 17v4"></path>
+          <rect x="168.5" y="22.5" width="66" height="30" rx="3" stroke-width="1.75"></rect>
+        </g>
+      </svg>
+      <figcaption>Release pipeline. Notarise is the only step that needs the network, and the only one that reads the keychain twice.</figcaption>
+      <button type="button" data-expand aria-label="Open full size"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path></svg></button>
+    </figure>
+
+    <div data-figures>
+      <figure data-figure>
+        <img src="assets/fig-latency.png" width="680" height="360" alt="Notarisation request latency, p50 and p95, over 24 hours.">
+        <figcaption>Notary latency, 24 h</figcaption>
+        <button type="button" data-expand aria-label="Open full size"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path></svg></button>
+      </figure>
+      <figure data-figure>
+        <img src="assets/fig-bundles.png" width="520" height="360" alt="Bundle size by target: macos-arm64 134 MB, macos-x64 141 MB, windows-x64 118 MB, linux-x64 126 MB.">
+        <figcaption>Bundle size by target</figcaption>
+        <button type="button" data-expand aria-label="Open full size"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path></svg></button>
+      </figure>
+    </div>
+
+    <figure data-figure data-state="loading">
+      <div data-placeholder></div>
+      <figcaption>Queue depth, 7 d</figcaption>
+    </figure>
+
+    <figure data-figure data-state="error">
+      <div data-placeholder><strong>Failed to render</strong><span>assets/queue-depth.svg · unexpected token at line 4</span></div>
+      <figcaption>Queue depth, 7 d</figcaption>
+      <button type="button" data-expand aria-label="Open full size"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path></svg></button>
+    </figure>
+
+    <div data-activity="done"><span>75 006 in · 640 out · $0.71</span><time>9.8 s</time></div>
+  </article>
+
+  <hr data-session>
+
+  <article data-turn="person">
+    <p>Fix the identity lookup, then re-run the workflow.</p>
+  </article>
+
+  <article data-turn="agent">
+    <div data-activity="waiting" role="status"><span data-mark></span><span>claude-1 is thinking</span><time>4s</time></div>
+  </article>
+
+  <article data-turn="agent">
+    <div data-activity="streaming" role="status"><span data-mark></span><span>claude-1 is responding</span><time>12s</time></div>
+    <details data-reasoning open>
+      <summary>Reasoning<time>6s</time></summary>
+      <p>The temporary keychain has to be created before <code>tauri build</code> runs, because the Rust step signs the sidecar binaries on its way through.</p>
+    </details>
+    <p>Adding a keychain step in front of the build, and deleting it in an <code>if: always()</code> step at the end. The identity is read once and passed down as<span data-edge></span></p>
+  </article>
+
+</div>
+    </div>
+    <footer><span style="flex:1">Message the agent</span><span>send</span></footer>
+  </div>
+</div>
+<script>
+  const root = document.documentElement, prose = document.querySelector('.sm-prose');
+  theme.onchange = e => root.setAttribute('data-theme', e.target.value);
+  density.onchange = e => e.target.value === 'compact'
+    ? root.setAttribute('data-density', 'compact') : root.removeAttribute('data-density');
+  turn.onchange = e => e.target.value
+    ? prose.setAttribute('data-turn-style', e.target.value) : prose.removeAttribute('data-turn-style');
+  // The copy control: the app owns this behaviour, the stylesheet owns every state.
+  prose.addEventListener('click', ev => {
+    const b = ev.target.closest('button[data-copy]');
+    if (!b) return;
+    const pre = b.parentElement.querySelector('pre');
+    navigator.clipboard && navigator.clipboard.writeText(pre.textContent);
+    b.dataset.state = 'copied';
+    b.querySelector('span').textContent = 'Copied';
+    clearTimeout(b._t);
+    b._t = setTimeout(() => { b.dataset.state = 'idle'; b.querySelector('span').textContent = 'Copy'; }, 1600);
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,104 @@
+/* ============================================================================
+   sm-prose — turn treatments (exploration).
+
+   Four candidate answers to one question: how does a person know whose sentence
+   they are reading? Each is a `data-turn-style` on the `.sm-prose` root.
+
+   1a · bubble, right IS NOW THE DEFAULT and lives in sm-prose.css — chosen.
+   `data-turn-style="bubble-right"` therefore matches nothing here and falls
+   through to it. What remains below is the three treatments not taken, plus
+   `rail` — the previous default — kept so the exploration page still renders
+   what was compared.
+
+   The agent's turn never changes: it stays the plain ground of the panel.
+   ============================================================================ */
+
+:root{
+  --prose-prompt-glyph:"\203A";   /* the ledger variant's gutter mark */
+}
+
+/* Shared reset — each variant starts from the default bubble stripped back to
+   nothing. Named explicitly so that an unknown value falls through to the base
+   treatment in sm-prose.css. `:where()` keeps this at the same specificity as
+   the base rule, and load order settles it. */
+.sm-prose:where([data-turn-style="bubble-left"],[data-turn-style="sliver-right"],
+                [data-turn-style="ledger"],[data-turn-style="rail"]) article[data-turn="person"]{
+  align-self:stretch;
+  max-width:none;
+  border:none;
+  border-radius:var(--radius-4);
+  background:none;
+  box-shadow:var(--shadow-none);
+  padding:var(--card-pad);
+}
+
+/* ---- rail · the previous default ----------------------------------------
+   A raised surface with a neutral bar down the left edge. Dropped because a
+   left bar is what a quotation uses, and the panel's own blockquote is two
+   steps away from it. */
+.sm-prose[data-turn-style="rail"] article[data-turn="person"]{
+  padding:var(--card-pad) var(--card-pad) var(--card-pad) var(--space-5);
+  border-left:var(--accent-bar-w) solid var(--border-strong);
+  border-radius:var(--radius-0) var(--radius-3) var(--radius-3) var(--radius-0);
+  background:var(--surface-raised);
+  box-shadow:var(--shadow-raised);
+}
+
+/* ---- 1b · bubble, left ---------------------------------------------------
+   The same separate cloud, kept on the column's left edge: a message you can
+   still scan down a single margin with, indented a little from the agent's
+   ground so the shape reads before the surface does. The squared corner points
+   back at the sender. */
+.sm-prose[data-turn-style="bubble-left"] article[data-turn="person"]{
+  align-self:flex-start;
+  max-width:92%;
+  margin-left:var(--space-5);
+  border:var(--border-w) solid var(--border-subtle);
+  border-radius:var(--radius-4) var(--radius-4) var(--radius-4) var(--radius-1);
+  background:var(--surface-raised);
+  box-shadow:var(--shadow-raised);
+}
+
+/* ---- 1c · sliver, right --------------------------------------------------
+   No container at all: the turn moves right, takes a hairline bar on its own
+   right edge and sets its text ragged-left. Side without a box — the cheapest
+   ink of the four, and the one that survives a column full of finished text
+   without adding another rectangle. Only works for short prompts. */
+.sm-prose[data-turn-style="sliver-right"] article[data-turn="person"]{
+  align-self:flex-end;
+  max-width:82%;
+  padding:var(--space-0) var(--space-5) var(--space-0) var(--space-0);
+  border-right:var(--accent-bar-w) solid var(--border-strong);
+  border-radius:var(--radius-0);
+  background:none;
+  color:var(--text-secondary);
+  text-align:right;
+}
+.sm-prose[data-turn-style="sliver-right"] article[data-turn="person"] ul[data-attachments]{
+  justify-content:flex-end;
+}
+
+/* ---- 1d · ledger --------------------------------------------------------
+   The person's turn as the echo of what they typed: a recessed surface with a
+   mono prompt mark in the gutter, the way the composer's own text looks. Reads
+   as input rather than as speech, which is what it is — and it is the only
+   variant that goes *down* instead of up, so it never competes with a raised
+   card elsewhere in the panel. */
+.sm-prose[data-turn-style="ledger"] article[data-turn="person"]{
+  position:relative;
+  padding-left:var(--space-8);
+  border:var(--border-w) solid var(--border-subtle);
+  border-radius:var(--radius-3);
+  background:var(--surface-sunken);
+  color:var(--text-secondary);
+}
+.sm-prose[data-turn-style="ledger"] article[data-turn="person"]::before{
+  content:var(--prose-prompt-glyph);
+  position:absolute;
+  top:var(--card-pad);
+  left:var(--space-5);
+  font-family:var(--font-mono);
+  font-size:var(--text-md);
+  line-height:var(--leading-normal);
+  color:var(--text-muted);
+}
