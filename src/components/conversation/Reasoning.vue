@@ -39,10 +39,11 @@
    number read once, after the fact, the way `waiting`'s ticking clock is read
    while it moves, not the receipt's own tenth-of-a-second precision.
 
-   The `.sm-prose` here is interim too, for the reason `AgentMessage.vue`'s
+   `.sm-prose` no longer wraps this block, for the reason `AgentMessage.vue`'s
    header gives: the contract's own root is the journal `ConversationView.vue`
-   draws, which is smetana-e3mc's, not this task's. Until it lands this block
-   carries its own `.sm-prose` around its one `details` child. */
+   draws now, so `details[data-reasoning]` is emitted bare, as a direct
+   sibling of the other turns under that one root, rather than inside a second
+   `.sm-prose` of its own. */
 import { computed, ref, toRef, watch } from 'vue'
 import Markdown from '../markdown/Markdown.vue'
 import { formatElapsedClock } from './elapsed.js'
@@ -82,10 +83,8 @@ const elapsedText = computed(() => (props.ms == null ? '' : formatElapsedClock(p
 </script>
 
 <template>
-  <div class="sm-prose">
-    <details data-reasoning :open="open" @toggle="onToggle">
-      <summary>Reasoning<time v-if="elapsedText">{{ elapsedText }}</time></summary>
-      <Markdown :text="text" @open="emit('open', $event)" />
-    </details>
-  </div>
+  <details data-reasoning :open="open" @toggle="onToggle">
+    <summary>Reasoning<time v-if="elapsedText">{{ elapsedText }}</time></summary>
+    <Markdown :text="text" @open="emit('open', $event)" />
+  </details>
 </template>

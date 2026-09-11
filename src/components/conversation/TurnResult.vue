@@ -55,10 +55,11 @@
    silhouette for a stopped thing, in place of the pill everything alive
    draws.
 
-   The `.sm-prose` wrapper is interim, for the reason every other conversation
-   component under this heading carries the same one: the contract's own root
-   is the journal `ConversationView.vue` draws, and that landing is
-   smetana-e3mc's, not this task's. */
+   The strip carries no `.sm-prose` wrapper of its own: the contract's root is
+   the journal `ConversationView.vue` draws, which smetana-e3mc landed, and a
+   second one here would re-apply that root's padding and turn gap to this one
+   row. Every rule this element spends lives under that class in
+   `sm-prose.css`, so it has to sit inside the journal to be drawn at all. */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { formatReceiptDuration, formatElapsedClock } from './elapsed.js'
 
@@ -149,11 +150,9 @@ const timeText = computed(() => {
 </script>
 
 <template>
-  <div class="sm-prose">
-    <div :data-activity="state" :role="state === 'waiting' ? 'status' : undefined">
-      <span v-if="state !== 'done'" data-mark></span>
-      <span>{{ primaryText }}</span>
-      <time :aria-hidden="state === 'waiting' ? 'true' : undefined">{{ timeText }}</time>
-    </div>
+  <div :data-activity="state" :role="state === 'waiting' ? 'status' : undefined">
+    <span v-if="state !== 'done'" data-mark></span>
+    <span>{{ primaryText }}</span>
+    <time :aria-hidden="state === 'waiting' ? 'true' : undefined">{{ timeText }}</time>
   </div>
 </template>

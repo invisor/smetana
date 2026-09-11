@@ -19,7 +19,37 @@
    like on screen.
 
    **The scroll rule is the one non-obvious thing left in this file**, and it is
-   written where it is enforced, on `stick` below. */
+   written where it is enforced, on `stick` below.
+
+   **The journal is also the markup contract's own root** (`class="sm-prose"`
+   below, `docs/design_handoff_conversation_panel/markup-contract.md`, section
+   1): one flex column with `gap:var(--prose-turn-gap)` and
+   `padding:var(--panel-pad)`, both spent by `sm-prose.css` rather than by the
+   `journal` style object here, which only adds what the scrolling viewport
+   needs beyond the contract — `flex`, `minWidth`/`minHeight` and the
+   `overflow` pair. `UserMessage.vue`, `AgentMessage.vue` and `Reasoning.vue`
+   used to carry a `.sm-prose` of their own, one turn per root, because this
+   shared one did not exist yet; each now emits its turn bare and this div is
+   the only root the class appears on. `ToolCall.vue` and `TurnResult.vue` are
+   not part of the contract — they take the flex gap like any other sibling —
+   but they are not unchanged either: both used to carry their own horizontal
+   `--panel-pad` to line up with the per-turn `.sm-prose` that no longer wraps
+   their neighbours, and now that this root spends the inset once for the
+   whole column, a second copy on either row would double it against the prose
+   beside it. Their own headers carry the fix; the `failure` row a few screens
+   down, drawn inside this same journal, got the identical correction.
+
+   **`hr[data-session]` has no live trigger here, and that is a fact about the
+   wire rather than a gap in this file.** The contract draws it as a break
+   between sessions, but a panel holds exactly one session's journal
+   (`journalRows` below has no notion of "session" at all), and
+   `session::history`'s own header is explicit that a resumed session's past
+   and its live half are stitched with no marker between them and none
+   wanted — the first live `TurnStart` is the seam, and it is invisible on
+   purpose. So there is nothing in this journal two sessions could sit either
+   side of yet; the element and its styling are ready in `sm-prose.css` for
+   whoever wires a real boundary, and `Gallery.vue` shows its appearance with
+   static markup rather than a synthesised one here. */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import AgentMessage from './AgentMessage.vue'
 import Composer from './Composer.vue'
@@ -330,6 +360,15 @@ const sep = {
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
 }
 
+/* The scrolling viewport, and — via `class="sm-prose"` on the same element in
+   the template — the contract's own root. `display` and `flexDirection` are
+   left to the class, which already spends them (`gap`, `padding` and the font
+   go the same way); an inline style only ever wins over a class for the
+   properties it actually sets, so leaving one out here is what lets the
+   class's own value reach the element rather than being silently shadowed by
+   a copy of it that could drift the day the class changes. `alignItems` stays
+   inline because the class does not spend it — flex's own default is already
+   `stretch`, but writing it down is what the comment below is about. */
 const journal = {
   flex: 1,
   minWidth: 0,
@@ -339,8 +378,6 @@ const journal = {
   /* The end of a short conversation sits at the top of the panel rather than
      floating in the middle of it: a journal is read from its first line down,
      and centring it would move every row as the second one arrived. */
-  display: 'flex',
-  flexDirection: 'column',
   alignItems: 'stretch'
 }
 
@@ -362,12 +399,17 @@ const questionPad = { padding: 'var(--panel-pad) var(--panel-pad) 0' }
    the activity strip's `failed` moment now (`TurnResult.vue`), drawn where
    `row.kind === 'activity'` is below; this is what is left over for the one
    case that is not a turn ending. Prose, so sans; the failed hue and the
-   status glyph, so it is not mistaken for the agent's own words. */
+   status glyph, so it is not mistaken for the agent's own words.
+
+   No horizontal `--panel-pad` of its own: this row is drawn inside the
+   journal, a direct child of its `.sm-prose` root, which already insets the
+   whole column. Unlike `refusal` below — drawn in `foot`, outside that root,
+   and still owing its own inset — a second one here would double it. */
 const failure = {
   display: 'flex',
   alignItems: 'flex-start',
   gap: 'var(--space-3)',
-  padding: 'var(--space-4) var(--panel-pad)',
+  padding: 'var(--space-4) 0',
   color: 'var(--status-failed-fg)',
   font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-sans)'
 }
@@ -406,7 +448,7 @@ const refusal = {
       </span>
     </div>
 
-    <div ref="viewport" :style="journal" @scroll="onScroll">
+    <div ref="viewport" class="sm-prose" :style="journal" @scroll="onScroll">
       <EmptyState
         v-if="!sessionId"
         icon="message-square"

@@ -513,7 +513,13 @@ const MOCK_CONVERSATION = [
   journalEvent(7, 'turn-start', { by: 'person', at: recentAt(18000) }),
   journalEvent(8, 'user-message', {
     text: 'Do the first one, and run the tests.',
-    attachments: ['/Users/you/Desktop/20260910-141202-collision.png'],
+    /* The second name is deliberately long — the chip has to ellipsize it
+       rather than let the bubble grow to fit, which a short name never
+       exercises at the panel's own width. */
+    attachments: [
+      '/Users/you/Desktop/20260910-141202-collision.png',
+      '/Users/you/Desktop/2026-09-10-full-notarization-pipeline-failure-transcript-with-timestamps.log'
+    ],
     at: recentAt(17800)
   }),
   journalEvent(9, 'reasoning', {
