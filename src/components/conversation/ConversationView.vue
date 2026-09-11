@@ -63,10 +63,11 @@ import Icon from '../core/Icon.vue'
 import StatusBadge from '../status/StatusBadge.vue'
 import { isBusy, journalRows } from './journal.js'
 import { basename } from '../../paths.js'
-/* Three stores beside the conversation's own, and each is here because this
-   component is the one that has to answer rather than raise.
+/* Four stores beside the conversation's own, and each is here because this
+   component is the one that has to answer rather than raise — with one
+   exception, named where it is bound below.
 
-   `openExternal` is the sharpest of the three, and it goes against
+   `openExternal` is the sharpest of the four, and it goes against
    `kanban/TaskInspector.vue`, which raises `open` for the view to bind.
    Deliberately: that panel imports no store at all, while this one already
    does, and the failure the other way round is silent — `Markdown` re-emits an
@@ -74,11 +75,25 @@ import { basename } from '../../paths.js'
    `@open` ships an agent's prose with links that do nothing, which no test in
    this project can catch. The panel that owns the session owns its links.
 
+   A local link's own `path` cannot be answered here the same way, and that is
+   a fact about where the rest of the file tree lives rather than a change of
+   heart about the paragraph above: opening a tab is `stores/tabs.js`'s
+   `openFile`, cheap enough to call directly, but revealing a folder needs
+   `views/DesktopApp.vue`'s own `revealInTree` — the tree's expanded set, its
+   selection and a directory read all live in that view, not in a store, and
+   duplicating the walk here would be a second copy of `revealInTree` to keep
+   in step with the first. So `open-local` (`emit` below) is raised rather
+   than answered, the one link event this panel does not own outright — and
+   `filesState.root` is read directly, since a prop threaded down through
+   `Markdown.vue` and `MarkdownInline.vue` needs a value from somewhere, and
+   this file already reads four stores of its own.
+
    The other two are the header's, and neither is on the wire: `session_attach`
    answers with the journal, its sequence number and the state, and nothing
    else. */
 import { agentLabel } from '../../stores/agents.js'
 import { openExternal } from '../../stores/app.js'
+import { filesState } from '../../stores/files.js'
 import { settings } from '../../stores/settings.js'
 import {
   answerQuestion,
@@ -100,6 +115,12 @@ import {
 const props = defineProps({
   sessionId: { type: [String, Number], default: null }
 })
+
+/* `open-local` alone: `open` (the external breed) is answered here directly,
+   through `openExternal`, and never leaves this component — see the note on
+   the store imports above for why the local breed is the one link event this
+   panel raises rather than owns. */
+const emit = defineEmits(['open-local'])
 
 /* The record this panel is drawing.
 
@@ -476,14 +497,24 @@ const refusal = {
             v-if="row.kind === 'user'"
             :text="row.text"
             :attachments="row.attachments"
+            :root="filesState.root ?? ''"
             @open="openExternal"
+            @open-local="emit('open-local', $event)"
           />
-          <AgentMessage v-else-if="row.kind === 'agent'" :text="row.text" @open="openExternal" />
+          <AgentMessage
+            v-else-if="row.kind === 'agent'"
+            :text="row.text"
+            :root="filesState.root ?? ''"
+            @open="openExternal"
+            @open-local="emit('open-local', $event)"
+          />
           <Reasoning
             v-else-if="row.kind === 'reasoning'"
             :text="row.text"
             :ms="row.ms"
+            :root="filesState.root ?? ''"
             @open="openExternal"
+            @open-local="emit('open-local', $event)"
           />
           <ToolCall
             v-else-if="row.kind === 'tool'"
