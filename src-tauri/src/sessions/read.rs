@@ -48,7 +48,7 @@ use super::model::{
 /// single line of megabytes, and none of what this reads is ever that far into
 /// one: `type`, `cwd`, `isSidechain` and the start of a message all sit in the
 /// first few hundred bytes of the record that carries them.
-const MAX_LINE: usize = 64 * 1024;
+pub(crate) const MAX_LINE: usize = 64 * 1024;
 
 /// How far back from the end the last spoken line is looked for. Measured
 /// rather than picked: across this project's 276 transcripts the last message
@@ -94,11 +94,11 @@ const ASSISTANT: &str = "\"type\":\"assistant\"";
 const SIDECHAIN: &str = "\"isSidechain\":true";
 
 /// One line of a transcript, and what it cost to get here.
-struct Line {
+pub(crate) struct Line {
     /// The line was longer than [`MAX_LINE`] and only its start was kept. It is
     /// still counted — the record type is at the front of the record — but it
     /// is not offered to the JSON parser, which would fail on half an object.
-    truncated: bool,
+    pub(crate) truncated: bool,
 }
 
 /// The next line, into a buffer that never grows past [`MAX_LINE`].
@@ -108,7 +108,15 @@ struct Line {
 /// transcript with a 10 MB tool result in it would decide this command's peak
 /// memory. Everything past the cap is read and dropped rather than skipped, so
 /// the reader still ends up on the next line.
-fn next_line(reader: &mut impl BufRead, line: &mut Vec<u8>) -> std::io::Result<Option<Line>> {
+///
+/// `pub(crate)` for one reader outside this module: `session::history` streams
+/// the same files, under the same ceiling, for the same reason. A second
+/// bounded reader written beside it would be a second chance to get the
+/// interrupted-read and the over-long-line cases exactly right.
+pub(crate) fn next_line(
+    reader: &mut impl BufRead,
+    line: &mut Vec<u8>,
+) -> std::io::Result<Option<Line>> {
     line.clear();
     let mut seen = 0usize;
     let mut truncated = false;
@@ -458,6 +466,55 @@ pub fn list_in(root: &Path, project: &Path) -> Vec<SessionSummary> {
     sessions
 }
 
+/// The transcript one session wrote, under a given `projects` root.
+///
+/// The pair `(cwd, id)` is how Claude Code itself names a session — `--resume`
+/// resolves an id against the directory it is run in — so it is the pair this
+/// answers to, and the same one `crate::session::history` replays a
+/// conversation from.
+///
+/// The folder is found rather than composed, and that is the whole of the
+/// method: the name is the working directory with its non-alphanumerics
+/// replaced, and this app deliberately does not claim to know which characters
+/// Claude Code replaces today. [`folder_could_hold`] can rule a folder *out*
+/// without ever letting a genuinely different path through, which is exactly
+/// the guarantee wanted here, and the id is a UUID — so a file of that name
+/// under a folder that could hold this directory is this session's transcript
+/// and cannot be another's.
+///
+/// `root` is a parameter for [`list_in`]'s reason: it is what makes this
+/// testable over a temporary directory.
+///
+/// The last guard is about the id, which travels from the front end with a
+/// worktree path beside it: `is_transcript` is what stops `../../..` in an id
+/// from naming a file elsewhere on the machine, and it is the same rule the
+/// Sessions tab's own verbs are held to.
+pub fn transcript_in(root: &Path, cwd: &Path, id: &str) -> Option<PathBuf> {
+    let real = cwd.canonicalize().ok().filter(|real| real != cwd);
+    let entries = std::fs::read_dir(root).ok()?;
+    for folder in entries.flatten() {
+        let name = folder.file_name().to_string_lossy().into_owned();
+        let keep = folder_could_hold(&name, cwd)
+            || real.as_deref().is_some_and(|real| folder_could_hold(&name, real));
+        if !keep {
+            continue;
+        }
+        let path = folder.path().join(format!("{id}.jsonl"));
+        if super::model::is_transcript(&path, root) && path.is_file() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// The transcript one session wrote. `None` on a machine with no Claude Code on
+/// it, and for a session whose file has been deleted since — neither is a
+/// failure, and the caller's answer to both is a conversation with no history
+/// in front of it.
+pub fn transcript(cwd: &Path, id: &str) -> Option<PathBuf> {
+    transcript_in(&projects_root()?, cwd, id)
+}
+
 /// Where Claude Code keeps its transcripts. `HOME` rather than a crate, the way
 /// `agents::library`, `runs::browser` and `tracker::access` already read it.
 pub(super) fn projects_root() -> Option<PathBuf> {
@@ -548,6 +605,44 @@ mod tests {
                 assistant_line(cwd, "Moved it."),
             ],
         )
+    }
+
+    /* ---- one session's own file ------------------------------------------ */
+
+    #[test]
+    fn a_session_is_found_by_the_pair_claude_code_names_it_by() {
+        let root = temp_dir("one-root");
+        let project = temp_dir("one-project");
+        let worktree = project.join(".worktrees/task");
+        std::fs::create_dir_all(&worktree).expect("a worktree");
+        let wanted = ordinary_session(&root, &worktree, "ours");
+        // The same id under another directory is another session as far as the
+        // harness is concerned, and must not be handed back for this one.
+        ordinary_session(&root, &project, "theirs");
+
+        assert_eq!(transcript_in(&root, &worktree, "ours").as_deref(), Some(wanted.as_path()));
+        assert_eq!(
+            transcript_in(&root, &worktree, "theirs"),
+            None,
+            "a session of the project root is not the worktree's"
+        );
+        assert_eq!(transcript_in(&root, &worktree, "never-written"), None);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    /// The id travels from the front end beside a path, so it is the one part
+    /// of the name this app did not choose.
+    #[test]
+    fn an_id_that_walks_out_of_the_projects_root_names_nothing() {
+        let root = temp_dir("escape-root");
+        let project = temp_dir("escape-project");
+        ordinary_session(&root, &project, "ours");
+        std::fs::write(root.join("outside.jsonl"), "{}\n").expect("a file to aim at");
+
+        assert_eq!(transcript_in(&root, &project, "../outside"), None);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&project);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 pub mod commands;
 pub mod driver;
+pub mod history;
 pub mod journal;
 pub mod model;
 pub mod permission;

@@ -6,7 +6,7 @@
 //! testable at all — the disk half is `read.rs`, and it carries its own tests
 //! over temporary directories.
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -121,6 +121,16 @@ pub struct Record {
     /// generated for the session. See [`generated_title`].
     #[serde(default)]
     pub ai_title: Option<String>,
+    /// When the record was written, RFC 3339, as Claude Code stamps it.
+    ///
+    /// Nothing in the Sessions tab reads it — a row's time is the file's mtime,
+    /// which is free and says the same thing — and it is here for the one
+    /// reader that cannot use an mtime: `session::history` replays a transcript
+    /// into a journal, and every event in a journal carries the moment it
+    /// happened. One mtime on a thousand events would date the whole
+    /// conversation to the minute the file was last touched.
+    #[serde(default)]
+    pub timestamp: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -327,6 +337,48 @@ pub fn spoken_text(record: &Record) -> Option<(String, String)> {
 /// by `smetana`.
 pub fn belongs_to(cwd: &str, project: &Path) -> bool {
     Path::new(cwd).starts_with(project)
+}
+
+/// The directory a recorded session may be picked up again in, or `None` for
+/// one it may not.
+///
+/// It sits beside [`belongs_to`] because it is that rule plus two more, and
+/// because **both workers ask it**: a resume goes down the PTY road
+/// (`terminal::service`) under a harness this app cannot drive, and down the
+/// driven road (`session::service`) under one it can. Two copies of a path
+/// guard is two chances to have exactly one of them right.
+///
+/// Three clauses, and the third is the one that is not obvious. The path
+/// arrives from the front end, so it is checked rather than trusted: it has to
+/// lie inside the project, by [`belongs_to`] — the very rule that decided this
+/// session was this project's when the list was read, asked again here rather
+/// than spelled out a second time — it must hold no `..`, because
+/// `Path::starts_with` is lexical and would otherwise wave through
+/// `<project>/../../elsewhere`, and it has to be a directory that is there now.
+///
+/// `also` is the project's canonical path when it has one, and it is here for
+/// the reason [`super::read::list_in`] carries it: `/tmp` on macOS is
+/// `/private/tmp`, so a transcript records whichever spelling Claude Code was
+/// started with while the front end holds whichever the project was opened
+/// with. Comparing against both is cheaper than refusing a session the list
+/// itself was happy to draw.
+///
+/// **The refusal is a bare `None` and the sentence is the caller's**, because
+/// the two callers answer in two different error vocabularies —
+/// `TerminalError::BadCwd` and `SessionError::Spawn` — and a rule this pure has
+/// no business knowing either. That they say the same words to a person is
+/// `session::service`'s doing, where it borrows the terminal's own sentence.
+pub fn resume_cwd(root: &Path, also: Option<&Path>, cwd: &str) -> Option<PathBuf> {
+    if cwd.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(cwd);
+    if path.components().any(|part| matches!(part, Component::ParentDir)) {
+        return None;
+    }
+    let ours =
+        belongs_to(cwd, root) || also.is_some_and(|other| belongs_to(cwd, other));
+    (ours && path.is_dir()).then_some(path)
 }
 
 /// Whether a folder under `~/.claude/projects` could hold sessions of this

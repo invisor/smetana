@@ -401,7 +401,16 @@ fn records_a_restorable(intent: &Intent) -> bool {
 /// nothing, exactly as a harness that cannot be told an id records nothing.
 /// Everything else gets a fresh id, when the profile can be told one and the
 /// machine will give the bytes.
-fn conversation_for(profile: &'static dyn agents::Profile, intent: &Intent) -> Option<String> {
+///
+/// **`pub(crate)` because the driven worker asks it too**, and asks it about
+/// the same two intents a person can start there. A driven session records into
+/// the very same `.smetana/agents.json`, under the same key, and an offline row
+/// cannot know which road made it — so the decision of *whether* to record, and
+/// under what name, has to be one function rather than two that agree today.
+pub(crate) fn conversation_for(
+    profile: &'static dyn agents::Profile,
+    intent: &Intent,
+) -> Option<String> {
     match intent {
         Intent::ResumeSession { id, fork: false, .. } => Some(id.clone()),
         Intent::ResumeSession { .. } => None,
@@ -657,35 +666,19 @@ fn shell_cwd(root: &Path, rel: Option<&str>) -> Result<PathBuf, TerminalError> {
 /// after the merge, with the transcript left behind, which is the ordinary case
 /// on any machine that has done a few tasks — is a refusal, not a substitution.
 ///
-/// Three clauses, and the third is the one that is not obvious. The path
-/// arrives from the front end, so it is checked rather than trusted: it has to
-/// lie inside the project, by `sessions::model::belongs_to` — the very rule
-/// that decided this session was this project's when the list was read, asked
-/// again here rather than spelled out a second time — it must hold no `..`,
-/// because `Path::starts_with` is lexical and would otherwise wave through
-/// `<project>/../../elsewhere`, and it has to be a directory that is there now.
+/// This worker's half of it: the shared rule, with this subsystem's own word
+/// for a refusal put on it.
 ///
-/// `also` is the project's canonical path when it has one, and it is here for
-/// the reason `sessions::read::list_in` carries it: `/tmp` on macOS is
-/// `/private/tmp`, so a transcript records whichever spelling Claude Code was
-/// started with while the front end holds whichever the project was opened
-/// with. Comparing against both is cheaper than refusing a session the list
-/// itself was happy to draw.
+/// **The rule itself lives in `sessions::model::resume_cwd`**, beside the
+/// `belongs_to` it is built out of, because the driven worker asks the same
+/// question of the same path and a second copy is two chances to have exactly
+/// one of them right. What stays here is the sentence: `BadCwd` is the
+/// terminal's error vocabulary, and `session::service` borrows this very
+/// variant rather than wording a second refusal, so the two roads refuse a
+/// missing worktree in identical words.
 fn resume_cwd(root: &Path, also: Option<&Path>, cwd: &str) -> Result<PathBuf, TerminalError> {
-    let bad = || TerminalError::BadCwd(cwd.to_owned());
-    if cwd.is_empty() {
-        return Err(bad());
-    }
-    let path = PathBuf::from(cwd);
-    if path.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
-        return Err(bad());
-    }
-    let ours = crate::sessions::model::belongs_to(cwd, root)
-        || also.is_some_and(|other| crate::sessions::model::belongs_to(cwd, other));
-    if !ours || !path.is_dir() {
-        return Err(bad());
-    }
-    Ok(path)
+    crate::sessions::model::resume_cwd(root, also, cwd)
+        .ok_or_else(|| TerminalError::BadCwd(cwd.to_owned()))
 }
 
 /// Everything the worker does synchronously. `ShutDown` is handled by the
