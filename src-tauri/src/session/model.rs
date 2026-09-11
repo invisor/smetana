@@ -76,6 +76,32 @@ pub enum SessionState {
     Failed,
 }
 
+/// The whole of the `session:state` payload.
+///
+/// A type rather than a `json!` literal at the emit, and the third field is why
+/// it became one. `id` and `state` were two words nobody could misspell twice;
+/// `conversation` is the name a row in the agents panel is keyed by, is read in
+/// `stores/conversation.js` off this very object, and nothing mechanical joins
+/// the two sides — so it is written down here, once, where the store's contract
+/// is the rest of this file.
+///
+/// **The conversation id travels on every state change rather than once at the
+/// start**, because a state event is the one thing a window is told about a
+/// session it has not attached to. It is the same value for the life of the
+/// session and repeating it costs a UUID per change; the alternative is a
+/// window that missed one message and never learns the name of the row it is
+/// drawing.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct StateChange {
+    pub id: SessionId,
+    pub state: SessionState,
+    /// The id this session's transcript is named after and its record in
+    /// `.smetana/agents.json` is keyed by, or `None` for a session that has
+    /// neither: a fork, whose new transcript Claude Code names itself, and a
+    /// machine that would not give the random bytes.
+    pub conversation: Option<String>,
+}
+
 #[derive(Clone, Debug, thiserror::Error, serde::Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "message")]
 pub enum SessionError {
