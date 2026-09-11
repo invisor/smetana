@@ -20,7 +20,21 @@
    The text is markdown, drawn by the shared component like every other piece of
    prose here, and `open` is forwarded for the reason `AgentMessage.vue` gives:
    a link inside reasoning is still a link, and it must leave for the person's
-   own browser rather than replace the app. */
+   own browser rather than replace the app.
+
+   `summary` says `Reasoning`, the word the contract's own example spells —
+   `<summary>Reasoning<time>18s</time></summary>` — and not this component's
+   older `Thinking`. There is deliberately no `<time>` here yet: the elapsed
+   clock is section 6's "the agent is working" strip, which this task does not
+   own (smetana-epzb), and this component has no elapsed value to put in one —
+   `expanded` is the only prop past the text. Whoever picks that task up adds
+   it here rather than finding a `<summary>` that already looks finished
+   without it.
+
+   The `.sm-prose` here is interim too, for the reason `AgentMessage.vue`'s
+   header gives: the contract's own root is the journal `ConversationView.vue`
+   draws, which is smetana-e3mc's, not this task's. Until it lands this block
+   carries its own `.sm-prose` around its one `details` child. */
 import { ref, toRef, watch } from 'vue'
 import Markdown from '../markdown/Markdown.vue'
 
@@ -55,7 +69,7 @@ function onToggle(event) {
 <template>
   <div class="sm-prose">
     <details data-reasoning :open="open" @toggle="onToggle">
-      <summary>Thinking</summary>
+      <summary>Reasoning</summary>
       <Markdown :text="text" @open="emit('open', $event)" />
     </details>
   </div>

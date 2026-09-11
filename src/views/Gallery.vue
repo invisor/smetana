@@ -3390,11 +3390,22 @@ const menuTargetStyle = {
            control — a task item's box is drawn in CSS and clicking it does
            nothing. `sm-prose.css` paints everything below off `class="sm-prose"`
            alone — neither `Markdown` nor `MarkdownInline` carries a `:style`
-           any more. -->
+           any more.
+
+           Each sample sits inside `article[data-turn="agent"]`, the panel's own
+           box, rather than as a bare child of `.sm-prose`: that root is a flex
+           column with `gap:var(--prose-turn-gap)` — the space between turns —
+           and a `<p>`/`<h1>` sitting directly under it would carry that gap on
+           top of its own `margin-bottom:var(--prose-block-gap)`, doubling every
+           paragraph's air. One `article` child makes the gap inert (nothing
+           beside it to space from) and shows the specimen in the box it is
+           actually read inside. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start' }">
         <div :style="{ width: '320px' }">
           <div class="sm-prose">
-            <Markdown :text="MARKDOWN_SAMPLE" @open="openExternal" />
+            <article data-turn="agent">
+              <Markdown :text="MARKDOWN_SAMPLE" @open="openExternal" />
+            </article>
           </div>
         </div>
         <!-- `kbd` and `small` have no markdown spelling this parser reaches
@@ -3404,10 +3415,12 @@ const menuTargetStyle = {
              `Markdown`. -->
         <div :style="{ width: '320px' }">
           <div class="sm-prose">
-            <p>
-              Press <kbd>⌘</kbd>+<kbd>K</kbd> to open the palette.
-              <small>Works from anywhere in the app.</small>
-            </p>
+            <article data-turn="agent">
+              <p>
+                Press <kbd>⌘</kbd>+<kbd>K</kbd> to open the palette.
+                <small>Works from anywhere in the app.</small>
+              </p>
+            </article>
           </div>
         </div>
       </div>

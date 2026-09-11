@@ -24,7 +24,12 @@
    last inside the person's own `article`, which is what lets it and the prose
    above it share one surface instead of sitting in two boxes. `basename` is
    `src/paths.js`'s and is deliberately not written out again here — that
-   function was three disagreeing copies once. */
+   function was three disagreeing copies once.
+
+   The `.sm-prose` here is interim, for the reason `AgentMessage.vue`'s header
+   gives: the contract's own root is the journal `ConversationView.vue` draws,
+   which is smetana-e3mc's, not this task's. Until it lands each message
+   carries its own `.sm-prose`, one turn per root. */
 import Markdown from '../markdown/Markdown.vue'
 import { basename } from '../../paths.js'
 

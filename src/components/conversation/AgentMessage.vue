@@ -19,7 +19,14 @@
    raises the href at every level of its tree, and whatever draws this binds it
    to `openExternal` in `stores/app.js`, because a navigation inside the webview
    would replace the app. Binding `:text` alone ships an agent's prose with
-   links that do nothing, and no test in this project can catch that. */
+   links that do nothing, and no test in this project can catch that.
+
+   The `.sm-prose` here is interim. The contract's own root is the journal that
+   holds every turn — `.sm-prose` as one flex column, `gap:var(--prose-turn-gap)`
+   between `article`s — and that root belongs to `ConversationView.vue`, which
+   is smetana-e3mc's, the turns task, not this task's. Until it lands each
+   message carries its own `.sm-prose`, one turn per root, which is why the gap
+   is inert here: there is nothing beside the single `article` to space from. */
 import Markdown from '../markdown/Markdown.vue'
 
 defineProps({
