@@ -17,7 +17,7 @@
    stays put while this scrolls, and where the run state and the writes it needs
    already are — none of which this file knows or needs to learn. */
 import { computed } from 'vue'
-import Markdown from './Markdown.vue'
+import Markdown from '../markdown/Markdown.vue'
 import Tooltip from '../core/Tooltip.vue'
 import StatusBadge from '../status/StatusBadge.vue'
 import TypeBadge from './TypeBadge.vue'
