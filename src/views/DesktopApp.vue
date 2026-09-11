@@ -684,9 +684,23 @@ async function newAgent() {
        back everything it put on screen; what is left to undo is this function's
        own two changes. There is no rethrow because there is nobody above to
        catch one — this is an event handler — and the catch is also what stops
-       Vue's unhandled-rejection warning repeating what the store already said. */
-    agentAim.set(path, aimed)
-    if (refused) conversationState.lastError = refused
+       Vue's unhandled-rejection warning repeating what the store already said.
+
+       **Only if nobody has moved since**, which is the guard `createSession`
+       puts on `terminalState.activeId` around its own await and the same reason
+       for it: a spawn takes about a second, and `selectAgent` — a row click, or
+       the `lastRunStart` watcher handing over to a run's next batch — can aim
+       this project inside that second. Putting a stale value back would take the
+       tab off the agent somebody has just been given. The aim is still this
+       function's to restore exactly while it is still the `null` it left, and
+       the sentence exactly while nothing else has said anything.
+
+       Written into the Map rather than through `showAgentTab`: that function
+       would bring the tab forward again, and if the project has no other agent
+       the watcher on `hasAgentTab` has just taken the person to the board. What
+       is being restored is where the tab points, not where the person is. */
+    if (agentAim.get(path) === null) agentAim.set(path, aimed)
+    if (refused && !conversationState.lastError) conversationState.lastError = refused
   }
 }
 
@@ -2573,10 +2587,19 @@ const activeTerminal = computed(() => terminalTab(project.activeTab))
 /* What the Agent tab is aimed at, per project: the id of a driven conversation,
    or `null` for whichever PTY session the agents panel has selected.
 
-   **One field, and `showAgentTab` below is the only thing that writes it** — so
-   what writes the aim is that function's callers, whatever the list grows to,
-   rather than a list here somebody has to remember to extend. They fall into two
-   kinds. Starting a conversation is one, and it is `newAgent` alone. The other
+   **One field, written by `showAgentTab` below** — so what aims this tab is that
+   function's callers, whatever the list grows to, rather than a list here
+   somebody has to remember to extend. They fall into two kinds.
+
+   There is a second writer and it is deliberate: `newAgent`'s catch puts the
+   previous aim back when a press started nothing, and it writes this Map
+   directly rather than calling `showAgentTab`. **Going through that function
+   would bring the tab forward again**, which is exactly wrong in the case the
+   restore exists for — with no other agent in the project, the fallback's own
+   failed ticket has just taken `hasAgentTab` false and the watcher below has
+   landed somebody on the board. The restore is about what the tab is aimed at if
+   they go back to it, not about putting them on it. Do not "unify" the two; the
+   bypass is the point. Starting a conversation is one, and it is `newAgent` alone. The other
    is every road that puts a PTY agent in front, which today is the
    `createSession` roads, each moving the aim while starting something;
    `selectAgent`, which moves it while starting nothing; and `attachToAgent`,
@@ -2647,18 +2670,26 @@ const conversationId = computed(() => {
   return aimed !== null && conversationsIn(activePath.value).includes(aimed) ? aimed : null
 })
 
-/* Whether that panel is on screen this moment, which decides **which of the two
-   readers says a refusal**: `conversationState.lastError` is one sentence for a
-   person, drawn as a line inside the panel where what it is about is, and as a
-   toast in the corner when there is no panel to put it in — a driven start that
-   never made a session draws no panel at all, and without the toast that
-   sentence reached nobody but the console.
+/* Whether that panel is on screen this moment.
 
    The tab test is enough on its own: every branch of the centre above the
    conversation's is a tab of another kind, so `activeTab === 'terminal'` with an
    aimed conversation is exactly the state in which that panel is mounted. */
 const conversationPanelOpen = computed(
   () => project.activeTab === 'terminal' && conversationId.value !== null
+)
+
+/* **Which of the two readers says a refusal.** `conversationState.lastError` is
+   a sentence and the session it is about; the panel draws the ones about the
+   session it is holding, and the corner draws everything else — a refusal for a
+   session that was never made, one about a conversation nobody is looking at,
+   one raised while the centre is on the board. Without the second reader those
+   reached nobody but the console; without the first, the corner would announce
+   what the panel is already saying an inch away. */
+const refusalInPanel = computed(
+  () =>
+    conversationPanelOpen.value &&
+    conversationState.lastError?.session === conversationId.value
 )
 
 /* The tree and the tabs open together with the project. By this point settings
@@ -6810,18 +6841,18 @@ const toastStackStyle = {
         @close="terminalState.lastError = null"
       />
       <!-- The driven sessions' half of the same thing, and it is here because
-           the panel that draws this sentence inline is not always on screen:
-           a start that made no session draws no panel, so without this the
-           worker's refusal reached nobody. Suppressed while the panel *is*
-           drawn, so it is never said twice — see `conversationPanelOpen`.
-           One title for every refusal on this road, the way the file tree's is
-           one title: they are all one thing failing, and the store's sentence
-           is what says which. -->
+           the panel that draws this sentence inline cannot draw all of them: it
+           draws the ones about the session it is holding, and a start that made
+           no session has none. This is the reader for everything it refuses —
+           see `refusalInPanel`, which is also what keeps a sentence from being
+           said twice. One title for every refusal on this road, the way the file
+           tree's is one title: they are all one thing failing to be reached, and
+           the store's sentence is what says which. -->
       <Toast
-        v-if="conversationState.lastError && !conversationPanelOpen"
+        v-if="conversationState.lastError && !refusalInPanel"
         tone="error"
         title="Could not reach the agent session"
-        :description="conversationState.lastError"
+        :description="conversationState.lastError.text"
         @close="conversationState.lastError = null"
       />
       <!-- A repair's success, which the board coming back does not say: the

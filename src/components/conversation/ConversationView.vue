@@ -123,6 +123,14 @@ const rows = computed(() => journalRows(held.value?.events ?? []))
    journal, because it is the one thing here that is a control. */
 const question = computed(() => held.value?.question ?? null)
 
+/* The last refusal, if it is this session's — see `refusal` below for why the
+   test is on the session rather than on there being one at all. */
+const ourRefusal = computed(() =>
+  conversationState.lastError?.session === props.sessionId
+    ? conversationState.lastError.text
+    : ''
+)
+
 const state = computed(() => held.value?.state ?? 'starting')
 const busy = computed(() => isBusy(state.value))
 
@@ -352,9 +360,15 @@ const failure = {
   font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-sans)'
 }
 
-/* The store's one sentence for a person, drawn as a line inside the panel
-   rather than as a toast in the corner: what it is about is the thing somebody
-   just pressed here, and it is cleared by the next call that answers. */
+/* The store's sentence for a person, drawn as a line inside the panel rather
+   than as a toast in the corner — but **only the sentences about the session
+   this panel is holding**. The store carries the session a refusal belongs to
+   for exactly this: a spawn refusal for a session that was never made has
+   nothing to do with a conversation somebody is reading, and this line has no
+   dismiss and clears only on the next call that answers, so it would have stood
+   at the foot of a healthy conversation for as long as the window lived.
+   Everything this refuses is drawn by the toast in `DesktopApp.vue`'s corner,
+   which is the reader for whatever has no panel of its own. */
 const refusal = {
   display: 'flex',
   alignItems: 'flex-start',
@@ -437,9 +451,9 @@ const refusal = {
           @answer="answer"
         />
       </div>
-      <div v-if="conversationState.lastError" :style="refusal">
+      <div v-if="ourRefusal" :style="refusal">
         <Icon name="x" :size="13" :stroke-width="2.25" />
-        <span>{{ conversationState.lastError }}</span>
+        <span>{{ ourRefusal }}</span>
       </div>
       <Composer
         v-if="held"

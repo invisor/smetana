@@ -242,8 +242,12 @@ was named.
 The Agent tab is **three branches over two components** since smetana-5ijg, and the seam is one `v-if`
 on which kind of session it is aimed at: `ConversationView.vue` with a driven session's id, or this
 same `TerminalView.vue` with `terminalState.activeId`. What decides is `agentAim` in `DesktopApp.vue`,
-one field per project written by `showAgentTab` and by nothing else — so what writes the aim is that
-function's callers, however many there come to be, rather than a list to keep in step with it. They
+one field per project written by `showAgentTab` — so what aims the tab is that function's callers,
+however many there come to be, rather than a list to keep in step with it. The one writer that is not
+that function is `newAgent`'s catch, putting the previous aim back when a press started nothing: it
+writes the field directly **because going through `showAgentTab` would bring the tab forward again**,
+and in the case that restore exists for the watch on `hasAgentTab` has just taken the person to the
+board. What is restored is where the tab points, not where they are standing. They
 fall into two kinds: starting a conversation, which is `newAgent` alone, and every road that puts a PTY
 agent in front — the `createSession` roads, which move the aim while starting something; `selectAgent`,
 which moves it while starting nothing; and `attachToAgent`, which moves it as a side effect of handing

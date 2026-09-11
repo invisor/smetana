@@ -23,21 +23,27 @@ export const conversationState = reactive({
      the reason `terminalState.ready` is — a panel that draws before the events
      are subscribed to would be drawing a conversation that cannot move. */
   ready: false,
-  /* One sentence for a person, or null, with **two readers**: a line inside the
-     conversation panel, and a toast in `DesktopApp.vue`'s corner drawn only
-     while that panel is not — a driven start that made no session draws no
-     panel at all, so without the second one every failure of that road reached
-     nobody but the console.
+  /* The last refusal, as `{ session, text }`, or null — **one sentence for a
+     person and the session it is about**.
 
-     A string all the same, and not the `{ title, description }` pair
-     `terminals.js` keeps, because the two readers want different halves of such
-     a pair and only one of them wants both. The panel needs no title: it is
-     drawn against the very thing the sentence is about, and a heading over it
-     would be a second way of saying "this session". The corner does need one,
-     and it is the same one every time — every refusal on this road is one thing
-     failing to be reached — so it is a constant at that one call site rather
-     than a field every `report` here would have to invent a value for. The
-     worker's own words are the whole of what varies. */
+     Two readers, and the session is what decides which of them says it. A line
+     inside the conversation panel, drawn only by the panel holding *that*
+     session; and a toast in `DesktopApp.vue`'s corner, which draws everything
+     the panel does not. `session` is `null` for a refusal that belongs to no
+     conversation at all — a start that never made one — and the corner is the
+     only reader such a sentence can have.
+
+     The pair is `{ session, text }` and not `terminals.js`'s `{ title,
+     description }`, because the title is the one part that does not vary: every
+     refusal on this road is one thing failing to be reached, so it is a
+     constant at the toast's own call site rather than a field every `report`
+     below would have to invent a value for. The panel needs no title at all —
+     it is drawn against the very thing the sentence is about — and what it does
+     need is exactly what the title cannot give it: whether this sentence is
+     about the session on screen. Without that, a spawn refusal for a session
+     that never existed painted itself at the foot of a healthy conversation and
+     stayed there, since that line has no dismiss and clears only on the next
+     call that answers. */
   lastError: null
 })
 
@@ -180,9 +186,13 @@ function sentence(error) {
   return typeof message === 'string' && message ? message : String(error)
 }
 
-function report(what, error) {
+/* `session` is the conversation the refusal belongs to, and `null` when it
+   belongs to none — a start that never made one. It is the first argument
+   because it is the thing a caller cannot leave out by accident: every call
+   below has one to hand, and the only `null` is written as `null`. */
+function report(session, what, error) {
   console.error(`[conversation] ${what} failed:`, error)
-  conversationState.lastError = sentence(error)
+  conversationState.lastError = { session, text: sentence(error) }
 }
 
 /* Append a batch, or say that it cannot be appended.
@@ -230,7 +240,7 @@ export async function attach(id) {
   try {
     await initConversation()
   } catch (err) {
-    report('subscribing to the session events', err)
+    report(id, 'subscribing to the session events', err)
     return
   }
   const current = invoke('session_attach', { id })
@@ -249,7 +259,7 @@ export async function attach(id) {
     // A newer attach has already overtaken this one; its outcome is what the
     // panel should reflect, not this rejection.
     if (attaching.get(id) !== current) return
-    report('attaching to a session', err)
+    report(id, 'attaching to a session', err)
   }
 }
 
@@ -427,7 +437,7 @@ export async function startConversation(project, intent = { kind: 'bare' }) {
     await attach(id)
     return id
   } catch (err) {
-    report('starting a session', err)
+    report(null, 'starting a session', err)
     return null
   }
 }
@@ -454,7 +464,7 @@ export async function sendMessage(id, text, attachments = []) {
        by the other road. */
     if (drafts.get(id) === text) drafts.set(id, '')
   } catch (err) {
-    report('sending a message', err)
+    report(id, 'sending a message', err)
   }
 }
 
@@ -467,7 +477,7 @@ export async function answerQuestion(id, question, decision) {
     await invoke('session_answer', { id, question, decision })
     conversationState.lastError = null
   } catch (err) {
-    report('answering a question', err)
+    report(id, 'answering a question', err)
   }
 }
 
@@ -479,6 +489,6 @@ export async function stopConversation(id) {
     await invoke('session_stop', { id })
     conversationState.lastError = null
   } catch (err) {
-    report('stopping a session', err)
+    report(id, 'stopping a session', err)
   }
 }

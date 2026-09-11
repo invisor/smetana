@@ -211,7 +211,11 @@ describe('the conversation store', () => {
     await stores.conversation.attach(1)
     await stores.conversation.answerQuestion(1, 'q1', 'allow')
 
-    expect(stores.conversation.conversationState.lastError).toContain('q1')
+    /* The sentence, and the session it is about: the panel draws a refusal only
+       for the conversation it is holding, so a refusal that lost its session
+       would be drawn by nobody or by the wrong panel. */
+    expect(stores.conversation.conversationState.lastError).toMatchObject({ session: 1 })
+    expect(stores.conversation.conversationState.lastError.text).toContain('q1')
   })
 
   /* Subscribing is an `invoke` too — `plugin:event|listen` — so it can be
@@ -277,7 +281,7 @@ describe('the conversation store', () => {
        here — and a `toBeTruthy` would be satisfied by the `session_attach` that
        follows if `register` ever stopped rethrowing, which is the other road to
        a filled `lastError` and a different fault entirely. */
-    expect(stores.conversation.conversationState.lastError).toContain(
+    expect(stores.conversation.conversationState.lastError.text).toContain(
       'the second subscription is refused'
     )
     // The half that did go up came back down, so a retry starts from nothing.
@@ -350,6 +354,20 @@ describe('the conversation store', () => {
       stores.conversation.detach(7)
 
       expect(stores.conversation.conversationsIn('/p')).toEqual([7])
+    })
+  })
+
+  /* The one refusal that belongs to no conversation, which is what `session:
+     null` is for: there is no panel to draw it, so the toast in the corner is
+     the only reader it can have. */
+  it('reports a start that never happened against no session at all', async () => {
+    const { ipc, stores } = await ready()
+    ipc.fail('session_start', new Error('claude could not be started'))
+    await stores.conversation.startConversation('/p')
+
+    expect(stores.conversation.conversationState.lastError).toEqual({
+      session: null,
+      text: 'claude could not be started'
     })
   })
 
