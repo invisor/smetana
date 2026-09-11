@@ -11,6 +11,7 @@ import { fileText } from '../../support/fixtures.js'
    anybody resetting them when the project changes, which is the whole reason
    they are computed from the session list instead of held beside it. */
 
+let conversation
 let ipc
 let settings
 let tabs
@@ -39,6 +40,7 @@ beforeEach(async () => {
   settings = loaded.stores.settings
   tabs = loaded.stores.tabs
   terminals = loaded.stores.terminals
+  conversation = loaded.stores.conversation
   loaded.stores.files.setRoot('/p')
   ipc.on('files_read', (args) => fileText({ path: args.path, text: `text of ${args.path}` }))
   ipc.on('terminal_list', [])
@@ -73,6 +75,35 @@ describe('the Agent tab', () => {
     expect(tabs.tabList.value[0]).toMatchObject({ kind: 'pinned', label: 'Kanban' })
     // Sans label and no close button, which is what `pinned` means to Tab.vue.
     expect(tabs.tabList.value[1]).toMatchObject({ kind: 'pinned', label: 'Agent' })
+  })
+
+  /* The other kind of agent session, and the reason this tab is derived from
+     two stores. A `Bare` session is driven by the worker rather than run under
+     a PTY, so it appears in no `terminal_list` at all — and the tab it needs is
+     this same one, because to a person it is one thing: where the agent is. */
+  it('is there for a driven conversation with no PTY session behind it', async () => {
+    settings.settings.activeProject = '/p'
+    ipc.on('session_start', 7)
+    ipc.on('session_attach', { events: [], seq: 0, state: 'starting' })
+    await conversation.startConversation('/p')
+    await listed()
+
+    expect(ids()).toEqual(['kanban', 'terminal'])
+    expect(tabs.hasAgentTab.value).toBe(true)
+  })
+
+  /* The driven sessions are held for the window rather than reloaded per
+     project, so the project each was started in is what keeps one project's
+     conversation out of another's tab row. */
+  it('is not there for a driven conversation started in another project', async () => {
+    settings.settings.activeProject = '/p'
+    ipc.on('session_start', 7)
+    ipc.on('session_attach', { events: [], seq: 0, state: 'starting' })
+    await conversation.startConversation('/elsewhere')
+    await listed()
+
+    expect(ids()).toEqual(['kanban'])
+    expect(tabs.hasAgentTab.value).toBe(false)
   })
 
   /* A spawn takes about a second. A tab that appeared only when the worker

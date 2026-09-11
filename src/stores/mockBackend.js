@@ -458,6 +458,71 @@ const MOCK_TEXT = new Map([['docs/page.html', MOCK_PAGE]])
 const MOCK_FILE_AT_HEAD = `fn main() {\n    println!("hello");\n}\n`
 const MOCK_UNTRACKED = 'notes/todo.txt'
 
+/* One driven session's journal, in the exact shape `session::model::Event`
+   serializes to: `seq`, `at`, and the kind's own fields flattened in beside a
+   kebab-case `kind`. The field names are the wire's and are deliberately not
+   translated here — `tokens_in`, `cost_usd` — because the panel's own
+   translation is the thing this fixture is checking.
+
+   It is a conversation rather than an emptiness for one reason: `?view=gallery`
+   is the only test `ConversationView` will ever have, and an empty journal
+   draws an empty state with every component inside the panel unchecked. So the
+   journal holds one of each — both halves of the conversation, a tool call that
+   finished and one still open, a thinking block, what a turn cost — and ends on
+   a question nobody has answered, which is the loud card and the state
+   `session::model::state_of` folds these events down to. */
+const CONVERSATION_AT = '2026-09-10T12:00:00Z'
+
+const journalEvent = (seq, kind, fields) => ({ seq, at: CONVERSATION_AT, kind, ...fields })
+
+const MOCK_CONVERSATION = [
+  journalEvent(1, 'turn-start', { by: 'person' }),
+  journalEvent(2, 'user-message', {
+    text: 'Rename the worktree when the branch changes, and keep `wt/` off the folder name.',
+    attachments: []
+  }),
+  journalEvent(3, 'text', {
+    text: [
+      'The collision is in `rename`: the worktree keeps the branch name verbatim, so a',
+      'branch with a slash in it names a folder that does not exist.',
+      '',
+      '- replace the separator when the folder is made, which leaves old worktrees alone',
+      '- store the folder beside the branch, which needs a migration',
+      '',
+      'The first one is what the rest of the tree already does:',
+      '',
+      '```rust',
+      "let name = branch.replace('/', '-');",
+      'let path = self.root.join(&name);',
+      '```'
+    ].join('\n')
+  }),
+  journalEvent(4, 'tool-use', { id: 't1', name: 'Read', detail: 'src-tauri/src/vcs/worktree.rs' }),
+  journalEvent(5, 'tool-result', { id: 't1', ok: true, summary: '180 lines' }),
+  journalEvent(6, 'result', { tokens_in: 12480, tokens_out: 416, cost_usd: 0.0312, ms: 4200 }),
+  journalEvent(7, 'turn-start', { by: 'person' }),
+  journalEvent(8, 'user-message', {
+    text: 'Do the first one, and run the tests.',
+    attachments: ['/Users/you/Desktop/20260910-141202-collision.png']
+  }),
+  journalEvent(9, 'reasoning', {
+    text: [
+      'The branch name reaches three places: the folder, the tab label and the',
+      'record in `.smetana/agents.json`. Only the first one has a filesystem',
+      'behind it, so only the first one has to be rewritten.'
+    ].join('\n')
+  }),
+  journalEvent(10, 'tool-use', { id: 't2', name: 'Edit', detail: 'src-tauri/src/vcs/worktree.rs' }),
+  journalEvent(11, 'tool-result', { id: 't2', ok: true, summary: '2 edits' }),
+  journalEvent(12, 'tool-use', { id: 't3', name: 'Grep', detail: 'fn worktree_path' }),
+  journalEvent(13, 'permission', {
+    id: 'q1',
+    tool: 'Bash',
+    detail: 'cargo test --manifest-path src-tauri/Cargo.toml worktree',
+    options: ['allow', 'allow-always', 'deny']
+  })
+]
+
 /* PTY output is arbitrary bytes; the fixture's box-drawing characters sit
    outside Latin-1, so plain btoa() would throw. Route through TextEncoder
    first, to get from this fixture's JS string to the UTF-8 bytes a PTY would
@@ -1579,21 +1644,24 @@ export function installMockBackend() {
        off the disk, and these two are one live conversation the worker is
        driving — `src-tauri/src/session/`.
 
-       An empty journal, and `ready` rather than the `starting` that
-       `session::model::state_of` answers for one — a deliberate departure and
-       not a mismatch. That function reads `starting` as "this session has not
-       produced anything *yet*", which is a promise about a child that is coming
-       up; a browser has no child and never will, so the session is idle rather
-       than starting, and answering `starting` would leave the panel waiting for
-       ever on the one verification this project has for a component.
+       The journal is `MOCK_CONVERSATION`, and its own header says why a browser
+       is answered with a conversation rather than with the emptiness this
+       started as. `state` is not chosen beside it but read off it: the fixture
+       ends on an unanswered question, which is what `session::model::state_of`
+       folds to `needs-you`, and `seq` is the last event's so that adding a line
+       to the fixture cannot leave the store reading the next event as a gap.
 
-       `session_since` answers the same emptiness in the shape that command
-       takes — an array, never `null`, since `null` is the worker saying "the
-       journal no longer reaches back that far, take a fresh snapshot", which
-       would send the store round a repair loop over a gap that does not exist.
-       Nothing calls it yet: the store takes a whole snapshot on a gap and never
-       stitches one, so this arm is here for the command's own sake, answered
-       before a caller arrives rather than after somebody meets the rejection.
+       There is no child behind any of it and never will be in a browser, so
+       what this is is one conversation frozen at its most interesting moment —
+       not one anybody can drive.
+
+       `session_since` answers an array and never `null`, since `null` is the
+       worker saying "the journal no longer reaches back that far, take a fresh
+       snapshot", which would send the store round a repair loop over a gap that
+       does not exist. Nothing calls it yet: the store takes a whole snapshot on
+       a gap and never stitches one, so this arm is here for the command's own
+       sake, answered before a caller arrives rather than after somebody meets
+       the rejection.
 
        The four that write — `session_start`, `session_send`, `session_answer`
        and `session_stop` — are deliberately not answered here and fall through
@@ -1602,7 +1670,15 @@ export function installMockBackend() {
        message that looked as though it had reached an agent would be worse than
        one that plainly did not. */
     if (command === 'session_attach') {
-      return { events: [], seq: 0, state: 'ready' }
+      /* A fresh array per answer, the way a worker's reply is its own object:
+         the store assigns this straight to the conversation and pushes into it,
+         so one shared instance would let a panel edit what the next attach
+         hands back. */
+      return {
+        events: MOCK_CONVERSATION.slice(),
+        seq: MOCK_CONVERSATION[MOCK_CONVERSATION.length - 1].seq,
+        state: 'needs-you'
+      }
     }
     if (command === 'session_since') {
       return []

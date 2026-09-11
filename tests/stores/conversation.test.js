@@ -211,7 +211,11 @@ describe('the conversation store', () => {
     await stores.conversation.attach(1)
     await stores.conversation.answerQuestion(1, 'q1', 'allow')
 
-    expect(stores.conversation.conversationState.lastError).toContain('q1')
+    /* The sentence, and the session it is about: the panel draws a refusal only
+       for the conversation it is holding, so a refusal that lost its session
+       would be drawn by nobody or by the wrong panel. */
+    expect(stores.conversation.conversationState.lastError).toMatchObject({ session: 1 })
+    expect(stores.conversation.conversationState.lastError.text).toContain('q1')
   })
 
   /* Subscribing is an `invoke` too — `plugin:event|listen` — so it can be
@@ -277,7 +281,7 @@ describe('the conversation store', () => {
        here — and a `toBeTruthy` would be satisfied by the `session_attach` that
        follows if `register` ever stopped rethrowing, which is the other road to
        a filled `lastError` and a different fault entirely. */
-    expect(stores.conversation.conversationState.lastError).toContain(
+    expect(stores.conversation.conversationState.lastError.text).toContain(
       'the second subscription is refused'
     )
     // The half that did go up came back down, so a retry starts from nothing.
@@ -311,5 +315,111 @@ describe('the conversation store', () => {
     await nextTick()
 
     expect(stores.conversation.conversationFor(1).state).toBe('needs-you')
+  })
+
+  /* Which driven sessions this window is holding, and for which project. The
+     centre's Agent tab is derived from this list (`hasAgentTab` in
+     `stores/tabs.js`), which is what makes each of the three below a rule about
+     the app rather than about a getter. */
+  describe('the sessions this window holds', () => {
+    it('holds a started session against the project it was started in', async () => {
+      const { ipc, stores } = await ready()
+      ipc.on('session_start', 7)
+
+      expect(await stores.conversation.startConversation('/p')).toBe(7)
+      expect(stores.conversation.conversationsIn('/p')).toEqual([7])
+      expect(stores.conversation.conversationsIn('/elsewhere')).toEqual([])
+    })
+
+    /* A start that was refused is not a session. The tab would otherwise appear
+       for a conversation that does not exist and stay for the life of the
+       window — nothing takes an entry out of this list. */
+    it('holds nothing when the start was refused', async () => {
+      const { ipc, stores } = await ready()
+      ipc.fail('session_start', new Error('claude could not be started'))
+
+      expect(await stores.conversation.startConversation('/p')).toBe(null)
+      expect(stores.conversation.conversationsIn('/p')).toEqual([])
+    })
+
+    /* **The list outlives `detach`.** The two answer different questions: the
+       conversations are what this window is drawing right now, and this is what
+       the project has at all. Derived from the other, the Agent tab would go
+       away the moment somebody looked at the board — taking with it the only
+       way back to their agent. */
+    it('goes on holding a session whose panel has been closed', async () => {
+      const { ipc, stores } = await ready()
+      ipc.on('session_start', 7)
+      await stores.conversation.startConversation('/p')
+      stores.conversation.detach(7)
+
+      expect(stores.conversation.conversationsIn('/p')).toEqual([7])
+    })
+  })
+
+  /* The one refusal that belongs to no conversation, which is what `session:
+     null` is for: there is no panel to draw it, so the toast in the corner is
+     the only reader it can have. */
+  it('reports a start that never happened against no session at all', async () => {
+    const { ipc, stores } = await ready()
+    ipc.fail('session_start', new Error('claude could not be started'))
+    await stores.conversation.startConversation('/p')
+
+    expect(stores.conversation.conversationState.lastError).toEqual({
+      session: null,
+      text: 'claude could not be started'
+    })
+  })
+
+  /* Which harnesses this app can drive. The list decides which road
+     `newAgent` takes, so a wrong answer here is either a Claude session that
+     never becomes a conversation or a Codex session that cannot start at all. */
+  describe('the harnesses that can be driven', () => {
+    it('drives Claude Code and nothing else this build ships', async () => {
+      const { stores } = await ready()
+
+      expect(stores.conversation.canDrive('claude')).toBe(true)
+      expect(stores.conversation.canDrive('codex')).toBe(false)
+    })
+
+    /* A hand-edited `settings.json`, or a harness added to Rust and not to this
+       list: the PTY road is the one that still works for it. */
+    it('does not drive a harness it has never heard of', async () => {
+      const { stores } = await ready()
+
+      expect(stores.conversation.canDrive('')).toBe(false)
+      expect(stores.conversation.canDrive('gemini')).toBe(false)
+    })
+  })
+
+  /* `session::model::SessionState` in the design system's words. The two that
+     are translated are the whole of the rule; the rest are already this
+     system's and pass through, a word from a Rust that has moved on ahead of
+     this list included. */
+  describe('the state in the status vocabulary', () => {
+    it('draws a session that has not spoken yet as live', async () => {
+      const { stores } = await ready()
+
+      expect(stores.conversation.statusOf('starting')).toBe('running')
+    })
+
+    it('draws an ordinary end as done', async () => {
+      const { stores } = await ready()
+
+      expect(stores.conversation.statusOf('exited')).toBe('done')
+    })
+
+    it('passes through the words this system already has', async () => {
+      const { stores } = await ready()
+      const { statusOf } = stores.conversation
+
+      expect(['ready', 'running', 'needs-you', 'failed'].map((state) => statusOf(state))).toEqual([
+        'ready',
+        'running',
+        'needs-you',
+        'failed'
+      ])
+      expect(statusOf('hibernating')).toBe('hibernating')
+    })
   })
 })

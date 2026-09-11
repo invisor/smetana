@@ -23,10 +23,27 @@ export const conversationState = reactive({
      the reason `terminalState.ready` is — a panel that draws before the events
      are subscribed to would be drawing a conversation that cannot move. */
   ready: false,
-  /* One sentence for a person, or null. A string and not the `{ title,
-     description }` pair `terminals.js` keeps, because what draws it is a line
-     inside the panel rather than the toast corner, and the worker's own words
-     are the whole of what there is to say about a question that has gone. */
+  /* The last refusal, as `{ session, text }`, or null — **one sentence for a
+     person and the session it is about**.
+
+     Two readers, and the session is what decides which of them says it. A line
+     inside the conversation panel, drawn only by the panel holding *that*
+     session; and a toast in `DesktopApp.vue`'s corner, which draws everything
+     the panel does not. `session` is `null` for a refusal that belongs to no
+     conversation at all — a start that never made one — and the corner is the
+     only reader such a sentence can have.
+
+     The pair is `{ session, text }` and not `terminals.js`'s `{ title,
+     description }`, because the title is the one part that does not vary: every
+     refusal on this road is one thing failing to be reached, so it is a
+     constant at the toast's own call site rather than a field every `report`
+     below would have to invent a value for. The panel needs no title at all —
+     it is drawn against the very thing the sentence is about — and what it does
+     need is exactly what the title cannot give it: whether this sentence is
+     about the session on screen. Without that, a spawn refusal for a session
+     that never existed painted itself at the foot of a healthy conversation and
+     stayed there, since that line has no dismiss and clears only on the next
+     call that answers. */
   lastError: null
 })
 
@@ -109,6 +126,28 @@ function hold(id) {
   return fresh
 }
 
+/* `session::model::SessionState` in the design system's status vocabulary.
+
+   The translation lives in a store for the reason the terminal's own lives in
+   `terminals.js` — `toUiState` there is the shape this follows rather than a
+   second reading of the same question — and it is deliberately not a copy of
+   that function: the two vocabularies differ, since a driven session has no
+   exit code to read and `state_of` has already decided which of the two endings
+   this was.
+
+   `starting` is a session that has not spoken yet, which is a live thing and so
+   `running`; `exited` is a turn that was closed when the child went, which is
+   an ordinary end and so `done`. `ready`, `running`, `needs-you` and `failed`
+   are already this system's words and pass through. So does a word this front
+   end has never heard of, which `status/status.js` answers with a generated
+   colour and a two-letter code — the honest outcome for a state added to Rust
+   and not yet to this list. */
+export function statusOf(state) {
+  if (state === 'starting') return 'running'
+  if (state === 'exited') return 'done'
+  return state
+}
+
 /* What a component draws: `{ events, state, question, draft }`, reactive, with
    `draft` writable. Never null — see `hold`.
 
@@ -147,9 +186,13 @@ function sentence(error) {
   return typeof message === 'string' && message ? message : String(error)
 }
 
-function report(what, error) {
+/* `session` is the conversation the refusal belongs to, and `null` when it
+   belongs to none — a start that never made one. It is the first argument
+   because it is the thing a caller cannot leave out by accident: every call
+   below has one to hand, and the only `null` is written as `null`. */
+function report(session, what, error) {
   console.error(`[conversation] ${what} failed:`, error)
-  conversationState.lastError = sentence(error)
+  conversationState.lastError = { session, text: sentence(error) }
 }
 
 /* Append a batch, or say that it cannot be appended.
@@ -197,7 +240,7 @@ export async function attach(id) {
   try {
     await initConversation()
   } catch (err) {
-    report('subscribing to the session events', err)
+    report(id, 'subscribing to the session events', err)
     return
   }
   const current = invoke('session_attach', { id })
@@ -216,7 +259,7 @@ export async function attach(id) {
     // A newer attach has already overtaken this one; its outcome is what the
     // panel should reflect, not this rejection.
     if (attaching.get(id) !== current) return
-    report('attaching to a session', err)
+    report(id, 'attaching to a session', err)
   }
 }
 
@@ -311,6 +354,68 @@ function listenToState() {
   })
 }
 
+/* Which harnesses this app can drive, and the whole of the list.
+
+   A driven session is one whose protocol the worker parses itself, and only
+   Claude Code has a driver: `session::service::driver_for` refuses every other
+   profile, and `Request::Start` refuses every intent but `Bare`. So the front
+   end asks before it takes this road at all — a person whose harness is Codex
+   pressing "+ New agent" must get the PTY they have always had.
+
+   **This is a cheap front door and cannot be the only gate, because it cannot
+   see `PATH`.** It is asked of `settings.agent`, and the first half of that
+   chain is exact: `Intent::Bare` takes `agents::Role::Default`, which
+   `settings::model::Settings::role_pair` answers with the root pair — the same
+   two fields the front end holds, with no per-project override reaching it. The
+   half it cannot see is downstream of all of that. `agents::pick` substitutes
+   **the first installed profile** when the configured one is not on the machine,
+   silently and by design, and `pick_with_model` is what `spawn_session` calls.
+   `settings.agent` ships as `claude` and `Settings::validate` forces anything
+   unknown back to it, so a machine with only Codex on it answers `true` here and
+   is refused by the driver a round trip later. What answers that is the caller:
+   `newAgent` in `views/DesktopApp.vue` falls through to `createSession` when a
+   driven start comes back with nothing, and `createSession` resolves whatever
+   `pick` would have. Nothing here should grow a second guess at `PATH` instead —
+   the front end does not have one.
+
+   A list here rather than a capability on the harness row, because there is no
+   flag for this: `agents::Capabilities` carries `resume`, `fork`, `clear`,
+   `usage`, `batch` and `oneshot`, and none of them means "has a driver". The
+   day a second harness grows one, this list and `driver_for` are the two places
+   that have to agree, which is why this one names the other. */
+const DRIVEN = ['claude']
+
+export const canDrive = (agent) => DRIVEN.includes(agent)
+
+/* Which driven sessions this window has started, and in which project.
+
+   Kept beside the conversations rather than read out of them, because the two
+   answer different questions. `conversations` above is what this window is
+   drawing *right now*, and `detach` empties it the moment a panel goes away;
+   this says which sessions a project has at all, which is what the centre's
+   Agent tab is derived from (`hasAgentTab` in `stores/tabs.js`). Derived from
+   the other, that tab would disappear the moment somebody looked at the board
+   and take the way back to their agent with it.
+
+   **Nothing takes an entry out, and that is the terminal's behaviour rather
+   than an omission.** A session whose child has gone keeps its row and its tab
+   there until somebody closes it, on the grounds that the last words of
+   whatever was running are worth reading; here there is not even a process to
+   close, only a journal the worker still holds. A restart empties this, driven
+   sessions deliberately not surviving one — the same repair `restoreTabs`
+   already makes for a remembered `activeTab: "terminal"`.
+
+   The project is the path `startConversation` was given, which is the same
+   string the terminal store keys its own sessions by: the project's own
+   folder. */
+const started = reactive([])
+
+/* The driven sessions of one project, oldest first. An array of ids rather than
+   of records, because that is the whole of what a caller wants — the tab is
+   derived from whether there are any, and the panel from which one is picked. */
+export const conversationsIn = (project) =>
+  started.filter((session) => session.project === project).map((session) => session.id)
+
 /* Start a driven session and hold it. The id is the answer; `null` means it did
    not start, and the sentence saying why is in `lastError`.
 
@@ -323,10 +428,16 @@ export async function startConversation(project, intent = { kind: 'bare' }) {
   try {
     const id = await invoke('session_start', { project, intent })
     conversationState.lastError = null
+    /* Before the attach rather than after it: the Agent tab is derived from
+       this list, and a session held only once its snapshot had come back would
+       leave the button somebody pressed with no visible effect for the length
+       of a spawn — the same reason `terminalState.starting` exists one
+       subsystem over. */
+    started.push({ id, project })
     await attach(id)
     return id
   } catch (err) {
-    report('starting a session', err)
+    report(null, 'starting a session', err)
     return null
   }
 }
@@ -353,7 +464,7 @@ export async function sendMessage(id, text, attachments = []) {
        by the other road. */
     if (drafts.get(id) === text) drafts.set(id, '')
   } catch (err) {
-    report('sending a message', err)
+    report(id, 'sending a message', err)
   }
 }
 
@@ -366,7 +477,7 @@ export async function answerQuestion(id, question, decision) {
     await invoke('session_answer', { id, question, decision })
     conversationState.lastError = null
   } catch (err) {
-    report('answering a question', err)
+    report(id, 'answering a question', err)
   }
 }
 
@@ -378,6 +489,6 @@ export async function stopConversation(id) {
     await invoke('session_stop', { id })
     conversationState.lastError = null
   } catch (err) {
-    report('stopping a session', err)
+    report(id, 'stopping a session', err)
   }
 }

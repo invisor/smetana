@@ -40,8 +40,10 @@ import {
   CodeBlock,
   ColumnHeader,
   CommandPalette,
+  Composer,
   ConflictModal,
   ConversationToolCall,
+  ConversationView,
   ContextMenu,
   DeleteBranchModal,
   DeleteSessionModal,
@@ -139,6 +141,7 @@ import { copyText, openExternal } from '../stores/app.js'
    settings window draws rather than a second list written out here. Read once
    at startup in `main.js`; in a browser `mockBackend.js` answers it. */
 import { agents } from '../stores/agents.js'
+import { settings } from '../stores/settings.js'
 import { fileIconUrl } from '../catppuccinIcon.js'
 import { documentTheme } from '../documentTheme.js'
 
@@ -2211,6 +2214,45 @@ const CONVERSATION_LONG_COMMAND =
 /* What a press on the loud card raised, so the emitted decision is visible
    rather than taken on trust. In the app this is `answerQuestion`. */
 const permissionAnswer = ref(null)
+
+/* The identity bar's three parts, seeded, and this is arrangement rather than
+   decoration.
+
+   `App.vue` deliberately does not call `loadSettings` for this view — the
+   gallery is `standalone` there — so the store holds its shipped defaults:
+   `agent` is `claude`, which is why the label draws, and `model` and
+   `activeProject` are both empty, which is why the model, the folder and the
+   two `·` separators were unreachable by eye. A three-part bar checked only in
+   its one-part state is a feature nothing has ever looked at, and the two
+   separators are exactly where a leading `·` or an empty gap would appear.
+
+   The folder is a worktree path because that is what this app is usually opened
+   on, and because its basename is long enough to make the bar overflow 420px:
+   the label must hold its one line and the two muted spans must be what
+   ellipsizes, which is the defect fixed in `ConversationView.vue`'s `agentName`.
+
+   Writing to the store from this view is safe exactly here: nothing else in the
+   gallery reads these two fields, and the watcher that would persist them is
+   installed by `loadSettings`, which this view never calls. */
+settings.model = 'sonnet'
+settings.activeProject = '/Users/you/dev/smetana/.worktrees/smetana-1a2b-rename-the-worktree'
+
+/* The panel itself is the one component in this file with a session behind it,
+   and the number does not name a real one: the mock backend answers
+   `session_attach` with `MOCK_CONVERSATION` whatever it is asked about, which
+   is what keeps the panel drawable in a browser with no Tauri behind it. A
+   constant of its own and deliberately not `GALLERY_SESSION` above — the two
+   stores number their sessions independently, and one number for both would
+   imply a relation between a PTY and a conversation that does not exist. */
+const GALLERY_CONVERSATION = 1
+
+/* The composer on its own, in the two states the panel cannot show at the same
+   time: a draft with files on it, and a turn in flight, where the one button is
+   Stop. Local refs, so both are live enough to type into — which is the only
+   way to see the field grow to its ceiling and then scroll. */
+const composerText = ref('Rename the worktree when the branch changes, and keep `wt/` off the folder name.')
+const composerAttachments = ref([...CONVERSATION_ATTACHMENTS])
+const composerBusyText = ref('')
 
 const sectionStyle = {
   display: 'flex', flexDirection: 'column', gap: 'var(--space-5)',
@@ -5794,6 +5836,52 @@ const menuTargetStyle = {
           />
           <div :style="{ font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
             {{ permissionAnswer ? `answer: ${permissionAnswer}` : 'no answer yet' }}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Conversation panel</div>
+      <!-- The whole panel over a fixture journal, which the mock backend answers
+           `session_attach` with — there is no Tauri behind the gallery and there
+           never will be. What it draws is the journal above assembled: the
+           identity bar, both halves of the conversation, a tool call that
+           finished and one still open, and the open question at the foot, where
+           the panel answers it rather than in the journal.
+
+           What to check in the four combinations, beyond the components' own
+           section above: the bar draws all four of its parts — the badge, the
+           agent's label, the model and the folder, with a `·` between each pair
+           and none leading — and keeps them on one line at both densities, with
+           the model and the folder ellipsizing while the label stays whole. The
+           journal scrolls and the bar and the composer do not, and the panel
+           sticks to the end of the journal only while it is already there —
+           scroll up and the panel stays put, scroll back down and it follows
+           again. The composer beside it is where the field is typed into: it
+           grows to six rows and then scrolls, Enter sends and shift+Enter does
+           not, and while `busy` the one button is Stop. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
+        <div
+          :style="{
+            width: '420px',
+            height: 'calc(var(--space-9) * 14)',
+            display: 'flex',
+            border: 'var(--border-w) solid var(--border)',
+            borderRadius: 'var(--radius-3)',
+            overflow: 'hidden'
+          }"
+        >
+          <ConversationView :session-id="GALLERY_CONVERSATION" />
+        </div>
+
+        <div :style="{ width: '360px', display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
+          <div :style="{ border: 'var(--border-w) solid var(--border)', borderRadius: 'var(--radius-3)' }">
+            <Composer v-model="composerText" v-model:attachments="composerAttachments" />
+          </div>
+          <!-- A turn in flight: one button, and it is Stop. -->
+          <div :style="{ border: 'var(--border-w) solid var(--border)', borderRadius: 'var(--radius-3)' }">
+            <Composer v-model="composerBusyText" busy />
           </div>
         </div>
       </div>
