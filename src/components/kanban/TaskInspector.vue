@@ -23,6 +23,7 @@ import StatusBadge from '../status/StatusBadge.vue'
 import TypeBadge from './TypeBadge.vue'
 import { copyLabel } from './copyId.js'
 import { priorityLabel } from './issueType.js'
+import { notesForDisplay } from './noteEntries.js'
 
 const props = defineProps({
   /* The issue in bd's own shape, straight out of the tracker store. */
@@ -72,6 +73,16 @@ function formatDate(value) {
 const blockedBy = computed(() =>
   (props.issue.dependencies ?? []).filter((d) => d.type === 'blocks').map((d) => d.depends_on_id)
 )
+
+/* `notes` is a journal, not a single markdown paragraph: bd joins every
+   `bd note` call with one newline, and a single newline inside a markdown
+   paragraph is a soft break — collapsed to a space, which glued the whole
+   log into one run-on sentence (smetana-k2mo). `noteEntries.js` holds the
+   rule for telling one record from the next; this just feeds `Markdown` the
+   normalized string, a blank line between records, so each becomes its own
+   paragraph with no change to `Markdown`, `MarkdownInline` or the markup
+   contract. */
+const notesText = computed(() => notesForDisplay(props.issue.notes))
 
 /* Only the rows the issue actually has. A fixed list with blanks in it would
    read as a form waiting to be filled in, and this panel is not one. */
@@ -243,7 +254,7 @@ const divider = {
     <div v-if="issue.notes" :style="proseSection">
       <span :style="rowLabel">Notes</span>
       <div class="sm-prose" :style="flatProse">
-        <Markdown :text="issue.notes" @open="emit('open', $event)" />
+        <Markdown :text="notesText" @open="emit('open', $event)" />
       </div>
     </div>
 
