@@ -22,44 +22,81 @@
    stranger's server for bytes on every render of a task nobody opened a
    connection for is a tracking pixel with no click behind it — the one thing
    a link is trusted with because a click is a decision and a paint is not.
+   `//host/path` is refused for the same reason and not a separate one: it has
+   no scheme by RFC 3986's own grammar, but every renderer resolves it against
+   the current origin's scheme (`new URL('//evil.example.com/x', location.href)`
+   is `http://evil.example.com/x` in the dev server and in a Windows release
+   alike), so it is exactly as live a request as a written-out `http://` and
+   is refused before the scheme test ever runs.
 
-   What is accepted: a source with no scheme at all — a relative or an
-   absolute filesystem path, `./a.png` among them — and a self-contained
-   `data:` URI, since it asks the network for nothing. Loading a path's bytes
-   into the front end is not this module's question and not yet built at all
-   (the wire still carries only a path); what this module decides is narrower
-   — which sources the renderer may even attempt to draw. */
+   What is accepted: a source with no scheme at all and no leading `//` — a
+   relative or an absolute filesystem path, `./a.png` among them — and a
+   self-contained `data:` URI whose media type is `image/…`, since it asks the
+   network for nothing. Loading a path's bytes into the front end is not this
+   module's question and not yet built at all (the wire still carries only a
+   path); what this module decides is narrower — which sources the renderer
+   may even attempt to draw. */
 
 /* A scheme, by RFC 3986's own grammar (`ALPHA *( ALPHA / DIGIT / "+" / "-" /
    "." )`), with one restriction this module adds on top: at least two
    characters ahead of the colon. RFC 3986 puts no floor on a scheme's own
-   length, but without one a Windows drive letter — `C:\Users\x\fig.png` — is
-   indistinguishable from a one-letter scheme, and would otherwise be refused
-   as though it were `javascript:` rather than read as the ordinary absolute
-   path it is. */
+   length, and no scheme this short is registered, so the floor exists for one
+   reason only — `C:\Users\x\fig.png`, an ordinary Windows absolute path, is
+   not refused as though its drive letter were a one-letter scheme. It does
+   not make such a path resolve to a real picture (nothing does — see this
+   module's own tests and the task's tracker note), only keeps it from being
+   confused with `javascript:` at this gate. */
 const SCHEME = /^([a-z][a-z0-9+.-]+):/i
 
-export function isAllowedFigureSrc(src) {
-  if (typeof src !== 'string' || src.trim() === '') return false
-  const scheme = SCHEME.exec(src)
-  if (!scheme) return true
-  return scheme[1].toLowerCase() === 'data'
+/* The media type of a `data:` URI, lower-cased, stopping at the first `;` or
+   `,` the way the URI's own grammar does — `data:image/svg+xml;base64,AAAA`
+   answers `image/svg+xml`, `data:text/html,<script>` answers `text/html`. */
+function dataUriMediaType(src) {
+  const rest = src.slice('data:'.length)
+  const end = rest.search(/[;,]/)
+  return (end === -1 ? rest : rest.slice(0, end)).trim().toLowerCase()
 }
 
-/* Whether a source is the one shape that can ever become the preferred, inline
-   `<svg>` form — a self-contained `data:image/svg+xml` URI. Nothing else
+export function isAllowedFigureSrc(src) {
+  if (typeof src !== 'string') return false
+  const trimmed = src.trim()
+  if (trimmed === '') return false
+  /* Protocol-relative first, ahead of the scheme test: `//host/path` has no
+     scheme by the grammar below, and would otherwise fall through the "no
+     scheme" branch as though it were a filesystem path. */
+  if (trimmed.startsWith('//')) return false
+  const scheme = SCHEME.exec(trimmed)
+  if (!scheme) return true
+  if (scheme[1].toLowerCase() !== 'data') return false
+  /* A `data:` URI is only ever accepted as a picture — `data:text/html,…` is
+     inert inside the `<img>`/`readInlineSvg` doors this module opens, but
+     admitting it here would be an unforced "any media type will do" answer
+     nobody asked for. */
+  return dataUriMediaType(trimmed).startsWith('image/')
+}
+
+/* Whether a source is the one shape that can ever become the preferred,
+   inline `<svg>` form — a self-contained `data:image/svg+xml` URI, with
+   arbitrary parameters ahead of its payload (`;base64`, `;charset=utf-8`,
+   the common non-standard `;utf8`, any order, any of them absent). The
+   parameter list is deliberately not a closed set: the one thing that must
+   never happen is `isAllowedFigureSrc` accepting an `image/svg+xml` source
+   this regexp does not also recognise, since that source would then reach
+   the raster `<img>` branch un-walked — an SVG with an arbitrary payload,
+   including a hard-coded colour, painted matted and unchecked. Nothing else
    carries literal markup for this renderer to draw: an ordinary path or a
-   `data:image/png` source is always the raster branch, matted. */
-const DATA_SVG = /^data:image\/svg\+xml(?:;charset=[a-z0-9_-]+)?(;base64)?,([\s\S]*)$/i
+   `data:image/png` source is always the raster branch. */
+const DATA_SVG = /^data:image\/svg\+xml((?:;[a-z0-9_-]+(?:=[^;,]*)?)*),([\s\S]*)$/i
 
 export function isInlineSvgSrc(src) {
-  return typeof src === 'string' && DATA_SVG.test(src)
+  return typeof src === 'string' && DATA_SVG.test(src.trim())
 }
 
 function decodeSvgPayload(src) {
-  const match = DATA_SVG.exec(src)
+  const match = DATA_SVG.exec(src.trim())
   if (!match) return null
-  const [, base64, payload] = match
+  const [, params, payload] = match
+  const base64 = /(^|;)base64(;|$)/i.test(params)
   try {
     return base64 ? atob(payload) : decodeURIComponent(payload)
   } catch {
@@ -69,10 +106,35 @@ function decodeSvgPayload(src) {
   }
 }
 
+/* The short, readable name for a source — what the error placeholder prints
+   instead of a percent-encoded `data:` payload that can run to hundreds of
+   characters and clips silently inside the figure's own frame. A `data:`
+   source is named by its media type alone (`data:image/svg+xml`, never its
+   body); anything else is short enough already to print whole. */
+export function describeFigureSrc(src) {
+  if (typeof src !== 'string') return ''
+  const trimmed = src.trim()
+  if (SCHEME.exec(trimmed)?.[1]?.toLowerCase() === 'data') {
+    return `data:${dataUriMediaType(trimmed)}`
+  }
+  return trimmed
+}
+
 /* The closed vocabulary of an agent-drawn diagram: shapes and text, nothing
    that loads a second resource (`use`, `image`, an `href` of any kind),
    nothing that carries a script or a foreign stylesheet (`script`, `style`,
-   `foreignObject`), and no nested `svg`. */
+   `foreignObject`). `svg` names only the document's own root — `readElement`
+   below refuses it at any deeper depth — so there is no nested viewport to
+   reason about either.
+
+   This set is attribute *names*; it says nothing about their values. Every
+   name in `ELEMENT_ATTRS` is drawn whatever it says — `d`, `points`,
+   `transform` and the rest are geometry, not colour, and are not checked
+   past being present at all. Only the two in `COLOR_ATTRS` below have their
+   *value* walked, against the token rule. Adding an attribute that can also
+   carry a colour — `stop-color`, `flood-color`, `lighting-color` — to any
+   element's set without adding it to `COLOR_ATTRS` reopens exactly the hole
+   this module exists to close. */
 const SVG_ELEMENTS = new Set([
   'svg',
   'g',
@@ -123,7 +185,10 @@ const ELEMENT_ATTRS = {
 /* The one rule the contract states in so many words: a colour attribute paints
    only `currentColor`, `none`, `transparent` or a `var(--token)` reference —
    never a hex, an `rgb()` and never a named colour. `none`/`transparent` are
-   the same two structural exceptions the rest of this design system allows. */
+   the same two structural exceptions the rest of this design system allows.
+   `fill`/`stroke` are the only two attributes in the whole vocabulary above
+   that can paint a colour at all — see `SVG_ELEMENTS`'s own comment for what
+   adding a third one obliges. */
 const COLOR_ATTRS = new Set(['fill', 'stroke'])
 const SAFE_COLOR = /^(none|transparent|currentcolor)$/i
 const TOKEN_COLOR = /^var\(--[a-z0-9-]+\)$/i
@@ -140,12 +205,24 @@ function isSafeColorValue(value) {
    hand and far short of the stack. */
 const MAX_SVG_DEPTH = 32
 
-function readElement(el, depth) {
+/* How many elements a diagram may carry in total, beside the depth cap above.
+   Depth alone does not bound a flat diagram of a great many siblings — every
+   accepted element becomes a Vue component instance through
+   `InlineFigureSvg`'s own recursion, which is exactly the class of cost
+   `markdown.js`'s ten-backtick cap on a code span exists to refuse elsewhere
+   in this same file family. Far past anything an agent draws by hand. */
+const MAX_SVG_NODES = 500
+
+function readElement(el, depth, budget) {
   const tag = el.tagName
   if (depth > MAX_SVG_DEPTH) {
     throw new Error('the diagram nests too deep to draw safely')
   }
-  if (!SVG_ELEMENTS.has(tag)) {
+  budget.count += 1
+  if (budget.count > MAX_SVG_NODES) {
+    throw new Error('the diagram has too many elements to draw safely')
+  }
+  if (!SVG_ELEMENTS.has(tag) || (tag === 'svg' && depth > 0)) {
     throw new Error(`"<${tag}>" is not a diagram element this renderer draws`)
   }
   const allowed = ELEMENT_ATTRS[tag]
@@ -170,7 +247,7 @@ function readElement(el, depth) {
   }
   const children = []
   for (const child of el.children) {
-    children.push(readElement(child, depth + 1))
+    children.push(readElement(child, depth + 1, budget))
   }
   const text =
     tag === 'text' || tag === 'tspan' || tag === 'title'
@@ -209,7 +286,7 @@ export function readInlineSvg(src) {
     return { ok: false, reason: 'the markup has no <svg> root' }
   }
   try {
-    return { ok: true, root: readElement(root, 0) }
+    return { ok: true, root: readElement(root, 0, { count: 0 }) }
   } catch (err) {
     return { ok: false, reason: err.message }
   }

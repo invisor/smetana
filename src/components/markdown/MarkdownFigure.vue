@@ -18,9 +18,13 @@
    and so is a remote `http(s)://` address — this is an offline-first app that
    fetches nothing of its own accord, and an inline illustration that quietly
    asked a stranger's server for bytes on every render is a tracking pixel
-   with no click behind it. What is accepted: a path with no scheme
-   (`./a.png`, the parser's own acceptance case, included) and a
-   self-contained `data:` URI.
+   with no click behind it. `//host/path` is refused the same way and before
+   the scheme test even runs: it has no scheme by the grammar, but every
+   renderer resolves it against the current origin's own scheme, so it is
+   exactly as live a request as a written-out `http://` one. What is
+   accepted: a path with no scheme and no leading `//` (`./a.png`, the
+   parser's own acceptance case, included) and a self-contained `data:` URI
+   whose media type is `image/…`.
 
    `readInlineSvg` is the second, and it is what lets the preferred form exist
    at all. The only way literal `<svg>` markup reaches this panel without the
@@ -43,7 +47,12 @@
 import { computed, ref, watch } from 'vue'
 import InlineFigureSvg from './InlineFigureSvg.vue'
 import { iconNodes } from '../core/icons.js'
-import { isAllowedFigureSrc, isInlineSvgSrc, readInlineSvg } from './figureSource.js'
+import {
+  describeFigureSrc,
+  isAllowedFigureSrc,
+  isInlineSvgSrc,
+  readInlineSvg
+} from './figureSource.js'
 
 const props = defineProps({
   /* The parsed node — `{ src, alt }`, `markdown.js`'s `image` block or inline
@@ -120,6 +129,15 @@ const errorReason = computed(() => {
 const showImg = computed(() => !inlineSvg.value && allowed.value && state.value === undefined)
 const showSvg = computed(() => inlineSvg.value && svgResult.value?.ok === true)
 
+/* The short, readable name for the source, printed *after* the reason in the
+   placeholder below rather than before it. The inline `<svg>` form only ever
+   exists as a `data:` URI, so a render-check failure's own source is exactly
+   the case a raw `block.src` runs to hundreds of characters and clips
+   silently inside the frame — `describeFigureSrc` is what shortens a `data:`
+   source to its media type alone, and the reason leading is what stays
+   readable regardless of how long the source still is. */
+const sourceLabel = computed(() => describeFigureSrc(props.block.src))
+
 function onExpand() {
   emit('open-image', { src: props.block.src, name: props.block.alt || undefined })
 }
@@ -132,7 +150,7 @@ function onExpand() {
     <div v-else data-placeholder>
       <template v-if="state === 'error'">
         <strong>Failed to render</strong>
-        <span>{{ block.src }} · {{ errorReason }}</span>
+        <span>{{ errorReason }} · {{ sourceLabel }}</span>
       </template>
     </div>
     <figcaption v-if="block.alt">{{ block.alt }}</figcaption>
