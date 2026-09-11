@@ -246,14 +246,15 @@ The Agent tab is **three branches over two components** since smetana-5ijg, and 
 on which kind of session it is aimed at: `ConversationView.vue` with a driven session's id, or this
 same `TerminalView.vue` with `terminalState.activeId`. What decides is `agentAim` in `DesktopApp.vue`,
 one field per project written by `showAgentTab` — so what aims the tab is that function's callers,
-however many there come to be, rather than a list to keep in step with it. They fall into two kinds:
-starting a conversation, which is `newAgent` alone, and every road that puts a PTY agent in front — the
-`createSession` roads, which move the aim while starting something; `selectAgent`, which moves it while
-starting nothing; and `attachToAgent`, which moves it as a side effect of handing a dropped path to the
-selected agent. **`selectAgent` is the only gesture that deliberately picks an agent that already
-exists**, which makes it the only way back to a PTY agent from a conversation that is not also a start;
-it is reached from a row click and from the `lastRunStart` watcher both, so a run handing over to its
-next batch moves the aim as well.
+however many there come to be, rather than a list to keep in step with it. They fall into two kinds,
+with one caller under both: aiming at a conversation is `newAgent`, which starts one, and `selectAgent`
+on a driven row, which picks one that is already going; against every road that puts a PTY agent in
+front — the `createSession` roads, which move the aim while starting something; `selectAgent` again on
+any other row, moving it while starting nothing; and `attachToAgent`, which moves it as a side effect
+of handing a dropped path to the selected agent. **`selectAgent` is the only gesture that deliberately
+picks an agent that already exists**, which makes it the only way back — to a PTY agent or to a
+conversation — that is not also a start; it is reached from a row click and from the `lastRunStart`
+watcher both, so a run handing over to its next batch moves the aim as well.
 
 Beside the field is a **count per project, raised by `showAgentTab` on every call**, and it is there for
 the one caller that puts an aim *back* after an await — aiming before one is ordinary, and most of the
@@ -314,6 +315,13 @@ Clicking such a row is `showAgentTab(session)` and never `terminalState.activeId
 terminal's own selection is left where it was, and the row carries the highlight for as long as
 `conversationId` answers — the aim rather than the panel being on screen, because a highlight that went
 out on the way to the board would not go out, it would move to a PTY row the tab is not aimed at.
+
+**The click also drops `rightFocus`, and that line is what buys a parity the branch would otherwise
+only claim.** Every reader of the focus goes through `focusIsLive`, which compares it to
+`terminalState.activeId`: a bare *PTY* row leaves the right column on the board for free, since its
+click moves that field out from under a focus left on another agent. A driven row moves nothing, so
+without the drop a run's `ClaimedTasks` — another agent's claimed issues — went on standing in the
+right column while the person was already watching a conversation.
 
 **A row's state cannot come from the journal.** `conversations` is emptied by `detach` the moment the
 panel leaves the screen, so the record in `started` carries the state and the moment the session began,

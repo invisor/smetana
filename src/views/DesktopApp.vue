@@ -2488,9 +2488,24 @@ function selectAgent(id) {
      the terminal at something nobody holds is the same failure the restored row
      below guards against. There is no work behind a bare conversation, so the
      right column and the board keep what they were showing — which is what a
-     bare PTY agent does too, and the whole behaviour rather than a gap in it. */
+     bare PTY agent does too, and the whole behaviour rather than a gap in it.
+
+     **That last parity is bought by the line below and not inherited**, which
+     is the one thing about this branch a reader cannot work out from the two
+     above it. Every reader of `rightFocus` goes through `focusIsLive`, and that
+     compares the focus to `terminalState.activeId` — so a bare *PTY* row gets
+     the fallback for free, its click moving `activeId` out from under a focus
+     left on some other agent. This row moves nothing, by the paragraph above,
+     so the same focus would stay live: a run's `ClaimedTasks` — another agent's
+     claimed issues — would go on standing in the right column while the person
+     is now watching a conversation. Letting the focus go is what makes the two
+     kinds of bare row answer a click alike, and it costs nothing else.
+     `rightPanel` falls back to `'board'`, whose watch fires only on the way
+     *out* of the board, so the tab somebody is standing on is left alone and
+     the board's own selection is drawn exactly as it was. */
   const conversation = drivenSessionOf(id)
   if (conversation !== null) {
+    rightFocus.value = null
     showAgentTab(conversation)
     return
   }
@@ -2717,12 +2732,14 @@ const activeTerminal = computed(() => terminalTab(project.activeTab))
 
    **One field, written by `showAgentTab` below** — so what aims this tab is that
    function's callers, whatever the list grows to, rather than a list here
-   somebody has to remember to extend. They fall into two kinds. Starting a
-   conversation is one, and it is `newAgent` alone. The other is every road that
-   puts a PTY agent in front, which today is the `createSession` roads, each
-   moving the aim while starting something; `selectAgent`, which moves it while
-   starting nothing; and `attachToAgent`, which moves it as a side effect of
-   handing a dropped path to whichever agent is selected.
+   somebody has to remember to extend. They fall into two kinds, and one caller
+   stands under both. Aiming at a conversation is `newAgent`, which starts one,
+   and `selectAgent` on a driven row, which picks one that is already going.
+   Against those: every road that puts a PTY agent in front, which today is the
+   `createSession` roads, each moving the aim while starting something;
+   `selectAgent` again, on any other row, moving it while starting nothing; and
+   `attachToAgent`, which moves it as a side effect of handing a dropped path to
+   whichever agent is selected.
 
    One field and one count beside it: `agentAimWrites` below is raised by that
    same function on every call, whatever is written. Plenty of callers aim before
@@ -2741,12 +2758,13 @@ const activeTerminal = computed(() => terminalTab(project.activeTab))
    alone for the same reason: putting back what was there is not a move. Do not
    "unify" the two; the bypass is the point.
 
-   `selectAgent` is worth naming on its own twice over: it is reached from a row
-   click *and* from the `lastRunStart` watcher, so a run handing over to its next
-   batch moves the aim too — and it is the only gesture that **deliberately picks
-   an agent that already exists**, which makes it the only way back to one that
-   is not also a start. The others get there as a consequence of doing something
-   else.
+   `selectAgent` is worth naming on its own three times over: it is reached from
+   a row click *and* from the `lastRunStart` watcher, so a run handing over to
+   its next batch moves the aim too; it is the one caller under both kinds
+   above, the row it was handed being what decides which; and it is the only
+   gesture that **deliberately picks an agent that already exists**, which makes
+   it the only way back — to a PTY agent or to a conversation — that is not also
+   a start. The others get there as a consequence of doing something else.
 
    The shape being avoided is three pieces of state for one question, which is
    what the first version of this had — a pick, a watcher on
