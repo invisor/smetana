@@ -68,15 +68,17 @@ and it empties, so **when the last PTY agent goes the tab goes with it** and a p
 lands on the board; `dropAgentTab` is that rule and a `watch` in `DesktopApp.vue` is what notices,
 because `tabs.js` is one half of an import cycle with `settings.js` and a module-scope `watch` there
 would read this store at evaluation time — the failure `notifications.js` carries its own note about.
-**Nothing ever takes an entry out of the driven half**, deliberately: a conversation's journal lives in
-the worker and is worth reading after the last word as much as during it, and there is no process to
-close and no cross on this tab to close it with. The consequence to know before reading `dropAgentTab`
-as the whole rule: **a project that has ever held a driven conversation keeps its Agent tab for the
-life of the window** — after that session has exited, after its child is gone — and the watch on
-`hasAgentTab` can never fire for it, because the value it watches never goes back to false. That is
-accepted at this stage rather than overlooked: it is window state and it dies with the window, and the
-tab it leaves standing draws a real journal that can still be read. A refused *start* leaves nothing at
-all, since a session that never began is not held. What happens to somebody standing on that tab
+**The driven half empties only when somebody empties it**, and nothing else takes an entry out: a
+conversation's journal lives in the worker and is worth reading after the last word as much as during
+it, so a session that has exited keeps its place in the list. The somebody is the **cross on its row in
+the agents panel** — `forget` in `stores/conversation.js`, the panel's own removal and the only caller
+there is. So a project whose last conversation is closed that way does lose its Agent tab, through the
+same `dropAgentTab` watch the PTY half uses, and a person standing on it lands on the board. Until that
+row existed there was no such gesture at all, and the paragraph here said the value could never go back
+to false; what is left of that is the part time does not change — **a session exiting on its own never
+takes the tab away**, after its child is gone and after the journal has stopped growing, because the
+tab is still standing over something that can be read. A refused *start* leaves nothing at all, since a
+session that never began is not held. What happens to somebody standing on that tab
 afterwards depends on what else the project has: in a project with no other agent and no earlier
 conversation the fallback's own `createSession` ticket takes `hasAgentTab` true and then false again,
 so the watch above fires and lands them on the board; where the tab is standing for something else it
@@ -246,14 +248,15 @@ The Agent tab is **three branches over two components** since smetana-5ijg, and 
 on which kind of session it is aimed at: `ConversationView.vue` with a driven session's id, or this
 same `TerminalView.vue` with `terminalState.activeId`. What decides is `agentAim` in `DesktopApp.vue`,
 one field per project written by `showAgentTab` — so what aims the tab is that function's callers,
-however many there come to be, rather than a list to keep in step with it. They fall into two kinds:
-starting a conversation, which is `newAgent` alone, and every road that puts a PTY agent in front — the
-`createSession` roads, which move the aim while starting something; `selectAgent`, which moves it while
-starting nothing; and `attachToAgent`, which moves it as a side effect of handing a dropped path to the
-selected agent. **`selectAgent` is the only gesture that deliberately picks an agent that already
-exists**, which makes it the only way back to a PTY agent from a conversation that is not also a start;
-it is reached from a row click and from the `lastRunStart` watcher both, so a run handing over to its
-next batch moves the aim as well.
+however many there come to be, rather than a list to keep in step with it. They fall into two kinds,
+with one caller under both: aiming at a conversation is `newAgent`, which starts one, and `selectAgent`
+on a driven row, which picks one that is already going; against every road that puts a PTY agent in
+front — the `createSession` roads, which move the aim while starting something; `selectAgent` again on
+any other row, moving it while starting nothing; and `attachToAgent`, which moves it as a side effect
+of handing a dropped path to the selected agent. **`selectAgent` is the only gesture that deliberately
+picks an agent that already exists**, which makes it the only way back — to a PTY agent or to a
+conversation — that is not also a start; it is reached from a row click and from the `lastRunStart`
+watcher both, so a run handing over to its next batch moves the aim as well.
 
 Beside the field is a **count per project, raised by `showAgentTab` on every call**, and it is there for
 the one caller that puts an aim *back* after an await — aiming before one is ordinary, and most of the
@@ -282,14 +285,58 @@ person asked for an agent and is getting one. The refusals that are worth report
 corner — `conversationState.lastError` has a `Toast` of its own in `DesktopApp.vue`, drawn only while
 the conversation panel is not, since that panel draws the same sentence as a line inside itself.
 
-One consequence of that, recorded because it looks like a bug from the outside: a driven session has no
-row in the agents panel, since `agentRows` is this store's, so once somebody picks a PTY agent in a
-project there is no gesture that aims the tab back at that project's conversation. The row is what the
-stage teaching this panel about driven sessions owes.
-
 Nothing about a shell reaches `settings.json`: it is not in `openTabs`, which is paths, and a tab id
 that lands in `activeTab` is rejected on the next launch by `validate` (it is neither of the two names
 nor a path) and again by `restoreTabs`.
+
+## A driven session in the agents panel
+
+**A driven conversation is a row of the agents panel, and the merge that puts it there lives in the
+view.** `agentRows`, `agentCounts`/`liveAgentCount` and `projectStates` are `stores/terminals.js`'s three
+lists and they know about PTY sessions alone; every reader of all three is `DesktopApp.vue`, so that is
+where the two kinds of session meet, through `components/agent/drivenRows.js` — pure, testable, and
+importing neither store. Teaching `terminals.js` about a second store was the alternative and was
+refused: it is exactly the growth epic smetana-79j5 shut the door on, and the terminal is the half that
+is going away.
+
+Four things about such a row are decisions rather than details.
+
+- **Its id is a string with `conversation:` in front of it.** `agentKey` is `row.conversation ?? row.id`,
+  a driven session is deliberately minted no conversation id (`session_id: None` in `spawn_session` — the
+  stage that adds restoring is the one that will mint it), and both workers count their sessions from 1:
+  without the prefix two rows collide on the key that carries the drawn order, the pins and the `v-for`.
+- **`conversation` stays `null`, so Pin refuses itself** with `nothing to remember it by` — and the
+  refusal is true, a driven conversation not surviving a restart, which is the whole of what a pin is for.
+- **Clear is refused too**, on `clearable: false`: `Profile::clear_command` is a line written into a PTY
+  and this session has none. `agentMenu.js` carries why the two cases share one sentence.
+- **The cross stops the conversation and forgets it.** `forget` in `stores/conversation.js` is the one
+  thing that takes an entry out of `started`, and this cross is its only caller — the store's rule is that
+  a session stays until somebody closes it, and until this row existed there was nobody to.
+
+Clicking such a row is `showAgentTab(session)` and never `terminalState.activeId`: the tab moves, the
+terminal's own selection is left where it was, and the row carries the highlight for as long as
+`conversationId` answers — the aim rather than the panel being on screen, because a highlight that went
+out on the way to the board would not go out, it would move to a PTY row the tab is not aimed at.
+
+**The click also drops `rightFocus`, and that line is what buys a parity the branch would otherwise
+only claim.** Every reader of the focus goes through `focusIsLive`, which compares it to
+`terminalState.activeId`: a bare *PTY* row leaves the right column on the board for free, since its
+click moves that field out from under a focus left on another agent. A driven row moves nothing, so
+without the drop a run's `ClaimedTasks` — another agent's claimed issues — went on standing in the
+right column while the person was already watching a conversation.
+
+**A row's state cannot come from the journal.** `conversations` is emptied by `detach` the moment the
+panel leaves the screen, so the record in `started` carries the state and the moment the session began,
+and the `session:state` listener writes it for every session this window started rather than only the
+ones it is drawing. The elapsed time is measured against a second thirty-second clock, in the view:
+`terminals.js` keeps its own and does not export it.
+
+Counting is by the same rules as the terminal's, which is what "on a par" means here: the footer's counter
+takes every driven session that has not ended (`done` and `failed` are the pair, the two words
+`toUiState` gets out of the one raw `exited`), the headline splits them into waiting and working, and a
+project's tile in the rail goes `loud` for a session waiting on somebody and `live` for one working. A
+session that is `ready` — it has spoken and waits on nobody — counts for the footer and not for the tile,
+exactly as an `idle` PTY session does.
 
 ## Dropping a file on the panel
 

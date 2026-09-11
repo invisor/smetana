@@ -95,7 +95,19 @@ const AGENT_REASON = {
   /* A harness nobody has confirmed a clearing line for. `sessionMenu.js`'s
      `this agent cannot resume by id` is the same sentence one verb over, and
      shorter here only because the ceiling above left no room for the longer
-     one. */
+     one.
+
+     Since the panel drew its first driven row it covers a second case: a
+     session with no PTY to write that line into at all, which
+     `components/agent/drivenRows.js` says by handing this file `clearable:
+     false`. **One sentence for the two, and that is a decision rather than an
+     oversight.** It reads as being about the agent on *this row* — which in
+     both cases is one that cannot be cleared — rather than about the harness in
+     the abstract: Claude Code clears perfectly well and a driven session of it
+     still cannot. Split them the day somebody standing in front of it has to
+     tell the two apart, and do it on a flag the row carries rather than by
+     guessing from `clearable`, since a Codex PTY row says these same words
+     truthfully. */
   cannotClear: 'this agent cannot do it'
 }
 

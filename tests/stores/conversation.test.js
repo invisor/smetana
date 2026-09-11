@@ -355,6 +355,72 @@ describe('the conversation store', () => {
 
       expect(stores.conversation.conversationsIn('/p')).toEqual([7])
     })
+
+    /* What the row in the agents panel is drawn from, and the reason the record
+       carries more than an id: the panel says what a session is doing and how
+       long it has been at it, and `conversations` cannot answer either once the
+       panel has left the screen. */
+    it('carries the state and the moment the session started', async () => {
+      const { ipc, stores } = await ready({ events: [], seq: 0, state: 'running' })
+      ipc.on('session_start', 7)
+      const before = Date.now()
+      await stores.conversation.startConversation('/p')
+
+      const [record] = stores.conversation.drivenSessions.value
+      expect(record).toMatchObject({ id: 7, project: '/p', state: 'running' })
+      expect(record.startedAt).toBeGreaterThanOrEqual(before)
+      expect(record.startedAt).toBeLessThanOrEqual(Date.now())
+    })
+
+    /* **The row keeps reporting after the panel has gone.** `detach` empties
+       the journal, so a listener that wrote only into it would leave the row
+       frozen at whatever it said when somebody last looked at the conversation
+       — which is every moment the centre tab is on the board. */
+    it('follows the state of a session whose journal it no longer holds', async () => {
+      const { ipc, stores, emit, nextTick } = await ready()
+      ipc.on('session_start', 7)
+      await stores.conversation.startConversation('/p')
+      stores.conversation.detach(7)
+      await emit('session:state', { id: 7, state: 'needs-you' })
+      await nextTick()
+
+      expect(stores.conversation.drivenSessions.value[0].state).toBe('needs-you')
+    })
+
+    /* A session this window never started has no record to write into, and a
+       state event arrives for every session of every project. */
+    it('writes no record for a session it never started', async () => {
+      const { ipc, stores, emit, nextTick } = await ready()
+      ipc.on('session_start', 7)
+      await stores.conversation.startConversation('/p')
+      await emit('session:state', { id: 9, state: 'needs-you' })
+      await nextTick()
+
+      expect(stores.conversation.drivenSessions.value).toHaveLength(1)
+      expect(stores.conversation.drivenSessions.value[0].state).not.toBe('needs-you')
+    })
+
+    /* The cross on the row, which is the one thing that takes an entry out of
+       this list. The journal goes with it: nothing is left that could ask for
+       the conversation again. */
+    it('lets a session go when the row is closed', async () => {
+      const { ipc, stores } = await ready()
+      ipc.on('session_start', 7)
+      await stores.conversation.startConversation('/p')
+      stores.conversation.forget(7)
+
+      expect(stores.conversation.conversationsIn('/p')).toEqual([])
+      expect(stores.conversation.drivenSessions.value).toEqual([])
+    })
+
+    it('forgets a session it never held without complaining', async () => {
+      const { ipc, stores } = await ready()
+      ipc.on('session_start', 7)
+      await stores.conversation.startConversation('/p')
+      stores.conversation.forget(9)
+
+      expect(stores.conversation.conversationsIn('/p')).toEqual([7])
+    })
   })
 
   /* The one refusal that belongs to no conversation, which is what `session:
