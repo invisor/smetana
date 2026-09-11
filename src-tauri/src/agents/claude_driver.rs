@@ -208,7 +208,15 @@ fn result_summary(content: Option<&Value>) -> String {
 /// for the reason it records — a missing row costs a person nothing the CLI's
 /// own logs do not still hold, while a wall of raw protocol costs them the
 /// panel.
-fn one_event(event: &Value) -> Vec<EventKind> {
+///
+/// **`pub(crate)` for one caller outside the codec: `session::history`.** A
+/// record in a `.jsonl` transcript and a line of this harness's stream-json
+/// output are the same object — that is what makes `--resume` work over a
+/// session recorded either way — so the history a person scrolls back through
+/// is decoded by this very function rather than by a second reading of the same
+/// format. Two readings would drift, and the drift would show as rows quietly
+/// ceasing to appear.
+pub(crate) fn one_event(event: &Value) -> Vec<EventKind> {
     match str_at(event, "type") {
         "system" => match str_at(event, "subtype") {
             "init" => vec![EventKind::TurnStart { by: Actor::Agent }],

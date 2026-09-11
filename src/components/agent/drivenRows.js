@@ -27,15 +27,25 @@
    `SessionId` is a `u64` counter in the session worker that starts at 1, and
    the terminal worker's own counter starts at 1 as well: the two spaces collide
    on their first session apiece. What that collides in is not cosmetic —
-   `agentKey` is `row.conversation ?? row.id`, and a driven session deliberately
-   has no conversation id (`session_id: None` in `spawn_session`, the stage that
-   adds restoring being the one that mints it), so the key falls through to the
-   number. That key is what carries the drawn order, the pins and the `v-for`,
-   and two rows under one key is two agents fighting over one place in the list.
+   `agentKey` is `row.conversation ?? row.id`, so a row with no conversation id
+   falls through to the number, and that key is what carries the drawn order,
+   the pins and the `v-for`. Two rows under one key is two agents fighting over
+   one place in the list.
 
-   A prefix parts the two spaces and leaves `conversation` honestly empty rather
-   than inventing a value for it. A start ticket's `start-N` is the same trick
-   one list over and cannot be confused with this one either. */
+   **Most driven rows have a conversation id and never reach the fallback**: the
+   worker mints one at the spawn and records the session under it, exactly as
+   the terminal worker does (smetana-477m). Two cases still land here — a
+   session's first frame, before the id has come back, and a fork for good,
+   `--fork-session` having Claude Code invent an id this app never learns. This
+   header used to say a driven session was deliberately minted none at all, on
+   the strength of a `session_id: None` in `spawn_session`. That `None` is still
+   produced for a resume — out of the match above the `Launch` there — and now
+   means something else entirely: the id is already on the command line behind
+   `--resume`, and a second flag would name two conversations.
+
+   A prefix parts the two spaces and leaves `conversation` honestly empty for
+   those two rather than inventing a value for it. A start ticket's `start-N` is
+   the same trick one list over and cannot be confused with this one either. */
 export const DRIVEN_PREFIX = 'conversation:'
 
 export const drivenRowId = (session) => `${DRIVEN_PREFIX}${session}`
@@ -59,25 +69,46 @@ export function drivenSessionOf(rowId) {
   return Number.isFinite(session) ? session : null
 }
 
+/* What such a row is captioned by, and it is deliberately the store's own
+   words: `CAPTION` in `stores/terminals.js` captions a session started by
+   "+ New agent" as `Agent` and one picked up from a transcript as `Resumed
+   session`, and this is that same pair of buttons' other road. That table is
+   private to the store, and this file could not reach into it without dragging
+   Tauri in behind it, so the copy is what the seam costs — the two are a pair
+   to change together if either is ever worded differently.
+
+   Two entries and no more, because two intents reach this road and no more:
+   `session::service`'s `Request::Start` refuses the rest. The `work` a row
+   carries is `workOf` in `stores/conversation.js`, which is the same reduction
+   `Intent::work()` makes in Rust. */
+const CAPTION = { bare: 'Agent', resumeSession: 'Resumed session' }
+
+/* The title goes *inside* the label rather than beside it, which is
+   `captionOf`'s rule one store over and the same reason: a row's `tasks` are
+   set in mono, where a person's own sentence would read as an identifier. A
+   transcript nobody typed a word into has no title at all, and then the row
+   says what it is and stops. */
+function captionOf(work) {
+  if (work?.kind !== 'resumeSession') return CAPTION.bare
+  return work.title ? `${CAPTION.resumeSession}: ${work.title}` : CAPTION.resumeSession
+}
+
 /* One driven session as a row of the agents panel.
 
-   The caption is written out rather than borrowed, and it is deliberately the
-   same word: `CAPTION.bare` in `stores/terminals.js` captions a session started
-   by "+ New agent" as `Agent`, and this is that same button's other road. That
-   table is private to the store, and this file could not reach into it without
-   dragging Tauri in behind it, so the copy is what the seam costs — the two are
-   a pair to change together if a bare agent is ever captioned anything else.
+   `conversation` is the id the worker minted at the spawn and wrote the
+   record in `.smetana/agents.json` under — the same name the offline row for
+   this very conversation carries, which is what lets a resume replace its own
+   offer in place and a pin outlive the session. It arrives a round trip after
+   the start (`noteConversation` in `stores/conversation.js`), so `null` is an
+   ordinary answer for the first frame, and the settled answer for a **fork**,
+   whose new transcript Claude Code names itself. Such a row falls back to
+   `drivenRowId` for its key and Pin refuses itself with `nothing to remember it
+   by`, which is true of it: there is genuinely nothing to bring it back under.
 
-   `conversation: null` is the truth about this row rather than a hole in it,
-   and the menu already has the sentence for it: `nothing to remember it by`. A
-   driven conversation does not survive a restart of the app, so there is
-   genuinely nothing for a pin to bring it back under — the refusal is honest
-   twice over.
-
-   `clearable: false` is the same shape of fact. Clearing is a line written into
-   a PTY — `Profile::clear_command` — and this session has no PTY to write into.
-   The menu refuses it with `this agent cannot do it`, which is a sentence about
-   the road rather than about Claude Code, since the harness itself clears
+   `clearable: false` is a fact of a different shape. Clearing is a line written
+   into a PTY — `Profile::clear_command` — and this session has no PTY to write
+   into. The menu refuses it with `this agent cannot do it`, which is a sentence
+   about the road rather than about Claude Code, since the harness itself clears
    perfectly well. If that ever reads as a lie to somebody standing in front of
    it, the answer is a reason of its own in `agentMenu.js` and not a `true`
    here.
@@ -86,14 +117,14 @@ export function drivenSessionOf(rowId) {
    for the second before the worker answers; this row exists only because
    `session_start` already has, so there is a session behind it to stop and the
    cross is live from the first frame. */
-export function drivenAgentRow({ id, state, elapsed }) {
+export function drivenAgentRow({ id, state, elapsed, conversation = null, work }) {
   return {
     id: drivenRowId(id),
-    conversation: null,
+    conversation,
     clearable: false,
-    work: { kind: 'bare' },
+    work: work ?? { kind: 'bare' },
     claimed: [],
-    label: 'Agent',
+    label: captionOf(work),
     tasks: [],
     state,
     elapsed
@@ -121,11 +152,31 @@ export function drivenAgentRow({ id, state, elapsed }) {
    With no driven session the rows come back by reference, which is the contract
    `moveAgent` and `orderAgents` already keep on this road: the caller's next
    step is `orderAgents`, which leans on identity to tell "never arranged" from
-   "arranged, and this is what it came to". */
+   "arranged, and this is what it came to".
+
+   **An offer standing behind a live conversation is dropped**, and that is the
+   half of this merge that is not about adding anything. `.smetana/agents.json`
+   holds a record for a session that is *running* — it is written at the spawn —
+   so from the moment an offline row is pressed the very same conversation is in
+   the panel twice: once as the agent somebody is watching, and once, under the
+   same id, as an offer to reopen what they are already looking at. The terminal
+   store answers this for its own sessions in `offeredRecords` and that function
+   cannot see this one, `terminals.js` being deliberately closed to a second
+   source — so the same rule is applied here, on the same key and by the same
+   test, over the rows it has already built.
+
+   By the conversation id and never by the row's own: a driven row's `id` is
+   this window's prefixed key and a record's is the conversation it names, which
+   is exactly the pair this drops against. A driven session with no id yet — the
+   first frame, and a fork for good — shadows nothing, which is correct: a fork
+   writes no record, so there is no offer of its to hide. */
 export function mergeAgentRows(rows, sessions) {
   const driven = (sessions ?? []).map(drivenAgentRow)
   if (!driven.length) return rows
-  const list = rows ?? []
+  const held = new Set(driven.map((row) => row.conversation).filter((id) => id != null))
+  const list = held.size
+    ? (rows ?? []).filter((row) => !(row?.restored && held.has(row.conversation)))
+    : (rows ?? [])
   const past = list.findIndex((row) => row?.restored)
   const at = past === -1 ? list.length : past
   return [...list.slice(0, at), ...driven, ...list.slice(at)]

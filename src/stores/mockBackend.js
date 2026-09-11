@@ -1677,7 +1677,14 @@ export function installMockBackend() {
       return {
         events: MOCK_CONVERSATION.slice(),
         seq: MOCK_CONVERSATION[MOCK_CONVERSATION.length - 1].seq,
-        state: 'needs-you'
+        state: 'needs-you',
+        /* The id the worker records the conversation under, and `null` here
+           because nothing in a browser records anything: there is no
+           `.smetana/agents.json` to write and no restart for a row to survive.
+           Written out rather than left off, since the store reads this field
+           off the snapshot and a fixture that answers in an older shape is
+           exactly what this file exists to stop happening quietly. */
+        conversation: null
       }
     }
     if (command === 'session_since') {

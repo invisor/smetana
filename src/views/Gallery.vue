@@ -923,14 +923,45 @@ const agentRows = [
      the panel being one flat list — so what is worth opening is its menu: two of
      the three verbs are refused at once, `Pin to top — nothing to remember it
      by` and `Clear session — this agent cannot do it`, and Close is the one that
-     works. The id is a string with `conversation:` in front of it because both
-     workers number their sessions from 1 and this is the key the order, the pins
-     and the `v-for` are carried by; `components/agent/drivenRows.js` builds the
-     whole row and carries the rest of the reasoning.
+     works.
+
+     **`conversation: null` is one of the two cases rather than the rule**, and
+     the row is here as that case. A driven session is recorded like any other
+     now, so an ordinary one carries its conversation id and can be pinned; the
+     two that carry none are a fork, whose new transcript Claude Code names
+     itself, and the first second of any session, before the id has come back
+     from the worker. This row is what either of those looks like, and the
+     prefixed id is what carries the order, the pins and the `v-for` when there
+     is nothing better — both workers number their sessions from 1, so the
+     prefix is what keeps two session 1s apart.
+     `components/agent/drivenRows.js` builds the whole row and carries the rest
+     of the reasoning.
 
      Above the offline row below and under the live ones, which is where the
      merge puts it: the project's past keeps the bottom of the column. */
   { id: 'conversation:1', conversation: null, clearable: false, label: 'Agent', tasks: [], state: 'needs-you', elapsed: '4m' },
+  /* And the ordinary driven row the one above is the exception to: a
+     conversation picked up again from its transcript. Three things are here to
+     be looked at and nowhere else in the app can they be, this page being the
+     only verification anything under `src/components/` has. It carries a real
+     conversation id, so `Pin to top` is live on it where its neighbour's is
+     greyed — the row above and this one are the pair to open the menu on, one
+     after the other. It is captioned `Resumed session: …`, the caption
+     `drivenRows.js` builds out of the work the store reduced the intent to, and
+     the title is deliberately long enough to reach the ellipsis: a person's own
+     sentence inside a 236px row is the case that decides whether this reads at
+     all. And `Clear session` is still refused, because that is about the road
+     rather than about the conversation — there is no PTY to write the line
+     into, whichever transcript this one came from. */
+  {
+    id: 'conversation:2',
+    conversation: 'c7d8e9f0-1a2b-4c3d-8e4f-5a6b7c8d9e0f',
+    clearable: false,
+    label: 'Resumed session: Rename the worktree when the branch changes',
+    tasks: [],
+    state: 'running',
+    elapsed: '12m'
+  },
   /* A session the last run of the app left behind, off `.smetana/agents.json`.
      The row that answers "the agent is gone after a restart", and the whole of
      what it is worth is how it is drawn: quiet, so it reads as the project's

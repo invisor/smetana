@@ -23,13 +23,18 @@
 //! rules that can be checked without a process are in `model.rs` and
 //! `journal.rs`, and each carries its own tests.
 //!
-//! **Nothing here is written to disk.** A driven session lives exactly as long
-//! as the app does: no record in `.smetana/agents.json`, so nothing offers one
-//! back after a restart. Restoring one is a later stage's work, and a record
-//! written by this stage would be a row nothing could reopen.
+//! **One thing here is written to disk, and it is the same file the terminal
+//! worker writes**: `.smetana/agents.json`, through `terminal::restore`. A
+//! driven session's *process* still dies with the app, exactly as a PTY
+//! session's does; what survives is the record that offers the conversation
+//! back, and it is deliberately not marked with which of the two roads made it.
+//! An offline row is taken up by whichever road the project's agent can drive
+//! *now* — `conversation_for` in `terminal::service` is the one decision about
+//! whether a session is recorded and under what name, asked from here rather
+//! than restated.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use portable_pty::CommandBuilder;
 use tauri::{AppHandle, Emitter, Manager};
@@ -41,6 +46,7 @@ use super::driver::{Driver, Input, LineBuffer};
 use super::journal::Journal;
 use super::model::{
     is_open_question, state_of, Decision, Event, EventKind, SessionError, SessionId, SessionState,
+    StateChange,
 };
 use super::permission::{Asked, PermissionServer};
 use crate::agents::claude_driver::ClaudeDriver;
@@ -85,6 +91,14 @@ pub struct Attached {
     pub events: Vec<Event>,
     pub seq: u64,
     pub state: SessionState,
+    /// The same value `session:state` carries, and here for the window between
+    /// the two. `session_start` answers with the worker's own session number
+    /// and nothing else, and the next thing a store does is attach — while the
+    /// first state *change* may be a whole turn away, since `session:state`
+    /// goes out on a change and never on a repeat. Without this the row a
+    /// person has just pressed a button for would be drawn under a key that
+    /// changes under it the moment the agent first speaks.
+    pub conversation: Option<String>,
 }
 
 pub enum Request {
@@ -146,6 +160,16 @@ struct Live {
     /// The last state emitted for this session. `session:state` goes out on a
     /// change and never on a repeat.
     state: SessionState,
+    /// The conversation this session is recorded under, or `None` for one with
+    /// no record — a fork, and a machine that would not give the random bytes.
+    /// It is on the wire with every state change and it is what the record in
+    /// `.smetana/agents.json` is keyed by, which is also why the `Eof` arm can
+    /// take that record away without holding a second copy of the id.
+    conversation: Option<String>,
+    /// The project folder, which is where that registry lives. The worker knows
+    /// a session by a number, so this is the only thing left here that can find
+    /// the file again once the child has gone.
+    project: String,
 }
 
 pub fn start(app: AppHandle) -> SessionHandle {
@@ -285,6 +309,31 @@ fn driver_for(
     }
 }
 
+/// Where a session started under this intent actually runs.
+///
+/// The project root for everything but a resume, and for a resume the directory
+/// its transcript recorded: `claude --resume` resolves an id against the
+/// directory it is run in, so the same id at the project root is a session
+/// Claude Code has never heard of — and a worktree session reopened there would
+/// be an agent reading a tree its own conversation never mentions.
+///
+/// **The rule is `sessions::model::resume_cwd`**, asked rather than restated:
+/// the two roads refuse the same worktree, and a person who switched their
+/// agent between one attempt and the next must not be told two different things
+/// about one missing folder.
+///
+/// The refusal is `SessionError::BadCwd` and never a `Spawn`. A `Spawn`'s text
+/// reaches a person unchanged, and this one's would be an internal sentence
+/// with an absolute path in it; the tag is what lets
+/// `stores/conversation.js` answer in the same words `stores/terminals.js`
+/// answers the terminal's `BadCwd` with.
+fn session_cwd(project: &str, intent: &Intent) -> Result<PathBuf, SessionError> {
+    let root = PathBuf::from(project);
+    let Intent::ResumeSession { cwd, .. } = intent else { return Ok(root) };
+    crate::sessions::model::resume_cwd(&root, cwd)
+        .ok_or_else(|| SessionError::BadCwd(cwd.to_owned()))
+}
+
 /// Start a child for this session, or say why not.
 fn spawn_session(
     app: &AppHandle,
@@ -321,9 +370,41 @@ fn spawn_session(
         )));
     };
 
+    // Refused before anything is spawned, and before the id below is spent:
+    // a worktree removed once its task merged is the ordinary case rather
+    // than an exotic one, and the transcript outlives it.
+    let cwd = session_cwd(project, &intent)?;
+    // The id this app writes the conversation under, and the one decision about
+    // it in the app — `terminal::service::conversation_for`, asked here rather
+    // than restated. A bare session gets a fresh one, a resume carries the one
+    // it reopened, a fork gets none at all because `--fork-session` has the
+    // harness invent an id this app never learns.
+    let conversation = crate::terminal::service::conversation_for(profile, &intent);
+    // A resume's id is already on its command line behind `--resume`, and the
+    // profile refuses a second one beside it. This is the half that says the
+    // worker never asks for it — the same pair of guards `terminal::service`
+    // keeps, about two different things.
+    let session_id = match &intent {
+        Intent::ResumeSession { .. } => None,
+        _ => conversation.clone(),
+    };
+    // The conversation so far, read before the spawn so that the journal a
+    // window attaches to already holds it. Under `--input-format stream-json`
+    // the harness replays nothing, so this is the whole of what an interactive
+    // `--resume` would have painted. One file, read once, and a failure is an
+    // empty history rather than a refusal.
+    let past = match &intent {
+        Intent::ResumeSession { id, .. } => super::history::read(&cwd, id),
+        _ => Vec::new(),
+    };
+    // Taken before the `Launch` moves the intent, and spent after the spawn has
+    // succeeded: it is what captions the row, exactly as it does one worker
+    // over, so a resumed conversation is not drawn as a bare agent.
+    let work = intent.work();
+
     let launch = Launch {
         profile,
-        cwd: PathBuf::from(project),
+        cwd: cwd.clone(),
         intent,
         skills: agents::library::resolve(app),
         // Read from the file here for the reason `terminal::service` reads them
@@ -334,12 +415,9 @@ fn spawn_session(
         // value.
         languages: crate::settings::languages(app),
         agent_prompt: crate::settings::agent_prompt(app),
-        // Only a `Setup` intent has any, and this stage starts none.
+        // Only a `Setup` intent has any, and this road starts none.
         facts: None,
-        // Nothing records this conversation, so there is nothing to name it
-        // for: an id chosen here would only be one nothing can hand back. The
-        // stage that adds restoring is the stage that mints one.
-        session_id: None,
+        session_id,
         model,
         // A run's subagents, and this stage starts no run.
         worker_model: None,
@@ -376,15 +454,46 @@ fn spawn_session(
     read_stdout(id, stdout, chunks.clone());
     read_stderr(id, stderr);
 
+    // After the spawn and not before it: a record for a session that never
+    // started would be a row offering a conversation the harness never opened.
+    // The same file, the same key and the same rules the terminal worker's
+    // records are written under — a row offered back after a restart cannot
+    // tell which road made it, and must not have to.
+    if let Some(session_id) = conversation.clone() {
+        crate::terminal::restore::record(
+            Path::new(project),
+            crate::terminal::restore::Restorable {
+                session_id,
+                agent: profile.id().to_owned(),
+                cwd: cwd.to_string_lossy().into_owned(),
+                project: project.to_owned(),
+                work,
+                started_at: chrono::Utc::now().to_rfc3339(),
+            },
+        );
+    }
+
+    // The past, before anything the child says. Appended rather than emitted:
+    // nothing has attached to this session yet — it is not even in the worker's
+    // map — and `session_attach` is what hands the whole journal over.
+    let mut journal = Journal::new();
+    for (kind, at) in past {
+        journal.append(kind, at);
+    }
     Ok(Live {
+        // `Starting` for a session with nothing behind it, which is what
+        // `state_of` calls an empty journal; a resumed one opens on a
+        // conversation and so opens `Ready`. Asked of the journal rather than
+        // written down, so the two cases cannot come apart. Not emitted: the
+        // front end reads it out of `session_attach`, which is the next thing
+        // it does.
+        state: state_of(journal.events(), true),
         talking: Some(Talking { driver, stdin: stdin_tx }),
-        journal: Journal::new(),
+        journal,
         child: Some(child),
         child_alive: true,
-        // Nothing has happened yet, which is what `state_of` calls `Starting`.
-        // Not emitted: the front end reads it out of `session_attach`, which is
-        // the next thing it does.
-        state: SessionState::Starting,
+        conversation,
+        project: project.to_owned(),
     })
 }
 
@@ -505,15 +614,24 @@ fn handle(
 ) {
     match request {
         Request::Start(project, intent, tx) => {
-            // The one intent this stage can start. Anything else is refused
-            // rather than half-supported: every other intent carries a brief,
-            // and `ClaudeDriver::start` puts what it is given on
+            // The two intents this road can start, and everything else is
+            // refused rather than half-supported: the rest carry a brief, and
+            // `ClaudeDriver::start` puts what it is given on
             // `--append-system-prompt`, which would silently reclassify
             // somebody's opening turn as a standing instruction. That file's
             // own comment records the decision.
-            if !matches!(intent, Intent::Bare) {
+            //
+            // A resume is the one intent that is exempt for a stated reason
+            // rather than by permission: `prompt::build` refuses it a prompt at
+            // all — a reopened conversation already has somebody's words in it
+            // — so `prompt_text` answers `None` and no such flag is written.
+            // The refusal above is about a brief going somewhere it should not,
+            // and a resume has none to send.
+            if !matches!(intent, Intent::Bare | Intent::ResumeSession { .. }) {
                 let _ = tx.send(Err(SessionError::Spawn(
-                    "a driven session can only be started bare, with no task behind it".into(),
+                    "a driven session can only be started bare or picked up again, \
+                     with no task behind it"
+                        .into(),
                 )));
                 return;
             }
@@ -541,7 +659,12 @@ fn handle(
             let _ = tx.send(match sessions.get(&id) {
                 Some(live) => {
                     let (events, seq) = live.journal.snapshot();
-                    Ok(Attached { events, seq, state: live.state })
+                    Ok(Attached {
+                        events,
+                        seq,
+                        state: live.state,
+                        conversation: live.conversation.clone(),
+                    })
                 }
                 None => Err(SessionError::NoSuchSession(id)),
             });
@@ -701,6 +824,19 @@ fn absorb(
             if let Some(server) = permission {
                 server.forget(id);
             }
+            // And nothing left to offer back: the conversation ended, so the
+            // row it would draw after the next restart would be an offer to
+            // reopen a finished agent. `forget_session` one worker over is the
+            // same two lines, and this is deliberately the *only* place a
+            // driven session's record is dropped — the cross on the row stops
+            // the session, which kills the child, which ends this stream, which
+            // arrives here. **The app's own exit does not take this path**:
+            // `Request::ShutDown` returns out of the worker's loop before any
+            // of its kills reaches `absorb`, which is what leaves the records in
+            // place for the next launch.
+            if let Some(conversation) = live.conversation.as_deref() {
+                crate::terminal::restore::drop_record(Path::new(&live.project), conversation);
+            }
             // Reaped on a task of its own: end of stream arrives before the
             // child has necessarily been waited on, and the worker must never
             // wait on a process. Dropping the handle unwaited would leave a
@@ -780,5 +916,8 @@ fn refresh_state(app: &AppHandle, id: SessionId, live: &mut Live) {
         return;
     }
     live.state = state;
-    let _ = app.emit("session:state", serde_json::json!({ "id": id, "state": state }));
+    let _ = app.emit(
+        "session:state",
+        StateChange { id, state, conversation: live.conversation.clone() },
+    );
 }

@@ -401,7 +401,16 @@ fn records_a_restorable(intent: &Intent) -> bool {
 /// nothing, exactly as a harness that cannot be told an id records nothing.
 /// Everything else gets a fresh id, when the profile can be told one and the
 /// machine will give the bytes.
-fn conversation_for(profile: &'static dyn agents::Profile, intent: &Intent) -> Option<String> {
+///
+/// **`pub(crate)` because the driven worker asks it too**, and asks it about
+/// the same two intents a person can start there. A driven session records into
+/// the very same `.smetana/agents.json`, under the same key, and an offline row
+/// cannot know which road made it — so the decision of *whether* to record, and
+/// under what name, has to be one function rather than two that agree today.
+pub(crate) fn conversation_for(
+    profile: &'static dyn agents::Profile,
+    intent: &Intent,
+) -> Option<String> {
     match intent {
         Intent::ResumeSession { id, fork: false, .. } => Some(id.clone()),
         Intent::ResumeSession { .. } => None,
@@ -657,35 +666,23 @@ fn shell_cwd(root: &Path, rel: Option<&str>) -> Result<PathBuf, TerminalError> {
 /// after the merge, with the transcript left behind, which is the ordinary case
 /// on any machine that has done a few tasks — is a refusal, not a substitution.
 ///
-/// Three clauses, and the third is the one that is not obvious. The path
-/// arrives from the front end, so it is checked rather than trusted: it has to
-/// lie inside the project, by `sessions::model::belongs_to` — the very rule
-/// that decided this session was this project's when the list was read, asked
-/// again here rather than spelled out a second time — it must hold no `..`,
-/// because `Path::starts_with` is lexical and would otherwise wave through
-/// `<project>/../../elsewhere`, and it has to be a directory that is there now.
+/// This worker's half of it: the shared rule, with this subsystem's own word
+/// for a refusal put on it.
 ///
-/// `also` is the project's canonical path when it has one, and it is here for
-/// the reason `sessions::read::list_in` carries it: `/tmp` on macOS is
-/// `/private/tmp`, so a transcript records whichever spelling Claude Code was
-/// started with while the front end holds whichever the project was opened
-/// with. Comparing against both is cheaper than refusing a session the list
-/// itself was happy to draw.
-fn resume_cwd(root: &Path, also: Option<&Path>, cwd: &str) -> Result<PathBuf, TerminalError> {
-    let bad = || TerminalError::BadCwd(cwd.to_owned());
-    if cwd.is_empty() {
-        return Err(bad());
-    }
-    let path = PathBuf::from(cwd);
-    if path.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
-        return Err(bad());
-    }
-    let ours = crate::sessions::model::belongs_to(cwd, root)
-        || also.is_some_and(|other| crate::sessions::model::belongs_to(cwd, other));
-    if !ours || !path.is_dir() {
-        return Err(bad());
-    }
-    Ok(path)
+/// **The rule itself lives in `sessions::model::resume_cwd`**, beside the
+/// `belongs_to` it is built out of, because the driven worker asks the same
+/// question of the same path and a second copy is two chances to have exactly
+/// one of them right. The whole question is there, the project's second
+/// spelling included — this is a `Result` and nothing else.
+///
+/// What stays here is the error *type*: `BadCwd` is this subsystem's
+/// vocabulary, and `session::service` has a variant of its own under the same
+/// name. What a person reads is neither, and is not a Rust string at all —
+/// each store's `ERRORS` table answers `badCwd` with the same sentence, which
+/// is where the two roads are held to one wording.
+fn resume_cwd(root: &Path, cwd: &str) -> Result<PathBuf, TerminalError> {
+    crate::sessions::model::resume_cwd(root, cwd)
+        .ok_or_else(|| TerminalError::BadCwd(cwd.to_owned()))
 }
 
 /// Everything the worker does synchronously. `ShutDown` is handled by the
@@ -783,8 +780,7 @@ fn handle(
             let dir = match &intent {
                 agents::Intent::ResumeSession { cwd, .. } => {
                     let root = PathBuf::from(&project);
-                    let real = root.canonicalize().ok().filter(|real| *real != root);
-                    match resume_cwd(&root, real.as_deref(), cwd) {
+                    match resume_cwd(&root, cwd) {
                         Ok(dir) => dir,
                         Err(err) => {
                             let _ = tx.send(Err(err));
@@ -1535,7 +1531,7 @@ mod tests {
         let worktree = root.join(".worktrees/smetana-0cj");
         std::fs::create_dir_all(&worktree).unwrap();
         assert_eq!(
-            resume_cwd(&root, None, &worktree.to_string_lossy()).unwrap(),
+            resume_cwd(&root, &worktree.to_string_lossy()).unwrap(),
             worktree
         );
     }
@@ -1545,7 +1541,7 @@ mod tests {
     #[test]
     fn a_root_session_resumes_at_the_root() {
         let root = scratch("resume-root");
-        assert_eq!(resume_cwd(&root, None, &root.to_string_lossy()).unwrap(), root);
+        assert_eq!(resume_cwd(&root, &root.to_string_lossy()).unwrap(), root);
     }
 
     /// **The refusal this feature exists to make.** A worktree is removed once
@@ -1557,7 +1553,7 @@ mod tests {
     fn a_worktree_that_has_been_removed_is_refused_rather_than_replaced() {
         let root = scratch("resume-gone");
         let gone = root.join(".worktrees/smetana-merged-long-ago");
-        let answer = resume_cwd(&root, None, &gone.to_string_lossy());
+        let answer = resume_cwd(&root, &gone.to_string_lossy());
         assert!(matches!(answer, Err(TerminalError::BadCwd(_))), "{answer:?}");
     }
 
@@ -1568,7 +1564,7 @@ mod tests {
         std::fs::create_dir_all(&sibling).unwrap();
         for cwd in [sibling.to_string_lossy().into_owned(), "/etc".to_owned(), String::new()] {
             assert!(
-                matches!(resume_cwd(&root, None, &cwd), Err(TerminalError::BadCwd(_))),
+                matches!(resume_cwd(&root, &cwd), Err(TerminalError::BadCwd(_))),
                 "{cwd} is not a directory this project may be resumed in"
             );
         }
@@ -1584,7 +1580,7 @@ mod tests {
     fn a_path_that_walks_back_out_of_the_project_is_refused() {
         let root = scratch("resume-escape");
         let escape = format!("{}/../..", root.display());
-        assert!(matches!(resume_cwd(&root, None, &escape), Err(TerminalError::BadCwd(_))));
+        assert!(matches!(resume_cwd(&root, &escape), Err(TerminalError::BadCwd(_))));
     }
 
     /// A file is not a working directory. `Pty::spawn` handed one would fail
@@ -1596,25 +1592,42 @@ mod tests {
         let file = root.join("transcript.jsonl");
         std::fs::write(&file, "{}\n").unwrap();
         assert!(matches!(
-            resume_cwd(&root, None, &file.to_string_lossy()),
+            resume_cwd(&root, &file.to_string_lossy()),
             Err(TerminalError::BadCwd(_))
         ));
     }
 
-    /// The two spellings of one path, which is what `also` is for: `/tmp` on
-    /// macOS is `/private/tmp`, so the project can be held under one name while
-    /// the transcript recorded the other. `sessions::read::list_in` compares
-    /// against both for the same reason, and a resume that refused what the
-    /// list was happy to draw would be the two disagreeing about one session.
+    /// The two spellings of one path: `/tmp` on macOS is `/private/tmp`, so the
+    /// project can be held under one name while the transcript recorded the
+    /// other. `sessions::read::list_in` compares against both for the same
+    /// reason, and a resume that refused what the list was happy to draw would
+    /// be the two disagreeing about one session.
+    ///
+    /// A real symlink rather than a pair of strings, because the second
+    /// spelling is `resume_cwd`'s own to derive now — it canonicalises the root
+    /// itself, so a test that handed it one would be testing nothing the
+    /// callers do.
+    #[cfg(unix)]
     #[test]
     fn the_projects_other_spelling_is_accepted_too() {
         let real = scratch("resume-symlink");
-        let other = real.parent().unwrap().join("resume-symlink-alias");
-        let cwd = real.join("src");
+        let alias = real.parent().unwrap().join("resume-symlink-alias");
+        let _ = std::fs::remove_file(&alias);
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        // The transcript recorded the path behind the link; the front end holds
+        // the link.
+        let cwd = real.canonicalize().unwrap().join("src");
         std::fs::create_dir_all(&cwd).unwrap();
-        // The project as the front end holds it is `other`; the transcript
-        // recorded a path under `real`.
-        assert!(matches!(resume_cwd(&other, None, &cwd.to_string_lossy()), Err(_)));
-        assert_eq!(resume_cwd(&other, Some(&real), &cwd.to_string_lossy()).unwrap(), cwd);
+        assert_eq!(resume_cwd(&alias, &cwd.to_string_lossy()).unwrap(), cwd);
+
+        // And a project that is genuinely somewhere else is still refused:
+        // canonicalising widens the comparison, it does not open it.
+        let elsewhere = scratch("resume-symlink-elsewhere");
+        assert!(matches!(
+            resume_cwd(&elsewhere, &cwd.to_string_lossy()),
+            Err(TerminalError::BadCwd(_))
+        ));
+        let _ = std::fs::remove_file(&alias);
+        let _ = std::fs::remove_dir_all(&elsewhere);
     }
 }

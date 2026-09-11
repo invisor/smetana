@@ -39,14 +39,17 @@ its "+ New agent" row, from the `+` button beside the pinned tabs, or from the t
 agent to edit". The reason the subsystem exists at all is the second half of that sentence: it notices
 when an agent is waiting on a human, including one in a tab nobody is looking at.
 
-**One of those roads has already left this subsystem.** "+ New agent" starts a *driven* session under
-Claude Code since smetana-5ijg — no PTY, no ring, no row in the Agents view — because the worker parses
-that harness's protocol itself and the app draws typed events (`src-tauri/src/session/`,
-`src/stores/conversation.js`, `src/components/conversation/`). Every other harness keeps this road
-exactly as it is, since only Claude Code has a driver, and so does every other intent whatever the
-harness. Which of the two a press takes is `canDrive` in the conversation store, over `settings.agent` and
-`settings.conversationPanel` — the switch on the Agents tab that sends every harness down this road
-again (`.claude/rules/settings.md`).
+**Two of those roads have already left this subsystem.** "+ New agent" starts a *driven* session under
+Claude Code since smetana-5ijg, and picking a recorded conversation up again — the offline row, and the
+Sessions tab's Resume and Continue in a new session — does the same since smetana-477m: no PTY and no
+ring, because the worker parses that harness's protocol itself and the app draws typed events
+(`src-tauri/src/session/`, `src/stores/conversation.js`, `src/components/conversation/`). Every other
+harness keeps this road exactly as it is, since only Claude Code has a driver, and so does every other
+intent whatever the harness. Which of the two a press takes is `canDrive` in the conversation store,
+over `settings.agent` and `settings.conversationPanel` — the switch on the Agents tab that sends every
+harness down this road again (`.claude/rules/settings.md`). A driven session *does* have a row in the
+Agents view (smetana-inl1) and *is* offered back after a restart (smetana-477m); the two sentences
+this paragraph used to end on said otherwise and were true when they were written.
 What is written below is the PTY half and stays true of it; the parts the split changed are marked
 where they are.
 
@@ -301,17 +304,29 @@ is going away.
 
 Four things about such a row are decisions rather than details.
 
-- **Its id is a string with `conversation:` in front of it.** `agentKey` is `row.conversation ?? row.id`,
-  a driven session is deliberately minted no conversation id (`session_id: None` in `spawn_session` — the
-  stage that adds restoring is the one that will mint it), and both workers count their sessions from 1:
-  without the prefix two rows collide on the key that carries the drawn order, the pins and the `v-for`.
-- **`conversation` stays `null`, so Pin refuses itself** with `nothing to remember it by` — and the
-  refusal is true, a driven conversation not surviving a restart, which is the whole of what a pin is for.
-- **Clear is refused too**, on `clearable: false`: `Profile::clear_command` is a line written into a PTY
-  and this session has none. `agentMenu.js` carries why the two cases share one sentence.
-- **The cross stops the conversation and forgets it.** `forget` in `stores/conversation.js` is the one
-  thing that takes an entry out of `started`, and this cross is its only caller — the store's rule is that
-  a session stays until somebody closes it, and until this row existed there was nobody to.
+- **Its key is the conversation id where there is one, and a prefixed number where there is not.**
+  `agentKey` is `row.conversation ?? row.id`. A driven session mints an id and records itself under it
+  exactly as a PTY one does (smetana-477m), so the ordinary row is keyed by the same name its own
+  offline row carried yesterday — which is what lets a resume take its offer's place and a pin outlive
+  the agent. `conversation: null` is left for the two cases that really have none: the first frame,
+  before `noteConversation` has the worker's answer, and a **fork** for good, `--fork-session` having
+  Claude Code invent an id this app never learns. Then the id is `drivenRowId`'s, with
+  `conversation:` in front of a number, because both workers count their sessions from 1 and without
+  the prefix two rows would collide on the key that carries the drawn order, the pins and the `v-for`.
+- **Pin refuses itself on exactly those two**, with `nothing to remember it by`, and the refusal is
+  true of them: there is genuinely nothing to bring such a session back under. It is an ordinary row
+  with an ordinary pin otherwise.
+- **Clear is refused always**, on `clearable: false`: `Profile::clear_command` is a line written into a
+  PTY and this session has none. `agentMenu.js` carries why the two cases share one sentence.
+- **The cross stops the conversation, forgets it, and takes the offer with it.** `forget` in
+  `stores/conversation.js` is the one thing that takes an entry out of `started`, and this cross is its
+  only caller — the store's rule is that a session stays until somebody closes it, and until this row
+  existed there was nobody to. The third act is `forgetRestored`, and it is `dropSession`'s lesson on
+  the other road: a record is written at the spawn, so the registry holds one for a session that is
+  *running*, and a row closed without it comes back a tick later as an `offline` offer to resume what
+  somebody has just shut (smetana-q7sq). While the row is on screen the merge is what hides that
+  record — `mergeAgentRows` drops an offer whose id a live conversation is carrying, which is
+  `offeredRecords`' rule applied where `terminals.js` cannot see it.
 
 Clicking such a row is `showAgentTab(session)` and never `terminalState.activeId`: the tab moves, the
 terminal's own selection is left where it was, and the row carries the highlight for as long as
@@ -580,8 +595,32 @@ of what layer A does: a capture has just written into the session and is waiting
 arrive at all, so a screen that happens to look unchanged mid-answer is not a settled one, and
 reading a half-finished reply as finished would hand a caller the wrong text with nothing to say so.
 
-**A session's process does not survive a restart, and a record does.** `RunEvent::Exit` calls
-`terminal::service::shutdown`, and the worker ends every session the way closing a terminal window
+**A session's process does not survive a restart, and a record does.** What follows is written about
+the PTY worker and holds word for word of the driven one: `session::service` mints its id through the
+very same `conversation_for`, writes through the very same `terminal::restore::record`, and drops the
+record at the end of its child's stdout where this one drops it at `Chunk::Gone`. A record on disk
+deliberately does **not** say which of the two wrote it — an offline row is taken up by whichever road
+the project's harness can take *now*, and a field saying how the session was recorded would be one
+more thing to disagree with.
+
+**Stop takes the record with it, and that is the honest reading rather than a third removal.** The
+spec named two — a session that left on its own, and the cross on the row — and the driven panel's
+Stop is neither by name: `Driver::interrupt` answers `None` for Claude Code, which outside its own SDK
+has no documented way of being asked to stop one turn, so `Request::Stop` kills the child. That child
+*is* the session. What follows is `Chunk::Eof`, the same arrival a self-exit makes, and the
+conversation is over either way — so it is offered back no more than any other finished agent is,
+which is exactly the rule the terminal worker keeps at `Chunk::Gone` for a PTY child killed by
+anything at all. The thing to know before changing it: **the worker cannot tell the three apart, and
+there is no command by which it could.** `Request` is Start, Attach, Since, Send, Answer, Stop and
+ShutDown, and `session/commands.rs` exposes six commands with no removal among them — so the cross is
+`session_stop` exactly as the composer's Stop button is, and a self-exit is no request at all. A drop
+moved onto `Stop` would therefore separate none of the three and would miss the self-exit outright.
+`Eof` is the one arrival all of them make, which is why the drop is there. (The cross does reach Rust
+a second time, and about this very record: `removeAgentRow` calls `forgetRestored`, which is
+`terminal_forget`. That is the front end taking away the *offer* it was drawing, not the worker
+learning which gesture ended the session.)
+
+`RunEvent::Exit` calls `terminal::service::shutdown`, and the worker ends every session the way closing a terminal window
 does: `SIGHUP` to the session's process group — which reaches whatever the
 agent itself started, as `SIGKILL` to the direct child would not — then a short wait, then a kill for
 what is left. The two seconds `shutdown` itself waits are the ceiling on a *wedged worker*, the same
@@ -646,10 +685,13 @@ list* — is answered rather than overruled. The row is explicitly not a live on
 (`state: 'done'`, which is what `attentionLevel` reads and `AgentList` dims by), it says `offline`
 where an elapsed time would be, it is counted by neither `liveAgentCount` nor `hasAgentSession` — so
 a freshly launched app does not open on an empty Agent tab — and its whole content is an offer. The
-click is the offer, and it takes the one road to a PTY: `resumeSession` in `DesktopApp.vue` →
-`createSession` with an `Intent::ResumeSession` → `--resume <id>` in the record's own directory. A
-worktree removed after its task merged is the ordinary case and is refused by `resume_cwd`, which
-reaches the person as a sentence in the toast corner like every other session verb's refusal.
+click is the offer, and it takes `resumeSession` in `DesktopApp.vue`, which since smetana-477m forks
+the same way "+ New agent" does: `canDrive` → `startConversation` with an `Intent::ResumeSession`, and
+otherwise `createSession` with the very same intent. Either way it is `--resume <id>` in the record's
+own directory, and the one function is deliberate — `selectAgent` on this row and the Sessions tab's
+own two verbs are three doors onto one verb, and a second fork in any of them would be a copy to
+drift. A worktree removed after its task merged is the ordinary case and is refused by `resume_cwd`,
+which reaches the person as a sentence in the toast corner like every other session verb's refusal.
 
 **The other refusal is the front end's own and is asked before the worker is**: a record is written
 only for a session whose conversation id this app knows, but the row is drawn whatever agent the
@@ -1128,20 +1170,51 @@ the same folder, which would have differed from "+ New agent" only by its direct
 session opened on a prompt assembled out of the transcript, which is a new intent and a new prompt in
 `prompt.rs` for something the fork gives whole and more accurately.
 
-**There is one road to a PTY and this takes it.** `resumeSession` in `DesktopApp.vue` calls
+**There is one road to a PTY and this takes it**, and since smetana-477m there is a road that is not
+one. `resumeSession` in `DesktopApp.vue` asks `canDrive` the same question "+ New agent" asks, in the
+same one place: under a harness this app drives, a resume opens the **conversation panel** on the
+transcript it reopened; under any other, and with the person's own switch off, it calls
 `createSession` with an `Intent::ResumeSession`, which is `terminal_create`, which is the profile's
-own command line plus `--resume <id>` and `Pty::spawn` — the same road "+ New agent", a filing
-session and a run's batch all take. A second way to start an agent is the place two ways silently
-diverge, which is also why the fork is a `fork` flag on that one intent rather than a road of its
-own: everything but the arguments is shared.
+own command line plus `--resume <id>` and `Pty::spawn` — the same road a filing session and a run's
+batch still take. The intent is one object built once and handed to whichever road answers, which is
+also why the fork is a `fork` flag on that one variant rather than a road of its own: everything but
+the arguments is shared. The driven half is `session::service`, which accepts `Bare` and
+`ResumeSession` and nothing else — every other intent carries a brief, and this harness's driven form
+would put one on `--append-system-prompt`.
+
+**What the panel opens on is the conversation that already happened.** Under `--input-format
+stream-json` the harness replays nothing at all, so `session::history` reads the transcript before the
+spawn and lays its records into the journal as ordinary events — through
+`claude_driver::one_event`, the very function the live stream goes through, because a `.jsonl` record
+and a stream-json line are the same object. A person's own turn is the half that stream never carries,
+and `sessions::model::human_text` is the rule that finds one: not meta, not a sidechain, `origin.kind`
+human where the file is new enough to say. A `TurnStart` is deliberately filtered back out — one with
+no `Result` after it is what `state_of` reads as a turn in flight, and a resumed panel would open with
+the composer showing Stop and no way back. There is no marker between the history and the live half
+and none is wanted: the first live `TurnStart`, off the harness's own `init`, is the boundary. A
+transcript that is missing or unreadable is a panel with no history and a line in the log, never a
+refusal to resume.
 
 **The working directory is the session's own, and never the project root.** `claude --resume`
 resolves an id against the directory it is run in, so the same id somewhere else is a session Claude
 Code has never heard of, and a worktree session started at the root would be an agent reading a tree
-its own transcript never mentions. `resume_cwd` in `terminal/service.rs` is the guard and it refuses
-rather than substitutes: the path has to lie inside the project (`sessions::model::belongs_to`, the
-very rule that decided the session was this project's), hold no `..`, and be a directory that is
-there now. This is the one intent for which a session's `cwd` and its `project` differ — the same
+its own transcript never mentions. `sessions::model::resume_cwd` is the guard and it refuses rather
+than substitutes: the path has to lie inside the project (`belongs_to` beside it, the very rule that
+decided the session was this project's), hold no `..`, and be a directory that is there now — and the
+project's second spelling, `/tmp` against `/private/tmp`, is that function's own to derive rather than
+an argument, since a caller deriving it was a caller deriving it twice. It lives there rather than in
+either worker because **both** ask it: a resume goes down whichever road the project's harness can
+take.
+
+**The refusal is a bare `None`, each worker puts its own error type on it, and the sentence is
+neither's.** `TerminalError::BadCwd` and `SessionError::BadCwd` are two tags for one fact, and what a
+person reads is the `badCwd` entry in each store's `ERRORS` table — `terminals.js` has one and
+`conversation.js` carries a copy of it, which is a **pair to change together with nothing mechanical
+between them**. A `Spawn` would have done neither: that variant's text reaches a person unchanged, so
+a driven refusal would have arrived as `that folder cannot be a working directory: /Users/…`, lower
+case, with an absolute path in it. And the front end does not fall back to the PTY road on this one
+refusal at all — both workers ask one function about one path, so the second attempt can only refuse
+again and put a second toast on screen saying the sentence already there. This is the one intent for which a session's `cwd` and its `project` differ — the same
 divergence a shell opened from a folder in the tree has.
 
 A directory that has gone is the **ordinary** case, not an exotic one: a worktree is removed once its

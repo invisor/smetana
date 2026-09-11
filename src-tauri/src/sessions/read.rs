@@ -1,12 +1,15 @@
 //! The disk half: turning a folder of transcripts into a list of rows.
 //!
 //! **A transcript is streamed, never loaded.** The ceiling on what one file
-//! costs in memory is [`MAX_LINE`] for the line being looked at, [`MAX_LINE`]
-//! again for the first human record, which is kept whole so that
+//! costs *this module* is [`MAX_LINE`] for the line being looked at,
+//! [`MAX_LINE`] again for the first human record, which is kept whole so that
 //! [`super::kickoff`] has something to read, and [`TAIL_WINDOW`] for the window
 //! read back from the end — 384 KiB, for a file of any size, and the largest
 //! one on the machine this was written against is 16 MB. Files are summarised
-//! one at a time, so that is the ceiling for the whole command as well.
+//! one at a time, so that is the ceiling for the whole command as well. It is
+//! not a ceiling on transcript reading in the tree: [`next_line`] takes its
+//! limit from whoever calls it, and `session::history` reads the same files at
+//! sixteen times this one.
 //!
 //! **One pass forward, one window back.** Everything a row needs is in one of
 //! three places: at the head (`cwd`, `gitBranch`, the session's title), at the
@@ -44,11 +47,22 @@ use super::model::{
     SessionSummary,
 };
 
-/// The most of one line that is ever held. A tool result carrying a file is a
-/// single line of megabytes, and none of what this reads is ever that far into
-/// one: `type`, `cwd`, `isSidechain` and the start of a message all sit in the
-/// first few hundred bytes of the record that carries them.
-const MAX_LINE: usize = 64 * 1024;
+/// The most of one line **the forward pass** ever holds, and the limit it hands
+/// [`next_line`]. A tool result carrying a file is a single line of megabytes,
+/// and none of what that pass reads is ever that far into one: `type`, `cwd`,
+/// `isSidechain` and the start of a message all sit in the first few hundred
+/// bytes of the record that carries them.
+///
+/// The forward pass and not the module: [`scan_tail`] holds a whole
+/// [`TAIL_WINDOW`] and parses records out of it, so a last message of 200 KiB
+/// is held by this file in spite of this number. That reader is bounded by the
+/// window instead, which the module header enumerates beside this.
+///
+/// It is not the tree's ceiling on a transcript line and must not be borrowed
+/// as one: what justifies 64 KB is the head-of-a-record reading above, and
+/// `session::history` replays whole records and holds itself to the live
+/// codec's `driver::MAX_LINE` instead.
+pub(crate) const MAX_LINE: usize = 64 * 1024;
 
 /// How far back from the end the last spoken line is looked for. Measured
 /// rather than picked: across this project's 276 transcripts the last message
@@ -94,21 +108,41 @@ const ASSISTANT: &str = "\"type\":\"assistant\"";
 const SIDECHAIN: &str = "\"isSidechain\":true";
 
 /// One line of a transcript, and what it cost to get here.
-struct Line {
-    /// The line was longer than [`MAX_LINE`] and only its start was kept. It is
-    /// still counted — the record type is at the front of the record — but it
-    /// is not offered to the JSON parser, which would fail on half an object.
-    truncated: bool,
+pub(crate) struct Line {
+    /// The line was longer than the caller's `limit` and only its start was
+    /// kept. It is still counted — the record type is at the front of the
+    /// record — but it is not offered to the JSON parser, which would fail on
+    /// half an object.
+    pub(crate) truncated: bool,
 }
 
-/// The next line, into a buffer that never grows past [`MAX_LINE`].
+/// The next line, into a buffer that never grows past `limit`.
 ///
 /// `BufRead::read_until` would do this in one call and is not usable here for
 /// exactly one reason: it grows the buffer to the length of the line, so a
 /// transcript with a 10 MB tool result in it would decide this command's peak
 /// memory. Everything past the cap is read and dropped rather than skipped, so
 /// the reader still ends up on the next line.
-fn next_line(reader: &mut impl BufRead, line: &mut Vec<u8>) -> std::io::Result<Option<Line>> {
+///
+/// **The ceiling is the caller's and not this module's**, which is the whole
+/// reason it is a parameter. This module reads the *head* of a record —
+/// [`MAX_LINE`], and its comment says why a few hundred bytes would nearly do —
+/// while `session::history` replays the whole of one and holds itself to the
+/// live codec's ceiling instead. What is shared is the reading, not the budget:
+/// a second bounded reader written beside this one would be a second chance to
+/// get the interrupted-read and the over-long-line cases exactly right.
+///
+/// **A caller's limit is the whole of the bound, and there is no floor and no
+/// ceiling on it here.** This function exists in place of `read_until` because
+/// that one grows its buffer to the length of the line; a caller passing
+/// something very large brings exactly that growth back, one line at a time, on
+/// a file this app did not write. Pick a limit against what the caller actually
+/// reads out of a record, the way both of today's two do.
+pub(crate) fn next_line(
+    reader: &mut impl BufRead,
+    line: &mut Vec<u8>,
+    limit: usize,
+) -> std::io::Result<Option<Line>> {
     line.clear();
     let mut seen = 0usize;
     let mut truncated = false;
@@ -127,7 +161,7 @@ fn next_line(reader: &mut impl BufRead, line: &mut Vec<u8>) -> std::io::Result<O
                 None => (available.len(), false),
             };
             let chunk = &available[..used];
-            let room = MAX_LINE.saturating_sub(line.len()).min(chunk.len());
+            let room = limit.saturating_sub(line.len()).min(chunk.len());
             if room < chunk.len() {
                 truncated = true;
             }
@@ -177,7 +211,7 @@ fn scan_forward(file: File, project: &Path, also: Option<&Path>) -> Option<Facts
     let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024);
     let mut facts = Facts::default();
     let mut index = 0usize;
-    while let Ok(Some(line)) = next_line(&mut reader, &mut buf) {
+    while let Ok(Some(line)) = next_line(&mut reader, &mut buf, MAX_LINE) {
         let text = String::from_utf8_lossy(&buf);
         let is_user = text.contains(USER);
         let is_assistant = text.contains(ASSISTANT);
@@ -458,6 +492,55 @@ pub fn list_in(root: &Path, project: &Path) -> Vec<SessionSummary> {
     sessions
 }
 
+/// The transcript one session wrote, under a given `projects` root.
+///
+/// The pair `(cwd, id)` is how Claude Code itself names a session — `--resume`
+/// resolves an id against the directory it is run in — so it is the pair this
+/// answers to, and the same one `crate::session::history` replays a
+/// conversation from.
+///
+/// The folder is found rather than composed, and that is the whole of the
+/// method: the name is the working directory with its non-alphanumerics
+/// replaced, and this app deliberately does not claim to know which characters
+/// Claude Code replaces today. [`folder_could_hold`] can rule a folder *out*
+/// without ever letting a genuinely different path through, which is exactly
+/// the guarantee wanted here, and the id is a UUID — so a file of that name
+/// under a folder that could hold this directory is this session's transcript
+/// and cannot be another's.
+///
+/// `root` is a parameter for [`list_in`]'s reason: it is what makes this
+/// testable over a temporary directory.
+///
+/// The last guard is about the id, which travels from the front end with a
+/// worktree path beside it: `is_transcript` is what stops `../../..` in an id
+/// from naming a file elsewhere on the machine, and it is the same rule the
+/// Sessions tab's own verbs are held to.
+pub fn transcript_in(root: &Path, cwd: &Path, id: &str) -> Option<PathBuf> {
+    let real = cwd.canonicalize().ok().filter(|real| real != cwd);
+    let entries = std::fs::read_dir(root).ok()?;
+    for folder in entries.flatten() {
+        let name = folder.file_name().to_string_lossy().into_owned();
+        let keep = folder_could_hold(&name, cwd)
+            || real.as_deref().is_some_and(|real| folder_could_hold(&name, real));
+        if !keep {
+            continue;
+        }
+        let path = folder.path().join(format!("{id}.jsonl"));
+        if super::model::is_transcript(&path, root) && path.is_file() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// The transcript one session wrote. `None` on a machine with no Claude Code on
+/// it, and for a session whose file has been deleted since — neither is a
+/// failure, and the caller's answer to both is a conversation with no history
+/// in front of it.
+pub fn transcript(cwd: &Path, id: &str) -> Option<PathBuf> {
+    transcript_in(&projects_root()?, cwd, id)
+}
+
 /// Where Claude Code keeps its transcripts. `HOME` rather than a crate, the way
 /// `agents::library`, `runs::browser` and `tracker::access` already read it.
 pub(super) fn projects_root() -> Option<PathBuf> {
@@ -548,6 +631,44 @@ mod tests {
                 assistant_line(cwd, "Moved it."),
             ],
         )
+    }
+
+    /* ---- one session's own file ------------------------------------------ */
+
+    #[test]
+    fn a_session_is_found_by_the_pair_claude_code_names_it_by() {
+        let root = temp_dir("one-root");
+        let project = temp_dir("one-project");
+        let worktree = project.join(".worktrees/task");
+        std::fs::create_dir_all(&worktree).expect("a worktree");
+        let wanted = ordinary_session(&root, &worktree, "ours");
+        // The same id under another directory is another session as far as the
+        // harness is concerned, and must not be handed back for this one.
+        ordinary_session(&root, &project, "theirs");
+
+        assert_eq!(transcript_in(&root, &worktree, "ours").as_deref(), Some(wanted.as_path()));
+        assert_eq!(
+            transcript_in(&root, &worktree, "theirs"),
+            None,
+            "a session of the project root is not the worktree's"
+        );
+        assert_eq!(transcript_in(&root, &worktree, "never-written"), None);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    /// The id travels from the front end beside a path, so it is the one part
+    /// of the name this app did not choose.
+    #[test]
+    fn an_id_that_walks_out_of_the_projects_root_names_nothing() {
+        let root = temp_dir("escape-root");
+        let project = temp_dir("escape-project");
+        ordinary_session(&root, &project, "ours");
+        std::fs::write(root.join("outside.jsonl"), "{}\n").expect("a file to aim at");
+
+        assert_eq!(transcript_in(&root, &project, "../outside"), None);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&project);
     }
 
     #[test]
@@ -1098,14 +1219,14 @@ mod tests {
         let mut reader = BufReader::new(long.as_bytes());
         let mut buf = Vec::new();
 
-        let first = next_line(&mut reader, &mut buf).unwrap().expect("the long line");
+        let first = next_line(&mut reader, &mut buf, MAX_LINE).unwrap().expect("the long line");
         assert!(first.truncated);
         assert_eq!(buf.len(), MAX_LINE, "the cap is the whole of the memory it costs");
 
-        let second = next_line(&mut reader, &mut buf).unwrap().expect("the line after it");
+        let second = next_line(&mut reader, &mut buf, MAX_LINE).unwrap().expect("the line after it");
         assert!(!second.truncated);
         assert_eq!(String::from_utf8_lossy(&buf), "short\n");
-        assert!(next_line(&mut reader, &mut buf).unwrap().is_none());
+        assert!(next_line(&mut reader, &mut buf, MAX_LINE).unwrap().is_none());
     }
 
     #[test]
@@ -1185,9 +1306,9 @@ mod tests {
     fn a_file_that_does_not_end_in_a_newline_still_gives_up_its_last_line() {
         let mut reader = BufReader::new("one\ntwo".as_bytes());
         let mut buf = Vec::new();
-        assert!(next_line(&mut reader, &mut buf).unwrap().is_some());
-        assert!(next_line(&mut reader, &mut buf).unwrap().is_some());
+        assert!(next_line(&mut reader, &mut buf, MAX_LINE).unwrap().is_some());
+        assert!(next_line(&mut reader, &mut buf, MAX_LINE).unwrap().is_some());
         assert_eq!(String::from_utf8_lossy(&buf), "two");
-        assert!(next_line(&mut reader, &mut buf).unwrap().is_none());
+        assert!(next_line(&mut reader, &mut buf, MAX_LINE).unwrap().is_none());
     }
 }

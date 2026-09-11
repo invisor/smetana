@@ -317,6 +317,54 @@ describe('the conversation store', () => {
     expect(stores.conversation.conversationFor(1).state).toBe('needs-you')
   })
 
+  /* The refusal the ordinary resume meets: a worktree removed once its task
+     merged, with the transcript still on disk. Both stores answer `badCwd` with
+     one sentence, and `views/DesktopApp.vue` reads the tag rather than the
+     sentence to decide that the PTY road has nothing left to try. */
+  describe('a refusal about the directory', () => {
+    it('is worded as the terminal store words it, not as the worker wrote it', async () => {
+      const { ipc, stores } = await ready()
+      ipc.fail('session_start', {
+        kind: 'badCwd',
+        message: '/p/.worktrees/smetana-merged-long-ago'
+      })
+      await stores.conversation.startConversation('/p', {
+        kind: 'resumeSession',
+        id: '9f1c',
+        cwd: '/p/.worktrees/smetana-merged-long-ago',
+        title: null,
+        fork: false
+      })
+
+      const { text } = stores.conversation.conversationState.lastError
+      expect(text).toBe(
+        'Smetana could not start a shell there. The tree may be out of date — refresh it.'
+      )
+      /* The whole reason it is not a `spawn`: that kind hands the worker's own
+         text straight through, absolute path and all. */
+      expect(text).not.toContain('/p/.worktrees')
+    })
+
+    it('carries the worker\u2019s own tag, so a caller can tell it from the rest', async () => {
+      const { ipc, stores } = await ready()
+      ipc.fail('session_start', { kind: 'badCwd', message: '/p/gone' })
+      await stores.conversation.startConversation('/p')
+
+      expect(stores.conversation.conversationState.lastError.kind).toBe('badCwd')
+    })
+
+    /* Anything that did not come from the worker has no tag, and must not be
+       mistaken for one: a plain transport error is not a refusal about a
+       directory. */
+    it('leaves the tag empty for a refusal the worker never made', async () => {
+      const { ipc, stores } = await ready()
+      ipc.fail('session_start', new Error('the session worker is not running'))
+      await stores.conversation.startConversation('/p')
+
+      expect(stores.conversation.conversationState.lastError.kind).toBe(null)
+    })
+  })
+
   /* Which driven sessions this window is holding, and for which project. The
      centre's Agent tab is derived from this list (`hasAgentTab` in
      `stores/tabs.js`), which is what makes each of the three below a rule about
@@ -370,6 +418,89 @@ describe('the conversation store', () => {
       expect(record).toMatchObject({ id: 7, project: '/p', state: 'running' })
       expect(record.startedAt).toBeGreaterThanOrEqual(before)
       expect(record.startedAt).toBeLessThanOrEqual(Date.now())
+    })
+
+    /* The name the row is keyed by, and the one thing about a driven session
+       that will still mean something after a restart. `session_start` answers
+       with the worker's own counter, so the id the conversation is *recorded*
+       under has to arrive by another road — and the snapshot is the earlier of
+       the two, `session:state` going out on a change and a session that has
+       just started not having changed yet. */
+    it('takes the conversation id off the snapshot it attaches with', async () => {
+      const { ipc, stores } = await ready({
+        events: [],
+        seq: 0,
+        state: 'starting',
+        conversation: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60'
+      })
+      ipc.on('session_start', 7)
+      await stores.conversation.startConversation('/p')
+
+      expect(stores.conversation.drivenSessions.value[0].conversation).toBe(
+        '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60'
+      )
+    })
+
+    /* And the other road, which is the one a window that missed the snapshot
+       has: the id travels on every state change rather than once. */
+    it('takes it off a state change as well', async () => {
+      const { ipc, stores, emit, nextTick } = await ready()
+      ipc.on('session_start', 7)
+      await stores.conversation.startConversation('/p')
+      expect(stores.conversation.drivenSessions.value[0].conversation).toBe(null)
+
+      await emit('session:state', {
+        id: 7,
+        state: 'running',
+        conversation: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60'
+      })
+      await nextTick()
+
+      expect(stores.conversation.drivenSessions.value[0].conversation).toBe(
+        '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60'
+      )
+    })
+
+    /* A fork is recorded nowhere and says so with a `null`; so does the first
+       frame of any session. What must never happen is the other direction — a
+       payload that arrived without the field taking a name off a row that has
+       one, since that is a build that stopped sending it rather than a session
+       that has lost its id. */
+    it('never writes a name back off a row that has one', async () => {
+      const { ipc, stores, emit, nextTick } = await ready({
+        events: [],
+        seq: 0,
+        state: 'starting',
+        conversation: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60'
+      })
+      ipc.on('session_start', 7)
+      await stores.conversation.startConversation('/p')
+      await emit('session:state', { id: 7, state: 'running' })
+      await nextTick()
+
+      expect(stores.conversation.drivenSessions.value[0].conversation).toBe(
+        '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60'
+      )
+    })
+
+    /* What the row is captioned by, which is this store's half of
+       `Intent::work()` in Rust: which of an intent's payload is drawn, and
+       which of it was only a briefing for the agent. */
+    it('reduces the intent to what the row says about it', async () => {
+      const { ipc, stores } = await ready()
+      ipc.on('session_start', 7)
+      await stores.conversation.startConversation('/p', {
+        kind: 'resumeSession',
+        id: '9f1c',
+        cwd: '/p/.worktrees/task',
+        title: 'Move the card to done',
+        fork: false
+      })
+
+      expect(stores.conversation.drivenSessions.value[0].work).toEqual({
+        kind: 'resumeSession',
+        title: 'Move the card to done'
+      })
     })
 
     /* **The row keeps reporting after the panel has gone.** `detach` empties
@@ -433,6 +564,11 @@ describe('the conversation store', () => {
 
     expect(stores.conversation.conversationState.lastError).toEqual({
       session: null,
+      /* A plain transport error carries no tag of the worker's, which is what
+         `null` says: the one caller that reads this field is deciding whether
+         a second road is worth trying, and "we do not know" must not read as
+         any particular refusal. */
+      kind: null,
       text: 'claude could not be started'
     })
   })

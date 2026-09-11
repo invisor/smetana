@@ -6,7 +6,7 @@
 //! testable at all — the disk half is `read.rs`, and it carries its own tests
 //! over temporary directories.
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -121,6 +121,16 @@ pub struct Record {
     /// generated for the session. See [`generated_title`].
     #[serde(default)]
     pub ai_title: Option<String>,
+    /// When the record was written, RFC 3339, as Claude Code stamps it.
+    ///
+    /// Nothing in the Sessions tab reads it — a row's time is the file's mtime,
+    /// which is free and says the same thing — and it is here for the one
+    /// reader that cannot use an mtime: `session::history` replays a transcript
+    /// into a journal, and every event in a journal carries the moment it
+    /// happened. One mtime on a thousand events would date the whole
+    /// conversation to the minute the file was last touched.
+    #[serde(default)]
+    pub timestamp: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -264,7 +274,11 @@ pub fn one_line(text: &str) -> String {
 /// is all prompt and no person, so [`super::kickoff`] takes the words out first
 /// and [`one_line`] is applied to what is left — the same cut on the same
 /// field, one step later. The cost is bounded by the record this is called
-/// over: `read::MAX_LINE` is the most of a transcript line that is ever held.
+/// over, under whichever ceiling its caller reads a line at: 64 KB
+/// (`super::read::MAX_LINE`, `pub(crate)` and so written out rather than linked
+/// from a `pub` item's documentation) for the Sessions tab, which needs only the
+/// head of a record, and [`crate::session::driver::MAX_LINE`] for the
+/// conversation panel's history, which replays the whole of one.
 pub fn human_text(record: &Record) -> Option<String> {
     if !record.is_user() || record.is_sidechain == Some(true) || record.is_meta == Some(true) {
         return None;
@@ -327,6 +341,53 @@ pub fn spoken_text(record: &Record) -> Option<(String, String)> {
 /// by `smetana`.
 pub fn belongs_to(cwd: &str, project: &Path) -> bool {
     Path::new(cwd).starts_with(project)
+}
+
+/// The directory a recorded session may be picked up again in, or `None` for
+/// one it may not.
+///
+/// It sits beside [`belongs_to`] because it is that rule plus two more, and
+/// because **both workers ask it**: a resume goes down the PTY road
+/// (`terminal::service`) under a harness this app cannot drive, and down the
+/// driven road (`session::service`) under one it can. Two copies of a path
+/// guard is two chances to have exactly one of them right.
+///
+/// Three clauses, and the third is the one that is not obvious. The path
+/// arrives from the front end, so it is checked rather than trusted: it has to
+/// lie inside the project, by [`belongs_to`] — the very rule that decided this
+/// session was this project's when the list was read, asked again here rather
+/// than spelled out a second time — it must hold no `..`, because
+/// `Path::starts_with` is lexical and would otherwise wave through
+/// `<project>/../../elsewhere`, and it has to be a directory that is there now.
+///
+/// **The project's other spelling is this function's own business**, and it is
+/// here for the reason [`super::read::list_in`] carries it: `/tmp` on macOS is
+/// `/private/tmp`, so a transcript records whichever spelling Claude Code was
+/// started with while the front end holds whichever the project was opened
+/// with. Comparing against both is cheaper than refusing a session the list
+/// itself was happy to draw. It used to be a second argument, derived by the
+/// caller — and it was then derived identically in both workers, which left the
+/// acceptance criterion about this rule living in one place true only of half
+/// of it.
+///
+/// **The refusal is a bare `None` and the sentence is the caller's**, because
+/// the two callers answer in two different error vocabularies —
+/// `TerminalError::BadCwd` and `SessionError::BadCwd` — and a rule this pure has
+/// no business knowing either. Those two are a pair with one wording, kept in
+/// step by the front end rather than here: each store's own `ERRORS` table has
+/// a `badCwd` entry, and they carry the same sentence.
+pub fn resume_cwd(root: &Path, cwd: &str) -> Option<PathBuf> {
+    if cwd.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(cwd);
+    if path.components().any(|part| matches!(part, Component::ParentDir)) {
+        return None;
+    }
+    let also = root.canonicalize().ok().filter(|real| real != root);
+    let ours =
+        belongs_to(cwd, root) || also.is_some_and(|other| belongs_to(cwd, &other));
+    (ours && path.is_dir()).then_some(path)
 }
 
 /// Whether a folder under `~/.claude/projects` could hold sessions of this

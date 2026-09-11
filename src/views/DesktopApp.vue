@@ -142,10 +142,10 @@ import {
   send,
   terminalState
 } from '../stores/terminals.js'
-/* The other half of the Agent tab. A `Bare` session is driven now — the worker
-   parses the harness's protocol and the app draws typed events — while every
-   other intent is still a PTY under `terminals.js` above. Two stores and one
-   tab, deliberately: this is a union of two kinds of session rather than an
+/* The other half of the Agent tab. A `Bare` session and a resumed one are
+   driven now — the worker parses the harness's protocol and the app draws typed
+   events — while every other intent is still a PTY under `terminals.js` above.
+   Two stores and one tab, deliberately: this is a union of two kinds of session rather than an
    abstraction over two back ends, because the terminal is going away and a seam
    built to outlive that migration would. */
 import {
@@ -2594,7 +2594,14 @@ const drivenAgents = computed(() =>
     id: session.id,
     project: session.project,
     state: statusOf(session.state),
-    elapsed: formatElapsed(agentClock.value - session.startedAt)
+    elapsed: formatElapsed(agentClock.value - session.startedAt),
+    /* The two fields that travel whole rather than being translated: the name
+       the row is keyed by and the offer it stands in front of, and what the
+       session was started for. Neither is this file's to word — the first is
+       the worker's own id and the second is `workOf`'s reduction of the
+       intent — and both are read by `drivenRows.js` alone. */
+    conversation: session.conversation ?? null,
+    work: session.work
   }))
 )
 
@@ -2677,8 +2684,21 @@ function reorderAgents(rows) {
 function removeAgentRow(id) {
   const conversation = drivenSessionOf(id)
   if (conversation !== null) {
+    /* Three acts for this one, and the third is the one that is easy to miss.
+       A driven session has a record in the project's registry from the moment
+       it spawned, and while the row was on screen the merge was hiding it; the
+       worker takes it off disk when the child goes, but `terminalState.restored`
+       was read when the project was opened and does not know that. Leave it and
+       the same conversation is back a tick later as a dim `offline` row
+       offering to resume what somebody has just closed — smetana-q7sq exactly,
+       one road over, and `dropSession` in stores/terminals.js is its answer
+       there. `forgetRestored` is that store's own verb for a row with no
+       session behind it, and asking the worker to forget a record it has
+       already dropped writes nothing. */
+    const recorded = orderedAgentRows.value.find((row) => row.id === id)?.conversation
     stopConversation(conversation)
     forget(conversation)
+    if (recorded) forgetRestored(recorded)
     return
   }
   const offered = agentRows.value.find((row) => row.id === id && row.restored)
@@ -2895,6 +2915,24 @@ const refusalInPanel = computed(
   () =>
     conversationPanelOpen.value &&
     conversationState.lastError?.session === conversationId.value
+)
+
+/* The title over that corner's sentence, which is a literal here rather than a
+   field on the store: the title is the part that does not vary, so it belongs
+   at the call site and not in a `report` that would have to invent one every
+   time. This is that argument with one exception in front of it.
+
+   The exception is `badCwd`, where the store's sentence is `terminals.js`'s own
+   — "Smetana could not start a shell there" — and the default title says
+   something that did not happen: nothing was reached because nothing was tried,
+   and the road it was not tried on has no shell. So the terminal's title comes
+   across with the terminal's sentence, which is also what makes one refusal
+   read the same whichever road a person was on. A map rather than a condition,
+   so a second such kind is a line rather than a nested ternary. */
+const REFUSAL_TITLE = { badCwd: 'That folder is gone' }
+const DEFAULT_REFUSAL_TITLE = 'Could not reach the agent session'
+const refusalTitle = computed(
+  () => REFUSAL_TITLE[conversationState.lastError?.kind] ?? DEFAULT_REFUSAL_TITLE
 )
 
 /* The tree and the tabs open together with the project. By this point settings
@@ -3781,14 +3819,33 @@ async function deleteSession(session) {
 
 /* A session read off disk, brought back as a live agent.
 
-   **The same road every other agent in this app takes**, and that is the whole
-   design of it rather than a detail: `createSession` with an intent, which is
-   `terminal_create`, which is a profile's own command line plus `--resume <id>`
-   and `Pty::spawn`. A second way to start an agent is the place two ways
-   silently diverge. What the session gets that others do not is the directory
-   it is resumed in — the one its transcript recorded, which for a worktree
-   session is a path under `.worktrees/` and is never quietly replaced by the
-   project root.
+   **The same fork `newAgent` has, and it is the same one decision said once.**
+   Under a harness this app can drive, a resume opens the conversation panel on
+   the transcript it reopened; under any other, it is the PTY road this has
+   always taken. `canDrive` is that question — `settings.agent` and the person's
+   own `conversationPanel` switch — and it is asked here rather than at either
+   of the two gestures that reach this function, because a second copy of it in
+   `selectAgent` and a third in `onSessionAction` would be two copies of one
+   rule to drift apart. Both doors are the same verb, so there is one function
+   and one fork.
+
+   **The PTY road is unchanged and is still the same road every other agent in
+   this app takes**, which is the whole design of it rather than a detail:
+   `createSession` with an intent, which is `terminal_create`, which is a
+   profile's own command line plus `--resume <id>` and `Pty::spawn`. A second
+   way to start an agent is the place two ways silently diverge. It is also
+   where a driven start that came back with nothing lands — `agents::pick`
+   substitutes the first installed harness silently, so `canDrive` can answer
+   `true` on a machine the driver then refuses, and the fall-through resolves
+   whatever `pick` would have. A fallback is not a failure and says nothing; the
+   refusal is only worth reporting if the second road fails as well, which is
+   why the driven road's sentence is held rather than left on screen.
+
+   What the session gets that others do not is the directory it is resumed in —
+   the one its transcript recorded, which for a worktree session is a path under
+   `.worktrees/` and is never quietly replaced by the project root. Both roads
+   check it, and in the same words: `sessions::model::resume_cwd` is the rule
+   and `TerminalError::BadCwd` is the sentence, whichever worker is asked.
 
    `fork` is the whole of the difference between the Sessions tab's two
    launching verbs, and it rides in the intent rather than forking this
@@ -3825,20 +3882,60 @@ async function resumeSession(session, { fork = false } = {}) {
   if (!path) return
   const capable = can(settings.agent, fork ? 'fork' : 'resume')
   if (!resumeAvailability(session, { fork, capable }).available) return
+  /* One intent for both roads, and that is the point of it being one variant in
+     Rust: the id, the directory and the title are the same three facts whether
+     a PTY or a driven worker is asked for them.
+
+     Absence travels as absence: a transcript nobody typed in has no title, and
+     the row says what it is rather than inventing a name for it. */
+  const intent = {
+    kind: 'resumeSession',
+    id: session.id,
+    cwd: session.cwd,
+    title: session.title ?? null,
+    fork
+  }
+  let refused = null
+
+  project.sideTab = 'agents'
+  if (canDrive(settings.agent)) {
+    /* The tab comes forward on the press and the aim follows the id, which is
+       `newAgent`'s pair of lines and its reason: a spawn takes about a second,
+       and a person who pressed this must see what they asked for rather than
+       nothing at all. */
+    project.activeTab = 'terminal'
+    const id = await startConversation(path, intent)
+    if (id !== null) {
+      showAgentTab(id, path)
+      return
+    }
+    /* **A refusal about the directory ends it here, and the sentence stands.**
+       The fall-through exists for one thing — `agents::pick` substitutes the
+       first installed harness silently, so `canDrive` can answer `true` on a
+       machine whose driver then refuses — and that is a question about which
+       harness is on the machine. This one is not: both workers ask
+       `sessions::model::resume_cwd` of the same path, so the second road can
+       only refuse again, a round trip later, and put a second corner toast on
+       screen saying the very sentence already there. That doubling is what
+       `lastError`'s shape was reshaped to prevent. */
+    if (conversationState.lastError?.kind === 'badCwd') return
+    // Off the screen for the fallback, and back again below if that fails too.
+    refused = conversationState.lastError
+    conversationState.lastError = null
+  }
+
   try {
-    project.sideTab = 'agents'
-    showAgentTab()
-    await createSession(path, {
-      kind: 'resumeSession',
-      id: session.id,
-      cwd: session.cwd,
-      /* Absence travels as absence: a transcript nobody typed in has no title,
-         and the row says what it is rather than inventing a name for it. */
-      title: session.title ?? null,
-      fork
-    })
+    /* `path` and not the default, which would be `activePath` read *after* the
+       await above. `newAgent` passes it for this reason and `showAgentTab`'s own
+       header names the case: a person who switched project inside the second
+       that start took would have this aim written under the project they are
+       now looking at, and its Agent tab brought forward over nothing, while the
+       session starts in the one they pressed in. */
+    showAgentTab(null, path)
+    await createSession(path, intent)
   } catch {
     // already reported — see comment above
+    if (refused && !conversationState.lastError) conversationState.lastError = refused
   }
 }
 
@@ -7061,13 +7158,14 @@ const toastStackStyle = {
            draws the ones about the session it is holding, and a start that made
            no session has none. This is the reader for everything it refuses —
            see `refusalInPanel`, which is also what keeps a sentence from being
-           said twice. One title for every refusal on this road, the way the file
-           tree's is one title: they are all one thing failing to be reached, and
-           the store's sentence is what says which. -->
+           said twice. One title for nearly every refusal on this road, the way
+           the file tree's is one title: they are all one thing failing to be
+           reached, and the store's sentence is what says which. `refusalTitle`
+           carries the one exception and why it is one. -->
       <Toast
         v-if="conversationState.lastError && !refusalInPanel"
         tone="error"
-        title="Could not reach the agent session"
+        :title="refusalTitle"
         :description="conversationState.lastError.text"
         @close="conversationState.lastError = null"
       />

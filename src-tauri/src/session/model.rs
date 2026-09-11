@@ -76,6 +76,32 @@ pub enum SessionState {
     Failed,
 }
 
+/// The whole of the `session:state` payload.
+///
+/// A type rather than a `json!` literal at the emit, and the third field is why
+/// it became one. `id` and `state` were two words nobody could misspell twice;
+/// `conversation` is the name a row in the agents panel is keyed by, is read in
+/// `stores/conversation.js` off this very object, and nothing mechanical joins
+/// the two sides — so it is written down here, once, where the store's contract
+/// is the rest of this file.
+///
+/// **The conversation id travels on every state change rather than once at the
+/// start**, because a state event is the one thing a window is told about a
+/// session it has not attached to. It is the same value for the life of the
+/// session and repeating it costs a UUID per change; the alternative is a
+/// window that missed one message and never learns the name of the row it is
+/// drawing.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct StateChange {
+    pub id: SessionId,
+    pub state: SessionState,
+    /// The id this session's transcript is named after and its record in
+    /// `.smetana/agents.json` is keyed by, or `None` for a session that has
+    /// neither: a fork, whose new transcript Claude Code names itself, and a
+    /// machine that would not give the random bytes.
+    pub conversation: Option<String>,
+}
+
 #[derive(Clone, Debug, thiserror::Error, serde::Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "message")]
 pub enum SessionError {
@@ -85,6 +111,21 @@ pub enum SessionError {
     NoSuchSession(SessionId),
     #[error("there is no question {0} waiting for an answer")]
     NoSuchQuestion(String),
+    /// A directory a resumed session was asked to open in that is not a folder
+    /// inside the project: outside the root, gone from disk, or a file.
+    ///
+    /// **Its own variant rather than a `Spawn`, and that is about what a person
+    /// reads.** A `Spawn` carries its own text to the front end unchanged
+    /// (`ERRORS.spawn` is the identity), which is right for a sentence written
+    /// for whoever fixes things and wrong for this one: a removed worktree is
+    /// the ordinary outcome here, not a fault, and the store has words for it.
+    /// `stores/conversation.js` keys `badCwd` on this tag and answers with the
+    /// same sentence `stores/terminals.js` answers `TerminalError::BadCwd`
+    /// with, which is what makes one refusal read the same on either road.
+    ///
+    /// The payload is the path, unused by that sentence and kept for the log.
+    #[error("that folder cannot be a working directory: {0}")]
+    BadCwd(String),
 }
 
 /// The whole of what a session's state is: a fold over its journal.
