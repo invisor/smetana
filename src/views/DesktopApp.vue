@@ -613,7 +613,10 @@ onMounted(initUpdates)
    sentence: a project that was watching a conversation when somebody pressed
    this must still be watching it afterwards, and by the gap this stage leaves
    open there would be no gesture to get back to it — starting another
-   conversation is precisely the road that has just failed.
+   conversation is precisely the road that has just failed. Unless somebody has
+   aimed the tab elsewhere in the second the failed start took, which is the
+   guard below: what is owed is the aim nobody has overwritten, not the one this
+   press found.
 
    The two roads differ in what they can promise before the worker answers, and
    that is worth having straight. `createSession` parks a start ticket the
@@ -2615,9 +2618,10 @@ const activeTerminal = computed(() => terminalTab(project.activeTab))
    handing a dropped path to whichever agent is selected.
 
    One field and one count beside it: `agentAimWrites` below is raised by that
-   same function on every call, whatever is written, which is how the one caller
-   that aims before an await can ask afterwards whether it is still the last
-   thing to have aimed this project.
+   same function on every call, whatever is written. Plenty of callers aim before
+   an await; **`newAgent` is the only one that puts its aim back after one**, and
+   the count is what lets it ask first whether it is still the last thing to have
+   aimed this project.
 
    There is a second writer and it is deliberate: `newAgent`'s catch puts the
    previous aim back when a press started nothing, and it writes this Map
@@ -2673,11 +2677,12 @@ const agentAim = reactive(new Map())
    aimed since", so a start answering late in the project somebody has switched
    to would cost an untouched project its restore.
 
-   Not reactive, unlike the aim: nothing draws it. It is read imperatively, by
-   the one caller that aims before an await (`newAgent`), and a reactive version
-   would only offer render dependencies on a number that means nothing on
-   screen. Nothing clears it either, for the reason nothing clears the aim — one
-   small entry per project this window has aimed, dying with the window. */
+   Not reactive, unlike the aim: nothing draws it. It is read imperatively, and
+   by one caller — `newAgent`, the only one that puts an aim *back* after an
+   await — so a reactive version would only offer render dependencies on a
+   number that means nothing on screen. Nothing clears it either, for the reason
+   nothing clears the aim — one small entry per project this window has aimed,
+   dying with the window. */
 const agentAimWrites = new Map()
 
 /* Bring the Agent tab forward, and say which of the two kinds of session it is
