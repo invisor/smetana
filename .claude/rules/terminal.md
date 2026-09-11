@@ -79,7 +79,8 @@ afterwards depends on what else the project has: in a project with no other agen
 conversation the fallback's own `createSession` ticket takes `hasAgentTab` true and then false again,
 so the watch above fires and lands them on the board; where the tab is standing for something else it
 does not fire, which is correct — there is still a tab, and `newAgent` puts its aim back where it found
-it so whatever was being watched is still being watched.
+it, so whatever was being watched is still being watched unless somebody has aimed the tab elsewhere
+in the second the failed start took.
 
 The one seam that costs something: `project.activeTab` **is** remembered, so a project last left
 watching an agent comes back naming a tab that cannot exist yet, sessions deliberately not surviving a
@@ -243,19 +244,27 @@ The Agent tab is **three branches over two components** since smetana-5ijg, and 
 on which kind of session it is aimed at: `ConversationView.vue` with a driven session's id, or this
 same `TerminalView.vue` with `terminalState.activeId`. What decides is `agentAim` in `DesktopApp.vue`,
 one field per project written by `showAgentTab` — so what aims the tab is that function's callers,
-however many there come to be, rather than a list to keep in step with it. The one writer that is not
-that function is `newAgent`'s catch, putting the previous aim back when a press started nothing: it
-writes the field directly **because going through `showAgentTab` would bring the tab forward again**,
-and in the case that restore exists for the watch on `hasAgentTab` has just taken the person to the
-board. What is restored is where the tab points, not where they are standing. They
-fall into two kinds: starting a conversation, which is `newAgent` alone, and every road that puts a PTY
-agent in front — the `createSession` roads, which move the aim while starting something; `selectAgent`,
-which moves it while starting nothing; and `attachToAgent`, which moves it as a side effect of handing
-a dropped path to the selected agent. **`selectAgent` is the only gesture that deliberately picks an
-agent that already exists**, which makes it the only way back to a PTY agent from a conversation that
-is not also a start; it is reached from a row click and from the `lastRunStart` watcher both, so a run
-handing over to its next batch moves the aim as well. The field is deliberately not derived from
-`terminalState.activeId`: `loadSessions` repairs
+however many there come to be, rather than a list to keep in step with it. They fall into two kinds:
+starting a conversation, which is `newAgent` alone, and every road that puts a PTY agent in front — the
+`createSession` roads, which move the aim while starting something; `selectAgent`, which moves it while
+starting nothing; and `attachToAgent`, which moves it as a side effect of handing a dropped path to the
+selected agent. **`selectAgent` is the only gesture that deliberately picks an agent that already
+exists**, which makes it the only way back to a PTY agent from a conversation that is not also a start;
+it is reached from a row click and from the `lastRunStart` watcher both, so a run handing over to its
+next batch moves the aim as well.
+
+Beside the field is a **count per project, raised by `showAgentTab` on every call**, and it is there for
+the one caller that aims before an await: `newAgent` aims the tab and then waits about a second for
+`createSession`, and comparing the aim afterwards cannot tell its own `null` from somebody else's —
+every road to a PTY agent calls `showAgentTab()` with no argument and writes that same `null`, so a
+guard on the value read a row click as "untouched" and restored over the agent a run had just handed the
+person. A failed start therefore puts the previous aim back only while the count is unmoved. The one
+writer that is not `showAgentTab` is that restore: it writes the field directly **because going through
+the function would bring the tab forward again**, and in the case the restore exists for the watch on
+`hasAgentTab` has just taken the person to the board. What is restored is where the tab points, not
+where they are standing — and the count stays where it is, a restore not being a move.
+
+The field is deliberately not derived from `terminalState.activeId`: `loadSessions` repairs
 that selection itself on every project switch, and a first version that watched it had a switch away
 and back quietly taking the tab off a live conversation. The union is deliberately not an abstraction
 over the two back ends either — the terminal is going away when the last intent moves, and a seam built

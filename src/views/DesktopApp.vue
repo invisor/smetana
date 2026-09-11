@@ -677,6 +677,11 @@ async function newAgent() {
   }
 
   showAgentTab(null, path)
+  /* The aim just written, taken by its number rather than by its value.
+     `showAgentTab` raises a count beside the aim on every call, and that count
+     is what the catch below compares to find out whether this function is still
+     the last thing to have aimed the project. */
+  const aimWrites = agentAimWrites.get(path)
   try {
     await createSession(path, { kind: 'bare' })
   } catch {
@@ -686,20 +691,33 @@ async function newAgent() {
        catch one — this is an event handler — and the catch is also what stops
        Vue's unhandled-rejection warning repeating what the store already said.
 
-       **Only if nobody has moved since**, which is the guard `createSession`
-       puts on `terminalState.activeId` around its own await and the same reason
-       for it: a spawn takes about a second, and `selectAgent` — a row click, or
-       the `lastRunStart` watcher handing over to a run's next batch — can aim
-       this project inside that second. Putting a stale value back would take the
-       tab off the agent somebody has just been given. The aim is still this
-       function's to restore exactly while it is still the `null` it left, and
-       the sentence exactly while nothing else has said anything.
+       **Only if nobody has aimed this project since**, which is the guard
+       `createSession` puts on `terminalState.activeId` around its own await and
+       the same reason for it: a spawn takes about a second, and `selectAgent` —
+       a row click, or the `lastRunStart` watcher handing over to a run's next
+       batch — can aim this project inside that second. Putting a stale value
+       back would take the tab off the agent somebody has just been given.
+
+       **The test is the write count and not the aim**, because the aims are not
+       distinguishable from one another: every one of those roads calls
+       `showAgentTab()` with no argument, which writes the same `null` this
+       function wrote a second earlier. A version that compared values read that
+       `null` as "untouched" and restored over the agent a run had just handed
+       the person — precisely the case the guard exists for, missed by the guard
+       itself. The count moves on every call whatever is written, so it is the
+       one thing that tells "nothing happened" from "something happened and said
+       the same word". The sentence is restored on its own terms, which are that
+       nothing else has said anything.
 
        Written into the Map rather than through `showAgentTab`: that function
        would bring the tab forward again, and if the project has no other agent
        the watcher on `hasAgentTab` has just taken the person to the board. What
-       is being restored is where the tab points, not where the person is. */
-    if (agentAim.get(path) === null) agentAim.set(path, aimed)
+       is being restored is where the tab points, not where the person is. The
+       count is deliberately left where it is by that write — putting back what
+       was already there is not one of the moves being counted, and raising it
+       would only make a second press's own restore look like somebody else's
+       aim. */
+    if (agentAimWrites.get(path) === aimWrites) agentAim.set(path, aimed)
     if (refused && !conversationState.lastError) conversationState.lastError = refused
   }
 }
@@ -2589,7 +2607,17 @@ const activeTerminal = computed(() => terminalTab(project.activeTab))
 
    **One field, written by `showAgentTab` below** — so what aims this tab is that
    function's callers, whatever the list grows to, rather than a list here
-   somebody has to remember to extend. They fall into two kinds.
+   somebody has to remember to extend. They fall into two kinds. Starting a
+   conversation is one, and it is `newAgent` alone. The other is every road that
+   puts a PTY agent in front, which today is the `createSession` roads, each
+   moving the aim while starting something; `selectAgent`, which moves it while
+   starting nothing; and `attachToAgent`, which moves it as a side effect of
+   handing a dropped path to whichever agent is selected.
+
+   One field and one count beside it: `agentAimWrites` below is raised by that
+   same function on every call, whatever is written, which is how the one caller
+   that aims before an await can ask afterwards whether it is still the last
+   thing to have aimed this project.
 
    There is a second writer and it is deliberate: `newAgent`'s catch puts the
    previous aim back when a press started nothing, and it writes this Map
@@ -2598,13 +2626,9 @@ const activeTerminal = computed(() => terminalTab(project.activeTab))
    restore exists for — with no other agent in the project, the fallback's own
    failed ticket has just taken `hasAgentTab` false and the watcher below has
    landed somebody on the board. The restore is about what the tab is aimed at if
-   they go back to it, not about putting them on it. Do not "unify" the two; the
-   bypass is the point. Starting a conversation is one, and it is `newAgent` alone. The other
-   is every road that puts a PTY agent in front, which today is the
-   `createSession` roads, each moving the aim while starting something;
-   `selectAgent`, which moves it while starting nothing; and `attachToAgent`,
-   which moves it as a side effect of handing a dropped path to whichever agent
-   is selected.
+   they go back to it, not about putting them on it, and it leaves the count
+   alone for the same reason: putting back what was there is not a move. Do not
+   "unify" the two; the bypass is the point.
 
    `selectAgent` is worth naming on its own twice over: it is reached from a row
    click *and* from the `lastRunStart` watcher, so a run handing over to its next
@@ -2636,6 +2660,26 @@ const activeTerminal = computed(() => terminalTab(project.activeTab))
    back is starting another conversation. */
 const agentAim = reactive(new Map())
 
+/* How many times that aim has been written through `showAgentTab`, per project.
+
+   A number rather than the aim itself, because the aims are not distinguishable
+   from one another: every road that puts a PTY agent in front writes `null`, so
+   "the aim is still the one I left" and "nobody has aimed this project since"
+   are two different questions and only the second is the one anybody asking has
+   in mind. This answers the second.
+
+   Per project, keyed the way the aim is, because that is the question's own
+   shape. One count for the window would answer "has anything anywhere been
+   aimed since", so a start answering late in the project somebody has switched
+   to would cost an untouched project its restore.
+
+   Not reactive, unlike the aim: nothing draws it. It is read imperatively, by
+   the one caller that aims before an await (`newAgent`), and a reactive version
+   would only offer render dependencies on a number that means nothing on
+   screen. Nothing clears it either, for the reason nothing clears the aim — one
+   small entry per project this window has aimed, dying with the window. */
+const agentAimWrites = new Map()
+
 /* Bring the Agent tab forward, and say which of the two kinds of session it is
    to draw. One function because those are one act: a caller that moved the tab
    and left the aim alone would show whatever was in front last time, which is
@@ -2653,9 +2697,18 @@ const agentAim = reactive(new Map())
    record, so a start that answered after somebody switched away must leave the
    project now in front on whatever tab they put it. The same guard the review
    road a few hundred lines up makes with `activePath.value === path`, and for
-   the same reason. */
+   the same reason.
+
+   **Every call raises that project's write count**, whatever it aims at and
+   whether or not the tab itself moves — a call for a project that is no longer
+   in front still aimed it. That count is what `newAgent` reads to tell an aim of
+   its own from somebody else's a second later, and this being the only place it
+   is raised is what keeps that true however long the list of callers grows. The
+   one write that goes around this function, `newAgent`'s catch, goes around the
+   count with it, on purpose. */
 function showAgentTab(conversation = null, path = activePath.value) {
   agentAim.set(path, conversation)
+  agentAimWrites.set(path, (agentAimWrites.get(path) ?? 0) + 1)
   if (path === activePath.value) project.activeTab = 'terminal'
 }
 
