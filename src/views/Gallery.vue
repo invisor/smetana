@@ -22,6 +22,7 @@ import { orderTabs } from '../components/shell/tabOrder.js'
 import {
   AboutSettings,
   AgentList,
+  AgentMessage,
   AgentSettings,
   AppShell,
   Assignee,
@@ -40,6 +41,7 @@ import {
   ColumnHeader,
   CommandPalette,
   ConflictModal,
+  ConversationToolCall,
   ContextMenu,
   DeleteBranchModal,
   DeleteSessionModal,
@@ -77,10 +79,12 @@ import {
   NotificationCard,
   NotificationPanel,
   Panel,
+  PermissionRequest,
   ProjectRail,
   ProjectTile,
   PromoteColumnModal,
   ReadyTaskModal,
+  Reasoning,
   RepoList,
   ReviewChangesDialog,
   ScopeIndicator,
@@ -109,8 +113,10 @@ import {
   Textarea,
   TypeBadge,
   Toast,
+  TurnResult,
   ToolCall,
   Tooltip,
+  UserMessage,
   TOGGLE_LANE,
   WindowControls
 } from '../components/index.js'
@@ -2157,6 +2163,54 @@ const galleryUpdateStates = [
    version of "you cannot install right now" is one that arrives from Rust with
    the projects named. */
 const galleryUpdateRefusal = { kind: 'run_live', detail: { projects: 'smetana, holiday-curb' } }
+
+/* The conversation panel's fixtures — a driven session's journal as the worker
+   hands it over, one piece per component.
+
+   The agent's prose deliberately carries the three things that have to survive
+   the shared markdown component at this width: a paragraph, a list, and a
+   fenced block, which is drawn as a `<pre>` in mono and never highlighted —
+   CodeMirror was taken off the plan for it. */
+const CONVERSATION_AGENT_TEXT = [
+  'The collision is in `rename`: the worktree keeps the branch name verbatim, so a',
+  'branch with a slash in it names a folder that does not exist. Two ways out:',
+  '',
+  '- replace the separator when the folder is made, which leaves old worktrees alone',
+  '- store the folder beside the branch, which needs a migration',
+  '',
+  'The first one is what the rest of the tree already does:',
+  '',
+  '```rust',
+  "let name = branch.replace('/', '-');",
+  'let path = self.root.join(&name);',
+  '```',
+  '',
+  'See [the design system](https://claude.ai/design) for the naming rule.'
+].join('\n')
+
+const CONVERSATION_USER_TEXT =
+  'Rename the worktree when the branch changes, and keep `wt/` off the folder name.'
+
+/* Paths and nothing else, which is what `session_send` carries and what the
+   journal keeps: the chips draw `basename`, and the bytes stay on disk. */
+const CONVERSATION_ATTACHMENTS = ['/Users/you/Desktop/20260910-141202-collision.png', '/tmp/worktree.log']
+
+const CONVERSATION_REASONING = [
+  'The branch name reaches three places: the folder, the tab label and the',
+  'record in `.smetana/agents.json`. Only the first one has a filesystem behind',
+  'it, so only the first one has to be rewritten — rewriting the other two would',
+  'make the branch unsearchable by its own name.'
+].join('\n')
+
+/* The long command the permission card has to wrap rather than clip. It is one
+   line in the journal and deliberately too wide for any panel this app draws. */
+const CONVERSATION_LONG_COMMAND =
+  'git worktree add --checkout -b feature/smetana-ihz2-conversation-log-components ' +
+  '/Users/you/Desktop/Projects/smetana/.worktrees/smetana-ihz2-conversation-log-components feat/redesign-agents'
+
+/* What a press on the loud card raised, so the emitted decision is visible
+   rather than taken on trust. In the app this is `answerQuestion`. */
+const permissionAnswer = ref(null)
 
 const sectionStyle = {
   display: 'flex', flexDirection: 'column', gap: 'var(--space-5)',
@@ -5662,6 +5716,85 @@ const menuTargetStyle = {
         </div>
         <div :style="{ width: '360px' }">
           <LogView :lines="logLines" :height="220" stream-state="paused" :follow="false" />
+        </div>
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Conversation journal</div>
+      <!-- A driven session's journal, drawn from typed events rather than from
+           a terminal's scrollback. Every column here is 360px, which is the
+           width the panel is actually read at — a row checked across the page
+           would never show the clipping and the wrapping that are the whole
+           difference between these components.
+
+           What to look at in the four combinations: nothing changes size
+           between the themes, compact tightens the spacing without touching a
+           colour or a radius, the file-type icon on a tool call is legible on
+           both grounds, and the filled permission card carries readable text in
+           the light theme, where its ink inverts to `var(--surface-raised)`. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
+        <div :style="{ width: '360px', display: 'flex', flexDirection: 'column' }">
+          <UserMessage
+            :text="CONVERSATION_USER_TEXT"
+            :attachments="CONVERSATION_ATTACHMENTS"
+            @open="openExternal"
+          />
+          <AgentMessage :text="CONVERSATION_AGENT_TEXT" @open="openExternal" />
+          <TurnResult :tokens-in="12480" :tokens-out="416" :cost-usd="0.0312" :ms="4200" />
+        </div>
+
+        <div :style="{ width: '360px', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }">
+          <!-- The three states a tool call has: still open, done, and failed.
+               The first two carry a path, so the glyph comes from
+               `catppuccinIcon.js`; the third carries a command, so it does
+               not. -->
+          <ConversationToolCall name="Read" detail="src/components/conversation/ToolCall.vue" :result="null" />
+          <ConversationToolCall
+            name="Edit"
+            detail="src-tauri/src/session/journal.rs"
+            :result="{ ok: true, summary: '2 edits' }"
+          />
+          <ConversationToolCall
+            name="Bash"
+            detail="cargo test --manifest-path src-tauri/Cargo.toml"
+            :result="{ ok: false, summary: 'exit 101' }"
+          />
+          <!-- A folded block and an open one. Both are `quiet`; opening one
+               costs no loudness, which is what the pair is here to show. -->
+          <Reasoning :text="CONVERSATION_REASONING" />
+          <Reasoning :text="CONVERSATION_REASONING" expanded @open="openExternal" />
+          <!-- A turn the harness priced, and one it said nothing about: the
+               cost is omitted rather than drawn as `$0`. -->
+          <TurnResult :tokens-in="860" :tokens-out="120" :cost-usd="0.0041" :ms="840" />
+          <TurnResult :tokens-in="4100" :tokens-out="2210" :cost-usd="null" :ms="124300" />
+        </div>
+
+        <div :style="{ width: '360px', display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
+          <!-- The one loud thing on the panel, in the three cases worth
+               checking: a command too long for the card, which has to wrap
+               rather than be cut; a file path; and a harness offering two
+               answers instead of three, where the missing button leaves no
+               gap. -->
+          <PermissionRequest
+            tool="Bash"
+            :detail="CONVERSATION_LONG_COMMAND"
+            @answer="permissionAnswer = $event"
+          />
+          <PermissionRequest
+            tool="Write"
+            detail="src-tauri/src/session/permission.rs"
+            @answer="permissionAnswer = $event"
+          />
+          <PermissionRequest
+            tool="Bash"
+            detail="rm -rf .worktrees/smetana-ihz2"
+            :options="['allow', 'deny']"
+            @answer="permissionAnswer = $event"
+          />
+          <div :style="{ font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
+            {{ permissionAnswer ? `answer: ${permissionAnswer}` : 'no answer yet' }}
+          </div>
         </div>
       </div>
     </section>

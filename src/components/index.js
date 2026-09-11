@@ -79,6 +79,28 @@ export { default as SessionRow } from './agent/SessionRow.vue'
 export { default as ToolCall } from './agent/ToolCall.vue'
 export { parseAnsi } from './agent/ansi.js'
 
+/* conversation — a driven session's journal, one component per event kind.
+
+   `ToolCall` is the one export in this file whose name is not its file's, and
+   the reason is that the two components are two different things rather than
+   one waiting to be unified. The neighbour a few lines above folds a terminal's
+   arguments and output out of a scrollback and belongs to the subsystem
+   `.claude/rules/terminal.md` covers — that rule names `src/components/agent/**`
+   among its paths, so it is a live part of the tree with prose of its own, not a
+   short name about to fall vacant. This one is a row drawn from a typed event,
+   with no terminal anywhere behind it. Two names, then, because there are two
+   components; the longer one goes to the newcomer.
+
+   What this is *not* an argument about is breakage. Nothing outside
+   `views/Gallery.vue` imports either of them, so either could be renamed for
+   two lines — which is worth knowing before treating this as settled. */
+export { default as AgentMessage } from './conversation/AgentMessage.vue'
+export { default as ConversationToolCall } from './conversation/ToolCall.vue'
+export { default as PermissionRequest } from './conversation/PermissionRequest.vue'
+export { default as Reasoning } from './conversation/Reasoning.vue'
+export { default as TurnResult } from './conversation/TurnResult.vue'
+export { default as UserMessage } from './conversation/UserMessage.vue'
+
 // files
 export { default as DiffView } from './files/editor/DiffView.vue'
 export { default as DocumentModeToggle } from './files/DocumentModeToggle.vue'
