@@ -315,6 +315,87 @@ describe('parseInline', () => {
     ])
   })
 
+  /* The widened half: a bare relative path with no scheme in front of it is a
+     local link now, not literal text — `./links.js` decides this, and the
+     rule itself is pinned by its own tests (`links.test.js`). What is pinned
+     here is that `markdown.js` reaches that module at all and builds the
+     node shape `MarkdownInline.vue` draws: `local: true`, the clean path,
+     which breed it is, and the head/tail split — of the target's own text
+     when the label carries nothing of its own, and of the label otherwise.
+     Nothing here is discarded either way; see this file's own header. */
+  it('splits the target into head and tail when the label is the same path written twice', () => {
+    expect(parseInline('[src-tauri/tauri.conf.json:41](src-tauri/tauri.conf.json:41)')).toEqual([
+      {
+        type: 'link',
+        local: true,
+        path: 'src-tauri/tauri.conf.json',
+        targetKind: 'file',
+        head: 'src-tauri/',
+        tail: 'tauri.conf.json:41'
+      }
+    ])
+  })
+
+  it('splits the target when the label is empty, the same as a matching one', () => {
+    expect(parseInline('[](src-tauri/tauri.conf.json:41)')).toEqual([
+      {
+        type: 'link',
+        local: true,
+        path: 'src-tauri/tauri.conf.json',
+        targetKind: 'file',
+        head: 'src-tauri/',
+        tail: 'tauri.conf.json:41'
+      }
+    ])
+  })
+
+  /* The invariant this whole family rests on, stated as a test: a label that
+     says something the target does not is not thrown away in favour of the
+     path. `data-path`, `data-kind` and the click still carry the real
+     target — see `MarkdownInline.vue` — but what a person reads is what they
+     wrote. */
+  it('keeps a distinct label verbatim, as an unsplit tail, rather than showing the target', () => {
+    expect(parseInline('[the manifest](src-tauri/tauri.conf.json)')).toEqual([
+      {
+        type: 'link',
+        local: true,
+        path: 'src-tauri/tauri.conf.json',
+        targetKind: 'file',
+        head: '',
+        tail: 'the manifest'
+      }
+    ])
+  })
+
+  it('reads a trailing slash as a directory target, splitting a matching label the same way', () => {
+    expect(parseInline('[docs/design/](docs/design/)')).toEqual([
+      {
+        type: 'link',
+        local: true,
+        path: 'docs/design',
+        targetKind: 'dir',
+        head: 'docs/',
+        tail: 'design'
+      }
+    ])
+  })
+
+  it('reads a bare file name with no folder above it as an all-tail local link', () => {
+    expect(parseInline('[README.md](README.md)')).toEqual([
+      { type: 'link', local: true, path: 'README.md', targetKind: 'file', head: '', tail: 'README.md' }
+    ])
+  })
+
+  /* A scheme-less target with no slash and no extension is ordinary prose,
+     not a path — the positive shape `links.js`'s own tests pin in full; this
+     one line is what proves `markdown.js` actually reaches that rule rather
+     than reading "no scheme" as license enough on its own. */
+  it('leaves a score-shaped target as text — no slash, no extension, no path', () => {
+    expect(parseInline('a score of [two nil](2:1) settled it')).toEqual([
+      { type: 'text', value: 'a score of [two nil](2:1) settled it' }
+    ])
+  })
+
   it('reads an inline image beside other text as its own node, not a link', () => {
     expect(parseInline('a shot: ![a shot](https://example.com/s.png) above')).toEqual([
       { type: 'text', value: 'a shot: ' },

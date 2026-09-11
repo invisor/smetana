@@ -18,9 +18,9 @@
    `--attn-quiet-opacity` on top of `--text-muted` would not have.
 
    The text is markdown, drawn by the shared component like every other piece of
-   prose here, and `open` is forwarded for the reason `AgentMessage.vue` gives:
-   a link inside reasoning is still a link, and it must leave for the person's
-   own browser rather than replace the app.
+   prose here, and `open` and `open-local` are forwarded for the reason
+   `AgentMessage.vue` gives: a link inside reasoning is still a link, whichever
+   breed it is, and `root` rides along beside them for the same reason.
 
    `summary` says `Reasoning`, the word the contract's own example spells —
    `<summary>Reasoning<time>18s</time></summary>` — and not this component's
@@ -64,10 +64,12 @@ const props = defineProps({
      and the same watch, and the gallery opens one of its three the same way.
      That file says nothing about why, so the shared motive is read off the two
      uses rather than quoted from it. */
-  expanded: { type: Boolean, default: false }
+  expanded: { type: Boolean, default: false },
+  /* Passed straight through to `Markdown`, unread here — see its own header. */
+  root: { type: String, default: '' }
 })
 
-const emit = defineEmits(['open'])
+const emit = defineEmits(['open', 'open-local'])
 
 const open = ref(props.expanded)
 watch(toRef(props, 'expanded'), (value) => { open.value = value })
@@ -85,6 +87,6 @@ const elapsedText = computed(() => (props.ms == null ? '' : formatElapsedClock(p
 <template>
   <details data-reasoning :open="open" @toggle="onToggle">
     <summary>Reasoning<time v-if="elapsedText">{{ elapsedText }}</time></summary>
-    <Markdown :text="text" @open="emit('open', $event)" />
+    <Markdown :text="text" :root="root" @open="emit('open', $event)" @open-local="emit('open-local', $event)" />
   </details>
 </template>

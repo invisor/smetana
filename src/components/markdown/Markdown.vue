@@ -20,7 +20,11 @@
    No `v-html`, deliberately and permanently: the tree is drawn as Vue nodes, so
    an issue's text can never become markup and no sanitiser is needed. A link is
    emitted rather than opened, the way `AboutSettings` does it — the library
-   knows nothing about Tauri, and the view binds the app's one link path.
+   knows nothing about Tauri, and the view binds the app's own verbs to the
+   two events `MarkdownInline.vue` raises: `open` for an external link, and
+   `open-local` for one that names a path on this machine. `root`, threaded
+   down to every `MarkdownInline` below, is that same split's other half — see
+   that file's own header for what it is and what an empty one does.
 
    Read-only, all of it. A task item's box is drawn by `sm-prose.css` off
    `li[data-checked]`, never a Lucide glyph and never `<input type="checkbox"
@@ -67,10 +71,16 @@ const props = defineProps({
      calls below pass — a quote and a list item are already parsed, and parsing
      them again would be the same work done twice per level of nesting. */
   text: { type: String, default: '' },
-  blocks: { type: Array, default: null }
+  blocks: { type: Array, default: null },
+  /* The active project's absolute path, or `''` where there is none — see
+     `MarkdownInline.vue`'s own header. Passed straight through to every node
+     this file draws and to the recursive calls below, since a quote or a list
+     item is the same prose at one remove and owes its own links the same
+     answer to "is there anything here that can open one". */
+  root: { type: String, default: '' }
 })
 
-const emit = defineEmits(['open'])
+const emit = defineEmits(['open', 'open-local'])
 
 const tree = computed(() => props.blocks ?? parseMarkdown(props.text))
 
@@ -127,11 +137,21 @@ function isCodeCopied(index) {
 <template>
   <template v-for="(block, index) in tree" :key="index">
     <component :is="`h${block.level}`" v-if="block.type === 'heading'">
-      <MarkdownInline :nodes="block.children" @open="emit('open', $event)" />
+      <MarkdownInline
+        :nodes="block.children"
+        :root="root"
+        @open="emit('open', $event)"
+        @open-local="emit('open-local', $event)"
+      />
     </component>
 
     <p v-else-if="block.type === 'paragraph'">
-      <MarkdownInline :nodes="block.children" @open="emit('open', $event)" />
+      <MarkdownInline
+        :nodes="block.children"
+        :root="root"
+        @open="emit('open', $event)"
+        @open-local="emit('open-local', $event)"
+      />
     </p>
 
     <figure v-else-if="block.type === 'code'" data-code :data-lang="block.lang || undefined">
@@ -153,7 +173,12 @@ function isCodeCopied(index) {
     <hr v-else-if="block.type === 'rule'" />
 
     <blockquote v-else-if="block.type === 'quote'">
-      <Markdown :blocks="block.blocks" @open="emit('open', $event)" />
+      <Markdown
+        :blocks="block.blocks"
+        :root="root"
+        @open="emit('open', $event)"
+        @open-local="emit('open-local', $event)"
+      />
     </blockquote>
 
     <component
@@ -167,15 +192,32 @@ function isCodeCopied(index) {
         :key="at"
         :data-checked="entry.checked ? '' : undefined"
       >
-        <Markdown :blocks="entry.blocks" @open="emit('open', $event)" />
+        <Markdown
+          :blocks="entry.blocks"
+          :root="root"
+          @open="emit('open', $event)"
+          @open-local="emit('open-local', $event)"
+        />
       </li>
     </component>
 
     <dl v-else-if="block.type === 'dl'">
       <template v-for="(item, at) in block.items" :key="at">
-        <dt><MarkdownInline :nodes="item.term" @open="emit('open', $event)" /></dt>
+        <dt>
+          <MarkdownInline
+            :nodes="item.term"
+            :root="root"
+            @open="emit('open', $event)"
+            @open-local="emit('open-local', $event)"
+          />
+        </dt>
         <dd v-for="(definition, d) in item.definitions" :key="d">
-          <MarkdownInline :nodes="definition" @open="emit('open', $event)" />
+          <MarkdownInline
+            :nodes="definition"
+            :root="root"
+            @open="emit('open', $event)"
+            @open-local="emit('open-local', $event)"
+          />
         </dd>
       </template>
     </dl>
