@@ -66,6 +66,7 @@ import {
   GitPanel,
   Icon,
   IconButton,
+  iconNodes,
   ImageViewer,
   Input,
   KanbanBoard,
@@ -1746,6 +1747,70 @@ const MARKDOWN_SAMPLE = [
   'Filed under smetana-29j.'
 ].join('\n')
 
+/* Section 7's raster case, and the whole reason the mat token is fixed
+   across both themes: a PNG carries its own white ground, and the failure
+   this gallery has to show is that ground surviving intact in the dark
+   theme rather than reading as a hole in the panel. A tiny solid-white PNG
+   (16×10) built at import time — this repository carries no binary fixtures,
+   and one pixel's worth of colour says everything a bigger picture would. */
+const FIGURE_PNG_SRC =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAKCAIAAAAy3EnLAAAAEklEQVR4nGP4TyJgGNUwNDUAALFR3jDZ4RWPAAAAAElFTkSuQmCC'
+
+/* Section 7's preferred form: a diagram that paints only through
+   `currentColor` and `var()` tokens, so `MarkdownFigure.vue` draws it with no
+   mat at all and it recolours itself on a theme switch the same way any other
+   piece of chrome does. `figureSource.js`'s `readInlineSvg` is what checks
+   this before it ever reaches the panel — see that module's header. The
+   caption matches the contract's own example verbatim. */
+const FIGURE_PIPELINE_SVG = [
+  '<svg viewBox="0 0 320 60" role="img" aria-label="Pipeline: build, sign, notarise, staple">',
+  '<rect x="4" y="18" width="60" height="24" fill="none" stroke="currentColor"/>',
+  '<text x="14" y="34" fill="var(--text-secondary)">build</text>',
+  '<line x1="64" y1="30" x2="84" y2="30" stroke="currentColor"/>',
+  '<rect x="84" y="18" width="60" height="24" fill="none" stroke="currentColor"/>',
+  '<text x="96" y="34" fill="var(--text-secondary)">sign</text>',
+  '<line x1="144" y1="30" x2="164" y2="30" stroke="currentColor"/>',
+  '<rect x="164" y="18" width="76" height="24" fill="none" stroke="currentColor"/>',
+  '<text x="172" y="34" fill="var(--text-secondary)">notarise</text>',
+  '<line x1="240" y1="30" x2="260" y2="30" stroke="currentColor"/>',
+  '<rect x="260" y="18" width="56" height="24" fill="none" stroke="currentColor"/>',
+  '<text x="268" y="34" fill="var(--text-secondary)">staple</text>',
+  '</svg>'
+].join('')
+const FIGURE_SVG_SRC = `data:image/svg+xml,${encodeURIComponent(FIGURE_PIPELINE_SVG)}`
+
+/* The render check failing, reached through the real branch rather than
+   faked: a hard-coded hex is exactly what `readInlineSvg` refuses, so this is
+   the same placeholder a real agent-drawn diagram with a stray colour would
+   produce — not a second, gallery-only error path. */
+const FIGURE_BLOCKED_SVG = '<svg viewBox="0 0 24 24"><rect width="10" height="10" fill="#ff0000"/></svg>'
+const FIGURE_ERROR_SRC = `data:image/svg+xml,${encodeURIComponent(FIGURE_BLOCKED_SVG)}`
+
+/* Raster, vector, and the render check failing, each its own turn so the
+   frame around each is easy to find. */
+const MARKDOWN_FIGURE_RASTER_SAMPLE = `![Notary latency, 24 h](${FIGURE_PNG_SRC})`
+const MARKDOWN_FIGURE_VECTOR_SAMPLE = `![Release pipeline](${FIGURE_SVG_SRC})`
+const MARKDOWN_FIGURE_ERROR_SAMPLE = `![Queue depth, 7 d](${FIGURE_ERROR_SRC})`
+
+/* Two image lines with no blank line between them, `markdown.js`'s own case
+   for "the same run" — `Markdown.vue`'s `groups` folds them into one
+   `div[data-figures]` row rather than two bare figures. */
+const MARKDOWN_FIGURE_PAIR_SAMPLE = [
+  `![Notary latency, 24 h](${FIGURE_PNG_SRC})`,
+  `![Release pipeline](${FIGURE_SVG_SRC})`
+].join('\n')
+
+/* `data-state="loading"` has no markdown spelling — nothing in a task's prose
+   ever asks for it, since it is the shape a figure holds for the moment
+   between the frame existing and a real `<img>` resolving, which
+   `MarkdownFigure.vue` reaches through an `Image` probe rather than through
+   any prop this page could set. So, like `kbd`/`small` above, it is written
+   out by hand: the one other place in this file that draws prose without
+   going through `Markdown`. `expandIconChildren` is `MarkdownFigure.vue`'s
+   own way of drawing the control without `Icon.vue`'s `style` attribute,
+   copied here rather than exported, since nothing outside that file needs it. */
+const expandIconChildren = iconNodes['maximize-2']?.[2] || []
+
 /* This page's own copy of what `DesktopApp.vue` keeps for the id somebody
    clicked, in the small: a card and an inspector raise `copy-id` and take back
    a `copyState`, and neither of them knows a clipboard exists, so the harness
@@ -3420,6 +3485,73 @@ const menuTargetStyle = {
                 Press <kbd>⌘</kbd>+<kbd>K</kbd> to open the palette.
                 <small>Works from anywhere in the app.</small>
               </p>
+            </article>
+          </div>
+        </div>
+      </div>
+      <!-- Section 7's figures: raster on the mat, the preferred inline `<svg>`
+           form, the render check failing, and two in a row wrapped into
+           `div[data-figures]` — every one of them reached through the real
+           `Markdown` pipeline and `figureSource.js`'s own rules, not faked.
+           `data-state="loading"` is the one exception, and the comment above
+           `expandIconChildren` says why. -->
+      <div :style="{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-6)', alignItems: 'flex-start' }">
+        <div :style="{ width: '320px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown :text="MARKDOWN_FIGURE_RASTER_SAMPLE" @open-image="() => {}" />
+            </article>
+          </div>
+        </div>
+        <div :style="{ width: '320px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown :text="MARKDOWN_FIGURE_VECTOR_SAMPLE" @open-image="() => {}" />
+            </article>
+          </div>
+        </div>
+        <div :style="{ width: '320px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown :text="MARKDOWN_FIGURE_ERROR_SAMPLE" @open-image="() => {}" />
+            </article>
+          </div>
+        </div>
+        <div :style="{ width: '320px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown :text="MARKDOWN_FIGURE_PAIR_SAMPLE" @open-image="() => {}" />
+            </article>
+          </div>
+        </div>
+        <!-- `data-state="loading"` has no markdown spelling — see
+             `expandIconChildren`'s own comment above for why this is written
+             out by hand rather than reached through `Markdown`. -->
+        <div :style="{ width: '320px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <figure data-figure data-state="loading">
+                <div data-placeholder></div>
+                <figcaption>Queue depth, 7 d</figcaption>
+                <button type="button" data-expand aria-label="Open full size">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.75"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <component
+                      :is="child[0]"
+                      v-for="(child, i) in expandIconChildren"
+                      :key="i"
+                      v-bind="child[1]"
+                    />
+                  </svg>
+                </button>
+              </figure>
             </article>
           </div>
         </div>

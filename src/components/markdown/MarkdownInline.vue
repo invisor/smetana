@@ -27,7 +27,18 @@
    over an `href` only for http and https, so there is nothing here to judge;
    the local-file half of the link contract (`data-path`, `data-kind`, the
    head/tail split) is its own task, and this parser does not produce a link
-   node that would need it yet. */
+   node that would need it yet.
+
+   An `image` node reaches here only when it sat beside other words on its
+   line — `markdown.js` keeps a picture that is alone on its own line a block
+   of `Markdown.vue`'s own, section 7's whole figure. Section 7 has no answer
+   for one sitting mid-sentence: the mat, the caption row and the expand
+   control are a two-row grid, and nesting that inside the `<p>` this node is
+   already inside is not a shape the contract draws anywhere. Rather than
+   invent one, or drop the picture the way a link this app may not open is
+   dropped, this reads it back as the markdown that made it — `![alt](src)` —
+   which keeps every character on screen exactly as `markdown.js`'s own header
+   promises, in the one shape the contract does have room for here: text. */
 defineProps({
   nodes: { type: Array, required: true }
 })
@@ -47,6 +58,7 @@ function onAuxClick(event, href) {
 <template>
   <template v-for="(node, index) in nodes" :key="index">
     <template v-if="node.type === 'text'">{{ node.value }}</template>
+    <template v-else-if="node.type === 'image'">{{ `![${node.alt}](${node.src})` }}</template>
     <code v-else-if="node.type === 'code'">{{ node.value }}</code>
     <strong v-else-if="node.type === 'strong'">
       <MarkdownInline :nodes="node.children" @open="emit('open', $event)" />
