@@ -28,21 +28,39 @@
 
    The one control on the tree — the code block's copy button (contract
    section 4) — stays read-only in the same sense: it acts on the clipboard,
-   never on the prose, and answers with nothing this component keeps. It calls
-   the browser's own `navigator.clipboard` directly rather than importing a
-   store: this file draws markup for five different owners (the task inspector,
-   three turn kinds of the conversation panel, the gallery) and must never
-   import `@tauri-apps/api` itself, and threading a callback through every one
-   of those five just to prefer `stores/app.js`'s `copyText` — which takes the
-   very same browser branch outside a Tauri build — is a cost with no payoff
-   anywhere but the live app. An owner that already imports a store, such as
-   `conversation/ConversationView.vue`, is free to override that later if the
-   plugin's better reliability on a real WebKitGTK build turns out to matter
-   here too; nothing below forecloses it. */
-import { computed, onBeforeUnmount, ref } from 'vue'
+   never on the prose, and answers with nothing this component keeps for
+   itself, past the confirmation on the one button somebody pressed.
+
+   Its state and its timer are `core/copyFeedback.js`'s `useCopyFeedback`, not
+   a copy of that policy written out again — that file's own header narrates
+   what a fifth copy of "clear the timer, claim the target, await the write,
+   bail if a later press has taken it over, clear the timer a second time" has
+   already cost this tree twice, and there is no reason to find out a fifth
+   time what a fourth already proved. The one place this call site differs
+   from every other is the duration: the contract's own 1600ms rather than
+   `COPIED_MS`'s 1200, passed as that composable's second argument — see
+   `kanban/copyId.js`'s header for why the two numbers are allowed to differ.
+
+   The clipboard writer is `inject('smCopyText', …)`, the same shape
+   `overlays/Modal.vue` reaches `views/DialogWindow.vue` through
+   (`smDialogWindow`, `smDialogFill`, `smDialogClosable`): a library component
+   reaching an ancestor that owns a store without importing one itself. This
+   file draws markup for whichever view ends up rendering it — today
+   `views/DesktopApp.vue` and `views/Gallery.vue`, the only two that draw
+   anything with a `Markdown` under it — and must never import
+   `@tauri-apps/api` on its own account, so the default below, wired to
+   nothing, is the browser's own `navigator.clipboard`. Both of those views
+   already import `stores/app.js`'s `copyText`, which prefers the Tauri
+   clipboard plugin for the reason that store's own header gives —
+   `navigator.clipboard` wants a secure context and a gesture the webview does
+   not always agree it had, a failure with no visible cause in the packaged
+   app alone — so both `provide('smCopyText', copyText)`, and the default
+   below is what a future owner falls back to until it does the same. */
+import { computed, inject } from 'vue'
 import Icon from '../core/Icon.vue'
 import MarkdownInline from './MarkdownInline.vue'
 import { parseMarkdown } from './markdown.js'
+import { useCopyFeedback } from '../core/copyFeedback.js'
 
 const props = defineProps({
   /* The source. Ignored when `blocks` is given, which is what the recursive
@@ -68,43 +86,42 @@ function isTaskList(block) {
   return block.items.length > 0 && block.items[0].checked !== null
 }
 
-/* The copy control's confirmation window, per the contract. Deliberately its
-   own number and not `kanban/copyId.js`'s `COPIED_MS`: that one is 1200ms,
-   tuned for a task's id, and a different duration is a different policy, not
-   a variant of the same one — borrowing it would tie this control's timing to
-   a change made for that one's sake. */
-const COPY_REVERT_MS = 1600
-
-/* Which block in *this* instance's own flat list last showed "Copied", by
-   its `v-for` index — `null` when none has. One ref for the whole tree rather
-   than one per block: a press can only ever come from one button at a time, so
-   a single "who last succeeded" is the whole of the state a list of blocks
-   needs, the same shape `useCopyFeedback`'s single `target` takes for a list of
-   rows. A quote or a list item recurses into its own `Markdown` instance with
-   its own copy of this ref, so two code blocks in two different quotes are
-   free to say "Copied" at the same moment — nothing in the contract asks for
-   one confirmation across a whole document, only one per control. */
-const copiedIndex = ref(null)
-let copyRevertTimer = null
-
-async function copyCode(index, text) {
-  clearTimeout(copyRevertTimer)
+/* Wrapped rather than passed bare so it always answers `Promise<boolean>`,
+   `copyText`'s own shape and what `useCopyFeedback` requires of `write` —
+   `navigator.clipboard.writeText` alone resolves `undefined` on success and
+   rejects on failure, neither of which is a boolean. */
+async function browserCopyText(text) {
   try {
     await navigator.clipboard.writeText(text)
-    copiedIndex.value = index
-    copyRevertTimer = setTimeout(() => {
-      copiedIndex.value = null
-    }, COPY_REVERT_MS)
+    return true
   } catch (err) {
     // Left at rest: a control that claimed success it did not have would be
     // worse than one that stays silent about a clipboard it could not reach.
     console.error('[markdown] the code block did not reach the clipboard:', err)
+    return false
   }
 }
 
-// The one piece of state this file owns outright — cleared so an unmounted
-// panel never fires a reset into a component that is no longer there.
-onBeforeUnmount(() => clearTimeout(copyRevertTimer))
+const writeCode = inject('smCopyText', browserCopyText)
+
+/* The contract's own confirmation window — see `kanban/copyId.js`'s header
+   for why this is not `COPIED_MS`. */
+const COPY_CODE_MS = 1600
+
+/* One `useCopyFeedback` per `Markdown` instance, keyed on the `v-for` index
+   below: a quote or a list item recurses into its own instance with its own
+   copy of this state, so two code blocks in two different quotes are free to
+   say "Copied" at the same moment — nothing in the contract asks for one
+   confirmation across a whole document, only one per control, which is this
+   composable's own "one target at a time" read one level narrower. The
+   parser only ever appends blocks, so the index is a stable enough key for
+   which one last said "Copied"; see `useCopyFeedback` for the rest of the
+   policy this file no longer writes out by hand. */
+const { stateFor: copyStateFor, copy: copyCode } = useCopyFeedback(writeCode, COPY_CODE_MS)
+
+function isCodeCopied(index) {
+  return copyStateFor(index) === 'copied'
+}
 </script>
 
 <template>
@@ -122,13 +139,13 @@ onBeforeUnmount(() => clearTimeout(copyRevertTimer))
       <button
         type="button"
         data-copy
-        :data-state="copiedIndex === index ? 'copied' : 'idle'"
-        aria-label="Copy code"
+        :data-state="isCodeCopied(index) ? 'copied' : 'idle'"
+        :aria-label="isCodeCopied(index) ? 'Copied' : 'Copy code'"
         @click="copyCode(index, block.text)"
       >
         <Icon name="copy" data-icon="copy" />
         <Icon name="check" data-icon="check" />
-        <span>{{ copiedIndex === index ? 'Copied' : 'Copy' }}</span>
+        <span>{{ isCodeCopied(index) ? 'Copied' : 'Copy' }}</span>
       </button>
       <pre><code>{{ block.text }}</code></pre>
     </figure>
