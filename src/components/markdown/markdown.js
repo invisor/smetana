@@ -10,11 +10,15 @@
    asterisk, a malformed table, a reference link, an HTML tag — comes back as
    ordinary text, so the worst outcome for an unsupported construct is the
    panel as it looked before this module existed. That is what makes it safe
-   to put between a person and the only copy of a task's description. A
-   *recognised* construct is a different case: a GFM table's extra cell and a
-   heading's closing `#` are both consumed by the syntax that owns them, the
-   same way a quote's leading `>` already was — the invariant is about what
-   this module cannot read, not about every marker of what it can.
+   to put between a person and the only copy of a task's description, and it
+   does not soften for a *recognised* construct's own content — only for the
+   marker characters whose entire job is to say what the construct is, and
+   which carry no information once it is known: a heading's closing `#`, a
+   quote's leading `>`, a table's `|`. A table row with more cells than its
+   header is not a marker going missing, it is a person's words the parser
+   read and must not drop — `takeTable` widens the whole table to its widest
+   row rather than clipping to the header, so an extra cell still lands
+   somewhere rather than nowhere.
 
    `docs/design_handoff_conversation_panel/markup-contract.md` (sections 2, 3
    and 7) is the closed list of what the conversation panel is allowed to
@@ -316,23 +320,31 @@ function columnAlign(cell) {
 
 /* The header and the alignment row are already read by the time this runs —
    `parseBlocks` only calls it once both have been checked against
-   `ALIGN_CELL` — so this just gathers the body. A body row is any run of
-   non-blank lines that is not itself the start of some other block, exactly
-   the rule a paragraph already stops on; a row short of cells is padded with
-   empty ones and a row with too many has the extra dropped, which is GFM's
-   own rule for a ragged table, not this file inventing one. */
+   `ALIGN_CELL` — so this just gathers the body first, one raw cell array per
+   row, before deciding the table's width. The width is the *widest* row of
+   the three (header, alignment, body), not the header's own count: GFM says
+   to drop a body row's extra cells and this file does not, on the same
+   ground the heading branch above already stands on — a cell past the
+   header is somebody's words, not a marker, and the invariant does not let
+   content go quiet just because the construct around it is a recognised
+   one. A short row still pads with empty cells, which loses nothing because
+   there is nothing there to lose; a column with nothing in the alignment
+   row gets `null`, which is the same "no opinion" `columnAlign` already
+   returns for a plain `---`. */
 function takeTable(lines, start, headerCells, delimiterCells) {
-  const table = {
-    type: 'table',
-    align: delimiterCells.map(columnAlign),
-    head: headerCells.map((cell) => parseInline(cell)),
-    rows: []
-  }
+  const rows = []
   let i = start + 2
   while (i < lines.length && lines[i].trim() && !startsBlock(lines[i])) {
-    const cells = splitTableRow(lines[i])
-    table.rows.push(table.align.map((_, column) => parseInline(cells[column] ?? '')))
+    rows.push(splitTableRow(lines[i]))
     i++
+  }
+  const width = Math.max(headerCells.length, ...rows.map((cells) => cells.length))
+  const columns = Array.from({ length: width }, (_, column) => column)
+  const table = {
+    type: 'table',
+    align: columns.map((column) => columnAlign(delimiterCells[column] ?? '')),
+    head: columns.map((column) => parseInline(headerCells[column] ?? '')),
+    rows: rows.map((cells) => columns.map((column) => parseInline(cells[column] ?? '')))
   }
   return [table, i]
 }

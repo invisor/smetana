@@ -124,6 +124,24 @@ describe('parseMarkdown blocks', () => {
       }
     })
 
+    /* A row wider than the header is content, not a marker — unlike a
+       heading's closing `#` or a table's own `|`, a cell past the header is
+       somebody's words, and the parser already read them (`splitTableRow`
+       returns them) before this row was built. Clipping to the header count
+       would drop them with nothing on screen to say so, which is exactly
+       the failure the module's invariant exists to rule out. */
+    it('keeps every cell of a row wider than its header, rather than clipping to it', () => {
+      const [table] = parseMarkdown(['| a | b |', '| --- | --- |', '| 1 | 2 | SECRET |'].join('\n'))
+      expect(table.align).toEqual([null, null, null])
+      expect(table.head.map((cell) => cell[0]?.value)).toEqual(['a', 'b', undefined])
+      expect(table.rows[0].map((cell) => cell[0]?.value)).toEqual(['1', '2', 'SECRET'])
+    })
+
+    it('pads a row shorter than the header with empty cells', () => {
+      const [table] = parseMarkdown(['| a | b | c |', '| --- | --- | --- |', '| 1 |'].join('\n'))
+      expect(table.rows[0].map((cell) => cell.length)).toEqual([1, 0, 0])
+    })
+
     it('nests a table inside a quote without losing the quote', () => {
       const source = ['> | a | b |', '> | --- | --- |', '> | 1 | 2 |'].join('\n')
       const [quote] = parseMarkdown(source)
@@ -384,6 +402,13 @@ describe('the invariant', () => {
       .split(/\s+/)
       .filter(Boolean)
 
+  /* The table's body row is deliberately one cell wider than its header
+     (`ragged`, past `a`/`b`) — this is a genuinely recognised table, blank
+     line and all, so it is `takeTable` doing the widening rather than a
+     paragraph carrying the word along as ordinary text. This is the fixture
+     that would have caught a clip-to-the-header bug: `visible()` walks every
+     column of every row, and a dropped cell is a missing word this test
+     notices without knowing to look for one. */
   const SOURCE = [
     '# Title',
     '',
@@ -391,7 +416,7 @@ describe('the invariant', () => {
     '',
     '| a | b |',
     '| - | - |',
-    '| 1 | 2 |',
+    '| 1 | 2 | ragged |',
     '',
     '- [ ] one',
     '- [x] two',
