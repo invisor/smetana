@@ -19,7 +19,32 @@
    like on screen.
 
    **The scroll rule is the one non-obvious thing left in this file**, and it is
-   written where it is enforced, on `stick` below. */
+   written where it is enforced, on `stick` below.
+
+   **The journal is also the markup contract's own root** (`class="sm-prose"`
+   below, `docs/design_handoff_conversation_panel/markup-contract.md`, section
+   1): one flex column with `gap:var(--prose-turn-gap)` and
+   `padding:var(--panel-pad)`, both spent by `sm-prose.css` rather than by the
+   `journal` style object here, which only adds what the scrolling viewport
+   needs beyond the contract — `flex`, `minWidth`/`minHeight` and the
+   `overflow` pair. `UserMessage.vue`, `AgentMessage.vue` and `Reasoning.vue`
+   used to carry a `.sm-prose` of their own, one turn per root, because this
+   shared one did not exist yet; each now emits its turn bare and this div is
+   the only root the class appears on. `ToolCall.vue` and `TurnResult.vue`
+   are not part of the contract — they take the flex gap like any other
+   sibling and paint themselves in `:style`, same as before.
+
+   **`hr[data-session]` has no live trigger here, and that is a fact about the
+   wire rather than a gap in this file.** The contract draws it as a break
+   between sessions, but a panel holds exactly one session's journal
+   (`journalRows` below has no notion of "session" at all), and
+   `session::history`'s own header is explicit that a resumed session's past
+   and its live half are stitched with no marker between them and none
+   wanted — the first live `TurnStart` is the seam, and it is invisible on
+   purpose. So there is nothing in this journal two sessions could sit either
+   side of yet; the element and its styling are ready in `sm-prose.css` for
+   whoever wires a real boundary, and `Gallery.vue` shows its appearance with
+   static markup rather than a synthesised one here. */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import AgentMessage from './AgentMessage.vue'
 import Composer from './Composer.vue'
@@ -321,6 +346,11 @@ const sep = {
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
 }
 
+/* The scrolling viewport, and — via `class="sm-prose"` on the same element in
+   the template — the contract's own root. Nothing here repeats what the class
+   already spends (`gap`, `padding`, the font); an inline style only ever wins
+   over a class for the properties it actually sets, so the two coexist on one
+   element without either overriding the other's half. */
 const journal = {
   flex: 1,
   minWidth: 0,
@@ -394,7 +424,7 @@ const refusal = {
       </span>
     </div>
 
-    <div ref="viewport" :style="journal" @scroll="onScroll">
+    <div ref="viewport" class="sm-prose" :style="journal" @scroll="onScroll">
       <EmptyState
         v-if="!sessionId"
         icon="message-square"
