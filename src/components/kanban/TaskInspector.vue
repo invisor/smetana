@@ -196,9 +196,14 @@ const divider = {
 
     <!-- Everything bd stores is markdown, and so is everything an agent writes
          into it, so all five prose fields below are drawn as markdown rather
-         than as the text of it. Still read-only: nothing here is editable, and
-         a task item's checkbox is a glyph rather than a control. -->
-    <Markdown v-if="issue.description" :text="issue.description" @open="emit('open', $event)" />
+         than as the text of it — as `sm-prose.css` (markup-contract.md,
+         section 2) now paints it, so each field's own `Markdown` sits under a
+         `class="sm-prose"` root and carries no `:style` of its own. Still
+         read-only: nothing here is editable, and a task item's box is drawn by
+         the stylesheet rather than by a control. -->
+    <div v-if="issue.description" class="sm-prose">
+      <Markdown :text="issue.description" @open="emit('open', $event)" />
+    </div>
 
     <!-- bd's other prose, in a fixed order: the two that are the spec first,
          the log that grows last. Read-only like the description — rewriting
@@ -206,17 +211,23 @@ const divider = {
          an issue without them looks exactly as it did before they existed. -->
     <div v-if="issue.acceptance_criteria" :style="proseSection">
       <span :style="rowLabel">Acceptance criteria</span>
-      <Markdown :text="issue.acceptance_criteria" @open="emit('open', $event)" />
+      <div class="sm-prose">
+        <Markdown :text="issue.acceptance_criteria" @open="emit('open', $event)" />
+      </div>
     </div>
 
     <div v-if="issue.design" :style="proseSection">
       <span :style="rowLabel">Design</span>
-      <Markdown :text="issue.design" @open="emit('open', $event)" />
+      <div class="sm-prose">
+        <Markdown :text="issue.design" @open="emit('open', $event)" />
+      </div>
     </div>
 
     <div v-if="issue.notes" :style="proseSection">
       <span :style="rowLabel">Notes</span>
-      <Markdown :text="issue.notes" @open="emit('open', $event)" />
+      <div class="sm-prose">
+        <Markdown :text="issue.notes" @open="emit('open', $event)" />
+      </div>
     </div>
 
     <!-- Only when there is a record to separate: an issue carrying neither
@@ -233,7 +244,9 @@ const divider = {
 
     <div v-if="issue.close_reason" :style="closeReasonBox">
       <span :style="rowLabel">Close reason</span>
-      <Markdown :text="issue.close_reason" @open="emit('open', $event)" />
+      <div class="sm-prose">
+        <Markdown :text="issue.close_reason" @open="emit('open', $event)" />
+      </div>
     </div>
   </div>
 </template>
