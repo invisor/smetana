@@ -86,6 +86,18 @@ import IconButton from '../components/core/IconButton.vue'
 import { CommandPalette, ConversationView, TaskSearchButton, TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import { agentKey, conversationsOf, orderAgents } from '../components/agent/agentOrder.js'
+/* What a driven conversation is in the three places this file counts agents:
+   the panel's rows, the footer's numbers and the rail's map. The rule is pure
+   and lives there rather than here for the reason every rule in this app does —
+   nothing in this repository can test a `.vue`. */
+import {
+  drivenRowId,
+  drivenSessionOf,
+  mergeAgentCounts,
+  mergeAgentRows,
+  mergeLiveAgentCount,
+  mergeProjectStates
+} from '../components/agent/drivenRows.js'
 import SessionRow from '../components/agent/SessionRow.vue'
 /* What each harness this build ships can be asked to do, read once at startup
    — the two agent menus and the Sessions tab's cards are all drawn from it. */
@@ -118,6 +130,7 @@ import {
   createSession,
   createShell,
   forgetRestored,
+  formatElapsed,
   initTerminals,
   lastHandover,
   lastRunStart,
@@ -139,7 +152,11 @@ import {
   canDrive,
   conversationState,
   conversationsIn,
-  startConversation
+  drivenSessions,
+  forget,
+  startConversation,
+  statusOf,
+  stopConversation
 } from '../stores/conversation.js'
 import {
   boardColumns,
@@ -2464,6 +2481,19 @@ watch(lastHandover, (handover) => {
    No await — selection is local state, and TerminalView attaches to whatever
    activeId names once it is on screen. */
 function selectAgent(id) {
+  /* A driven row names a conversation rather than a session of the terminal
+     worker, and both halves of a click are different for it. What comes forward
+     is the conversation panel, which is `showAgentTab(conversation)`; and
+     `terminalState.activeId` is deliberately left where it was, since pointing
+     the terminal at something nobody holds is the same failure the restored row
+     below guards against. There is no work behind a bare conversation, so the
+     right column and the board keep what they were showing — which is what a
+     bare PTY agent does too, and the whole behaviour rather than a gap in it. */
+  const conversation = drivenSessionOf(id)
+  if (conversation !== null) {
+    showAgentTab(conversation)
+    return
+  }
   /* A restored row has no session behind it, and its id is a conversation's
      rather than the worker's — so selecting it would point the terminal at
      something nobody holds. The row *is* the offer, and the click is the offer
@@ -2509,6 +2539,64 @@ function selectAgent(id) {
   }
 }
 
+/* The clock the driven rows' elapsed time is measured against, and the second
+   one this window runs. `stores/terminals.js` keeps its own for the PTY rows
+   and does not export it; thirty seconds is its interval as well, and the two
+   ticking out of step costs nothing anybody can see, a row being counted in
+   minutes. It is cleared on unmount, which the store's own deliberately is not
+   — `sweep` a few hundred lines down is the shape every interval in this file
+   takes. */
+const AGENT_CLOCK_MS = 30 * 1000
+const agentClock = ref(Date.now())
+let agentTick = null
+onMounted(() => {
+  agentTick = setInterval(() => (agentClock.value = Date.now()), AGENT_CLOCK_MS)
+})
+onUnmounted(() => {
+  if (agentTick) clearInterval(agentTick)
+  agentTick = null
+})
+
+/* The driven sessions as the panel and the two counters want them: in the
+   design system's status vocabulary, with the elapsed time already worked out.
+   That is what lets `components/agent/drivenRows.js` be a rule about rows and
+   counts rather than a second reader of two stores — it may import neither, the
+   family it belongs to being defined by having no Vue and no Tauri in it.
+
+   Both translations are borrowed rather than written again here. `statusOf` is
+   the conversation store's, beside the terminal store's own for PTY sessions;
+   `formatElapsed` is that terminal store's, exported and used as it stands,
+   because two spellings of "2h 14m" one row apart is exactly the drift this
+   file is careful about everywhere else. */
+const drivenAgents = computed(() =>
+  drivenSessions.value.map((session) => ({
+    id: session.id,
+    project: session.project,
+    state: statusOf(session.state),
+    elapsed: formatElapsed(agentClock.value - session.startedAt)
+  }))
+)
+
+/* The ones belonging to the project on screen. Everything in this file except
+   the rail wants this project's alone, and the rail wants every project's at
+   once — the same split `agentCounts` and `projectStates` already are on the
+   terminal's side, and for the same reason: the panel and the footer are about
+   where somebody is standing, the rail is about where they are not. */
+const drivenHere = computed(() =>
+  drivenAgents.value.filter((session) => session.project === activePath.value)
+)
+
+/* What every project is doing, the two kinds of session counted together: the
+   rail's map with the driven sessions folded into it.
+
+   Every project and not only this one, because that is the whole of what the
+   rail is for — the projects somebody is *not* looking at, one of which may
+   have a conversation waiting on them. `panelSummary` a few hundred lines down
+   reads this same merged map rather than the store's, so the tile's tooltip and
+   the panel header's line cannot end up saying two different things about the
+   project in front. */
+const agentStates = computed(() => mergeProjectStates(projectStates.value, drivenAgents.value))
+
 /* The agents panel in the order the person put it in. bd's board and the
    settings meet in `orderColumns` a few hundred lines down; this is the same
    shape one panel over — the store owns which rows exist, `settings.json` owns
@@ -2529,9 +2617,13 @@ function selectAgent(id) {
    these keys name another project's agents. */
 const agentArrangement = ref([])
 
+/* The two kinds of session in one list, and the merge is here rather than in
+   `stores/terminals.js` deliberately — `drivenRows.js` carries the whole of
+   why. What the panel is handed is one flat list, so a driven row is dragged,
+   pinned and closed by the same rules every other row is. */
 const orderedAgentRows = computed(() =>
   orderAgents(
-    agentRows.value,
+    mergeAgentRows(agentRows.value, drivenHere.value),
     agentArrangement.value.length ? agentArrangement.value : project.agentOrder,
     project.pinnedAgents
   )
@@ -2546,13 +2638,28 @@ function reorderAgents(rows) {
   project.agentOrder = conversationsOf(rows)
 }
 
-/* The X on a row in the agents panel, and which of the two removals it is.
+/* The X on a row in the agents panel, and which of the three removals it is.
 
    A live row's remove ends a session at the worker. A restored row has none —
    what it has is a record in the project's own registry, so the file is what is
    written and `terminal_remove` is never called: it would ask the worker to end
-   a session it has never held, and answer that it has no such id. */
+   a session it has never held, and answer that it has no such id. A driven row
+   is the third, and it is two acts rather than one: the conversation is stopped
+   and the record forgotten.
+
+   Neither of those is awaited and neither is guarded on the other's answer. The
+   record is this window's own bookkeeping — the store keeps a driven session
+   until somebody closes it, and this cross is that somebody — so a stop the
+   worker refused is a sentence for the toast corner rather than a reason to
+   leave a row standing that the person has just dismissed. `stopConversation`
+   reports rather than throws, which is what lets this be an ordinary call. */
 function removeAgentRow(id) {
+  const conversation = drivenSessionOf(id)
+  if (conversation !== null) {
+    stopConversation(conversation)
+    forget(conversation)
+    return
+  }
   const offered = agentRows.value.find((row) => row.id === id && row.restored)
   if (offered) {
     forgetRestored(id)
@@ -2637,9 +2744,9 @@ const activeTerminal = computed(() => terminalTab(project.activeTab))
    `selectAgent` is worth naming on its own twice over: it is reached from a row
    click *and* from the `lastRunStart` watcher, so a run handing over to its next
    batch moves the aim too — and it is the only gesture that **deliberately picks
-   an agent that already exists**, which makes it the only way back to a PTY
-   agent from a conversation that is not also a start. The others get there as a
-   consequence of doing something else.
+   an agent that already exists**, which makes it the only way back to one that
+   is not also a start. The others get there as a consequence of doing something
+   else.
 
    The shape being avoided is three pieces of state for one question, which is
    what the first version of this had — a pick, a watcher on
@@ -2656,12 +2763,12 @@ const activeTerminal = computed(() => terminalTab(project.activeTab))
    the project it was started in. A switch away and back therefore finds the
    conversation again, still held by the worker, with its whole journal.
 
-   What this still cannot do is aim the tab *back* at a conversation once
-   somebody has picked a PTY agent in the same project, and that is a gap rather
-   than a decision: a driven session has no row in the agents panel — those come
-   from `terminalState.sessions` — so the panel offers nothing to click. The row
-   is the stage that teaches that panel about driven sessions; until then the way
-   back is starting another conversation. */
+   It aims back at a conversation as well as away from one, and that is what the
+   driven row bought. Until the agents panel drew those rows, `agentRows` being
+   the terminal store's alone, a project where somebody had since picked a PTY
+   agent offered nothing to click and the only way back to its conversation was
+   starting another one. `selectAgent` recognises such a row by its key now and
+   aims the tab at the session behind it — `components/agent/drivenRows.js`. */
 const agentAim = reactive(new Map())
 
 /* How many times that aim has been written through `showAgentTab`, per project.
@@ -2727,6 +2834,22 @@ const conversationId = computed(() => {
   const aimed = agentAim.get(activePath.value) ?? null
   return aimed !== null && conversationsIn(activePath.value).includes(aimed) ? aimed : null
 })
+
+/* Which row of the agents panel is drawn as the selected one.
+
+   Two selections meet here and only one row can carry the highlight: a driven
+   conversation, whenever the Agent tab is aimed at one, and otherwise whichever
+   PTY session the panel has selected. The conversation wins for as long as
+   `conversationId` answers — which is the aim rather than the panel being on
+   screen, deliberately. A highlight that went out the moment somebody looked at
+   the board would not go out at all: it would move to the PTY row
+   `terminalState.activeId` still names, and pointing at an agent the tab is not
+   aimed at is a worse thing to say than a highlight outliving the panel. That
+   field is untouched by a driven selection, so it is still there to go back
+   to. */
+const activeAgentRow = computed(() =>
+  conversationId.value !== null ? drivenRowId(conversationId.value) : terminalState.activeId
+)
 
 /* Whether that panel is on screen this moment.
 
@@ -5772,7 +5895,7 @@ const branchLabel = computed(() => {
    branch is dropped by `projectSummary` instead. */
 const activeProjectName = computed(() => (activePath.value ? basename(activePath.value) : 'Projects'))
 const panelSummary = computed(() =>
-  activePath.value ? projectSummary(gitState.branch, projectStates.value[activePath.value]) : ''
+  activePath.value ? projectSummary(gitState.branch, agentStates.value[activePath.value]) : ''
 )
 /* The missing-tracker mark, for the selected project. Every other project says
    it in its tile's tooltip, which is the only room a 28px tile has for it. */
@@ -5901,10 +6024,21 @@ const decidedRuns = new Set()
    them, but the source is unchanged — the counter beside this sentence is built
    from the sessions and the two have to agree. The store comment beside
    `agentCounts` has the whole of it. This is the active project's strip, so the
-   active project's own list is the right source anyway. */
+   active project's own list is the right source anyway.
+
+   The driven conversations are folded in on top of it, by the same rule and in
+   the same breath as the counter below — see there for why the two cannot be
+   merged one without the other. */
 const stateHeadline = computed(() =>
-  headline({ row: agentCounts.value, runs: runsState.runs })
+  headline({ row: mergeAgentCounts(agentCounts.value, drivenHere.value), runs: runsState.runs })
 )
+
+/* The number beside that sentence, the two merged the same way and in one place
+   for the reason the store gives for deriving one from the other: they sit a
+   gap apart in the same bar and say the same noun, so a driven session counted
+   in one and not in the other is two numbers disagreeing in front of
+   somebody. */
+const agentsActive = computed(() => mergeLiveAgentCount(liveAgentCount.value, drivenHere.value))
 
 /* Which runs have stopped, as a value that changes exactly when one does —
    `configFreshness.js`'s shape, and for the same reason: `upsert` writes a run
@@ -6207,7 +6341,7 @@ const toastStackStyle = {
           v-if="railOpen"
           :projects="projectRows"
           :active-path="activePath"
-          :states="projectStates"
+          :states="agentStates"
           :branches="activePath ? { [activePath]: gitState.branch } : {}"
           :can-add-agent="project.sideTab === 'agents'"
           :configured="configured"
@@ -6379,7 +6513,7 @@ const toastStackStyle = {
               <AgentList
                 v-else
                 :rows="orderedAgentRows"
-                :active-id="terminalState.activeId"
+                :active-id="activeAgentRow"
                 :pinned="project.pinnedAgents"
                 @select="selectAgent"
                 @remove="removeAgentRow"
@@ -6841,7 +6975,7 @@ const toastStackStyle = {
       :busy="usageBusy"
       :error="usageError"
       :dirty-count="dirtyCount"
-      :agents-active="liveAgentCount"
+      :agents-active="agentsActive"
       :headline="stateHeadline.text"
       :headline-level="stateHeadline.level"
       @refresh="readUsage"

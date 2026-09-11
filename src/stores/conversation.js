@@ -254,6 +254,10 @@ export async function attach(id) {
     held.events = events ?? []
     held.seq = seq ?? 0
     held.state = state ?? 'starting'
+    /* The snapshot is the freshest thing anybody has about this session, so the
+       record takes it too — a row drawn from a state event alone would be one
+       event behind the panel beside it for as long as nothing moved. */
+    noteState(id, held.state)
     conversationState.lastError = null
   } catch (err) {
     // A newer attach has already overtaken this one; its outcome is what the
@@ -348,6 +352,13 @@ function listenToEvents() {
 function listenToState() {
   return listen('session:state', (event) => {
     const { id, state } = event.payload
+    /* Before the drop below, and deliberately not under it: the row in the
+       agents panel hangs on this. The journal is emptied by `detach` and the
+       record is not, so a window whose conversation panel has gone must still
+       follow the state of the sessions it started — reading it out of
+       `conversations` alone had the row freeze at whatever it said when
+       somebody last looked at it. */
+    noteState(id, state)
     const held = conversations.get(id)
     if (!held) return
     held.state = state
@@ -397,13 +408,22 @@ export const canDrive = (agent) => DRIVEN.includes(agent)
    the other, that tab would disappear the moment somebody looked at the board
    and take the way back to their agent with it.
 
-   **Nothing takes an entry out, and that is the terminal's behaviour rather
-   than an omission.** A session whose child has gone keeps its row and its tab
-   there until somebody closes it, on the grounds that the last words of
-   whatever was running are worth reading; here there is not even a process to
-   close, only a journal the worker still holds. A restart empties this, driven
+   **One gesture takes an entry out and it is the only one: the cross on the
+   row** (`forget` below). A session whose child has gone keeps its row and its
+   tab until somebody closes it, on the grounds that the last words of whatever
+   was running are worth reading — the terminal's behaviour, and the reason
+   nothing here expires on its own; the cross is the somebody that closes it,
+   and until this list was drawn there was nobody. A restart empties it, driven
    sessions deliberately not surviving one — the same repair `restoreTabs`
    already makes for a remembered `activeTab: "terminal"`.
+
+   **A record carries the session's state and the moment it started**, and
+   neither is read out of `conversations` above. That map is emptied by
+   `detach`, so a row built from it would go blank the moment the centre tab
+   moved to the board — which is precisely when somebody glances at the panel to
+   see how their agent is getting on. The state is therefore written here by the
+   state listener as well, for every session this window has started rather than
+   only for the ones it is drawing.
 
    The project is the path `startConversation` was given, which is the same
    string the terminal store keys its own sessions by: the project's own
@@ -415,6 +435,59 @@ const started = reactive([])
    derived from whether there are any, and the panel from which one is picked. */
 export const conversationsIn = (project) =>
   started.filter((session) => session.project === project).map((session) => session.id)
+
+/* Every driven session this window holds, whichever project it belongs to: the
+   id, the project, the worker's own word for its state and the moment it
+   started.
+
+   Copies rather than the records, so that a reader cannot write one back. This
+   is what the agents panel's rows, the footer's counter and the project rail
+   are all built from — `components/agent/drivenRows.js` is the rule, and
+   `views/DesktopApp.vue` is the one caller — and a view able to edit the list
+   it draws would be a second author of this store's state.
+
+   Every project rather than one, because the three readers do not agree on how
+   many they want: the panel and the counter are about the project on screen,
+   and the rail is about all of them at once. Filtering is the caller's, and
+   cheap; a second exported filter here would only be a third answer to a
+   question these two already answer between them.
+
+   `conversationsIn` above stays the narrower answer it always was: its callers
+   ask whether a project has a conversation at all, not what any of them is
+   doing. */
+export const drivenSessions = computed(() => started.map((session) => ({ ...session })))
+
+/* The state on the record, for a session this window has started.
+
+   Written beside the conversation's own state rather than instead of it,
+   because the two have different lifetimes and that is the whole point: a
+   conversation goes at `detach` and this record stays, so a row in the sidebar
+   goes on saying what its agent is doing after the panel drawing it has left
+   the screen. A session this window never started has no record and nothing
+   happens — `session:state` arrives for every session of every project. */
+function noteState(id, state) {
+  const record = started.find((session) => session.id === id)
+  if (record) record.state = state
+}
+
+/* This window stops holding a session at all: the record goes, and the row in
+   the agents panel with it.
+
+   The cross on that row is the whole of what calls this — the one gesture the
+   header above says empties this list. The journal goes too, through `detach`,
+   and that is not tidying up: the row is gone, so nothing is left that could
+   ask for this conversation again, and a journal kept for it would grow in a
+   window that draws none of it, which is the cost `detach` exists to avoid.
+
+   Stopping the session is the caller's other half and deliberately not done
+   here: what a stop costs the harness is `stopConversation`'s to say, and a
+   refusal of it is a sentence for the toast corner rather than a reason to keep
+   a row somebody has just dismissed. */
+export function forget(id) {
+  const at = started.findIndex((session) => session.id === id)
+  if (at !== -1) started.splice(at, 1)
+  detach(id)
+}
 
 /* Start a driven session and hold it. The id is the answer; `null` means it did
    not start, and the sentence saying why is in `lastError`.
@@ -433,7 +506,13 @@ export async function startConversation(project, intent = { kind: 'bare' }) {
        leave the button somebody pressed with no visible effect for the length
        of a spawn — the same reason `terminalState.starting` exists one
        subsystem over. */
-    started.push({ id, project })
+    /* `starting` and this window's own clock. The worker mints neither for a
+       driven session — `session_attach` answers with a journal, a sequence
+       number and a state, and nothing about when the session began — and the
+       moment the start answered is within one spawn of the truth. The state is
+       the word `hold` starts a conversation on, for the same reason it does: a
+       session that has produced nothing yet has not failed to. */
+    started.push({ id, project, state: 'starting', startedAt: Date.now() })
     await attach(id)
     return id
   } catch (err) {
