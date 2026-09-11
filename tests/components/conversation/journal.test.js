@@ -106,8 +106,8 @@ describe('the journal as rows', () => {
      session `failed` while appending no `Error` at all. Read against the
      events alone this would stay `waiting` forever, ticking beside a header
      that already reads `failed`; `state` says otherwise, so the strip closes
-     too, with no words of its own and an elapsed figure off the last event
-     this batch still holds. */
+     too, with the panel's own sentence — the worker gave no words of its
+     own — and an elapsed figure off the last event this batch still holds. */
   it('closes the strip failed when the session already has, and the events never did', () => {
     const rows = journalRows(
       [
@@ -118,28 +118,39 @@ describe('the journal as rows', () => {
       'failed'
     )
 
-    expect(rows.at(-1)).toEqual({ key: 1, kind: 'activity', state: 'failed', text: '', ms: 221000 })
+    expect(rows.at(-1)).toEqual({
+      key: 1,
+      kind: 'activity',
+      state: 'failed',
+      text: 'The session ended while this turn was still open.',
+      ms: 221000
+    })
   })
 
-  /* The two `SessionState`s that keep a turn `waiting` — `running` and
-     `needs-you` — against everything else, which closes it. `starting` is
-     included on the safe side: the honest reading of "we do not know the
-     agent is working" is the same one `isBusy` itself gives. */
-  it('closes the strip failed for every state that is not busy', () => {
+  /* **Only `failed` and `exited` close a turn the events never did**, never
+     the wider `!isBusy(state)`. `state_of` can only reach those two with the
+     child already dead — everything else, including `ready` and `starting`,
+     is read as "we cannot see that it ended" and keeps the strip `waiting`.
+     `ready`/`starting` matter especially: they are the ordinary skew between
+     `session:events` and the `session:state` that follows it, one reactive
+     flush behind a fresh send, and reading that skew as a death used to
+     close the strip `failed` under the very message that had just opened the
+     turn. */
+  it('closes the strip failed only for the two states that mean the child is gone', () => {
     const at = (state) =>
       journalRows(
         [event(1, 'turn-start', { by: 'person', at: '2026-09-10T12:00:00Z' })],
         state
       ).at(-1).state
 
-    expect(['ready', 'exited', 'failed', 'starting', undefined].map(at)).toEqual([
-      'failed',
-      'failed',
-      'failed',
-      'failed',
-      'failed'
+    expect(['failed', 'exited'].map(at)).toEqual(['failed', 'failed'])
+    expect(['ready', 'starting', 'running', 'needs-you', undefined].map(at)).toEqual([
+      'waiting',
+      'waiting',
+      'waiting',
+      'waiting',
+      'waiting'
     ])
-    expect(['running', 'needs-you'].map(at)).toEqual(['waiting', 'waiting'])
   })
 
   /* **The strip's `failed` moment**: an `error` closes an *open* turn `failed`

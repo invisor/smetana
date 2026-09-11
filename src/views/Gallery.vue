@@ -5964,12 +5964,22 @@ const menuTargetStyle = {
         <div :style="{ width: '280px', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }">
           <!-- One element, three moments — `markup-contract.md` section 6,
                its own example values. `waiting`'s clock is genuinely ticking
-               here, off `GALLERY_ACTIVITY_STARTED_AT`; `done` and `failed`
-               are fixed. Nothing spins, and `failed` is the one strip in the
-               whole gallery that turns the mark into a square. -->
+               here, off `GALLERY_ACTIVITY_STARTED_AT`; `done` and both
+               `failed` rows are fixed. Nothing spins, and `failed` is the
+               one strip in the whole gallery that turns the mark into a
+               square. -->
           <TurnResult state="waiting" label="claude-1 is thinking" :started-at="GALLERY_ACTIVITY_STARTED_AT" />
           <TurnResult state="done" :tokens-in="72515" :tokens-out="1204" :cost-usd="0.81" :ms="13000" />
+          <!-- The harness said what happened. -->
           <TurnResult state="failed" text="exit 101 in wt/bd-3c9d" :ms="134000" />
+          <!-- It did not: `Stop`, or the process simply ending, closes the
+               turn with no `Error` on the wire at all — `journal.js`'s own
+               `TURN_ENDED` sentence is the panel's, not the agent's. -->
+          <TurnResult
+            state="failed"
+            text="The session ended while this turn was still open."
+            :ms="30000"
+          />
         </div>
       </div>
     </section>

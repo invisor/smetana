@@ -58,11 +58,41 @@
    turn read against the events alone would stay `waiting` forever in that
    case, its clock still climbing next to a header that already reads
    `failed` and a composer already reading Send again — which is why `state`
-   is the second argument here: `!isBusy(state)` on a turn the events never
-   closed closes it `failed` too, with an elapsed figure off the last event's
-   own `at` in place of one `Error` never sent, and no words, since none were
-   given. This is the strip's only reader of `state` — every other row is the
-   events alone.
+   is the second argument here.
+
+   **The check is narrow on purpose: `state === 'failed' || state === 'exited'`,
+   never the wider `!isBusy(state)`.** `state_of` (`session::model`) is the
+   authority on what those words can mean: with the child dead it answers
+   `Failed` for an open turn and `Exited` for a closed one, so `exited` with a
+   turn still open is a state that cannot truthfully arise and is named here
+   only so a value this file has misread can never reach it either. `ready` and
+   `starting` are the ordinary skew of two events delivered as two IPC
+   messages — `append()` ships `session:events` and only then calls
+   `refresh_state`, which ships `session:state`
+   (`service.rs`) — so a fresh `turn-start`/`user-message` can sit for a
+   reactive flush against a `state` that has not moved off `ready` yet. Read
+   against `!isBusy`, that skew closed the strip `failed`, wordless and
+   saturated, under the very message that just opened the turn, on every
+   single send. Read against this narrower pair it ticks `waiting` instead —
+   the honest answer for a state this fold cannot yet see has ended, which is
+   the same conservative reading `BUSY`'s own header gives a word it has never
+   heard of.
+
+   **The closed turn still gets words of its own.** `text` is not the empty
+   string here any more: nobody said anything, but the panel knows one true
+   sentence — the session ended while this turn was still open — and prints
+   that rather than a blank strip a person would read as broken rather than
+   stopped. This is the strip's only reader of `state` — every other row is
+   the events alone.
+
+   **The elapsed figure is the gap to the *last event this batch still
+   holds*, not to the moment the child actually died** — `journal.js` has no
+   later timestamp to read, and a batch holding only the `turn-start` reads
+   `0s` rather than nothing. That under-reports whenever the agent's last
+   tool call landed well before the process actually ended, sometimes by
+   minutes; it never over-reports, and unlike anything measured off
+   `Date.now()` it does not change if the panel is closed and reopened, which
+   matters for a number sitting in a journal rather than ticking on screen.
 
    `Error` carries no duration of its own — `session::model::EventKind::Error`
    is `{ text }`, full stop — so a `failed` turn's elapsed time is the one this
@@ -109,6 +139,21 @@
 const BUSY = ['running', 'needs-you']
 
 export const isBusy = (state) => BUSY.includes(state)
+
+/* Closes an open turn even though nothing in its own events did — the two
+   states `state_of` can only reach with the child already dead. Not
+   `!isBusy(state)`: `ready` and `starting` are the ordinary skew between
+   `session:events` and the `session:state` that follows it, and reading that
+   skew as a death closed the strip `failed` under the very message that had
+   just opened the turn. See the fold's own header for the fuller reasoning. */
+const CHILD_GONE = ['failed', 'exited']
+
+/* The one sentence the panel can truthfully say about a turn the events never
+   closed: not what happened, since the worker gave no words for that, but
+   that the session ended while this turn was still open. A blank strip reads
+   as broken rather than stopped, which is the wordless version this
+   replaces. */
+const TURN_ENDED = 'The session ended while this turn was still open.'
 
 export function journalRows(events = [], state) {
   const rows = []
@@ -176,22 +221,21 @@ export function journalRows(events = [], state) {
   }
 
   if (openAt != null) {
-    if (isBusy(state)) {
-      rows.push({ key: openSeq, kind: 'activity', state: 'waiting', startedAt: openAt })
-    } else {
+    if (CHILD_GONE.includes(state)) {
       /* The events said nothing closed this turn, but the session's own state
          already has — `Chunk::Eof` with nothing journalled, which is `Stop`,
-         a shell window closing, or any other end that rang no `Error`. `text`
-         is blank rather than invented, since the worker gave none; `ms` is the
-         gap to the last event this batch actually holds, in place of the one
-         a real `error` would have closed on. */
+         a shell window closing, or any other end that rang no `Error`. `ms` is
+         the gap to the last event this batch actually holds, in place of the
+         one a real `error` would have closed on. */
       rows.push({
         key: openSeq,
         kind: 'activity',
         state: 'failed',
-        text: '',
+        text: TURN_ENDED,
         ms: elapsedSince(events[events.length - 1].at)
       })
+    } else {
+      rows.push({ key: openSeq, kind: 'activity', state: 'waiting', startedAt: openAt })
     }
   }
 
