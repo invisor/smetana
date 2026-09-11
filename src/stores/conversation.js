@@ -23,10 +23,21 @@ export const conversationState = reactive({
      the reason `terminalState.ready` is — a panel that draws before the events
      are subscribed to would be drawing a conversation that cannot move. */
   ready: false,
-  /* One sentence for a person, or null. A string and not the `{ title,
-     description }` pair `terminals.js` keeps, because what draws it is a line
-     inside the panel rather than the toast corner, and the worker's own words
-     are the whole of what there is to say about a question that has gone. */
+  /* One sentence for a person, or null, with **two readers**: a line inside the
+     conversation panel, and a toast in `DesktopApp.vue`'s corner drawn only
+     while that panel is not — a driven start that made no session draws no
+     panel at all, so without the second one every failure of that road reached
+     nobody but the console.
+
+     A string all the same, and not the `{ title, description }` pair
+     `terminals.js` keeps, because the two readers want different halves of such
+     a pair and only one of them wants both. The panel needs no title: it is
+     drawn against the very thing the sentence is about, and a heading over it
+     would be a second way of saying "this session". The corner does need one,
+     and it is the same one every time — every refusal on this road is one thing
+     failing to be reached — so it is a constant at that one call site rather
+     than a field every `report` here would have to invent a value for. The
+     worker's own words are the whole of what varies. */
   lastError: null
 })
 

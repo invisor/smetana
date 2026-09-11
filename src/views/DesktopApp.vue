@@ -600,9 +600,20 @@ onMounted(initUpdates)
 
    **A fallback is not a failure and must not be said out loud.** From where the
    person is standing they asked for an agent and are getting one, so the
-   sentence `startConversation` left behind is cleared on the way through. The
-   failures worth reporting are `createSession`'s own, which come with a toast
-   already.
+   sentence `startConversation` left behind is taken off the screen on the way
+   through — held, though, and not dropped: if the PTY road refuses as well, it
+   goes back, because it is then the only account of the press anybody has.
+   `createSession` sets a sentence of its own, but that one does not reliably
+   survive to a frame — the next successful terminal read clears
+   `terminalState.lastError`, which on a machine with a worker answering reads is
+   a matter of microseconds. That behaviour is `terminals.js`'s and predates this
+   road; what is this function's business is not resting on it.
+
+   **A press that started nothing costs nothing.** The aim is put back with the
+   sentence: a project that was watching a conversation when somebody pressed
+   this must still be watching it afterwards, and by the gap this stage leaves
+   open there would be no gesture to get back to it — starting another
+   conversation is precisely the road that has just failed.
 
    The two roads differ in what they can promise before the worker answers, and
    that is worth having straight. `createSession` parks a start ticket the
@@ -629,31 +640,53 @@ onMounted(initUpdates)
    say the same two lines so that adding another is one decision rather than
    two.
 
-   The catch below swallows the rejection: `createSession` logs its own refusal
-   and sets the field the toast corner draws, so nothing is lost by not
-   rethrowing — this catch exists only to stop Vue's own unhandled-rejection
-   warning from repeating what the store already said. */
+   The one `try` left is around `createSession`, which is the only call here that
+   rejects: `startConversation` reports and answers `null` instead, which is what
+   makes the choice between the two roads an ordinary `if` rather than control
+   flow through an exception. */
 async function newAgent() {
   const path = activePath.value
-  try {
-    project.sideTab = 'agents'
-    if (canDrive(settings.agent)) {
-      /* The tab comes forward on the press; the aim follows the id, so a spawn
-         that answers leaves the panel on the new conversation and one that does
-         not leaves nothing pointing at a session that was never made. */
-      project.activeTab = 'terminal'
-      const id = await startConversation(path, { kind: 'bare' })
-      if (id !== null) {
-        showAgentTab(id, path)
-        return
-      }
-      // Nothing to report: the PTY below is what was asked for either way.
-      conversationState.lastError = null
+  /* The guard its neighbours carry. Nothing reaches this without a project
+     today — the button is drawn beside a project's own tabs — but the capture
+     above is what would otherwise file an aim under `undefined` and hand the
+     same to the worker, and that should be a fact about this function rather
+     than about whoever draws the button. */
+  if (!path) return
+  /* What to put back if nothing starts: where the tab was aimed before the
+     press, and whatever the driven road had to say for itself. `?? null` because
+     a project nobody has aimed yet reads the same as one aimed at its PTY agent
+     — `conversationId` folds the two together — so restoring `null` restores
+     exactly what was there. */
+  const aimed = agentAim.get(path) ?? null
+  let refused = null
+
+  project.sideTab = 'agents'
+  if (canDrive(settings.agent)) {
+    /* The tab comes forward on the press; the aim follows the id, so a spawn
+       that answers leaves the panel on the new conversation and one that does
+       not leaves nothing pointing at a session that was never made. */
+    project.activeTab = 'terminal'
+    const id = await startConversation(path, { kind: 'bare' })
+    if (id !== null) {
+      showAgentTab(id, path)
+      return
     }
-    showAgentTab(null, path)
+    // Off the screen for the fallback, and back again below if that fails too.
+    refused = conversationState.lastError
+    conversationState.lastError = null
+  }
+
+  showAgentTab(null, path)
+  try {
     await createSession(path, { kind: 'bare' })
   } catch {
-    // already reported — see comment above
+    /* Both roads refused. `createSession` has already logged its own and taken
+       back everything it put on screen; what is left to undo is this function's
+       own two changes. There is no rethrow because there is nobody above to
+       catch one — this is an event handler — and the catch is also what stops
+       Vue's unhandled-rejection warning repeating what the store already said. */
+    agentAim.set(path, aimed)
+    if (refused) conversationState.lastError = refused
   }
 }
 
@@ -2540,13 +2573,22 @@ const activeTerminal = computed(() => terminalTab(project.activeTab))
 /* What the Agent tab is aimed at, per project: the id of a driven conversation,
    or `null` for whichever PTY session the agents panel has selected.
 
-   **One field, written by the two kinds of act that aim this tab and by nothing
-   else**: starting a conversation, and every road that puts a PTY agent in
-   front — every `createSession` road in this file, `selectAgent`, and
-   `attachToAgent`. `selectAgent` is worth naming on its own twice over: it is
-   reached from a row click *and* from the `lastRunStart` watcher, so a run
-   handing over to its next batch does move the aim, and it is also the **only**
-   gesture that takes somebody from a conversation back to a PTY agent.
+   **One field, and `showAgentTab` below is the only thing that writes it** — so
+   what writes the aim is that function's callers, whatever the list grows to,
+   rather than a list here somebody has to remember to extend. They fall into two
+   kinds. Starting a conversation is one, and it is `newAgent` alone. The other
+   is every road that puts a PTY agent in front, which today is the
+   `createSession` roads, each moving the aim while starting something;
+   `selectAgent`, which moves it while starting nothing; and `attachToAgent`,
+   which moves it as a side effect of handing a dropped path to whichever agent
+   is selected.
+
+   `selectAgent` is worth naming on its own twice over: it is reached from a row
+   click *and* from the `lastRunStart` watcher, so a run handing over to its next
+   batch moves the aim too — and it is the only gesture that **deliberately picks
+   an agent that already exists**, which makes it the only way back to a PTY
+   agent from a conversation that is not also a start. The others get there as a
+   consequence of doing something else.
 
    The shape being avoided is three pieces of state for one question, which is
    what the first version of this had — a pick, a watcher on

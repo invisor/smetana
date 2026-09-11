@@ -74,8 +74,12 @@ life of the window** — after that session has exited, after its child is gone 
 `hasAgentTab` can never fire for it, because the value it watches never goes back to false. That is
 accepted at this stage rather than overlooked: it is window state and it dies with the window, and the
 tab it leaves standing draws a real journal that can still be read. A refused *start* leaves nothing at
-all, since a session that never began is not held; the fallback to `createSession` on that road parks a
-ticket of its own, so the watch above does fire when that one fails.
+all, since a session that never began is not held. What happens to somebody standing on that tab
+afterwards depends on what else the project has: in a project with no other agent and no earlier
+conversation the fallback's own `createSession` ticket takes `hasAgentTab` true and then false again,
+so the watch above fires and lands them on the board; where the tab is standing for something else it
+does not fire, which is correct — there is still a tab, and `newAgent` puts its aim back where it found
+it so whatever was being watched is still being watched.
 
 The one seam that costs something: `project.activeTab` **is** remembered, so a project last left
 watching an agent comes back naming a tab that cannot exist yet, sessions deliberately not surviving a
@@ -238,12 +242,16 @@ was named.
 The Agent tab is **three branches over two components** since smetana-5ijg, and the seam is one `v-if`
 on which kind of session it is aimed at: `ConversationView.vue` with a driven session's id, or this
 same `TerminalView.vue` with `terminalState.activeId`. What decides is `agentAim` in `DesktopApp.vue`,
-one field per project written by `showAgentTab` and by nothing else. Its writers are the two kinds of
-act that aim this tab: starting a conversation, and every road that puts a PTY agent in front — every
-`createSession` road in that file, `selectAgent`, and `attachToAgent`. **`selectAgent` is the only
-gesture that takes somebody from a conversation back to a PTY agent**, and it is reached from a row
-click and from the `lastRunStart` watcher both, so a run handing over to its next batch moves the aim
-as well. The field is deliberately not derived from `terminalState.activeId`: `loadSessions` repairs
+one field per project written by `showAgentTab` and by nothing else — so what writes the aim is that
+function's callers, however many there come to be, rather than a list to keep in step with it. They
+fall into two kinds: starting a conversation, which is `newAgent` alone, and every road that puts a PTY
+agent in front — the `createSession` roads, which move the aim while starting something; `selectAgent`,
+which moves it while starting nothing; and `attachToAgent`, which moves it as a side effect of handing
+a dropped path to the selected agent. **`selectAgent` is the only gesture that deliberately picks an
+agent that already exists**, which makes it the only way back to a PTY agent from a conversation that
+is not also a start; it is reached from a row click and from the `lastRunStart` watcher both, so a run
+handing over to its next batch moves the aim as well. The field is deliberately not derived from
+`terminalState.activeId`: `loadSessions` repairs
 that selection itself on every project switch, and a first version that watched it had a switch away
 and back quietly taking the tab off a live conversation. The union is deliberately not an abstraction
 over the two back ends either — the terminal is going away when the last intent moves, and a seam built
