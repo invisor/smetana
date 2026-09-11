@@ -144,9 +144,15 @@ onBeforeUnmount(() => {
   if (attached !== null) detach(attached)
 })
 
+const state = computed(() => held.value?.state ?? 'starting')
+const busy = computed(() => isBusy(state.value))
+
 /* The journal as rows to draw — `journal.js`, which is where the fold and the
-   translation are written and tested. */
-const rows = computed(() => journalRows(held.value?.events ?? []))
+   translation are written and tested. `state` is the second argument for one
+   row alone: a turn the events never closed (`Chunk::Eof` with no `Error`,
+   which is what `Stop` itself reaches) is read against it rather than left
+   `waiting` forever next to a header that already reads `failed`. */
+const rows = computed(() => journalRows(held.value?.events ?? [], state.value))
 
 /* The question the session is waiting on, derived by the store and never stored
    there — see its own note. Drawn at the foot of the panel rather than in the
@@ -160,9 +166,6 @@ const ourRefusal = computed(() =>
     ? conversationState.lastError.text
     : ''
 )
-
-const state = computed(() => held.value?.state ?? 'starting')
-const busy = computed(() => isBusy(state.value))
 
 /* Who is on the other end. None of this is on the wire — `session_attach`
    answers with the journal, the sequence number and the state, and nothing
@@ -181,6 +184,12 @@ const busy = computed(() => isBusy(state.value))
 const label = computed(() => agentLabel(settings.agent))
 const model = computed(() => settings.model)
 const folder = computed(() => (settings.activeProject ? basename(settings.activeProject) : ''))
+
+/* The activity strip's own `waiting` sentence — the same label the bar
+   already reads, put to the one other sentence this panel says on its
+   behalf. `TurnResult.vue`'s own header carries the rest of the strip's
+   reasoning; this is the one word it needs that only the store can give. */
+const waitingLabel = computed(() => `${label.value} is thinking`)
 
 /* `session::model::SessionState` in this design system's words, from the store
    for the reason the terminal's own translation lives in `terminals.js`. */
@@ -384,10 +393,13 @@ const foot = {
 
 const questionPad = { padding: 'var(--panel-pad) var(--panel-pad) 0' }
 
-/* An `Error` event, which is the worker saying what happened where an answer
-   would have gone — a message that did not reach the agent, a line the harness
-   wrote to stderr. Prose, so sans; the failed hue and the status glyph, so it
-   is not mistaken for the agent's own words.
+/* A bare `error` row — an `Error` event `journal.js` found no open turn to
+   fold into, which is the worker saying a message never reached the agent at
+   all rather than a turn that opened and then failed. A turn's own failure is
+   the activity strip's `failed` moment now (`TurnResult.vue`), drawn where
+   `row.kind === 'activity'` is below; this is what is left over for the one
+   case that is not a turn ending. Prose, so sans; the failed hue and the
+   status glyph, so it is not mistaken for the agent's own words.
 
    No horizontal `--panel-pad` of its own: this row is drawn inside the
    journal, a direct child of its `.sm-prose` root, which already insets the
@@ -467,7 +479,12 @@ const refusal = {
             @open="openExternal"
           />
           <AgentMessage v-else-if="row.kind === 'agent'" :text="row.text" @open="openExternal" />
-          <Reasoning v-else-if="row.kind === 'reasoning'" :text="row.text" @open="openExternal" />
+          <Reasoning
+            v-else-if="row.kind === 'reasoning'"
+            :text="row.text"
+            :ms="row.ms"
+            @open="openExternal"
+          />
           <ToolCall
             v-else-if="row.kind === 'tool'"
             :name="row.name"
@@ -475,7 +492,11 @@ const refusal = {
             :result="row.result"
           />
           <TurnResult
-            v-else-if="row.kind === 'result'"
+            v-else-if="row.kind === 'activity'"
+            :state="row.state"
+            :label="waitingLabel"
+            :started-at="row.startedAt"
+            :text="row.text"
             :tokens-in="row.tokensIn"
             :tokens-out="row.tokensOut"
             :cost-usd="row.costUsd"

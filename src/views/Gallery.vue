@@ -2296,6 +2296,13 @@ const CONVERSATION_LONG_COMMAND =
   'git worktree add --checkout -b feature/smetana-ihz2-conversation-log-components ' +
   '/Users/you/Desktop/Projects/smetana/.worktrees/smetana-ihz2-conversation-log-components feat/redesign-agents'
 
+/* The activity strip's own `waiting` moment needs a clock to tick from,
+   which is the one thing about it `TurnResult.vue` cannot be handed as a
+   literal — nothing pure can know "now". Read once, on this view's own
+   setup, so the strip below opens already a few seconds in rather than at
+   zero, which is closer to what the state actually looks like on screen. */
+const GALLERY_ACTIVITY_STARTED_AT = new Date(Date.now() - 4000).toISOString()
+
 /* What a press on the loud card raised, so the emitted decision is visible
    rather than taken on trust. In the app this is `answerQuestion`. */
 const permissionAnswer = ref(null)
@@ -5891,8 +5898,11 @@ const menuTargetStyle = {
            colour or a radius, the file-type icon on a tool call is legible on
            both grounds, and the filled permission card carries readable text in
            the light theme, where its ink inverts to `var(--surface-raised)`.
+           The loud colour in this section is `failed` — the two activity
+           strips and the third tool call take `--status-failed-fg`, and
+           nothing else does.
 
-           The two columns below carry `class="sm-prose"` themselves, with
+           The prose columns below carry `class="sm-prose"` themselves, with
            `--panel-pad` left to the class rather than zeroed: since
            smetana-e3mc, `UserMessage`, `AgentMessage` and `Reasoning` emit
            their bare `article`/`details` and expect an ancestor root to space
@@ -5911,7 +5921,7 @@ const menuTargetStyle = {
             @open="openExternal"
           />
           <AgentMessage :text="CONVERSATION_AGENT_TEXT" @open="openExternal" />
-          <TurnResult :tokens-in="12480" :tokens-out="416" :cost-usd="0.0312" :ms="4200" />
+          <TurnResult state="done" :tokens-in="12480" :tokens-out="416" :cost-usd="0.0312" :ms="4200" />
         </div>
 
         <div class="sm-prose" :style="{ width: '360px', gap: 'var(--space-4)' }">
@@ -5930,14 +5940,17 @@ const menuTargetStyle = {
             detail="cargo test --manifest-path src-tauri/Cargo.toml"
             :result="{ ok: false, summary: 'exit 101' }"
           />
-          <!-- A folded block and an open one. Both are `quiet`; opening one
-               costs no loudness, which is what the pair is here to show. -->
-          <Reasoning :text="CONVERSATION_REASONING" />
-          <Reasoning :text="CONVERSATION_REASONING" expanded @open="openExternal" />
+          <!-- A folded block and an open one. Both are dimmed by colour and
+               size, not by opacity — `sm-prose.css`'s own reasoning rule — and
+               both carry a `<summary><time>`: how long the turn had already
+               been going when the agent said this, `journal.js`'s own
+               `elapsedSince`. -->
+          <Reasoning :text="CONVERSATION_REASONING" :ms="6000" />
+          <Reasoning :text="CONVERSATION_REASONING" :ms="134000" expanded @open="openExternal" />
           <!-- A turn the harness priced, and one it said nothing about: the
                cost is omitted rather than drawn as `$0`. -->
-          <TurnResult :tokens-in="860" :tokens-out="120" :cost-usd="0.0041" :ms="840" />
-          <TurnResult :tokens-in="4100" :tokens-out="2210" :cost-usd="null" :ms="124300" />
+          <TurnResult state="done" :tokens-in="860" :tokens-out="120" :cost-usd="0.0041" :ms="840" />
+          <TurnResult state="done" :tokens-in="4100" :tokens-out="2210" :cost-usd="null" :ms="124300" />
         </div>
 
         <div :style="{ width: '360px', display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
@@ -5965,6 +5978,27 @@ const menuTargetStyle = {
           <div :style="{ font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
             {{ permissionAnswer ? `answer: ${permissionAnswer}` : 'no answer yet' }}
           </div>
+        </div>
+
+        <div class="sm-prose" :style="{ width: '280px', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }">
+          <!-- One element, three moments — `markup-contract.md` section 6,
+               its own example values. `waiting`'s clock is genuinely ticking
+               here, off `GALLERY_ACTIVITY_STARTED_AT`; `done` and both
+               `failed` rows are fixed. Nothing spins, and `failed` is the
+               one strip in the whole gallery that turns the mark into a
+               square. -->
+          <TurnResult state="waiting" label="claude-1 is thinking" :started-at="GALLERY_ACTIVITY_STARTED_AT" />
+          <TurnResult state="done" :tokens-in="72515" :tokens-out="1204" :cost-usd="0.81" :ms="13000" />
+          <!-- The harness said what happened. -->
+          <TurnResult state="failed" text="exit 101 in wt/bd-3c9d" :ms="134000" />
+          <!-- It did not: `Stop`, or the process simply ending, closes the
+               turn with no `Error` on the wire at all — `journal.js`'s own
+               `TURN_ENDED` sentence is the panel's, not the agent's. -->
+          <TurnResult
+            state="failed"
+            text="The session ended while this turn was still open."
+            :ms="30000"
+          />
         </div>
 
         <!-- `hr[data-session]` — a full-bleed break between sessions,
