@@ -315,6 +315,46 @@ describe('parseInline', () => {
     ])
   })
 
+  /* The widened half: a bare relative path with no scheme in front of it is a
+     local link now, not literal text — `./links.js` decides this, and the rule
+     is pinned by its own tests. What is pinned here is that `markdown.js`
+     reaches that module at all and builds the node shape `MarkdownInline.vue`
+     draws: `local: true`, the clean path, which breed it is, and the head/tail
+     split of the target's own text — never the label, which is discarded for
+     a local link (see this file's own header for why that does not conflict
+     with the invariant below). */
+  it('reads a bare relative path as a local link, split into head and tail', () => {
+    expect(parseInline('[see the config](src-tauri/tauri.conf.json:41)')).toEqual([
+      {
+        type: 'link',
+        local: true,
+        path: 'src-tauri/tauri.conf.json',
+        targetKind: 'file',
+        head: 'src-tauri/',
+        tail: 'tauri.conf.json:41'
+      }
+    ])
+  })
+
+  it('reads a trailing slash as a directory target', () => {
+    expect(parseInline('[the docs folder](docs/design/)')).toEqual([
+      {
+        type: 'link',
+        local: true,
+        path: 'docs/design',
+        targetKind: 'dir',
+        head: 'docs/',
+        tail: 'design'
+      }
+    ])
+  })
+
+  it('reads a bare file name with no folder above it as an all-tail local link', () => {
+    expect(parseInline('[readme](README.md)')).toEqual([
+      { type: 'link', local: true, path: 'README.md', targetKind: 'file', head: '', tail: 'README.md' }
+    ])
+  })
+
   it('reads an inline image beside other text as its own node, not a link', () => {
     expect(parseInline('a shot: ![a shot](https://example.com/s.png) above')).toEqual([
       { type: 'text', value: 'a shot: ' },

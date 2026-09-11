@@ -30,7 +30,23 @@
    syntax nobody typed. A stray `<kbd>` or `<small>` in a source string is an
    HTML tag, already out of scope, and stays literal text like any other one.
    `del` has a real, common markdown spelling (`~~text~~`, GFM's own) and gets
-   a node; `kbd` and `small` do not, and no branch below produces either. */
+   a node; `kbd` and `small` do not, and no branch below produces either.
+
+   `./links.js` is where a link's own target is judged, and `link()` near the
+   bottom of this file is its one caller: which scheme opens in the person's
+   browser, which bare path is a local one, and the split of a local path into
+   a head and a tail are all questions that module answers, kept out of this
+   one so there is exactly one place in the tree that classifies a link target
+   rather than two that could disagree. A **local** link node is the one
+   deliberate exception to the paragraph above about a recognised construct
+   keeping its own content: `link()` below shows the target's own text — a
+   path names itself, the same standing an autolink's `<https://…>` already
+   holds where its label is its own href — and not whatever words a person or
+   an agent put between the brackets, because a path split into a head and a
+   tail is what the markup contract's local link actually is. Nothing is lost
+   by the source's own invariant either way: every character of the target
+   itself survives, in the head or in the tail. */
+import { classifyLink, splitPath } from './links.js'
 
 /* The closing run of hashes is optional and must have whitespace before it.
    Without that whitespace `## Migrate to C#` loses the character that makes the
@@ -402,14 +418,18 @@ function takeDefinitionList(lines, start) {
    backtick span wins over anything inside it; the image before the link, so its
    `!` is not left behind; `**` before `*` for the obvious reason.
 
-   A link node is produced only for http and https. Every other scheme — file,
-   mailto, and the ones that would be a security question elsewhere — stays
-   literal text, which is both the honest thing to draw (this app cannot open
-   it) and what keeps the URL itself on screen. An image node carries no such
+   A link node is produced for http and https, which open in the person's
+   browser, and for a bare path with no scheme at all, which is local and
+   opens in this app — `./links.js`'s `classifyLink` is the one place that
+   decision is made, and `link()` below is its only caller. Every other named
+   scheme — `mailto:`, `javascript:`, the literal `file:` a person might paste
+   by hand, and anything this file has never heard of — stays literal text,
+   which is both the honest thing to draw (this app cannot open it) and what
+   keeps the target itself on screen. An image node carries no such
    restriction on its `src`: it is not opened through `opener:allow-open-url`
    or any other opener, only handed to whatever the illustrations task uses to
    load it, and the acceptance criteria's own example (`./a.png`) is a relative
-   path with no scheme at all — the http/https gate belongs to `link` alone.
+   path with no scheme at all — the scheme gate belongs to `link` alone.
 
    Two guards that are not decoration. The closers of `**` and `__` refuse a
    third marker, so `**a *b***` closes on the outer pair and the emphasis inside
@@ -429,8 +449,8 @@ const INLINE = [
      all and falls through to plain text, markers included. */
   [/^(`{1,10})([\s\S]*?[^`])\1(?!`)/, (m) => ({ type: 'code', value: m[2] })],
   [/^!\[([^\]]*)\]\(\s*(\S+?)\s*\)/, (m) => ({ type: 'image', src: m[2], alt: m[1] })],
-  [/^\[([^\]]*)\]\(\s*(\S+?)\s*\)/, (m) => link(m[2], parseInline(m[1]))],
-  [/^<(https?:\/\/[^>\s]+)>/i, (m) => link(m[1], [{ type: 'text', value: m[1] }])],
+  [/^\[([^\]]*)\]\(\s*(\S+?)\s*\)/, (m) => link(m[2], m[1])],
+  [/^<(https?:\/\/[^>\s]+)>/i, (m) => link(m[1], m[1], { verbatim: true })],
   [/^\*\*([\s\S]+?)\*\*(?!\*)/, (m) => ({ type: 'strong', children: parseInline(m[1]) })],
   [
     /^__([\s\S]+?)__(?![\p{L}\p{N}_])/u,
@@ -444,19 +464,46 @@ const INLINE = [
   ]
 ]
 
-const OPENABLE = /^(https?):\/\//i
 const WORD = /[\p{L}\p{N}_]/u
 
-/* A scheme is case-insensitive by RFC 3986, so `HTTPS://x` is a link — but the
-   href stored here is what reaches `opener:allow-open-url`, whose scope is
-   spelled `https://*` and `http://*`, and nothing promises that glob is matched
+/* `href` is the target as written; `rawLabel` is the text between the
+   brackets, unparsed — `classifyLink` decides what the target is, and this
+   function decides what to do with the label once it knows.
+
+   **External** keeps exactly the behaviour this file always had: the label is
+   markdown in its own right and is parsed (`parseInline`), except when
+   `verbatim` says otherwise — the one caller that sets it is the autolink
+   form (`<https://…>`), whose label is the URL itself and must not be handed
+   back through the parser a second time. A URL commonly carries an
+   underscore or, more rarely, an asterisk, and re-parsing it risks reading
+   one as an emphasis marker over text that is not prose at all — a scheme is
+   case-insensitive by RFC 3986, so `HTTPS://x` is a link, but the href stored
+   here is what reaches `opener:allow-open-url`, whose scope is spelled
+   `https://*` and `http://*`, and nothing promises that glob is matched
    case-blind. Lowercasing the scheme and nothing else makes the two agree by
    construction: the rest of the URL is left exactly as written, because case
-   is meaningful in a path, and the link's own label is what the person typed. */
-function link(href, children) {
-  const scheme = OPENABLE.exec(href)
-  if (!scheme) return null
-  return { type: 'link', href: scheme[1].toLowerCase() + href.slice(scheme[1].length), children }
+   is meaningful in a path.
+
+   **Local** does not touch `rawLabel` at all — see this file's own header for
+   why the target's own text is what is shown, split by `classifyLink`'s
+   `display` into the head and the tail `MarkdownInline.vue` draws as two
+   spans. */
+function link(href, rawLabel, { verbatim = false } = {}) {
+  const classified = classifyLink(href)
+  if (!classified) return null
+  if (classified.kind === 'external') {
+    const children = verbatim ? [{ type: 'text', value: rawLabel }] : parseInline(rawLabel)
+    return { type: 'link', href: classified.href, children }
+  }
+  const { head, tail } = splitPath(classified.display)
+  return {
+    type: 'link',
+    local: true,
+    path: classified.path,
+    targetKind: classified.targetKind,
+    head,
+    tail
+  }
 }
 
 export function parseInline(text) {
