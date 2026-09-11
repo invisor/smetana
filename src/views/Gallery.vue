@@ -918,6 +918,19 @@ const agentRows = [
      It lasts about a second in the app, which is exactly why it belongs here —
      the only place it can be looked at for longer than that. */
   { id: 'start-1', label: 'Creating a task', clearable: true, tasks: [], state: 'running', elapsed: 'starting', starting: true },
+  /* A driven conversation, which is what "+ New agent" starts under Claude Code.
+     Nothing about it is drawn differently — that is the point of the row, and of
+     the panel being one flat list — so what is worth opening is its menu: two of
+     the three verbs are refused at once, `Pin to top — nothing to remember it
+     by` and `Clear session — this agent cannot do it`, and Close is the one that
+     works. The id is a string with `conversation:` in front of it because both
+     workers number their sessions from 1 and this is the key the order, the pins
+     and the `v-for` are carried by; `components/agent/drivenRows.js` builds the
+     whole row and carries the rest of the reasoning.
+
+     Above the offline row below and under the live ones, which is where the
+     merge puts it: the project's past keeps the bottom of the column. */
+  { id: 'conversation:1', conversation: null, clearable: false, label: 'Agent', tasks: [], state: 'needs-you', elapsed: '4m' },
   /* A session the last run of the app left behind, off `.smetana/agents.json`.
      The row that answers "the agent is gone after a restart", and the whole of
      what it is worth is how it is drawn: quiet, so it reads as the project's
