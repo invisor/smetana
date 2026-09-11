@@ -923,10 +923,19 @@ const agentRows = [
      the panel being one flat list — so what is worth opening is its menu: two of
      the three verbs are refused at once, `Pin to top — nothing to remember it
      by` and `Clear session — this agent cannot do it`, and Close is the one that
-     works. The id is a string with `conversation:` in front of it because both
-     workers number their sessions from 1 and this is the key the order, the pins
-     and the `v-for` are carried by; `components/agent/drivenRows.js` builds the
-     whole row and carries the rest of the reasoning.
+     works.
+
+     **`conversation: null` is one of the two cases rather than the rule**, and
+     the row is here as that case. A driven session is recorded like any other
+     now, so an ordinary one carries its conversation id and can be pinned; the
+     two that carry none are a fork, whose new transcript Claude Code names
+     itself, and the first second of any session, before the id has come back
+     from the worker. This row is what either of those looks like, and the
+     prefixed id is what carries the order, the pins and the `v-for` when there
+     is nothing better — both workers number their sessions from 1, so the
+     prefix is what keeps two session 1s apart.
+     `components/agent/drivenRows.js` builds the whole row and carries the rest
+     of the reasoning.
 
      Above the offline row below and under the live ones, which is where the
      merge puts it: the project's past keeps the bottom of the column. */

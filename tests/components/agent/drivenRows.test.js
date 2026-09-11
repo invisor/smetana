@@ -79,6 +79,51 @@ describe('a driven conversation among the agents', () => {
       expect(row.tasks).toEqual([])
     })
 
+    /* The caption is the store's own word for the same work, and the title goes
+       inside the label rather than beside it: `tasks` is drawn in mono, where a
+       person's own sentence would read as an identifier. */
+    it('says what a resumed conversation is and names it', () => {
+      const resumed = drivenAgentRow({
+        id: 4,
+        state: 'ready',
+        elapsed: '2m',
+        work: { kind: 'resumeSession', title: 'Move the card to done' }
+      })
+
+      expect(resumed.label).toBe('Resumed session: Move the card to done')
+      expect(resumed.tasks).toEqual([])
+    })
+
+    /* A transcript nobody typed a word into — a run's batch, a setup, an
+       earlier "+ New agent" — has no title, which is an ordinary answer rather
+       than a gap to fill with something invented. */
+    it('says what it is and stops when the transcript has no title', () => {
+      const resumed = drivenAgentRow({
+        id: 4,
+        state: 'ready',
+        elapsed: '2m',
+        work: { kind: 'resumeSession', title: null }
+      })
+
+      expect(resumed.label).toBe('Resumed session')
+    })
+
+    /* The whole point of the id reaching the row: the panel's order and its
+       pins are kept under the conversation, which is the one name for this
+       session that will still mean something tomorrow. */
+    it('is keyed by its conversation the moment the worker has named one', () => {
+      const named = drivenAgentRow({
+        id: 3,
+        state: 'running',
+        elapsed: '1m',
+        conversation: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60'
+      })
+
+      expect(named.conversation).toBe('9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60')
+      expect(agentKey(named)).toBe('9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60')
+      expect(agentKey(row)).toBe(`${DRIVEN_PREFIX}3`)
+    })
+
     it('carries the state and the elapsed time it was given', () => {
       expect(row.state).toBe('needs-you')
       expect(row.elapsed).toBe('4m')
@@ -113,6 +158,35 @@ describe('a driven conversation among the agents', () => {
       const rows = [live(1, 'a1')]
 
       expect(mergeAgentRows(rows, [])).toBe(rows)
+    })
+
+    /* The registry holds a record for a session that is *running* — it is
+       written at the spawn — so from the moment an offline row is pressed the
+       same conversation would be in the panel twice: the agent somebody is
+       watching, and an offer to reopen what they are already looking at.
+       `offeredRecords` in stores/terminals.js is the same rule for PTY
+       sessions, and it cannot see this one. */
+    it('hides the offer a live conversation is standing in front of', () => {
+      const rows = [live(1, 'a1'), offline('9f1c'), offline('other')]
+      const resumed = { ...driven(2), conversation: '9f1c' }
+
+      expect(mergeAgentRows(rows, [resumed]).map((row) => row.id)).toEqual([
+        1,
+        `${DRIVEN_PREFIX}2`,
+        'other'
+      ])
+    })
+
+    /* A fork writes no record — `--fork-session` has the harness invent an id
+       this app never learns — so there is no offer of its to hide, and the row
+       it was started from goes on standing. */
+    it('hides nothing for a conversation that was never recorded', () => {
+      const rows = [offline('9f1c')]
+
+      expect(mergeAgentRows(rows, [driven(2)]).map((row) => row.id)).toEqual([
+        `${DRIVEN_PREFIX}2`,
+        '9f1c'
+      ])
     })
 
     it('draws a conversation in a project with no PTY agent at all', () => {

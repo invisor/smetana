@@ -252,7 +252,7 @@ export async function attach(id) {
   const current = invoke('session_attach', { id })
   attaching.set(id, current)
   try {
-    const { events, seq, state } = await current
+    const { events, seq, state, conversation } = await current
     if (attaching.get(id) !== current) return
     /* Replaced whole and never merged: this *is* the conversation, and the one
        thing a snapshot is for is being trusted over whatever was drawn before
@@ -264,6 +264,11 @@ export async function attach(id) {
        record takes it too — a row drawn from a state event alone would be one
        event behind the panel beside it for as long as nothing moved. */
     noteState(id, held.state)
+    /* And the name the row is keyed by, which arrives on the snapshot as well
+       as on every state change. This is the earlier of the two roads by a
+       whole turn: `session:state` goes out on a *change*, and a session that
+       has just started and said nothing has not changed state yet. */
+    noteConversation(id, conversation)
     conversationState.lastError = null
   } catch (err) {
     // A newer attach has already overtaken this one; its outcome is what the
@@ -357,7 +362,7 @@ function listenToEvents() {
 
 function listenToState() {
   return listen('session:state', (event) => {
-    const { id, state } = event.payload
+    const { id, state, conversation } = event.payload
     /* Before the drop below, and deliberately not under it: the row in the
        agents panel hangs on this. The journal is emptied by `detach` and the
        record is not, so a window whose conversation panel has gone must still
@@ -365,6 +370,7 @@ function listenToState() {
        `conversations` alone had the row freeze at whatever it said when
        somebody last looked at it. */
     noteState(id, state)
+    noteConversation(id, conversation)
     const held = conversations.get(id)
     if (!held) return
     held.state = state
@@ -375,9 +381,10 @@ function listenToState() {
 
    A driven session is one whose protocol the worker parses itself, and only
    Claude Code has a driver: `session::service::driver_for` refuses every other
-   profile, and `Request::Start` refuses every intent but `Bare`. So the front
-   end asks before it takes this road at all — a person whose harness is Codex
-   pressing "+ New agent" must get the PTY they have always had.
+   profile, and `Request::Start` refuses every intent but `Bare` and
+   `ResumeSession`. So the front end asks before it takes this road at all — a
+   person whose harness is Codex pressing "+ New agent", or picking a recorded
+   conversation up, must get the PTY they have always had.
 
    **This is a cheap front door and cannot be the only gate, because it cannot
    see `PATH`.** It is asked of `settings.agent`, and the first half of that
@@ -404,8 +411,9 @@ function listenToState() {
    **The person's own switch is inside this answer rather than beside it.**
    `settings.conversationPanel` off makes every harness answer `false` here, so
    every road into a session takes the PTY without a second condition anywhere
-   — a `if (!settings.conversationPanel)` in `newAgent` and a third in whatever
-   resumes one would be two copies of one rule, and copies drift apart. It is
+   — a `if (!settings.conversationPanel)` in `newAgent` and a third in
+   `resumeSession` would be two copies of one rule, and copies drift apart.
+   Those two are the whole list of callers today, and each asks it once. It is
    in front of the list rather than in it: the list is what Rust can drive and
    is not the person's to edit, and `session::service::driver_for` is untouched
    by this switch. The front end simply stops asking.
@@ -432,9 +440,12 @@ export const canDrive = (agent) => settings.conversationPanel && DRIVEN.includes
    tab until somebody closes it, on the grounds that the last words of whatever
    was running are worth reading — the terminal's behaviour, and the reason
    nothing here expires on its own; the cross is the somebody that closes it,
-   and until this list was drawn there was nobody. A restart empties it, driven
-   sessions deliberately not surviving one — the same repair `restoreTabs`
-   already makes for a remembered `activeTab: "terminal"`.
+   and until this list was drawn there was nobody. A restart empties it — no
+   session's *process* survives one — which is the same repair `restoreTabs`
+   already makes for a remembered `activeTab: "terminal"`. What does survive is
+   the record in `.smetana/agents.json` the worker wrote at the spawn, and the
+   next launch offers it back as an offline row of the agents panel like any
+   other; `conversation` below is the name the two halves meet under.
 
    **A record carries the session's state and the moment it started**, and
    neither is read out of `conversations` above. That map is emptied by
@@ -489,6 +500,31 @@ function noteState(id, state) {
   if (record) record.state = state
 }
 
+/* The name that outlives the session, for a session this window has started.
+
+   **It is written rather than returned by the start**, and that is a fact about
+   the worker rather than a shape chosen here: `session_start` answers with the
+   worker's own session number, which counts from 1 on every launch, and the id
+   the conversation is *recorded* under is minted a moment later, inside the
+   spawn. It arrives twice over — on the `session_attach` snapshot, which is the
+   next thing `startConversation` does, and on every `session:state` after that
+   — and this is the one place either of them lands.
+
+   `null` is an ordinary answer and stays one: a fork records nothing, since
+   `--fork-session` has the harness invent an id this app never learns, and a
+   machine that would not give the random bytes records nothing either. Such a
+   row is keyed by `drivenRowId` instead and simply does not survive a restart,
+   which is what `agentMenu.js`'s `nothing to remember it by` says on its Pin.
+
+   Never written back to `null` over a value: the two roads carry the same id
+   and a payload that arrived without one is a build that stopped sending it,
+   not a session that has lost its name. */
+function noteConversation(id, conversation) {
+  if (conversation == null) return
+  const record = started.find((session) => session.id === id)
+  if (record) record.conversation = conversation
+}
+
 /* This window stops holding a session at all: the record goes, and the row in
    the agents panel with it.
 
@@ -506,6 +542,27 @@ export function forget(id) {
   const at = started.findIndex((session) => session.id === id)
   if (at !== -1) started.splice(at, 1)
   detach(id)
+}
+
+/* What the row for a session started on this intent is captioned by — this
+   store's half of `Intent::work()` in `src-tauri/src/agents/mod.rs`, and the
+   same reduction: which of an intent's payload is drawn, and which of it was
+   only a briefing for the agent.
+
+   Two intents reach this road and no more (`Request::Start` refuses the rest),
+   so the closed list is two lines rather than a translation of the whole enum.
+   A `title` is `null` for a transcript nobody typed a word into, which is an
+   ordinary answer: `drivenRows.js` draws the caption without one.
+
+   Here rather than in `drivenRows.js` because it is about an *intent*, which is
+   this store's side of the wire, and the row is that file's; and outside
+   `startConversation` because a rule with a test on it should not be reachable
+   only through an `invoke`. */
+export function workOf(intent) {
+  if (intent?.kind === 'resumeSession') {
+    return { kind: 'resumeSession', title: intent.title ?? null }
+  }
+  return { kind: 'bare' }
 }
 
 /* Start a driven session and hold it. The id is the answer; `null` means it did
@@ -531,7 +588,18 @@ export async function startConversation(project, intent = { kind: 'bare' }) {
        moment the start answered is within one spawn of the truth. The state is
        the word `hold` starts a conversation on, for the same reason it does: a
        session that has produced nothing yet has not failed to. */
-    started.push({ id, project, state: 'starting', startedAt: Date.now() })
+    started.push({
+      id,
+      project,
+      state: 'starting',
+      startedAt: Date.now(),
+      /* Filled in by `noteConversation` a round trip later — the worker mints
+         it inside the spawn and `session_start` answers with its own session
+         number alone. Until then the row is keyed by `drivenRowId`, which is
+         what that function's absence has always meant. */
+      conversation: null,
+      work: workOf(intent)
+    })
     await attach(id)
     return id
   } catch (err) {
