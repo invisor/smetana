@@ -42,14 +42,34 @@
    plain sentences appended back to back read as two (neither is evidence, so
    neither folds).
 
-   The failure mode this trades away: an ordinary paragraph a person happened
-   to wrap across two unindented lines, with no list syntax on the second,
-   still splits into two records. That is the one shape this rule cannot
-   tell apart from two real records typed back to back — the two are
-   genuinely the same shape in bd's own string — and it is the rarer failure,
-   and a visible one (a line that reads oddly split) rather than the silent
-   one the marker list produced (a real record quietly merged into its
-   neighbour, quoted `bd note` text nowhere in this app's own vocabulary). */
+   `INDENTED` is kept on measured evidence rather than a guess. A sweep of the
+   whole board (review pass 2) found 104 lines, across all 280 issues that
+   carry notes, that fold for no reason other than leading whitespace — 81 of
+   them indented list items and 23 a hanging-indent prose wrap under a bullet
+   (a bullet's own point continuing on the next line, indented under it, a
+   shape the board actually has). Every one of the 104 is a genuine
+   continuation; none is a standalone record wrongly swallowed. Dropping the
+   condition to close a hypothetical hole would split 104 real continuations
+   on this board today to defend against a shape that does not occur in it.
+
+   That evidence does not make `INDENTED` free of risk, and the residual
+   failure it carries is silent rather than visible — say so plainly rather
+   than understating it. A genuinely separate `bd note` record whose own text
+   happens to open with a space or a tab folds into the record above it with
+   nothing on screen to say two records became one; the board says this
+   shape does not occur, which is the whole of why the condition is kept, not
+   a claim that it cannot occur. And `INDENTED` is not like the other three
+   triggers in this respect: a line that folds only because it opens with
+   list or quote syntax still renders as its own block regardless, because
+   `markdown.js`'s `startsBlock` treats `BULLET`/`ORDERED`/`QUOTE` as
+   unconditional block openers — a folded bullet or quote is misgrouped with
+   its neighbour but still visibly its own list or quote on screen, never
+   swallowed into a run of prose. Leading whitespace alone opens nothing in
+   `markdown.js`'s grammar, so a record folded only on `INDENTED` has no such
+   rescue: it is the one trigger in this file whose failure is a real record
+   disappearing into another with no mark of it at all, which is why it is
+   the one worth the scrutiny above rather than the same footing as the
+   other three. */
 
 /* A line indented relative to the record above it: a person's own
    continuation, never a record's own opening — nothing this app or its
@@ -59,12 +79,14 @@ const INDENTED = /^[ \t]/
 /* The opening syntax of a markdown list item or a block quote — mirrors the
    shape of `markdown.js`'s own `BULLET`, `ORDERED` and `QUOTE` (not imported:
    that file's regexes are private, and this only needs to recognise the same
-   shape, not share the pattern object). Anchored at the start and requiring
-   the whitespace or end-of-line a real marker carries, so a hyphen or a
-   number sitting mid-sentence — "Tuesday - not before" — is not read as one:
-   the whole point of this list is what a line *opens* with, not what it
-   contains. */
-const LIST_OR_QUOTE_START = /^(?:[-*+>]|\d{1,9}[.)])(?:\s|$)/
+   shape, not share the pattern object). `BULLET` and `ORDERED` both require
+   `(\s+)` after the marker — a bare `-` or `1)` with nothing after it does
+   not open a list there, so it must not fold here either, and the tail below
+   is `\s` rather than `\s|$` for exactly that reason. Anchored at the start,
+   so a hyphen or a number sitting mid-sentence — "Tuesday - not before" — is
+   not read as one: the whole point of this list is what a line *opens*
+   with, not what it contains. */
+const LIST_OR_QUOTE_START = /^(?:[-*+>]|\d{1,9}[.)])\s/
 
 /* Whether `line` can only be read as part of the record above it — the one
    question this module asks. Never called on the field's own first line,

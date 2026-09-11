@@ -80,6 +80,26 @@ describe('splitNoteEntries', () => {
     ])
   })
 
+  it('keeps a hanging-indent prose continuation folded under its bullet', () => {
+    // 23 of the 104 indentation-only folds on the real board are this exact
+    // shape: a checklist line's own explanation, wrapped and indented under
+    // it rather than fitting on one line (review pass 2).
+    const notes = [
+      '- newTask: PASS — clicking the "Creating a task" row showed',
+      '    the "Not on the board yet" line, TYPE Auto, PRIORITY P1. Auto is drawn',
+      '    as Auto, not as a made-up value. Nothing on the board is highlighted.'
+    ].join('\n')
+    expect(splitNoteEntries(notes)).toEqual([notes])
+  })
+
+  it('does not fold a bare marker with nothing after it', () => {
+    // `markdown.js`'s own `BULLET`/`ORDERED` both require at least one
+    // whitespace character after the marker — a lone `-` or `1)` opens
+    // nothing there, so it must not fold here either.
+    const notes = 'first record\n-\nsecond record\n1)\nthird record'
+    expect(splitNoteEntries(notes)).toEqual(['first record', '-', 'second record', '1)', 'third record'])
+  })
+
   it('does not read list syntax sitting mid-line as an opener', () => {
     // The marker is what a line *opens* with; a hyphen or a number later in
     // the sentence is not that, and folding on it would glue two unrelated
