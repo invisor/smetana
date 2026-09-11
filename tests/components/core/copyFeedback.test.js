@@ -13,10 +13,14 @@ import { COPIED_MS } from '../../../src/components/kanban/copyId.js'
 
 /* A scope, because the composable clears its pending timer on
    `onScopeDispose`, and outside one that call has nothing to register on. It is
-   also what the last test here disposes on purpose. */
-const mount = (write) => {
+   also what the last test here disposes on purpose.
+
+   `ms` is optional and passed straight through to `useCopyFeedback`: left out,
+   the composable's own default parameter takes over, which is what keeps every
+   test above unchanged by its addition. */
+const mount = (write, ms) => {
   const scope = effectScope()
-  return { scope, feedback: scope.run(() => useCopyFeedback(write)) }
+  return { scope, feedback: scope.run(() => useCopyFeedback(write, ms)) }
 }
 
 /* A write whose answer is handed over by the test rather than by a promise
@@ -134,6 +138,28 @@ describe('how long it stands, and which press owns it', () => {
     await feedback.copy('bd-a1b2', 'bd-a1b2')
     vi.advanceTimersByTime(COPIED_MS - 1)
     expect(feedback.stateFor('bd-a1b2')).toBe('copied')
+    vi.advanceTimersByTime(1)
+    expect(feedback.stateFor('bd-a1b2')).toBe('')
+    expect(feedback.nounFor('bd-a1b2')).toBe('')
+  })
+
+  /* The optional second argument, for a caller that does not confirm at
+     `COPIED_MS` — the prose code block's copy button holds to the markup
+     contract's own 1600ms instead of the id-copying controls' 1200. A duration
+     well past `COPIED_MS` is chosen on purpose: the default still passing with
+     nothing reverted is what proves this call is not quietly falling back to
+     it, which a duration merely different from `COPIED_MS` could not show. */
+  it('holds for a duration a caller supplies instead of COPIED_MS', async () => {
+    const custom = COPIED_MS + 400
+    const { feedback } = mount(ok, custom)
+    await feedback.copy('bd-a1b2', 'bd-a1b2')
+
+    vi.advanceTimersByTime(COPIED_MS)
+    expect(feedback.stateFor('bd-a1b2')).toBe('copied')
+
+    vi.advanceTimersByTime(custom - COPIED_MS - 1)
+    expect(feedback.stateFor('bd-a1b2')).toBe('copied')
+
     vi.advanceTimersByTime(1)
     expect(feedback.stateFor('bd-a1b2')).toBe('')
     expect(feedback.nounFor('bd-a1b2')).toBe('')

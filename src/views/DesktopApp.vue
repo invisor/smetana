@@ -9,7 +9,7 @@
    The core moment this screen is built for: you come back after two hours and
    read, in three seconds, what finished, what stalled, and what is waiting for
    you. Hence the loud budget — exactly one card and one callout shout here. */
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch, watchEffect } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, watch, watchEffect } from 'vue'
 import ScopeIndicator from '../components/shell/ScopeIndicator.vue'
 import Panel from '../components/shell/Panel.vue'
 import Resizer from '../components/shell/Resizer.vue'
@@ -378,6 +378,17 @@ const props = defineProps({
     validator: (value) => CHROME_STATES.includes(value)
   }
 })
+
+/* `Markdown.vue` injects `smCopyText` for its code blocks' copy button rather
+   than importing a store itself — the same shape `overlays/Modal.vue` reaches
+   `views/DialogWindow.vue` through — and this window is one of the two that
+   draw anything with a `Markdown` under it (`TaskInspector`, and
+   `ConversationView`'s three turn kinds). Provided once, here, rather than
+   threaded down through either: `provide` reaches every depth of both trees
+   in one call, where a prop would have to cross `TaskInspector`,
+   `ConversationView`, `UserMessage`, `AgentMessage` and `Reasoning` for a
+   value none of them otherwise has a reason to know about. */
+provide('smCopyText', copyText)
 
 /* The two halves of the window's state that do change while it is open. The
    chrome itself does not — it is what the platform gave us, and it arrives as a
@@ -4966,6 +4977,28 @@ async function revealInTree(path) {
   }
 }
 
+/* The other half of the agent panel's prose links — `MarkdownInline.vue`'s
+   `open-local`, bubbled up through `Markdown.vue` and `ConversationView.vue`
+   unchanged, since neither of those knows a file tree exists. This is where
+   it lands: `data-kind="file"` opens the same permanent tab a click in the
+   tree opens, and `data-kind="dir"` reveals it exactly where a click on a
+   folder would — this function is what both already run through, so a path
+   an agent named reads the same as a path a person clicked. `openFile` alone
+   is enough for the file case: setting `project.activeTab` is what the
+   `activeFilePath` watch below reacts to, and that watch is what expands the
+   tree above whichever file just became active — calling `revealInTree` here
+   as well would be the same read twice. A directory has no tab to open, so it
+   is `revealInTree`'s alone, given the path unchanged: that function already
+   treats "reveal" as "select this path and open every folder above it",
+   which is exactly right for a folder as well as for the file it was written
+   for. `openExternal` needs none of this: `ConversationView.vue` still binds
+   that event itself, since it is the one thing this panel could already do
+   without a file tree in front of it. */
+function onConversationLocalLink({ path, kind }) {
+  if (kind === 'dir') revealInTree(path)
+  else openFile(path, { permanent: true })
+}
+
 /* `immediate`, and that is the startup case rather than tidiness: `activeTab` is
    restored from `settings.json` before this view is rendered at all — `App.vue`
    awaits `loadSettings` — so a watcher that only fired on a change would never
@@ -6805,7 +6838,11 @@ const toastStackStyle = {
                and no abstraction over the two back ends behind them. The terminal
                is going away when the last intent moves, and a seam built to
                outlive that migration would. -->
-          <ConversationView v-else-if="conversationPanelOpen" :session-id="conversationId" />
+          <ConversationView
+            v-else-if="conversationPanelOpen"
+            :session-id="conversationId"
+            @open-local="onConversationLocalLink"
+          />
           <TerminalView
             v-else-if="project.activeTab === 'terminal'"
             :session-id="terminalState.activeId"

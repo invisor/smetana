@@ -1099,7 +1099,11 @@ fixed in the app and not in the harness leaves the harness reproducing a defect 
 has — indistinguishable by eye from a real one. `tests/components/core/copyFeedback.test.js` is what
 now sees the rule at all; it was entirely inside `.vue` files before, which no runner here can read.
 How long a confirmation stands is still `COPIED_MS` in `kanban/copyId.js`, borrowed by the composable
-rather than declared again, so the pure rule modules stay free of Vue.
+rather than declared again, so the pure rule modules stay free of Vue. `useCopyFeedback` takes it as an
+optional second argument now rather than reading the constant unconditionally, because one caller does
+not hold to it: the prose code block's copy button (`components/markdown/Markdown.vue`, the conversation
+panel's markup contract) confirms for 1600ms, the handoff's own figure, and passes it there instead of
+being folded into `COPIED_MS` or given a second constant to drift from the first.
 
 **Open log, Reveal log and Open working directory are three commands of ours, not the opener
 plugin's, and they are three rather than one on purpose.** The plugin's `open_path` is refused by its

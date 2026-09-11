@@ -2,7 +2,7 @@
 /* Dev harness: renders every component in the library once, so a broken port
    shows up here rather than in the product. Not part of the shipped app —
    reachable at ?view=gallery. */
-import { computed, ref, watchEffect } from 'vue'
+import { computed, provide, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { branchMenuItems } from '../components/git/branchMenu.js'
 import { CHANGE_MENU_W, changeMenuItems } from '../components/git/changeMenu.js'
@@ -144,6 +144,16 @@ import { agents } from '../stores/agents.js'
 import { settings } from '../stores/settings.js'
 import { fileIconUrl } from '../catppuccinIcon.js'
 import { documentTheme } from '../documentTheme.js'
+
+/* `Markdown.vue`'s code blocks inject `smCopyText` for their copy button
+   rather than importing a store themselves, the same shape `overlays/Modal.vue`
+   reaches `views/DialogWindow.vue` through. This page is this project's only
+   verification of anything under `src/components/`, so without this the
+   button below would copy through the browser fallback alone and the app's
+   own `copyText` — the one path this button takes in the packaged build —
+   would go unchecked here exactly as the hazard `useCopyFeedback`'s own
+   header warns about. */
+provide('smCopyText', copyText)
 
 /* Two attachments for the strip and for the dialog above it. Eight-pixel PNGs
    written out as data URLs, which is exactly the shape `attachments.js` builds
@@ -1756,6 +1766,21 @@ const MARKDOWN_SAMPLE = [
   'npm test -- tests/components/kanban/boardView.test.js',
   '```',
   '',
+  'A fence with no language declared, so the figure carries no `figcaption` and',
+  'no `data-lang`:',
+  '',
+  '```',
+  'no language on this fence',
+  '```',
+  '',
+  'And one whose first line is long enough to prove the figure scrolls the code',
+  'sideways instead of growing to fit it, with the copy button staying put in',
+  'the header band rather than sliding off with the line:',
+  '',
+  '```sh',
+  'xcrun notarytool submit build/App.dmg --keychain-profile "notarytool-password" --team-id ABCDE12345WXYZ --wait --timeout 30m --output json',
+  '```',
+  '',
   'See [the design system](https://claude.ai/design) and',
   '<http://localhost:5173/?view=gallery>. A [local note](file:///tmp/run.log)',
   'stays text, and so do an | unsupported | table |, a [reference][ref] and an',
@@ -1765,6 +1790,40 @@ const MARKDOWN_SAMPLE = [
   '',
   'Filed under smetana-29j.'
 ].join('\n')
+
+/* The two breeds of link, section 5 of the markup contract: an external one,
+   leaving for the person's own browser, and a local one, opened in this app.
+
+   The first two local links write the target as its own label — `[path](path)`,
+   the markup contract's own example, a path written twice over — which is
+   what `markdown.js`'s `link()` reads as "nothing here but the path" and
+   splits into a head and a tail rather than showing the label whole. The
+   file one is about 90 characters, so the head-truncation is checkable at
+   the 420px column the specimen below is drawn at, and it carries a line
+   number, which is what the tail is for: the file name and the line survive
+   whatever the head loses to the ellipsis. The directory link beside it has
+   no line, and no trailing slash of its own — `sm-prose.css` draws that
+   glyph, and a slash already in the markup would draw two.
+
+   The third is the other half of the same rule: a label that says something
+   the target does not (`markdown.js`'s own fixed BLOCKING finding) is kept
+   whole rather than replaced by the path — no head, the label as the tail,
+   unsplit and unparsed. `data-path` still carries the real target underneath
+   it, which is what a click and a copy-link both answer to. */
+const MARKDOWN_LINKS_SAMPLE = [
+  'See [the design system](https://claude.ai/design) for the source of truth.',
+  '',
+  'The replay is stitched in',
+  '[src-tauri/src/session/claude_driver/conversation_history_replay_and_stitching_logic.rs:184](src-tauri/src/session/claude_driver/conversation_history_replay_and_stitching_logic.rs:184),',
+  'read from [src/components/markdown/](src/components/markdown/) — see also',
+  '[the manifest](src-tauri/tauri.conf.json).'
+].join('\n')
+
+/* The active project's absolute path this page pretends to have, so the
+   local specimen above can build a working `data-path` and `href` — nothing
+   here is ever opened for real, since `?view=gallery` has no Tauri behind it,
+   but the shape has to be right to be checkable by eye. */
+const GALLERY_ROOT = '/Users/flexo/Desktop/Projects/smetana'
 
 /* This page's own copy of what `DesktopApp.vue` keeps for the id somebody
    clicked, in the small: a card and an inspector raise `copy-id` and take back
@@ -3454,6 +3513,45 @@ const menuTargetStyle = {
                 Press <kbd>⌘</kbd>+<kbd>K</kbd> to open the palette.
                 <small>Works from anywhere in the app.</small>
               </p>
+            </article>
+          </div>
+        </div>
+      </div>
+      <!-- Section 5 of the markup contract: the two breeds of link, side by
+           side at the panel's own 420px column so the local target's
+           head-truncation is checkable — narrower than the two boxes above,
+           which are about the rest of prose and were never meant to test
+           this. The left specimen carries a `root`, the way
+           `ConversationView.vue` does, and draws the local links as the
+           interactive anchors the contract shows: mono, a hairline
+           underline, the head ellipsised and the tail — the file name and
+           its line, or a distinct label kept whole — never lost. The right
+           one carries none, `TaskInspector.vue`'s own case (no session, no
+           working tree — its own out-of-scope note says the local breed does
+           not arise there), and the same source draws the same three links
+           as plain text: no anchor, no underline, nothing that looks
+           pressable over a click nothing here could answer. `@open-local`
+           has nowhere real to go in this harness — there
+           is no file tree behind `?view=gallery` — so it is a no-op, the same
+           standing every other event this page cannot wire for real already
+           takes. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start' }">
+        <div :style="{ width: '420px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown
+                :text="MARKDOWN_LINKS_SAMPLE"
+                :root="GALLERY_ROOT"
+                @open="openExternal"
+                @open-local="() => {}"
+              />
+            </article>
+          </div>
+        </div>
+        <div :style="{ width: '420px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown :text="MARKDOWN_LINKS_SAMPLE" @open="openExternal" />
             </article>
           </div>
         </div>

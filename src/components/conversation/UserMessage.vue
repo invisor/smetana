@@ -12,8 +12,10 @@
 
    The words are markdown too. A person pastes a path, a fenced snippet, a list
    of three things, and the agent receives it as markdown, so drawing it as
-   anything else would show one thing and send another. `open` is forwarded for
-   the reason `AgentMessage.vue` gives.
+   anything else would show one thing and send another. `open` and `open-local`
+   are forwarded for the reason `AgentMessage.vue` gives — a person's own
+   message can carry a local path exactly as the agent's can, and `root` is
+   what makes one operable.
 
    An attachment is a path and nothing more — that is what `session_send` sends
    and what the journal keeps (`EventKind::UserMessage`). No thumbnail, then:
@@ -38,15 +40,17 @@ import { basename } from '../../paths.js'
 defineProps({
   text: { type: String, default: '' },
   /* Paths, in the order they were attached. */
-  attachments: { type: Array, default: () => [] }
+  attachments: { type: Array, default: () => [] },
+  /* Passed straight through to `Markdown`, unread here — see its own header. */
+  root: { type: String, default: '' }
 })
 
-const emit = defineEmits(['open'])
+const emit = defineEmits(['open', 'open-local'])
 </script>
 
 <template>
   <article data-turn="person">
-    <Markdown :text="text" @open="emit('open', $event)" />
+    <Markdown :text="text" :root="root" @open="emit('open', $event)" @open-local="emit('open-local', $event)" />
     <ul v-if="attachments.length" data-attachments>
       <li v-for="path in attachments" :key="path">{{ basename(path) }}</li>
     </ul>
