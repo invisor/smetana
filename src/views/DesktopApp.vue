@@ -2917,6 +2917,24 @@ const refusalInPanel = computed(
     conversationState.lastError?.session === conversationId.value
 )
 
+/* The title over that corner's sentence, which is a literal here rather than a
+   field on the store: the title is the part that does not vary, so it belongs
+   at the call site and not in a `report` that would have to invent one every
+   time. This is that argument with one exception in front of it.
+
+   The exception is `badCwd`, where the store's sentence is `terminals.js`'s own
+   — "Smetana could not start a shell there" — and the default title says
+   something that did not happen: nothing was reached because nothing was tried,
+   and the road it was not tried on has no shell. So the terminal's title comes
+   across with the terminal's sentence, which is also what makes one refusal
+   read the same whichever road a person was on. A map rather than a condition,
+   so a second such kind is a line rather than a nested ternary. */
+const REFUSAL_TITLE = { badCwd: 'That folder is gone' }
+const DEFAULT_REFUSAL_TITLE = 'Could not reach the agent session'
+const refusalTitle = computed(
+  () => REFUSAL_TITLE[conversationState.lastError?.kind] ?? DEFAULT_REFUSAL_TITLE
+)
+
 /* The tree and the tabs open together with the project. By this point settings
    have already read the active project — App.vue awaits loadSettings before it
    renders this view at all.
@@ -7140,13 +7158,14 @@ const toastStackStyle = {
            draws the ones about the session it is holding, and a start that made
            no session has none. This is the reader for everything it refuses —
            see `refusalInPanel`, which is also what keeps a sentence from being
-           said twice. One title for every refusal on this road, the way the file
-           tree's is one title: they are all one thing failing to be reached, and
-           the store's sentence is what says which. -->
+           said twice. One title for nearly every refusal on this road, the way
+           the file tree's is one title: they are all one thing failing to be
+           reached, and the store's sentence is what says which. `refusalTitle`
+           carries the one exception and why it is one. -->
       <Toast
         v-if="conversationState.lastError && !refusalInPanel"
         tone="error"
-        title="Could not reach the agent session"
+        :title="refusalTitle"
         :description="conversationState.lastError.text"
         @close="conversationState.lastError = null"
       />

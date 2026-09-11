@@ -274,7 +274,10 @@ pub fn one_line(text: &str) -> String {
 /// is all prompt and no person, so [`super::kickoff`] takes the words out first
 /// and [`one_line`] is applied to what is left — the same cut on the same
 /// field, one step later. The cost is bounded by the record this is called
-/// over: `read::MAX_LINE` is the most of a transcript line that is ever held.
+/// over, under whichever ceiling its caller reads a line at: 64 KB
+/// ([`super::read::MAX_LINE`]) for the Sessions tab, which needs only the head
+/// of a record, and [`crate::session::driver::MAX_LINE`] for the conversation
+/// panel's history, which replays the whole of one.
 pub fn human_text(record: &Record) -> Option<String> {
     if !record.is_user() || record.is_sidechain == Some(true) || record.is_meta == Some(true) {
         return None;

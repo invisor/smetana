@@ -27,15 +27,25 @@
    `SessionId` is a `u64` counter in the session worker that starts at 1, and
    the terminal worker's own counter starts at 1 as well: the two spaces collide
    on their first session apiece. What that collides in is not cosmetic —
-   `agentKey` is `row.conversation ?? row.id`, and a driven session deliberately
-   has no conversation id (`session_id: None` in `spawn_session`, the stage that
-   adds restoring being the one that mints it), so the key falls through to the
-   number. That key is what carries the drawn order, the pins and the `v-for`,
-   and two rows under one key is two agents fighting over one place in the list.
+   `agentKey` is `row.conversation ?? row.id`, so a row with no conversation id
+   falls through to the number, and that key is what carries the drawn order,
+   the pins and the `v-for`. Two rows under one key is two agents fighting over
+   one place in the list.
 
-   A prefix parts the two spaces and leaves `conversation` honestly empty rather
-   than inventing a value for it. A start ticket's `start-N` is the same trick
-   one list over and cannot be confused with this one either. */
+   **Most driven rows have a conversation id and never reach the fallback**: the
+   worker mints one at the spawn and records the session under it, exactly as
+   the terminal worker does (smetana-477m). Two cases still land here — a
+   session's first frame, before the id has come back, and a fork for good,
+   `--fork-session` having Claude Code invent an id this app never learns. This
+   header used to say a driven session was deliberately minted none at all, on
+   the strength of `session_id: None` in `spawn_session`; that line is still
+   there for a resume and now means something else entirely, which is that the
+   id is already on the command line behind `--resume` and a second flag would
+   name two conversations.
+
+   A prefix parts the two spaces and leaves `conversation` honestly empty for
+   those two rather than inventing a value for it. A start ticket's `start-N` is
+   the same trick one list over and cannot be confused with this one either. */
 export const DRIVEN_PREFIX = 'conversation:'
 
 export const drivenRowId = (session) => `${DRIVEN_PREFIX}${session}`

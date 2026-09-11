@@ -56,11 +56,14 @@ describe('a driven conversation among the agents', () => {
   describe('what such a row offers', () => {
     const row = drivenAgentRow({ id: 3, state: 'needs-you', elapsed: '4m' })
 
-    /* Both refusals the menu draws over this row come from these two fields,
-       and both are true of a driven session: there is no conversation id for a
-       pin to survive a restart under, and no PTY for a clearing line to be
-       written into. */
-    it('has no conversation id, so pinning refuses itself', () => {
+    /* **The exception rather than the rule**, and the test below is the rule: a
+       driven session is recorded under a conversation id like any other, and
+       two cases still carry none — a session's first frame, before the id has
+       come back from the worker, and a fork for good, whose new transcript
+       Claude Code names itself. `row` is built with none, so this is what
+       either of those offers: a pin refused with nothing to remember it by,
+       which is true of them. */
+    it('refuses a pin while it has no conversation id to be pinned under', () => {
       expect(row.conversation).toBe(null)
     })
 

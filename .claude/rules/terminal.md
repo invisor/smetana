@@ -610,10 +610,15 @@ has no documented way of being asked to stop one turn, so `Request::Stop` kills 
 *is* the session. What follows is `Chunk::Eof`, the same arrival a self-exit makes, and the
 conversation is over either way — so it is offered back no more than any other finished agent is,
 which is exactly the rule the terminal worker keeps at `Chunk::Gone` for a PTY child killed by
-anything at all. The thing to know before changing it: **the worker cannot tell the three apart and is
-not meant to.** The cross is two acts on the front end, `stopConversation` then `forget`, and no
-command of its own reaches Rust — so a drop moved off `Eof` onto "the two paths the spec names" would
-have no second path to move onto.
+anything at all. The thing to know before changing it: **the worker cannot tell the three apart, and
+there is no command by which it could.** `Request` is Start, Attach, Since, Send, Answer, Stop and
+ShutDown, and `session/commands.rs` exposes six commands with no removal among them — so the cross is
+`session_stop` exactly as the composer's Stop button is, and a self-exit is no request at all. A drop
+moved onto `Stop` would therefore separate none of the three and would miss the self-exit outright.
+`Eof` is the one arrival all of them make, which is why the drop is there. (The cross does reach Rust
+a second time, and about this very record: `removeAgentRow` calls `forgetRestored`, which is
+`terminal_forget`. That is the front end taking away the *offer* it was drawing, not the worker
+learning which gesture ended the session.)
 
 `RunEvent::Exit` calls `terminal::service::shutdown`, and the worker ends every session the way closing a terminal window
 does: `SIGHUP` to the session's process group — which reaches whatever the

@@ -1,12 +1,15 @@
 //! The disk half: turning a folder of transcripts into a list of rows.
 //!
 //! **A transcript is streamed, never loaded.** The ceiling on what one file
-//! costs in memory is [`MAX_LINE`] for the line being looked at, [`MAX_LINE`]
-//! again for the first human record, which is kept whole so that
+//! costs *this module* is [`MAX_LINE`] for the line being looked at,
+//! [`MAX_LINE`] again for the first human record, which is kept whole so that
 //! [`super::kickoff`] has something to read, and [`TAIL_WINDOW`] for the window
 //! read back from the end — 384 KiB, for a file of any size, and the largest
 //! one on the machine this was written against is 16 MB. Files are summarised
-//! one at a time, so that is the ceiling for the whole command as well.
+//! one at a time, so that is the ceiling for the whole command as well. It is
+//! not a ceiling on transcript reading in the tree: [`next_line`] takes its
+//! limit from whoever calls it, and `session::history` reads the same files at
+//! sixteen times this one.
 //!
 //! **One pass forward, one window back.** Everything a row needs is in one of
 //! three places: at the head (`cwd`, `gitBranch`, the session's title), at the
@@ -44,10 +47,16 @@ use super::model::{
     SessionSummary,
 };
 
-/// The most of one line that is ever held. A tool result carrying a file is a
-/// single line of megabytes, and none of what this reads is ever that far into
-/// one: `type`, `cwd`, `isSidechain` and the start of a message all sit in the
-/// first few hundred bytes of the record that carries them.
+/// The most of one line **this module** ever holds, and the limit it hands
+/// [`next_line`]. A tool result carrying a file is a single line of megabytes,
+/// and none of what this reads is ever that far into one: `type`, `cwd`,
+/// `isSidechain` and the start of a message all sit in the first few hundred
+/// bytes of the record that carries them.
+///
+/// It is not the tree's ceiling on a transcript line and must not be borrowed
+/// as one: what justifies 64 KB is the head-of-a-record reading above, and
+/// `session::history` replays whole records and holds itself to the live
+/// codec's `driver::MAX_LINE` instead.
 pub(crate) const MAX_LINE: usize = 64 * 1024;
 
 /// How far back from the end the last spoken line is looked for. Measured
@@ -117,6 +126,13 @@ pub(crate) struct Line {
 /// live codec's ceiling instead. What is shared is the reading, not the budget:
 /// a second bounded reader written beside this one would be a second chance to
 /// get the interrupted-read and the over-long-line cases exactly right.
+///
+/// **A caller's limit is the whole of the bound, and there is no floor and no
+/// ceiling on it here.** This function exists in place of `read_until` because
+/// that one grows its buffer to the length of the line; a caller passing
+/// something very large brings exactly that growth back, one line at a time, on
+/// a file this app did not write. Pick a limit against what the caller actually
+/// reads out of a record, the way both of today's two do.
 pub(crate) fn next_line(
     reader: &mut impl BufRead,
     line: &mut Vec<u8>,
