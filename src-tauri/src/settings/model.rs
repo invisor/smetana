@@ -1126,6 +1126,26 @@ pub struct Settings {
     /// beside `agent` and for the reason written there: which model files a
     /// person's tasks is a habit of theirs, not a property of a project.
     pub agent_roles: AgentRoles,
+    /// Whether a harness this app can drive opens in the conversation panel.
+    ///
+    /// At the root beside `agent` and for that field's own reason: which
+    /// interface somebody wants to meet their agent in is a habit of theirs,
+    /// not a property of a repository.
+    ///
+    /// On by default, which is the behaviour of every build before the field
+    /// existed. Off puts every session back in a terminal tab with a PTY in it
+    /// — the one road there was before `session/` had a driver at all — and it
+    /// changes what *starts*, never what is already running.
+    ///
+    /// `validate` deliberately says nothing about it: a boolean has no set of
+    /// legal values to be forced back into, and a file written before this
+    /// field existed reads as `true` because `parse` defaults it there.
+    ///
+    /// The worker knows nothing about this. `Request::Start` and
+    /// `session::service::driver_for` are untouched — the field decides which
+    /// road the front end takes (`canDrive` in `src/stores/conversation.js`),
+    /// not whether a driver exists.
+    pub conversation_panel: bool,
     pub last_project: Option<String>,
     /// The contents and order of the on-screen list — the order things were
     /// added, not how recent they are: rows that jump on every switch are
@@ -1158,6 +1178,7 @@ impl Default for Settings {
             agent_prompt: String::new(),
             model: String::new(),
             agent_roles: AgentRoles::default(),
+            conversation_panel: true,
             last_project: None,
             open_projects: Vec::new(),
             projects: BTreeMap::new(),
@@ -1208,6 +1229,9 @@ pub struct ResolvedSettings {
     /// The (harness, model) pair per kind of agent call. See
     /// `Settings::agent_roles`.
     pub agent_roles: AgentRoles,
+    /// Whether a driven harness opens in the conversation panel. See
+    /// `Settings::conversation_panel`.
+    pub conversation_panel: bool,
     pub project: ProjectState,
     pub open_projects: Vec<String>,
     pub active_project: Option<String>,
@@ -1239,6 +1263,7 @@ impl Default for ResolvedSettings {
             agent_prompt: String::new(),
             model: String::new(),
             agent_roles: AgentRoles::default(),
+            conversation_panel: true,
             project: ProjectState::default(),
             open_projects: Vec::new(),
             active_project: None,
@@ -1298,6 +1323,13 @@ pub fn parse(text: &str) -> Outcome {
         // must read without one, and a hand-edited one that is not an object
         // loses the roles rather than the file.
         agent_roles: section(&object, "agentRoles"),
+        // `true` for anything that is not a boolean, a missing key included:
+        // the panel is what this app does, and a file written before the field
+        // existed must open exactly as it did yesterday.
+        conversation_panel: object
+            .get("conversationPanel")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
         last_project: object.get("lastProject").and_then(Value::as_str).map(str::to_owned),
         open_projects: section(&object, "openProjects"),
         projects: projects(&object),
@@ -1349,6 +1381,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         agent_prompt: file.agent_prompt.clone(),
         model: file.model.clone(),
         agent_roles: file.agent_roles.clone(),
+        conversation_panel: file.conversation_panel,
         project: active
             .as_deref()
             .and_then(|path| file.projects.get(path))
@@ -1381,6 +1414,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.agent_prompt = resolved.agent_prompt;
     file.model = resolved.model;
     file.agent_roles = resolved.agent_roles;
+    file.conversation_panel = resolved.conversation_panel;
     file.open_projects = resolved.open_projects;
     file.last_project = resolved.active_project.clone();
 
@@ -3754,6 +3788,62 @@ mod tests {
         ));
         assert_eq!(file.agent_prompt, "", "one byte past the ceiling loses the whole field");
         assert_eq!(file.agent, "codex", "and nothing else in the file");
+    }
+
+    /// The walk `a_standing_instruction_does_not_quietly_vanish` makes, one
+    /// field over: a field added to the two structs but not wired into
+    /// `parse`, `resolve` and `merge` would read as its default for ever no
+    /// matter what the file says — and for a switch that default is "on",
+    /// which is the position that looks right and would hide the fault.
+    #[test]
+    fn the_conversation_panel_switch_does_not_quietly_vanish() {
+        let file = settings_of(r#"{"version":1,"conversationPanel":false}"#);
+        assert!(!file.conversation_panel, "parse must read it off the disk");
+
+        let resolved = resolve(&file, None);
+        assert!(!resolved.conversation_panel, "resolve must carry it to the front end");
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert!(!written.conversation_panel, "merge must carry it back into the file");
+    }
+
+    /// Every file on a person's disk right now was written before this field
+    /// existed, and every one of them has to open the way it opened yesterday:
+    /// with the conversation panel. The same argument covers a hand-edited
+    /// value of the wrong type — a `validate` list is not available to a
+    /// boolean, so `parse` is the whole of the guard.
+    #[test]
+    fn a_file_that_says_nothing_about_the_conversation_panel_opens_with_it_on() {
+        assert!(
+            settings_of(r#"{"version":1}"#).conversation_panel,
+            "a file written before the field existed opens as it always did"
+        );
+        assert!(
+            settings_of(r#"{"version":1,"conversationPanel":"no"}"#).conversation_panel,
+            "a hand-edited value that is not a boolean is not an answer to this question"
+        );
+        assert!(
+            Settings::default().conversation_panel,
+            "and the shipped default is the same position"
+        );
+        assert!(
+            ResolvedSettings::default().conversation_panel,
+            "including the one the front end is handed before a file is read"
+        );
+    }
+
+    /// `validate` has nothing to say about a boolean, and that is the claim
+    /// being pinned rather than an absence nobody noticed: a switch somebody
+    /// turned off must still be off after the file has been through the same
+    /// pass that rewrites an unknown agent id back to `claude`.
+    #[test]
+    fn validating_a_file_leaves_the_conversation_panel_switch_where_it_was_put() {
+        let mut file = settings_of(r#"{"version":1,"conversationPanel":false,"agent":"nobody"}"#);
+        file.validate();
+
+        assert!(!file.conversation_panel, "off stays off");
+        assert_eq!(file.agent, "claude", "while the field beside it is corrected as usual");
     }
 
     #[test]

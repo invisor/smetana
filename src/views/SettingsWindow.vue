@@ -101,6 +101,13 @@ const view = reactive({
     runLead: { agent: '', model: '' },
     reviewBranch: { agent: '', model: '' }
   },
+  /* Whether a harness the app can drive opens in the conversation panel.
+     Shipped on, the same as `settings/model.rs`, `stores/settings.js` and the
+     component's own prop default — the four copies have to agree, or this
+     window draws the switch in the position opposite to what the app is doing
+     for the moment before the first answer arrives, and in a browser under
+     `?view=settings` it draws it that way for good, since no answer comes. */
+  conversationPanel: true,
   /* BCP-47 ids, every one of them mirroring Rust's `en` — the same
      shipped-defaults reasoning the four above carry. */
   agentLanguage: 'en',
@@ -653,6 +660,7 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :commit-language="view.commitLanguage"
           :report-language="view.reportLanguage"
           :agent-prompt="view.agentPrompt"
+          :conversation-panel="view.conversationPanel"
           :subscription-pause-at="view.subscriptionPauseAt"
           :subscription-reduced-at="view.subscriptionReducedAt"
           :show-report="view.notificationShowReport"
@@ -665,6 +673,7 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @update:commit-language="change({ commitLanguage: $event })"
           @update:report-language="change({ reportLanguage: $event })"
           @update:agent-prompt="changeAgentPrompt($event)"
+          @update:conversation-panel="change({ conversationPanel: $event })"
           @update:subscription-pause-at="change({ subscriptionPauseAt: $event })"
           @update:subscription-reduced-at="change({ subscriptionReducedAt: $event })"
           @refresh="readUsage()"

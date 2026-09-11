@@ -301,6 +301,33 @@ describe('loading', () => {
     const sent = second.ipc.calls('settings_save').at(-1).settings
     expect(sent.agentPrompt).toBe('Always use pnpm.')
   })
+
+  /* Every file on a person's disk right now was written before this switch
+     existed, and each of them has to open the way it opened yesterday — with
+     the conversation panel. The Rust half of that is
+     `a_file_that_says_nothing_about_the_conversation_panel_opens_with_it_on`;
+     this is the front end's own fall-back, which answers when the read fails
+     as well as when the field is missing. */
+  it('opens with the conversation panel on when the file says nothing about it', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('settings_load', {})
+    ipc.on('settings_save', null)
+    await stores.settings.loadSettings()
+    expect(stores.settings.settings.conversationPanel).toBe(true)
+
+    const second = await loadStores()
+    second.ipc.on('settings_load', { conversationPanel: false })
+    second.ipc.on('settings_save', null)
+    await second.stores.settings.loadSettings()
+    expect(second.stores.settings.settings.conversationPanel).toBe(false)
+
+    /* And back out on the next write, so a restart opens agents the way this
+       person left them. */
+    second.stores.settings.settings.appearance.theme = 'light'
+    await second.stores.settings.flushPending()
+    const written = second.ipc.calls('settings_save').at(-1).settings
+    expect(written.conversationPanel).toBe(false)
+  })
 })
 
 describe('a project\'s layout', () => {
@@ -645,6 +672,24 @@ describe('the settings window', () => {
     expect(settings.settings.agentPrompt).toBe('')
   })
 
+  it('takes the conversation panel switch, off included', async () => {
+    await emit(settings.SETTINGS_APPLY, { conversationPanel: false })
+    await nextTick()
+    expect(settings.settings.conversationPanel).toBe(false)
+
+    await emit(settings.SETTINGS_APPLY, { conversationPanel: true })
+    await nextTick()
+    expect(settings.settings.conversationPanel).toBe(true)
+
+    /* A switch, so the whole check is the type and `false` is never coerced
+       out of a malformed event: skipped rather than reset, the same as every
+       other field here. */
+    await emit(settings.SETTINGS_APPLY, { conversationPanel: false })
+    await emit(settings.SETTINGS_APPLY, { conversationPanel: 'off' })
+    await nextTick()
+    expect(settings.settings.conversationPanel).toBe(false)
+  })
+
   it('takes the board settings and cleans the two column lists on the way in', async () => {
     await emit(settings.SETTINGS_APPLY, {
       kanbanColumns: 'non-empty',
@@ -961,6 +1006,7 @@ describe('the settings window', () => {
       commitLanguage: 'en',
       reportLanguage: 'en',
       agentPrompt: '',
+      conversationPanel: true,
       model: '',
       agentRoles: {
         tasks: { agent: '', model: '' },
@@ -1060,6 +1106,7 @@ describe('the settings window', () => {
       commitLanguage: 'en',
       reportLanguage: 'en',
       agentPrompt: '',
+      conversationPanel: true,
       model: '',
       agentRoles: {
         tasks: { agent: '', model: '' },

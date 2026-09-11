@@ -17,6 +17,12 @@
 import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+/* The one thing this store reads out of another, and it is read inside
+   `canDrive` alone: whether the person wants the conversation panel at all.
+   Nothing happens at import time — `settings.js` reaches Tauri only from its
+   own functions — and the cycle this closes (settings → tabs → conversation)
+   is the one `settings.js` already records as harmless for that reason. */
+import { settings } from './settings.js'
 
 export const conversationState = reactive({
   /* Whether the listeners are up. Nothing branches on it today; it is here for
@@ -382,10 +388,23 @@ function listenToState() {
    flag for this: `agents::Capabilities` carries `resume`, `fork`, `clear`,
    `usage`, `batch` and `oneshot`, and none of them means "has a driver". The
    day a second harness grows one, this list and `driver_for` are the two places
-   that have to agree, which is why this one names the other. */
+   that have to agree, which is why this one names the other.
+
+   **The person's own switch is inside this answer rather than beside it.**
+   `settings.conversationPanel` off makes every harness answer `false` here, so
+   every road into a session takes the PTY without a second condition anywhere
+   — a `if (!settings.conversationPanel)` in `newAgent` and a third in whatever
+   resumes one would be two copies of one rule, and copies drift apart. It is
+   in front of the list rather than in it: the list is what Rust can drive and
+   is not the person's to edit, and `session::service::driver_for` is untouched
+   by this switch. The front end simply stops asking.
+
+   Read at the moment it is asked and never cached, which is the whole of
+   "changes what starts, not what runs": a panel already on screen goes on being
+   a panel, and the next session opens in a terminal. */
 const DRIVEN = ['claude']
 
-export const canDrive = (agent) => DRIVEN.includes(agent)
+export const canDrive = (agent) => settings.conversationPanel && DRIVEN.includes(agent)
 
 /* Which driven sessions this window has started, and in which project.
 
