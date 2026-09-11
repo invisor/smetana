@@ -95,5 +95,40 @@ function isTaskList(block) {
         </dd>
       </template>
     </dl>
+
+    <!-- The wrapper owns the border, the radius and the horizontal scroll
+         (`markup-contract.md`, section 3), so the table itself never has to
+         clip anything and the panel never has to grow. `data-wide` is set off
+         the column count alone — more than four — which is the one thing this
+         file knows ahead of layout; `sm-prose.css` is what turns that into
+         `width:max-content` against `--prose-table-wide-min`. `block.align`
+         is `null` for a column with no opinion, and `?? undefined` is what
+         keeps that a missing attribute rather than `data-align="null"`. -->
+    <div data-table-scroll v-else-if="block.type === 'table'">
+      <table :data-wide="block.head.length > 4 ? '' : undefined">
+        <thead>
+          <tr>
+            <th
+              v-for="(cell, column) in block.head"
+              :key="column"
+              :data-align="block.align[column] ?? undefined"
+            >
+              <MarkdownInline :nodes="cell" @open="emit('open', $event)" />
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(row, r) in block.rows" :key="r">
+            <td
+              v-for="(cell, column) in row"
+              :key="column"
+              :data-align="block.align[column] ?? undefined"
+            >
+              <MarkdownInline :nodes="cell" @open="emit('open', $event)" />
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </template>
 </template>

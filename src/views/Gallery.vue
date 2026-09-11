@@ -1671,9 +1671,20 @@ const CONFLICT = {
 /* Every construct the parser supports, in one issue description: a heading at
    each of the two sizes, a paragraph carrying strong, emphasis, code and both
    link forms, a task list with a nested list under it, a numbered list, a
-   quote, a fenced block and a rule. The last paragraph is the invariant on
-   screen — a table, a reference link, an HTML tag and a link this app may not
-   open are none of them supported, and every character of them is still drawn.
+   quote, a fenced block, a rule, and — since smetana-zi8k — two tables: a
+   narrow one matching the contract's own example, plus a centred column to
+   exercise `data-align="center"` and a column with no alignment at all in
+   the same table — `null` is the case `data-align` has to skip rather than
+   invent, and a table that never carries one would leave that branch
+   untested. Beside it, a five-column one wide enough to carry `data-wide`,
+   its `cdhash` column holding a 40-character hash inside `code` so the
+   wrapper's scroll is the thing that gives, never the panel. The last
+   paragraph is the invariant on screen — a reference link, an HTML tag and a
+   link this app may not open are none of them supported, and every
+   character of them is still drawn; the pipes inside that paragraph read as
+   plain text rather than a third table, because a real GFM table needs a
+   blank line ahead of it and a delimiter row, and that sentence has
+   neither.
 
    One constant for two places: the card below looks at the component on its
    own, and `FULL_ISSUE` reads the same text through the inspector, where the
@@ -1731,6 +1742,15 @@ const MARKDOWN_SAMPLE = [
   '`--status-quiet`',
   ': the opacity a finished badge dims to',
   ': shown twice, since a term may carry more than one definition',
+  '',
+  '| Step | Where | ms |',
+  '|---|:---:|---:|',
+  '| identity | local | 12 |',
+  '| notarize | remote | 640 |',
+  '',
+  '| Path | Stage | Result | ms | cdhash |',
+  '|---|---|---|---:|---|',
+  '| `src-tauri/target/release/bundle/macos/smetana.app` | codesign | ok | 812 | `da39a3ee5e6b4b0d3255bfef95601890afd80709` |',
   '',
   '```sh',
   'npm test -- tests/components/kanban/boardView.test.js',
