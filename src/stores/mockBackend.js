@@ -473,6 +473,16 @@ const MOCK_UNTRACKED = 'notes/todo.txt'
    `session::model::state_of` folds these events down to. */
 const CONVERSATION_AT = '2026-09-10T12:00:00Z'
 
+/* The second turn's own clock, relative to now rather than to `CONVERSATION_AT`
+   — the same `Date.now()`-offset shape `mockSessions`' own `at` uses below, and
+   for the same reason. This turn is the one the fixture leaves open (its own
+   `result` never arrives), which is what draws `TurnResult.vue`'s `waiting`
+   moment: a fixed date from the first turn would tick a clock reading days,
+   once `npm run dev` is opened on any day but the one this was written on, and
+   `journal.js`'s own `elapsedSince` would hand `Reasoning`'s `<time>` a number
+   with the same problem. */
+const recentAt = (msAgo) => new Date(Date.now() - msAgo).toISOString()
+
 const journalEvent = (seq, kind, fields) => ({ seq, at: CONVERSATION_AT, kind, ...fields })
 
 const MOCK_CONVERSATION = [
@@ -500,26 +510,34 @@ const MOCK_CONVERSATION = [
   journalEvent(4, 'tool-use', { id: 't1', name: 'Read', detail: 'src-tauri/src/vcs/worktree.rs' }),
   journalEvent(5, 'tool-result', { id: 't1', ok: true, summary: '180 lines' }),
   journalEvent(6, 'result', { tokens_in: 12480, tokens_out: 416, cost_usd: 0.0312, ms: 4200 }),
-  journalEvent(7, 'turn-start', { by: 'person' }),
+  journalEvent(7, 'turn-start', { by: 'person', at: recentAt(18000) }),
   journalEvent(8, 'user-message', {
     text: 'Do the first one, and run the tests.',
-    attachments: ['/Users/you/Desktop/20260910-141202-collision.png']
+    attachments: ['/Users/you/Desktop/20260910-141202-collision.png'],
+    at: recentAt(17800)
   }),
   journalEvent(9, 'reasoning', {
     text: [
       'The branch name reaches three places: the folder, the tab label and the',
       'record in `.smetana/agents.json`. Only the first one has a filesystem',
       'behind it, so only the first one has to be rewritten.'
-    ].join('\n')
+    ].join('\n'),
+    at: recentAt(12000)
   }),
-  journalEvent(10, 'tool-use', { id: 't2', name: 'Edit', detail: 'src-tauri/src/vcs/worktree.rs' }),
-  journalEvent(11, 'tool-result', { id: 't2', ok: true, summary: '2 edits' }),
-  journalEvent(12, 'tool-use', { id: 't3', name: 'Grep', detail: 'fn worktree_path' }),
+  journalEvent(10, 'tool-use', {
+    id: 't2',
+    name: 'Edit',
+    detail: 'src-tauri/src/vcs/worktree.rs',
+    at: recentAt(9000)
+  }),
+  journalEvent(11, 'tool-result', { id: 't2', ok: true, summary: '2 edits', at: recentAt(8000) }),
+  journalEvent(12, 'tool-use', { id: 't3', name: 'Grep', detail: 'fn worktree_path', at: recentAt(6000) }),
   journalEvent(13, 'permission', {
     id: 'q1',
     tool: 'Bash',
     detail: 'cargo test --manifest-path src-tauri/Cargo.toml worktree',
-    options: ['allow', 'allow-always', 'deny']
+    options: ['allow', 'allow-always', 'deny'],
+    at: recentAt(4000)
   })
 ]
 

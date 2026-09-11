@@ -23,10 +23,9 @@
    **An event kind this does not know produces no row.** The chain is closed and
    has no fallback, which is `EventKind`'s own rule one layer up — a missing row
    costs a person nothing the harness's own logs do not still hold, while a wall
-   of raw protocol costs them the panel. Three known kinds deliberately produce
-   none either: `turn-start` is said by the message under it, and the two
-   permission kinds are drawn from the session's open question, at the foot of
-   the panel where it is answered, rather than twice.
+   of raw protocol costs them the panel. The two permission kinds are drawn from
+   the session's open question, at the foot of the panel where it is answered,
+   rather than twice.
 
    A tool call and its result are **one row**, folded by the id they share:
    `tool-result` carries no name and no detail of its own, so a row of its own
@@ -36,13 +35,52 @@
    journal is dropped: that is a journal the worker has trimmed, and there is
    nothing to put in the row.
 
+   **`turn-start` no longer produces nothing.** It used to, on the reading that
+   the message under it already says a turn began; what it opens now is the
+   strip `markup-contract.md` section 6 calls the agent's activity — one
+   element, three moments, folded here exactly as a tool call and its result
+   are. `result` closes it `done`, with the wire's own `tokens_in`, `tokens_out`,
+   `cost_usd` and `ms`, the same four this file has always translated. `error`
+   closes it `failed` **only while a turn is actually open** — `session::model`
+   also uses `EventKind::Error` for a message that never reached a session with
+   nothing open at all (`Request::Send` against a dead child), and that one is
+   not a turn ending, it is the worker saying where the words went instead; it
+   keeps the old bare `error` row a turn's fold has no share in. A turn still
+   open when the batch ends draws `waiting`, carrying the `turn-start`'s own
+   `at` rather than a duration — nothing pure can compute how long "now" is,
+   which is `TurnResult.vue`'s own clock to tick.
+
+   `Error` carries no duration of its own — `session::model::EventKind::Error`
+   is `{ text }`, full stop — so a `failed` turn's elapsed time is the one this
+   file *can* compute, the gap between the `turn-start` that opened it and the
+   `error` that closed it. `elapsedSince` is that same gap asked of anything
+   produced while a turn is open, which is also what gives `Reasoning`'s own
+   `<summary><time>` a number to show: `EventKind::Reasoning` carries no
+   duration either, and "how long the agent had been going when it said this"
+   is the honest reading available from two timestamps the wire already sends.
+   `null` where no turn is open, which the component reads as nothing to print
+   rather than a guess at zero.
+
    `key` is the event's own `seq`, which the worker mints from one counter per
-   session and never reuses. */
+   session and never reuses — except `waiting`, keyed by the `turn-start` that
+   opened the turn it is still describing, since no closing event exists yet to
+   mint one under. */
 export function journalRows(events = []) {
   const rows = []
   const calls = new Map()
+  /* The turn open right now, if any — never more than one, since a person
+     cannot send a second message while the composer's one button reads Stop.
+     Cleared the moment `result` or `error` closes it, and read once more after
+     the loop if nothing did. */
+  let openAt = null
+  let openSeq = null
+  const elapsedSince = (at) => (openAt == null ? null : Date.parse(at) - Date.parse(openAt))
+
   for (const event of events) {
-    if (event.kind === 'user-message') {
+    if (event.kind === 'turn-start') {
+      openAt = event.at
+      openSeq = event.seq
+    } else if (event.kind === 'user-message') {
       rows.push({
         key: event.seq,
         kind: 'user',
@@ -52,7 +90,7 @@ export function journalRows(events = []) {
     } else if (event.kind === 'text') {
       rows.push({ key: event.seq, kind: 'agent', text: event.text })
     } else if (event.kind === 'reasoning') {
-      rows.push({ key: event.seq, kind: 'reasoning', text: event.text })
+      rows.push({ key: event.seq, kind: 'reasoning', text: event.text, ms: elapsedSince(event.at) })
     } else if (event.kind === 'tool-use') {
       const row = {
         key: event.seq,
@@ -69,16 +107,30 @@ export function journalRows(events = []) {
     } else if (event.kind === 'result') {
       rows.push({
         key: event.seq,
-        kind: 'result',
+        kind: 'activity',
+        state: 'done',
         tokensIn: event.tokens_in,
         tokensOut: event.tokens_out,
         costUsd: event.cost_usd ?? null,
         ms: event.ms
       })
+      openAt = null
+      openSeq = null
     } else if (event.kind === 'error') {
-      rows.push({ key: event.seq, kind: 'error', text: event.text })
+      if (openAt != null) {
+        rows.push({ key: event.seq, kind: 'activity', state: 'failed', text: event.text, ms: elapsedSince(event.at) })
+        openAt = null
+        openSeq = null
+      } else {
+        rows.push({ key: event.seq, kind: 'error', text: event.text })
+      }
     }
   }
+
+  if (openAt != null) {
+    rows.push({ key: openSeq, kind: 'activity', state: 'waiting', startedAt: openAt })
+  }
+
   return rows
 }
 

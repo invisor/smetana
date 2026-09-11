@@ -20,7 +20,7 @@ describe('the journal as rows', () => {
     expect(rows).toEqual([
       { key: 1, kind: 'user', text: 'hello', attachments: ['/tmp/a.png'] },
       { key: 2, kind: 'agent', text: 'an answer' },
-      { key: 3, kind: 'reasoning', text: 'working it out' }
+      { key: 3, kind: 'reasoning', text: 'working it out', ms: null }
     ])
   })
 
@@ -35,15 +35,19 @@ describe('the journal as rows', () => {
   /* **The four names the wire actually uses**, which is the one translation in
      the whole front end and the one the tracker singled out: every numeric prop
      of `TurnResult` has a default, so an event handed over raw draws
-     "0 in · 0 out · 0 ms" with no warning anywhere. */
-  it('translates a turn result out of the wire names', () => {
+     "0 in · 0 out · 0 ms" with no warning anywhere. A `result` closes the
+     `activity` strip `turn-start` opened, `done`, at the `result`'s own seq —
+     the same position the old bare `result` row held. */
+  it('translates a turn result out of the wire names, closing the strip done', () => {
     const [row] = journalRows([
+      event(7, 'turn-start', { by: 'person' }),
       event(9, 'result', { tokens_in: 12480, tokens_out: 416, cost_usd: 0.0312, ms: 4200 })
     ])
 
     expect(row).toEqual({
       key: 9,
-      kind: 'result',
+      kind: 'activity',
+      state: 'done',
       tokensIn: 12480,
       tokensOut: 416,
       costUsd: 0.0312,
@@ -59,6 +63,73 @@ describe('the journal as rows', () => {
     ])
 
     expect(row.costUsd).toBe(null)
+  })
+
+  /* A `result` with no `turn-start` behind it still draws `done` — the wire
+     always pairs them, but the fold does not lean on that: `ms` is the wire's
+     own and needs no open turn to read. */
+  it('still closes done with no turn-start at all', () => {
+    const [row] = journalRows([
+      event(9, 'result', { tokens_in: 1, tokens_out: 2, cost_usd: null, ms: 3 })
+    ])
+
+    expect(row).toMatchObject({ kind: 'activity', state: 'done' })
+  })
+
+  /* **The strip's `waiting` moment**: a `turn-start` with nothing closing it
+     yet draws one row, at the very end, keyed by the `turn-start` itself since
+     there is no closing event to mint a key under. `startedAt` is the
+     `turn-start`'s own `at` — the ticking clock is `TurnResult.vue`'s to build
+     from it, since nothing pure can know "now". */
+  it('draws the strip waiting while a turn is still open', () => {
+    const rows = journalRows([
+      event(1, 'turn-start', { by: 'person', at: '2026-09-10T12:00:04Z' }),
+      event(2, 'user-message', { text: 'hello' })
+    ])
+
+    expect(rows.at(-1)).toEqual({
+      key: 1,
+      kind: 'activity',
+      state: 'waiting',
+      startedAt: '2026-09-10T12:00:04Z'
+    })
+  })
+
+  /* **The strip's `failed` moment**: an `error` closes an *open* turn `failed`
+     rather than standing on its own, with the worker's own words and the gap
+     between the `turn-start` and the `error` — `EventKind::Error` carries no
+     duration of its own, so this is the one the fold can compute. */
+  it('closes an open turn failed on an error, with the elapsed gap', () => {
+    const rows = journalRows([
+      event(1, 'turn-start', { by: 'person', at: '2026-09-10T12:00:00Z' }),
+      event(2, 'error', { text: 'exit 101 in wt/bd-3c9d', at: '2026-09-10T12:02:14Z' })
+    ])
+
+    expect(rows).toEqual([
+      { key: 2, kind: 'activity', state: 'failed', text: 'exit 101 in wt/bd-3c9d', ms: 134000 }
+    ])
+  })
+
+  /* **Not every `error` is a turn failing.** `Request::Send` against a session
+     whose child has already died appends `Error` with no `turn-start` in front
+     of it — the message never opened a turn at all — and that is the bare
+     `error` row this journal has always drawn, not the strip. */
+  it('leaves a standalone error alone, with no turn open to fold it into', () => {
+    expect(
+      journalRows([event(1, 'error', { text: 'This session has ended.' })])
+    ).toEqual([{ key: 1, kind: 'error', text: 'This session has ended.' }])
+  })
+
+  /* `Reasoning`'s own `<time>` — how long the turn had been going when this
+     was said, the gap between its `turn-start` and this event. */
+  it('measures a reasoning block against the turn it was said in', () => {
+    const rows = journalRows([
+      event(1, 'turn-start', { by: 'person', at: '2026-09-10T12:00:00Z' }),
+      event(2, 'reasoning', { text: 'working it out', at: '2026-09-10T12:00:18Z' }),
+      event(3, 'result', { tokens_in: 1, tokens_out: 1, cost_usd: null, ms: 18000 })
+    ])
+
+    expect(rows[0]).toEqual({ key: 2, kind: 'reasoning', text: 'working it out', ms: 18000 })
   })
 
   it('folds a tool call together with its result, by the id they share', () => {
@@ -91,25 +162,18 @@ describe('the journal as rows', () => {
     )
   })
 
-  /* The closed chain. `turn-start` is said by the message under it, and the two
-     permission kinds are drawn from the session's open question at the foot of
-     the panel — once, where they are answered. */
-  it('draws no row for a turn start or for either half of a permission', () => {
-    expect(
-      journalRows([
-        event(1, 'turn-start', { by: 'person' }),
-        event(2, 'permission', { id: 'q1', tool: 'Bash', detail: 'ls', options: ['allow'] }),
-        event(3, 'permission-answered', { id: 'q1', decision: 'allow' })
-      ])
-    ).toEqual([])
-  })
+  /* The two permission kinds are drawn from the session's open question at the
+     foot of the panel — once, where they are answered — and produce no row of
+     their own here, open turn or not. */
+  it('draws no row for either half of a permission, leaving the open turn waiting', () => {
+    const rows = journalRows([
+      event(1, 'turn-start', { by: 'person', at: '2026-09-10T12:00:00Z' }),
+      event(2, 'permission', { id: 'q1', tool: 'Bash', detail: 'ls', options: ['allow'] }),
+      event(3, 'permission-answered', { id: 'q1', decision: 'allow' })
+    ])
 
-  /* An error is the worker saying what happened where an answer would have
-     gone — a message that never reached the agent, a line off stderr — and it is
-     the one kind here a person can act on. */
-  it('draws an error the worker reported', () => {
-    expect(journalRows([event(1, 'error', { text: 'the agent could not be reached' })])).toEqual([
-      { key: 1, kind: 'error', text: 'the agent could not be reached' }
+    expect(rows).toEqual([
+      { key: 1, kind: 'activity', state: 'waiting', startedAt: '2026-09-10T12:00:00Z' }
     ])
   })
 

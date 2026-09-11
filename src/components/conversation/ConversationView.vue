@@ -152,6 +152,12 @@ const label = computed(() => agentLabel(settings.agent))
 const model = computed(() => settings.model)
 const folder = computed(() => (settings.activeProject ? basename(settings.activeProject) : ''))
 
+/* The activity strip's own `waiting` sentence — the same label the bar
+   already reads, put to the one other sentence this panel says on its
+   behalf. `TurnResult.vue`'s own header carries the rest of the strip's
+   reasoning; this is the one word it needs that only the store can give. */
+const waitingLabel = computed(() => `${label.value} is thinking`)
+
 /* `session::model::SessionState` in this design system's words, from the store
    for the reason the terminal's own translation lives in `terminals.js`. */
 const status = computed(() => statusOf(state.value))
@@ -347,10 +353,13 @@ const foot = {
 
 const questionPad = { padding: 'var(--panel-pad) var(--panel-pad) 0' }
 
-/* An `Error` event, which is the worker saying what happened where an answer
-   would have gone — a message that did not reach the agent, a line the harness
-   wrote to stderr. Prose, so sans; the failed hue and the status glyph, so it
-   is not mistaken for the agent's own words. */
+/* A bare `error` row — an `Error` event `journal.js` found no open turn to
+   fold into, which is the worker saying a message never reached the agent at
+   all rather than a turn that opened and then failed. A turn's own failure is
+   the activity strip's `failed` moment now (`TurnResult.vue`), drawn where
+   `row.kind === 'activity'` is below; this is what is left over for the one
+   case that is not a turn ending. Prose, so sans; the failed hue and the
+   status glyph, so it is not mistaken for the agent's own words. */
 const failure = {
   display: 'flex',
   alignItems: 'flex-start',
@@ -425,7 +434,12 @@ const refusal = {
             @open="openExternal"
           />
           <AgentMessage v-else-if="row.kind === 'agent'" :text="row.text" @open="openExternal" />
-          <Reasoning v-else-if="row.kind === 'reasoning'" :text="row.text" @open="openExternal" />
+          <Reasoning
+            v-else-if="row.kind === 'reasoning'"
+            :text="row.text"
+            :ms="row.ms"
+            @open="openExternal"
+          />
           <ToolCall
             v-else-if="row.kind === 'tool'"
             :name="row.name"
@@ -433,7 +447,11 @@ const refusal = {
             :result="row.result"
           />
           <TurnResult
-            v-else-if="row.kind === 'result'"
+            v-else-if="row.kind === 'activity'"
+            :state="row.state"
+            :label="waitingLabel"
+            :started-at="row.startedAt"
+            :text="row.text"
             :tokens-in="row.tokensIn"
             :tokens-out="row.tokensOut"
             :cost-usd="row.costUsd"
