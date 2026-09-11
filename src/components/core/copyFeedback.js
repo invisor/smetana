@@ -104,7 +104,7 @@ export function useCopyFeedback(write, ms = COPIED_MS) {
     /* Again, and this is not the same clear as the one above. Two presses on
        the same row both get past that guard, and the second one's `setTimeout`
        would overwrite the first's handle while the first timer went on running
-       with nothing pointing at it. It then fires `COPIED_MS` after the *first*
+       with nothing pointing at it. It then fires `ms` after the *first*
        copy resolved: soon enough to cut this confirmation short, and — since it
        puts `target` back to null — soon enough to make a later copy's own guard
        bail on it, so a copy that worked would say nothing at all. A
