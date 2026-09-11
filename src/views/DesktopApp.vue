@@ -3906,6 +3906,13 @@ async function resumeSession(session, { fork = false } = {}) {
     title: session.title ?? null,
     fork
   }
+  /* What to put back if nothing starts, and the count to test it against —
+     `newAgent`'s own pair, read here before either road's first `await` for
+     the same reason: both roads below can fail after the tab has already come
+     forward, and what is owed on a press that started nothing is the aim it
+     found, not `null`. */
+  const aimed = agentAim.get(path) ?? null
+  const aimWrites = agentAimWrites.get(path)
   let refused = null
 
   project.sideTab = 'agents'
@@ -3929,12 +3936,20 @@ async function resumeSession(session, { fork = false } = {}) {
        only refuse again, a round trip later, and put a second corner toast on
        screen saying the very sentence already there. That doubling is what
        `lastError`'s shape was reshaped to prevent. */
-    if (conversationState.lastError?.kind === 'badCwd') return
+    if (conversationState.lastError?.kind === 'badCwd') {
+      /* `showAgentTab` has not been called on this road — only `activeTab`
+         moved, above — so the count taken before the first `await` is still
+         the one to test: restore the aim only if nobody has aimed this
+         project since the press, `newAgent`'s own guard and its own reason. */
+      if (agentAimWrites.get(path) === aimWrites) agentAim.set(path, aimed)
+      return
+    }
     // Off the screen for the fallback, and back again below if that fails too.
     refused = conversationState.lastError
     conversationState.lastError = null
   }
 
+  let ownAimWrites
   try {
     /* `path` and not the default, which would be `activePath` read *after* the
        await above. `newAgent` passes it for this reason and `showAgentTab`'s own
@@ -3943,9 +3958,15 @@ async function resumeSession(session, { fork = false } = {}) {
        now looking at, and its Agent tab brought forward over nothing, while the
        session starts in the one they pressed in. */
     showAgentTab(null, path)
+    /* The aim just written, taken by its number rather than by its value —
+       `newAgent`'s own guard, read the same way here: this road's own write
+       raises the count, and the catch below tests against the count taken
+       right after it rather than the one taken at the top of this function. */
+    ownAimWrites = agentAimWrites.get(path)
     await createSession(path, intent)
   } catch {
     // already reported — see comment above
+    if (agentAimWrites.get(path) === ownAimWrites) agentAim.set(path, aimed)
     if (refused && !conversationState.lastError) conversationState.lastError = refused
   }
 }
