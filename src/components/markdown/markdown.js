@@ -7,10 +7,26 @@
 
    The invariant every branch below is written to keep: **no character of the
    source disappears.** Anything unrecognised — an unclosed fence, a stray
-   asterisk, a table, a reference link, an HTML tag — comes back as ordinary
-   text, so the worst outcome for an unsupported construct is the panel as it
-   looked before this module existed. That is what makes it safe to put between
-   a person and the only copy of a task's description. */
+   asterisk, a malformed table, a reference link, an HTML tag — comes back as
+   ordinary text, so the worst outcome for an unsupported construct is the
+   panel as it looked before this module existed. That is what makes it safe
+   to put between a person and the only copy of a task's description. A
+   *recognised* construct is a different case: a GFM table's extra cell and a
+   heading's closing `#` are both consumed by the syntax that owns them, the
+   same way a quote's leading `>` already was — the invariant is about what
+   this module cannot read, not about every marker of what it can.
+
+   `docs/design_handoff_conversation_panel/markup-contract.md` (sections 2, 3
+   and 7) is the closed list of what the conversation panel is allowed to
+   render; this module only has to be able to *reach* each element in it from
+   markdown, not to render it. Two elements on that list, `kbd` and `small`,
+   have no markdown syntax anywhere in this file's vocabulary — no library, no
+   convention in a `bd` description, nothing this codebase already leans on —
+   and the honest answer is to leave them unreached rather than invent a
+   syntax nobody typed. A stray `<kbd>` or `<small>` in a source string is an
+   HTML tag, already out of scope, and stays literal text like any other one.
+   `del` has a real, common markdown spelling (`~~text~~`, GFM's own) and gets
+   a node; `kbd` and `small` do not, and no branch below produces either. */
 
 /* The closing run of hashes is optional and must have whitespace before it.
    Without that whitespace `## Migrate to C#` loses the character that makes the
@@ -25,13 +41,40 @@ const BULLET = /^(\s*)([-*+])(\s+)(.*)$/
 const ORDERED = /^(\s*)(\d{1,9})[.)](\s+)(.*)$/
 const TASK = /^\[([ xX])\]\s+(.*)$/
 
+/* A line that is nothing but an image is a block of its own — the illustration
+   this document is attaching — while the same syntax beside other words on a
+   line is part of a sentence and stays inline (see `INLINE` below). Anchored
+   at both ends so `![a](b) and more text` does not match. */
+const IMAGE_LINE = /^ {0,3}!\[([^\]]*)\]\(\s*(\S+?)\s*\)\s*$/
+
+/* A definition list's `dd` line. Never matched on its own — only a term line
+   immediately above one turns a run of these into a `dl`; met without a term
+   above it, `: like this` is nothing this file knows and stays a paragraph,
+   which is the point of checking the pair rather than the line alone. */
+const DEFINITION = /^: (.*)$/
+
+/* The GFM alignment row's own cell shape: a run of dashes with an optional
+   colon on either side. Checked against every cell of the row directly under
+   a candidate header before either is trusted, so a row that merely looks
+   like one — three words separated by hyphens, say — leaves both lines to
+   fall through to ordinary paragraphs untouched. */
+const ALIGN_CELL = /^:?-+:?$/
+
 /* How deep a quote may nest inside a quote, and a list inside a list. Both are
    recursive block constructs, and both take their depth from the input rather
    than from anything this app decides: one line of ten thousand `>` is ten
    thousand levels, and it overflowed the stack — which in a computed on the UI
    thread is a blank panel where an issue used to be. Sixteen is far past any
    prose a person writes and far short of the stack; past it the markers are
-   drawn as the characters they are, so nothing is lost, only unnested. */
+   drawn as the characters they are, so nothing is lost, only unnested.
+
+   Tables and definition lists join headings and rules rather than quotes and
+   lists here: neither recurses into `parseBlocks` — a table cell and a `dd`
+   are read as inline text, never as nested blocks — so neither this counter
+   nor `nested` below has anything to say about them. Putting one inside a
+   quote nested near the clamp is still safe, but for the ordinary reason that
+   the quote's own recursion is bounded, not because the table does anything
+   to keep itself so. */
 const MAX_BLOCK_DEPTH = 16
 
 export function parseMarkdown(text) {
@@ -84,6 +127,14 @@ function parseBlocks(lines, depth = 0) {
       continue
     }
 
+    /* Quote and list before the image, the table and the definition list
+       below: both of those strip their own marker and recurse into this same
+       function on what is left, which is what lets a table live inside a
+       quote (and a quote's `>` live inside a table cell as the plain text it
+       is, never as a nested block — cells are read as inline, never as
+       blocks). Checking image/table/dl first here would instead try to read
+       `> | a | b |` as a table row with the quote marker baked into its first
+       cell. */
     if (QUOTE.test(line) && nested) {
       const body = []
       while (i < lines.length && QUOTE.test(lines[i])) body.push(QUOTE.exec(lines[i++])[1])
@@ -94,6 +145,45 @@ function parseBlocks(lines, depth = 0) {
     if ((BULLET.test(line) || ORDERED.test(line)) && nested) {
       const [list, next] = takeList(lines, i, depth)
       blocks.push(list)
+      i = next
+      continue
+    }
+
+    const imageLine = IMAGE_LINE.exec(line)
+    if (imageLine) {
+      blocks.push({ type: 'image', src: imageLine[2], alt: imageLine[1] })
+      i++
+      continue
+    }
+
+    /* A table is only ever recognised here, at the start of a fresh block —
+       never partway through an already-running paragraph, since a table row
+       is not in `startsBlock` below. In practice that means a table right
+       after a heading, a rule or another table's last row is read as one
+       immediately, but a table directly under a line of prose — with no blank
+       line between them — is swallowed by that paragraph's own continuation
+       rule and stays prose, exactly as it did before this file could read
+       tables at all. That case is not in the acceptance criteria, and GFM
+       tables are conventionally written with a blank line ahead of them
+       anyway. */
+    if (line.includes('|') && i + 1 < lines.length) {
+      const headerCells = splitTableRow(line)
+      const delimiterCells = splitTableRow(lines[i + 1])
+      if (
+        headerCells.length > 0 &&
+        delimiterCells.length === headerCells.length &&
+        delimiterCells.every((cell) => ALIGN_CELL.test(cell))
+      ) {
+        const [table, next] = takeTable(lines, i, headerCells, delimiterCells)
+        blocks.push(table)
+        i = next
+        continue
+      }
+    }
+
+    if (DEFINITION.test(lines[i + 1] || '') && !DEFINITION.test(line)) {
+      const [dl, next] = takeDefinitionList(lines, i)
+      blocks.push(dl)
       i = next
       continue
     }
@@ -112,12 +202,17 @@ function parseBlocks(lines, depth = 0) {
 /* What ends a paragraph without a blank line before it. A list is deliberately
    in here: `bd` descriptions are written with criteria straight under their
    sentence, and a paragraph that swallowed them would be the bug this whole
-   change exists to remove. */
+   change exists to remove. An image line joins it for the same reason as the
+   block dispatch above: a picture on its own line is a block wherever it
+   turns up, not only when a blank line happens to precede it. Tables and
+   definition lists are deliberately left out — see the table branch above for
+   why a table needs a blank line ahead of it to be read as one. */
 function startsBlock(line) {
   return (
     FENCE.test(line) ||
     RULE.test(line) ||
     HEADING.test(line) ||
+    IMAGE_LINE.test(line) ||
     QUOTE.test(line) ||
     BULLET.test(line) ||
     ORDERED.test(line)
@@ -167,6 +262,109 @@ function leading(line) {
   return line.length - line.trimStart().length
 }
 
+/* A GFM row, split on its cell boundary. Outer pipes are optional and
+   stripped when present, so `| a | b |` and `a | b` split the same way — the
+   acceptance criteria's own case for a table missing its edge pipes. A
+   backtick run inside a cell is tracked the same way the inline `code` opener
+   is (a run, not a single character), so a cdhash or a path typed as `` `a|b`
+   `` keeps its pipe: without that guard the cell would split in the middle of
+   a code span instead of on the column boundary. */
+function splitTableRow(line) {
+  let body = line.trim()
+  if (body.startsWith('|')) body = body.slice(1)
+  if (body.endsWith('|')) body = body.slice(0, -1)
+  const cells = []
+  let cell = ''
+  let fence = ''
+  let i = 0
+  while (i < body.length) {
+    if (body[i] === '`') {
+      let j = i
+      while (body[j] === '`') j++
+      const run = body.slice(i, j)
+      if (!fence) fence = run
+      else if (run === fence) fence = ''
+      cell += run
+      i = j
+      continue
+    }
+    if (body[i] === '|' && !fence) {
+      cells.push(cell.trim())
+      cell = ''
+      i++
+      continue
+    }
+    cell += body[i]
+    i++
+  }
+  cells.push(cell.trim())
+  return cells
+}
+
+/* `left`/`center`/`right` from the marker on each side of the alignment row's
+   cell, `null` when neither colon is there — the column carries no opinion,
+   and the render step is expected to skip `data-align` rather than write it
+   with an empty or a made-up value. */
+function columnAlign(cell) {
+  const left = cell.startsWith(':')
+  const right = cell.endsWith(':')
+  if (left && right) return 'center'
+  if (left) return 'left'
+  if (right) return 'right'
+  return null
+}
+
+/* The header and the alignment row are already read by the time this runs —
+   `parseBlocks` only calls it once both have been checked against
+   `ALIGN_CELL` — so this just gathers the body. A body row is any run of
+   non-blank lines that is not itself the start of some other block, exactly
+   the rule a paragraph already stops on; a row short of cells is padded with
+   empty ones and a row with too many has the extra dropped, which is GFM's
+   own rule for a ragged table, not this file inventing one. */
+function takeTable(lines, start, headerCells, delimiterCells) {
+  const table = {
+    type: 'table',
+    align: delimiterCells.map(columnAlign),
+    head: headerCells.map((cell) => parseInline(cell)),
+    rows: []
+  }
+  let i = start + 2
+  while (i < lines.length && lines[i].trim() && !startsBlock(lines[i])) {
+    const cells = splitTableRow(lines[i])
+    table.rows.push(table.align.map((_, column) => parseInline(cells[column] ?? '')))
+    i++
+  }
+  return [table, i]
+}
+
+/* A `dl` is a run of one or more term-then-definitions pairs, each found the
+   same way: a line that is not already some other block, immediately above a
+   line starting `: `. The pairing is what keeps a bare `: stray` from turning
+   into a definition list of its own — checked here, and not in `startsBlock`,
+   because unlike a table or a list a lone `: ` line carries nothing that
+   marks it as the *start* of anything; only the term above it does. */
+function takeDefinitionList(lines, start) {
+  const dl = { type: 'dl', items: [] }
+  let i = start
+  while (
+    i + 1 < lines.length &&
+    lines[i].trim() &&
+    !startsBlock(lines[i]) &&
+    !DEFINITION.test(lines[i]) &&
+    DEFINITION.test(lines[i + 1])
+  ) {
+    const term = parseInline(lines[i])
+    i++
+    const definitions = []
+    while (i < lines.length && DEFINITION.test(lines[i])) {
+      definitions.push(parseInline(DEFINITION.exec(lines[i])[1]))
+      i++
+    }
+    dl.items.push({ term, definitions })
+  }
+  return [dl, i]
+}
+
 /* Inline markers, tried in this order at every position. Code first, so a
    backtick span wins over anything inside it; the image before the link, so its
    `!` is not left behind; `**` before `*` for the obvious reason.
@@ -174,7 +372,11 @@ function leading(line) {
    A link node is produced only for http and https. Every other scheme — file,
    mailto, and the ones that would be a security question elsewhere — stays
    literal text, which is both the honest thing to draw (this app cannot open
-   it) and what keeps the URL itself on screen.
+   it) and what keeps the URL itself on screen. An image node carries no such
+   restriction on its `src`: it is not opened through `opener:allow-open-url`
+   or any other opener, only handed to whatever the illustrations task uses to
+   load it, and the acceptance criteria's own example (`./a.png`) is a relative
+   path with no scheme at all — the http/https gate belongs to `link` alone.
 
    Two guards that are not decoration. The closers of `**` and `__` refuse a
    third marker, so `**a *b***` closes on the outer pair and the emphasis inside
@@ -184,7 +386,8 @@ function leading(line) {
    of `close_reason` and `settings_load`: two such names in one sentence would
    otherwise open an emphasis at the first underscore and close it at the last,
    swallowing both markers and italicising the words between them. `*` keeps no
-   such guard — nothing in this vocabulary is spelled with one. */
+   such guard — nothing in this vocabulary is spelled with one. `~~` keeps none
+   either, for the same reason: nothing here is spelled with a single `~`. */
 const INLINE = [
   /* The opener is capped rather than open-ended. A backreferenced greedy run
      around a lazy body is cubic in the length of a run of backticks — 3200 of
@@ -192,7 +395,7 @@ const INLINE = [
      span is fenced by more than a few. Past ten the run is not an opener at
      all and falls through to plain text, markers included. */
   [/^(`{1,10})([\s\S]*?[^`])\1(?!`)/, (m) => ({ type: 'code', value: m[2] })],
-  [/^!\[([^\]]*)\]\(\s*(\S+?)\s*\)/, (m) => image(m[1], m[2])],
+  [/^!\[([^\]]*)\]\(\s*(\S+?)\s*\)/, (m) => ({ type: 'image', src: m[2], alt: m[1] })],
   [/^\[([^\]]*)\]\(\s*(\S+?)\s*\)/, (m) => link(m[2], parseInline(m[1]))],
   [/^<(https?:\/\/[^>\s]+)>/i, (m) => link(m[1], [{ type: 'text', value: m[1] }])],
   [/^\*\*([\s\S]+?)\*\*(?!\*)/, (m) => ({ type: 'strong', children: parseInline(m[1]) })],
@@ -200,6 +403,7 @@ const INLINE = [
     /^__([\s\S]+?)__(?![\p{L}\p{N}_])/u,
     (m, before) => (WORD.test(before) ? null : { type: 'strong', children: parseInline(m[1]) })
   ],
+  [/^~~([\s\S]+?)~~(?!~)/, (m) => ({ type: 'del', children: parseInline(m[1]) })],
   [/^\*([^\s*][\s\S]*?)\*(?!\*)/, (m) => ({ type: 'em', children: parseInline(m[1]) })],
   [
     /^_([^\s_][\s\S]*?)_(?![\p{L}\p{N}_])/u,
@@ -220,14 +424,6 @@ function link(href, children) {
   const scheme = OPENABLE.exec(href)
   if (!scheme) return null
   return { type: 'link', href: scheme[1].toLowerCase() + href.slice(scheme[1].length), children }
-}
-
-function image(alt, href) {
-  /* Never a picture: images are forbidden in this system apart from the app
-     icon and the file-type icons, and a description is not a third exception. */
-  const target = link(href, [{ type: 'text', value: href }])
-  if (!target) return null
-  return [alt ? { type: 'text', value: `${alt} ` } : null, target].filter(Boolean)
 }
 
 export function parseInline(text) {
