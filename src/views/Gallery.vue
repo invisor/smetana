@@ -1869,10 +1869,13 @@ const FULL_ISSUE = {
   ].join('\n'),
   design:
     'A quiet strip above the columns rather than a replacement of them: the board stays usable while it says the data may be stale.',
-  // Two lines on purpose: every `bd note` appends, and the panel owes the
-  // whole log, latest line included.
+  // Three lines on purpose: two separate `bd note` calls, each its own
+  // record and its own paragraph (`noteEntries.js`), and a third, indented
+  // line — a person's own continuation inside the second call, broken across
+  // two lines by hand — which stays folded onto it rather than reading as a
+  // third record (smetana-k2mo).
   notes:
-    'parked: needs a decision on where the strip sits\nparked: still waiting on the design call',
+    'parked: needs a decision on where the strip sits\nparked: still waiting on the design call\n  checked again at the next stand-up, still nothing',
   priority: 1,
   issue_type: 'bug',
   owner: 'merazent@gmail.com',
