@@ -44,7 +44,9 @@ Claude Code since smetana-5ijg — no PTY, no ring, no row in the Agents view �
 that harness's protocol itself and the app draws typed events (`src-tauri/src/session/`,
 `src/stores/conversation.js`, `src/components/conversation/`). Every other harness keeps this road
 exactly as it is, since only Claude Code has a driver, and so does every other intent whatever the
-harness. Which of the two a press takes is `canDrive` in the conversation store, over `settings.agent`.
+harness. Which of the two a press takes is `canDrive` in the conversation store, over `settings.agent` and
+`settings.conversationPanel` — the switch on the Agents tab that sends every harness down this road
+again (`.claude/rules/settings.md`).
 What is written below is the PTY half and stays true of it; the parts the split changed are marked
 where they are.
 
@@ -273,8 +275,8 @@ and back quietly taking the tab off a live conversation. The union is deliberate
 over the two back ends either — the terminal is going away when the last intent moves, and a seam built
 to outlive that migration would.
 
-Which harness takes which road is `canDrive` in `stores/conversation.js`, over `settings.agent`, and it
-is **a front door rather than a gate**: `agents::pick` substitutes the first installed profile when the
+Which harness takes which road is `canDrive` in `stores/conversation.js`, over `settings.agent` and
+the `conversationPanel` switch, and it is **a front door rather than a gate**: `agents::pick` substitutes the first installed profile when the
 configured one is not on `PATH`, silently, so a machine with only Codex on it still answers `true`
 there — `settings.agent` ships as `claude` and `Settings::validate` forces anything unknown back to it.
 What catches that is `newAgent` falling through to `createSession` when a driven start comes back with

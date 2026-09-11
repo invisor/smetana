@@ -28,6 +28,8 @@ panel, `branchSide` for which side the review window's branch list is put on —
 start, `model`, which model to ask it for, `agentRoles`, a harness-and-model pair per kind of agent
 call, `agentLanguage`, `taskLanguage`, `commitLanguage` and `reportLanguage`, the languages that agent
 works in, `agentPrompt`, the person's own standing instruction for every session they are in,
+`conversationPanel`, whether an agent the app can drive opens in the conversation panel or in a
+terminal,
 `kanban`, how
 the board is drawn, `git`, what the app does to a person's repositories without asking each time,
 `window`, whether the main window opens where it was left, `updates`, whether the app asks
@@ -94,6 +96,30 @@ beside it test truthiness as well. For a language an empty id is nothing anybody
 truthiness guard would swallow the clearing, leaving the old text in the app window's state and in
 the next session started while the field on screen looked empty. The shape to copy is
 `editorWordWrap`'s, not `agentLanguage`'s.
+
+`conversationPanel` sits at the root beside `agent` on that field's own argument — which interface
+somebody wants to meet their agent in is a habit of theirs rather than a property of a repository —
+and it is a boolean, shipped `true`. On is this app's behaviour to the letter since the panel
+existed, so nothing on anybody's screen moves on the day they update; off puts every session started
+after it back in a terminal tab with a PTY, which is where an agent opened before
+`src-tauri/src/session/` had a driver. The switch is the last row of **Agents and models** on the
+Agents tab.
+
+Its validation is the absence of any, and that is a decision rather than a gap: a boolean has no set
+of legal values to be forced back into, so the whole of the guard is `parse`, which answers `true`
+for a missing key and for a hand-edited value that is not a boolean alike. That is the same reading
+`Settings::default()` and `ResolvedSettings::default()` give, and
+`a_file_that_says_nothing_about_the_conversation_panel_opens_with_it_on` in `model.rs` pins all
+three.
+
+**The switch decides what starts and never what runs**, and it is read in exactly one place:
+`canDrive` in `src/stores/conversation.js`, which answers `false` for every harness while the field
+is off. That is why no view carries a condition about it — the new-agent button and every other road
+into a session already ask `canDrive`, and a second `if` beside it would be a copy of one rule with
+nothing keeping the two in step. The worker is untouched: `Request::Start` and
+`session::service::driver_for` still drive Claude Code, and this field only stops the front end
+asking them to. A conversation already on screen stays a conversation; switching back on reaches the
+next session and leaves an open terminal as a terminal.
 
 `model` and `agentRoles` sit at the root beside `agent`, on that field's own argument: which model
 files a person's tasks is a habit of theirs, not a property of a project. `model` is the fallback

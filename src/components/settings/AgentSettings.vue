@@ -72,12 +72,14 @@
    those two rows could only ever have stayed empty.
 
    **This tab is about how an agent talks and what it spends** — the harness,
-   the four languages, the standing instruction, the run limits and the
-   allowance under them. Anything about what is *installed* on this machine
-   around the agent is a different question and does not belong here. */
+   which interface it opens in, the four languages, the standing instruction,
+   the run limits and the allowance under them. Anything about what is
+   *installed* on this machine around the agent is a different question and does
+   not belong here. */
 import { computed } from 'vue'
 import Button from '../core/Button.vue'
 import Dropdown from '../core/Dropdown.vue'
+import Switch from '../core/Switch.vue'
 import Textarea from '../core/Textarea.vue'
 import SettingsGroup from './SettingsGroup.vue'
 import SettingsRow from './SettingsRow.vue'
@@ -144,6 +146,13 @@ const props = defineProps({
      Which sessions it reaches is `agents::prompt::talks_to_a_person` in Rust —
      this component only draws the field. */
   agentPrompt: { type: String, default: '' },
+  /* Whether a harness the app can drive opens in the conversation panel rather
+     than in a terminal tab. `true` is the shipped position and this app's
+     behaviour since the panel existed, so the row draws the right way round in
+     the moment before the first answer arrives — and in `?view=gallery`, where
+     there is no answer at all. What the switch reaches is `canDrive` in
+     `stores/conversation.js`; this component only draws it. */
+  conversationPanel: { type: Boolean, default: true },
   /* The two percentages the run gate holds a batch on, `0` meaning off. Numbers
      rather than an object, matching the flat pair the two windows speak in —
      and defaulted to the shipped thresholds so the tab draws what the app is
@@ -187,6 +196,7 @@ const emit = defineEmits([
   'update:commitLanguage',
   'update:reportLanguage',
   'update:agentPrompt',
+  'update:conversationPanel',
   'update:subscriptionPauseAt',
   'update:subscriptionReducedAt',
   'refresh'
@@ -411,6 +421,29 @@ const errorStyle = {
             />
           </div>
         </div>
+      </SettingsRow>
+
+      <!-- Last in the group and under every pair, because it is about the same
+           agents rather than about a sixth kind of call: which interface the
+           harness above opens in. Here and not in a group of its own — a
+           caption over one switch would be a heading for its own sake — and not
+           on the General tab, where it would be a fact about an agent filed
+           under the app.
+
+           The description names what happens instead, since the switch's own
+           two positions cannot: off is not "no interface", it is the terminal
+           tab every agent opened in before the panel existed. "An agent you
+           start" rather than "every agent", for the distinction the standing
+           instruction row below draws as carefully: a run's batches open in a
+           terminal whichever way this switch is set. -->
+      <SettingsRow
+        label="Conversation panel"
+        description="Opens an agent this app can drive in the conversation panel. With it off, an agent you start opens in a terminal tab instead, the way it did before. Takes effect on the next session started."
+      >
+        <Switch
+          :model-value="props.conversationPanel"
+          @update:model-value="emit('update:conversationPanel', $event)"
+        />
       </SettingsRow>
     </SettingsGroup>
 

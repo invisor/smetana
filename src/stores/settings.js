@@ -216,6 +216,20 @@ const defaults = () => ({
     runLead: { agent: '', model: '' },
     reviewBranch: { agent: '', model: '' }
   },
+  /* Whether a harness this app can drive opens in the conversation panel. At
+     the root beside `agent`, and for that field's reason: which interface
+     somebody wants to meet their agent in is a habit of theirs rather than a
+     property of a repository.
+
+     On, which is this app's behaviour to the letter since the panel shipped —
+     the same argument `gitAutoFetch` carries, and the opposite of `wordWrap`
+     above: nothing about somebody's screen moves on the day they update. Off
+     puts every session started after it back in a terminal tab with a PTY.
+
+     Read in exactly one place, `canDrive` in `stores/conversation.js`, which is
+     what keeps the two roads out of the views: the new-agent button asks that
+     one question and this switch is inside its answer. */
+  conversationPanel: true,
   /* The two percentages the run gate holds a batch on: `0` is off. Global
      beside `agent` and the languages, because a subscription is the person's
      and not the repository's, and shipped as today's behaviour exactly — the
@@ -530,6 +544,7 @@ export async function loadSettings() {
     settings.reportLanguage = stored.reportLanguage ?? base.reportLanguage
     settings.agentPrompt = stored.agentPrompt ?? base.agentPrompt
     settings.model = stored.model ?? base.model
+    settings.conversationPanel = stored.conversationPanel ?? base.conversationPanel
     /* Section by section rather than in one assignment, the shape
        `applySection` uses above and for its reason: a file written before this
        object existed carries none of the four roles, and one that carries two
@@ -680,6 +695,12 @@ function toShared(source) {
     agentPrompt: source.agentPrompt ?? base.agentPrompt,
     /* The root model, flat beside the agent it is chosen against. */
     model: source.model ?? base.model,
+    /* Flat beside the agent, and named for what it draws rather than for what
+       it switches off: the two spellings — this one and the one `applyPatch`
+       reads back — have to be the same word, or the switch moves on screen, is
+       dropped on arrival and reverts at the next open with nothing to say
+       so. */
+    conversationPanel: source.conversationPanel ?? base.conversationPanel,
     /* The four roles, as one object and deliberately not flattened the way
        every scalar above is: this is not a message of independent fields but a
        table, and the settings window sends a whole role back at a time —
@@ -760,6 +781,13 @@ export function applyPatch(patch) {
      as `agent` above defers to `agents::IDS`. */
   if (typeof patch.model === 'string') {
     settings.model = patch.model
+  }
+  /* A switch, so the whole check is the type — the shape `editorWordWrap` and
+     `gitAutoFetch` keep, and for their reason: `false` is the whole point of
+     this field and `Boolean(patch.conversationPanel)` would turn a malformed
+     event into a deliberate-looking "off". */
+  if (typeof patch.conversationPanel === 'boolean') {
+    settings.conversationPanel = patch.conversationPanel
   }
   /* A whole role at a time, and never half of one: the pair is indivisible, and
      a patch carrying a model without the harness it was chosen against is the

@@ -2032,6 +2032,11 @@ const galleryReportLanguage = ref('de')
    field is its placeholder and the filled one is the layout worth checking:
    six lines of somebody's own prose in a column of its own. */
 const galleryAgentPrompt = ref('Talk to me briefly. This machine has no Docker.')
+/* The conversation panel switch, on as it ships. Live rather than a constant,
+   so the one thing a switch has to be checked for — that it moves — is
+   checkable here; the cell below draws the off position without touching
+   this. */
+const galleryConversationPanel = ref(true)
 /* The subscription block. A reading rather than one of the two empty states:
    those are a sentence each, while this is the shape with a layout to check —
    two rows, the line about what a run would do, and a live Refresh beside the
@@ -5961,6 +5966,7 @@ const menuTargetStyle = {
             :commit-language="galleryCommitLanguage"
             :report-language="galleryReportLanguage"
             :agent-prompt="galleryAgentPrompt"
+            :conversation-panel="galleryConversationPanel"
             :usage="galleryAgentUsage"
             @update:agent-role="galleryChooseRole($event)"
             @update:agent-language="galleryAgentLanguage = $event"
@@ -5968,6 +5974,7 @@ const menuTargetStyle = {
             @update:commit-language="galleryCommitLanguage = $event"
             @update:report-language="galleryReportLanguage = $event"
             @update:agent-prompt="galleryAgentPrompt = $event"
+            @update:conversation-panel="galleryConversationPanel = $event"
           />
         </div>
         <!-- The same tab with Show run report off on the General tab, which is
@@ -5981,7 +5988,10 @@ const menuTargetStyle = {
              run at turned off — because off is the value most likely to be
              drawn wrongly and this is what makes it visible without editing
              `settings.json`. Take fewer tasks at stays on its shipped 75, so
-             the two shapes sit side by side in one cell. -->
+             the two shapes sit side by side in one cell. The conversation panel
+             switch is drawn off here for the same reason: off is the position
+             the app is not normally in, and a switch is only half checked while
+             it has been seen in one of its two. -->
         <!-- Wider than the 380 px the other settings cells take, and it has to
              be: this tab now holds a row asking for a 48ch control, which is
              wider than that cell, so at 380 px the harness would only ever show
@@ -5996,6 +6006,7 @@ const menuTargetStyle = {
             :commit-language="galleryCommitLanguage"
             :report-language="galleryReportLanguage"
             :show-report="false"
+            :conversation-panel="false"
             :subscription-pause-at="0"
             :usage="galleryAgentUsage"
           />

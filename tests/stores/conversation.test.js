@@ -456,6 +456,31 @@ describe('the conversation store', () => {
       expect(stores.conversation.canDrive('')).toBe(false)
       expect(stores.conversation.canDrive('gemini')).toBe(false)
     })
+
+    /* The person's own switch, and the reason it lives inside this answer
+       rather than beside it: every road into a session asks this one question,
+       so `views/DesktopApp.vue` needs no condition of its own and there is no
+       second copy of the rule to drift away from this one.
+
+       The setting is written straight into the store rather than loaded off a
+       fixture on purpose: `loadSettings` is what installs the debounced write,
+       and a `settings_save` draining out of the afterEach is exactly the
+       cross-test noise this file's own transport note warns about. Nothing
+       here needs the disk — `canDrive` reads the live object. */
+    it('drives nothing at all while the conversation panel is switched off', async () => {
+      const { stores } = await ready()
+      stores.settings.settings.conversationPanel = false
+
+      expect(stores.conversation.canDrive('claude')).toBe(false)
+      expect(stores.conversation.canDrive('codex')).toBe(false)
+
+      /* Switched back on, the next session is a conversation again: the field
+         is read at the moment it is asked, which is what makes this a rule
+         about what starts rather than about what is already running. */
+      stores.settings.settings.conversationPanel = true
+
+      expect(stores.conversation.canDrive('claude')).toBe(true)
+    })
   })
 
   /* `session::model::SessionState` in the design system's words. The two that
