@@ -6,7 +6,7 @@
 
 **Architecture:** A new store `src/stores/conversation.js` beside `terminals.js`, and a new component group `src/components/conversation/`. `terminals.js` and `components/terminal/` are not touched: a `Bare` session opens a tab of the new kind, every other intent keeps the terminal, and the two coexist until the last intent moves.
 
-**Tech Stack:** Vue 3, `@lezer/markdown` (already in the tree under `@codemirror/lang-markdown`), CodeMirror read-only for fenced code, vitest.
+**Tech Stack:** Vue 3, the shared markdown parser and components in `src/components/markdown/`, vitest.
 
 **Spec:** `docs/superpowers/specs/2026-09-10-conversation-ui-design.md`
 **Depends on:** `docs/superpowers/plans/2026-09-10-conversation-session-worker.md` — every command and event named below is that plan's Task 8.
@@ -19,7 +19,7 @@
 - No gradients, glass, blur or emoji. No native right-click menu.
 - Every new component is exported from `src/components/index.js` and added to `src/views/Gallery.vue`. There is no component test runner in this project and none is invented here: `?view=gallery` in all four theme × density combinations is the check.
 - Components import siblings by relative path; product code imports from `index.js`.
-- No new dependency. `@lezer/markdown` is already installed transitively; add it to `package.json` `dependencies` at its installed version, since importing a transitive dependency directly is how a build breaks on somebody else's `npm install`.
+- No new dependency, and no second markdown parser. Prose is parsed and drawn by `src/components/markdown/`, which the task inspector already uses; see Task 1.
 - Do not touch `src/stores/terminals.js` or `src/components/terminal/`.
 
 ---
@@ -29,9 +29,7 @@
 | file | responsibility |
 |---|---|
 | `src/stores/conversation.js` | the only new file in `src/` that knows Tauri exists: journals per session, the draft, the open question |
-| `src/components/conversation/markdown.js` | markdown text → a plain tree of nodes; pure, no Vue |
 | `src/components/conversation/ConversationView.vue` | the journal, and the scroll rule |
-| `src/components/conversation/Markdown.vue` | that tree, drawn |
 | `src/components/conversation/AgentMessage.vue` | a paragraph of the agent's prose |
 | `src/components/conversation/UserMessage.vue` | the person's words and attachments |
 | `src/components/conversation/ToolCall.vue` | name, one line of detail, result state |
@@ -40,287 +38,41 @@
 | `src/components/conversation/TurnResult.vue` | tokens, cost, duration |
 | `src/components/conversation/Composer.vue` | input, attachments, send, stop |
 | `tests/stores/conversation.test.js` | the store, through `mockIPC` |
-| `tests/components/conversation/markdown.test.js` | the parser |
 
 ---
 
-## Task 1: The markdown tree
+## Task 1: The markdown tree — already in the tree
 
-Pure and first, because it has no dependency on anything else and the components below consume it.
+Nothing to write. Markdown is parsed once for the whole front end by
+`src/components/markdown/markdown.js`, and drawn by `Markdown.vue` and
+`MarkdownInline.vue` beside it. The module was written for the task inspector and
+moved out of `src/components/kanban/` into its own group by smetana-738c, exactly
+so that this panel could use it: one parser and one pair of components, rather
+than two grammars diverging in silence.
 
-**Files:**
-- Create: `src/components/conversation/markdown.js`, `tests/components/conversation/markdown.test.js`
-- Modify: `package.json`
+Import the components from `src/components/index.js` (`Markdown`,
+`MarkdownInline`) as product code does, and `parseMarkdown` from the module
+itself if a tree is wanted without drawing it. No dependency is added: the parser
+is handwritten and has none.
 
-**Interfaces:**
-- Produces: `parseMarkdown(text: string) -> Node[]` where a `Node` is one of
-  `{ type: 'paragraph', children: Inline[] }`,
-  `{ type: 'heading', level: number, children: Inline[] }`,
-  `{ type: 'list', ordered: boolean, items: Node[][] }`,
-  `{ type: 'code', lang: string|null, code: string }`,
-  `{ type: 'quote', children: Node[] }`,
-  and an `Inline` is one of
-  `{ type: 'text', value }`, `{ type: 'strong'|'em', children }`, `{ type: 'code', value }`, `{ type: 'link', href, children }`.
+The tree it returns — the contract the components below are written against:
 
-- [ ] **Step 1: Pin the dependency**
+- `{ type: 'paragraph', children: Inline[] }`
+- `{ type: 'heading', level, children: Inline[] }`
+- `{ type: 'list', ordered, start, items: { checked: boolean|null, blocks: Node[] }[] }`
+- `{ type: 'code', lang: string|null, text }`
+- `{ type: 'quote', blocks: Node[] }`
+- `{ type: 'rule' }`
 
-```bash
-node -p "require('./node_modules/@lezer/markdown/package.json').version"
-```
+and an `Inline` is one of `{ type: 'text', value }`,
+`{ type: 'strong'|'em', children }`, `{ type: 'code', value }`,
+`{ type: 'link', href, children }`.
 
-Add `"@lezer/markdown": "^<that version>"` to `dependencies` in `package.json`, then `npm install`.
-
-- [ ] **Step 2: Write the failing test**
-
-```js
-import { describe, expect, it } from 'vitest'
-import { parseMarkdown } from '../../../src/components/conversation/markdown.js'
-
-/* The text of every inline in a node, joined — enough to assert on structure
-   without spelling out a whole inline tree in each case. */
-const flatten = (children) =>
-  children.map((node) => (node.type === 'text' || node.type === 'code' ? node.value : flatten(node.children))).join('')
-
-describe('parseMarkdown', () => {
-  it('turns a bare line into one paragraph', () => {
-    expect(parseMarkdown('hello')).toEqual([
-      { type: 'paragraph', children: [{ type: 'text', value: 'hello' }] }
-    ])
-  })
-
-  it('keeps two blocks apart', () => {
-    const nodes = parseMarkdown('one\n\ntwo')
-    expect(nodes).toHaveLength(2)
-    expect(flatten(nodes[1].children)).toBe('two')
-  })
-
-  it('reads a fenced block as code and keeps its language', () => {
-    expect(parseMarkdown('```rust\nlet x = 1;\n```')).toEqual([
-      { type: 'code', lang: 'rust', code: 'let x = 1;' }
-    ])
-  })
-
-  it('reads a fence with no language as code all the same', () => {
-    expect(parseMarkdown('```\nplain\n```')[0]).toEqual({ type: 'code', lang: null, code: 'plain' })
-  })
-
-  it('reads a bullet list, each item a list of blocks', () => {
-    const [list] = parseMarkdown('- one\n- two')
-    expect(list.type).toBe('list')
-    expect(list.ordered).toBe(false)
-    expect(list.items).toHaveLength(2)
-    expect(flatten(list.items[1][0].children)).toBe('two')
-  })
-
-  it('tells an ordered list from a bullet one', () => {
-    expect(parseMarkdown('1. one\n2. two')[0].ordered).toBe(true)
-  })
-
-  it('reads a heading with its level', () => {
-    const [heading] = parseMarkdown('## Title')
-    expect(heading).toMatchObject({ type: 'heading', level: 2 })
-    expect(flatten(heading.children)).toBe('Title')
-  })
-
-  it('reads emphasis inside a paragraph rather than as literal asterisks', () => {
-    const [paragraph] = parseMarkdown('a **bold** word')
-    expect(paragraph.children.some((node) => node.type === 'strong')).toBe(true)
-    expect(flatten(paragraph.children)).toBe('a bold word')
-  })
-
-  it('reads inline code as its own node so it can be drawn in mono', () => {
-    const [paragraph] = parseMarkdown('run `cargo test` now')
-    expect(paragraph.children).toContainEqual({ type: 'code', value: 'cargo test' })
-  })
-
-  it('reads a link and keeps its target', () => {
-    const [paragraph] = parseMarkdown('see [the docs](https://example.com)')
-    const link = paragraph.children.find((node) => node.type === 'link')
-    expect(link.href).toBe('https://example.com')
-    expect(flatten(link.children)).toBe('the docs')
-  })
-
-  /* The whole reason this module exists rather than a markdown-to-HTML
-     library: the agent's prose routinely quotes output it did not write, and
-     nothing here may produce markup. A tag survives only as text. */
-  it('carries html through as text and never as markup', () => {
-    const nodes = parseMarkdown('<img src=x onerror=alert(1)>')
-    const asText = JSON.stringify(nodes)
-    expect(asText).toContain('onerror')
-    expect(nodes.every((node) => node.type !== 'html')).toBe(true)
-  })
-
-  it('answers with nothing at all for an empty string', () => {
-    expect(parseMarkdown('')).toEqual([])
-  })
-
-  it('does not lose a trailing block that has no blank line after it', () => {
-    expect(parseMarkdown('para\n\n- item')).toHaveLength(2)
-  })
-})
-```
-
-- [ ] **Step 3: Run it and watch it fail**
-
-Run: `npm test -- tests/components/conversation/markdown.test.js`
-Expected: FAIL — the module does not exist.
-
-- [ ] **Step 4: Implement the parser**
-
-```js
-/* Markdown as a tree of plain objects, for components to draw.
- *
- * There is no HTML anywhere in this file and there must never be. The agent's
- * prose routinely quotes output it did not write, and this webview holds
- * Tauri's IPC: handing such a string to `v-html` would be a real hole rather
- * than a theoretical one. A tree closes it by construction — a tag that
- * survives parsing survives as text, and text is all a component can draw.
- *
- * The parser is `@lezer/markdown`, which the editor's markdown mode already
- * brings in. Walking its syntax tree rather than using a renderer is what keeps
- * the output ours: nodes this app knows about, and nothing else. */
-import { parser } from '@lezer/markdown'
-
-/* lezer names the node types; these are the ones this app draws. Anything not
- * listed falls through to its own text, which is the same choice the Rust side
- * makes for an event type it has never heard of. */
-const INLINE = {
-  StrongEmphasis: 'strong',
-  Emphasis: 'em',
-  InlineCode: 'code',
-  Link: 'link'
-}
-
-export function parseMarkdown(text) {
-  if (!text.trim()) return []
-  const tree = parser.parse(text)
-  const blocks = []
-  const cursor = tree.cursor()
-  // Descend once into the document, then take the top-level blocks in order.
-  if (!cursor.firstChild()) return []
-  do {
-    const node = block(cursor.node, text)
-    if (node) blocks.push(node)
-  } while (cursor.nextSibling())
-  return blocks
-}
-
-function block(node, text) {
-  switch (node.name) {
-    case 'Paragraph':
-      return { type: 'paragraph', children: inlines(node, text) }
-    case 'ATXHeading1':
-    case 'ATXHeading2':
-    case 'ATXHeading3':
-    case 'ATXHeading4':
-    case 'ATXHeading5':
-    case 'ATXHeading6':
-      return { type: 'heading', level: Number(node.name.slice(-1)), children: inlines(node, text) }
-    case 'FencedCode':
-    case 'CodeBlock':
-      return code(node, text)
-    case 'BulletList':
-    case 'OrderedList':
-      return {
-        type: 'list',
-        ordered: node.name === 'OrderedList',
-        items: children(node, 'ListItem').map((item) =>
-          children(item).map((child) => block(child, text)).filter(Boolean)
-        )
-      }
-    case 'Blockquote':
-      return { type: 'quote', children: children(node).map((child) => block(child, text)).filter(Boolean) }
-    default:
-      return null
-  }
-}
-
-function code(node, text) {
-  const info = node.getChild('CodeInfo')
-  const body = node.getChild('CodeText')
-  return {
-    type: 'code',
-    lang: info ? text.slice(info.from, info.to) : null,
-    code: body ? text.slice(body.from, body.to) : ''
-  }
-}
-
-/* The inlines of one block, in order, with the runs of plain text between them
- * kept — otherwise "a **bold** word" would lose both spaces. */
-function inlines(node, text) {
-  const out = []
-  let at = node.from
-  // A heading's own marker is a child too, and is not part of what it says.
-  for (const child of children(node)) {
-    if (child.name === 'HeaderMark' || child.name === 'QuoteMark' || child.name === 'ListMark') {
-      at = Math.max(at, child.to)
-      continue
-    }
-    const kind = INLINE[child.name]
-    if (!kind) continue
-    push(out, text.slice(at, child.from))
-    out.push(inline(kind, child, text))
-    at = child.to
-  }
-  push(out, text.slice(at, node.to))
-  return out
-}
-
-function inline(kind, node, text) {
-  if (kind === 'code') {
-    const marks = children(node, 'CodeMark')
-    const from = marks.length ? marks[0].to : node.from
-    const to = marks.length > 1 ? marks[marks.length - 1].from : node.to
-    return { type: 'code', value: text.slice(from, to) }
-  }
-  if (kind === 'link') {
-    const url = node.getChild('URL')
-    return {
-      type: 'link',
-      href: url ? text.slice(url.from, url.to) : '',
-      children: [{ type: 'text', value: linkText(node, text) }]
-    }
-  }
-  return { type: kind, children: inlines(node, text) }
-}
-
-function linkText(node, text) {
-  const marks = children(node, 'LinkMark')
-  return marks.length >= 2 ? text.slice(marks[0].to, marks[1].from) : text.slice(node.from, node.to)
-}
-
-/* A run of plain text, trimmed of nothing: the spaces around emphasis are part
- * of the sentence. Only a run that is entirely empty is dropped. */
-function push(out, value) {
-  if (!value) return
-  const last = out[out.length - 1]
-  if (last && last.type === 'text') last.value += value
-  else out.push({ type: 'text', value })
-}
-
-function children(node, name) {
-  const out = []
-  let child = node.firstChild
-  while (child) {
-    if (!name || child.name === name) out.push(child)
-    child = child.nextSibling
-  }
-  return out
-}
-```
-
-- [ ] **Step 5: Run the tests**
-
-Run: `npm test -- tests/components/conversation/markdown.test.js`
-Expected: PASS, 13 tests. If lezer's node names differ from the list above, print them first — `parser.parse(text).toString()` names every node — and correct the switch rather than working around it.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/components/conversation/markdown.js tests/components/conversation/markdown.test.js package.json package-lock.json
-git commit -m "feat(conversation): markdown в дерево узлов, без единого фрагмента разметки"
-```
-
+Two behaviours of that module this plan relies on: no character of the source
+disappears — an unrecognised construct and any HTML tag come back as ordinary
+text — and a `link` node is produced only for `http` and `https`, which is what
+makes an agent's output safe to hand to `openExternal`. `tests/components/markdown/markdown.test.js`
+covers all of it; a defect found there is its own task, not a fix inside this plan.
 ---
 
 ## Task 2: The store
@@ -516,61 +268,40 @@ git commit -m "feat(conversation): store журнала, вопроса и че�
 Five of the eight: everything that is neither loud nor an input. Built together because each is a few dozen lines of the same shape, and a reviewer would not reject one while approving its neighbour.
 
 **Files:**
-- Create: `src/components/conversation/Markdown.vue`, `AgentMessage.vue`, `UserMessage.vue`, `ToolCall.vue`, `Reasoning.vue`, `TurnResult.vue`
+- Create: `src/components/conversation/AgentMessage.vue`, `UserMessage.vue`, `ToolCall.vue`, `Reasoning.vue`, `TurnResult.vue`
 - Modify: `src/components/index.js`, `src/views/Gallery.vue`
 
 **Interfaces:**
-- Consumes: `parseMarkdown` from Task 1; `Icon` from `../core/Icon.vue`; `iconFor` from `src/catppuccinIcon.js`.
-- Produces: components taking one prop each — `Markdown { text }`, `AgentMessage { text }`, `UserMessage { text, attachments }`, `ToolCall { name, detail, result }` where `result` is `null | { ok, summary }`, `Reasoning { text }`, `TurnResult { tokensIn, tokensOut, costUsd, ms }`.
+- Consumes: `Markdown` from `../markdown/Markdown.vue` (Task 1); `Icon` from `../core/Icon.vue`; `iconFor` from `src/catppuccinIcon.js`.
+- Produces: `AgentMessage { text }` and `UserMessage { text, attachments }`, both with `emits: ['open']`; `ToolCall { name, detail, result }` where `result` is `null | { ok, summary }`; `Reasoning { text }`; `TurnResult { tokensIn, tokensOut, costUsd, ms }`.
 
 - [ ] **Step 1: Register the glyphs first**
 
 `Icon` warns in dev for an unregistered name, and `core/icons.js` is the only file that names Lucide. Add whatever these components use — at minimum `chevron-right` (Reasoning's fold), `check` and `x` (a tool's outcome) — if they are not registered already. Check before adding; most are.
 
-- [ ] **Step 2: Write `Markdown.vue`**
+- [ ] **Step 2: Write the five**
 
-It renders the tree from Task 1 and recurses into itself for a quote and a list item. Fenced code goes to CodeMirror read-only through the existing editor wiring; inline code is a `<span>` in `var(--font-mono)` on `var(--surface-sunken)`.
+Each is the shape `src/components/status/StatusBadge.vue` already has: a
+`defineProps`, a `computed` returning an object of `var(--token)` references, and a
+template binding it with `:style`. Read that file before writing the first of these
+— it is the reference, and nothing below departs from its shape.
 
-```vue
-<script setup>
-import { computed } from 'vue'
-import { parseMarkdown } from './markdown.js'
+`AgentMessage` is the shared `Markdown` with the turn's spacing around it — a fenced block inside it draws as that component already draws one, a `<pre>` in `var(--font-mono)`, and syntax highlighting is not this plan's. `UserMessage` sits on `var(--surface-raised)` with a left border in `var(--border-strong)` so the two halves of the conversation are told apart by shape rather than by colour. `ToolCall` is one row: the glyph, the name in mono, the detail in mono and dimmed, and the result's outcome at the end — a tick or a cross with `summary` beside it, and nothing at all while it is still running. A path in `detail` takes its icon from `catppuccinIcon.js`. `Reasoning` is folded by default behind a `chevron-right` and carries `data-attention="quiet"` with `opacity: var(--attn-quiet-opacity)`. `TurnResult` is one dimmed mono line: `120 in · 40 out · $0.031 · 4.2 s`, with the cost omitted when it is `null` rather than drawn as `$0`.
 
-const props = defineProps({ text: { type: String, required: true } })
-const blocks = computed(() => parseMarkdown(props.text))
+The one thing not to drop while wiring these up: the shared `Markdown` opens no
+link itself. It emits `open` with the href and re-emits it upward at every level
+of the tree, so `AgentMessage` and `UserMessage` have to declare `emits: ['open']`
+and forward it, and whatever draws them binds it to `openExternal` in
+`src/stores/app.js` — the way `kanban/TaskInspector.vue` and `views/Gallery.vue`
+already do. The desktop opens a link in the person's own browser; a navigation
+inside the webview would replace the app. Bind `:text` alone and an agent's prose
+ships with links that do nothing, which no test in this project can catch.
 
-const paragraph = computed(() => ({
-  margin: 0,
-  font: `var(--weight-regular) var(--text-sm)/var(--leading-normal) var(--font-sans)`,
-  color: 'var(--text)'
-}))
-const inlineCode = {
-  font: `var(--weight-regular) var(--text-xs)/1.4 var(--font-mono)`,
-  background: 'var(--surface-sunken)',
-  border: 'var(--border-w) solid var(--border)',
-  borderRadius: 'var(--radius-1)',
-  padding: '0 var(--space-1)'
-}
-</script>
-```
+- [ ] **Step 3: Export and gallery**
 
-Draw every node type the parser can produce. A `link` is an `<a>` whose click is intercepted and handed to `openExternal` in `src/stores/app.js` — the desktop opens links in the person's own browser, and a navigation inside the webview would replace the app.
+Add all five to `src/components/index.js` under a `// conversation` comment, and a section to `src/views/Gallery.vue` showing each with realistic content: a paragraph with a list and a fenced block, a tool call in each of its three states, a folded and an unfolded reasoning block, a turn result with and without a cost.
 
-- [ ] **Step 3: Write the other five**
-
-Each is the shape `src/components/status/StatusBadge.vue` already has and which
-`Markdown.vue` above repeats: a `defineProps`, a `computed` returning an object of
-`var(--token)` references, and a template binding it with `:style`. Read that file
-before writing the first of these — it is the reference, and nothing below departs
-from its shape.
-
-`AgentMessage` is `Markdown` with the turn's spacing around it. `UserMessage` sits on `var(--surface-raised)` with a left border in `var(--border-strong)` so the two halves of the conversation are told apart by shape rather than by colour. `ToolCall` is one row: the glyph, the name in mono, the detail in mono and dimmed, and the result's outcome at the end — a tick or a cross with `summary` beside it, and nothing at all while it is still running. A path in `detail` takes its icon from `catppuccinIcon.js`. `Reasoning` is folded by default behind a `chevron-right` and carries `data-attention="quiet"` with `opacity: var(--attn-quiet-opacity)`. `TurnResult` is one dimmed mono line: `120 in · 40 out · $0.031 · 4.2 s`, with the cost omitted when it is `null` rather than drawn as `$0`.
-
-- [ ] **Step 4: Export and gallery**
-
-Add all six to `src/components/index.js` under a `// conversation` comment, and a section to `src/views/Gallery.vue` showing each with realistic content: a paragraph with a list and a fenced block, a tool call in each of its three states, a folded and an unfolded reasoning block, a turn result with and without a cost.
-
-- [ ] **Step 5: Check by eye**
+- [ ] **Step 4: Check by eye**
 
 ```bash
 npm run dev
@@ -585,7 +316,7 @@ Open `http://localhost:5173/?view=gallery` and check the new section in all four
 
 What to look for: nothing changes size between the themes (that would be a hardcoded value), the compact density tightens spacing without changing type colour or radius, and the file-type icon in a `ToolCall` is legible on both grounds.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/components/conversation/ src/components/index.js src/views/Gallery.vue src/components/core/icons.js

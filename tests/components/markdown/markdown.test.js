@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseInline, parseMarkdown } from '../../../src/components/kanban/markdown.js'
+import { parseInline, parseMarkdown } from '../../../src/components/markdown/markdown.js'
 
 describe('parseMarkdown blocks', () => {
   it('reads a heading and its level', () => {

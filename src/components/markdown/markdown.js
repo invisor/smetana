@@ -1,4 +1,4 @@
-/* Markdown to a tree, for the task inspector.
+/* Markdown to a tree, for the task inspector and the conversation panel.
 
    Pure — no Vue and no DOM — because a `.vue` file is the one thing no test in
    this repository can reach, and a parser is the most test-shaped thing in the

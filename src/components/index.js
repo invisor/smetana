@@ -58,8 +58,6 @@ export { default as DeleteTaskModal } from './kanban/DeleteTaskModal.vue'
 export { default as DraftInspector } from './kanban/DraftInspector.vue'
 export { default as KanbanBoard } from './kanban/KanbanBoard.vue'
 export { default as KanbanColumn } from './kanban/KanbanColumn.vue'
-export { default as Markdown } from './kanban/Markdown.vue'
-export { default as MarkdownInline } from './kanban/MarkdownInline.vue'
 export { default as NewTaskModal } from './kanban/NewTaskModal.vue'
 export { default as PromoteColumnModal } from './kanban/PromoteColumnModal.vue'
 export { default as ReadyTaskModal } from './kanban/ReadyTaskModal.vue'
@@ -186,6 +184,10 @@ export {
 export { BRANCH_ROWS, filler, resolveDrag } from './git/sectionHeights.js'
 export { AHEAD_TOKEN, BEHIND_TOKEN, folderBehind, pullAction, pushAction, trackingMark } from './git/tracking.js'
 export { writeSummary } from './git/writeSummary.js'
+
+// markdown
+export { default as Markdown } from './markdown/Markdown.vue'
+export { default as MarkdownInline } from './markdown/MarkdownInline.vue'
 
 // notifications
 export { default as NotificationCard } from './notifications/NotificationCard.vue'
