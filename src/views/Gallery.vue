@@ -1695,13 +1695,42 @@ const MARKDOWN_SAMPLE = [
   '### What it looks like',
   '',
   'A **quiet** strip above the columns rather than a *replacement* of them,',
-  'drawn by `src/components/kanban/KanbanBoard.vue`.',
+  'drawn by `src/components/kanban/KanbanBoard.vue`. A stale value is ~~kept~~',
+  'dropped rather than shown next to a live one.',
+  '',
+  '#### Rollout',
+  '',
+  'Behind the same flag as the rest of the health check.',
+  '',
+  '##### Risk',
+  '',
+  'Low — the strip reads a value the board already has.',
+  '',
+  '###### Owner',
+  '',
+  'Whoever picks up smetana-29j next.',
   '',
   '> The board stays usable while it says the data may be stale.',
+  '>',
+  '> > Only while `bd health` disagrees with the last snapshot.',
   '',
   '1. Read the health',
   '2. Draw the strip',
   '3. Leave the columns alone',
+  '',
+  '- Top level',
+  '  - Second level',
+  '    - Third level',
+  '  - Second level again',
+  '- Top level again',
+  '  1. Ordered inside unordered',
+  '  2. Keeps its own numbers',
+  '',
+  '`--status-live`',
+  ': the colour a badge takes while a run is in flight',
+  '`--status-quiet`',
+  ': the opacity a finished badge dims to',
+  ': shown twice, since a term may carry more than one definition',
   '',
   '```sh',
   'npm test -- tests/components/kanban/boardView.test.js',
@@ -3358,10 +3387,41 @@ const menuTargetStyle = {
       <!-- The renderer on its own, at the width it is read at in the app: the
            right column is 320px, and a code block that scrolls there rather
            than widening the panel is the thing to look at. Nothing in it is a
-           control — a task item is a glyph, and clicking one does nothing. -->
+           control — a task item's box is drawn in CSS and clicking it does
+           nothing. `sm-prose.css` paints everything below off `class="sm-prose"`
+           alone — neither `Markdown` nor `MarkdownInline` carries a `:style`
+           any more.
+
+           Each sample sits inside `article[data-turn="agent"]`, the panel's own
+           box, rather than as a bare child of `.sm-prose`: that root is a flex
+           column with `gap:var(--prose-turn-gap)` — the space between turns —
+           and a `<p>`/`<h1>` sitting directly under it would carry that gap on
+           top of its own `margin-bottom:var(--prose-block-gap)`, doubling every
+           paragraph's air. One `article` child makes the gap inert (nothing
+           beside it to space from) and shows the specimen in the box it is
+           actually read inside. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start' }">
         <div :style="{ width: '320px' }">
-          <Markdown :text="MARKDOWN_SAMPLE" @open="openExternal" />
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown :text="MARKDOWN_SAMPLE" @open="openExternal" />
+            </article>
+          </div>
+        </div>
+        <!-- `kbd` and `small` have no markdown spelling this parser reaches
+             (see `markdown.js`'s own header), so the only way to show
+             `sm-prose.css` painting them is to write the two tags out by hand —
+             the one place in this file that draws prose without going through
+             `Markdown`. -->
+        <div :style="{ width: '320px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <p>
+                Press <kbd>⌘</kbd>+<kbd>K</kbd> to open the palette.
+                <small>Works from anywhere in the app.</small>
+              </p>
+            </article>
+          </div>
         </div>
       </div>
       <!-- Two of them: the panel draws only the fields an issue has, so the

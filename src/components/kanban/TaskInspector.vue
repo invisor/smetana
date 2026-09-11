@@ -162,6 +162,22 @@ const proseSection = {
   gap: 'var(--space-2)'
 }
 
+/* `.sm-prose` (`sm-prose.css:33`) is the conversation panel's own container —
+   a flex column with `gap:var(--prose-turn-gap)` and `padding:var(--panel-pad)`
+   — not a bare wrapper for a fragment of prose. This panel has no turns to
+   space apart and its own padding already comes from `inspectorBody` in
+   `DesktopApp.vue`, so every field below turns the container half of the class
+   off and keeps only what actually paints the elements inside it: `display:
+   block` makes the flex `gap` inert (blocks fall back to `sm-prose.css`'s own
+   `margin-bottom:var(--prose-block-gap)` rhythm, and `:first-child`/
+   `:last-child` still trim both ends), and zeroing the padding leaves the
+   panel's own inset the only one. Do not remove this thinking it is dead
+   weight — without it every paragraph here carries the turn gap on top of its
+   own block margin, roughly doubling the space between them, and the
+   description sits inset twice under a title and an id row that are inset
+   once. */
+const flatProse = { display: 'block', padding: 'var(--space-0)' }
+
 const closeReasonBox = {
   display: 'flex',
   flexDirection: 'column',
@@ -196,9 +212,15 @@ const divider = {
 
     <!-- Everything bd stores is markdown, and so is everything an agent writes
          into it, so all five prose fields below are drawn as markdown rather
-         than as the text of it. Still read-only: nothing here is editable, and
-         a task item's checkbox is a glyph rather than a control. -->
-    <Markdown v-if="issue.description" :text="issue.description" @open="emit('open', $event)" />
+         than as the text of it — as `sm-prose.css` (markup-contract.md,
+         section 2) now paints it, so each field's own `Markdown` sits under a
+         `class="sm-prose"` root. `flatProse` above is the one `:style` on that
+         root, turning off the panel-container half of the class this field has
+         no use for. Still read-only: nothing here is editable, and a task
+         item's box is drawn by the stylesheet rather than by a control. -->
+    <div v-if="issue.description" class="sm-prose" :style="flatProse">
+      <Markdown :text="issue.description" @open="emit('open', $event)" />
+    </div>
 
     <!-- bd's other prose, in a fixed order: the two that are the spec first,
          the log that grows last. Read-only like the description — rewriting
@@ -206,17 +228,23 @@ const divider = {
          an issue without them looks exactly as it did before they existed. -->
     <div v-if="issue.acceptance_criteria" :style="proseSection">
       <span :style="rowLabel">Acceptance criteria</span>
-      <Markdown :text="issue.acceptance_criteria" @open="emit('open', $event)" />
+      <div class="sm-prose" :style="flatProse">
+        <Markdown :text="issue.acceptance_criteria" @open="emit('open', $event)" />
+      </div>
     </div>
 
     <div v-if="issue.design" :style="proseSection">
       <span :style="rowLabel">Design</span>
-      <Markdown :text="issue.design" @open="emit('open', $event)" />
+      <div class="sm-prose" :style="flatProse">
+        <Markdown :text="issue.design" @open="emit('open', $event)" />
+      </div>
     </div>
 
     <div v-if="issue.notes" :style="proseSection">
       <span :style="rowLabel">Notes</span>
-      <Markdown :text="issue.notes" @open="emit('open', $event)" />
+      <div class="sm-prose" :style="flatProse">
+        <Markdown :text="issue.notes" @open="emit('open', $event)" />
+      </div>
     </div>
 
     <!-- Only when there is a record to separate: an issue carrying neither
@@ -233,7 +261,9 @@ const divider = {
 
     <div v-if="issue.close_reason" :style="closeReasonBox">
       <span :style="rowLabel">Close reason</span>
-      <Markdown :text="issue.close_reason" @open="emit('open', $event)" />
+      <div class="sm-prose" :style="flatProse">
+        <Markdown :text="issue.close_reason" @open="emit('open', $event)" />
+      </div>
     </div>
   </div>
 </template>
