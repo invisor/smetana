@@ -58,10 +58,37 @@ describe('parseMarkdown blocks', () => {
     expect(list.items).toHaveLength(2)
   })
 
-  it('reads the checkbox of a task item, and its absence', () => {
-    const [list] = parseMarkdown('- [ ] open\n- [x] done\n- plain')
-    expect(list.items.map((i) => i.checked)).toEqual([false, true, null])
+  /* `sm-prose.css` draws the task box on every direct child of `ul[data-task]`
+     unconditionally, so `takeList` only claims a list is one — and only then
+     consumes the marker — when every item of it opens with `[x]`/`[ ]`. This
+     is the case where that is true of the whole list. */
+  it('reads the checkbox of every item in a bulleted list where all of them are marked', () => {
+    const [list] = parseMarkdown('- [ ] open\n- [x] done')
+    expect(list.items.map((i) => i.checked)).toEqual([false, true])
+    expect(list.items[0].blocks[0].children[0].value).toBe('open')
     expect(list.items[1].blocks[0].children[0].value).toBe('done')
+  })
+
+  /* An ordered list has no task box in the contract — `ul[data-task]` only —
+     so a `[x]` typed on a numbered item is not a marker this parser owns: it
+     is left as the words it is, and the item's `checked` stays `null`. */
+  it('leaves a checkbox marker on a numbered item as text, since an ol has no task box', () => {
+    const [list] = parseMarkdown('1. [x] done')
+    expect(list.ordered).toBe(true)
+    expect(list.items[0].checked).toBeNull()
+    expect(list.items[0].blocks[0].children[0].value).toBe('[x] done')
+  })
+
+  /* One marked item beside one plain bullet is not a list of tasks — the box
+     is drawn on the whole `ul`, so claiming it here would put an empty,
+     unchecked box in front of a bullet the person never marked. Every marker
+     in a list like this is left as text instead, `checked` staying `null`
+     throughout, so nothing is invented and nothing typed is lost either. */
+  it('leaves every marker in a mixed bulleted list as text, since the box is drawn on the whole list', () => {
+    const [list] = parseMarkdown('- [x] done\n- plain')
+    expect(list.items.map((i) => i.checked)).toEqual([null, null])
+    expect(list.items[0].blocks[0].children[0].value).toBe('[x] done')
+    expect(list.items[1].blocks[0].children[0].value).toBe('plain')
   })
 
   it('nests a list inside its item', () => {

@@ -42,12 +42,15 @@ const emit = defineEmits(['open'])
 const tree = computed(() => props.blocks ?? parseMarkdown(props.text))
 
 /* `data-task` lives on the `<ul>`, not per item, so it is decided once for the
-   whole list: any item carrying a checked state (`true` or `false`, never
-   `null`) makes the list a task list. An ordered list is never one — the
-   contract's task box is `ul[data-task]` only, and `1. [ ] …` has no markdown
-   convention behind it worth inventing one for. */
+   whole list, off a single item — `markdown.js`'s `takeList` is what actually
+   decides this, and its guarantee is what makes checking one enough: a list's
+   items carry a checked state either all together or not at all, never a mix,
+   so `sm-prose.css`'s unconditional `ul[data-task] > li::before` never lands
+   on a plain bullet. This file does not re-derive that homogeneity, only
+   trusts it — an ordered list is never a task list either, for the same
+   reason `takeList` refuses one: the contract's box is `ul[data-task]` only. */
 function isTaskList(block) {
-  return !block.ordered && block.items.some((item) => item.checked !== null)
+  return block.items.length > 0 && block.items[0].checked !== null
 }
 </script>
 

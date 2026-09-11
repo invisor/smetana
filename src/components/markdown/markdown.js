@@ -233,6 +233,10 @@ function takeList(lines, start, depth = 0) {
     items: []
   }
   let i = start
+  /* Every item's raw body is gathered first, unparsed, so the marker decision
+     below can look at the whole list before committing to it — see the
+     comment on `isTask`. */
+  const bodies = []
   while (i < lines.length) {
     const match = BULLET.exec(lines[i]) || ORDERED.exec(lines[i])
     /* A less-indented marker belongs to an outer list, and any other line at
@@ -248,7 +252,24 @@ function takeList(lines, start, depth = 0) {
       body.push(lines[i].slice(Math.min(leading(lines[i]), width)))
       i++
     }
-    const task = TASK.exec(body[0])
+    bodies.push(body)
+  }
+
+  /* `sm-prose.css` draws the task box on `ul[data-task] > li` unconditionally
+     — every direct child, not just the ones that opened with a marker — so a
+     list may only claim to be one when every one of its items genuinely is:
+     a bullet list (an `ol` has no task box in the contract, and its numbers
+     are worth more than a checkbox markdown never gave them a place to keep)
+     where **every** item opens with `[x]`/`[ ]`. Anything short of that —
+     one plain bullet among marked ones, or a marker on a numbered item —
+     leaves every marker in the list as the literal text it is, rather than
+     consuming it and then having nowhere to draw what it meant: the box is
+     drawn on the container, so a partial claim would either invent a box
+     under a plain bullet or eat a person's `[x]` and show nothing for it. */
+  const isTask = !ordered && bodies.length > 0 && bodies.every((body) => TASK.test(body[0]))
+
+  for (const body of bodies) {
+    const task = isTask ? TASK.exec(body[0]) : null
     if (task) body[0] = task[2]
     list.items.push({
       checked: task ? task[1].toLowerCase() === 'x' : null,
