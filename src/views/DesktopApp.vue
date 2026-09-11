@@ -2780,13 +2780,15 @@ const activeTerminal = computed(() => terminalTab(project.activeTab))
 
    One field and one count beside it: `agentAimWrites` below is raised by that
    same function on every call, whatever is written. Plenty of callers aim before
-   an await; **`newAgent` is the only one that puts its aim back after one**, and
-   the count is what lets it ask first whether it is still the last thing to have
-   aimed this project.
+   an await; **`newAgent` and `resumeSession` are the only ones that put an aim
+   back after one**, and the count is what lets each ask first whether it is
+   still the last thing to have aimed this project.
 
-   There is a second writer and it is deliberate: `newAgent`'s catch puts the
-   previous aim back when a press started nothing, and it writes this Map
-   directly rather than calling `showAgentTab`. **Going through that function
+   There is a second kind of writer and it is deliberate: `newAgent`'s catch and
+   `resumeSession`'s two restore sites — its early return on `badCwd` and its own
+   `createSession` catch — put the previous aim back when a press started
+   nothing, and each writes this Map directly rather than calling
+   `showAgentTab`. **Going through that function
    would bring the tab forward again**, which is exactly wrong in the case the
    restore exists for — with no other agent in the project, the fallback's own
    failed ticket has just taken `hasAgentTab` false and the watcher below has
@@ -2840,8 +2842,8 @@ const agentAim = reactive(new Map())
    to would cost an untouched project its restore.
 
    Not reactive, unlike the aim: nothing draws it. It is read imperatively, and
-   by one caller — `newAgent`, the only one that puts an aim *back* after an
-   await — so a reactive version would only offer render dependencies on a
+   by two callers — `newAgent` and `resumeSession`, the only ones that put an
+   aim *back* after an await — so a reactive version would only offer render dependencies on a
    number that means nothing on screen. Nothing clears it either, for the reason
    nothing clears the aim — one small entry per project this window has aimed,
    dying with the window. */
@@ -2868,11 +2870,12 @@ const agentAimWrites = new Map()
 
    **Every call raises that project's write count**, whatever it aims at and
    whether or not the tab itself moves — a call for a project that is no longer
-   in front still aimed it. That count is what `newAgent` reads to tell an aim of
-   its own from somebody else's a second later, and this being the only place it
-   is raised is what keeps that true however long the list of callers grows. The
-   one write that goes around this function, `newAgent`'s catch, goes around the
-   count with it, on purpose. */
+   in front still aimed it. That count is what `newAgent` and `resumeSession`
+   read to tell an aim of their own from somebody else's a second later, and
+   this being the only place it is raised is what keeps that true however long
+   the list of callers grows. The writes that go around this function —
+   `newAgent`'s catch and `resumeSession`'s two restore sites — go around the
+   count with them, on purpose. */
 function showAgentTab(conversation = null, path = activePath.value) {
   agentAim.set(path, conversation)
   agentAimWrites.set(path, (agentAimWrites.get(path) ?? 0) + 1)
