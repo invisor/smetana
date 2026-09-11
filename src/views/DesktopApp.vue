@@ -2500,7 +2500,7 @@ function selectAgent(id) {
      claimed issues — would go on standing in the right column while the person
      is now watching a conversation. Letting the focus go is what makes the two
      kinds of bare row answer a click alike, and it costs nothing else.
-     `rightPanel` falls back to `'board'`, whose watch fires only on the way
+     `rightPanel` falls back to `'board'`, whose watch writes only on the way
      *out* of the board, so the tab somebody is standing on is left alone and
      the board's own selection is drawn exactly as it was. */
   const conversation = drivenSessionOf(id)
