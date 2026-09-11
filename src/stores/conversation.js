@@ -338,14 +338,24 @@ function listenToState() {
    A driven session is one whose protocol the worker parses itself, and only
    Claude Code has a driver: `session::service::driver_for` refuses every other
    profile, and `Request::Start` refuses every intent but `Bare`. So the front
-   end has to ask before it takes this road at all — a person whose harness is
-   Codex pressing "+ New agent" must get the PTY they have always had, not a
-   refusal.
+   end asks before it takes this road at all — a person whose harness is Codex
+   pressing "+ New agent" must get the PTY they have always had.
 
-   Asked of `settings.agent` and nothing else, and that is exact rather than a
-   guess: `Intent::Bare` takes `agents::Role::Default`, which
+   **This is a cheap front door and cannot be the only gate, because it cannot
+   see `PATH`.** It is asked of `settings.agent`, and the first half of that
+   chain is exact: `Intent::Bare` takes `agents::Role::Default`, which
    `settings::model::Settings::role_pair` answers with the root pair — the same
-   two fields the front end holds. No per-project override reaches it.
+   two fields the front end holds, with no per-project override reaching it. The
+   half it cannot see is downstream of all of that. `agents::pick` substitutes
+   **the first installed profile** when the configured one is not on the machine,
+   silently and by design, and `pick_with_model` is what `spawn_session` calls.
+   `settings.agent` ships as `claude` and `Settings::validate` forces anything
+   unknown back to it, so a machine with only Codex on it answers `true` here and
+   is refused by the driver a round trip later. What answers that is the caller:
+   `newAgent` in `views/DesktopApp.vue` falls through to `createSession` when a
+   driven start comes back with nothing, and `createSession` resolves whatever
+   `pick` would have. Nothing here should grow a second guess at `PATH` instead —
+   the front end does not have one.
 
    A list here rather than a capability on the harness row, because there is no
    flag for this: `agents::Capabilities` carries `resume`, `fork`, `clear`,

@@ -16,6 +16,17 @@ paths:
   # editing that half, not only for whoever is editing the worker.
   - "src/stores/tabs.js"
   - "src/components/shell/**"
+  # The other kind of agent session, which shares this subsystem's one tab: a
+  # driven conversation. Until it has a rule of its own, this file is the only
+  # written account of why the Agent tab is aimed by a per-project field rather
+  # than by a watcher, and of what stands between a Codex machine and a dead
+  # "+ New agent" — so it has to load for whoever edits either end of that.
+  - "src/stores/conversation.js"
+  - "src/components/conversation/**"
+  - "src-tauri/src/session/**"
+  # Where the two kinds meet: `agentAim` and `showAgentTab` decide which of them
+  # the Agent tab draws, and every road into a session is in this file.
+  - "src/views/DesktopApp.vue"
 ---
 
 # The terminal: agent sessions, and one shell
@@ -57,10 +68,14 @@ because `tabs.js` is one half of an import cycle with `settings.js` and a module
 would read this store at evaluation time — the failure `notifications.js` carries its own note about.
 **Nothing ever takes an entry out of the driven half**, deliberately: a conversation's journal lives in
 the worker and is worth reading after the last word as much as during it, and there is no process to
-close and no cross on this tab to close it with. So once a project has held a driven conversation its
-Agent tab stands for the life of the window, that watch can never fire for it, and a start that was
-*refused* is taken back by hand in `newAgent` instead — there is no ticket on that road for the store
-to withdraw. A restart clears it, driven sessions deliberately not surviving one.
+close and no cross on this tab to close it with. The consequence to know before reading `dropAgentTab`
+as the whole rule: **a project that has ever held a driven conversation keeps its Agent tab for the
+life of the window** — after that session has exited, after its child is gone — and the watch on
+`hasAgentTab` can never fire for it, because the value it watches never goes back to false. That is
+accepted at this stage rather than overlooked: it is window state and it dies with the window, and the
+tab it leaves standing draws a real journal that can still be read. A refused *start* leaves nothing at
+all, since a session that never began is not held; the fallback to `createSession` on that road parks a
+ticket of its own, so the watch above does fire when that one fails.
 
 The one seam that costs something: `project.activeTab` **is** remembered, so a project last left
 watching an agent comes back naming a tab that cannot exist yet, sessions deliberately not surviving a
@@ -223,12 +238,26 @@ was named.
 The Agent tab is **three branches over two components** since smetana-5ijg, and the seam is one `v-if`
 on which kind of session it is aimed at: `ConversationView.vue` with a driven session's id, or this
 same `TerminalView.vue` with `terminalState.activeId`. What decides is `agentAim` in `DesktopApp.vue`,
-one field per project written by the two acts that aim this tab and by nothing else — starting a
-conversation, and `showAgentTab()` on every road through `createSession`. It is deliberately not
-derived from `terminalState.activeId`: `loadSessions` repairs that selection itself on every project
-switch, and a first version that watched it had a switch away and back quietly taking the tab off a
-live conversation. The union is deliberately not an abstraction over the two back ends either — the
-terminal is going away when the last intent moves, and a seam built to outlive that migration would.
+one field per project written by `showAgentTab` and by nothing else. Its writers are the two kinds of
+act that aim this tab: starting a conversation, and every road that puts a PTY agent in front — every
+`createSession` road in that file, `selectAgent`, and `attachToAgent`. **`selectAgent` is the only
+gesture that takes somebody from a conversation back to a PTY agent**, and it is reached from a row
+click and from the `lastRunStart` watcher both, so a run handing over to its next batch moves the aim
+as well. The field is deliberately not derived from `terminalState.activeId`: `loadSessions` repairs
+that selection itself on every project switch, and a first version that watched it had a switch away
+and back quietly taking the tab off a live conversation. The union is deliberately not an abstraction
+over the two back ends either — the terminal is going away when the last intent moves, and a seam built
+to outlive that migration would.
+
+Which harness takes which road is `canDrive` in `stores/conversation.js`, over `settings.agent`, and it
+is **a front door rather than a gate**: `agents::pick` substitutes the first installed profile when the
+configured one is not on `PATH`, silently, so a machine with only Codex on it still answers `true`
+there — `settings.agent` ships as `claude` and `Settings::validate` forces anything unknown back to it.
+What catches that is `newAgent` falling through to `createSession` when a driven start comes back with
+nothing, which resolves whatever `pick` would have. A fallback is not a failure and says nothing: the
+person asked for an agent and is getting one. The refusals that are worth reporting reach the toast
+corner — `conversationState.lastError` has a `Toast` of its own in `DesktopApp.vue`, drawn only while
+the conversation panel is not, since that panel draws the same sentence as a line inside itself.
 
 One consequence of that, recorded because it looks like a bug from the outside: a driven session has no
 row in the agents panel, since `agentRows` is this store's, so once somebody picks a PTY agent in a
