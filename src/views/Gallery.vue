@@ -1870,12 +1870,12 @@ const FULL_ISSUE = {
   design:
     'A quiet strip above the columns rather than a replacement of them: the board stays usable while it says the data may be stale.',
   // Three lines on purpose: two separate `bd note` calls, each its own
-  // record and its own paragraph (`noteEntries.js`), and a third with no
-  // marker of its own — a line somebody broke by hand inside the second call
-  // — which stays folded onto it rather than reading as a third record
-  // (smetana-k2mo).
+  // record and its own paragraph (`noteEntries.js`), and a third, indented
+  // line — a person's own continuation inside the second call, broken across
+  // two lines by hand — which stays folded onto it rather than reading as a
+  // third record (smetana-k2mo).
   notes:
-    'parked: needs a decision on where the strip sits\nparked: still waiting on the design call\nchecked again at the next stand-up, still nothing',
+    'parked: needs a decision on where the strip sits\nparked: still waiting on the design call\n  checked again at the next stand-up, still nothing',
   priority: 1,
   issue_type: 'bug',
   owner: 'merazent@gmail.com',

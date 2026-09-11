@@ -16,57 +16,86 @@
    contract (`markup-contract.md`, sections 2 and 9) — reopening either is out
    of scope here.
 
-   The join is genuinely lossy: bd does not say whether a `\n` in the string
-   is the boundary between two calls or a line break a person typed inside a
-   single one of them, and the two produce byte-identical strings — there is
-   no way to tell them apart from the string alone in general. What is not
-   lossy is the vocabulary: every note this app, its Rust side and its skills
-   actually write opens with one of a small set of markers — `parked:` /
-   `resolved:` (`components/kanban/parked.js`, `agents/prompt.rs`), `merged:`,
-   `digest:`, `closed with follow-up`, `live check`, `epic child`
-   (`resources/smetana/skills/running-tasks/SKILL.md`), or `batch <n> (`
-   (`runs::queue::release`) — and every one of those calls is disciplined to a
-   single line (`runs::queue`'s own tests assert `!note.contains('\n')` on
-   every one it writes). A line that opens with one of them is read as the
-   start of a new record; so is the very first line of the field, marker or
-   not, since an issue's first-ever note may carry none. Anything else is read
-   as a continuation of whatever record precedes it — which is where a
-   person's own line break inside one note lands — and it is folded back onto
-   that record with a single `\n` of its own, so the whole record still
-   renders as one markdown paragraph rather than several.
+   An earlier version of this file matched a line against a vocabulary of
+   markers this app is known to write — `parked:`, `resolved:` and the like —
+   and read anything else as a continuation. A sweep of the real board
+   refuted that outright: 177 of 1162 non-first note lines were ordinary
+   prose with no marker at all, standing on their own as records the marker
+   list simply had no name for (smetana-k2mo, review pass 1). The premise was
+   wrong — this app's own vocabulary is not the board's — and no fixed list
+   of markers can be, since a person's own note is free text by construction
+   and the app does not get to enumerate what somebody will type next.
 
-   What this does not solve, and cannot from the string alone: two ordinary
-   notes with no marker at all, written back to back with nothing between
-   them, are indistinguishable from one note a person wrote across two lines.
-   That pair reads as a single record rather than two — not a regression,
-   since without this module every record on the field ran together anyway,
-   but a real limit on what a marker-based rule can do. */
+   The rule below is the other way around: **default to a new record, and
+   fold a line onto the one before it only on positive evidence that it
+   cannot stand alone.** That evidence is markdown's own block structure
+   rather than this app's vocabulary — a line that is indented relative to
+   the record it follows, or that opens with the syntax of a list item or a
+   quote (`-`, `*`, `+`, `>`, `1.`, `1)` and the kind), reads as a
+   continuation; a blank line carries no content of its own and folds too,
+   which is what lets a record hold more than one markdown block internally
+   (`markdown.js`'s own paragraph break) without becoming two records.
+   Everything else — including an ordinary sentence with no marker, no
+   indentation and no list syntax — starts a new record. This is what makes a
+   header line immediately followed by a `1)`…`7)` enumeration read as one
+   record (the enumeration is evidence, so it folds), while two unrelated
+   plain sentences appended back to back read as two (neither is evidence, so
+   neither folds).
 
-const MARKERS = [
-  /^parked:/i,
-  /^resolved:/i,
-  /^merged:/i,
-  /^digest:/i,
-  /^closed with follow-up/i,
-  /^live check/i,
-  /^epic child/i,
-  /^batch \d+ \(/i
-]
+   The failure mode this trades away: an ordinary paragraph a person happened
+   to wrap across two unindented lines, with no list syntax on the second,
+   still splits into two records. That is the one shape this rule cannot
+   tell apart from two real records typed back to back — the two are
+   genuinely the same shape in bd's own string — and it is the rarer failure,
+   and a visible one (a line that reads oddly split) rather than the silent
+   one the marker list produced (a real record quietly merged into its
+   neighbour, quoted `bd note` text nowhere in this app's own vocabulary). */
 
-const opensRecord = (line) => MARKERS.some((marker) => marker.test(line.trim()))
+/* A line indented relative to the record above it: a person's own
+   continuation, never a record's own opening — nothing this app or its
+   skills write starts a line with leading space or a tab. */
+const INDENTED = /^[ \t]/
+
+/* The opening syntax of a markdown list item or a block quote — mirrors the
+   shape of `markdown.js`'s own `BULLET`, `ORDERED` and `QUOTE` (not imported:
+   that file's regexes are private, and this only needs to recognise the same
+   shape, not share the pattern object). Anchored at the start and requiring
+   the whitespace or end-of-line a real marker carries, so a hyphen or a
+   number sitting mid-sentence — "Tuesday - not before" — is not read as one:
+   the whole point of this list is what a line *opens* with, not what it
+   contains. */
+const LIST_OR_QUOTE_START = /^(?:[-*+>]|\d{1,9}[.)])(?:\s|$)/
+
+/* Whether `line` can only be read as part of the record above it — the one
+   question this module asks. Never called on the field's own first line,
+   which is always a record regardless of its shape: an issue's first-ever
+   note may be a plain sentence, and there is no record above it to fold
+   into. */
+function continuesPreviousRecord(line) {
+  if (line.trim() === '') return true
+  if (INDENTED.test(line)) return true
+  return LIST_OR_QUOTE_START.test(line)
+}
 
 /* The field's own records, in the order bd appended them. Each entry may
-   still hold more than one line — a person's own break inside a single call —
-   joined with `\n`, the same soft break markdown already reads correctly. */
+   still hold more than one line — a continuation folded onto it, blank lines
+   included — joined back with `\n`, which is what lets `markdown.js` read an
+   internal blank line as this record's own paragraph break rather than as
+   the boundary to another record, and what lets a header line and the list
+   under it stay one record while still parsing as a paragraph followed by a
+   list (`markdown.js`'s `startsBlock` opens a new block on `BULLET`/
+   `ORDERED` whether or not a blank line came first — see its own comment on
+   why: a `bd` description with criteria straight under the sentence must not
+   be swallowed by it). */
 export function splitNoteEntries(notes) {
-  if (!notes) return []
+  if (!notes || !String(notes).trim()) return []
   const lines = String(notes).split('\n')
   const entries = []
   lines.forEach((line, index) => {
-    if (index === 0 || opensRecord(line)) {
-      entries.push(line)
-    } else {
+    if (index > 0 && continuesPreviousRecord(line)) {
       entries[entries.length - 1] += `\n${line}`
+    } else {
+      entries.push(line)
     }
   })
   return entries
@@ -74,10 +103,10 @@ export function splitNoteEntries(notes) {
 
 /* What `TaskInspector.vue` actually feeds `Markdown`: the same field, each
    record turned into its own paragraph. A blank line is markdown's own
-   paragraph break (`markdown.js`'s `parseBlocks`), so joining the records with
-   one is the whole of the normalization — no `br`, no `white-space` rule, and
-   `MarkdownInline.vue` and `sm-prose.css` stay exactly as smetana-3tax left
-   them. */
+   paragraph break (`markdown.js`'s `parseBlocks`), so joining the records
+   with one is the whole of the normalization — no `br`, no `white-space`
+   rule, and `MarkdownInline.vue` and `sm-prose.css` stay exactly as
+   smetana-3tax left them. */
 export function notesForDisplay(notes) {
   return splitNoteEntries(notes).join('\n\n')
 }

@@ -12,57 +12,92 @@ describe('splitNoteEntries', () => {
     ])
   })
 
-  it('separates every marker the app itself writes', () => {
+  it('splits two ordinary sentences with no marker, no indentation and no list syntax', () => {
+    // What the marker vocabulary got wrong: a real board carries plenty of
+    // notes with no marker at all, and each is still its own record.
     const notes = [
-      'parked: which storage format',
-      'resolved: sqlite, decided 2026-08-01',
-      'merged: feature/x-a769 is in main',
-      'digest: [high] a stray screenshot in the repo root — from smetana-9zz (depth 1)',
-      'closed with follow-up smetana-2ab',
-      'live check skipped: nothing user-facing',
-      'epic child — live check owed to the parent',
-      'batch 3 (smetana-run-10) ended without finishing this; it is open again and unclaimed'
+      'the contract disagrees with what the Rust side actually returns',
+      'the epic is waiting on smetana-5ijg before it can close',
+      'the last task under the epic was closed by hand'
     ].join('\n')
     expect(splitNoteEntries(notes)).toEqual([
-      'parked: which storage format',
-      'resolved: sqlite, decided 2026-08-01',
-      'merged: feature/x-a769 is in main',
-      'digest: [high] a stray screenshot in the repo root — from smetana-9zz (depth 1)',
-      'closed with follow-up smetana-2ab',
-      'live check skipped: nothing user-facing',
-      'epic child — live check owed to the parent',
-      'batch 3 (smetana-run-10) ended without finishing this; it is open again and unclaimed'
+      'the contract disagrees with what the Rust side actually returns',
+      'the epic is waiting on smetana-5ijg before it can close',
+      'the last task under the epic was closed by hand'
     ])
   })
 
-  it('keeps a record a person broke across lines whole, rather than as two records', () => {
-    // What a marker cannot see: a continuation line carries no marker of its
-    // own, so it stays folded onto the record before it.
-    const notes = 'parked: checked with prod on this — looks fine\njust double check the migration before merge'
+  it('keeps an indented continuation folded onto the record above it', () => {
+    const notes = 'checked with prod on this\n  and it looks fine, just double check the migration'
     expect(splitNoteEntries(notes)).toEqual([
-      'parked: checked with prod on this — looks fine\njust double check the migration before merge'
+      'checked with prod on this\n  and it looks fine, just double check the migration'
     ])
   })
 
-  it('reads the very first line as a record even without a marker', () => {
-    // An issue's first-ever note may be ordinary prose with no marker at all
-    // — it still has to stand on its own rather than vanish into nothing.
-    const notes = 'Talked to Ann about this.\nparked: who owns the migration'
-    expect(splitNoteEntries(notes)).toEqual(['Talked to Ann about this.', 'parked: who owns the migration'])
+  it('keeps a numbered enumeration folded onto the header line above it', () => {
+    // The genuine multi-line case acceptance criterion #2 exists for: a
+    // header sentence followed immediately by the list explaining it, with
+    // no blank line between them.
+    const notes = [
+      'seven files carry the same rename, paired below',
+      '1) old-a.js -> new-a.js',
+      '2) old-b.js -> new-b.js',
+      '3) old-c.js -> new-c.js'
+    ].join('\n')
+    expect(splitNoteEntries(notes)).toEqual([
+      [
+        'seven files carry the same rename, paired below',
+        '1) old-a.js -> new-a.js',
+        '2) old-b.js -> new-b.js',
+        '3) old-c.js -> new-c.js'
+      ].join('\n')
+    ])
   })
 
-  it('tolerates the case and whitespace a hand-written note carries', () => {
-    const notes = 'parked: one thing\n  Resolved:   done'
-    expect(splitNoteEntries(notes)).toEqual(['parked: one thing', '  Resolved:   done'])
+  it('folds a bullet or a quote line the same way as a numbered one', () => {
+    const notes = 'three things to check\n- the migration\n* the seed data\n> already flagged once'
+    expect(splitNoteEntries(notes)).toEqual([
+      'three things to check\n- the migration\n* the seed data\n> already flagged once'
+    ])
+  })
+
+  it('keeps a blank line inside one record rather than reading it as another', () => {
+    // A checklist a person wrote as a single `bd note` call, its items
+    // separated by their own blank lines — still one record.
+    const notes = ['- [ ] first item', '', '- [ ] second item', '', '- [ ] third item'].join('\n')
+    expect(splitNoteEntries(notes)).toEqual([
+      ['- [ ] first item', '', '- [ ] second item', '', '- [ ] third item'].join('\n')
+    ])
+  })
+
+  it('reads the very first line as a record even when it looks like a continuation', () => {
+    // There is no record above the field's first line to fold onto, whatever
+    // shape that first line has.
+    const notes = '- an issue filed straight as a bulleted note\nsomething ordinary after it'
+    expect(splitNoteEntries(notes)).toEqual([
+      '- an issue filed straight as a bulleted note',
+      'something ordinary after it'
+    ])
+  })
+
+  it('does not read list syntax sitting mid-line as an opener', () => {
+    // The marker is what a line *opens* with; a hyphen or a number later in
+    // the sentence is not that, and folding on it would glue two unrelated
+    // records together on the strength of a stray character.
+    const notes = 'do this by Tuesday - not before\nthe other task can wait'
+    expect(splitNoteEntries(notes)).toEqual([
+      'do this by Tuesday - not before',
+      'the other task can wait'
+    ])
   })
 
   it('finds nothing on a task with no notes at all', () => {
-    for (const notes of ['', null, undefined]) {
+    for (const notes of ['', null, undefined, '   ', '\n\n']) {
       expect(splitNoteEntries(notes)).toEqual([])
     }
   })
 
-  it('reads a note with no marker and no continuation as one record', () => {
+  it('reads a lone note with no marker and no continuation as one record', () => {
     expect(splitNoteEntries('Nothing to say.')).toEqual(['Nothing to say.'])
   })
 })
@@ -75,9 +110,9 @@ describe('notesForDisplay', () => {
     )
   })
 
-  it('leaves a record’s own internal line break as a single newline', () => {
-    const notes = 'parked: checked with prod on this\njust double check the migration'
-    expect(notesForDisplay(notes)).toBe('parked: checked with prod on this\njust double check the migration')
+  it('leaves a record’s own indented continuation as a single newline', () => {
+    const notes = 'checked with prod on this\n  just double check the migration'
+    expect(notesForDisplay(notes)).toBe('checked with prod on this\n  just double check the migration')
   })
 
   it('is the empty string for a task with no notes', () => {
