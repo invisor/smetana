@@ -76,6 +76,145 @@ describe('parseMarkdown blocks', () => {
     expect(quote.blocks.map((b) => b.type)).toEqual(['paragraph', 'heading'])
   })
 
+  describe('tables', () => {
+    it('reads a GFM table and each column’s alignment', () => {
+      const source = ['| Step | Local | ms |', '| :--- | :---: | ---: |', '| identity | ok | 12 |'].join(
+        '\n'
+      )
+      const [table] = parseMarkdown(source)
+      expect(table.type).toBe('table')
+      expect(table.align).toEqual(['left', 'center', 'right'])
+      expect(table.head.map((cell) => cell[0].value)).toEqual(['Step', 'Local', 'ms'])
+      expect(table.rows).toEqual([
+        [
+          [{ type: 'text', value: 'identity' }],
+          [{ type: 'text', value: 'ok' }],
+          [{ type: 'text', value: '12' }]
+        ]
+      ])
+    })
+
+    it('parses a column with no colon as unaligned rather than guessing', () => {
+      const [table] = parseMarkdown(['| a | b |', '| --- | ---: |', '| 1 | 2 |'].join('\n'))
+      expect(table.align).toEqual([null, 'right'])
+    })
+
+    it('reads the same table with no leading or trailing pipes on any row', () => {
+      const [table] = parseMarkdown(['a | b | c', ':--- | :---: | ---:', '1 | 2 | 3'].join('\n'))
+      expect(table.align).toEqual(['left', 'center', 'right'])
+      expect(table.rows[0].map((cell) => cell[0].value)).toEqual(['1', '2', '3'])
+    })
+
+    it('parses a table cell as inline, keeping a marker inside a cell', () => {
+      const [table] = parseMarkdown(['| a |', '| --- |', '| **bold** |'].join('\n'))
+      expect(table.rows[0][0]).toEqual([{ type: 'strong', children: [{ type: 'text', value: 'bold' }] }])
+    })
+
+    /* The invariant, for a construct that is entirely new in this file: a
+       row whose second line only looks like an alignment row — three words
+       joined by hyphens, not `-`/`:-`/`-:` cells — leaves the whole thing
+       exactly where it would have landed before tables existed. */
+    it('leaves the whole chunk as paragraphs when the second row is not a GFM alignment row', () => {
+      const source = ['| a | b |', '| not | aligned |', '| 1 | 2 |'].join('\n')
+      const blocks = parseMarkdown(source)
+      expect(blocks.every((b) => b.type === 'paragraph')).toBe(true)
+      const shown = blocks.map((b) => b.children.map((c) => c.value).join('')).join('\n')
+      for (const word of source.replace(/[|:-]/g, ' ').split(/\s+/).filter(Boolean)) {
+        expect(shown).toContain(word)
+      }
+    })
+
+    /* A row wider than the header is content, not a marker — unlike a
+       heading's closing `#` or a table's own `|`, a cell past the header is
+       somebody's words, and the parser already read them (`splitTableRow`
+       returns them) before this row was built. Clipping to the header count
+       would drop them with nothing on screen to say so, which is exactly
+       the failure the module's invariant exists to rule out. */
+    it('keeps every cell of a row wider than its header, rather than clipping to it', () => {
+      const [table] = parseMarkdown(['| a | b |', '| --- | --- |', '| 1 | 2 | SECRET |'].join('\n'))
+      expect(table.align).toEqual([null, null, null])
+      expect(table.head.map((cell) => cell[0]?.value)).toEqual(['a', 'b', undefined])
+      expect(table.rows[0].map((cell) => cell[0]?.value)).toEqual(['1', '2', 'SECRET'])
+    })
+
+    it('pads a row shorter than the header with empty cells', () => {
+      const [table] = parseMarkdown(['| a | b | c |', '| --- | --- | --- |', '| 1 |'].join('\n'))
+      expect(table.rows[0].map((cell) => cell.length)).toEqual([1, 0, 0])
+    })
+
+    it('nests a table inside a quote without losing the quote', () => {
+      const source = ['> | a | b |', '> | --- | --- |', '> | 1 | 2 |'].join('\n')
+      const [quote] = parseMarkdown(source)
+      expect(quote.type).toBe('quote')
+      expect(quote.blocks[0].type).toBe('table')
+      expect(quote.blocks[0].rows[0].map((cell) => cell[0].value)).toEqual(['1', '2'])
+    })
+
+    it('keeps a quote marker typed inside a table cell as the plain text it is', () => {
+      const [table] = parseMarkdown(['| note |', '| --- |', '| > not a nested quote |'].join('\n'))
+      expect(table.rows[0][0]).toEqual([{ type: 'text', value: '> not a nested quote' }])
+    })
+
+    /* Deep quote nesting already clamps at `MAX_BLOCK_DEPTH`; this pins that a
+       table sitting at the bottom of one does not change that number, since
+       neither a table nor its cells add a level of their own. */
+    it('keeps the same block-depth clamp when a table sits inside deep quote nesting', () => {
+      const quoteDepth = (blocks) =>
+        blocks.reduce((d, b) => (b.type === 'quote' ? Math.max(d, 1 + quoteDepth(b.blocks)) : d), 0)
+      const quotes = '>'.repeat(20)
+      const source = [`${quotes} | a |`, `${quotes} | --- |`, `${quotes} | x |`].join('\n')
+      let tree
+      expect(() => {
+        tree = parseMarkdown(source)
+      }).not.toThrow()
+      expect(quoteDepth(tree)).toBeLessThanOrEqual(16)
+    })
+  })
+
+  describe('definition lists', () => {
+    it('reads a term and its definition as a dl', () => {
+      const [dl] = parseMarkdown('bd\n: the tracker CLI')
+      expect(dl.type).toBe('dl')
+      expect(dl.items).toEqual([
+        {
+          term: [{ type: 'text', value: 'bd' }],
+          definitions: [[{ type: 'text', value: 'the tracker CLI' }]]
+        }
+      ])
+    })
+
+    it('reads more than one definition under one term', () => {
+      const [dl] = parseMarkdown('bd\n: the tracker CLI\n: also a sidecar binary')
+      expect(dl.items[0].definitions).toHaveLength(2)
+    })
+
+    it('leaves a definition line with no term above it as an ordinary paragraph', () => {
+      const blocks = parseMarkdown(': stray definition')
+      expect(blocks).toEqual([
+        { type: 'paragraph', children: [{ type: 'text', value: ': stray definition' }] }
+      ])
+    })
+  })
+
+  describe('block images', () => {
+    it('reads an image alone on its own line as a block, not a link', () => {
+      expect(parseMarkdown('![a caption](./a.png)')).toEqual([
+        { type: 'image', src: './a.png', alt: 'a caption' }
+      ])
+    })
+
+    it('reads a block image between two paragraphs', () => {
+      const blocks = parseMarkdown('before\n\n![a caption](./a.png)\n\nafter')
+      expect(blocks.map((b) => b.type)).toEqual(['paragraph', 'image', 'paragraph'])
+    })
+
+    it('keeps an image beside other text on its line as inline, inside the paragraph', () => {
+      const [paragraph] = parseMarkdown('see ![a caption](./a.png) here')
+      expect(paragraph.type).toBe('paragraph')
+      expect(paragraph.children.some((c) => c.type === 'image')).toBe(true)
+    })
+  })
+
   it('is empty for empty input, and for whitespace', () => {
     expect(parseMarkdown('')).toEqual([])
     expect(parseMarkdown('   \n\n')).toEqual([])
@@ -149,14 +288,38 @@ describe('parseInline', () => {
     ])
   })
 
-  it('draws an image as its alt text and a link, and never as a picture', () => {
-    expect(parseInline('![a shot](https://example.com/s.png)')).toEqual([
-      { type: 'text', value: 'a shot ' },
-      {
-        type: 'link',
-        href: 'https://example.com/s.png',
-        children: [{ type: 'text', value: 'https://example.com/s.png' }]
-      }
+  it('reads an inline image beside other text as its own node, not a link', () => {
+    expect(parseInline('a shot: ![a shot](https://example.com/s.png) above')).toEqual([
+      { type: 'text', value: 'a shot: ' },
+      { type: 'image', src: 'https://example.com/s.png', alt: 'a shot' },
+      { type: 'text', value: ' above' }
+    ])
+  })
+
+  it('carries a relative image source unchanged, with no scheme gate', () => {
+    expect(parseInline('see ![a](./a.png) there')).toEqual([
+      { type: 'text', value: 'see ' },
+      { type: 'image', src: './a.png', alt: 'a' },
+      { type: 'text', value: ' there' }
+    ])
+  })
+
+  it('reads strikethrough, and leaves a lone tilde as itself', () => {
+    expect(parseInline('~~gone~~ but not ~forgotten~')).toEqual([
+      { type: 'del', children: [{ type: 'text', value: 'gone' }] },
+      { type: 'text', value: ' but not ~forgotten~' }
+    ])
+  })
+
+  /* The contract lists `kbd` and `small` among the panel's prose elements
+     (`docs/design_handoff_conversation_panel/markup-contract.md`, section 2),
+     but nothing in this file's markdown vocabulary spells either of them —
+     see the module header. An HTML tag, `<kbd>` included, is out of scope and
+     stays literal text like any other one; this pins that down so a future
+     change does not quietly invent a syntax for it. */
+  it('leaves a `kbd`-shaped and a `small`-shaped HTML tag as plain text', () => {
+    expect(parseInline('press <kbd>Enter</kbd> or read the <small>fine print</small>')).toEqual([
+      { type: 'text', value: 'press <kbd>Enter</kbd> or read the <small>fine print</small>' }
     ])
   })
 
@@ -214,8 +377,15 @@ describe('the invariant', () => {
       .map((b) => {
         if (b.type === 'code') return b.text
         if (b.type === 'rule') return ''
+        if (b.type === 'image') return b.alt
         if (b.type === 'quote') return visible(b.blocks)
         if (b.type === 'list') return b.items.map((i) => visible(i.blocks)).join(' ')
+        if (b.type === 'table') return [...b.head, ...b.rows.flat()].map(flatten).join(' ')
+        if (b.type === 'dl') {
+          return b.items
+            .map((item) => `${flatten(item.term)} ${item.definitions.map(flatten).join(' ')}`)
+            .join(' ')
+        }
         return flatten(b.children)
       })
       .join(' ')
@@ -232,6 +402,13 @@ describe('the invariant', () => {
       .split(/\s+/)
       .filter(Boolean)
 
+  /* The table's body row is deliberately one cell wider than its header
+     (`ragged`, past `a`/`b`) — this is a genuinely recognised table, blank
+     line and all, so it is `takeTable` doing the widening rather than a
+     paragraph carrying the word along as ordinary text. This is the fixture
+     that would have caught a clip-to-the-header bug: `visible()` walks every
+     column of every row, and a dropped cell is a missing word this test
+     notices without knowing to look for one. */
   const SOURCE = [
     '# Title',
     '',
@@ -239,7 +416,7 @@ describe('the invariant', () => {
     '',
     '| a | b |',
     '| - | - |',
-    '| 1 | 2 |',
+    '| 1 | 2 | ragged |',
     '',
     '- [ ] one',
     '- [x] two',
@@ -256,11 +433,14 @@ describe('the invariant', () => {
     'Trailing <b>tag</b> and [a][ref].'
   ].join('\n')
 
-  /* The five constructs the task names, in one string: an unclosed fence, a
-     lone asterisk, a GFM table, a reference link and an HTML tag. Not one of
-     them is in the supported subset, and every word of all five is still on
-     screen. The fence goes last because an unclosed one swallows the rest of
-     the input by design — which is itself the invariant working. */
+  /* Five constructs in one string, and every word of all five is still on
+     screen. Four are simply outside the supported subset: a lone asterisk, a
+     reference link, an HTML tag and — glued straight onto the sentence ahead
+     of it, with no blank line to open it as a block — a run of table-shaped
+     lines, which stays part of that sentence rather than becoming a `table`
+     (see the table branch in `parseBlocks`). The fifth, the unclosed fence,
+     goes last because it swallows the rest of the input by design — which is
+     itself the invariant working. */
   const UNSUPPORTED = [
     'A ratio of 2 * 3, a <b>tag</b> and a link like [text][ref].',
     '| column | other |',
