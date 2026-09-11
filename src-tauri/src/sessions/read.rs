@@ -47,11 +47,16 @@ use super::model::{
     SessionSummary,
 };
 
-/// The most of one line **this module** ever holds, and the limit it hands
+/// The most of one line **the forward pass** ever holds, and the limit it hands
 /// [`next_line`]. A tool result carrying a file is a single line of megabytes,
-/// and none of what this reads is ever that far into one: `type`, `cwd`,
+/// and none of what that pass reads is ever that far into one: `type`, `cwd`,
 /// `isSidechain` and the start of a message all sit in the first few hundred
 /// bytes of the record that carries them.
+///
+/// The forward pass and not the module: [`scan_tail`] holds a whole
+/// [`TAIL_WINDOW`] and parses records out of it, so a last message of 200 KiB
+/// is held by this file in spite of this number. That reader is bounded by the
+/// window instead, which the module header enumerates beside this.
 ///
 /// It is not the tree's ceiling on a transcript line and must not be borrowed
 /// as one: what justifies 64 KB is the head-of-a-record reading above, and

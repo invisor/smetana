@@ -275,9 +275,10 @@ pub fn one_line(text: &str) -> String {
 /// and [`one_line`] is applied to what is left — the same cut on the same
 /// field, one step later. The cost is bounded by the record this is called
 /// over, under whichever ceiling its caller reads a line at: 64 KB
-/// ([`super::read::MAX_LINE`]) for the Sessions tab, which needs only the head
-/// of a record, and [`crate::session::driver::MAX_LINE`] for the conversation
-/// panel's history, which replays the whole of one.
+/// (`super::read::MAX_LINE`, `pub(crate)` and so written out rather than linked
+/// from a `pub` item's documentation) for the Sessions tab, which needs only the
+/// head of a record, and [`crate::session::driver::MAX_LINE`] for the
+/// conversation panel's history, which replays the whole of one.
 pub fn human_text(record: &Record) -> Option<String> {
     if !record.is_user() || record.is_sidechain == Some(true) || record.is_meta == Some(true) {
         return None;

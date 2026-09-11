@@ -38,10 +38,10 @@
    session's first frame, before the id has come back, and a fork for good,
    `--fork-session` having Claude Code invent an id this app never learns. This
    header used to say a driven session was deliberately minted none at all, on
-   the strength of `session_id: None` in `spawn_session`; that line is still
-   there for a resume and now means something else entirely, which is that the
-   id is already on the command line behind `--resume` and a second flag would
-   name two conversations.
+   the strength of a `session_id: None` in `spawn_session`. That `None` is still
+   produced for a resume — out of the match above the `Launch` there — and now
+   means something else entirely: the id is already on the command line behind
+   `--resume`, and a second flag would name two conversations.
 
    A prefix parts the two spaces and leaves `conversation` honestly empty for
    those two rather than inventing a value for it. A start ticket's `start-N` is

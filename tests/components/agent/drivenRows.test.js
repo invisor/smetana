@@ -63,7 +63,7 @@ describe('a driven conversation among the agents', () => {
        Claude Code names itself. `row` is built with none, so this is what
        either of those offers: a pin refused with nothing to remember it by,
        which is true of them. */
-    it('refuses a pin while it has no conversation id to be pinned under', () => {
+    it('carries no conversation id, which is what Pin refuses on', () => {
       expect(row.conversation).toBe(null)
     })
 
