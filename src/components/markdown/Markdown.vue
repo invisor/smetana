@@ -239,7 +239,12 @@ function isCodeCopied(index) {
               :key="column"
               :data-align="block.align[column] ?? undefined"
             >
-              <MarkdownInline :nodes="cell" @open="emit('open', $event)" />
+              <MarkdownInline
+                :nodes="cell"
+                :root="root"
+                @open="emit('open', $event)"
+                @open-local="emit('open-local', $event)"
+              />
             </th>
           </tr>
         </thead>
@@ -250,7 +255,12 @@ function isCodeCopied(index) {
               :key="column"
               :data-align="block.align[column] ?? undefined"
             >
-              <MarkdownInline :nodes="cell" @open="emit('open', $event)" />
+              <MarkdownInline
+                :nodes="cell"
+                :root="root"
+                @open="emit('open', $event)"
+                @open-local="emit('open-local', $event)"
+              />
             </td>
           </tr>
         </tbody>
