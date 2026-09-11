@@ -1,0 +1,63 @@
+/* ============================================================================
+   CONVERSATION PROSE — tokens with no existing alias.
+
+   Ported from the design handoff's sm-prose-tokens.css
+   (docs/design_handoff_conversation_panel/), which named these as candidates;
+   they are adopted here, one to one, names and roles unchanged.
+
+   Only the tokens that could not be expressed as an alias of an existing token
+   live here. Aliases (gaps, surfaces, rules) are declared on `.sm-prose`
+   itself, in sm-prose.css, so that a `data-density` or `data-theme` attribute
+   set on ANY ancestor resolves correctly — a custom property substitutes
+   var() at the element where it is declared, so a density-dependent alias
+   declared on :root would freeze at the root's density.
+   ============================================================================ */
+
+:root{
+  /* ---- illustrations ---------------------------------------------------- */
+
+  /* The mat behind a raster illustration. Deliberately identical in both
+     themes: an agent-drawn PNG carries its own white ground, and the failure
+     case is that ground glowing as a bare rectangle in a dark panel. A mat
+     that is always paper turns it into a pinned print — intentional, bordered,
+     the same object in either theme — instead of a hole in the surface. */
+  --prose-figure-mat:#f4f7f7;
+  /* Narrowest a figure may get in a two-up row before the row wraps. */
+  --prose-figure-min:132px;
+  /* Height of the skeleton stand-in while an illustration loads, when the
+     markup declares no intrinsic size. */
+  --prose-figure-loading-h:128px;
+
+  /* ---- tables ----------------------------------------------------------- */
+
+  /* A table marked data-wide scrolls inside its own wrapper rather than
+     compressing. This is the width below which compressing is worse than
+     scrolling. */
+  --prose-table-wide-min:440px;
+
+  /* ---- drawn glyphs ------------------------------------------------------
+     Every glyph in the prose surface is drawn from borders, not typed. A font
+     character would render three different ways across WebKitGTK, WKWebView
+     and WebView2; a native control would bring platform chrome we cannot
+     tokenise. */
+  --prose-box:11px;          /* task-list box */
+  --prose-tick-w:6px;        /* task-list tick, long arm */
+  --prose-tick-h:3px;        /* task-list tick, short arm */
+  --prose-chevron:5px;       /* disclosure marker arm */
+  --prose-dot:7px;           /* activity mark */
+  --prose-caret-w:2px;       /* streaming live edge */
+  --prose-icon:13px;         /* copy / expand control glyph box */
+
+  /* ---- scroll affordance -------------------------------------------------
+     Blocks that scroll sideways inside the panel draw their trough at all
+     times: overlay scrollbars would hide the one signal that the block
+     continues past the right edge, and a fade would need a gradient. */
+  --prose-scrollbar-h:8px;
+  --prose-scroll-track:var(--surface-sunken);
+  --prose-scroll-thumb:var(--border-strong);
+
+  /* ---- typed affordances (content strings, not decoration) --------------- */
+  --prose-external-glyph:"\2197";  /* leaves the app */
+  --prose-dir-glyph:"/";           /* the local target is a folder */
+  --prose-meta-sep:" \00B7 ";      /* the system's separator, per the guide */
+}

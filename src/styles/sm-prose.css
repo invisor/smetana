@@ -1,0 +1,790 @@
+/* ============================================================================
+   sm-prose — the agent conversation panel.
+
+   One stylesheet over a known markup contract. The renderer emits markdown as
+   HTML and cannot add classes to what it emits, so everything below selects on
+   element names and data- attributes, and every rule is scoped under the single
+   root `.sm-prose`.
+
+   Theme and density are attributes on the document root (`data-theme`,
+   `data-density`) and nothing here branches on anything else: the design-system
+   token files do the branching, this file only spends tokens.
+
+   Build target es2021 / chrome100 / safari15 — no :has(), no container
+   queries, no nesting. `:where()` is used for the zero-specificity base so that
+   a single `:first-child` / `:last-child` rule can win over it.
+
+   Two properties are newer than the target and are used as progressive
+   enhancement only: `text-wrap:pretty` / `balance` (chrome 117, safari 17.5)
+   and `::marker { font-family }` (safari 17). All three fall back to the
+   browser default with no layout consequence — no size, spacing or colour
+   depends on them.
+
+   Contract summary (full version in markup-contract.md):
+
+     .sm-prose
+       article[data-turn="person"|"agent"]
+       hr[data-session]                        session break between turns
+   ============================================================================ */
+
+
+/* 1 · ROOT + LOCAL TOKENS ================================================== */
+
+.sm-prose{
+  /* Aliases live here, not on :root — see sm-prose-tokens.css for why. */
+  --prose-turn-gap:var(--space-6);
+  --prose-block-gap:var(--space-5);
+  --prose-tight-gap:var(--space-2);
+  --prose-heading-gap:var(--space-7);
+  --prose-indent:var(--space-6);
+  --prose-pad:var(--card-pad);
+
+  --prose-rule:var(--border-subtle);
+  --prose-rule-strong:var(--border);
+  --prose-accent-bar:var(--border-strong);
+  --prose-person-bg:var(--surface-raised);
+  --prose-chip-bg:var(--surface-sunken);
+  --prose-chip-border:var(--border-subtle);
+  --prose-code-bg:var(--editor-bg);
+  --prose-code-header-bg:var(--surface);
+  --prose-link-underline:var(--border-strong);
+  --prose-live:var(--attn-live);
+
+  display:flex;
+  flex-direction:column;
+  gap:var(--prose-turn-gap);
+  padding:var(--panel-pad);
+  font-family:var(--font-sans);
+  font-size:var(--text-body-size);
+  line-height:var(--leading-normal);
+  color:var(--text-primary);
+  text-wrap:pretty;
+  overflow-wrap:break-word;
+}
+
+
+/* 2 · THE TWO SIDES ========================================================
+   The person's turn leaves the column and sits on its own side: a raised
+   surface, bounded, held off the right edge, with the bottom-right corner
+   squared — the corner is the tail, and it points back at the sender. Side and
+   shape carry the distinction; hue stays reserved for status, and the earlier
+   left-bar treatment is gone because a left bar is what a quotation uses.
+
+   The agent's turn is the plain ground of the panel: no container, no avatar,
+   no caption. It is most of the column, and framing every one of them would
+   turn the panel into a stack of boxes.
+
+   Three alternative treatments live in sm-prose-turns.css behind
+   `data-turn-style` on this root; this is the default. */
+
+.sm-prose article{
+  min-width:0;
+}
+
+.sm-prose article[data-turn="person"]{
+  align-self:flex-end;
+  max-width:88%;
+  padding:var(--prose-pad);
+  border:var(--border-w) solid var(--prose-rule);
+  border-radius:var(--radius-4) var(--radius-4) var(--radius-1) var(--radius-4);
+  background:var(--prose-person-bg);
+  box-shadow:var(--shadow-raised);
+}
+
+/* Attachments on a person's turn: mono chips carrying a file name, never a
+   thumbnail — the name is the identifier a person searches for. */
+.sm-prose ul[data-attachments]{
+  display:flex;
+  flex-wrap:wrap;
+  gap:var(--space-2);
+  padding:var(--space-0);
+  list-style:none;
+}
+.sm-prose ul[data-attachments] > li{
+  display:flex;
+  align-items:center;
+  gap:var(--space-2);
+  max-width:100%;
+  padding:var(--space-1) var(--space-3);
+  border:var(--border-w) solid var(--prose-chip-border);
+  border-radius:var(--radius-2);
+  background:var(--prose-chip-bg);
+  color:var(--text-secondary);
+  font-family:var(--font-mono);
+  font-size:var(--text-xs);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.sm-prose ul[data-attachments] > li > span{
+  color:var(--text-muted);
+}
+
+
+/* 3 · BLOCK RHYTHM =========================================================
+   One base rule at zero specificity, so the two end-stop rules below win
+   without !important and without counting selectors. */
+
+.sm-prose :where(p,ul,ol,dl,pre,figure,blockquote,table,hr,details,
+                 h1,h2,h3,h4,h5,h6,
+                 div[data-table-scroll],div[data-figures],div[data-activity]){
+  margin:var(--space-0) var(--space-0) var(--prose-block-gap);
+}
+.sm-prose :where(h1,h2,h3,h4,h5,h6){
+  margin-top:var(--prose-heading-gap);
+}
+/* No stray margin at either end of a turn, or of any container. */
+.sm-prose :first-child{ margin-top:var(--space-0) }
+.sm-prose :last-child { margin-bottom:var(--space-0) }
+
+
+/* 4 · HEADINGS =============================================================
+   Sentence case, sans, tight. A side panel has no room for a display scale:
+   h1 and h2 are separated from body by weight and a rule, not by size. h4–h6
+   degrade quietly — they stop growing and become labels. */
+
+.sm-prose :where(h1,h2,h3,h4,h5,h6){
+  font-weight:var(--weight-semibold);
+  line-height:var(--leading-tight);
+  letter-spacing:var(--tracking-tight);
+  color:var(--text-primary);
+  text-wrap:balance;
+}
+.sm-prose h1{
+  font-size:var(--text-xl);
+  padding-bottom:var(--space-3);
+  border-bottom:var(--border-w) solid var(--prose-rule-strong);
+}
+.sm-prose h2{
+  font-size:var(--text-lg);
+  padding-bottom:var(--space-2);
+  border-bottom:var(--border-w) solid var(--prose-rule);
+}
+.sm-prose h3{ font-size:var(--text-md) }
+.sm-prose h4{ font-size:var(--text-md); font-weight:var(--weight-medium) }
+.sm-prose h5{ font-size:var(--text-sm); font-weight:var(--weight-semibold); color:var(--text-secondary) }
+.sm-prose h6{
+  font-family:var(--font-mono);
+  font-size:var(--text-2xs);
+  font-weight:var(--weight-medium);
+  letter-spacing:var(--tracking-caps);
+  text-transform:uppercase;
+  color:var(--text-muted);
+}
+/* A heading immediately after a heading owns no extra air. */
+.sm-prose :where(h1,h2,h3,h4,h5,h6) + :where(h1,h2,h3,h4,h5,h6){
+  margin-top:var(--space-0);
+}
+
+
+/* 5 · INLINE =============================================================== */
+
+.sm-prose strong{ font-weight:var(--weight-semibold); color:var(--text-primary) }
+.sm-prose em{ font-style:italic }
+.sm-prose del{ color:var(--text-muted); text-decoration-line:line-through }
+.sm-prose small{ font-size:var(--text-sm); color:var(--text-muted) }
+.sm-prose kbd{
+  padding:var(--space-0) var(--space-2);
+  border:var(--border-w) solid var(--prose-chip-border);
+  border-bottom-width:var(--border-w-strong);
+  border-radius:var(--radius-2);
+  background:var(--prose-chip-bg);
+  font-family:var(--font-mono);
+  font-size:var(--text-xs);
+}
+
+/* Inline code is an identifier, not a control: recessed, hairline, no
+   elevation and no radius past --radius-2. Anything more and it reads as a
+   button in a column where real buttons exist. */
+.sm-prose :not(pre) > code{
+  padding:var(--space-0) var(--space-2);
+  border:var(--border-w) solid var(--prose-chip-border);
+  border-radius:var(--radius-2);
+  background:var(--prose-chip-bg);
+  font-family:var(--font-mono);
+  font-size:var(--text-code-size);
+  color:var(--text-primary);
+  overflow-wrap:anywhere;
+}
+
+
+/* 6 · LISTS ================================================================ */
+
+.sm-prose :where(ul,ol){
+  padding-left:var(--prose-indent);
+}
+.sm-prose li + li{ margin-top:var(--prose-tight-gap) }
+.sm-prose li > :where(ul,ol){ margin-top:var(--prose-tight-gap); margin-bottom:var(--space-0) }
+.sm-prose li > :where(p,pre,blockquote,figure,div[data-table-scroll]){ margin-top:var(--prose-tight-gap) }
+
+.sm-prose ul{ list-style:disc }
+.sm-prose ul ul{ list-style:none }
+/* Second level: an en dash, so two levels never look like one list. */
+.sm-prose ul ul > li::before{
+  content:"\2013";
+  position:absolute;
+  margin-left:calc(var(--prose-indent) * -1);
+  color:var(--text-muted);
+}
+.sm-prose ul ul > li{ position:relative }
+.sm-prose ul ul ul{ list-style:circle }
+.sm-prose ul ul ul > li::before{ content:none }
+
+.sm-prose ol{ list-style:decimal }
+.sm-prose ol ol{ list-style:lower-alpha }
+.sm-prose li::marker{ color:var(--text-muted) }
+.sm-prose ol > li::marker{ font-family:var(--font-mono); font-size:var(--text-sm) }
+
+/* Task lists.
+   The box is DRAWN, not an <input type="checkbox" disabled>. A native control
+   renders as platform chrome in three different webviews, cannot be coloured
+   from the token set without appearance:none anyway, and reads as operable
+   when it is not — this is a transcript, the state is already decided. */
+.sm-prose ul[data-task]{
+  padding-left:var(--space-0);
+  list-style:none;
+}
+.sm-prose ul[data-task] > li{
+  position:relative;
+  padding-left:var(--prose-indent);
+}
+.sm-prose ul[data-task] > li::before{
+  content:"";
+  position:absolute;
+  top:calc((1em * var(--leading-normal) - var(--prose-box)) / 2);
+  left:var(--space-0);
+  width:var(--prose-box);
+  height:var(--prose-box);
+  border:var(--border-w) solid var(--border-strong);
+  border-radius:var(--radius-1);
+  background:var(--surface);
+}
+.sm-prose ul[data-task] > li[data-checked]{
+  color:var(--text-muted);
+}
+.sm-prose ul[data-task] > li[data-checked]::after{
+  content:"";
+  position:absolute;
+  top:calc((1em * var(--leading-normal) - var(--prose-box)) / 2 + var(--space-1));
+  left:var(--space-1);
+  width:var(--prose-tick-w);
+  height:var(--prose-tick-h);
+  border-left:var(--border-w-strong) solid var(--text-secondary);
+  border-bottom:var(--border-w-strong) solid var(--text-secondary);
+  transform:rotate(-45deg);
+}
+
+/* Definition lists — the agent writes these for flags and options. */
+.sm-prose dt{
+  font-family:var(--font-mono);
+  font-size:var(--text-code-size);
+  color:var(--text-primary);
+}
+.sm-prose dd{
+  margin:var(--space-1) var(--space-0) var(--space-4) var(--prose-indent);
+  color:var(--text-secondary);
+}
+.sm-prose dd:last-child{ margin-bottom:var(--space-0) }
+
+
+/* 7 · QUOTES AND BREAKS ==================================================== */
+
+.sm-prose blockquote{
+  padding-left:var(--space-5);
+  border-left:var(--border-w-strong) solid var(--prose-rule-strong);
+  color:var(--text-secondary);
+}
+/* Nested: quieter, never italic — italic at 13px in a system stack is mush. */
+.sm-prose blockquote blockquote{
+  margin-top:var(--prose-tight-gap);
+  border-left-color:var(--prose-rule);
+  color:var(--text-muted);
+}
+
+.sm-prose hr{
+  height:var(--border-w);
+  border:none;
+  background:var(--prose-rule);
+}
+/* A break between sessions, not inside one message: full bleed and labelled
+   by its own extra air. */
+.sm-prose hr[data-session]{
+  margin:var(--space-2) calc(var(--panel-pad) * -1);
+  background:var(--prose-rule-strong);
+}
+
+
+/* 8 · TABLES ===============================================================
+   Ruled, not zebra. Zebra fills a second rhythm over a column that already
+   alternates raised person turns against plain agent ground, and stripes are
+   the first thing to go muddy at compact density where rows are 4px apart.
+   Hairline row rules + a weighted header do the same work for one border. */
+
+.sm-prose div[data-table-scroll]{
+  overflow-x:auto;
+  border:var(--border-w) solid var(--prose-rule);
+  border-radius:var(--radius-3);
+  scrollbar-color:var(--prose-scroll-thumb) var(--prose-scroll-track);
+}
+.sm-prose div[data-table-scroll]::-webkit-scrollbar{
+  height:var(--prose-scrollbar-h);
+}
+.sm-prose div[data-table-scroll]::-webkit-scrollbar-track{
+  background:var(--prose-scroll-track);
+  border-top:var(--border-w) solid var(--prose-rule);
+}
+.sm-prose div[data-table-scroll]::-webkit-scrollbar-thumb{
+  background:var(--prose-scroll-thumb);
+  border:var(--border-w) solid transparent;
+  background-clip:content-box;
+  border-radius:var(--radius-pill);
+}
+
+.sm-prose table{
+  width:100%;
+  border-collapse:collapse;
+  font-size:var(--text-sm);
+  line-height:var(--leading-snug);
+}
+/* Wider than the panel: the block scrolls, the panel never grows. */
+.sm-prose table[data-wide]{
+  width:max-content;
+  min-width:var(--prose-table-wide-min);
+}
+.sm-prose :where(th,td){
+  padding:var(--space-3) var(--space-4);
+  text-align:left;
+  vertical-align:top;
+  border-bottom:var(--border-w) solid var(--prose-rule);
+  overflow-wrap:break-word;
+}
+/* A long unbreakable cell — a path, a hash — breaks rather than pushing the
+   table wide, but only where it actually is an identifier: `anywhere` on every
+   cell makes ordinary words break mid-syllable at these column widths. */
+.sm-prose :where(th,td) :where(code,a){
+  overflow-wrap:anywhere;
+}
+.sm-prose thead th{
+  background:var(--prose-code-header-bg);
+  border-bottom:var(--border-w) solid var(--prose-rule-strong);
+  color:var(--text-secondary);
+  font-weight:var(--weight-medium);
+  white-space:nowrap;
+}
+.sm-prose tbody tr:last-child > :where(th,td){ border-bottom:none }
+.sm-prose [data-align="right"]{ text-align:right }
+.sm-prose [data-align="center"]{ text-align:center }
+/* Numbers line up, so they are mono and right-aligned by the renderer. */
+.sm-prose td[data-align="right"]{ font-family:var(--font-mono); font-size:var(--text-xs) }
+
+
+/* 9 · CODE BLOCKS ==========================================================
+   Header band, then the code. The copy control lives IN the band rather than
+   floating over the first line: an absolutely positioned control collides with
+   a long first line exactly when the line is worth copying, and it disappears
+   from a keyboard user's model of the block.
+
+   It is always visible, never hover-revealed — this panel is read by keyboard
+   as much as by pointer, and a control that appears on hover is a control that
+   is not there when you tab to it. Its resting weight is muted text on the
+   band, so the budget it spends is close to nothing. */
+
+.sm-prose figure[data-code]{
+  display:grid;
+  grid-template-columns:1fr auto;
+  border:var(--border-w) solid var(--prose-rule);
+  border-radius:var(--radius-3);
+  background:var(--prose-code-bg);
+  overflow:hidden;
+}
+.sm-prose figure[data-code]::before{
+  content:"";
+  grid-area:1 / 1 / 2 / -1;
+  background:var(--prose-code-header-bg);
+  border-bottom:var(--border-w) solid var(--prose-rule);
+}
+.sm-prose figure[data-code] > figcaption{
+  grid-area:1 / 1;
+  position:relative;
+  align-self:center;
+  padding:var(--space-2) var(--space-4);
+  font-family:var(--font-mono);
+  font-size:var(--text-2xs);
+  letter-spacing:var(--tracking-caps);
+  text-transform:uppercase;
+  color:var(--text-muted);
+}
+.sm-prose figure[data-code] > pre{
+  grid-area:2 / 1 / 3 / -1;
+  overflow-x:auto;
+  padding:var(--space-4);
+  scrollbar-color:var(--prose-scroll-thumb) var(--prose-scroll-track);
+}
+.sm-prose pre{
+  margin:var(--space-0);
+  font-family:var(--font-mono);
+  font-size:var(--text-code-size);
+  line-height:var(--leading-code);
+  color:var(--text-primary);
+  /* Code never wraps. */
+  white-space:pre;
+  tab-size:2;
+}
+.sm-prose pre > code{
+  padding:var(--space-0);
+  border:none;
+  background:none;
+  font-size:inherit;
+}
+.sm-prose figure[data-code] > pre::-webkit-scrollbar{ height:var(--prose-scrollbar-h) }
+.sm-prose figure[data-code] > pre::-webkit-scrollbar-track{ background:var(--prose-scroll-track) }
+.sm-prose figure[data-code] > pre::-webkit-scrollbar-thumb{
+  background:var(--prose-scroll-thumb);
+  border:var(--border-w) solid transparent;
+  background-clip:content-box;
+  border-radius:var(--radius-pill);
+}
+
+/* The copy control, and the expand control on a figure — one family. */
+.sm-prose button[data-copy],
+.sm-prose button[data-expand]{
+  grid-area:1 / 2;
+  position:relative;
+  display:inline-flex;
+  align-items:center;
+  gap:var(--space-2);
+  height:var(--control-h-sm);
+  margin:var(--space-1) var(--space-1) var(--space-1) var(--space-0);
+  padding:var(--space-0) var(--space-3);
+  border:var(--border-w) solid transparent;
+  border-radius:var(--radius-2);
+  background:none;
+  color:var(--text-muted);
+  font-family:var(--font-sans);
+  font-size:var(--text-xs);
+  font-weight:var(--weight-medium);
+  line-height:1;
+  cursor:default;
+  transition:var(--transition-control);
+}
+.sm-prose button[data-copy]:hover,
+.sm-prose button[data-expand]:hover{
+  background:var(--surface-hover);
+  border-color:var(--prose-rule);
+  color:var(--text-secondary);
+}
+.sm-prose button[data-copy]:active,
+.sm-prose button[data-expand]:active{
+  background:var(--surface-active);
+  color:var(--text-primary);
+}
+.sm-prose button[data-copy]:focus-visible,
+.sm-prose button[data-expand]:focus-visible{
+  outline:var(--border-w-strong) solid var(--focus-ring);
+  /* Inside a clipped block, the ring is inset so nothing eats it. */
+  outline-offset:calc(var(--border-w-strong) * -1);
+  color:var(--text-secondary);
+}
+/* Confirmation is the control changing: the glyph becomes a tick, the label
+   becomes "Copied". No toast, no colour flash — the answer is where the
+   question was asked. */
+.sm-prose button[data-copy][data-state="copied"]{
+  color:var(--text-primary);
+}
+.sm-prose button[data-copy] > svg,
+.sm-prose button[data-expand] > svg{
+  width:var(--prose-icon);
+  height:var(--prose-icon);
+  flex:none;
+}
+.sm-prose button[data-copy] > svg[data-icon="check"]{ display:none }
+.sm-prose button[data-copy][data-state="copied"] > svg[data-icon="copy"]{ display:none }
+.sm-prose button[data-copy][data-state="copied"] > svg[data-icon="check"]{ display:block }
+
+
+/* 10 · LINKS ===============================================================
+   Two kinds, told apart before the click. External is prose, sans, and carries
+   a glyph that says it leaves the app. Local is an identifier, so mono, and
+   carries a permanent hairline underline because it sits in text that is
+   already full of mono that does nothing. */
+
+.sm-prose a{
+  color:var(--text-link);
+  text-decoration:none;
+  border-bottom:var(--border-w) solid transparent;
+}
+.sm-prose a:hover{ color:var(--text-link-hover); border-bottom-color:currentColor }
+.sm-prose a:focus-visible{
+  outline:var(--border-w-strong) solid var(--focus-ring);
+  outline-offset:var(--space-1);
+  border-radius:var(--radius-2);
+}
+
+.sm-prose a[href^="https://"]::after,
+.sm-prose a[href^="http://"]::after{
+  content:var(--prose-external-glyph);
+  margin-left:var(--space-1);
+  font-family:var(--font-mono);
+  font-size:var(--text-xs);
+  color:var(--text-muted);
+}
+.sm-prose a[href^="https://"]:hover::after{ color:currentColor }
+
+/* Local target. Styling keys on the attribute, never on the href shape. The
+   path is split by the renderer into a head that truncates and a tail that
+   never does, so the file name survives at any column width. */
+.sm-prose a[data-path]{
+  display:inline-flex;
+  align-items:baseline;
+  max-width:100%;
+  font-family:var(--font-mono);
+  font-size:var(--text-code-size);
+  border-bottom-color:var(--prose-link-underline);
+}
+.sm-prose a[data-path] > span[data-head]{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  min-width:var(--space-0);
+}
+.sm-prose a[data-path] > span[data-tail]{
+  flex:none;
+  white-space:nowrap;
+}
+.sm-prose a[data-kind="dir"]::after{
+  content:var(--prose-dir-glyph);
+  color:var(--text-muted);
+}
+/* On a line of its own: takes the full column so the head truncates late. */
+.sm-prose p > a[data-path]:only-child{
+  display:flex;
+  width:100%;
+}
+
+
+/* 11 · THE AGENT IS WORKING ================================================
+   One strip, four moments: waiting, streaming, done, failed. The same element
+   in the same place changes its mark and its words, so the transition reads as
+   one thing progressing rather than three things appearing.
+
+   Waiting does not spin. The elapsed time is the liveness signal — it is the
+   answer to the only question being asked — and the mark beside it fades on
+   the system's --dur-pulse rather than blinking. prefers-reduced-motion stops
+   it, and the clock still ticks. */
+
+.sm-prose div[data-activity]{
+  display:flex;
+  align-items:center;
+  gap:var(--space-3);
+  min-height:var(--row-h);
+  font-size:var(--text-sm);
+  color:var(--text-muted);
+}
+.sm-prose div[data-activity] > span[data-mark]{
+  flex:none;
+  width:var(--prose-dot);
+  height:var(--prose-dot);
+  border-radius:var(--radius-pill);
+  background:var(--prose-live);
+  animation:sm-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+}
+.sm-prose div[data-activity="waiting"]{ color:var(--text-secondary) }
+.sm-prose div[data-activity] > time{
+  margin-left:auto;
+  font-family:var(--font-mono);
+  font-size:var(--text-xs);
+  font-variant-numeric:tabular-nums;
+  color:var(--text-muted);
+}
+/* Finished: the strip becomes the receipt for the turn. */
+.sm-prose div[data-activity="done"]{
+  font-family:var(--font-mono);
+  font-size:var(--text-xs);
+  color:var(--text-muted);
+  opacity:var(--attn-quiet-opacity);
+}
+.sm-prose div[data-activity="done"] > time{ opacity:1 }
+.sm-prose div[data-activity="failed"]{
+  font-size:var(--text-sm);
+  color:var(--status-failed-fg);
+}
+.sm-prose div[data-activity="failed"] > span[data-mark]{
+  border-radius:var(--radius-0);
+  background:var(--status-failed-fg);
+  animation:none;
+}
+
+/* The live edge of a streaming message: a caret pinned to the last character
+   the model has produced. The renderer moves this one element; nothing else in
+   the partial message differs from a finished one. */
+.sm-prose span[data-edge]{
+  display:inline-block;
+  width:var(--prose-caret-w);
+  height:1em;
+  margin-left:var(--space-1);
+  vertical-align:text-bottom;
+  background:var(--prose-live);
+  animation:sm-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+}
+
+/* Reasoning: the agent working something out, not the agent speaking. Folded
+   by default and dimmed at every moment — by colour and size, not by opacity,
+   so it still clears the contrast floor when open. */
+.sm-prose details[data-reasoning]{
+  border-left:var(--border-w) solid var(--prose-rule);
+  padding-left:var(--space-5);
+  font-size:var(--text-sm);
+  color:var(--text-muted);
+}
+.sm-prose details[data-reasoning] > summary{
+  display:flex;
+  align-items:center;
+  gap:var(--space-3);
+  min-height:var(--row-h);
+  list-style:none;
+  cursor:default;
+  color:var(--text-secondary);
+  user-select:none;
+}
+.sm-prose details[data-reasoning] > summary::-webkit-details-marker{ display:none }
+.sm-prose details[data-reasoning] > summary:hover{ color:var(--text-primary) }
+.sm-prose details[data-reasoning] > summary:focus-visible{
+  outline:var(--border-w-strong) solid var(--focus-ring);
+  outline-offset:var(--space-1);
+  border-radius:var(--radius-2);
+}
+/* Our own disclosure marker: two borders, rotated. */
+.sm-prose details[data-reasoning] > summary::before{
+  content:"";
+  flex:none;
+  width:var(--prose-chevron);
+  height:var(--prose-chevron);
+  margin-left:var(--space-1);
+  border-right:var(--border-w-strong) solid currentColor;
+  border-bottom:var(--border-w-strong) solid currentColor;
+  transform:rotate(-45deg);
+  transition:transform var(--dur-fast) var(--ease-out);
+}
+.sm-prose details[data-reasoning][open] > summary::before{ transform:rotate(45deg) }
+.sm-prose details[data-reasoning] > summary > time{
+  margin-left:auto;
+  font-family:var(--font-mono);
+  font-size:var(--text-xs);
+  color:var(--text-muted);
+}
+.sm-prose details[data-reasoning][open] > :where(p,ul,ol,pre,figure){
+  margin-top:var(--space-4);
+}
+
+
+/* 12 · ILLUSTRATIONS =======================================================
+   Two accepted forms, and the difference between them is the answer to the
+   dark-theme failure case:
+
+     <img>        always sits on --prose-figure-mat, the same paper in both
+                  themes, inside a border. A PNG that carries its own white
+                  ground then reads as a pinned print rather than a hole cut in
+                  the panel, and a transparent PNG drawn in dark ink is still
+                  legible.
+     inline <svg> is the preferred form, and is accepted ONLY when it paints
+                  with currentColor and var() tokens. It gets no mat: it is
+                  part of the panel and follows the theme.
+
+   The renderer enforces that rule; the stylesheet just stops guessing. */
+
+.sm-prose figure[data-figure]{
+  display:grid;
+  grid-template-columns:1fr auto;
+  border:var(--border-w) solid var(--prose-rule);
+  border-radius:var(--radius-3);
+  overflow:hidden;
+}
+.sm-prose figure[data-figure] > :where(img,svg,div[data-placeholder]){
+  grid-area:1 / 1 / 2 / -1;
+  display:block;
+  width:100%;
+  height:auto;
+  max-width:100%;
+  border-bottom:var(--border-w) solid var(--prose-rule);
+}
+.sm-prose figure[data-figure] > img{
+  padding:var(--space-4);
+  background:var(--prose-figure-mat);
+}
+.sm-prose figure[data-figure] > svg{
+  padding:var(--space-4);
+  background:var(--surface);
+  color:var(--text-secondary);
+}
+/* Type inside an agent-drawn diagram is ours, not the diagram's. */
+.sm-prose figure[data-figure] > svg text{
+  font-family:var(--font-mono);
+  font-size:var(--text-2xs);
+  fill:currentColor;
+}
+/* Caption row: the caption, and the control that opens the picture full size
+   in a window of its own. The row is always present — when the agent gives no
+   caption it still carries the control, and a figure without a way out of the
+   column is a figure a person cannot read. */
+.sm-prose figure[data-figure] > figcaption{
+  grid-area:2 / 1;
+  align-self:center;
+  padding:var(--space-2) var(--space-4);
+  background:var(--prose-code-header-bg);
+  font-size:var(--text-xs);
+  line-height:var(--leading-snug);
+  color:var(--text-muted);
+}
+.sm-prose figure[data-figure] > button[data-expand]{
+  grid-area:2 / 2;
+  background:var(--prose-code-header-bg);
+  margin:var(--space-0);
+  padding:var(--space-0) var(--space-4);
+  height:auto;
+  align-self:stretch;
+  border-radius:var(--radius-0);
+  border-left:var(--border-w) solid var(--prose-rule);
+}
+
+/* Loading: the shape of the picture arrives before the picture. */
+.sm-prose figure[data-figure] > div[data-placeholder]{
+  height:var(--prose-figure-loading-h);
+  background:var(--surface-hover);
+}
+.sm-prose figure[data-figure][data-state="loading"] > div[data-placeholder]{
+  animation:sm-skeleton var(--dur-pulse) var(--ease-in-out) infinite;
+}
+/* Failed: says what happened and where, and keeps the frame so the column does
+   not jump when it resolves. */
+.sm-prose figure[data-figure][data-state="error"] > div[data-placeholder]{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  justify-content:center;
+  gap:var(--space-2);
+  height:auto;
+  min-height:var(--prose-figure-loading-h);
+  padding:var(--space-5);
+  background:var(--surface-sunken);
+  font-family:var(--font-mono);
+  font-size:var(--text-xs);
+  color:var(--text-secondary);
+}
+.sm-prose figure[data-figure][data-state="error"] > div[data-placeholder] > strong{
+  font-family:var(--font-sans);
+  font-size:var(--text-sm);
+  font-weight:var(--weight-medium);
+  color:var(--status-failed-fg);
+}
+
+/* Two in a turn, in a row. They wrap rather than crush below the minimum. */
+.sm-prose div[data-figures]{
+  display:flex;
+  flex-wrap:wrap;
+  gap:var(--space-4);
+}
+.sm-prose div[data-figures] > figure[data-figure]{
+  flex:1 1 var(--prose-figure-min);
+  min-width:var(--prose-figure-min);
+  margin:var(--space-0);
+}
