@@ -59,29 +59,47 @@ import { absolutePath } from '../../paths.js'
 
 const HTTP_SCHEME = /^(https?):\/\//i
 
-/* RFC 3986's own scheme grammar is `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`
-   followed by `:`, and the dot in it is why this is narrower than that by one
-   character on purpose. Taken literally, `tauri.conf.json:41` — a bare file
-   name with a line number and no folder in front of it, no `/` anywhere —
-   reads as a scheme named `tauri.conf.json` exactly as validly as `mailto`
-   reads as one, and was declined before `LOOKS_LIKE_PATH` below ever got to
-   judge it: a real, previously-passing local target failed only because this
-   regex is more permissive than any scheme this app or a person actually
-   writes. No scheme in this file's own header, and none this app has ever
-   been asked to open, carries a literal dot — `mailto`, `javascript`, `data`,
-   `file`, `ftp`, `tel` — so refusing it here costs nothing real and stops it
-   colliding with an extension, which always does carry one.
+/* RFC 3986's own scheme grammar, `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`
+   followed by `:`, in full — the dot included, which an earlier version of
+   this line dropped and should not have. Narrowing the grammar itself was
+   the wrong fix: it stopped `tauri.conf.json:41` reading as a scheme, but it
+   also stopped every *dotted* scheme being recognised as one at all, and a
+   reverse-DNS scheme is an ordinary construct — `com.example.app://…` is the
+   everyday shape of a desktop deep link, and a narrowed grammar read it as a
+   local path and drew it as a pressable anchor over a click that could only
+   fail. The collision is separated instead, with a negative lookahead on
+   what follows the colon: `(?!\d)` refuses the match when a digit comes
+   right after it. Every scheme this app declines is still declined by
+   it — `mailto:`, `javascript:`, `data:`, `file:`, and `com.example.app://…`
+   — because none of them is followed by a digit; `tauri.conf.json:41` is
+   followed by `4`, so it is no longer read as a scheme and reaches
+   `LOOKS_LIKE_PATH` below, which is what it takes to be a local target.
 
-   It is deliberately not narrowed to that handful of names, though: a scheme
-   neither this app nor the list above has ever heard of is exactly as
+   It is deliberately not narrowed to a handful of named schemes: one neither
+   this app nor the paragraph above has ever heard of is exactly as
    unopenable as `mailto:`, and refusing by shape rather than by a list is
    what keeps a local path with a genuine colon in it (a Windows drive
    letter, `C:\Users\x`) from slipping through unrefused — a single letter in
    front of a colon matches this grammar too, which is a known, accepted gap:
    this app's local links are written as repository-relative paths, where a
    colon never opens the string, and a Windows absolute path reaching this
-   parser is not a case any fixture in this project has needed yet. */
-const OTHER_SCHEME = /^[a-zA-Z][a-zA-Z0-9+-]*:/
+   parser is not a case any fixture in this project has needed yet.
+
+   **The lookahead is not the whole answer, and it is worth being exact about
+   the piece it leaves open.** It separates a dotted scheme from a dotted
+   *file name* only when the two differ in what follows the colon — a `/`
+   against a digit. A dotted scheme with a digit directly after its own colon
+   and no `/` anywhere, `com.example.app:41`, has the identical shape
+   `LOOKS_LIKE_PATH` accepts a real one by (a dot, a short alphanumeric run,
+   a line-shaped suffix), and nothing in either regex can tell the two apart
+   without a dictionary of real extensions or real scheme names — which
+   this module deliberately does not keep, for the same reason it refuses by
+   shape rather than by a list two paragraphs up. It reads as local, the same
+   as `tauri.conf.json:41` does and must. This is not the residual gap
+   `LOOKS_LIKE_PATH`'s own header names (`foo:1/bar`, which needs a `/` as
+   well) — it is a second, narrower one, worth naming here rather than
+   discovering by surprise. */
+const OTHER_SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d)/
 
 /* The positive shape a scheme-less target has to have before it is read as
    local at all — without this, "everything that is not a scheme" swallowed
@@ -110,7 +128,18 @@ const OTHER_SCHEME = /^[a-zA-Z][a-zA-Z0-9+-]*:/
    module's business to guess. The Windows drive-letter gap `OTHER_SCHEME`'s
    own comment names is untouched by this — a path like `C:\Users\x\a.rs` is
    declined earlier, as an unrecognised scheme, and never reaches this
-   check. */
+   check.
+
+   **One more gap, named rather than chased.** A scheme whose colon is
+   followed by a digit *and* which also contains a `/` — `foo:1/bar` — passes
+   `OTHER_SCHEME`'s lookahead for the reason `tauri.conf.json:41` needs it to,
+   and then reads as local off the `/` alone. It is contrived, it never
+   reaches `openExternal` (nothing gets there but the external branch above),
+   and Rust's own `resolve_within` holds the filesystem boundary regardless
+   of what this module classifies — so the cost of chasing it is higher than
+   the cost of leaving it. `OTHER_SCHEME`'s own header names the narrower
+   sibling of this same gap, a dotted scheme with a digit after its colon and
+   no `/` at all. */
 const LOOKS_LIKE_PATH = /\/|\.[A-Za-z0-9]{1,10}(?::\d+(?::\d+)?)?$/
 
 /* A line, or a line and a column, glued onto the end of a file target with a

@@ -44,6 +44,39 @@ describe('classifyLink: every other scheme stays unrecognised', () => {
   })
 })
 
+/* `OTHER_SCHEME` keeps RFC 3986's dot, which an earlier version of this
+   module had dropped to stop `tauri.conf.json:41` reading as a scheme — and
+   dropping it instead stopped every *dotted* scheme being recognised at
+   all, `com.example.app://…` (an ordinary desktop deep link) included. The
+   fix is a negative lookahead on what follows the colon rather than a
+   narrower grammar, so a dotted scheme is still a scheme unless a digit
+   comes right after it. */
+describe('classifyLink: a dotted scheme is still a scheme', () => {
+  it('declines a reverse-DNS deep link, dots and all', () => {
+    expect(classifyLink('com.example.app://x')).toBeNull()
+  })
+
+  /* The lookahead is not the whole answer, and this is the shape it leaves
+     open: a dotted scheme whose colon happens to be followed by a digit and
+     nothing else distinguishes it from `tauri.conf.json:41` — both are a
+     dot, a short alphanumeric run and a line-shaped suffix, and neither
+     regex has a dictionary of real extensions or real scheme names to tell
+     them apart by. It reads as local, the same as a genuine file with a line
+     number must. `OTHER_SCHEME`'s own header names this gap next to the
+     wider one `LOOKS_LIKE_PATH`'s header names (`foo:1/bar`, which needs a
+     `/` as well) — it is not chased for the same reason: nothing reaches
+     `openExternal` from here, and Rust's own `resolve_within` holds the
+     filesystem boundary regardless of what this module classifies. */
+  it('cannot tell a dotted scheme with no slash from a real file and a line, and does not try', () => {
+    expect(classifyLink('com.example.app:41')).toEqual({
+      kind: 'local',
+      targetKind: 'file',
+      path: 'com.example.app',
+      display: 'com.example.app:41'
+    })
+  })
+})
+
 describe('classifyLink: local', () => {
   it('reads a bare relative path as a local file, with no line suffix', () => {
     expect(classifyLink('src-tauri/tauri.conf.json')).toEqual({
