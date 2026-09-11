@@ -333,6 +333,29 @@ function listenToState() {
   })
 }
 
+/* Which harnesses this app can drive, and the whole of the list.
+
+   A driven session is one whose protocol the worker parses itself, and only
+   Claude Code has a driver: `session::service::driver_for` refuses every other
+   profile, and `Request::Start` refuses every intent but `Bare`. So the front
+   end has to ask before it takes this road at all — a person whose harness is
+   Codex pressing "+ New agent" must get the PTY they have always had, not a
+   refusal.
+
+   Asked of `settings.agent` and nothing else, and that is exact rather than a
+   guess: `Intent::Bare` takes `agents::Role::Default`, which
+   `settings::model::Settings::role_pair` answers with the root pair — the same
+   two fields the front end holds. No per-project override reaches it.
+
+   A list here rather than a capability on the harness row, because there is no
+   flag for this: `agents::Capabilities` carries `resume`, `fork`, `clear`,
+   `usage`, `batch` and `oneshot`, and none of them means "has a driver". The
+   day a second harness grows one, this list and `driver_for` are the two places
+   that have to agree, which is why this one names the other. */
+const DRIVEN = ['claude']
+
+export const canDrive = (agent) => DRIVEN.includes(agent)
+
 /* Which driven sessions this window has started, and in which project.
 
    Kept beside the conversations rather than read out of them, because the two

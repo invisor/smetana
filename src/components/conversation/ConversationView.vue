@@ -9,27 +9,17 @@
    `stopConversation`); everything that decides what a session *is* stays in
    `stores/conversation.js`, and nothing here knows Tauri exists.
 
-   **The events are translated here and nowhere else.** `session::model::Event`
-   carries its kind's fields flattened in beside a kebab-case `kind`, and those
-   fields are *not* renamed on the way out: `tokens_in`, `tokens_out`,
-   `cost_usd`. Every numeric prop of `TurnResult` has a default, so an event
-   handed over raw — `v-bind="event"`, or `:tokens-in="event.tokens_in"` read
-   off a store with no translation — would draw `0 in · 0 out · 0 ms` silently,
-   with no warning from Vue and nothing on screen to say the numbers are not the
-   session's. The one place the wire's names appear is `rows` below.
+   **What this file does not hold is the two rules about the journal itself.**
+   `journal.js` beside it turns events into rows — the fold of a tool call
+   together with its result, and the one translation of the wire's `tokens_in`,
+   `tokens_out` and `cost_usd` — and says which states count as a turn in
+   flight. Both are whole rules with a test each, and a rule inside a `.vue`
+   file is a rule nothing in this repository can read; that module's header
+   carries the reasoning, including what a silent failure of either would look
+   like on screen.
 
-   **A kind this panel does not know draws nothing.** The chain over the kinds
-   is closed and has no fallback: that is `session::model::EventKind`'s own rule
-   one layer up ("an event type a driver does not recognise produces no event"),
-   and the reason is the same — a missing row costs a person nothing the
-   harness's own logs do not still hold, while a wall of raw protocol costs them
-   the panel. `turn-start` and the two permission kinds are deliberately among
-   the ones that draw nothing: a turn's start is said by the message under it,
-   and a question is drawn from `held.question` at the foot of the panel, where
-   it is answered, rather than twice.
-
-   **The scroll rule is the one non-obvious thing in this file**, and it is
-   written where it is enforced, on `atEnd` below. */
+   **The scroll rule is the one non-obvious thing left in this file**, and it is
+   written where it is enforced, on `stick` below. */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import AgentMessage from './AgentMessage.vue'
 import Composer from './Composer.vue'
@@ -41,6 +31,7 @@ import UserMessage from './UserMessage.vue'
 import EmptyState from '../core/EmptyState.vue'
 import Icon from '../core/Icon.vue'
 import StatusBadge from '../status/StatusBadge.vue'
+import { isBusy, journalRows } from './journal.js'
 import { basename } from '../../paths.js'
 /* Three stores beside the conversation's own, and each is here because this
    component is the one that has to answer rather than raise.
@@ -107,6 +98,13 @@ function open(id) {
   /* A panel that has just opened belongs at the end of its journal, whatever
      the last one was scrolled to. */
   stick = true
+  /* And it carries nothing over from the session it was last pointed at. The
+     draft is deliberately the other way — the store keys one per session, so it
+     comes back with the conversation it was typed into — while these are held
+     here and would otherwise be attached to somebody else's next message.
+     Unreachable while nothing fills the list; it is one line now and a defect
+     the day drops are wired. */
+  attachments.value = []
   attach(id)
 }
 
@@ -116,56 +114,9 @@ onBeforeUnmount(() => {
   if (attached !== null) detach(attached)
 })
 
-/* The journal as rows to draw: one per event, except that a tool call and its
-   result are one row folded together by the id they share.
-
-   The fold is why this is a list built in one pass rather than a `v-for` with a
-   branch inside it: `tool-result` carries no name and no detail of its own, and
-   drawing it on a line by itself would split one thing the agent did across two
-   rows. A result whose call is not in this journal draws nothing — that is a
-   trimmed journal, and `ToolCall` has nothing to put in its row.
-
-   `result: null` is the running state and is what `ToolCall` is written
-   against: it draws the live glyph rather than guessing at an outcome. */
-const rows = computed(() => {
-  const out = []
-  const calls = new Map()
-  for (const event of held.value?.events ?? []) {
-    if (event.kind === 'user-message') {
-      out.push({
-        key: event.seq,
-        kind: 'user',
-        text: event.text,
-        attachments: event.attachments ?? []
-      })
-    } else if (event.kind === 'text') {
-      out.push({ key: event.seq, kind: 'agent', text: event.text })
-    } else if (event.kind === 'reasoning') {
-      out.push({ key: event.seq, kind: 'reasoning', text: event.text })
-    } else if (event.kind === 'tool-use') {
-      const row = { key: event.seq, kind: 'tool', name: event.name, detail: event.detail, result: null }
-      calls.set(event.id, row)
-      out.push(row)
-    } else if (event.kind === 'tool-result') {
-      const row = calls.get(event.id)
-      if (row) row.result = { ok: event.ok, summary: event.summary }
-    } else if (event.kind === 'result') {
-      /* The four names the wire actually uses. See the header: this is the
-         translation, and there is no second copy of it anywhere. */
-      out.push({
-        key: event.seq,
-        kind: 'result',
-        tokensIn: event.tokens_in,
-        tokensOut: event.tokens_out,
-        costUsd: event.cost_usd ?? null,
-        ms: event.ms
-      })
-    } else if (event.kind === 'error') {
-      out.push({ key: event.seq, kind: 'error', text: event.text })
-    }
-  }
-  return out
-})
+/* The journal as rows to draw — `journal.js`, which is where the fold and the
+   translation are written and tested. */
+const rows = computed(() => journalRows(held.value?.events ?? []))
 
 /* The question the session is waiting on, derived by the store and never stored
    there — see its own note. Drawn at the foot of the panel rather than in the
@@ -173,10 +124,7 @@ const rows = computed(() => {
 const question = computed(() => held.value?.question ?? null)
 
 const state = computed(() => held.value?.state ?? 'starting')
-/* Whether a turn is in flight, which is what turns the composer's one button
-   into Stop. A session waiting on a permission counts: the turn is open and the
-   thing to do about it is the card above the field, not another message. */
-const busy = computed(() => ['starting', 'running', 'needs-you'].includes(state.value))
+const busy = computed(() => isBusy(state.value))
 
 /* Who is on the other end. None of this is on the wire — `session_attach`
    answers with the journal, the sequence number and the state, and nothing
@@ -301,11 +249,33 @@ const bar = {
   flex: '0 0 auto',
   height: 'var(--scope-bar-h)',
   padding: '0 var(--panel-pad)',
+  /* The last line of defence under the rule below: with only the two muted
+     spans able to give, a panel narrower than the badge and the label together
+     would push the bar wider than the pane and put a horizontal scrollbar under
+     the whole column. Clipped instead — the parts are in the order they are
+     most worth keeping. */
+  overflow: 'hidden',
   borderBottom: 'var(--border-w) solid var(--border-subtle)',
   background: 'var(--surface)'
 }
 
+/* The label, and the two properties that decide what gives way when the bar
+   runs out of room.
+
+   **The identity is the wrong thing to shrink**, and without the `0 0` in that
+   `flex` it is exactly what flexbox picks: every child of this row is shrinkable by
+   default, so a long model and a long folder squeezed "Claude Code" from one
+   73px line into a 40px box and it wrapped to two — 22px of text in a bar that
+   is 24px tall in compact. The meta spans below have `minWidth: 0` and an
+   ellipsis for this, and now they are the only ones that can give, which is
+   what that ellipsis was for. `nowrap` is the second half: a label that cannot
+   shrink must also not break, or a harness with a two-word name wraps on a
+   narrow panel instead. The badge at the head of the bar is held the same way,
+   from the template, since it is a component and its own style object is its
+   own. */
 const agentName = {
+  flex: '0 0 auto',
+  whiteSpace: 'nowrap',
   font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)',
   color: 'var(--text-primary)'
 }
@@ -319,9 +289,26 @@ const quiet = {
   color: 'var(--text-muted)'
 }
 
-/* The one thing in the bar that is not a value: the separator between them.
-   The bar sets no font of its own, so this says its own. */
+/* A meta pair: the separator and the value it introduces, in one box so that
+   what gives way gives way whole. Measured in Chrome at 200px of panel, a
+   separator that shrank on its own account was left behind pointing at a value
+   that had ellipsised away to nothing — "Claude Code · ·". The pair is the only
+   shrinkable thing in the bar, and it takes its own separator with it.
+
+   The separator is its own span inside it because it is the one thing in the
+   bar that is not a value: it is drawn in the border colour rather than the
+   muted text one, and the bar sets no font, so it says its own. */
+const metaPair = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-3)',
+  flex: '0 1 auto',
+  minWidth: 0,
+  overflow: 'hidden'
+}
+
 const sep = {
+  flex: '0 0 auto',
   color: 'var(--border-strong)',
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
 }
@@ -381,12 +368,16 @@ const refusal = {
 <template>
   <div :style="root">
     <div :style="bar">
-      <StatusBadge :status="status" size="sm" />
+      <StatusBadge :status="status" size="sm" :style="{ flex: '0 0 auto' }" />
       <span :style="agentName">{{ label }}</span>
-      <span v-if="model" :style="sep">·</span>
-      <span v-if="model" :style="quiet">{{ model }}</span>
-      <span v-if="folder" :style="sep">·</span>
-      <span v-if="folder" :style="quiet">{{ folder }}</span>
+      <span v-if="model" :style="metaPair">
+        <span :style="sep">·</span>
+        <span :style="quiet">{{ model }}</span>
+      </span>
+      <span v-if="folder" :style="metaPair">
+        <span :style="sep">·</span>
+        <span :style="quiet">{{ folder }}</span>
+      </span>
     </div>
 
     <div ref="viewport" :style="journal" @scroll="onScroll">

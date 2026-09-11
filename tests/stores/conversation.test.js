@@ -353,6 +353,27 @@ describe('the conversation store', () => {
     })
   })
 
+  /* Which harnesses this app can drive. The list decides which road
+     `newAgent` takes, so a wrong answer here is either a Claude session that
+     never becomes a conversation or a Codex session that cannot start at all. */
+  describe('the harnesses that can be driven', () => {
+    it('drives Claude Code and nothing else this build ships', async () => {
+      const { stores } = await ready()
+
+      expect(stores.conversation.canDrive('claude')).toBe(true)
+      expect(stores.conversation.canDrive('codex')).toBe(false)
+    })
+
+    /* A hand-edited `settings.json`, or a harness added to Rust and not to this
+       list: the PTY road is the one that still works for it. */
+    it('does not drive a harness it has never heard of', async () => {
+      const { stores } = await ready()
+
+      expect(stores.conversation.canDrive('')).toBe(false)
+      expect(stores.conversation.canDrive('gemini')).toBe(false)
+    })
+  })
+
   /* `session::model::SessionState` in the design system's words. The two that
      are translated are the whole of the rule; the rest are already this
      system's and pass through, a word from a Rust that has moved on ahead of

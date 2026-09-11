@@ -28,17 +28,39 @@ its "+ New agent" row, from the `+` button beside the pinned tabs, or from the t
 agent to edit". The reason the subsystem exists at all is the second half of that sentence: it notices
 when an agent is waiting on a human, including one in a tab nobody is looking at.
 
-**That tab is drawn on demand and is not stored anywhere.** It exists exactly while the project has an
-agent session — live in `terminalState.sessions`, or still coming up in `terminalState.starting` —
-and `hasAgentTab` in `src/stores/tabs.js` is the whole of the rule, over `hasAgentSession` in
-`terminals.js`. Before that it was pinned beside the board, so a project opened on an empty folder
-offered a tab whose entire content was an empty terminal. A *start* counts and not only a session:
-a spawn takes about a second, and a tab that appeared only when the worker answered would leave the
-button somebody pressed with no visible effect for that second — the same reason `starting` exists for
-the panel at all. When the last agent goes the tab goes with it, and a person standing on it lands on
-the board; `dropAgentTab` is that rule and a `watch` in `DesktopApp.vue` is what notices, because
-`tabs.js` is one half of an import cycle with `settings.js` and a module-scope `watch` there would
-read this store at evaluation time — the failure `notifications.js` carries its own note about.
+**One of those roads has already left this subsystem.** "+ New agent" starts a *driven* session under
+Claude Code since smetana-5ijg — no PTY, no ring, no row in the Agents view — because the worker parses
+that harness's protocol itself and the app draws typed events (`src-tauri/src/session/`,
+`src/stores/conversation.js`, `src/components/conversation/`). Every other harness keeps this road
+exactly as it is, since only Claude Code has a driver, and so does every other intent whatever the
+harness. Which of the two a press takes is `canDrive` in the conversation store, over `settings.agent`.
+What is written below is the PTY half and stays true of it; the parts the split changed are marked
+where they are.
+
+**That tab is drawn on demand and is not stored anywhere.** `hasAgentTab` in `src/stores/tabs.js` is
+the whole of the rule, and since smetana-5ijg it is over **two** stores rather than one: a PTY session
+live in `terminalState.sessions` or still coming up in `terminalState.starting` (`hasAgentSession`
+here), **or** a driven conversation this window has started in the project
+(`conversationsIn` in `src/stores/conversation.js`). One tab for both, because to a person it is one
+thing — where the agent is — and the terminal is what is going away rather than a second kind of agent
+that will stay. Before either, the tab was pinned beside the board, so a project opened on an empty
+folder offered a tab whose entire content was an empty terminal. A *start* counts and not only a
+session: a spawn takes about a second, and a tab that appeared only when the worker answered would
+leave the button somebody pressed with no visible effect for that second — the same reason `starting`
+exists for the panel at all.
+
+The two halves do not expire alike, and the difference is worth knowing before trusting either. A PTY
+agent's half is per project by construction — `terminalState.sessions` is replaced on every switch —
+and it empties, so **when the last PTY agent goes the tab goes with it** and a person standing on it
+lands on the board; `dropAgentTab` is that rule and a `watch` in `DesktopApp.vue` is what notices,
+because `tabs.js` is one half of an import cycle with `settings.js` and a module-scope `watch` there
+would read this store at evaluation time — the failure `notifications.js` carries its own note about.
+**Nothing ever takes an entry out of the driven half**, deliberately: a conversation's journal lives in
+the worker and is worth reading after the last word as much as during it, and there is no process to
+close and no cross on this tab to close it with. So once a project has held a driven conversation its
+Agent tab stands for the life of the window, that watch can never fire for it, and a start that was
+*refused* is taken back by hand in `newAgent` instead — there is no ticket on that road for the store
+to withdraw. A restart clears it, driven sessions deliberately not surviving one.
 
 The one seam that costs something: `project.activeTab` **is** remembered, so a project last left
 watching an agent comes back naming a tab that cannot exist yet, sessions deliberately not surviving a
@@ -192,11 +214,26 @@ its last screen still in the ring, until somebody closes it. That is the intende
 oversight — it is what a terminal emulator with "close on exit" switched off does, it leaves the last
 words of whatever was running there to be read, and closing it is the same one gesture as before.
 
-What such a tab draws is `TerminalView.vue` with a `sessionId` prop, and the Agent tab is the same
-component with `terminalState.activeId` passed in. The prop is what the pane attaches to, sends
-keystrokes to and resizes; the pane reads no selection of its own. That is the other half of the
-`activeId` split above — and the whole reason two shells do not open on one scrollback, since the pane
-holds one xterm instance per *view* and refills it from the ring of whichever session it was named.
+What such a tab draws is `TerminalView.vue` with a `sessionId` prop. The prop is what the pane
+attaches to, sends keystrokes to and resizes; the pane reads no selection of its own. That is the other
+half of the `activeId` split above — and the whole reason two shells do not open on one scrollback,
+since the pane holds one xterm instance per *view* and refills it from the ring of whichever session it
+was named.
+
+The Agent tab is **three branches over two components** since smetana-5ijg, and the seam is one `v-if`
+on which kind of session it is aimed at: `ConversationView.vue` with a driven session's id, or this
+same `TerminalView.vue` with `terminalState.activeId`. What decides is `agentAim` in `DesktopApp.vue`,
+one field per project written by the two acts that aim this tab and by nothing else — starting a
+conversation, and `showAgentTab()` on every road through `createSession`. It is deliberately not
+derived from `terminalState.activeId`: `loadSessions` repairs that selection itself on every project
+switch, and a first version that watched it had a switch away and back quietly taking the tab off a
+live conversation. The union is deliberately not an abstraction over the two back ends either — the
+terminal is going away when the last intent moves, and a seam built to outlive that migration would.
+
+One consequence of that, recorded because it looks like a bug from the outside: a driven session has no
+row in the agents panel, since `agentRows` is this store's, so once somebody picks a PTY agent in a
+project there is no gesture that aims the tab back at that project's conversation. The row is what the
+stage teaching this panel about driven sessions owes.
 
 Nothing about a shell reaches `settings.json`: it is not in `openTabs`, which is paths, and a tab id
 that lands in `activeTab` is rejected on the next launch by `validate` (it is neither of the two names

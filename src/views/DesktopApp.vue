@@ -9,7 +9,7 @@
    The core moment this screen is built for: you come back after two hours and
    read, in three seconds, what finished, what stalled, and what is waiting for
    you. Hence the loud budget — exactly one card and one callout shout here. */
-import { computed, nextTick, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch, watchEffect } from 'vue'
 import ScopeIndicator from '../components/shell/ScopeIndicator.vue'
 import Panel from '../components/shell/Panel.vue'
 import Resizer from '../components/shell/Resizer.vue'
@@ -135,7 +135,7 @@ import {
    tab, deliberately: this is a union of two kinds of session rather than an
    abstraction over two back ends, because the terminal is going away and a seam
    built to outlive that migration would. */
-import { conversationsIn, startConversation } from '../stores/conversation.js'
+import { canDrive, conversationsIn, startConversation } from '../stores/conversation.js'
 import {
   boardColumns,
   clearSemantic,
@@ -570,43 +570,54 @@ onMounted(initRuns)
 onMounted(initUpdates)
 
 /* A new agent becomes the one you're looking at right away: that is what it was
-   created for. Both switches sit before the await, the same as on the other two
-   routes into a session — a spawn takes about a second, and waiting it out
-   leaves the button a person pressed doing nothing visible for that second.
-   What used to make the switch wait was a failed spawn jumping to an empty
-   terminal; that is now the store's business rather than each caller's, and it
-   is answered properly: the row and the selection appear at once and are both
-   taken back if nothing starts, so a failure ends where it began instead of on
-   a blank pane.
+   created for. Which of the two kinds of session it is depends on the harness,
+   and on nothing else this button knows — `canDrive` in the conversation store
+   holds that list and says why it is asked of `settings.agent`.
+
+   **Claude Code takes the driven road**: the worker parses its protocol and the
+   Agent tab draws a conversation. Every other harness keeps `createSession`
+   exactly as it always was, because only Claude Code has a driver — sending a
+   Codex person down this road would turn a working PTY into a refusal from
+   `Request::Start`, which is the opposite of what this stage is for.
+
+   The two roads differ in what they can promise before the worker answers, and
+   that is worth having straight. `createSession` parks a start ticket the
+   moment it is called: a row appears in the panel and the selection moves to
+   it, and both are taken back if nothing starts, so a failed spawn ends where
+   it began. There is no ticket on the driven road — the Agent tab is derived
+   from the sessions this window *holds*, and a session that has not started is
+   not one — so what a person sees between the press and `session_start`
+   answering is whatever the tab was drawing before: about a second of the last
+   conversation, or of the selected agent's terminal, or of the empty state if
+   there was neither. The tab is aimed once there is something to aim it at, and
+   a start that failed is taken back by hand here, since the watcher on
+   `hasAgentTab` cannot fire for a value that never changed.
 
    The side tab is set here even though the button that calls this only exists
    while the panel is already on Agents: where a session is started from is not
-   what should decide where the window ends up, and the three routes say the
-   same two lines so that adding a fourth is one decision rather than two.
+   what should decide where the window ends up, and the routes into a session
+   say the same two lines so that adding another is one decision rather than
+   two.
 
-   The catch below swallows the rejection: createSession already logged it and
-   set terminalState.lastError, which renders as a toast, so nothing is lost by
-   not rethrowing — this catch exists only to stop Vue's own
-   unhandled-rejection warning from repeating what the store already said. */
+   The catch below swallows the rejection: both stores log their own refusal and
+   set a field that renders as a toast or a line, so nothing is lost by not
+   rethrowing — this catch exists only to stop Vue's own unhandled-rejection
+   warning from repeating what the store already said. */
 async function newAgent() {
   try {
     project.sideTab = 'agents'
+    if (!canDrive(settings.agent)) {
+      showAgentTab()
+      await createSession(activePath.value, { kind: 'bare' })
+      return
+    }
+    /* The tab comes forward on the press; the aim follows the id, so a spawn
+       that answers leaves the panel on the new conversation and one that does
+       not leaves nothing pointing at a session that was never made. */
     project.activeTab = 'terminal'
-    /* The one start in this file that is a driven session rather than a PTY,
-       and the whole of the seam: `Intent::Bare` is what the conversation worker
-       supports, every other intent still goes through `createSession` above.
-       The id is what the Agent tab draws a conversation for — `null` is a start
-       that did not happen, and the sentence saying why is the store's. */
     const id = await startConversation(activePath.value, { kind: 'bare' })
-    pickedConversation.value = id
-    /* A start that did not happen must not leave somebody standing on a tab the
-       row does not draw. There is no start ticket on this road — the tab is
-       derived from the sessions this window holds, and a refused start adds
-       none — so `hasAgentTab` never changes and the watcher below never fires.
-       This is the landing that watcher would have made, and it is guarded
-       because the project may have other agents, whose tab is not this start's
-       to take away. */
-    if (id === null && !hasAgentTab.value) dropAgentTab()
+    if (id !== null) showAgentTab(id)
+    else if (!hasAgentTab.value) dropAgentTab()
   } catch {
     // already reported — see comment above
   }
@@ -1545,7 +1556,7 @@ async function startReview(form) {
        started from rather than whatever is selected now. */
     if (activePath.value === path) {
       project.sideTab = 'agents'
-      project.activeTab = 'terminal'
+      showAgentTab()
     }
     /* `fetchFailed` rides beside the pairs so that the report can say so about
        itself. Without it the sentence lived only on screen and in a toast, and
@@ -1755,7 +1766,7 @@ const resolveConflictWithAgent = async () => {
   if (!conflict || !path) return
   dismissConflict()
   project.sideTab = 'agents'
-  project.activeTab = 'terminal'
+  showAgentTab()
   try {
     await createSession(path, {
       kind: 'resolveConflict',
@@ -2277,7 +2288,7 @@ const startSetup = async () => {
   settingUp.value = true
   try {
     project.sideTab = 'agents'
-    project.activeTab = 'terminal'
+    showAgentTab()
     await createSession(path, { kind: 'setup' })
     closeSetup()
   } catch {
@@ -2376,7 +2387,7 @@ function selectAgent(id) {
     return
   }
   terminalState.activeId = id
-  project.activeTab = 'terminal'
+  showAgentTab()
   const row = agentRows.value.find((candidate) => candidate.id === id)
   const work = row?.work
   if (work?.kind === 'editTask' || work?.kind === 'resolveTask' || work?.kind === 'fixTask') {
@@ -2492,48 +2503,57 @@ watch(hasAgentTab, (has) => {
    `activeDiff` has, for the same reason. */
 const activeTerminal = computed(() => terminalTab(project.activeTab))
 
-/* Which driven session the Agent tab is showing, and `null` when it is showing
-   a PTY agent instead.
+/* What the Agent tab is aimed at, per project: the id of a driven conversation,
+   or `null` for whichever PTY session the agents panel has selected.
 
-   One tab and two kinds of session, so something has to say which of the two is
-   in front, and the rule is **the last one somebody asked for**. Starting a
-   conversation is the line in `newAgent`; every road to a PTY agent — a row in
-   the panel, a run's first session, "Ask agent to edit", a shell of the
-   person's own — ends in `terminalState.activeId`, so one watcher over that
-   field covers all of them and there is no line to remember at every call site
-   that sets it.
+   **One field, written by the two acts that aim this tab and by nothing else.**
+   The shape being avoided is three pieces of state for one question, which is
+   what the first version of this had — a pick, a watcher on
+   `terminalState.activeId` that cleared it, and a fallback that read that same
+   field again. The three could disagree, and did: `loadSessions` repairs its own
+   selection on every project switch (`if (!selected()) activeId = lastAgent()`),
+   so switching away and back was enough to have the watcher quietly take the tab
+   off a live conversation — possibly one sitting on an open permission question,
+   with no gesture anywhere to aim it back. Here, only `showAgentTab` writes, so
+   the worker moving a selection of its own moves nothing on screen.
 
-   The pick is validated against the project rather than cleared on a switch,
-   which is what makes a switch away and back free: the tab is derived per
-   project (`hasAgentTab`), the session belongs to the project it was started
-   in, and an id that is not among that project's driven sessions is simply not
-   the one on screen. Coming back finds it again, still held by the worker, with
-   its whole journal. */
-const pickedConversation = ref(null)
+   Per project rather than per window, because that is what the question is
+   about: the tab is derived per project (`hasAgentTab`) and a session belongs to
+   the project it was started in. A switch away and back therefore finds the
+   conversation again, still held by the worker, with its whole journal.
 
+   What this still cannot do is aim the tab *back* at a conversation once
+   somebody has picked a PTY agent in the same project, and that is a gap rather
+   than a decision: a driven session has no row in the agents panel — those come
+   from `terminalState.sessions` — so the panel offers nothing to click. The row
+   is the stage that teaches that panel about driven sessions; until then the way
+   back is starting another conversation. */
+const agentAim = reactive(new Map())
+
+/* Bring the Agent tab forward, and say which of the two kinds of session it is
+   to draw. One function because those are one act: a caller that moved the tab
+   and left the aim alone would show whatever was in front last time, which is
+   how somebody ends up watching another agent's terminal after pressing a
+   button about this one.
+
+   `showAgentTab()` — the PTY agent the panel has selected, which is what every
+   road through `createSession` wants. `showAgentTab(id)` — a driven
+   conversation. */
+function showAgentTab(conversation = null) {
+  agentAim.set(activePath.value, conversation)
+  project.activeTab = 'terminal'
+}
+
+/* Which driven session the Agent tab is drawing, and `null` when it is drawing
+   a PTY agent instead. Derived from the one field above and from the sessions
+   this window holds — the second is a validity check rather than a second
+   opinion: an aim naming a session this window does not hold is not an answer,
+   and drawing a panel that could never attach would be worse than the terminal
+   beside it. */
 const conversationId = computed(() => {
-  const held = conversationsIn(activePath.value)
-  if (!held.length) return null
-  const picked = pickedConversation.value
-  if (picked !== null && held.includes(picked)) return picked
-  /* Nothing picked that belongs to this project, which is what a project switch
-     leaves behind: the pick is one field for the window while the sessions are
-     per project. The newest conversation is the landing place rather than the
-     terminal's empty state, and that is a rule about not stranding anybody —
-     this tab exists *because* of that session, so "No agent selected" drawn
-     over a live conversation would be a way in with no way back. A PTY agent
-     selected in this project still wins, because it is the more recent thing
-     somebody asked for and `terminalState.activeId` is per project too
-     (`loadSessions` repairs it on every switch). */
-  return terminalState.activeId ? null : held[held.length - 1]
+  const aimed = agentAim.get(activePath.value) ?? null
+  return aimed !== null && conversationsIn(activePath.value).includes(aimed) ? aimed : null
 })
-
-watch(
-  () => terminalState.activeId,
-  (id) => {
-    if (id) pickedConversation.value = null
-  }
-)
 
 /* The tree and the tabs open together with the project. By this point settings
    have already read the active project — App.vue awaits loadSettings before it
@@ -2843,7 +2863,7 @@ const askAgentAboutTracker = async () => {
   const path = activePath.value
   if (!path) return
   project.sideTab = 'agents'
-  project.activeTab = 'terminal'
+  showAgentTab()
   try {
     const failure = await trackerFailure()
     await createSession(path, {
@@ -3465,7 +3485,7 @@ async function resumeSession(session, { fork = false } = {}) {
   if (!resumeAvailability(session, { fork, capable }).available) return
   try {
     project.sideTab = 'agents'
-    project.activeTab = 'terminal'
+    showAgentTab()
     await createSession(path, {
       kind: 'resumeSession',
       id: session.id,
@@ -3638,7 +3658,7 @@ const submitNewTask = async ({ brainstorm, spec, plan, ...draft }) => {
   if (!path) return false
   creating.value = true
   project.sideTab = 'agents'
-  project.activeTab = 'terminal'
+  showAgentTab()
   try {
     /* The three stages ride beside the draft rather than in it: they are the
        agent's briefing about how to work, and nothing on screen draws them —
@@ -3951,7 +3971,7 @@ const askAgentToEdit = async (issue) => {
   const path = activePath.value
   if (!path) return
   project.sideTab = 'agents'
-  project.activeTab = 'terminal'
+  showAgentTab()
   try {
     await createSession(path, { kind: 'editTask', id: issue.id, title: issue.title })
   } catch {
@@ -3968,7 +3988,7 @@ const askAgentToResolve = async (issue) => {
   const path = activePath.value
   if (!path) return
   project.sideTab = 'agents'
-  project.activeTab = 'terminal'
+  showAgentTab()
   try {
     await createSession(path, { kind: 'resolveTask', id: issue.id, title: issue.title })
   } catch {
@@ -3984,7 +4004,7 @@ const askAgentToFix = async (issue) => {
   const path = activePath.value
   if (!path) return
   project.sideTab = 'agents'
-  project.activeTab = 'terminal'
+  showAgentTab()
   try {
     await createSession(path, { kind: 'fixTask', id: issue.id, title: issue.title })
   } catch {
@@ -4806,8 +4826,9 @@ async function attachToAgent(path) {
     return
   }
   /* The tab and nothing else: `id` is already `terminalState.activeId`, which is
-     what this tab draws, so the path lands in the session that comes up. */
-  project.activeTab = 'terminal'
+     what this tab draws once the tab is aimed at a PTY session again, so the
+     path lands in the session that comes up. */
+  showAgentTab()
   await send(id, text)
 }
 
