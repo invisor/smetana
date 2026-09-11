@@ -3660,14 +3660,23 @@ mod tests {
     #[test]
     fn the_camel_case_names_are_the_ones_the_front_end_writes() {
         // The front end sends the whole settings object back on every save, so
-        // these four keys are the contract rather than an implementation
-        // detail: a rename on either side is a choice silently dropped.
+        // these keys are the contract rather than an implementation detail: a
+        // rename on either side is a choice silently dropped.
+        //
+        // `conversationPanel` is the sharpest of them, because its two sides
+        // are independent: the key written here comes from the derived
+        // `rename_all`, and the key read comes from a literal typed into
+        // `parse`. A rename would move one and leave the other looking for a
+        // name nobody writes — and since that read ends in `.unwrap_or(true)`,
+        // what a person would see is not an error but their switch turning
+        // itself back on at the next launch, with every test still green.
         let mut settings = Settings::default();
         settings.agent_roles.run_lead.agent = "claude".into();
         settings.agent_roles.review_branch.agent = "codex".into();
         let json = serde_json::to_value(&settings).expect("the settings serialize");
         let roles = json.get("agentRoles").expect("agentRoles, not agent_roles");
         assert!(json.get("model").is_some());
+        assert!(json.get("conversationPanel").is_some(), "conversationPanel, not conversation_panel");
         assert!(roles.get("runLead").is_some(), "runLead, not run_lead");
         assert!(roles.get("reviewBranch").is_some(), "reviewBranch, not review_branch");
         assert!(roles.get("tasks").is_some() && roles.get("code").is_some());

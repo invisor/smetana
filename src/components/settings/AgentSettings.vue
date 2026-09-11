@@ -432,10 +432,13 @@ const errorStyle = {
 
            The description names what happens instead, since the switch's own
            two positions cannot: off is not "no interface", it is the terminal
-           tab every agent opened in before the panel existed. -->
+           tab every agent opened in before the panel existed. "An agent you
+           start" rather than "every agent", for the distinction the standing
+           instruction row below draws as carefully: a run's batches open in a
+           terminal whichever way this switch is set. -->
       <SettingsRow
         label="Conversation panel"
-        description="Opens an agent this app can drive in the conversation panel. Off, every agent opens in a terminal tab instead, the way it did before. Takes effect on the next session started; one already open stays as it is."
+        description="Opens an agent this app can drive in the conversation panel. With it off, an agent you start opens in a terminal tab instead, the way it did before. Takes effect on the next session started."
       >
         <Switch
           :model-value="props.conversationPanel"

@@ -575,28 +575,34 @@ onMounted(initRuns)
 onMounted(initUpdates)
 
 /* A new agent becomes the one you're looking at right away: that is what it was
-   created for. Which of the two kinds of session it is depends on the harness,
-   and on nothing else this button knows — `canDrive` in the conversation store
-   holds that list and says why it is asked of `settings.agent`.
+   created for. Which of the two kinds of session it is depends on the harness
+   and on the person's own switch, and on nothing else this button knows —
+   `canDrive` in the conversation store is where both live, and this file asks
+   it rather than reading either.
 
-   **Claude Code takes the driven road**: the worker parses its protocol and the
-   Agent tab draws a conversation. Every other harness keeps `createSession`
-   exactly as it always was, because only Claude Code has a driver — sending a
-   Codex person down this road would turn a working PTY into a refusal from
-   `Request::Start`, which is the opposite of what this stage is for.
+   **Claude Code takes the driven road while the conversation panel is
+   switched on**: the worker parses its protocol and the Agent tab draws a
+   conversation. Every other harness keeps `createSession` exactly as it always
+   was, because only Claude Code has a driver — sending a Codex person down this
+   road would turn a working PTY into a refusal from `Request::Start`, which is
+   the opposite of what this stage is for. With `settings.conversationPanel`
+   off, `canDrive` answers `false` for every harness and every press lands on
+   that same road, which is the whole of what that switch does; there is
+   deliberately no second condition here to keep in step with it.
 
    **`canDrive` is the front door and never the gate.** It reads
-   `settings.agent`, which is what a person configured, and the profile that
-   actually runs is `agents::pick`'s: when the configured harness is not on
-   `PATH` that function silently substitutes the first one that is. So on a
-   machine with only Codex installed — where `settings.agent` still ships as
-   `claude`, and `Settings::validate` forces any unknown value back to it —
-   the cheap check answers yes and the worker's `driver_for` then refuses. The
-   answer is the road below rather than a better question here: a driven start
-   that comes back with nothing falls through to `createSession`, which resolves
-   the same harness Rust would have picked and opens the PTY that button has
-   always opened. What the check is still worth is the round trip it saves in
-   the ordinary case, and the refusal it keeps out of the log.
+   `settings.agent` and `settings.conversationPanel`, which is what a person
+   configured, and the profile that actually runs is `agents::pick`'s: when the
+   configured harness is not on `PATH` that function silently substitutes the
+   first one that is. So on a machine with only Codex installed — where
+   `settings.agent` still ships as `claude`, and `Settings::validate` forces any
+   unknown value back to it — the cheap check answers yes and the worker's
+   `driver_for` then refuses. The answer is the road below rather than a better
+   question here: a driven start that comes back with nothing falls through to
+   `createSession`, which resolves the same harness Rust would have picked and
+   opens the PTY that button has always opened. What the check is still worth is
+   the round trip it saves in the ordinary case, and the refusal it keeps out of
+   the log.
 
    **A fallback is not a failure and must not be said out loud.** From where the
    person is standing they asked for an agent and are getting one, so the
