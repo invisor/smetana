@@ -24,8 +24,23 @@
 
    Read-only, all of it. A task item's box is drawn by `sm-prose.css` off
    `li[data-checked]`, never a Lucide glyph and never `<input type="checkbox"
-   disabled>` — see the contract for why the native control is refused. */
-import { computed } from 'vue'
+   disabled>` — see the contract for why the native control is refused.
+
+   The one control on the tree — the code block's copy button (contract
+   section 4) — stays read-only in the same sense: it acts on the clipboard,
+   never on the prose, and answers with nothing this component keeps. It calls
+   the browser's own `navigator.clipboard` directly rather than importing a
+   store: this file draws markup for five different owners (the task inspector,
+   three turn kinds of the conversation panel, the gallery) and must never
+   import `@tauri-apps/api` itself, and threading a callback through every one
+   of those five just to prefer `stores/app.js`'s `copyText` — which takes the
+   very same browser branch outside a Tauri build — is a cost with no payoff
+   anywhere but the live app. An owner that already imports a store, such as
+   `conversation/ConversationView.vue`, is free to override that later if the
+   plugin's better reliability on a real WebKitGTK build turns out to matter
+   here too; nothing below forecloses it. */
+import { computed, onBeforeUnmount, ref } from 'vue'
+import Icon from '../core/Icon.vue'
 import MarkdownInline from './MarkdownInline.vue'
 import { parseMarkdown } from './markdown.js'
 
@@ -52,6 +67,44 @@ const tree = computed(() => props.blocks ?? parseMarkdown(props.text))
 function isTaskList(block) {
   return block.items.length > 0 && block.items[0].checked !== null
 }
+
+/* The copy control's confirmation window, per the contract. Deliberately its
+   own number and not `kanban/copyId.js`'s `COPIED_MS`: that one is 1200ms,
+   tuned for a task's id, and a different duration is a different policy, not
+   a variant of the same one — borrowing it would tie this control's timing to
+   a change made for that one's sake. */
+const COPY_REVERT_MS = 1600
+
+/* Which block in *this* instance's own flat list last showed "Copied", by
+   its `v-for` index — `null` when none has. One ref for the whole tree rather
+   than one per block: a press can only ever come from one button at a time, so
+   a single "who last succeeded" is the whole of the state a list of blocks
+   needs, the same shape `useCopyFeedback`'s single `target` takes for a list of
+   rows. A quote or a list item recurses into its own `Markdown` instance with
+   its own copy of this ref, so two code blocks in two different quotes are
+   free to say "Copied" at the same moment — nothing in the contract asks for
+   one confirmation across a whole document, only one per control. */
+const copiedIndex = ref(null)
+let copyRevertTimer = null
+
+async function copyCode(index, text) {
+  clearTimeout(copyRevertTimer)
+  try {
+    await navigator.clipboard.writeText(text)
+    copiedIndex.value = index
+    copyRevertTimer = setTimeout(() => {
+      copiedIndex.value = null
+    }, COPY_REVERT_MS)
+  } catch (err) {
+    // Left at rest: a control that claimed success it did not have would be
+    // worse than one that stays silent about a clipboard it could not reach.
+    console.error('[markdown] the code block did not reach the clipboard:', err)
+  }
+}
+
+// The one piece of state this file owns outright — cleared so an unmounted
+// panel never fires a reset into a component that is no longer there.
+onBeforeUnmount(() => clearTimeout(copyRevertTimer))
 </script>
 
 <template>
@@ -64,7 +117,21 @@ function isTaskList(block) {
       <MarkdownInline :nodes="block.children" @open="emit('open', $event)" />
     </p>
 
-    <pre v-else-if="block.type === 'code'"><code>{{ block.text }}</code></pre>
+    <figure v-else-if="block.type === 'code'" data-code :data-lang="block.lang || undefined">
+      <figcaption v-if="block.lang">{{ block.lang }}</figcaption>
+      <button
+        type="button"
+        data-copy
+        :data-state="copiedIndex === index ? 'copied' : 'idle'"
+        aria-label="Copy code"
+        @click="copyCode(index, block.text)"
+      >
+        <Icon name="copy" data-icon="copy" />
+        <Icon name="check" data-icon="check" />
+        <span>{{ copiedIndex === index ? 'Copied' : 'Copy' }}</span>
+      </button>
+      <pre><code>{{ block.text }}</code></pre>
+    </figure>
 
     <hr v-else-if="block.type === 'rule'" />
 
