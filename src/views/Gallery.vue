@@ -2273,8 +2273,15 @@ const CONVERSATION_USER_TEXT =
   'Rename the worktree when the branch changes, and keep `wt/` off the folder name.'
 
 /* Paths and nothing else, which is what `session_send` carries and what the
-   journal keeps: the chips draw `basename`, and the bytes stay on disk. */
-const CONVERSATION_ATTACHMENTS = ['/Users/you/Desktop/20260910-141202-collision.png', '/tmp/worktree.log']
+   journal keeps: the chips draw `basename`, and the bytes stay on disk. The
+   third is deliberately long — a name this width has to ellipsize inside the
+   chip rather than widen the bubble, and widening it is the failure a short
+   name would never show at either 420px or 320px. */
+const CONVERSATION_ATTACHMENTS = [
+  '/Users/you/Desktop/20260910-141202-collision.png',
+  '/tmp/worktree.log',
+  '/Users/you/Desktop/2026-09-10-full-notarization-pipeline-failure-transcript-with-timestamps.log'
+]
 
 const CONVERSATION_REASONING = [
   'The branch name reaches three places: the folder, the tab label and the',
@@ -5883,9 +5890,21 @@ const menuTargetStyle = {
            between the themes, compact tightens the spacing without touching a
            colour or a radius, the file-type icon on a tool call is legible on
            both grounds, and the filled permission card carries readable text in
-           the light theme, where its ink inverts to `var(--surface-raised)`. -->
+           the light theme, where its ink inverts to `var(--surface-raised)`.
+
+           The two columns below carry `class="sm-prose"` themselves, with
+           `--panel-pad` left to the class rather than zeroed: since
+           smetana-e3mc, `UserMessage`, `AgentMessage` and `Reasoning` emit
+           their bare `article`/`details` and expect an ancestor root to space
+           and inset them, exactly as `ConversationView.vue`'s journal is that
+           root in the app — a demo column with the padding zeroed would teach
+           a panel inset the real one does not draw. `ToolCall` and
+           `TurnResult` are not part of the contract, and paint themselves
+           with no horizontal inset of their own any more (their own headers
+           say why) so they line up with the prose rather than doubling this
+           root's `--panel-pad`. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
-        <div :style="{ width: '360px', display: 'flex', flexDirection: 'column' }">
+        <div class="sm-prose" :style="{ width: '360px' }">
           <UserMessage
             :text="CONVERSATION_USER_TEXT"
             :attachments="CONVERSATION_ATTACHMENTS"
@@ -5895,7 +5914,7 @@ const menuTargetStyle = {
           <TurnResult :tokens-in="12480" :tokens-out="416" :cost-usd="0.0312" :ms="4200" />
         </div>
 
-        <div :style="{ width: '360px', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }">
+        <div class="sm-prose" :style="{ width: '360px', gap: 'var(--space-4)' }">
           <!-- The three states a tool call has: still open, done, and failed.
                The first two carry a path, so the glyph comes from
                `catppuccinIcon.js`; the third carries a command, so it does
@@ -5946,6 +5965,32 @@ const menuTargetStyle = {
           <div :style="{ font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
             {{ permissionAnswer ? `answer: ${permissionAnswer}` : 'no answer yet' }}
           </div>
+        </div>
+
+        <!-- `hr[data-session]` — a full-bleed break between sessions,
+             distinct from a plain `hr` inside a message's own markdown
+             (section 2 of the contract). No live conversation in this app
+             ever draws one yet: a panel holds exactly one session's journal,
+             and `session::history`'s own header is explicit that a resumed
+             session's past and its live half are stitched with no marker
+             between them and none wanted, so there is nothing today for two
+             sessions to sit either side of. This is the markup and the
+             styling the contract asks for, stood up here rather than
+             invented in `ConversationView.vue` against nothing. -->
+        <div class="sm-prose" :style="{ width: '360px' }">
+          <article data-turn="agent">
+            <p>Notarization is failing intermittently. I'll pull the last run's log.</p>
+          </article>
+          <article data-turn="person">
+            <p>Thanks — that's enough for tonight, I'll pick it up tomorrow.</p>
+          </article>
+          <hr data-session>
+          <article data-turn="person">
+            <p>Back on this — did the log say anything about the keychain?</p>
+          </article>
+          <article data-turn="agent">
+            <p>Yes: the temporary keychain wasn't unlocked before <code>codesign</code> ran.</p>
+          </article>
         </div>
       </div>
     </section>

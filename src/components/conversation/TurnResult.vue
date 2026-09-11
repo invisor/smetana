@@ -41,8 +41,12 @@ const line = computed(() => {
   return parts.join(' · ')
 })
 
+/* Vertical breathing room only: the horizontal inset is the journal's
+   `.sm-prose` root now (`ConversationView.vue`), and a second `--panel-pad`
+   here on top of that root's would push this line in twice as far as the
+   prose it sits beside. */
 const style = {
-  padding: 'var(--space-3) var(--panel-pad)',
+  padding: 'var(--space-3) 0',
   font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)',
   color: 'var(--text-muted)'
 }
