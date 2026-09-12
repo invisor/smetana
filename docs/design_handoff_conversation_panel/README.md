@@ -14,12 +14,11 @@ contract**, not as a set of components:
 
 | file | what it is | ship it? |
 |---|---|---|
-| `sm-prose.css` | the stylesheet. Every rule scoped under `.sm-prose`, every value a `var(--token)` | **yes, as-is** |
-| `sm-prose-tokens.css` | the tokens this design needs that the system does not have yet | **yes** — or fold into `tokens/` |
+| `sm-prose.css` | the stylesheet. Every rule scoped under `.sm-prose`, every value a `var(--token)` | shipped, unchanged, as `src/styles/sm-prose.css` |
+| `sm-prose-tokens.css` | the tokens this design needs that the system does not have yet | shipped, folded in, as `src/styles/tokens/prose.css` |
 | `markup-contract.md` | the exact HTML the renderer must emit, case by case, with the reasoning behind each decision | read first |
 | `sm-prose-turns.css` | three turn treatments not taken, plus the previous `rail` default | reference only |
-| `reference.html` | the rendered result, standalone. Open it in a browser; switch theme, density and turn style in the top bar | reference only |
-| `ds/` | the smetana token set, copied so `reference.html` runs offline | already in the app |
+| `reference.html` | the rendered result. Open it in a browser; switch theme, density and turn style in the top bar | reference only |
 | `assets/*.png` | two stand-in charts, drawn for this design to demonstrate the illustration mat | throwaway |
 
 ## About the design files
@@ -28,12 +27,20 @@ contract**, not as a set of components:
 the intended look and behaviour. Its page chrome (top bar, panel frame, the
 inline `<script>`) is scaffolding, not production code.
 
-`sm-prose.css` and `sm-prose-tokens.css` are the opposite: they **are** the
-deliverable and are meant to be dropped into the app unchanged. The work in the
-codebase is (a) making the markdown renderer emit exactly the markup in
-`markup-contract.md`, and (b) wiring the four behaviours listed under
-*Interactions* below in the app's existing environment (Vue 3 + Tauri 2, per the
-design system) using its established patterns.
+By the time this folder was committed, `sm-prose.css` and the 16 tokens once
+in `sm-prose-tokens.css` had already shipped, as `src/styles/sm-prose.css` and
+`src/styles/tokens/prose.css`. That is the deliverable now: this folder never
+carries a second copy of either. `reference.html` pulls both in through
+`../../src/styles/styles.css`, the app's own stylesheet entry point, so the
+rendered reference is drawn by exactly the CSS the app ships — nothing here
+can quietly drift out of step with it. That is also the price of the
+arrangement: this folder is no longer a self-contained copy of the design;
+opening `reference.html` from anywhere but inside a checkout of this
+repository will 404 on that one link. The work in the codebase is (a) making
+the markdown renderer emit exactly the markup in `markup-contract.md`, and
+(b) wiring the four behaviours listed under *Interactions* below in the app's
+existing environment (Vue 3 + Tauri 2, per the design system) using its
+established patterns.
 
 ## Fidelity
 
@@ -42,8 +49,8 @@ resolved from smetana tokens — no raw values anywhere. Recreate it exactly.
 There are no invented colours to approve: everything comes from
 `tokens/color-surfaces.css`, `tokens/color-status.css`,
 `tokens/color-editor.css`, `tokens/typography.css`, `tokens/space.css`,
-`tokens/shape.css`, `tokens/motion.css`, plus the 16 proposed tokens named in
-`sm-prose-tokens.css`.
+`tokens/shape.css`, `tokens/motion.css`, plus the 16 tokens named in
+`tokens/prose.css` (the shipped `sm-prose-tokens.css`).
 
 ## The one view
 
@@ -165,7 +172,7 @@ duration), reasoning text + open/closed. Per code block: `copied` (transient,
 ## Design tokens
 
 No raw values. Existing smetana tokens carry everything except the 16 in
-`sm-prose-tokens.css`, each with its role in a comment:
+`sm-prose-tokens.css`, shipped as `tokens/prose.css`, each with its role in a comment:
 
 `--prose-figure-mat` `--prose-figure-min` `--prose-figure-loading-h`
 `--prose-table-wide-min` `--prose-box` `--prose-tick-w` `--prose-tick-h`

@@ -3,9 +3,12 @@
 <head>
 <meta charset="utf-8">
 <title>Conversation panel — rendered reference</title>
-<link rel="stylesheet" href="ds/tokens.css">
-<link rel="stylesheet" href="sm-prose-tokens.css">
-<link rel="stylesheet" href="sm-prose.css">
+<!--
+  This reaches out of the handoff folder on purpose: the tokens and sm-prose.css
+  this reference needs are the shipped copies in src/styles/, not a duplicate
+  kept here. Do not "fix" this back into a local file — see README.md.
+-->
+<link rel="stylesheet" href="../../src/styles/styles.css">
 <link rel="stylesheet" href="sm-prose-turns.css">
 <style>
   /* Page chrome only. Nothing here styles the conversation: that is sm-prose.css. */
