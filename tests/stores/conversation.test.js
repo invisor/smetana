@@ -248,6 +248,33 @@ describe('the conversation store', () => {
     expect(stores.conversation.conversationState.lastError.text).toContain('q1')
   })
 
+  /* `answers` is `AskUserQuestion`'s own, and `null` — never `undefined`,
+     which `invoke` would drop from the payload — is what every other tool's
+     ordinary allow/deny still sends, one argument short of the wire's own
+     five. A caller that forgot the argument entirely must not send Rust a
+     payload missing the field outright. */
+  it('answers a plain permission with no answers at all', async () => {
+    const { ipc, stores } = await ready({ events: [permission(1)], seq: 1, state: 'needs-you' })
+    ipc.on('session_answer', null)
+    await stores.conversation.attach(1)
+    await stores.conversation.answerQuestion(1, 'q1', 'allow')
+
+    expect(ipc.calls('session_answer')).toEqual([{ id: 1, question: 'q1', decision: 'allow', answers: null }])
+  })
+
+  /* The whole point of the feature: what `AskUserQuestion.vue` built travels
+     to the worker unchanged, keyed by each question's own text. */
+  it('carries AskUserQuestion’s own answers over to session_answer', async () => {
+    const { ipc, stores } = await ready({ events: [permission(1)], seq: 1, state: 'needs-you' })
+    ipc.on('session_answer', null)
+    await stores.conversation.attach(1)
+    await stores.conversation.answerQuestion(1, 'q1', 'allow', { 'Which approach?': 'Rewrite the migration' })
+
+    expect(ipc.calls('session_answer')).toEqual([
+      { id: 1, question: 'q1', decision: 'allow', answers: { 'Which approach?': 'Rewrite the migration' } }
+    ])
+  })
+
   /* Subscribing is an `invoke` too — `plugin:event|listen` — so it can be
      refused, and `attach` is the function a component calls from `onMounted`
      with nothing to catch it. The refusal has to reach `lastError` rather than

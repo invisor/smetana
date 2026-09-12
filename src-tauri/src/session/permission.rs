@@ -50,7 +50,7 @@
 //! `PermissionTicket::mcp_config` produces carries `type`, `url` and `headers`
 //! and must never carry `timeout`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
@@ -110,6 +110,11 @@ pub struct Asked {
     /// for a `ToolUse` event, so that the sentence in the question and the
     /// sentence in the conversation above it cannot drift apart.
     pub detail: String,
+    /// The call's own arguments, untouched. Carried through to the
+    /// `Permission` event so `AskUserQuestion`'s own card can read its
+    /// `questions` back out — `detail` above is `tool_detail`'s one-line
+    /// summary and cannot hold four questions with their own options.
+    pub input: Value,
 }
 
 /// Where one session's child asks, and with what.
@@ -152,13 +157,19 @@ impl PermissionTicket {
     }
 }
 
+/// A person's decision, and — for `AskUserQuestion` alone — what was chosen or
+/// typed for each question. `None` for every other tool's ordinary allow/deny,
+/// and for a decline to answer: refusing a question is `Decision::Deny` with
+/// no answers, same as refusing anything else.
+type Answer = (Decision, Option<BTreeMap<String, String>>);
+
 struct Inner {
     /// Per session: the token that session's child must present. A session
     /// absent from here cannot be authenticated at all, which is what
     /// `register` falls back to when the machine will not give it randomness.
     tokens: HashMap<SessionId, String>,
     /// Questions asked and not yet answered, by the id we minted.
-    waiting: HashMap<String, oneshot::Sender<Decision>>,
+    waiting: HashMap<String, oneshot::Sender<Answer>>,
     next_question: u64,
 }
 
@@ -246,9 +257,9 @@ impl PermissionServer {
 
     /// A person's answer. `false` means there was no such question waiting —
     /// it was answered already, or the harness gave up and went.
-    pub fn answer(&self, id: &str, decision: Decision) -> bool {
+    pub fn answer(&self, id: &str, decision: Decision, answers: Option<BTreeMap<String, String>>) -> bool {
         let sender = self.lock().waiting.remove(id);
-        sender.map(|tx| tx.send(decision).is_ok()).unwrap_or(false)
+        sender.map(|tx| tx.send((decision, answers)).is_ok()).unwrap_or(false)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -335,10 +346,27 @@ fn immediate(method: &str, request: &Value) -> Immediate {
 /// `AllowAlways` is an allow here and nothing more. Not asking again is the
 /// worker's memory to keep, not this socket's — the harness asks afresh every
 /// time and has nowhere to record that it should not.
-fn decision_payload(decision: Decision, input: &Value) -> Value {
+///
+/// **`answers` is what makes `AskUserQuestion` a different shape of allow.**
+/// The Agent SDK's own documented contract for that tool is answered inside
+/// this same permission channel rather than through a channel of its own:
+/// `updatedInput` carries `questions` — the original call's own, echoed back
+/// rather than reparsed here, so a person's answers can never disagree with
+/// the questions that were actually asked — beside `answers`, the map this
+/// file otherwise has no way to build. Every other tool keeps the original
+/// behaviour: `input` rides back unchanged, since nothing here asked it
+/// anything structured.
+fn decision_payload(decision: Decision, input: &Value, answers: Option<&BTreeMap<String, String>>) -> Value {
     match decision {
         Decision::Allow | Decision::AllowAlways => {
-            json!({ "behavior": "allow", "updatedInput": input })
+            let updated_input = match answers {
+                Some(answers) => json!({
+                    "questions": input.get("questions").cloned().unwrap_or(Value::Null),
+                    "answers": answers,
+                }),
+                None => input.clone(),
+            };
+            json!({ "behavior": "allow", "updatedInput": updated_input })
         }
         Decision::Deny => json!({
             "behavior": "deny",
@@ -409,7 +437,7 @@ async fn ask(session: SessionId, shared: Shared, request: Value, id: Value) -> R
     };
     if shared
         .asked
-        .send(Asked { session, id: question.clone(), tool, detail })
+        .send(Asked { session, id: question.clone(), tool, detail, input: input.clone() })
         .await
         .is_err()
     {
@@ -454,7 +482,7 @@ struct Answering {
     input: Value,
     progress_token: Option<Value>,
     beat: tokio::time::Interval,
-    answer: oneshot::Receiver<Decision>,
+    answer: oneshot::Receiver<Answer>,
     progress: u64,
     done: bool,
 }
@@ -482,8 +510,8 @@ impl Answering {
         }
     }
 
-    fn decided(&self, decision: Decision) -> SseEvent {
-        let payload = decision_payload(decision, &self.input);
+    fn decided(&self, decision: Decision, answers: Option<&BTreeMap<String, String>>) -> SseEvent {
+        let payload = decision_payload(decision, &self.input, answers);
         let result = json!({ "content": [{ "type": "text", "text": payload.to_string() }] });
         SseEvent::default().json_data(rpc_result(&self.id, result)).unwrap_or_else(|error| {
             log::error!("a permission answer would not serialise: {error}");
@@ -506,7 +534,8 @@ impl Stream for Answering {
                 // A dropped sender means the question was taken out from under
                 // this request — the app going down, and nothing else does it.
                 // Deny is the only safe reading of "nobody will answer".
-                Poll::Ready(Some(Ok(this.decided(answered.unwrap_or(Decision::Deny)))))
+                let (decision, answers) = answered.unwrap_or((Decision::Deny, None));
+                Poll::Ready(Some(Ok(this.decided(decision, answers.as_ref()))))
             }
             Poll::Pending => match this.beat.poll_tick(cx) {
                 Poll::Ready(_) => Poll::Ready(Some(Ok(this.heartbeat()))),
@@ -670,7 +699,7 @@ mod tests {
     #[test]
     fn an_allowed_call_goes_back_with_the_input_the_harness_proposed() {
         let input = json!({ "command": "cargo test" });
-        let payload = decision_payload(Decision::Allow, &input);
+        let payload = decision_payload(Decision::Allow, &input, None);
         assert_eq!(payload["behavior"], "allow");
         assert_eq!(payload["updatedInput"], input);
     }
@@ -679,21 +708,42 @@ mod tests {
     fn allowing_for_the_rest_of_the_session_is_an_allow_on_this_socket() {
         // Not asking again is the worker's memory to keep; the harness asks
         // afresh every time and has nowhere to record that it should not.
-        let payload = decision_payload(Decision::AllowAlways, &json!({}));
+        let payload = decision_payload(Decision::AllowAlways, &json!({}), None);
         assert_eq!(payload["behavior"], "allow");
     }
 
     #[test]
     fn a_denied_call_goes_back_with_a_message_and_no_input() {
-        let payload = decision_payload(Decision::Deny, &json!({ "command": "rm -rf /" }));
+        let payload = decision_payload(Decision::Deny, &json!({ "command": "rm -rf /" }), None);
         assert_eq!(payload["behavior"], "deny");
         assert!(payload["message"].is_string(), "{payload}");
         assert!(payload.get("updatedInput").is_none(), "{payload}");
     }
 
     #[test]
+    fn an_answer_with_answers_carries_the_original_questions_back_rather_than_the_input_whole() {
+        // The design this is ported from: `updatedInput` is `{ questions,
+        // answers }` rather than the call's raw `input` handed back verbatim —
+        // a person's chosen labels have nowhere else to go.
+        let input = json!({ "questions": [{ "question": "Which approach?" }] });
+        let mut answers = BTreeMap::new();
+        answers.insert("Which approach?".to_string(), "Rewrite the migration".to_string());
+        let payload = decision_payload(Decision::Allow, &input, Some(&answers));
+        assert_eq!(payload["behavior"], "allow");
+        assert_eq!(payload["updatedInput"]["questions"], input["questions"]);
+        assert_eq!(payload["updatedInput"]["answers"]["Which approach?"], "Rewrite the migration");
+    }
+
+    #[test]
+    fn a_decline_to_answer_is_an_ordinary_deny_with_no_answers_field() {
+        let payload = decision_payload(Decision::Deny, &json!({ "questions": [] }), None);
+        assert_eq!(payload["behavior"], "deny");
+        assert!(payload.get("updatedInput").is_none(), "{payload}");
+    }
+
+    #[test]
     fn answering_a_question_nobody_asked_is_false_rather_than_a_panic() {
-        assert!(!server().answer("q404", Decision::Allow));
+        assert!(!server().answer("q404", Decision::Allow, None));
     }
 
     #[test]
@@ -701,9 +751,9 @@ mod tests {
         let server = server();
         let (tx, rx) = oneshot::channel();
         server.lock().waiting.insert("q1".into(), tx);
-        assert!(server.answer("q1", Decision::Allow), "the first answer reaches the request");
-        assert!(!server.answer("q1", Decision::Deny), "and there is nothing left to answer");
-        assert_eq!(rx.blocking_recv().expect("the decision arrived"), Decision::Allow);
+        assert!(server.answer("q1", Decision::Allow, None), "the first answer reaches the request");
+        assert!(!server.answer("q1", Decision::Deny, None), "and there is nothing left to answer");
+        assert_eq!(rx.blocking_recv().expect("the decision arrived"), (Decision::Allow, None));
     }
 
     #[test]
@@ -714,6 +764,6 @@ mod tests {
         let (tx, rx) = oneshot::channel();
         server.lock().waiting.insert("q1".into(), tx);
         drop(rx);
-        assert!(!server.answer("q1", Decision::Allow));
+        assert!(!server.answer("q1", Decision::Allow, None));
     }
 }

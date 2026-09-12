@@ -52,6 +52,7 @@
    static markup rather than a synthesised one here. */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import AgentMessage from './AgentMessage.vue'
+import AskUserQuestion from './AskUserQuestion.vue'
 import Composer from './Composer.vue'
 import PermissionRequest from './PermissionRequest.vue'
 import Reasoning from './Reasoning.vue'
@@ -61,6 +62,7 @@ import UserMessage from './UserMessage.vue'
 import EmptyState from '../core/EmptyState.vue'
 import Icon from '../core/Icon.vue'
 import StatusBadge from '../status/StatusBadge.vue'
+import { isAskUserQuestion } from './askUserQuestion.js'
 import { isBusy, journalRows } from './journal.js'
 import { basename } from '../../paths.js'
 /* Four stores beside the conversation's own, and each is here because this
@@ -194,6 +196,14 @@ const rows = computed(() => journalRows(held.value?.events ?? [], state.value))
    journal, because it is the one thing here that is a control. */
 const question = computed(() => held.value?.question ?? null)
 
+/* Which of the two cards a pending question draws. `AskUserQuestion` is the
+   one tool this permission channel also carries a real form for — up to four
+   questions, each with its own options — and every other tool keeps the
+   ordinary allow/deny card exactly as it always has
+   (`askUserQuestion.js`'s own header explains why the two do not share one
+   component). */
+const isAskUserQuestionCard = computed(() => isAskUserQuestion(question.value?.tool))
+
 /* The last refusal, if it is this session's — see `refusal` below for why the
    test is on the session rather than on there being one at all. */
 const ourRefusal = computed(() =>
@@ -315,7 +325,7 @@ async function send() {
 }
 
 const stop = () => stopConversation(props.sessionId)
-const answer = (decision) => answerQuestion(props.sessionId, question.value.id, decision)
+const answer = (decision, answers) => answerQuestion(props.sessionId, question.value.id, decision, answers)
 
 const root = {
   display: 'flex',
@@ -569,7 +579,14 @@ const refusal = {
 
     <div :style="foot">
       <div v-if="question" :style="questionPad">
+        <AskUserQuestion
+          v-if="isAskUserQuestionCard"
+          :key="question.id"
+          :input="question.input"
+          @answer="answer"
+        />
         <PermissionRequest
+          v-else
           :tool="question.tool"
           :detail="question.detail"
           :options="question.options"

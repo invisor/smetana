@@ -419,6 +419,21 @@ pub(crate) fn tool_detail(name: &str, input: &serde_json::Value) -> String {
             let what = field("description");
             if what.is_empty() { field("status").to_string() } else { what.to_string() }
         }
+        // `AskUserQuestion`'s real content — up to four questions, each with
+        // its own options — does not fit one line, and the structured form
+        // reaches the panel through `Permission::input` instead
+        // (`src/components/conversation/askUserQuestion.js`). This is only
+        // the log's own one-liner, the first question's own text, for
+        // whatever still reads `detail` rather than `input` — a diagnostic
+        // line, never a source of truth.
+        "AskUserQuestion" => input
+            .get("questions")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|questions| questions.first())
+            .and_then(|question| question.get("question"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string(),
         _ => String::new(),
     };
     clip(&one_line(&detail), MAX_DETAIL)
@@ -1702,6 +1717,26 @@ Last 24h · 2269 requests · 24 sessions
         // unreadable, which is a sentence a person can act on.
         assert_eq!(usage("Invalid API key · Please run /login"), None);
         assert_eq!(usage(""), None);
+    }
+
+    #[test]
+    fn ask_user_questions_detail_is_the_first_questions_own_text() {
+        // Not the whole call — four questions with their own options do not
+        // fit one line — but enough that a log naming only `detail` still
+        // says something rather than nothing. `Permission::input` is where
+        // the panel actually reads the questions from.
+        let input = serde_json::json!({
+            "questions": [
+                { "question": "Which approach?", "header": "Approach", "options": [] },
+                { "question": "Ship it today?", "header": "Timing", "options": [] }
+            ]
+        });
+        assert_eq!(tool_detail("AskUserQuestion", &input), "Which approach?");
+    }
+
+    #[test]
+    fn ask_user_questions_detail_is_empty_rather_than_panicking_on_a_bare_call() {
+        assert_eq!(tool_detail("AskUserQuestion", &serde_json::json!({})), "");
     }
 }
 

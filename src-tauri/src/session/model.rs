@@ -4,6 +4,8 @@
 //! Every type here is what the front end sees, so the serde shape is part of
 //! the contract rather than an implementation detail.
 
+use std::collections::BTreeMap;
+
 pub type SessionId = u64;
 
 /// Whose turn produced this.
@@ -78,8 +80,22 @@ pub enum EventKind {
     Reasoning { text: String },
     ToolUse { id: String, name: String, detail: String },
     ToolResult { id: String, ok: bool, summary: String },
-    Permission { id: String, tool: String, detail: String, options: Vec<Decision> },
-    PermissionAnswered { id: String, decision: Decision },
+    /// `input` is the tool call's own arguments, untouched. Every other tool's
+    /// panel draws `detail` alone, but `AskUserQuestion`'s own card
+    /// (`src/components/conversation/AskUserQuestion.vue`) reads its
+    /// `questions` out of this field instead — `detail` is `tool_detail`'s
+    /// one-line summary of it and cannot carry four questions, each with its
+    /// own options and descriptions. Carried for every tool rather than only
+    /// this one so that a second structured tool never needs a second field
+    /// here.
+    Permission { id: String, tool: String, detail: String, options: Vec<Decision>, input: serde_json::Value },
+    /// `answers` is `Some` only for a person's own answer to `AskUserQuestion`
+    /// — the text of each question mapped to what was chosen or typed, the
+    /// same shape that rides back to the harness as `updatedInput.answers`
+    /// (`permission::decision_payload`). `None` for an ordinary allow/deny,
+    /// and for a decline to answer: refusing a question is `Decision::Deny`
+    /// with no answers, exactly like refusing any other tool.
+    PermissionAnswered { id: String, decision: Decision, answers: Option<BTreeMap<String, String>> },
     Result { tokens_in: u64, tokens_out: u64, cost_usd: Option<f64>, ms: u64 },
     Error { text: String },
 }
@@ -249,7 +265,12 @@ mod tests {
             tool: "Bash".into(),
             detail: "rm -rf /tmp/x".into(),
             options: vec![Decision::Allow, Decision::Deny],
+            input: serde_json::json!({ "command": "rm -rf /tmp/x" }),
         }
+    }
+
+    fn answered(id: &str, decision: Decision) -> EventKind {
+        EventKind::PermissionAnswered { id: id.into(), decision, answers: None }
     }
 
     #[test]
@@ -267,9 +288,24 @@ mod tests {
         let events = vec![
             ev(1, EventKind::TurnStart { by: Actor::Agent }),
             ev(2, permission("p1")),
-            ev(3, EventKind::PermissionAnswered { id: "p1".into(), decision: Decision::Allow }),
+            ev(3, answered("p1", Decision::Allow)),
         ];
         assert_eq!(state_of(&events, true), SessionState::Running);
+    }
+
+    #[test]
+    fn an_answer_carrying_chosen_labels_settles_the_question_like_any_other() {
+        // `AskUserQuestion`'s own answer carries `answers` on top of the plain
+        // `Decision`, and the fold's `..` pattern must not care: settling a
+        // question is about the id, never about what rode along with it.
+        let mut answers = BTreeMap::new();
+        answers.insert("Which approach?".to_string(), "Rewrite the migration".to_string());
+        let events = vec![
+            ev(1, permission("p1")),
+            ev(2, EventKind::PermissionAnswered { id: "p1".into(), decision: Decision::Allow, answers: Some(answers) }),
+        ];
+        assert!(!is_open_question(&events, "p1"));
+        assert_eq!(state_of(&events, true), SessionState::Ready);
     }
 
     #[test]
@@ -279,7 +315,7 @@ mod tests {
         let events = vec![
             ev(1, permission("p1")),
             ev(2, permission("p2")),
-            ev(3, EventKind::PermissionAnswered { id: "p2".into(), decision: Decision::Deny }),
+            ev(3, answered("p2", Decision::Deny)),
         ];
         assert_eq!(state_of(&events, true), SessionState::NeedsYou);
     }
@@ -329,12 +365,9 @@ mod tests {
     fn a_question_that_is_standing_is_one_to_answer_exactly_once() {
         let asked = vec![ev(1, permission("q1"))];
         assert!(is_open_question(&asked, "q1"));
-        let mut answered = asked.clone();
-        answered.push(ev(2, EventKind::PermissionAnswered {
-            id: "q1".into(),
-            decision: Decision::Allow,
-        }));
-        assert!(!is_open_question(&answered, "q1"), "a second answer has nothing to settle");
-        assert!(!is_open_question(&answered, "q2"), "and it settled only its own question");
+        let mut settled = asked.clone();
+        settled.push(ev(2, answered("q1", Decision::Allow)));
+        assert!(!is_open_question(&settled, "q1"), "a second answer has nothing to settle");
+        assert!(!is_open_question(&settled, "q2"), "and it settled only its own question");
     }
 }

@@ -175,6 +175,7 @@ mod tests {
             tool: "Bash".into(),
             detail: "ls".into(),
             options: vec![],
+            input: serde_json::json!({ "command": "ls" }),
         }
     }
 
@@ -266,7 +267,7 @@ mod tests {
         let mut journal = Journal::new();
         journal.append(permission("p1"), at());
         journal.append(
-            EventKind::PermissionAnswered { id: "p1".into(), decision: Decision::Allow },
+            EventKind::PermissionAnswered { id: "p1".into(), decision: Decision::Allow, answers: None },
             at(),
         );
         for n in 0..BUDGET + 10 {
