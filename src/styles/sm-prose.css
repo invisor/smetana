@@ -92,7 +92,15 @@
 }
 
 /* Attachments on a person's turn: mono chips carrying a file name, never a
-   thumbnail — the name is the identifier a person searches for. */
+   thumbnail — the name is the identifier a person searches for. Since
+   smetana-4x3w the name is a `button` when there is somewhere for a click to
+   go — the picture window for a picture, an editor tab for anything else
+   inside the open project — and a chip that read as plain text regardless
+   would keep that a secret. An attachment with neither channel behind it
+   (`ConversationView.vue`'s `attachmentAction.js` answers `null`) draws
+   `span[data-attachment-name]` instead: the same chip look, with no cursor
+   and no `:hover` rule bound to it at all, so it never claims to be a
+   control it is not. */
 .sm-prose ul[data-attachments]{
   display:flex;
   flex-wrap:wrap;
@@ -100,17 +108,46 @@
   padding:var(--space-0);
   list-style:none;
 }
-/* `display:block` and not `flex`: on a flex container the li's own text
+/* `display:block` and not `flex`: on a flex container the li's own content
    becomes an anonymous flex item, and `text-overflow:ellipsis` has nothing of
    that shape to act on — the name hard-clips mid-character with no "…"
    instead. `min-width:0` is still needed here, and for a different reason: the
    li is itself a flex item of `ul[data-attachments]` above, and without it a
    long name refuses to shrink below its own content width and pushes the
-   panel wide rather than wrapping to the next chip. */
+   panel wide rather than wrapping to the next chip. `white-space:nowrap` is
+   what the contract's markup needs now that the name is a `button` rather
+   than a bare text node: an inline-level element and an inline sibling break
+   onto a second line at the space between them under the browser's default
+   `white-space:normal` the moment the row runs out of room, which put the
+   optional size span under the chip instead of after the name inside it — the
+   li itself now carries no other styling, and this is the one property that
+   still has to. */
 .sm-prose ul[data-attachments] > li{
   display:block;
   min-width:0;
   max-width:100%;
+  white-space:nowrap;
+}
+/* The chip's own look, shared by the two shapes the name can take —
+   `<button>` when there is somewhere for a click to go,
+   `span[data-attachment-name]` when there is not (see the rule above this
+   selector). `display:inline-block` rather than `block` — a block-level
+   element ends the line box it sits in, which is exactly what pushed the
+   optional size span in the contract's own markup (`<li><button>…</button>
+   <span>…</span></li>`) onto a line of its own, outside the chip's frame.
+   Inline-block keeps the name and its sibling size `<span>` on the li's one
+   `nowrap` line, sized to its own content up to `max-width:100%` of the li —
+   which is what the ellipsis rule below still needs, since text-overflow
+   still wants a box with a resolved width to clip against rather than a
+   button's own unconstrained natural one. `text-align:left` and the reset
+   border/background are what keep a `<button>` from drawing like one of the
+   browser's own; the plain span needed neither; both get them for one rule
+   rather than two that have to be kept in step. */
+.sm-prose ul[data-attachments] > li > button,
+.sm-prose ul[data-attachments] > li > span[data-attachment-name]{
+  display:inline-block;
+  max-width:100%;
+  min-width:0;
   padding:var(--space-1) var(--space-3);
   border:var(--border-w) solid var(--prose-chip-border);
   border-radius:var(--radius-2);
@@ -118,13 +155,39 @@
   color:var(--text-secondary);
   font-family:var(--font-mono);
   font-size:var(--text-xs);
+  text-align:left;
   white-space:nowrap;
   overflow:hidden;
   text-overflow:ellipsis;
 }
+/* `cursor:default` rather than a pointer, matching `button[data-copy]` and
+   `button[data-expand]` below: every button in this system reads as a
+   control by the surface stepping up under a pointer, not by the cursor
+   changing shape. Bound to the button alone, and so is the `:hover` rule
+   under it — the one surface step up the whole system allows
+   (`core/interactive.js`'s own rule, which this plain-CSS button cannot
+   import but still keeps) — which is the whole of what tells the two shapes
+   above apart: a `span[data-attachment-name]` has nowhere a click could go,
+   so it keeps the browser's own cursor over its text and never steps up on
+   a hover it has no handler for. Keyboard focus needs nothing here at all —
+   `tokens/base.css`'s global `:focus-visible` rule reaches the button like
+   any other, and nothing between it and the button clips an outline the way
+   a figure's own `overflow:hidden` does for the pair below; the span is
+   never a tab stop in the first place. */
+.sm-prose ul[data-attachments] > li > button{
+  cursor:default;
+  transition:var(--transition-control);
+}
+.sm-prose ul[data-attachments] > li > button:hover{
+  background:var(--surface-hover);
+}
 /* The optional size, inline after the name rather than flex-gapped from it,
-   since the li above is no longer a flex container. */
-.sm-prose ul[data-attachments] > li > span{
+   since the li above is no longer a flex container. Still a sibling of the
+   name and not a child of it — the name, button or plain text, is the file
+   name alone. `:not([data-attachment-name])` is what keeps this rule off the
+   name's own plain-text shape, which is a `span` too but wants the chip look
+   above rather than this muted, unbordered one. */
+.sm-prose ul[data-attachments] > li > span:not([data-attachment-name]){
   margin-left:var(--space-2);
   color:var(--text-muted);
 }

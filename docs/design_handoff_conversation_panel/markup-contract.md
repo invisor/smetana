@@ -61,13 +61,25 @@ a demo affordance, not a second mechanism.)
 
 ```html
 <ul data-attachments>
-  <li>ci-notarize.log<span>12 KB</span></li>
+  <li><span data-attachment-name>ci-notarize.log</span><span>12 KB</span></li>
+  <li><button type="button">tauri.conf.json</button><span>4 KB</span></li>
 </ul>
 ```
 
 Mono chips carrying the file name, never a thumbnail — the name is what a person
-searches for. The optional `<span>` is the size, muted. The chip truncates with
-an ellipsis; it never wraps.
+searches for. The optional `<span>` is the size, muted, inline after the name.
+The chip truncates with an ellipsis; it never wraps.
+
+The name is a `button` (smetana-4x3w) when there is somewhere for a click to
+go — the image window for a picture, an editor tab for anything else inside
+the open project — and `span[data-attachment-name]` otherwise: an attachment
+that is neither a picture nor inside the project has no channel this app can
+open it through (`files_read` refuses a path outside the project root, and
+`openExternal`'s own allow-list is `http`/`https` alone), so it is plain
+text — no button, no cursor, no hover — the same discipline a disabled
+control keeps elsewhere in this system. There is no cross to remove it
+here — this half of the chip is sent — so the whole of it is the one
+control, when there is one at all.
 
 ---
 

@@ -51,8 +51,27 @@ import { watchWindowDrops } from './windowDrops.js'
 
 /* What the picker offers. The list is the same four formats `sniff` in
    `attachments.rs` recognises — a filter is a convenience, and Rust is the one
-   that decides, by looking at the bytes rather than at the name. */
-const EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp']
+   that decides, by looking at the bytes rather than at the name.
+
+   Exported since smetana-4x3w: an attachment chip — in the composer, before a
+   message is sent, and under a sent message once it is — has to decide
+   whether a click opens the picture in the image window or the file in an
+   editor tab, and this is the one list of what counts as a picture in this
+   app. A second copy of it beside a chip's own click handler is exactly the
+   kind of drift `basename` in `src/paths.js` already cost this tree once. */
+export const EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp']
+
+/* Whether a path's extension is one of the above, case-insensitively — a
+   dropped or attached file's name is whatever the filesystem gave it, and
+   `Screenshot.PNG` is exactly as much a picture as `screenshot.png`. No dot at
+   all reads as "not a picture" rather than throwing: an attachment is always a
+   path with a real extension by the time it reaches a chip, but a rule read by
+   a `.vue` file has to answer something for every string handed to it. */
+export function isImagePath(path) {
+  const dot = path.lastIndexOf('.')
+  if (dot < 0) return false
+  return EXTENSIONS.includes(path.slice(dot + 1).toLowerCase())
+}
 
 /* A second copy of `MAX_IMAGE_BYTES` from `attachments.rs`, and the same bargain
    `defaults()` in settings.js makes with the Rust schema: Rust holds the
