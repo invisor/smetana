@@ -156,8 +156,8 @@ rather than trusting the concatenation. `TurnResult.vue` gained the fourth `data
 `streaming`, sharing `waiting`'s own clock — a reply arriving is the same wait resolving, not a second
 thing starting. `Markdown.vue` gained a `streaming` prop and draws `span[data-edge]` as the last
 child of the last block while one is true, propagated through a blockquote or a list to whichever
-nested block is actually last; a table, a definition list or a rule as the literal last block draws
-no caret, recorded as a narrow gap in that file's own header rather than solved.
+nested block is actually last; a table, a definition list, a rule, or a run of images as the literal
+last block draws no caret, recorded as a narrow gap in that file's own header rather than solved.
 
 **This reaches Claude Code alone, and that is not a phase one of two.** `session::service::driver_for`
 answers `"claude" => ClaudeDriver, _ => None` and `ClaudeDriver` is the only `impl Driver` in the
@@ -171,10 +171,11 @@ its own, not a line item a streaming task picks up in passing. Claude Code's own
 shape it was verified against), read only for `content_block_delta`/`text_delta` — reasoning and a
 tool call's arguments still arrive whole, from the same consolidated `assistant` event this driver
 already produced, because streaming either of those was out of this task's scope rather than out of
-reach. A resumed session never replays a stray delta either, and not by any filter written for the
-occasion: Claude Code's own persisted transcript holds only the consolidated records this driver
-always read, never a raw `stream_event` line, which was checked against the installed CLI rather than
-assumed.
+reach. A resumed session never replays a stray delta either, on two guarantees rather than one:
+Claude Code's own persisted transcript holds only the consolidated records this driver always read,
+never a raw `stream_event` line, which was checked against the installed CLI rather than assumed —
+and `session::history::is_past` refuses the event kind a second time regardless, the deliberate
+filter both `model.rs` and `history.rs` carry as the reason not to rest on the first fact alone.
 
 ## One renderer, shared with the task inspector — and why it was not forked
 

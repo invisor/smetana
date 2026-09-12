@@ -107,33 +107,57 @@
    A row still being streamed carries `streaming: true`, which is the one
    thing that tells `AgentMessage`/`Markdown` to draw the live edge
    (`span[data-edge]`, contract section 6) after its last character — see
-   `Markdown.vue`'s own header for where. Every path that closes a turn also
-   closes a row still streaming, setting `streaming: false` without touching
-   its `text` again: the ordinary close (`text` above), a `result`, an
-   `error`, and the trailing `CHILD_GONE` branch below all do it, because a
-   caret pinned to a reply nothing is still writing is the exact scrap the
-   acceptance criteria refuse to leave behind. In the protocol this wire
-   actually speaks a content block is always closed by its own whole event
-   before the next one opens, so in the ordinary case `streamingRow` is
-   already `null` by the time any of those four is reached — the explicit
-   closes are what stop a truly abandoned stream (the child dying mid-chunk)
-   from leaving a pulsing mark on screen forever, not a case this file expects
-   to hit in the every-day path.
+   `Markdown.vue`'s own header for where. Five places close a row still
+   streaming, setting `streaming: false` without touching its `text` again:
+   the ordinary close (`text` above), `result`, `error`, the trailing
+   `CHILD_GONE` branch, and the trailing `else if (streamingRow)` beside it —
+   because a caret pinned to a reply nothing is still writing is the exact
+   scrap the acceptance criteria refuse to leave behind, and every one of the
+   five is unconditional on whether this fold can still see the turn that
+   opened the stream. That last qualification is load-bearing rather than
+   defensive phrasing: `openAt` tracks the *turn* (set at `turn-start`,
+   cleared at `result` or at a turn-closing `error`), and `streamingRow`
+   tracks the *stream*, and the two can come apart once a journal is long
+   enough to trim the `turn-start` off its front while later `text-delta`s
+   survive — an ordinary shape once a single reply is substantial, since a
+   trim drops from the front regardless of which kind of event it meets
+   (`journal.rs`'s own header on `BUDGET`). `error`'s clear is therefore
+   outside its own `openAt != null` branch, and the trailing `else if` exists
+   for the same reason applied to the tail of the fold: a `streamingRow` still
+   open when the loop ends with no `openAt` at all has nothing above it left
+   to close it otherwise. In the protocol this wire actually speaks a content
+   block is always closed by its own whole event before the next one opens,
+   so in the ordinary case `streamingRow` is already `null` by the time any of
+   the five is reached — the explicit closes are what stop a truly abandoned
+   stream (the child dying mid-chunk, or its turn-start trimmed out from under
+   it) from leaving a pulsing mark on screen forever, not a shape this file
+   expects to hit on the every-day path.
 
-   **A re-entry never finds a stitched row waiting to be resumed, by
-   construction rather than by a check written here.** Re-attaching to a
-   session whose worker is still alive replays the very same events through
-   this same fold, so a stream still genuinely in progress draws exactly as it
-   would live — correct, since it is live. A session read back from Claude
-   Code's own transcript (`session::history`, after a restart) never carries a
-   `text-delta` at all: that harness's `.jsonl` holds only the consolidated
-   `assistant` records this fold already turns into `text`, never the raw
-   `stream_event` lines partial messages ride on — checked against the
-   installed CLI rather than assumed, and `history::is_past` refuses the
-   event kind a second time regardless. So there is no event sequence this
-   fold could ever see that ends on an unclosed `streamingRow`, other than the
-   live, still-open turn the trailing branch below already handles on
-   purpose.
+   **A re-entry never finds a stitched row waiting to be resumed, and that
+   rests on two separate guarantees rather than one.** Re-attaching to a
+   session whose worker is still alive asks for a fresh snapshot
+   (`session::journal::Journal::snapshot`), and what that snapshot holds
+   depends on whether the stream it would be replaying is still open. A reply
+   genuinely still arriving is handed over exactly as its own deltas stand
+   right now, so it draws here exactly as it would have live — correct, since
+   it is live. **A reply that has already closed is not handed over as the
+   run of deltas a live listener actually watched arrive, one at a time** —
+   `Journal::append` drops a stream's deltas the instant its closing `text`
+   lands beside them, so a re-attacher's snapshot already holds only the
+   consolidated event, the same way a fresh session opens on one. That
+   collapse is safe *because* this fold treats the two shapes identically:
+   a `text` with no `streamingRow` open behind it and a `text` closing one
+   both end in the same finished row, so a re-attacher seeing fewer raw events
+   than a live listener once did draws the same thing regardless. A session
+   read back from Claude Code's own transcript (`session::history`, after a
+   restart) never carries a `text-delta` at all in the first place: that
+   harness's `.jsonl` holds only the consolidated `assistant` records this
+   fold already turns into `text`, never the raw `stream_event` lines partial
+   messages ride on — checked against the installed CLI rather than assumed,
+   and `history::is_past` refuses the event kind a second time regardless. So
+   there is no event sequence this fold could ever see that ends on an
+   unclosed `streamingRow`, other than the live, still-open turn the trailing
+   branch below already handles on purpose.
 
    **The elapsed figure is the gap to the *last event this batch still
    holds*, not to the moment the child actually died** — `journal.js` has no
@@ -295,11 +319,19 @@ export function journalRows(events = [], state) {
       openAt = null
       openSeq = null
     } else if (event.kind === 'error') {
+      // The caret close is deliberately outside the `openAt != null` branch
+      // below: `openAt` tracks the *turn*, not the stream, and the two can
+      // come apart once a journal is long enough to trim a `turn-start` away
+      // while a `text-delta` appended after it survives — an everyday event
+      // once a substantial reply is hundreds of them (`journal.rs`'s own
+      // `BUDGET` header). A `streamingRow` orphaned that way must still lose
+      // its caret on any event that says the words stopped, whether or not
+      // this fold can still see the turn that opened them.
+      if (streamingRow) {
+        streamingRow.streaming = false
+        streamingRow = null
+      }
       if (openAt != null) {
-        if (streamingRow) {
-          streamingRow.streaming = false
-          streamingRow = null
-        }
         rows.push({ key: event.seq, kind: 'activity', state: 'failed', text: event.text, ms: elapsedSince(event.at) })
         openAt = null
         openSeq = null
@@ -335,6 +367,14 @@ export function journalRows(events = [], state) {
     } else {
       rows.push({ key: openSeq, kind: 'activity', state: 'waiting', startedAt: openAt })
     }
+  } else if (streamingRow) {
+    // `openAt` tracks the turn, not the stream, and a long enough reply can
+    // trim its own `turn-start` off the front of the journal while its own
+    // `text-delta`s, appended later, survive — `openAt` reads `null` here
+    // with `streamingRow` still open. There is no turn left to draw an
+    // activity strip for, but the row already in `rows` still carries a
+    // caret nothing above this point would otherwise ever clear.
+    streamingRow.streaming = false
   }
 
   return rows

@@ -259,13 +259,20 @@ describe('the journal as rows', () => {
    header carries in full. */
 describe('a streamed reply', () => {
   it('stitches a run of deltas into one growing row, marked streaming', () => {
+    // A real `turn-start` in front, the way the wire actually pairs the two —
+    // without one, `openAt` never opens and the trailing branch below reads
+    // an orphaned stream rather than a live one.
     const rows = journalRows([
-      event(1, 'text-delta', { text: 'The identity is read once' }),
-      event(2, 'text-delta', { text: ' and passed down' })
+      event(1, 'turn-start', { by: 'agent' }),
+      event(2, 'text-delta', { text: 'The identity is read once' }),
+      event(3, 'text-delta', { text: ' and passed down' })
     ])
 
+    // The stitched row, and the trailing activity strip a genuinely still-open
+    // turn draws beside it — `streaming`, covered on its own further down.
     expect(rows).toEqual([
-      { key: 1, kind: 'agent', text: 'The identity is read once and passed down', streaming: true }
+      { key: 2, kind: 'agent', text: 'The identity is read once and passed down', streaming: true },
+      { key: 1, kind: 'activity', state: 'streaming', startedAt: '2026-09-10T12:00:00Z' }
     ])
   })
 
@@ -309,6 +316,7 @@ describe('a streamed reply', () => {
      into two rows and never one one running on. */
   it('starts a fresh stitched row after a tool call interrupts the stream', () => {
     const rows = journalRows([
+      event(0, 'turn-start', { by: 'agent' }),
       event(1, 'text-delta', { text: 'Reading the file' }),
       event(2, 'text', { text: 'Reading the file first.' }),
       event(3, 'tool-use', { id: 't1', name: 'Read', detail: 'src/main.js' }),
@@ -319,7 +327,8 @@ describe('a streamed reply', () => {
     expect(rows).toEqual([
       { key: 1, kind: 'agent', text: 'Reading the file first.', streaming: false },
       { key: 3, kind: 'tool', name: 'Read', detail: 'src/main.js', result: { ok: true, summary: '10 lines' } },
-      { key: 5, kind: 'agent', text: 'Found it', streaming: true }
+      { key: 5, kind: 'agent', text: 'Found it', streaming: true },
+      { key: 0, kind: 'activity', state: 'streaming', startedAt: '2026-09-10T12:00:00Z' }
     ])
   })
 
@@ -405,6 +414,37 @@ describe('a streamed reply', () => {
 
     const agentRow = rows.find((row) => row.kind === 'agent')
     expect(agentRow).toEqual({ key: 2, kind: 'agent', text: 'Half a sentence', streaming: false })
+  })
+
+  /* The review's own reproduction for the finding that two of the four
+     caret-clearing paths were gated on `openAt != null` and two were not: a
+     `turn-start` old enough to have been trimmed off the front of the journal
+     (`journal.rs`'s own `BUDGET`) leaves `openAt` reading `null` while a
+     `text-delta` appended after it, and therefore newer, survives — an
+     orphaned stream this fold never opened a turn for. Before the fix, the
+     `error` arm's clear lived inside `if (openAt != null)` and never ran here,
+     leaving `streaming: true` beside a bare `error` row for good. */
+  it('drops the caret on an error even with no turn-start in view to open one', () => {
+    const rows = journalRows([
+      event(1, 'text-delta', { text: 'orphan' }),
+      event(2, 'error', { text: 'This session has ended.' })
+    ])
+
+    expect(rows).toEqual([
+      { key: 1, kind: 'agent', text: 'orphan', streaming: false },
+      { key: 2, kind: 'error', text: 'This session has ended.' }
+    ])
+  })
+
+  /* The same orphaning, with nothing at all closing the stream afterwards —
+     the trailing `else if (streamingRow)` this finding added. Before it, a
+     `streamingRow` left open with `openAt` already `null` at the end of the
+     loop had no path left above it to ever clear the caret, and it pulsed
+     over "orphan" for the life of the panel. */
+  it('drops the caret at the tail when the stream outlives its own trimmed-away turn-start', () => {
+    const rows = journalRows([event(1, 'text-delta', { text: 'orphan' })])
+
+    expect(rows).toEqual([{ key: 1, kind: 'agent', text: 'orphan', streaming: false }])
   })
 })
 

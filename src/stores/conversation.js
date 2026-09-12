@@ -268,7 +268,17 @@ const attaching = new Map()
 
 /* Take the whole conversation from the worker. Asked whenever a window opens on
    a session, however many times that is: the journal is the worker's, so a
-   second attach hands back exactly what the first did.
+   second attach hands back exactly what the first did — with nothing having
+   happened to the session in between, which is the ordinary reading of that
+   claim and not a promise that time stood still. It is not even a promise
+   that the *count* of events stands still with nothing new appended: a reply
+   still streaming when the first attach read the journal and closed by the
+   time a second one does will hand back a shorter list the second time —
+   the deltas the first attach saw one at a time are gone from the worker's
+   own copy by then (`session::journal::Journal::append`'s own header),
+   folded into the one `text` event that superseded them. `journal.js`'s fold
+   draws that shorter list exactly as it would have drawn the longer one live,
+   which is what makes the difference invisible on screen.
 
    The listeners are ensured here rather than left to a caller: a snapshot taken
    before anything is subscribed would be a conversation that never moves again,

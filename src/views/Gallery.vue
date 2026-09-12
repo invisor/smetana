@@ -6210,8 +6210,12 @@ const menuTargetStyle = {
              is what a genuinely partial reply looks like; `Markdown`'s own
              `streaming` prop is what draws the caret rather than anything
              here, and it has to sit inside this `.sm-prose` root to paint at
-             all — see `.claude/rules/attachments.md`'s neighbouring hazard
-             about a bare prose column drawing plain text. -->
+             all — `.smetana/project.toml`'s hazard list names this one
+             directly ("the strip has to sit inside the journal to be drawn
+             at all"), off the smetana-epzb merge that landed a gallery
+             activity column with no prose root and every strip painting as
+             plain text, both failed rows indistinguishable from ordinary
+             prose. -->
         <div class="sm-prose" :style="{ width: '280px' }">
           <AgentMessage :text="CONVERSATION_STREAMING_TEXT" streaming @open="openExternal" />
           <TurnResult

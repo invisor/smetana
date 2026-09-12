@@ -33,6 +33,53 @@
 //! into `Text` still arrives once a block completes, unchanged. That whole
 //! message is what actually closes a streamed reply — there is no separate
 //! "stream finished" event to wait for, and none is needed.
+//!
+//! **The flag has no version probe on this line, and that absence was
+//! decided rather than overlooked.** This driver's own command line already
+//! puts `--input-format stream-json`, `--mcp-config` and
+//! `--append-system-prompt` on every driven session unconditionally, none of
+//! them behind a check either, and Claude Code is the person's own install
+//! rather than a pinned sidecar (`.claude/rules/agents.md`; unlike `bd`,
+//! CLAUDE.md's own section on it) — so an install too old for any one of
+//! those already refuses the whole session at spawn, before this task. What
+//! was established rather than guessed: `~/.claude/cache/changelog.md`
+//! records `--include-partial-messages` as landing at **1.0.109**
+//! ("SDK: Added partial message streaming support via
+//! `--include-partial-messages` CLI flag"), while every other fact this file
+//! and `claude.rs` already carry about the installed CLI — the permission
+//! dialog's frame, the `--session-id` flag, the model aliases `--help`
+//! documents — was read off builds in the 2.1.1xx-2.1.269 range, over a
+//! thousand releases later. An install new enough to run a driven session at
+//! all, on the evidence already written into this file before this task
+//! touched it, is new enough by a wide margin for this one flag; there is no
+//! version this project already assumes that lacks it. A probe would be
+//! answering a question this file's own history already settles.
+//!
+//! **What was actually verified, against what was inferred from it, said
+//! precisely because the two were nearly written down as one thing.** The
+//! live run above settles the SSE envelope's shape — that
+//! `--include-partial-messages` wraps `content_block_delta`/`text_delta`
+//! exactly as documented, one JSON object per line — and that much is
+//! measured. What this codec's design *rests on*, and what that one capture
+//! only ever showed rather than proved, is that Claude Code emits one
+//! consolidated `assistant` event per content block, as that block completes,
+//! before the next block's deltas begin: the captured trace had exactly two
+//! blocks, `thinking` then `text`, in that order, with no tool call and no
+//! second text block to say whether the guarantee holds generally or was
+//! this reply's coincidence. `content_block_delta` carries the block's own
+//! `index`, and this driver reads only `delta.text` off it — the index is
+//! decoded and thrown away, and neither this driver nor `journal.js`'s fold
+//! knows which block a delta belongs to. If the premise is ever false —
+//! two text blocks whose deltas interleave, or a consolidated event arriving
+//! late relative to the next block's own deltas — the visible failure is a
+//! stitched row reading the two blocks concatenated ("onetwo"), which the
+//! closing `Text` then shrinks back down to one block's own content while
+//! pushing a second row for the other: a reflow at exactly the moment the
+//! acceptance criteria forbid one. A `[thinking, text]` turn misordered the
+//! same way would draw the `Reasoning` row *below* the reply it was supposed
+//! to precede. Nothing in this file or in `journal.js` guards against that;
+//! the guard, if the premise ever needs one, is carrying `index` on
+//! `TextDelta` and starting a fresh stitched row whenever it changes.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
