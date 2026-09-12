@@ -19,7 +19,17 @@
 
   --text-primary:#16201f;
   --text-secondary:#4a565a;
-  --text-muted:#6b777c;
+  /* Design-system value (#6b777c) failed the 4.5:1 acceptance floor against
+     two of its surfaces: 4.28:1 on --surface, 3.66:1 on --surface-sunken
+     (--surface-raised passed at 4.61:1). Replaced with the lightest value of
+     the same hue that clears 4.5:1 against both --surface and
+     --surface-sunken without dropping --surface-raised below its prior
+     4.61:1: #5e686d gives 5.30:1 / 4.53:1 / 5.71:1 respectively, and stays
+     lighter than --text-secondary (#4a565a) at the same hue, so muted text
+     still visibly recedes from secondary text. Deliberate, isolated
+     departure from the design system — dark theme is untouched (see below)
+     and still matches it verbatim. */
+  --text-muted:#5e686d;
   --text-inverse:#f4f7f7;
   --text-link:#1f5d8f;
   --text-link-hover:#123f63;
