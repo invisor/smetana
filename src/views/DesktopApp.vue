@@ -291,6 +291,7 @@ import { checkNewName } from '../components/files/newEntry.js'
    too. */
 import { absolutePath, ancestors, isUnder, relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
+import { resolveLocalLinkPath } from '../components/conversation/localLinkTarget.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { needsReady, promotesToReady } from '../components/run/readyPromote.js'
 import { runTitle, scopeBusyReason } from '../components/run/runScopes.js'
@@ -5030,10 +5031,28 @@ async function revealInTree(path) {
    which is exactly right for a folder as well as for the file it was written
    for. `openExternal` needs none of this: `ConversationView.vue` still binds
    that event itself, since it is the one thing this panel could already do
-   without a file tree in front of it. */
+   without a file tree in front of it.
+
+   `resolveLocalLinkPath` (`components/conversation/localLinkTarget.js`) is
+   what stands between `classifyLink`'s own reading of the link and either
+   door below: `classifyLink` reads an absolute path as an ordinary local
+   link, but both `openFile` and `revealInTree` trust whatever they are
+   given straight into `project.openTabs` and `project.expanded` — both
+   saved to `settings.json`. An absolute path inside the project is
+   translated to the same relative one a click on the file itself would
+   have carried; one outside the project — or with no project open to
+   resolve it against — has nothing to open or reveal, and is refused
+   before either door is reached, with one console line naming the path and
+   why, in the same `[conversation] … failed:` idiom `stores/conversation.js`
+   already reports its own refusals in. */
 function onConversationLocalLink({ path, kind }) {
-  if (kind === 'dir') revealInTree(path)
-  else openFile(path, { permanent: true })
+  const resolved = resolveLocalLinkPath(filesState.root, path)
+  if (resolved === null) {
+    console.error(`[conversation] local link failed: ${path} is outside the project`)
+    return
+  }
+  if (kind === 'dir') revealInTree(resolved)
+  else openFile(resolved, { permanent: true })
 }
 
 /* `immediate`, and that is the startup case rather than tidiness: `activeTab` is
