@@ -66,7 +66,6 @@ import {
   GitPanel,
   Icon,
   IconButton,
-  iconNodes,
   ImageViewer,
   Input,
   KanbanBoard,
@@ -1865,14 +1864,16 @@ const MARKDOWN_FIGURE_PATH_SAMPLE = '![A screenshot on disk](./assets/fig-path-d
 
 /* `data-state="loading"` has no markdown spelling — nothing in a task's prose
    ever asks for it, since it is the shape a figure holds for the moment
-   between the frame existing and a real `<img>` resolving, which
-   `MarkdownFigure.vue` reaches through an `Image` probe rather than through
-   any prop this page could set. So, like `kbd`/`small` above, it is written
-   out by hand: the one other place in this file that draws prose without
-   going through `Markdown`. `expandIconChildren` is `MarkdownFigure.vue`'s
-   own way of drawing the control without `Icon.vue`'s `style` attribute,
-   copied here rather than exported, since nothing outside that file needs it. */
-const expandIconChildren = iconNodes['maximize-2']?.[2] || []
+   between the frame existing and a real answer resolving, which
+   `MarkdownFigure.vue` reaches through `readImage`/an `Image` probe rather
+   than through any prop this page could set. So, like `kbd`/`small` above,
+   it is written out by hand: the one other place in this file that draws
+   prose without going through `Markdown`. No button in it, and that is not
+   an omission — `MarkdownFigure.vue`'s own `showExpand` requires a resolved
+   path, which a loading figure by definition does not have yet, so the real
+   component never draws one here either; the icon that control uses is
+   checkable instead on `MARKDOWN_FIGURE_PATH_SAMPLE`'s own figure below,
+   drawn through the real component. */
 
 /* The two breeds of link, section 5 of the markup contract: an external one,
    leaving for the person's own browser, and a local one, opened in this app.
@@ -3604,11 +3605,12 @@ const menuTargetStyle = {
         </div>
       </div>
       <!-- Section 7's figures: raster on the mat, the preferred inline `<svg>`
-           form, the render check failing, and two in a row wrapped into
-           `div[data-figures]` — every one of them reached through the real
-           `Markdown` pipeline and `figureSource.js`'s own rules, not faked.
-           `data-state="loading"` is the one exception, and the comment above
-           `expandIconChildren` says why. -->
+           form, the render check failing, a path read through `image_read`,
+           and two in a row wrapped into `div[data-figures]` — every one of
+           them reached through the real `Markdown` pipeline and
+           `figureSource.js`'s own rules, not faked. `data-state="loading"` is
+           the one exception, and the comment above
+           `MARKDOWN_FIGURE_PATH_SAMPLE` says why. -->
       <div :style="{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-6)', alignItems: 'flex-start' }">
         <div :style="{ width: '320px' }">
           <div class="sm-prose">
@@ -3651,33 +3653,20 @@ const menuTargetStyle = {
             </article>
           </div>
         </div>
-        <!-- `data-state="loading"` has no markdown spelling — see
-             `expandIconChildren`'s own comment above for why this is written
-             out by hand rather than reached through `Markdown`. -->
+        <!-- `data-state="loading"` has no markdown spelling, so this is
+             written out by hand rather than reached through `Markdown` — but
+             the shape still has to match what `MarkdownFigure.vue` actually
+             draws while `image_read` has not answered yet: no button, since
+             `showExpand` requires a resolved path, which a loading figure by
+             definition does not have. The expand control's own icon is
+             checkable instead on the path-backed figure above, drawn through
+             the real component rather than copied out by hand here. -->
         <div :style="{ width: '320px' }">
           <div class="sm-prose">
             <article data-turn="agent">
               <figure data-figure data-state="loading">
                 <div data-placeholder></div>
                 <figcaption>Queue depth, 7 d</figcaption>
-                <button type="button" data-expand aria-label="Open full size">
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.75"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                  >
-                    <component
-                      :is="child[0]"
-                      v-for="(child, i) in expandIconChildren"
-                      :key="i"
-                      v-bind="child[1]"
-                    />
-                  </svg>
-                </button>
               </figure>
             </article>
           </div>

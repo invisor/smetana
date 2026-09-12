@@ -173,6 +173,15 @@ onBeforeUnmount(() => {
 const state = computed(() => held.value?.state ?? 'starting')
 const busy = computed(() => isBusy(state.value))
 
+/* Where a relative illustration in a turn's own prose resolves from —
+   `Attached::cwd`, the directory this session actually runs in, never the
+   project root except where the two happen to be the same directory. `''`
+   before the snapshot lands or for a session the worker named none for,
+   which `Markdown.vue`'s own `effectiveBase` reads as "fall back to `root`",
+   the project — the same answer the task inspector gets from having no
+   session at all. */
+const base = computed(() => held.value?.cwd ?? '')
+
 /* The journal as rows to draw — `journal.js`, which is where the fold and the
    translation are written and tested. `state` is the second argument for one
    row alone: a turn the events never closed (`Chunk::Eof` with no `Error`,
@@ -503,6 +512,7 @@ const refusal = {
             :text="row.text"
             :attachments="row.attachments"
             :root="filesState.root ?? ''"
+            :base="base"
             @open="openExternal"
             @open-local="emit('open-local', $event)"
             @open-image="(picture) => openImageWindow(picture.path, picture.name)"
@@ -511,6 +521,7 @@ const refusal = {
             v-else-if="row.kind === 'agent'"
             :text="row.text"
             :root="filesState.root ?? ''"
+            :base="base"
             @open="openExternal"
             @open-local="emit('open-local', $event)"
             @open-image="(picture) => openImageWindow(picture.path, picture.name)"
@@ -520,6 +531,7 @@ const refusal = {
             :text="row.text"
             :ms="row.ms"
             :root="filesState.root ?? ''"
+            :base="base"
             @open="openExternal"
             @open-local="emit('open-local', $event)"
             @open-image="(picture) => openImageWindow(picture.path, picture.name)"

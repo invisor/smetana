@@ -84,11 +84,13 @@
    `''`: every caller of this file already has a `root` to give it, and the
    one that does not want a working local link (the inspector) still has an
    ordinary project directory a relative image path may sensibly be read
-   against. A caller with an actual session cwd passes it as `base`
-   explicitly and keeps `root` as the project's own path for its links —
-   `ConversationView.vue` is expected to be the first of those once a
-   session's cwd is threaded that far; nothing does yet, so every current
-   caller reads its figures against the project root, same as the inspector.
+   against. A caller with an actual session cwd passes it as `base` explicitly
+   and keeps `root` as the project's own path for its links —
+   `ConversationView.vue` does exactly that, off `stores/conversation.js`'s
+   `Attached::cwd`, which is a worktree rather than the project root for a
+   resumed session. The task inspector is still the one caller with no
+   session at all, and reads its figures against the project root instead,
+   the fallback above exists for.
 
    The bytes themselves are never this file's to fetch, and `readInlineSvg`
    aside, this component does not even decide whether a picture loaded: that

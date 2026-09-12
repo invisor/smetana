@@ -99,6 +99,13 @@ pub struct Attached {
     /// person has just pressed a button for would be drawn under a key that
     /// changes under it the moment the agent first speaks.
     pub conversation: Option<String>,
+    /// `Live::cwd` — the directory this session actually runs in, the project
+    /// root for every intent but a resumed worktree session. `Markdown.vue`
+    /// reads it as `base`, the directory a relative illustration in the
+    /// agent's own prose resolves from; the task inspector has no session and
+    /// falls back to the project root the same way this field would if the
+    /// worker ever answered one empty.
+    pub cwd: String,
 }
 
 pub enum Request {
@@ -170,6 +177,14 @@ struct Live {
     /// a session by a number, so this is the only thing left here that can find
     /// the file again once the child has gone.
     project: String,
+    /// Where this session actually runs — `session_cwd`'s answer, the project
+    /// root for every intent but `ResumeSession`, whose own `cwd` names a
+    /// worktree. Carried on `Attached` so the front end can resolve a relative
+    /// illustration in the agent's prose against the directory the agent is
+    /// actually sitting in, `Markdown.vue`'s own `base` — the project root
+    /// alone is the wrong answer for exactly the session this field exists to
+    /// name.
+    cwd: String,
 }
 
 pub fn start(app: AppHandle) -> SessionHandle {
@@ -494,6 +509,7 @@ fn spawn_session(
         child_alive: true,
         conversation,
         project: project.to_owned(),
+        cwd: cwd.to_string_lossy().into_owned(),
     })
 }
 
@@ -664,6 +680,7 @@ fn handle(
                         seq,
                         state: live.state,
                         conversation: live.conversation.clone(),
+                        cwd: live.cwd.clone(),
                     })
                 }
                 None => Err(SessionError::NoSuchSession(id)),

@@ -25,11 +25,15 @@
    component and not `Markdown` either — and `open-image` to `openImageWindow`
    in that same store, since a figure the agent drew opens in the app's one
    image window and never a second. `root` rides along beside them, since a
-   local link needs it to build a working `href` at all (`MarkdownInline.vue`);
-   a figure's own base is `Markdown.vue`'s to default from `root`, so nothing
-   about it needs a matching prop here. Binding `:text` alone ships an agent's
-   prose with links and figures that do nothing, and no test in this project
-   can catch that.
+   local link needs it to build a working `href` at all (`MarkdownInline.vue`).
+   `base` rides beside `root` rather than being left to `Markdown.vue`'s own
+   fallback: `ConversationView.vue` passes this session's own cwd
+   (`stores/conversation.js`'s `Attached::cwd`), which is a worktree rather
+   than the project root for a resumed session, and a relative illustration in
+   the agent's own prose has to resolve against the directory the agent is
+   actually sitting in. Binding `:text` alone ships an agent's prose with
+   links and figures that do nothing, and no test in this project can catch
+   that.
 
    `.sm-prose` no longer wraps this message. The contract's own root is the
    journal that holds every turn — one flex column, `gap:var(--prose-turn-gap)`
@@ -43,7 +47,11 @@ defineProps({
   /* Markdown as the agent wrote it — `session::model::EventKind::Text`. */
   text: { type: String, default: '' },
   /* Passed straight through to `Markdown`, unread here — see its own header. */
-  root: { type: String, default: '' }
+  root: { type: String, default: '' },
+  /* Also passed straight through, unread here: the session's own cwd, off
+     `stores/conversation.js`'s `Attached::cwd` — see `Markdown.vue`'s own
+     header for why this is not simply `root`. */
+  base: { type: String, default: '' }
 })
 
 const emit = defineEmits(['open', 'open-local', 'open-image'])
@@ -54,6 +62,7 @@ const emit = defineEmits(['open', 'open-local', 'open-image'])
     <Markdown
       :text="text"
       :root="root"
+      :base="base"
       @open="emit('open', $event)"
       @open-local="emit('open-local', $event)"
       @open-image="emit('open-image', $event)"

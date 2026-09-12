@@ -41,6 +41,36 @@ describe('the conversation store', () => {
     expect(ipc.calls('session_attach')).toEqual([{ id: 1 }])
   })
 
+  /* `Attached::cwd` — a resumed worktree session's own directory, never the
+     project root, which is what lets `Markdown.vue`'s `base` resolve a
+     relative illustration against the directory the agent is actually
+     sitting in rather than the project it happens to live under. */
+  it('carries the session cwd off the attach snapshot', async () => {
+    const { stores } = await ready({
+      events: [],
+      seq: 0,
+      state: 'ready',
+      cwd: '/p/.worktrees/smetana-je5v-prose-figures'
+    })
+    await stores.conversation.attach(1)
+
+    expect(stores.conversation.conversationFor(1).cwd).toBe('/p/.worktrees/smetana-je5v-prose-figures')
+  })
+
+  /* No snapshot yet, and a snapshot that names none — a session the worker
+     never gave one for, or a fixture written before this field existed.
+     Both read as `''`, which `Markdown.vue`'s own `effectiveBase` already
+     falls back to `root` on, never a hole a component has to guard itself. */
+  it('reads no cwd as an empty string rather than undefined', async () => {
+    const { stores } = await ready({ events: [], seq: 0, state: 'ready' })
+
+    expect(stores.conversation.conversationFor(1).cwd).toBe('')
+
+    await stores.conversation.attach(1)
+
+    expect(stores.conversation.conversationFor(1).cwd).toBe('')
+  })
+
   it('appends events that arrive in sequence', async () => {
     const { stores, emit, nextTick } = await ready({
       events: [text(1, 'a')],

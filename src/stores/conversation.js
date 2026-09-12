@@ -123,6 +123,14 @@ function hold(id) {
        snapshot, which is what the worker's own counter starts at. */
     seq: 0,
     state: 'starting',
+    /* `Attached::cwd` — where this session actually runs, filled in by
+       `attach`'s snapshot below. `''` until then, which `ConversationView.vue`
+       passes straight through as `Markdown.vue`'s `base` prop: that file's own
+       `effectiveBase` already falls back to `root` (the project) on an empty
+       string, so a component reading this before the snapshot lands, or a
+       session the worker never named one for, gets the project root exactly
+       as the task inspector does — never a hole. */
+    cwd: '',
     /* Derived, and derived once per change rather than once per read. A getter
        here read the same and refolded the whole journal every time a render
        touched it — against `journal::BUDGET`, four thousand events, while
@@ -284,7 +292,7 @@ export async function attach(id) {
   const current = invoke('session_attach', { id })
   attaching.set(id, current)
   try {
-    const { events, seq, state, conversation } = await current
+    const { events, seq, state, conversation, cwd } = await current
     if (attaching.get(id) !== current) return
     /* Replaced whole and never merged: this *is* the conversation, and the one
        thing a snapshot is for is being trusted over whatever was drawn before
@@ -292,6 +300,11 @@ export async function attach(id) {
     held.events = events ?? []
     held.seq = seq ?? 0
     held.state = state ?? 'starting'
+    /* Fixed for the life of the session — the worker names it once, at the
+       spawn — so this is a plain assignment rather than a `note*` helper: there
+       is no second source to reconcile it against the way `noteConversation`
+       reconciles the id against `session:state`. */
+    held.cwd = cwd ?? ''
     /* The snapshot is the freshest thing anybody has about this session, so the
        record takes it too — a row drawn from a state event alone would be one
        event behind the panel beside it for as long as nothing moved. */

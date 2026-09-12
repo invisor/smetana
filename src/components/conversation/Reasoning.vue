@@ -67,7 +67,11 @@ const props = defineProps({
      uses rather than quoted from it. */
   expanded: { type: Boolean, default: false },
   /* Passed straight through to `Markdown`, unread here — see its own header. */
-  root: { type: String, default: '' }
+  root: { type: String, default: '' },
+  /* Also passed straight through, unread here: the session's own cwd — see
+     `AgentMessage.vue`'s own header for why this rides beside `root` rather
+     than being left to `Markdown.vue`'s fallback. */
+  base: { type: String, default: '' }
 })
 
 const emit = defineEmits(['open', 'open-local', 'open-image'])
@@ -91,6 +95,7 @@ const elapsedText = computed(() => (props.ms == null ? '' : formatElapsedClock(p
     <Markdown
       :text="text"
       :root="root"
+      :base="base"
       @open="emit('open', $event)"
       @open-local="emit('open-local', $event)"
       @open-image="emit('open-image', $event)"

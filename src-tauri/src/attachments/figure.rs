@@ -39,8 +39,16 @@ use super::{sniff, Attachment, AttachmentError, MAX_IMAGE_BYTES};
 /// this on its own, since `\\host\p.png` *is* an absolute path on Windows,
 /// and this check runs the same way on every platform, string only, so a
 /// test does not need a second OS to prove it holds.
+///
+/// Trimmed first, matching `figureSource.js`'s own `isNetworkPath` exactly —
+/// `markdown.js` captures a source as `(\S+?)` on both sides of the wire, so
+/// leading or trailing whitespace does not reach either gate from a real
+/// `![…](src)` node today, but this function's own doc otherwise claims "one
+/// string check on each side of the boundary rather than trusting the other
+/// one to have run", and that claim was false for a caller that skipped the
+/// front-end gate and handed this one `" \\\\host\\p.png"` untrimmed.
 pub fn is_network_path(src: &str) -> bool {
-    let mut chars = src.chars();
+    let mut chars = src.trim().chars();
     let first = chars.next();
     let second = chars.next();
     matches!((first, second), (Some(a), Some(b)) if is_slashy(a) && is_slashy(b))
@@ -128,6 +136,17 @@ mod tests {
         // the two supplied either half of the leading pair.
         assert!(is_network_path("/\\host\\p.png"));
         assert!(is_network_path("\\/host/p.png"));
+    }
+
+    #[test]
+    fn a_unc_path_is_still_caught_with_leading_or_trailing_whitespace() {
+        // The front-end gate trims before testing; this one has to as well,
+        // or a caller that reached `image_read` without going through
+        // `figureSource.js` first — the one this doc comment claims cannot
+        // happen — could still slip a UNC path past it on a single space.
+        assert!(is_network_path(" \\\\host\\p.png"));
+        assert!(is_network_path("\\\\host\\p.png\t"));
+        assert!(is_network_path("  //host/p.png  "));
     }
 
     #[test]
