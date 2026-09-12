@@ -85,7 +85,11 @@ right of the column by `align-self`.
 - **Agent's turn** — `article[data-turn="agent"]`: no container, no avatar, no
   caption. It is the plain ground of the panel and most of the column.
 - May end in an **attachment strip**: `ul[data-attachments]` of mono chips
-  carrying a file name (never a thumbnail), truncating with an ellipsis.
+  carrying a file name (never a thumbnail), truncating with an ellipsis. The
+  name is a `button` (smetana-4x3w) when there is somewhere to open it —
+  the picture window, or an editor tab for a path inside the project — and
+  plain text (`span[data-attachment-name]`) otherwise, with no cursor and no
+  hover of its own.
 
 Three treatments that were explored and not taken (`bubble-left`,
 `sliver-right`, `ledger`) and the previous `rail` default are in

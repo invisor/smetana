@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { loadStores } from '../support/stores.js'
+import { isImagePath } from '../../src/stores/attachments.js'
 
 /* What `attachment_import` and `attachment_write` answer with. The base64 is
    two bytes, and only its round trip into the thumbnail's URL is under test —
@@ -18,6 +19,26 @@ const file = (name, bytes) => ({
   name,
   size: bytes.length,
   arrayBuffer: async () => new Uint8Array(bytes).buffer
+})
+
+describe('which paths count as pictures', () => {
+  it('matches the four formats the picker offers, case-insensitively', () => {
+    expect(isImagePath('/tmp/screenshot.png')).toBe(true)
+    expect(isImagePath('/tmp/Screenshot 2026-09-12 at 22.03.21.PNG')).toBe(true)
+    expect(isImagePath('/tmp/photo.jpg')).toBe(true)
+    expect(isImagePath('/tmp/photo.jpeg')).toBe(true)
+    expect(isImagePath('/tmp/animated.gif')).toBe(true)
+    expect(isImagePath('/tmp/graphic.webp')).toBe(true)
+  })
+
+  it('an attachment that is not one of the four formats is not a picture', () => {
+    expect(isImagePath('/tmp/worktree.log')).toBe(false)
+    expect(isImagePath('/tmp/notes.txt')).toBe(false)
+  })
+
+  it('a path with no extension at all is not a picture', () => {
+    expect(isImagePath('/tmp/README')).toBe(false)
+  })
 })
 
 describe('images attached to a task that has not been filed', () => {

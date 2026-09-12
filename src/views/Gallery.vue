@@ -138,7 +138,7 @@ import { MOCK_TREE } from '../stores/mockBackend.js'
    inspector's raise `copy-id` and know nothing about a clipboard, so the thing
    drawing them has to answer — here as in `DesktopApp.vue`. */
 import { copyText, openExternal } from '../stores/app.js'
-import { readFigureImage } from '../stores/attachments.js'
+import { isImagePath, readFigureImage } from '../stores/attachments.js'
 /* The harness catalogue, so the agent picker on this page is the one the
    settings window draws rather than a second list written out here. Read once
    at startup in `main.js`; in a browser `mockBackend.js` answers it. */
@@ -2454,6 +2454,14 @@ const CONVERSATION_ATTACHMENTS = [
   '/tmp/worktree.log',
   '/Users/you/Desktop/2026-09-10-full-notarization-pipeline-failure-transcript-with-timestamps.log'
 ]
+
+/* `attachmentAction.js` (`ConversationView.vue`) is what decides which of
+   `CONVERSATION_ATTACHMENTS` draws as a control — a picture always does, and
+   the other two would too were they inside an open project, which this page
+   has none of. `isImagePath` alone stands in for that whole decision here:
+   `relativeTo` against an empty root always answers `null`, the same as it
+   would with a real one open on neither of the two log paths above. */
+const CONVERSATION_OPEN_ATTACHMENTS = CONVERSATION_ATTACHMENTS.filter(isImagePath)
 
 const CONVERSATION_REASONING = [
   'The branch name reaches three places: the folder, the tab label and the',
@@ -6245,10 +6253,27 @@ const menuTargetStyle = {
            root's `--panel-pad`. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
         <div class="sm-prose" :style="{ width: '360px' }">
+          <!-- `CONVERSATION_ATTACHMENTS` mixes a picture and two files on
+               purpose (see its own comment), which is what makes its chips
+               checkable for both branches of `attachmentAction.js` at once —
+               `ConversationView.vue`'s own `openAttachment`, not drawn here,
+               is where that branch actually lives, and `openAttachments`
+               below is the other half neither `UserMessage` nor this page may
+               work out for itself. `CONVERSATION_OPEN_ATTACHMENTS` draws the
+               picture as a button and both log paths as plain text — this
+               page opens on no project, so neither would have an editor tab
+               to open into even were a real one behind it, which is the
+               ordinary "outside the project" case rather than a fixture this
+               page cannot represent. `open-attachment` is a no-op for the
+               reason every other event this page cannot wire for real
+               already takes: opening the picture would need a real OS window
+               this harness has nowhere to check the result of. -->
           <UserMessage
             :text="CONVERSATION_USER_TEXT"
             :attachments="CONVERSATION_ATTACHMENTS"
+            :open-attachments="CONVERSATION_OPEN_ATTACHMENTS"
             @open="openExternal"
+            @open-attachment="() => {}"
           />
           <AgentMessage :text="CONVERSATION_AGENT_TEXT" @open="openExternal" />
           <TurnResult state="done" :tokens-in="12480" :tokens-out="416" :cost-usd="0.0312" :ms="4200" />
@@ -6442,8 +6467,23 @@ const menuTargetStyle = {
         </div>
 
         <div :style="{ width: '360px', display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
+          <!-- `composerAttachments` is `CONVERSATION_ATTACHMENTS`, the same
+               mixed picture-and-files list the journal above draws as a sent
+               chip — checkable here as the composer's own idiom, the openable
+               name and the cross as two separate tab stops, and the two log
+               paths as plain text beside them with a cross of their own and
+               nothing else. `open-attachment` is a no-op for the reason every
+               other event this page cannot wire for real already takes:
+               `ConversationView.vue` is what turns it into `open-image` or
+               `open-local`, and this composer is drawn on its own, with
+               neither channel behind it. -->
           <div :style="{ border: 'var(--border-w) solid var(--border)', borderRadius: 'var(--radius-3)' }">
-            <Composer v-model="composerText" v-model:attachments="composerAttachments" />
+            <Composer
+              v-model="composerText"
+              v-model:attachments="composerAttachments"
+              :open-attachments="CONVERSATION_OPEN_ATTACHMENTS"
+              @open-attachment="() => {}"
+            />
           </div>
           <!-- A turn in flight: one button, and it is Stop. -->
           <div :style="{ border: 'var(--border-w) solid var(--border)', borderRadius: 'var(--radius-3)' }">
