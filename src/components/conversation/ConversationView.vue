@@ -733,6 +733,7 @@ const refusal = {
           v-if="isAskUserQuestionCard"
           :key="question.id"
           :input="question.input"
+          :asked-at="question.at"
           @answer="answer"
         />
         <PermissionRequest

@@ -15,7 +15,7 @@
    comma otherwise. `toggle`, `selectedLabels`, `buildAnswers` and
    `isComplete` are the rules `AskUserQuestion.vue` calls before it will let
    a press through; what stays in the component is plainer — which question
-   a click was on, and `setCustom`'s own small rule that typing clears
+   a click was on, and a small `watch` on the typed field that clears
    whatever was selected. */
 
 /** The one tool this whole family exists for. */

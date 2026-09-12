@@ -3,20 +3,50 @@
    inside it: that one draws a tool's name and a one-line detail behind two
    buttons, and this tool has neither — up to four questions, each with a
    short header, its own prose and two to four options that carry their own
-   description, some of them answerable with more than one choice at once. A
-   permission card fed this call's `detail` alone drew a yellow strip with a
-   title and nothing under it, because `agents::claude::tool_detail` has one
-   line to give and this tool needs a form.
+   description, some of them answerable with more than one choice at once.
+
+   **This used to draw the same saturated `statusColors('needs-you')` fill
+   `PermissionRequest.vue` still does, stretched over the whole card, and that
+   was the defect this port fixes (smetana-ndm9).** One row and two buttons
+   can carry a loud fill; two questions, up to eight options and two fields
+   cannot — on a saturated ground nothing inside can be emphasised, so an
+   option separated from the background by a border alone and "chosen"
+   degraded to a slightly thicker one, the weakest possible signal for the
+   most important state on the screen. A section of the design handoff written
+   for exactly this card draws the fix. The handoff committed under
+   `docs/design_handoff_conversation_panel/` (`README.md`, `markup-contract.md`,
+   `reference.html`, `sm-prose-turns.css`) predates this feature and carries no
+   section for it; this one reached the port outside the repository and is
+   not committed anywhere, so its reasoning is written down in full in
+   `.claude/rules/conversation-panel.md` rather than left as a path to
+   follow: the container becomes an ordinary raised
+   card, the same surface every other block in this panel sits on, and the
+   whole loud budget moves to one chip in the header — colour, the system's
+   triangle silhouette and the word, never colour alone. Every rule that
+   paints it lives in `sm-prose.css` section 13, the same fourth styling
+   exception the rest of this panel already spends (CLAUDE.md, Styling) —
+   this file only emits the markup that section asks for and the state that
+   decides which of it is drawn.
+
+   **This card is not itself a row of the journal, and every selector in that
+   section is written as a descendant of `.sm-prose`.** `ConversationView.vue`
+   draws it in the panel's foot, under the composer, outside the scrolling
+   viewport that carries the class — so the root here is its own `.sm-prose`
+   wrapper around `section[data-ask]`, with that wrapper's own `padding` and
+   `gap` neutralised through the computed style below: both are written for a
+   column of turns and would double the inset `ConversationView.vue`'s own
+   `questionPad` already spends around this card.
 
    The wire is `session::model::EventKind::Permission`'s `input` — the tool
    call's own arguments, untouched — and `askUserQuestion.js` beside this file
    holds the parsing and the answer-building rules, pure and tested there for
    the reason every file in this family is out of its component: a `.vue`
    file is the one thing no runner here can reach. This component's own state
-   is which option is selected (by index — see `toggle`'s own header) and
-   what a person typed per question; what it still decides on its own is
-   plainer but is a rule nonetheless — `setCustom` below is the one place
-   that says typing clears a selection.
+   is which option is selected (by index — see `toggle`'s own header), what a
+   person typed per question, and, new in this port, its own `state` —
+   `pending` until a press, then `answered` or `declined` for good; it stops
+   emitting after that, and the settled render is section 13's own, not a
+   second component.
 
    **A custom answer always wins over a selection, for one question at a
    time.** Choosing an option clears whatever was typed for it and typing
@@ -27,30 +57,54 @@
    place that resolves the two into that single string, so this file only has
    to keep them from being edited at the same time.
 
-   **Drawn at the same `loud` weight as `PermissionRequest.vue`, and for the
-   same reason**: the harness is holding this same tool call open and the
-   session is `needs-you` until somebody answers, whichever card is on
-   screen. `statusColors('needs-you')` and `STATUS_GLYPH` are the identical
-   pair that card uses, so the two read as one vocabulary rather than two —
-   only the shape of what is inside the frame differs. */
-import { reactive, ref, watch } from 'vue'
-import Button from '../core/Button.vue'
-import Icon from '../core/Icon.vue'
-import Input from '../core/Input.vue'
-import { STATUS_GLYPH, statusColors } from '../status/status.js'
-import { buildAnswers, isComplete, parseQuestions, selectedLabels, toggle } from './askUserQuestion.js'
+   **A real radiogroup gives up one thing a hand-drawn one had: clicking an
+   already-chosen single-select option no longer deselects it.** `toggle` in
+   `askUserQuestion.js` still supports that (both branches, tested there), but
+   a native `<input type="radio">` never fires a change event for a click on
+   the option already checked — that is true of every radiogroup on every
+   platform, not a gap this file leaves open — so the component only ever
+   calls `toggleOption` from a real `change`, and a single-select question can
+   no longer be emptied by re-clicking its own answer. Typing a custom answer
+   still clears it, which is the way out the contract actually asks for.
+   `multiSelect`'s checkboxes keep the old behaviour: a `change` fires on
+   every click regardless of the box's previous state. */
+import { computed, onBeforeUnmount, onMounted, ref, reactive, useId, watch } from 'vue'
+import { formatElapsedClock } from './elapsed.js'
+import {
+  ASK_USER_QUESTION_TOOL,
+  buildAnswers,
+  formatAnswer,
+  isComplete,
+  parseQuestions,
+  selectedLabels,
+  toggle
+} from './askUserQuestion.js'
 
 const props = defineProps({
   /* `Permission::input` off the wire — the raw arguments of the
      `AskUserQuestion` call, parsed by `askUserQuestion.js` rather than here. */
-  input: { type: Object, default: () => ({}) }
+  input: { type: Object, default: () => ({}) },
+  /* The permission event's own `at`, RFC 3339 — `session::model::Event`'s
+     timestamp, threaded straight through by `ConversationView.vue`. Optional:
+     a fixture built by hand (`Gallery.vue`'s settled columns) has no live
+     event behind it and draws no clock at all rather than a fabricated one. */
+  askedAt: { type: String, default: null }
 })
 
 /* `decision`, `'allow'` or `'deny'` (`session::model::Decision`'s wire
    words); `answers`, only for an allow, keyed by each question's own text —
    `undefined` for a decline, which the store already reads as no answers at
-   all. */
+   all. Fired once: `state` moves out of `pending` in the same call and every
+   later press is refused. */
 const emit = defineEmits(['answer'])
+
+/* Unique per instance, because option ids and radiogroup names are shared
+   between the hidden `<input>` and its `<label for>` — the same reason
+   `CommandPalette.vue` mints one, and the same failure mode without it: the
+   gallery draws this card more than once on one page. */
+const uid = `sm-ask-${useId()}`
+const optionId = (qi, oi) => `${uid}-q${qi}-o${oi}`
+const groupName = (qi) => `${uid}-q${qi}`
 
 const questions = ref([])
 
@@ -62,9 +116,17 @@ const questions = ref([])
    themselves change — a fresh `AskUserQuestion` call is a fresh form, never
    the last one's state showing through a new set of options — which in
    practice means every time, since `ConversationView.vue` keys this
-   component on the permission's own id. */
+   component on the permission's own id. Neither is cleared once the card
+   settles: the settled render reads the very same selection back to draw
+   which row was chosen. */
 const selected = reactive([])
 const custom = reactive([])
+
+/* `pending` until a press, then `answered` or `declined` for good — section
+   13's own three words, `data-state` on `section[data-ask]` unchanged. A
+   fresh call resets it exactly as it resets the selection: a new question is
+   never drawn settled from the state a previous one reached. */
+const state = ref('pending')
 
 function reset(parsed) {
   questions.value = parsed
@@ -74,12 +136,27 @@ function reset(parsed) {
     selected.push([])
     custom.push('')
   })
+  state.value = 'pending'
 }
 reset(parseQuestions(props.input))
 watch(() => props.input, (next) => reset(parseQuestions(next)))
 
 function isSelected(qi, oi) {
   return selected[qi]?.includes(oi) ?? false
+}
+
+/* A declined ask shows no chosen row at all, whatever was tentatively picked
+   before the decline — refusing to answer discards the draft, the same
+   reading `reference.html`'s own settle script takes. An answered one shows
+   exactly what `selected`/`custom` still hold, unchanged since the press.
+
+   This is also what the template's `:checked` binds to, rather than
+   `isSelected` directly: the hidden input stays in the markup once settled
+   (disabled, never removed), and a declined ask must not go on reporting a
+   tentative pick as checked through that branch while `label[data-chosen]`
+   says otherwise on the other — one source of truth for both. */
+function isChosen(qi, oi) {
+  return state.value !== 'declined' && isSelected(qi, oi)
 }
 
 /* The multiSelect/single-select/deselect rule itself is `toggle` in
@@ -100,218 +177,159 @@ function toggleOption(qi, oi) {
    typing an answer clears whatever was selected for the same question — the
    mutual exclusion `toggleOption` above keeps the other way round. It stays
    here because it is exactly this short; `selectedLabels`, imported above,
-   moved out for the opposite reason, carrying an edge case worth a test. */
-function setCustom(qi, text) {
-  custom[qi] = text
-  if (text) selected[qi] = []
-}
+   moved out for the opposite reason, carrying an edge case worth a test.
+
+   This used to be the freeform field's own `@input` handler, called with
+   `$event.target.value` — a `:value`/`@input` pair, which is not `v-model`
+   and carries none of its guarantees. Vue's own `vModelText` ignores an
+   `input` event while `el.composing` is true and re-syncs once
+   `compositionend` fires, and a handler that writes `custom[qi]` straight
+   from every `input` event has no such guard: an IME mid-composition — this
+   app ships twelve languages — could see its own pre-edit buffer cleared or
+   reordered by a write landing between keystrokes the composition has not
+   settled yet. The template now binds the field with a plain `v-model` on
+   `custom[qi]` directly, which is a valid assignment target on a `reactive`
+   array and gets the same compiled guard any other text input in this tree
+   would; this watcher is only the side effect v-model does not carry —
+   clearing a question's selection the moment its typed answer becomes
+   non-empty, checked for every question rather than tracked by index, since
+   a `deep` watch on the whole array does not say which of them changed. */
+watch(custom, () => {
+  questions.value.forEach((_, qi) => {
+    if (custom[qi] && selected[qi]?.length) selected[qi] = []
+  })
+}, { deep: true })
 
 const complete = ref(false)
 watch([questions, selected, custom], () => {
   complete.value = isComplete(questions.value, selectedLabels(questions.value, selected), custom)
 }, { immediate: true, deep: true })
 
+/* The footer's own hint — how many of the questions already have something
+   to send. Built off the same pure functions `complete` is, not a second
+   rule: a question counts once `formatAnswer` gives it a non-empty string,
+   exactly what gates `Send answer` for the whole card. */
+const answeredCount = computed(() => {
+  const labels = selectedLabels(questions.value, selected)
+  return questions.value.filter((_, i) => formatAnswer(labels[i], custom[i]).length > 0).length
+})
+
 function send() {
+  if (state.value !== 'pending') return
   emit('answer', 'allow', buildAnswers(questions.value, selectedLabels(questions.value, selected), custom))
+  state.value = 'answered'
 }
 
 function decline() {
+  if (state.value !== 'pending') return
   emit('answer', 'deny')
+  state.value = 'declined'
 }
 
-/* Reserved, so this is a constant rather than a computed — `needs-you`
-   always resolves to the same four token references, the pair
-   `PermissionRequest.vue` already draws its own card from. */
-const c = statusColors('needs-you')
-const glyph = STATUS_GLYPH[c.key]
+/* The header's own clock — ticking only while the ask is still `pending`,
+   the same "still going" idiom `TurnResult.vue` uses and for the identical
+   reason: the elapsed time is the liveness signal, not decoration, so it
+   stops rather than freezing the instant a press settles the card. Nothing
+   here fabricates a start time — no `askedAt` draws no `<time>` at all,
+   which is the gallery's own settled columns (hand-written markup, no live
+   event behind them). */
+const now = ref(Date.now())
+let timer = null
 
-const card = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 'var(--space-5)',
-  padding: 'var(--space-5)',
-  background: c.fg,
-  color: 'var(--surface-raised)',
-  border: `var(--border-w) solid ${c.fg}`,
-  borderRadius: 'var(--radius-4)',
-  fontFamily: 'var(--font-sans)'
-}
-
-/* `alignItems: 'flex-start'` rather than `center`: below about 330px the
-   sentence wraps to two lines, and centring the icon against the *block*
-   put the triangle floating between them rather than sitting on the first
-   line it is announcing. Flex-start pins it to the top, level with the
-   first line, whether the sentence wraps or not. */
-const head = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  gap: 'var(--space-3)',
-  font: 'var(--weight-medium) var(--text-sm)/var(--leading-snug) var(--font-sans)'
-}
-
-const questionsList = { display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }
-
-/* A rule between two questions in the same call, drawn from the border weight
-   this card already uses rather than a second colour: nothing here is
-   allowed a colour this design system did not choose, and a hairline in the
-   card's own ink is legible on both themes without one. The first question
-   gets none — there is nothing above it to separate it from. */
-const questionBlock = (i) => ({
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 'var(--space-3)',
-  paddingTop: i > 0 ? 'var(--space-5)' : 0,
-  borderTop: i > 0 ? 'var(--border-w) solid var(--surface-raised)' : 'none'
-})
-
-/* Sans, sentence case, no transform: `header` is the agent's own prose — a
-   short label it wrote, not an identifier and not this system's own copy —
-   and CLAUDE.md's rule is flat about both halves of that. Uppercase mono is
-   also the silhouette `StatusBadge` reserves for a status; spending it on
-   arbitrary agent text would put a badge's own idiom on a string that has
-   nothing to do with status. Weight and size are what set it apart from
-   `questionText` below instead of a transform or a second ink this card has
-   no colour budget left for. */
-const questionHeader = {
-  font: 'var(--weight-medium) var(--text-xs)/var(--leading-snug) var(--font-sans)'
-}
-
-const questionText = {
-  font: 'var(--weight-regular) var(--text-sm)/var(--leading-normal) var(--font-sans)'
-}
-
-const optionsList = { display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }
-
-/* One option, drawn by hand rather than through `Button.vue`: that component
-   is one line, centred and fixed-height, and an option here carries a label
-   and a wrapping description on the line under it — auto-height, since
-   nothing here declares one.
-
-   **The border is always the same width, `var(--border-w-strong)`, and only
-   its colour ever moves — never absent, only invisible**, the same device
-   `sm-prose.css`'s copy control uses (`.claude/rules/conversation-panel.md`,
-   "The copy button is always visible") and for the identical reason: with no
-   height declared, `box-sizing: border-box` has nothing to absorb a wider
-   border into, so a version that swapped `--border-w` for `--border-w-strong`
-   on hover or on selection grew the box by the difference — 2px taller, the
-   label a pixel lower, and the next question's first option shifted under
-   the pointer, which in a `multiSelect` question is exactly where the next
-   click was going.
-
-   **Three colours for three states, and the middle one is a genuine colour
-   change on hover** — `core/interactive.js`'s "never a colour change" rule
-   is written for a control on the app's own neutral surface ladder
-   (`--surface` → `--surface-hover` → `--surface-active`), and this card has
-   no such ladder to step on: its ground is `c.fg`, a saturated fill, and
-   stepping *that* would mean a second, brighter status hue with nothing in
-   this design system to draw it from. What meets the rule's actual purpose —
-   a control in a dense list cannot jump — is the reserved border alone: rest
-   is `c.border`, the same status's own dimmer step (`statusColors`'s
-   three-tier ramp, already computed above as `c` and already read for the
-   card's own fill; nothing new is spent), present but quiet, so an option
-   reads as bounded before anyone points at it; hover is `var(--surface-raised)`,
-   the card's full ink, a clearly stronger ring than rest; and a selected
-   option carries no border of its own — `transparent`, since the inverted
-   fill already says what a border would, the same ink-on-paper idiom the
-   primary button uses elsewhere in this system. */
-function optionStyle(qi, oi, hovered) {
-  const on = isSelected(qi, oi)
-  const borderColor = on ? 'transparent' : hovered ? 'var(--surface-raised)' : c.border
-  return {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'flex-start',
-    gap: 'var(--space-1)',
-    width: '100%',
-    textAlign: 'left',
-    padding: 'var(--space-3) var(--space-4)',
-    background: on ? 'var(--surface-raised)' : 'transparent',
-    color: on ? c.fg : 'var(--surface-raised)',
-    border: `var(--border-w-strong) solid ${borderColor}`,
-    borderRadius: 'var(--radius-3)',
-    font: 'inherit',
-    cursor: 'default',
-    transition: 'var(--transition-control)'
+function stopTicking() {
+  if (timer != null) {
+    clearInterval(timer)
+    timer = null
   }
 }
-
-const optionLabel = { font: 'var(--weight-medium) var(--text-sm)/var(--leading-snug) var(--font-sans)' }
-const optionDescription = { font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-sans)' }
-
-/* The free-text field has to read as a different kind of thing from an
-   option at a glance, and colour is not available to spend on it — both a
-   selected option and `Input.vue`'s own box resolve to the identical
-   `var(--surface-raised)` fill, `--radius-3` corner and full width, so in
-   the `Platforms` question with `Windows` chosen the card drew three
-   indistinguishable rounded boxes in a row, the last of which answers
-   nothing. A hairline above it separates it from the option list as its own
-   zone, a caption gives it the label an option never carries, and the
-   `pencil` prefix inside the field itself (`Input`'s own `prefix` slot) says
-   "type here" before anyone reads a word — three token-only cues, none of
-   them a hue. */
-const customRow = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 'var(--space-2)',
-  paddingTop: 'var(--space-3)',
-  borderTop: 'var(--border-w) solid var(--surface-raised)'
+function startTicking() {
+  stopTicking()
+  now.value = Date.now()
+  timer = setInterval(() => { now.value = Date.now() }, 1000)
 }
 
-const customLabel = { font: 'var(--weight-regular) var(--text-xs)/var(--leading-snug) var(--font-sans)' }
+onMounted(() => {
+  if (props.askedAt && state.value === 'pending') startTicking()
+})
+onBeforeUnmount(stopTicking)
+watch(state, (next) => {
+  if (props.askedAt && next === 'pending') startTicking()
+  else stopTicking()
+})
 
-const actions = { display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)' }
+const elapsedLabel = computed(() => {
+  if (!props.askedAt) return ''
+  return formatElapsedClock(Math.max(0, now.value - Date.parse(props.askedAt)))
+})
 
-/* Tracked per option rather than through `useInteractive` — that composable
-   is written for one control per component instance, and this card draws up
-   to sixteen of them (four questions, up to four options apiece). A single
-   hovered key is all a pointer can be over at once, and it is built from the
-   same `(qi, oi)` pair selection is, for the reason `selected` itself is
-   indexed rather than labelled. */
-const hoveredKey = ref(null)
-const keyOf = (qi, oi) => `${qi}:${oi}`
+/* `needs you` while pending; the state's own word once settled — the exact
+   text `reference.html`'s own settle script writes, kept for the reason
+   everything else in this port matches the handoff rather than "fixing" it. */
+const markLabel = computed(() => (state.value === 'pending' ? 'needs you' : state.value))
+
+/* The neutralising style this file's own header explains: `.sm-prose`'s own
+   `padding`/`gap` are written for a column of turns, and this card is not
+   one — `ConversationView.vue`'s `questionPad` already insets it, and the
+   journal's own turn gap has nothing here to space against, since this
+   wrapper holds exactly one child. */
+const root = { padding: 0, gap: 0 }
 </script>
 
 <template>
-  <div data-attention="loud" :style="card">
-    <div :style="head">
-      <Icon :name="glyph" :size="13" :stroke-width="2.25" />
-      <span>The agent needs an answer before it can continue.</span>
-    </div>
-    <div :style="questionsList">
-      <div v-for="(question, qi) in questions" :key="qi" :style="questionBlock(qi)">
-        <div v-if="question.header" :style="questionHeader">{{ question.header }}</div>
-        <div :style="questionText">{{ question.question }}</div>
-        <div :style="optionsList">
-          <button
-            v-for="(option, oi) in question.options"
-            :key="oi"
-            type="button"
-            :style="optionStyle(qi, oi, hoveredKey === keyOf(qi, oi))"
-            :aria-pressed="isSelected(qi, oi)"
-            @mouseenter="hoveredKey = keyOf(qi, oi)"
-            @mouseleave="hoveredKey = null"
-            @click="toggleOption(qi, oi)"
-          >
-            <span :style="optionLabel">{{ option.label }}</span>
-            <span v-if="option.description" :style="optionDescription">{{ option.description }}</span>
-          </button>
-        </div>
-        <div :style="customRow">
-          <div :style="customLabel">Or, in your own words</div>
-          <Input
-            :model-value="custom[qi]"
-            placeholder="Type an answer"
-            size="sm"
-            @update:model-value="setCustom(qi, $event)"
-          >
-            <template #prefix><Icon name="pencil" :size="12" /></template>
-          </Input>
-        </div>
+  <div class="sm-prose" :style="root">
+    <section data-ask :data-state="state">
+      <header>
+        <span data-mark>{{ markLabel }}</span>
+        <span data-tool :data-count="questions.length > 1 ? questions.length : undefined">{{ ASK_USER_QUESTION_TOOL }}</span>
+        <time v-if="elapsedLabel">{{ elapsedLabel }}</time>
+      </header>
+
+      <div v-for="(question, qi) in questions" :key="qi" data-question>
+        <h6 v-if="question.header">{{ question.header }}</h6>
+        <p>{{ question.question }}</p>
+
+        <ul
+          data-options
+          :role="question.multiSelect ? 'group' : 'radiogroup'"
+          :aria-label="question.header || question.question"
+        >
+          <li v-for="(option, oi) in question.options" :key="oi">
+            <input
+              v-if="question.multiSelect"
+              type="checkbox"
+              :id="optionId(qi, oi)"
+              :checked="isChosen(qi, oi)"
+              :disabled="state !== 'pending'"
+              @change="toggleOption(qi, oi)"
+            >
+            <input
+              v-else
+              type="radio"
+              :id="optionId(qi, oi)"
+              :name="groupName(qi)"
+              :checked="isChosen(qi, oi)"
+              :disabled="state !== 'pending'"
+              @change="toggleOption(qi, oi)"
+            >
+            <label :for="optionId(qi, oi)" :data-chosen="isChosen(qi, oi) ? '' : undefined">
+              <span :data-ring="question.multiSelect ? undefined : ''" :data-box="question.multiSelect ? '' : undefined"></span>
+              <strong>{{ option.label }}</strong>
+              <span v-if="option.description" data-why>{{ option.description }}</span>
+            </label>
+          </li>
+        </ul>
+
+        <label v-if="state === 'pending'" data-own>
+          <span>Or, in your own words</span>
+          <input type="text" v-model="custom[qi]" placeholder="Type an answer">
+        </label>
       </div>
-    </div>
-    <div :style="actions">
-      <Button size="sm" variant="primary" :disabled="!complete" @click="send">Send answer</Button>
-      <Button size="sm" variant="secondary" @click="decline">Decline to answer</Button>
-    </div>
+
+      <footer v-if="state === 'pending'">
+        <button type="button" data-send :disabled="!complete" @click="send">Send answer</button>
+        <button type="button" data-decline @click="decline">Decline to answer</button>
+        <span data-hint>{{ answeredCount }} of {{ questions.length }} answered</span>
+      </footer>
+    </section>
   </div>
 </template>
