@@ -18,9 +18,10 @@
    `--attn-quiet-opacity` on top of `--text-muted` would not have.
 
    The text is markdown, drawn by the shared component like every other piece of
-   prose here, and `open` and `open-local` are forwarded for the reason
-   `AgentMessage.vue` gives: a link inside reasoning is still a link, whichever
-   breed it is, and `root` rides along beside them for the same reason.
+   prose here, and `open`, `open-local` and `open-image` are forwarded for the
+   reason `AgentMessage.vue` gives: a link or a figure inside reasoning is
+   still a link or a figure, whichever breed it is, and `root` rides along
+   beside them for the same reason.
 
    `summary` says `Reasoning`, the word the contract's own example spells —
    `<summary>Reasoning<time>18s</time></summary>` — and not this component's
@@ -66,10 +67,14 @@ const props = defineProps({
      uses rather than quoted from it. */
   expanded: { type: Boolean, default: false },
   /* Passed straight through to `Markdown`, unread here — see its own header. */
-  root: { type: String, default: '' }
+  root: { type: String, default: '' },
+  /* Also passed straight through, unread here: the session's own cwd — see
+     `AgentMessage.vue`'s own header for why this rides beside `root` rather
+     than being left to `Markdown.vue`'s fallback. */
+  base: { type: String, default: '' }
 })
 
-const emit = defineEmits(['open', 'open-local'])
+const emit = defineEmits(['open', 'open-local', 'open-image'])
 
 const open = ref(props.expanded)
 watch(toRef(props, 'expanded'), (value) => { open.value = value })
@@ -87,6 +92,13 @@ const elapsedText = computed(() => (props.ms == null ? '' : formatElapsedClock(p
 <template>
   <details data-reasoning :open="open" @toggle="onToggle">
     <summary>Reasoning<time v-if="elapsedText">{{ elapsedText }}</time></summary>
-    <Markdown :text="text" :root="root" @open="emit('open', $event)" @open-local="emit('open-local', $event)" />
+    <Markdown
+      :text="text"
+      :root="root"
+      :base="base"
+      @open="emit('open', $event)"
+      @open-local="emit('open-local', $event)"
+      @open-image="emit('open-image', $event)"
+    />
   </details>
 </template>

@@ -88,11 +88,16 @@ import { basename } from '../../paths.js'
    `Markdown.vue` and `MarkdownInline.vue` needs a value from somewhere, and
    this file already reads four stores of its own.
 
+   `openImageWindow` answers `open-image` the same direct way: a figure in a
+   turn's prose is opened in the existing image window, never a second one,
+   and there is nothing here for this panel to own the way it owns nothing
+   about `open` either — both are read straight off `stores/app.js`.
+
    The other two are the header's, and neither is on the wire: `session_attach`
    answers with the journal, its sequence number and the state, and nothing
    else. */
 import { agentLabel } from '../../stores/agents.js'
-import { openExternal } from '../../stores/app.js'
+import { openExternal, openImageWindow } from '../../stores/app.js'
 import { filesState } from '../../stores/files.js'
 import { settings } from '../../stores/settings.js'
 import {
@@ -167,6 +172,15 @@ onBeforeUnmount(() => {
 
 const state = computed(() => held.value?.state ?? 'starting')
 const busy = computed(() => isBusy(state.value))
+
+/* Where a relative illustration in a turn's own prose resolves from —
+   `Attached::cwd`, the directory this session actually runs in, never the
+   project root except where the two happen to be the same directory. `''`
+   before the snapshot lands or for a session the worker named none for,
+   which `Markdown.vue`'s own `effectiveBase` reads as "fall back to `root`",
+   the project — the same answer the task inspector gets from having no
+   session at all. */
+const base = computed(() => held.value?.cwd ?? '')
 
 /* The journal as rows to draw — `journal.js`, which is where the fold and the
    translation are written and tested. `state` is the second argument for one
@@ -498,23 +512,29 @@ const refusal = {
             :text="row.text"
             :attachments="row.attachments"
             :root="filesState.root ?? ''"
+            :base="base"
             @open="openExternal"
             @open-local="emit('open-local', $event)"
+            @open-image="(picture) => openImageWindow(picture.path, picture.name)"
           />
           <AgentMessage
             v-else-if="row.kind === 'agent'"
             :text="row.text"
             :root="filesState.root ?? ''"
+            :base="base"
             @open="openExternal"
             @open-local="emit('open-local', $event)"
+            @open-image="(picture) => openImageWindow(picture.path, picture.name)"
           />
           <Reasoning
             v-else-if="row.kind === 'reasoning'"
             :text="row.text"
             :ms="row.ms"
             :root="filesState.root ?? ''"
+            :base="base"
             @open="openExternal"
             @open-local="emit('open-local', $event)"
+            @open-image="(picture) => openImageWindow(picture.path, picture.name)"
           />
           <ToolCall
             v-else-if="row.kind === 'tool'"

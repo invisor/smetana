@@ -215,6 +215,8 @@ export { writeSummary } from './git/writeSummary.js'
 // markdown
 export { default as Markdown } from './markdown/Markdown.vue'
 export { default as MarkdownInline } from './markdown/MarkdownInline.vue'
+export { default as MarkdownFigure } from './markdown/MarkdownFigure.vue'
+export { default as InlineFigureSvg } from './markdown/InlineFigureSvg.vue'
 
 // notifications
 export { default as NotificationCard } from './notifications/NotificationCard.vue'

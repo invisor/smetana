@@ -195,6 +195,7 @@ import {
   minimizeWindow,
   openDialogWindow,
   openExternal,
+  openImageWindow,
   openSettingsWindow,
   readAgentUsage,
   revealInFileManager,
@@ -221,6 +222,12 @@ import {
   switchTo
 } from '../stores/projects.js'
 import { gitState, loadBranches, loadHead } from '../stores/git.js'
+/* Figures in a task's prose read their file through `image_read`, and
+   `Markdown.vue` may not import this store itself — see `smReadImage`'s own
+   `provide` below. `TaskInspector.vue` opens one the same way `ConversationView.vue`
+   answers its own `open-image`, straight through `openImageWindow` rather than
+   forwarded, since neither panel owns a picture the way it owns a link. */
+import { readFigureImage } from '../stores/attachments.js'
 /* The compare window, which is a window rather than a panel: this view opens it
    and hears nothing back. Its state lives in that window's own webview
    (`stores/compare.js`), which is why nothing else of it is imported here. It
@@ -389,6 +396,12 @@ const props = defineProps({
    `ConversationView`, `UserMessage`, `AgentMessage` and `Reasoning` for a
    value none of them otherwise has a reason to know about. */
 provide('smCopyText', copyText)
+/* `smReadImage`, the same shape and for the same reason: a figure in a
+   task's prose is read off disk through `image_read`, and `Markdown.vue`
+   may not import `stores/attachments.js` any more than it may import Tauri
+   itself, since a library component knowing either exists is the thing this
+   whole `provide`/`inject` pair exists to avoid. */
+provide('smReadImage', readFigureImage)
 
 /* The two halves of the window's state that do change while it is open. The
    chrome itself does not — it is what the platform gave us, and it arrives as a
@@ -7056,14 +7069,21 @@ const toastStackStyle = {
 
                 <!-- A link in one of the issue's prose fields goes to the person's
                      own browser: the panel raises it, and this is where the app's
-                     one link-opening path is bound to it. -->
+                     one link-opening path is bound to it. `base` is the project
+                     root and never a session's own cwd — the inspector has no
+                     session behind it, `Markdown.vue`'s own header says why that
+                     is still a base worth giving a figure rather than none at
+                     all — and `open-image` is answered here directly, the same
+                     way `ConversationView.vue` answers its own. -->
                 <TaskInspector
                   v-if="inspectedIssue"
                   :issue="inspectedIssue"
                   :ui-status="toUiStatus(inspectedIssue.status)"
                   :copy-state="copyStateFor(inspectedIssue.id)"
+                  :base="filesState.root"
                   @open="openExternal"
                   @copy-id="copyTaskId"
+                  @open-image="(picture) => openImageWindow(picture.path, picture.name)"
                 />
 
                 <!-- Nothing picked on the board, which is where a project opens.

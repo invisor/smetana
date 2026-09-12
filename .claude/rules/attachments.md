@@ -13,6 +13,12 @@ paths:
   - "src/components/kanban/AttachmentStrip.vue"
   - "src/components/settings/StorageSettings.vue"
   - "src/components/settings/storage.js"
+  # The store's third and fourth consumers, since smetana-je5v: `image_read`'s
+  # own front-end wrapper, injected into these rather than imported by them —
+  # a figure's file comes from the same disk an attachment's does, through a
+  # command that mirrors `attachment_reopen` on purpose.
+  - "src/components/markdown/Markdown.vue"
+  - "src/components/markdown/MarkdownFigure.vue"
 ---
 
 # Attachments: pictures on a task nobody has filed yet
@@ -60,20 +66,34 @@ is what says when a draft may come back at all.
 true.** Clicking a thumbnail shows the picture whole in an OS window of its own —
 `src/views/ImageWindow.vue`, `?view=image`, opened by `window::image_window_open` and labelled
 `image`, one per app and re-aimed by `image:show` rather than rebuilt. That window calls exactly one
-thing here, `readAttachment(path)`: one `attachment_reopen`, the record handed straight back, and
-**nothing written to `attachmentsState`** — no list, no `lastError`, and above all no `watchDrops`.
-The invariant is untouched because a command is not a subscription: the list still belongs to the New
-task window alone, and nothing in the image window's webview can hear a drop or keep one.
+thing here, `readImagePath(path)`, which is `image_read` under a name that says what this window
+actually shows: not only a stored attachment any more, but any picture a click can name, including
+one an agent wrote into a task's prose (`src-tauri/src/attachments/figure.rs`, smetana-je5v). The
+path is always absolute by the time it reaches this window — a figure hands over the one `image_read`
+itself already resolved, and the New task window's own thumbnails carry absolute paths out of the
+store — so `image_read` is asked with no base at all, and it takes the path as it stands whichever
+door it came through. `attachment_reopen` is unchanged and still confined to `store_root()` by
+`cleanup::in_store`; its one remaining caller is `restorePaths`, above, for a draft's own thumbnails,
+where the record still has to say it came from the store rather than from anywhere on the disk. Read
+either way, the answer is **nothing written to `attachmentsState`** — no list, no `lastError`, and
+above all no `watchDrops`. The invariant is untouched because a command is not a subscription: the
+list still belongs to the New task window alone, and nothing in the image window's webview can hear a
+drop or keep one — and reading through a second command changes nothing about that, since neither one
+is a subscription either.
 
 **What travels to it is the path, and never the bytes.** A record's `url` is a `data:` URL of up to
 `MAX_IMAGE_BYTES` of base64: it fits in no URL, and putting it on the event channel would be eleven
 megabytes over IPC per click. So Rust percent-encodes the path and the name into the window's URL
-(`image_query`), the window reads the file itself, and `cleanup::in_store` confines that read exactly
-as it already confined the restore path — nothing new is allowed and no second check on a path was
-written. A file the Storage tab swept while the draft still names it is an ordinary outcome and the
-window draws an empty state carrying the name, which is why `readAttachment` rejects rather than
-swallowing the refusal the way `restorePaths` does: there is no list here for the rest of to arrive
-into. The strip itself opens nothing — it emits `view` with `{ path, name }` and `DialogWindow.vue`
+(`image_query`), and the window reads the file itself. What confines that read has changed with the
+command: a stored attachment's path is still checked against `cleanup::in_store` on the way in, since
+`restorePaths` still calls `attachment_reopen` for that case, but a path opened from a figure has
+nothing to confine it to — `figure.rs`'s own header says why there is no `resolve_within` there
+either, the source being an agent's prose and not this app's store. A file the Storage tab swept
+while the draft still names it, or a figure's own file moved or deleted like any file on a disk, is
+an ordinary outcome and the window draws an empty state carrying the name, which is why
+`readImagePath` rejects rather than swallowing the refusal the way `restorePaths` does: there is no
+list here for the rest of to arrive into. The strip itself opens nothing — it emits `view` with
+`{ path, name }` and `DialogWindow.vue`
 answers it beside `attach`, `files` and `remove`, so `AttachmentStrip.vue` stays drawable in
 `?view=gallery` with no store behind it. Before smetana-msxp the picture was an overlay pinned to
 `inset: 0`; once every dialog became a window of its own that meant the viewport of a 440-point

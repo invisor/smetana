@@ -731,10 +731,21 @@
   font-size:var(--text-2xs);
   fill:currentColor;
 }
-/* Caption row: the caption, and the control that opens the picture full size
-   in a window of its own. The row is always present — when the agent gives no
-   caption it still carries the control, and a figure without a way out of the
-   column is a figure a person cannot read. */
+/* Caption row: the caption, and, for a figure with a real file behind it, the
+   control that opens the picture full size in a window of its own. The row
+   is always present, whether or not either of the two is — `figcaption` is
+   unconditional in `MarkdownFigure.vue` for exactly that reason, empty where
+   the agent gave no caption, so this row keeps its height and its background
+   with or without a control next to it.
+
+   **The control is not on every figure any more, and that supersedes what
+   this comment said before smetana-je5v.** It used to hold the row up on its
+   own when there was no caption, on the reading that a figure with no way
+   out of the column is a figure a person cannot read; that stopped being
+   true once the control started opening a real file `image_read` resolved
+   rather than only the source already in the markup — a `data:` figure and a
+   validated inline `<svg>` have no such file, and `MarkdownFigure.vue` draws
+   no control for either, nor for one still loading or one that failed. */
 .sm-prose figure[data-figure] > figcaption{
   grid-area:2 / 1;
   align-self:center;

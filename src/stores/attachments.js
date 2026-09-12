@@ -162,6 +162,44 @@ export async function readAttachment(path) {
   }
 }
 
+/* An illustration an agent wrote into its own prose, read by path rather than
+   out of the attachment store — `image_read`, beside `attachment_reopen`
+   above and answering with the same record shape, but confined to nothing:
+   the source is wherever the agent's `![…](src)` node pointed, in the
+   session's own worktree, in the project, or anywhere else on the machine.
+   `figureSource.js`'s own gate has already refused a scheme, a remote address
+   and a network path before this is ever called; what is left is always
+   meant as a filesystem path, relative to `base` or absolute as it stands.
+
+   `Markdown.vue` never imports this file directly — a library component may
+   not know Tauri exists — so this is handed down as `smReadImage`,
+   `provide`d by `views/DesktopApp.vue` and `views/Gallery.vue` the same way
+   both already provide `smCopyText` for the code block's copy button.
+   `ImageWindow.vue` is this function's second caller, through
+   `readImagePath` below, and it is the reason nothing here rejects with the
+   refusal swallowed: whoever calls this owns telling a person what happened,
+   the same rule `readAttachment` above already keeps. */
+export async function readFigureImage(base, src) {
+  try {
+    return record(await invoke('image_read', { base, src }))
+  } catch (err) {
+    throw new Error(messageOf(err))
+  }
+}
+
+/* `ImageWindow.vue`'s own reader. What reaches that window is always an
+   absolute path already — a figure hands over the one `image_read` itself
+   resolved, and the New task window's own thumbnails carry absolute paths
+   out of the store — so `base` is irrelevant and left empty: `image_read`
+   takes an absolute `src` as it stands, whatever `base` says. This is the
+   whole reason `ImageWindow.vue` no longer calls `attachment_reopen`: that
+   command is confined to `store_root()`, and a picture opened from a task's
+   prose almost never lives there. See `.claude/rules/attachments.md` for the
+   rest of what that move changes and what it leaves alone. */
+export async function readImagePath(path) {
+  return readFigureImage('', path)
+}
+
 /* Files already on disk: the picker's answer and a drop's paths.
 
    One at a time and in order, not Promise.all: a person who picked four files

@@ -423,6 +423,50 @@ describe('images attached to a task that has not been filed', () => {
     )
   })
 
+  /* `image_read`'s own wrapper, beside `attachment_reopen`'s above: same
+     record shape, same "answers and keeps nothing" contract, and the one
+     that actually reads a figure's file — not confined to the attachment
+     store, and given a base to resolve a relative source against. */
+  it('a figure image is read with its base and comes back in the same shape', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('image_read', ({ base, src }) => {
+      expect(base).toBe('/worktree/agents/fix-1')
+      expect(src).toBe('./fig.png')
+      return stored('fig.png')
+    })
+
+    const picture = await stores.attachments.readFigureImage('/worktree/agents/fix-1', './fig.png')
+
+    expect(ipc.calls('image_read')).toEqual([{ base: '/worktree/agents/fix-1', src: './fig.png' }])
+    expect(picture).toEqual({
+      path: '/data/attachments/fig.png',
+      name: 'fig.png',
+      bytes: 2,
+      url: 'data:image/png;base64,AQI='
+    })
+  })
+
+  it('a figure image that could not be read rejects with the reason', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.fail('image_read', { kind: 'notAnImage', message: '/worktree/notes.txt is not a PNG, JPEG, GIF or WebP image' })
+
+    await expect(stores.attachments.readFigureImage('/worktree', './notes.txt')).rejects.toThrow(
+      'is not a PNG, JPEG, GIF or WebP image'
+    )
+  })
+
+  /* `ImageWindow.vue`'s own reader: an absolute path, no base to speak of —
+     `image_read` takes an absolute `src` as it stands, whatever `base` says,
+     so this is the empty string rather than anything computed. */
+  it("the image window's reader passes no base for the already-absolute path it is given", async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('image_read', () => stored('fig.png'))
+
+    await stores.attachments.readImagePath('/worktree/agents/fix-1/fig.png')
+
+    expect(ipc.calls('image_read')).toEqual([{ base: '', src: '/worktree/agents/fix-1/fig.png' }])
+  })
+
   /* One picture gone does not take the others with it: the window comes back
      with what is still there, and the line says what did not. */
   it('the rest of a restored list still comes back around a missing one', async () => {

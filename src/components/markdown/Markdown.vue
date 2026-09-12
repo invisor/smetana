@@ -59,10 +59,53 @@
    `navigator.clipboard` wants a secure context and a gesture the webview does
    not always agree it had, a failure with no visible cause in the packaged
    app alone — so both `provide('smCopyText', copyText)`, and the default
-   below is what a future owner falls back to until it does the same. */
+   below is what a future owner falls back to until it does the same.
+
+   An `image` block is `MarkdownFigure.vue`'s, section 7's `figure[data-figure]`
+   whole — the mat, the preferred inline `<svg>` form, the loading and the
+   failure placeholders. `groups` below is the one thing this file still owns
+   about it: folding a run of consecutive `image` blocks into the wrapping
+   `div[data-figures]` row section 7 asks for, since that grouping is about the
+   turn's layout and not about any one figure. Which sources an illustration
+   may even draw, and what a source or an inline `<svg>` that fails the render
+   check draws *instead* of the figure it asked for, is `figureSource.js`'s —
+   see `MarkdownFigure.vue`'s own header for why that is not simply `link()`'s
+   `OPENABLE` reused.
+
+   `base` is the second path a figure needs beside `root`: `root` is the
+   active project's own path, used to build a *local link's* `href`; `base` is
+   where a *relative image source* resolves from, and the two answer different
+   questions even though they often carry the same value. A link is written
+   against the project the whole task lives in, and stays the project's root
+   whoever is talking; a picture is written against the directory an agent was
+   sitting in when it typed `![x](./fig.png)` — the session's own cwd, a
+   worktree more often than not — and the task inspector has no session at
+   all, only the project. `base` therefore defaults to `root` rather than to
+   `''`: every caller of this file already has a `root` to give it, and the
+   one that does not want a working local link (the inspector) still has an
+   ordinary project directory a relative image path may sensibly be read
+   against. A caller with an actual session cwd passes it as `base` explicitly
+   and keeps `root` as the project's own path for its links —
+   `ConversationView.vue` does exactly that, off `stores/conversation.js`'s
+   `Attached::cwd`, which is a worktree rather than the project root for a
+   resumed session. The task inspector is still the one caller with no
+   session at all, and reads its figures against the project root instead,
+   the fallback above exists for.
+
+   The bytes themselves are never this file's to fetch, and `readInlineSvg`
+   aside, this component does not even decide whether a picture loaded: that
+   is `MarkdownFigure.vue`'s own state machine, fed by a function rather than
+   a store. `inject('smReadImage', …)`, the same shape as `smCopyText` right
+   above and for the same reason — a library component may not import
+   `stores/attachments.js`, which knows Tauri exists, so the two views that
+   provide `smCopyText` provide this alongside it, and the default here is a
+   plain rejection: a browser has no way to open an arbitrary path on the
+   machine's disk at all, unlike a clipboard, which has an ordinary web
+   API to fall back to. */
 import { computed, inject } from 'vue'
 import Icon from '../core/Icon.vue'
 import MarkdownInline from './MarkdownInline.vue'
+import MarkdownFigure from './MarkdownFigure.vue'
 import { parseMarkdown } from './markdown.js'
 import { useCopyFeedback } from '../core/copyFeedback.js'
 
@@ -77,12 +120,44 @@ const props = defineProps({
      this file draws and to the recursive calls below, since a quote or a list
      item is the same prose at one remove and owes its own links the same
      answer to "is there anything here that can open one". */
-  root: { type: String, default: '' }
+  root: { type: String, default: '' },
+  /* Where a relative illustration source resolves from — see this file's own
+     header for why it is not simply `root`. `''` is not a real default: the
+     computed below falls back to `root` the moment this prop is left unset,
+     so `''` only takes effect for a caller that passes it explicitly, the way
+     an empty `root` means "no project" for a link. */
+  base: { type: String, default: '' }
 })
 
-const emit = defineEmits(['open', 'open-local'])
+const emit = defineEmits(['open', 'open-local', 'open-image'])
 
 const tree = computed(() => props.blocks ?? parseMarkdown(props.text))
+
+/* See this file's own header. */
+const effectiveBase = computed(() => props.base || props.root)
+
+/* `markdown.js` hands over a flat run of blocks, with two adjacent `image`
+   blocks simply sitting next to each other — nothing in the parser groups
+   them, because grouping is a fact about how the *renderer* lays a turn out,
+   not about the source. Section 7 of the contract draws two figures in one
+   turn inside `div[data-figures]`, a wrapping flex row, and a lone figure
+   bare — so this is the one place the flat list becomes something the
+   template can dispatch on directly, folding every run of consecutive
+   `image` blocks into one `figures` entry and leaving everything else as an
+   ordinary `single` one. */
+const groups = computed(() => {
+  const entries = []
+  for (const block of tree.value) {
+    if (block.type === 'image') {
+      const last = entries[entries.length - 1]
+      if (last && last.type === 'figures') last.blocks.push(block)
+      else entries.push({ type: 'figures', blocks: [block] })
+    } else {
+      entries.push({ type: 'single', block })
+    }
+  }
+  return entries
+})
 
 /* `data-task` lives on the `<ul>`, not per item, so it is decided once for the
    whole list, off a single item — `markdown.js`'s `takeList` is what actually
@@ -114,6 +189,14 @@ async function browserCopyText(text) {
 
 const writeCode = inject('smCopyText', browserCopyText)
 
+/* See this file's own header for why a browser's own answer is a plain
+   refusal rather than a partial implementation of one. */
+async function browserReadImage(base, src) {
+  throw new Error('reading a picture from a path needs the desktop app')
+}
+
+const readImage = inject('smReadImage', browserReadImage)
+
 /* The contract's own confirmation window — see `kanban/copyId.js`'s header
    for why this is not `COPIED_MS`. */
 const COPY_CODE_MS = 1600
@@ -135,136 +218,166 @@ function isCodeCopied(index) {
 </script>
 
 <template>
-  <template v-for="(block, index) in tree" :key="index">
-    <component :is="`h${block.level}`" v-if="block.type === 'heading'">
-      <MarkdownInline
-        :nodes="block.children"
-        :root="root"
-        @open="emit('open', $event)"
-        @open-local="emit('open-local', $event)"
+  <template v-for="(group, index) in groups" :key="index">
+    <!-- A run of one or more illustrations. A lone one stays bare, the way
+         every other block does; two or more share the wrapping row section 7
+         asks for, `div[data-figures]`, which is a fact about the *run* and
+         not about any one figure in it. -->
+    <template v-if="group.type === 'figures'">
+      <div v-if="group.blocks.length > 1" data-figures>
+        <MarkdownFigure
+          v-for="(figure, at) in group.blocks"
+          :key="at"
+          :block="figure"
+          :base="effectiveBase"
+          :read-image="readImage"
+          @open-image="emit('open-image', $event)"
+        />
+      </div>
+      <MarkdownFigure
+        v-else
+        :block="group.blocks[0]"
+        :base="effectiveBase"
+        :read-image="readImage"
+        @open-image="emit('open-image', $event)"
       />
-    </component>
+    </template>
 
-    <p v-else-if="block.type === 'paragraph'">
-      <MarkdownInline
-        :nodes="block.children"
-        :root="root"
-        @open="emit('open', $event)"
-        @open-local="emit('open-local', $event)"
-      />
-    </p>
-
-    <figure v-else-if="block.type === 'code'" data-code :data-lang="block.lang || undefined">
-      <figcaption v-if="block.lang">{{ block.lang }}</figcaption>
-      <button
-        type="button"
-        data-copy
-        :data-state="isCodeCopied(index) ? 'copied' : 'idle'"
-        :aria-label="isCodeCopied(index) ? 'Copied' : 'Copy code'"
-        @click="copyCode(index, block.text)"
-      >
-        <Icon name="copy" data-icon="copy" />
-        <Icon name="check" data-icon="check" />
-        <span>{{ isCodeCopied(index) ? 'Copied' : 'Copy' }}</span>
-      </button>
-      <pre><code>{{ block.text }}</code></pre>
-    </figure>
-
-    <hr v-else-if="block.type === 'rule'" />
-
-    <blockquote v-else-if="block.type === 'quote'">
-      <Markdown
-        :blocks="block.blocks"
-        :root="root"
-        @open="emit('open', $event)"
-        @open-local="emit('open-local', $event)"
-      />
-    </blockquote>
-
-    <component
-      :is="block.ordered ? 'ol' : 'ul'"
-      v-else-if="block.type === 'list'"
-      :start="block.ordered && block.start !== 1 ? block.start : undefined"
-      :data-task="isTaskList(block) ? '' : undefined"
-    >
-      <li
-        v-for="(entry, at) in block.items"
-        :key="at"
-        :data-checked="entry.checked ? '' : undefined"
-      >
-        <Markdown
-          :blocks="entry.blocks"
+    <template v-else>
+      <component :is="`h${group.block.level}`" v-if="group.block.type === 'heading'">
+        <MarkdownInline
+          :nodes="group.block.children"
           :root="root"
           @open="emit('open', $event)"
           @open-local="emit('open-local', $event)"
         />
-      </li>
-    </component>
+      </component>
 
-    <dl v-else-if="block.type === 'dl'">
-      <template v-for="(item, at) in block.items" :key="at">
-        <dt>
-          <MarkdownInline
-            :nodes="item.term"
+      <p v-else-if="group.block.type === 'paragraph'">
+        <MarkdownInline
+          :nodes="group.block.children"
+          :root="root"
+          @open="emit('open', $event)"
+          @open-local="emit('open-local', $event)"
+        />
+      </p>
+
+      <figure v-else-if="group.block.type === 'code'" data-code :data-lang="group.block.lang || undefined">
+        <figcaption v-if="group.block.lang">{{ group.block.lang }}</figcaption>
+        <button
+          type="button"
+          data-copy
+          :data-state="isCodeCopied(index) ? 'copied' : 'idle'"
+          :aria-label="isCodeCopied(index) ? 'Copied' : 'Copy code'"
+          @click="copyCode(index, group.block.text)"
+        >
+          <Icon name="copy" data-icon="copy" />
+          <Icon name="check" data-icon="check" />
+          <span>{{ isCodeCopied(index) ? 'Copied' : 'Copy' }}</span>
+        </button>
+        <pre><code>{{ group.block.text }}</code></pre>
+      </figure>
+
+      <hr v-else-if="group.block.type === 'rule'" />
+
+      <blockquote v-else-if="group.block.type === 'quote'">
+        <Markdown
+          :blocks="group.block.blocks"
+          :root="root"
+          :base="effectiveBase"
+          @open="emit('open', $event)"
+          @open-local="emit('open-local', $event)"
+          @open-image="emit('open-image', $event)"
+        />
+      </blockquote>
+
+      <component
+        :is="group.block.ordered ? 'ol' : 'ul'"
+        v-else-if="group.block.type === 'list'"
+        :start="group.block.ordered && group.block.start !== 1 ? group.block.start : undefined"
+        :data-task="isTaskList(group.block) ? '' : undefined"
+      >
+        <li
+          v-for="(entry, at) in group.block.items"
+          :key="at"
+          :data-checked="entry.checked ? '' : undefined"
+        >
+          <Markdown
+            :blocks="entry.blocks"
             :root="root"
+            :base="effectiveBase"
             @open="emit('open', $event)"
             @open-local="emit('open-local', $event)"
+            @open-image="emit('open-image', $event)"
           />
-        </dt>
-        <dd v-for="(definition, d) in item.definitions" :key="d">
-          <MarkdownInline
-            :nodes="definition"
-            :root="root"
-            @open="emit('open', $event)"
-            @open-local="emit('open-local', $event)"
-          />
-        </dd>
-      </template>
-    </dl>
+        </li>
+      </component>
 
-    <!-- The wrapper owns the border, the radius and the horizontal scroll
-         (`markup-contract.md`, section 3), so the table itself never has to
-         clip anything and the panel never has to grow. `data-wide` is set off
-         the column count alone — more than four — which is the one thing this
-         file knows ahead of layout; `sm-prose.css` is what turns that into
-         `width:max-content` against `--prose-table-wide-min`. `block.align`
-         is `null` for a column with no opinion, and `?? undefined` is what
-         keeps that a missing attribute rather than `data-align="null"`. -->
-    <div data-table-scroll v-else-if="block.type === 'table'">
-      <table :data-wide="block.head.length > 4 ? '' : undefined">
-        <thead>
-          <tr>
-            <th
-              v-for="(cell, column) in block.head"
-              :key="column"
-              :data-align="block.align[column] ?? undefined"
-            >
-              <MarkdownInline
-                :nodes="cell"
-                :root="root"
-                @open="emit('open', $event)"
-                @open-local="emit('open-local', $event)"
-              />
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(row, r) in block.rows" :key="r">
-            <td
-              v-for="(cell, column) in row"
-              :key="column"
-              :data-align="block.align[column] ?? undefined"
-            >
-              <MarkdownInline
-                :nodes="cell"
-                :root="root"
-                @open="emit('open', $event)"
-                @open-local="emit('open-local', $event)"
-              />
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+      <dl v-else-if="group.block.type === 'dl'">
+        <template v-for="(item, at) in group.block.items" :key="at">
+          <dt>
+            <MarkdownInline
+              :nodes="item.term"
+              :root="root"
+              @open="emit('open', $event)"
+              @open-local="emit('open-local', $event)"
+            />
+          </dt>
+          <dd v-for="(definition, d) in item.definitions" :key="d">
+            <MarkdownInline
+              :nodes="definition"
+              :root="root"
+              @open="emit('open', $event)"
+              @open-local="emit('open-local', $event)"
+            />
+          </dd>
+        </template>
+      </dl>
+
+      <!-- The wrapper owns the border, the radius and the horizontal scroll
+           (`markup-contract.md`, section 3), so the table itself never has to
+           clip anything and the panel never has to grow. `data-wide` is set off
+           the column count alone — more than four — which is the one thing this
+           file knows ahead of layout; `sm-prose.css` is what turns that into
+           `width:max-content` against `--prose-table-wide-min`. `block.align`
+           is `null` for a column with no opinion, and `?? undefined` is what
+           keeps that a missing attribute rather than `data-align="null"`. -->
+      <div data-table-scroll v-else-if="group.block.type === 'table'">
+        <table :data-wide="group.block.head.length > 4 ? '' : undefined">
+          <thead>
+            <tr>
+              <th
+                v-for="(cell, column) in group.block.head"
+                :key="column"
+                :data-align="group.block.align[column] ?? undefined"
+              >
+                <MarkdownInline
+                  :nodes="cell"
+                  :root="root"
+                  @open="emit('open', $event)"
+                  @open-local="emit('open-local', $event)"
+                />
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, r) in group.block.rows" :key="r">
+              <td
+                v-for="(cell, column) in row"
+                :key="column"
+                :data-align="group.block.align[column] ?? undefined"
+              >
+                <MarkdownInline
+                  :nodes="cell"
+                  :root="root"
+                  @open="emit('open', $event)"
+                  @open-local="emit('open-local', $event)"
+                />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </template>
   </template>
 </template>

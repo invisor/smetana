@@ -273,24 +273,23 @@ Two accepted forms, and the difference between them **is** the answer to the
 dark-theme failure case.
 
 ```html
-<!-- raster: always matted -->
+<!-- raster read off disk through image_read: matted, and the one form with an expand control -->
 <figure data-figure>
   <img src="assets/fig-latency.png" width="680" height="360" alt="…">
   <figcaption>Notary latency, 24 h</figcaption>
   <button type="button" data-expand aria-label="Open full size"><svg …></svg></button>
 </figure>
 
-<!-- token-drawn vector: no mat, follows the theme -->
+<!-- token-drawn vector: no mat, follows the theme, no expand control — see below -->
 <figure data-figure>
   <svg viewBox="0 0 320 60" role="img" aria-label="Pipeline: build, sign, notarise, staple">…</svg>
   <figcaption>Release pipeline.</figcaption>
-  <button type="button" data-expand aria-label="Open full size"><svg …></svg></button>
 </figure>
 
 <!-- loading / failed -->
 <figure data-figure data-state="loading"><div data-placeholder></div><figcaption>Queue depth, 7 d</figcaption></figure>
 <figure data-figure data-state="error">
-  <div data-placeholder><strong>Failed to render</strong><span>assets/queue-depth.svg · unexpected token at line 4</span></div>
+  <div data-placeholder><strong>Failed to render</strong><span>unexpected token at line 4 · assets/queue-depth.svg</span></div>
   <figcaption>Queue depth, 7 d</figcaption>
 </figure>
 ```
@@ -305,16 +304,36 @@ dark-theme failure case.
   stylesheet stops guessing. (Text inside an agent-drawn diagram is styled by
   us: mono, `--text-2xs`, `fill:currentColor`.)
 - **The frame** is a 2-row grid: the picture, then a caption row. The caption
-  row is always present; `figcaption` is optional. A figure with no way out of
-  the column is a figure a person cannot read, so the row always carries the
-  expand control, right-aligned, in the same family as the copy button.
+  row is always present; `figcaption` is optional. **Superseded by the
+  decision below**: this paragraph originally went on to say the row always
+  carries the expand control, right-aligned, in the same family as the copy
+  button, whatever the figure — read that as history rather than as the
+  current rule.
+- **The expand control is not the row's floor any more, and it does not
+  appear on every figure.** Decided when smetana-je5v was unparked, once the
+  renderer actually read a path's bytes rather than only accepting the
+  markup: the control opens the file `image_read` resolved, in the app's
+  image window, and there is a file behind it for exactly one of these forms
+  — a raster source read off disk by path. A `data:` source, raster or
+  vector, and a validated inline `<svg>`, carry no such file and draw no
+  control; neither does a figure still loading or one that failed, since
+  `image_read` has not answered yet or answered with a refusal rather than a
+  path. The frame is unaffected — see the loading and failed examples above,
+  which never carried the control at all — and the caption row keeps its
+  height and background with or without one: `MarkdownFigure.vue` renders
+  `<figcaption>` unconditionally for exactly this reason, empty where the
+  agent gave no caption, so the row is never held up by a control that may
+  not be there.
 - **Wider than the panel**: `width:100%`, `height:auto` — it scales to fit and
   `data-expand` opens it full size in a window of its own.
 - **Loading**: `div[data-placeholder]` at `--prose-figure-loading-h`, pulsing on
   `sm-skeleton`. The frame and caption are already correct, so nothing jumps
   when the picture arrives.
 - **Failed**: the same placeholder says what happened and where, in mono, with
-  the heading in `--status-failed-fg`. The frame stays.
+  the heading in `--status-failed-fg`. The frame stays. The reason leads and
+  the source follows — a `data:` source can run to hundreds of characters and
+  clip the line if it came first, where the reason is the part worth reading
+  at a glance.
 - **Two in a turn**: `div[data-figures]` — a wrapping flex row,
   `flex:1 1 var(--prose-figure-min)`. They wrap rather than crush below the
   minimum.

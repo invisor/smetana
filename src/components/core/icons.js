@@ -61,6 +61,7 @@ import {
   Layers,
   LoaderCircle,
   Lock,
+  Maximize2,
   MessageCircleQuestion,
   MessageSquare,
   Milestone,
@@ -311,6 +312,14 @@ export const iconNodes = {
   gauge: Gauge,
   inbox: Inbox,
   'columns-3': Columns3,
+
+  // conversation prose
+  /* An illustration's "open full size" control, in `markdown/MarkdownFigure.vue`.
+     Registered here and read out by `iconNodes` rather than through `Icon.vue`:
+     that component's own root carries a `style` attribute for its flex sizing,
+     and the markup contract section 9 refuses one anywhere inside `.sm-prose`
+     — see that file's header for the rest of the reasoning. */
+  'maximize-2': Maximize2,
 
   // issue types
   bug: Bug,

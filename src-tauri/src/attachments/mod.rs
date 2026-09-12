@@ -51,6 +51,7 @@
 //! coming in can climb a directory, hide behind a dot or need quoting.
 
 mod cleanup;
+pub mod figure;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -224,6 +225,13 @@ pub enum AttachmentError {
     /// anything else is a mistake rather than a refusal a person can act on.
     #[error("{0} is not in this app's attachment store")]
     NotStored(String),
+    /// `image_read`'s own refusal, ahead of any read at all: `figure.rs`'s
+    /// `is_network_path` caught a UNC path (`\\host\…`) or its forward-slash
+    /// twin (`//host/…`) — a network read this offline-first app refuses the
+    /// same way `figureSource.js`'s front-end gate already refuses one before
+    /// this command is ever asked.
+    #[error("{0} names a network location, and this app reads a local file only")]
+    NetworkPath(String),
     /// Only the tidy-up ever sends this. Which pictures are still wanted is
     /// read off a project's board, so with no project open the question has no
     /// answer — and answering "nothing to delete" would be a guess dressed as a
@@ -248,6 +256,7 @@ impl AttachmentError {
             Self::TooLarge { .. } => "tooLarge",
             Self::NotAnImage(_) => "notAnImage",
             Self::NotStored(_) => "notStored",
+            Self::NetworkPath(_) => "networkPath",
             Self::NoProject => "noProject",
             Self::NoBoard => "noBoard",
             Self::Io(_) => "io",

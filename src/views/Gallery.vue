@@ -137,6 +137,7 @@ import { MOCK_TREE } from '../stores/mockBackend.js'
    inspector's raise `copy-id` and know nothing about a clipboard, so the thing
    drawing them has to answer — here as in `DesktopApp.vue`. */
 import { copyText, openExternal } from '../stores/app.js'
+import { readFigureImage } from '../stores/attachments.js'
 /* The harness catalogue, so the agent picker on this page is the one the
    settings window draws rather than a second list written out here. Read once
    at startup in `main.js`; in a browser `mockBackend.js` answers it. */
@@ -154,6 +155,13 @@ import { documentTheme } from '../documentTheme.js'
    would go unchecked here exactly as the hazard `useCopyFeedback`'s own
    header warns about. */
 provide('smCopyText', copyText)
+/* `smReadImage`, provided beside it for the same reason: most of this page's
+   own figure samples are `data:` sources and never call it, but
+   `MARKDOWN_FIGURE_PATH_SAMPLE` below is a bare path and does — a library
+   component's one path to Rust must still be the real one here, the same
+   argument the copy button's provide makes, and `mockBackend.js`'s own
+   `image_read` fixture is what answers it in a browser. */
+provide('smReadImage', readFigureImage)
 
 /* Two attachments for the strip and for the dialog above it. Eight-pixel PNGs
    written out as data URLs, which is exactly the shape `attachments.js` builds
@@ -1790,6 +1798,82 @@ const MARKDOWN_SAMPLE = [
   '',
   'Filed under smetana-29j.'
 ].join('\n')
+
+/* Section 7's raster case, and the whole reason the mat token is fixed
+   across both themes: a PNG carries its own white ground, and the failure
+   this gallery has to show is that ground surviving intact in the dark
+   theme rather than reading as a hole in the panel. A tiny solid-white PNG
+   (16×10) built at import time — this repository carries no binary fixtures,
+   and one pixel's worth of colour says everything a bigger picture would. */
+const FIGURE_PNG_SRC =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAKCAIAAAAy3EnLAAAAEklEQVR4nGP4TyJgGNUwNDUAALFR3jDZ4RWPAAAAAElFTkSuQmCC'
+
+/* Section 7's preferred form: a diagram that paints only through
+   `currentColor` and `var()` tokens, so `MarkdownFigure.vue` draws it with no
+   mat at all and it recolours itself on a theme switch the same way any other
+   piece of chrome does. `figureSource.js`'s `readInlineSvg` is what checks
+   this before it ever reaches the panel — see that module's header. The
+   caption matches the contract's own example verbatim. */
+const FIGURE_PIPELINE_SVG = [
+  '<svg viewBox="0 0 320 60" role="img" aria-label="Pipeline: build, sign, notarise, staple">',
+  '<rect x="4" y="18" width="60" height="24" fill="none" stroke="currentColor"/>',
+  '<text x="14" y="34" fill="var(--text-secondary)">build</text>',
+  '<line x1="64" y1="30" x2="84" y2="30" stroke="currentColor"/>',
+  '<rect x="84" y="18" width="60" height="24" fill="none" stroke="currentColor"/>',
+  '<text x="96" y="34" fill="var(--text-secondary)">sign</text>',
+  '<line x1="144" y1="30" x2="164" y2="30" stroke="currentColor"/>',
+  '<rect x="164" y="18" width="76" height="24" fill="none" stroke="currentColor"/>',
+  '<text x="172" y="34" fill="var(--text-secondary)">notarise</text>',
+  '<line x1="240" y1="30" x2="260" y2="30" stroke="currentColor"/>',
+  '<rect x="260" y="18" width="56" height="24" fill="none" stroke="currentColor"/>',
+  '<text x="268" y="34" fill="var(--text-secondary)">staple</text>',
+  '</svg>'
+].join('')
+const FIGURE_SVG_SRC = `data:image/svg+xml,${encodeURIComponent(FIGURE_PIPELINE_SVG)}`
+
+/* The render check failing, reached through the real branch rather than
+   faked: a hard-coded hex is exactly what `readInlineSvg` refuses, so this is
+   the same placeholder a real agent-drawn diagram with a stray colour would
+   produce — not a second, gallery-only error path. */
+const FIGURE_BLOCKED_SVG = '<svg viewBox="0 0 24 24"><rect width="10" height="10" fill="#ff0000"/></svg>'
+const FIGURE_ERROR_SRC = `data:image/svg+xml,${encodeURIComponent(FIGURE_BLOCKED_SVG)}`
+
+/* Raster, vector, and the render check failing, each its own turn so the
+   frame around each is easy to find. */
+const MARKDOWN_FIGURE_RASTER_SAMPLE = `![Notary latency, 24 h](${FIGURE_PNG_SRC})`
+const MARKDOWN_FIGURE_VECTOR_SAMPLE = `![Release pipeline](${FIGURE_SVG_SRC})`
+const MARKDOWN_FIGURE_ERROR_SAMPLE = `![Queue depth, 7 d](${FIGURE_ERROR_SRC})`
+
+/* Two image lines with no blank line between them, `markdown.js`'s own case
+   for "the same run" — `Markdown.vue`'s `groups` folds them into one
+   `div[data-figures]` row rather than two bare figures. */
+const MARKDOWN_FIGURE_PAIR_SAMPLE = [
+  `![Notary latency, 24 h](${FIGURE_PNG_SRC})`,
+  `![Release pipeline](${FIGURE_SVG_SRC})`
+].join('\n')
+
+/* A bare path rather than a `data:` source — the one figure on this page that
+   actually reaches `image_read`, through `smReadImage` (`provide`d above) and
+   `mockBackend.js`'s own fixture for it, rather than resolving inside the
+   browser the way every other sample here does. It is what makes the expand
+   button checkable at all: that control exists only for a figure `image_read`
+   answered for, never for a `data:` source or a validated inline `<svg>`
+   (`MarkdownFigure.vue`'s own header), so the raster and vector samples above
+   can never draw one. */
+const MARKDOWN_FIGURE_PATH_SAMPLE = '![A screenshot on disk](./assets/fig-path-demo.png)'
+
+/* `data-state="loading"` has no markdown spelling — nothing in a task's prose
+   ever asks for it, since it is the shape a figure holds for the moment
+   between the frame existing and a real answer resolving, which
+   `MarkdownFigure.vue` reaches through `readImage`/an `Image` probe rather
+   than through any prop this page could set. So, like `kbd`/`small` above,
+   it is written out by hand: the one other place in this file that draws
+   prose without going through `Markdown`. No button in it, and that is not
+   an omission — `MarkdownFigure.vue`'s own `showExpand` requires a resolved
+   path, which a loading figure by definition does not have yet, so the real
+   component never draws one here either; the icon that control uses is
+   checkable instead on `MARKDOWN_FIGURE_PATH_SAMPLE`'s own figure below,
+   drawn through the real component. */
 
 /* The two breeds of link, section 5 of the markup contract: an external one,
    leaving for the person's own browser, and a local one, opened in this app.
@@ -3516,6 +3600,74 @@ const menuTargetStyle = {
                 Press <kbd>⌘</kbd>+<kbd>K</kbd> to open the palette.
                 <small>Works from anywhere in the app.</small>
               </p>
+            </article>
+          </div>
+        </div>
+      </div>
+      <!-- Section 7's figures: raster on the mat, the preferred inline `<svg>`
+           form, the render check failing, a path read through `image_read`,
+           and two in a row wrapped into `div[data-figures]` — every one of
+           them reached through the real `Markdown` pipeline and
+           `figureSource.js`'s own rules, not faked. `data-state="loading"` is
+           the one exception, and the comment above
+           `MARKDOWN_FIGURE_PATH_SAMPLE` says why. -->
+      <div :style="{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-6)', alignItems: 'flex-start' }">
+        <div :style="{ width: '320px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown :text="MARKDOWN_FIGURE_RASTER_SAMPLE" @open-image="() => {}" />
+            </article>
+          </div>
+        </div>
+        <div :style="{ width: '320px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown :text="MARKDOWN_FIGURE_VECTOR_SAMPLE" @open-image="() => {}" />
+            </article>
+          </div>
+        </div>
+        <div :style="{ width: '320px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown :text="MARKDOWN_FIGURE_ERROR_SAMPLE" @open-image="() => {}" />
+            </article>
+          </div>
+        </div>
+        <div :style="{ width: '320px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown :text="MARKDOWN_FIGURE_PAIR_SAMPLE" @open-image="() => {}" />
+            </article>
+          </div>
+        </div>
+        <!-- The one figure on this page read through `image_read` rather than
+             resolved as a `data:` source — see `MARKDOWN_FIGURE_PATH_SAMPLE`'s
+             own comment. Its expand button is the only one this page can draw
+             at all; `@open-image` is a no-op like the samples above it, since
+             `image_window_open` opens a real OS window this harness has
+             nowhere to check the result of. -->
+        <div :style="{ width: '320px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown :text="MARKDOWN_FIGURE_PATH_SAMPLE" @open-image="() => {}" />
+            </article>
+          </div>
+        </div>
+        <!-- `data-state="loading"` has no markdown spelling, so this is
+             written out by hand rather than reached through `Markdown` — but
+             the shape still has to match what `MarkdownFigure.vue` actually
+             draws while `image_read` has not answered yet: no button, since
+             `showExpand` requires a resolved path, which a loading figure by
+             definition does not have. The expand control's own icon is
+             checkable instead on the path-backed figure above, drawn through
+             the real component rather than copied out by hand here. -->
+        <div :style="{ width: '320px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <figure data-figure data-state="loading">
+                <div data-placeholder></div>
+                <figcaption>Queue depth, 7 d</figcaption>
+              </figure>
             </article>
           </div>
         </div>
