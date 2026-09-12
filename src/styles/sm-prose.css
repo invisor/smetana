@@ -597,7 +597,10 @@
   background:var(--prose-live);
   animation:sm-pulse var(--dur-pulse) var(--ease-in-out) infinite;
 }
-.sm-prose div[data-activity="waiting"]{ color:var(--text-secondary) }
+/* Waiting and streaming read as the one condition they are — a turn in
+   flight, the words beside the strip changing rather than its colour. */
+.sm-prose div[data-activity="waiting"],
+.sm-prose div[data-activity="streaming"]{ color:var(--text-secondary) }
 .sm-prose div[data-activity] > time{
   margin-left:auto;
   font-family:var(--font-mono);

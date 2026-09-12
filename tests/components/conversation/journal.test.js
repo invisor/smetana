@@ -252,6 +252,162 @@ describe('the journal as rows', () => {
   })
 })
 
+/* **Streaming (smetana-6we6)**: `text-delta` is `EventKind::TextDelta`, one
+   incremental piece of a reply, never accumulated on the Rust side — this
+   fold is what stitches a run of them into one growing `agent` row, and what
+   closes it, on the wire decision this task made and `journal.js`'s own
+   header carries in full. */
+describe('a streamed reply', () => {
+  it('stitches a run of deltas into one growing row, marked streaming', () => {
+    const rows = journalRows([
+      event(1, 'text-delta', { text: 'The identity is read once' }),
+      event(2, 'text-delta', { text: ' and passed down' })
+    ])
+
+    expect(rows).toEqual([
+      { key: 1, kind: 'agent', text: 'The identity is read once and passed down', streaming: true }
+    ])
+  })
+
+  /* The closing `text` is not a second row: the key stays the first delta's
+     own, so nothing here reflows when the reply finishes, and the text is the
+     wire's own authoritative copy rather than the concatenation — cheap
+     insurance against the two ever drifting even though they agree today.
+     `streaming` stays on the row at `false` rather than being deleted: a
+     truthiness check reads it exactly like a row that never streamed at all,
+     which is the property the markup contract asks for; the row itself is
+     free to remember that it once did. */
+  it('closes a streamed reply on the whole text event, replacing the text and dropping streaming', () => {
+    const rows = journalRows([
+      event(1, 'text-delta', { text: 'The identity is read once' }),
+      event(2, 'text-delta', { text: ' and passed down' }),
+      event(3, 'text', { text: 'The identity is read once and passed down as `root`.' })
+    ])
+
+    expect(rows).toEqual([
+      {
+        key: 1,
+        kind: 'agent',
+        text: 'The identity is read once and passed down as `root`.',
+        streaming: false
+      }
+    ])
+  })
+
+  /* A harness that never streams — every history replay, and Codex's own PTY
+     road, which never reaches this fold at all — still takes the plain
+     branch precisely as it did before this task: no `streaming` field at
+     all, not `streaming: false`. */
+  it('draws a whole text with no streaming field at all when nothing streamed it first', () => {
+    const [row] = journalRows([event(1, 'text', { text: 'a whole reply' })])
+
+    expect(row).toEqual({ key: 1, kind: 'agent', text: 'a whole reply' })
+    expect(row).not.toHaveProperty('streaming')
+  })
+
+  /* Two separate replies in one turn — text, a tool call, more text — stitch
+     into two rows and never one one running on. */
+  it('starts a fresh stitched row after a tool call interrupts the stream', () => {
+    const rows = journalRows([
+      event(1, 'text-delta', { text: 'Reading the file' }),
+      event(2, 'text', { text: 'Reading the file first.' }),
+      event(3, 'tool-use', { id: 't1', name: 'Read', detail: 'src/main.js' }),
+      event(4, 'tool-result', { id: 't1', ok: true, summary: '10 lines' }),
+      event(5, 'text-delta', { text: 'Found it' })
+    ])
+
+    expect(rows).toEqual([
+      { key: 1, kind: 'agent', text: 'Reading the file first.', streaming: false },
+      { key: 3, kind: 'tool', name: 'Read', detail: 'src/main.js', result: { ok: true, summary: '10 lines' } },
+      { key: 5, kind: 'agent', text: 'Found it', streaming: true }
+    ])
+  })
+
+  /* The fourth moment of the activity strip: the same trailing spot `waiting`
+     takes, at the same `startedAt` as the turn that opened — a stream in
+     progress is still the one open turn, and a second clock ticking from
+     zero right beside a reply already seconds in would be a second, competing
+     answer to "how long has this been going". */
+  it('draws the strip streaming, not waiting, while a reply is still arriving', () => {
+    const rows = journalRows(
+      [
+        event(1, 'turn-start', { by: 'agent', at: '2026-09-10T12:00:04Z' }),
+        event(2, 'text-delta', { text: 'Working on it' })
+      ],
+      'running'
+    )
+
+    expect(rows.at(-1)).toEqual({
+      key: 1,
+      kind: 'activity',
+      state: 'streaming',
+      startedAt: '2026-09-10T12:00:04Z'
+    })
+  })
+
+  /* A closed stream leaves the strip back at `waiting` for whatever the turn
+     does next — reasoning, a tool call, or nothing at all yet. */
+  it('returns the strip to waiting once a streamed reply has closed', () => {
+    const rows = journalRows(
+      [
+        event(1, 'turn-start', { by: 'agent', at: '2026-09-10T12:00:00Z' }),
+        event(2, 'text-delta', { text: 'Working on it' }),
+        event(3, 'text', { text: 'Working on it.' })
+      ],
+      'running'
+    )
+
+    expect(rows.at(-1)).toMatchObject({ kind: 'activity', state: 'waiting' })
+  })
+
+  /* **The acceptance criterion this whole task turns on**: a stream the
+     events never closed does not leave a caret pinned to a reply nothing is
+     still writing, once the session's own state says the child is gone. The
+     words stay — they are the honest record of what had arrived — only the
+     live mark goes, the same "keep the words, drop the caret" reading
+     `error` and `result` take on the same shape. */
+  it('drops the caret rather than the words when the child dies mid-stream', () => {
+    const rows = journalRows(
+      [
+        event(1, 'turn-start', { by: 'agent', at: '2026-09-10T12:00:00Z' }),
+        event(2, 'text-delta', { text: 'Half a sentence', at: '2026-09-10T12:00:02Z' })
+      ],
+      'failed'
+    )
+
+    const agentRow = rows.find((row) => row.kind === 'agent')
+    expect(agentRow).toEqual({ key: 2, kind: 'agent', text: 'Half a sentence', streaming: false })
+    expect(rows.at(-1)).toMatchObject({ kind: 'activity', state: 'failed' })
+  })
+
+  /* Defensive rather than load-bearing on this wire's own protocol — a text
+     block always closes with its own whole `text` before a `result` can
+     follow — but a `result` arriving with a stream still nominally open must
+     not leave that row pulsing forever either. */
+  it('drops the caret if a result somehow arrives before the stream closed', () => {
+    const rows = journalRows([
+      event(1, 'turn-start', { by: 'agent', at: '2026-09-10T12:00:00Z' }),
+      event(2, 'text-delta', { text: 'Half a sentence' }),
+      event(3, 'result', { tokens_in: 1, tokens_out: 1, cost_usd: null, ms: 10 })
+    ])
+
+    const agentRow = rows.find((row) => row.kind === 'agent')
+    expect(agentRow).toEqual({ key: 2, kind: 'agent', text: 'Half a sentence', streaming: false })
+  })
+
+  /* Same defence, for the other event that can close a turn. */
+  it('drops the caret if an error somehow arrives before the stream closed', () => {
+    const rows = journalRows([
+      event(1, 'turn-start', { by: 'agent', at: '2026-09-10T12:00:00Z' }),
+      event(2, 'text-delta', { text: 'Half a sentence' }),
+      event(3, 'error', { text: 'exit 101', at: '2026-09-10T12:00:05Z' })
+    ])
+
+    const agentRow = rows.find((row) => row.kind === 'agent')
+    expect(agentRow).toEqual({ key: 2, kind: 'agent', text: 'Half a sentence', streaming: false })
+  })
+})
+
 /* **The closed list of `SessionState`'s wire words**, and the reason it is out
    here: rename `Running` in `session::model` and a copy of this list inside a
    `.vue` file would stop turning the composer's one button into Stop for the

@@ -1,9 +1,10 @@
 <script setup>
-/* The agent's activity, one element and three moments —
+/* The agent's activity, one element and four moments —
    `markup-contract.md` section 6. The strip mounts the instant a message is
-   sent, at `waiting`, and is replaced in place by `done` or `failed` when the
-   turn closes; nothing else in the column moves when it does, which is the
-   whole reason this used to be three things (a spinner somewhere, this
+   sent, at `waiting`, moves to `streaming` the instant a reply's first delta
+   arrives (smetana-6we6), and is replaced in place by `done` or `failed` when
+   the turn closes; nothing else in the column moves when it does, which is
+   the whole reason this used to be three things (a spinner somewhere, this
    component's own receipt line, an error row) and is now one.
 
    **This absorbed `TurnResult`'s old, narrower job** — the closing receipt,
@@ -14,18 +15,28 @@
    because the receipt is still most of what it draws; what changed is that it
    now also draws the wait before one and the failure instead of one.
 
-   `state` is `journal.js`'s own `waiting` / `done` / `failed`, the exact words
-   `data-activity` takes — no translation, because there is nothing to
-   translate: this and the fold agree on the vocabulary by construction, `row.
-   state` bound straight through.
+   `state` is `journal.js`'s own `waiting` / `streaming` / `done` / `failed`,
+   the exact words `data-activity` takes — no translation, because there is
+   nothing to translate: this and the fold agree on the vocabulary by
+   construction, `row.state` bound straight through.
 
-   **Waiting does not spin.** The mark beside it fades on `--dur-pulse` —
-   `sm-prose.css` section 11 — never blinking and never turning; the ticking
-   `<time>` is the strip's actual claim that something is still alive, and the
-   mark is decoration under it rather than a second, competing signal.
-   `prefers-reduced-motion` silences the fade globally (`tokens/motion.css`)
-   and leaves the clock running, because the clock is not motion for its own
-   sake — it is the one question this element answers.
+   **Waiting and streaming do not spin.** The mark beside either fades on
+   `--dur-pulse` — `sm-prose.css` section 11 — never blinking and never
+   turning; the ticking `<time>` is the strip's actual claim that something is
+   still alive, and the mark is decoration under it rather than a second,
+   competing signal. `prefers-reduced-motion` silences the fade globally
+   (`tokens/motion.css`) and leaves the clock running, because the clock is
+   not motion for its own sake — it is the one question this element answers.
+
+   **Streaming shares waiting's clock rather than starting a second one.**
+   Both read the same `startedAt` — `journal.js`'s own `openAt`, the turn's
+   `turn-start` — because a reply arriving is not a new thing happening, it is
+   the same wait resolving into an answer; switching to a clock that ticks
+   from zero at the first delta would draw two different answers to "how long
+   has this turn been going" a few pixels apart. What differs is only the
+   sentence beside it — `streamingLabel` against `label` — and that split
+   exists for the same reason `waitingLabel` does one level up in
+   `ConversationView.vue`: only the store knows the harness's own name.
 
    **`role="status"` on `waiting` is an implicit `aria-live="polite"`, and the
    ticking `<time>` inside it is the one thing that must not be read out
@@ -63,18 +74,31 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { formatReceiptDuration, formatElapsedClock } from './elapsed.js'
 
+/* The two moments with a ticking clock and an implicit `aria-live="polite"`
+   — both are "something is still happening", the same reason `role="status"`
+   is on `waiting` in the contract's own example. A word neither of these is
+   (`done`, `failed`, or anything this component has never heard of) gets
+   neither. */
+const LIVE = ['waiting', 'streaming']
+
 const props = defineProps({
-  /* `waiting`, `done` or `failed` — `journal.js`'s own three words, and the
-     exact ones `data-activity` takes. */
+  /* `waiting`, `streaming`, `done` or `failed` — `journal.js`'s own four
+     words, and the exact ones `data-activity` takes. */
   state: { type: String, required: true },
   /* `waiting`'s own sentence — "Claude Code is thinking" and the like. Unused
-     by the other two states. */
+     by the other three states. */
   label: { type: String, default: '' },
-  /* `waiting`'s own clock face: the ISO stamp its `turn-start` carried, which
-     is all a ticking clock can be built from — nothing pure can know "now". */
+  /* `streaming`'s own sentence — "Claude Code is responding" and the like,
+     `markup-contract.md` section 6's own example. Unused by the other three. */
+  streamingLabel: { type: String, default: '' },
+  /* Both live moments' clock face: the ISO stamp the turn's own `turn-start`
+     carried, which is all a ticking clock can be built from — nothing pure
+     can know "now". `journal.js` hands the same value to both, on purpose:
+     a reply arriving is the same wait resolving, not a second thing
+     starting. */
   startedAt: { type: String, default: null },
   /* `failed`'s own sentence — the worker's own words for what went wrong.
-     Unused by the other two states. */
+     Unused by the other three states. */
   text: { type: String, default: '' },
   tokensIn: { type: Number, default: 0 },
   tokensOut: { type: Number, default: 0 },
@@ -108,13 +132,13 @@ function startTicking() {
 }
 
 onMounted(() => {
-  if (props.state === 'waiting') startTicking()
+  if (LIVE.includes(props.state)) startTicking()
 })
 onBeforeUnmount(stopTicking)
 watch(
   () => props.state,
   (state) => {
-    if (state === 'waiting') startTicking()
+    if (LIVE.includes(state)) startTicking()
     else stopTicking()
   }
 )
@@ -138,21 +162,22 @@ const doneLine = computed(() => {
 
 const primaryText = computed(() => {
   if (props.state === 'waiting') return props.label
+  if (props.state === 'streaming') return props.streamingLabel
   if (props.state === 'failed') return props.text
   return doneLine.value
 })
 
 const timeText = computed(() => {
-  if (props.state === 'waiting') return formatElapsedClock(waitingElapsedMs.value)
+  if (LIVE.includes(props.state)) return formatElapsedClock(waitingElapsedMs.value)
   if (props.state === 'failed') return formatElapsedClock(props.ms)
   return formatReceiptDuration(props.ms)
 })
 </script>
 
 <template>
-  <div :data-activity="state" :role="state === 'waiting' ? 'status' : undefined">
+  <div :data-activity="state" :role="LIVE.includes(state) ? 'status' : undefined">
     <span v-if="state !== 'done'" data-mark></span>
     <span>{{ primaryText }}</span>
-    <time :aria-hidden="state === 'waiting' ? 'true' : undefined">{{ timeText }}</time>
+    <time :aria-hidden="LIVE.includes(state) ? 'true' : undefined">{{ timeText }}</time>
   </div>
 </template>

@@ -33,6 +33,28 @@ pub enum Decision {
 /// choice `agents::claude::transcript_line` already made, for the reason it
 /// records: a missing row costs a person nothing the CLI's own logs do not
 /// still hold, while a wall of raw protocol costs them the panel.
+///
+/// **`TextDelta` is Claude Code's only, today.** `session::service::driver_for`
+/// answers `"claude" => ClaudeDriver, _ => None`, and `ClaudeDriver` is the only
+/// `impl Driver` in this tree — a Codex session never reaches this enum at all,
+/// it runs the old PTY road (`.claude/rules/terminal.md`), so there is no
+/// second translator to extend with a delta. Codex's own `Profile::transcript`
+/// is a different mechanism entirely: it turns `exec --json` lines into plain
+/// strings for a run's log pane and has never touched `EventKind`.
+///
+/// **`TextDelta` must never survive a re-entry, and that is a property of the
+/// wire rather than of anything this crate filters.** Claude Code's own
+/// persisted transcript (`~/.claude/projects/.../*.jsonl`, what
+/// `session::history` replays after a restart) never contains a `stream_event`
+/// record — only the consolidated `assistant`/`user`/`result` records this enum
+/// already had before partial messages existed. Verified against the installed
+/// CLI (2.1.269): a `claude -p --include-partial-messages` run's own stdout
+/// carries `content_block_delta` lines, and the `.jsonl` it writes to disk
+/// afterwards carries none. So a resumed session's history is built the same
+/// way it always was and a `TextDelta` can only ever reach `journalRows` live,
+/// while its stream is still open. `session::history::is_past` filters it out
+/// a second time regardless, as a cheap independent guard rather than reliance
+/// on that fact alone.
 #[derive(Clone, PartialEq, Debug, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum EventKind {
@@ -40,6 +62,19 @@ pub enum EventKind {
     UserMessage { text: String, attachments: Vec<String> },
     /// Markdown as the agent wrote it. Rendering is the front end's business.
     Text { text: String },
+    /// One incremental piece of the reply now being written, in the order it
+    /// arrived — never accumulated here. `journal.js` is what stitches a run of
+    /// these into a growing row, and the closing `Text` above replaces the
+    /// stitched text wholesale with the harness's own authoritative final copy
+    /// rather than trusting the concatenation, which costs nothing and is
+    /// immune to the two ever drifting.
+    ///
+    /// Empty text is refused at the emitting end (`claude_driver::one_event`)
+    /// for the reason `Text` refuses a blank one, but **never on
+    /// `text.trim().is_empty()`** the way `Text` does: a delta that is a single
+    /// space or newline between two words is real content, and trimming it
+    /// away would silently glue two words together on the wire.
+    TextDelta { text: String },
     Reasoning { text: String },
     ToolUse { id: String, name: String, detail: String },
     ToolResult { id: String, ok: bool, summary: String },

@@ -44,8 +44,14 @@
 import Markdown from '../markdown/Markdown.vue'
 
 defineProps({
-  /* Markdown as the agent wrote it — `session::model::EventKind::Text`. */
+  /* Markdown as the agent wrote it — `session::model::EventKind::Text`, or
+     the growing text of a reply `journal.js` is still stitching together out
+     of `EventKind::TextDelta` (smetana-6we6). */
   text: { type: String, default: '' },
+  /* Whether this turn's reply is still arriving. Passed straight through to
+     `Markdown`, which is the one place that draws the live edge
+     (`span[data-edge]`) — see its own header for where and why. */
+  streaming: { type: Boolean, default: false },
   /* Passed straight through to `Markdown`, unread here — see its own header. */
   root: { type: String, default: '' },
   /* Also passed straight through, unread here: the session's own cwd, off
@@ -61,6 +67,7 @@ const emit = defineEmits(['open', 'open-local', 'open-image'])
   <article data-turn="agent">
     <Markdown
       :text="text"
+      :streaming="streaming"
       :root="root"
       :base="base"
       @open="emit('open', $event)"
