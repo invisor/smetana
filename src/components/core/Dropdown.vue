@@ -388,6 +388,12 @@ const panelStyle = computed(() => ({
   outline: 'none'
 }))
 
+/* This field is left transparent over the panel's own `--surface-overlay`,
+   which is `--text-muted`'s placeholder at 4.32:1 in dark — under the 4.5:1
+   floor `tokens/base.css`'s `::placeholder` rule was measured against a
+   different fill. `data-placeholder="secondary"` there raises this one field to
+   `--text-secondary` instead of moving every placeholder in the tree to
+   rescue this one; see that file for the full measurement. */
 const filterStyle = {
   height: 'var(--row-h)',
   padding: '0 var(--space-4)',
@@ -575,6 +581,7 @@ const headerStyle = (index) => ({
         :style="filterStyle"
         :placeholder="searchLabel"
         :aria-label="searchLabel"
+        data-placeholder="secondary"
       />
       <div ref="list" :style="listStyle">
         <template v-for="(option, i) in matches" :key="option.header ? `h:${option.label}` : option.value">

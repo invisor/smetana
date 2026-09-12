@@ -4983,7 +4983,18 @@ const menuTargetStyle = {
              check them in: the step is smallest there (1.198:1 against 1.338:1
              light), and `--surface-hover` was drawn here until its dark step
              measured 1.090:1 and could not be seen at the default font size.
-             Compact is the density to check the height in. -->
+             Compact is the density to check the height in.
+
+             The `:data-placeholder` binding on the input mirrors `GitPanel`'s
+             own: `--text-muted`'s placeholder falls to 4.27:1 light / 3.83:1
+             dark against the focused plate's `--surface-active`, under the
+             4.5:1 floor, so the field steps its placeholder to
+             `--text-secondary` for exactly the same span the plate is lit —
+             focused and never otherwise, since unfocused it sits on
+             `--surface-raised` and already clears the floor. See
+             `tokens/base.css` for the full measurement; a fixture that drops
+             this binding again would go back to demonstrating the defect
+             this task removed from the real component. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <SectionHeader label="Branches" :count="9" searching>
             <template #editor>
@@ -5016,6 +5027,7 @@ const menuTargetStyle = {
                     color: 'var(--text-primary)',
                     font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
                   }"
+                  :data-placeholder="headerSearchFocused ? 'secondary' : undefined"
                   @focus="headerSearchFocused = true"
                   @blur="headerSearchFocused = false"
                 />

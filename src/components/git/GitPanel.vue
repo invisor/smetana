@@ -996,6 +996,17 @@ const fieldStyle = {
   color: 'var(--text-primary)',
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
 }
+/* The one cost of the `--surface-active` step above that the rest of this
+   file's comment does not carry: `--text-muted`'s placeholder falls to
+   4.27:1 light and 3.83:1 dark against that plate, under the 4.5:1 floor
+   `tokens/base.css`'s `::placeholder` rule was measured against a different
+   fill, while the unfocused `--surface-raised` plate clears it the same as
+   `Input`/`Textarea` do. Rather than give up the surface step above — argued
+   for at length, and the only signal of focus this field has — the input
+   carries `data-placeholder="secondary"` while (and only while) `filterFocused`
+   is true, which raises just that state to `--text-secondary` (5.67 light,
+   6.29 dark). See `base.css` for the full measurement. */
+const filterPlaceholderTone = computed(() => (filterFocused.value ? 'secondary' : undefined))
 const FIELD_MARK = 12
 const fieldGlyphStyle = { flex: 'none', color: 'var(--text-muted)' }
 
@@ -1538,6 +1549,7 @@ const onReset = (section) => emit('resize', { section, rows: null })
                 :placeholder="BRANCH_FILTER_LABEL"
                 :aria-label="BRANCH_FILTER_LABEL"
                 :style="fieldStyle"
+                :data-placeholder="filterPlaceholderTone"
                 @keydown="onFilterKey"
                 @focus="filterFocused = true"
                 @blur="filterFocused = false"
