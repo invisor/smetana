@@ -205,6 +205,13 @@ const question = computed(() => held.value?.question ?? null)
    component). */
 const isAskUserQuestionCard = computed(() => isAskUserQuestion(question.value?.tool))
 
+/* One flag off the same `question`, for `Composer`'s own lock. Both cards
+   above hold the same tool call open and without an answer the agent will
+   not move, so a question and a permission request are one state as far as
+   the field is concerned — `Composer` takes this single prop rather than one
+   per card, and does not need to know which of the two it is. */
+const waitingForAnswer = computed(() => !!question.value)
+
 /* The last refusal, if it is this session's — see `refusal` below for why the
    test is on the session rather than on there being one at all. */
 const ourRefusal = computed(() =>
@@ -698,6 +705,7 @@ const refusal = {
         v-model="held.draft"
         :attachments="attachments"
         :busy="busy"
+        :waiting="waitingForAnswer"
         @update:attachments="attachments = $event"
         @send="send"
         @stop="stop"
