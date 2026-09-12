@@ -245,12 +245,23 @@ whatever was typed for that question, and typing clears whatever was chosen. `fo
 
 **Which options end up selected is `toggle` in `askUserQuestion.js`, pure and tested there rather than
 left inside `AskUserQuestion.vue`** — a `multiSelect` question allows more than one option at once, an
-ordinary one allows exactly one, and clicking a chosen option deselects it either way, which is one of
-this task's own acceptance criteria and belongs in the one file a test here can reach: an edit that
-made single-select accumulate or multi-select replace would ship with both gates green and reach the
-agent as one label where four were chosen. `toggle` itself joins nothing — it answers with the array of
-whatever now identifies the selected options — and `formatAnswer` is the only join in the file, several
-chosen labels with a comma, since a single-select answer is one label and needs none.
+ordinary one allows exactly one, and `toggle` answers a click at an already-chosen option by clearing
+it, on either branch: an edit that made single-select accumulate or multi-select replace would ship
+with both gates green and reach the agent as one label where four were chosen. `toggle` itself joins
+nothing — it answers with the array of whatever now identifies the selected options — and
+`formatAnswer` is the only join in the file, several chosen labels with a comma, since a single-select
+answer is one label and needs none.
+
+**The component only reaches that deselect branch for `multiSelect`, and that is a real native radio,
+not a second bug.** `AskUserQuestion.vue` (smetana-ndm9) draws a single-select question as a genuine
+`radiogroup` — a hidden `<input type="radio">` per option, so the group is reachable and steerable by
+keyboard rather than a row of `<button>`s standing in for one — and a native radiogroup never fires a
+`change` for a click at the option already checked, on any platform; that is not a gap this file left
+open. `toggle` still supports clearing a single-select answer, tested there, but the component only
+ever calls it from a real `change` event, so a single-select question can no longer be emptied by
+re-clicking its own answer once chosen — typing a custom answer, which already clears a selection, is
+the way out that remains. `multiSelect`'s checkboxes keep firing `change` on every click regardless of
+the box's previous state, so its own deselect stays exactly as it was.
 
 **The join is `', '`, a comma and a space, which is a decision rather than the obvious reading of
 "joined by commas" in the task's own Design section.** It was kept over a bare `','` because free
@@ -284,20 +295,33 @@ actually pin the degenerate case now. `selectedLabels(questions, selectedByIndex
 that same file rather than left as a `.vue` method, is the one place index and label meet — mapping
 the chosen indices back to `question.options[i].label`, `''` for an index past the end of `options`
 too — right before `buildAnswers` and `isComplete` are called, since those take the wire's own
-vocabulary and index is this component's alone. `setCustom`'s own mutual exclusion — typing clears a
-selection — stays in the component, being short enough that moving it out would cost more than it
-saves; it is still a rule, and the file's own header says so rather than claiming the component holds
-none.
+vocabulary and index is this component's alone. The mutual exclusion the other way round — typing
+clears a selection — stays in the component too, a `watch` on `custom` rather than a named setter
+since smetana-ndm9 put a plain `v-model` on the freeform field (its own header explains why: a
+`:value`/`@input` pair is not `v-model` and drops Vue's own IME composition guard, the one thing that
+field exists to type into safely); it is short enough that moving it out would cost more than it
+saves, and it is still a rule, the file's own header saying so rather than claiming the component
+holds none.
 
-**Drawn at the same `loud` weight as `PermissionRequest.vue`, deliberately**: the harness is holding
-the very same tool call open either way, so `AskUserQuestion.vue` reads `statusColors('needs-you')`
-and `STATUS_GLYPH` off the identical pair rather than choosing a softer treatment — the two cards read
-as one vocabulary for "the session cannot go on without you", and only the shape inside the frame
-says which tool is asking. The frame itself — the fill, the border, the outer padding and radius,
-the head row's icon and gap — is written out twice, once per component, and kept in step by hand
-rather than shared: that duplication is deliberate for now rather than an oversight to fold away, and
-nothing fails if only one of the two moves, which is worth knowing before assuming a shared frame
-already exists.
+**The two cards deliberately no longer share a frame, and that is the fix smetana-ndm9 made rather
+than a drift to repair.** Before it, `AskUserQuestion.vue` read `statusColors('needs-you')` and
+`STATUS_GLYPH` off the identical pair `PermissionRequest.vue` still does, filling its whole card the
+same saturated amber — which is sized correctly for one row and two buttons and was not for two
+questions, six options and two fields: on a saturated ground nothing inside could be emphasised, so a
+chosen option read as a border a shade thicker and nothing else. A section of the design handoff
+written for exactly this card draws the replacement — not the `markup-contract.md`/`sm-prose.css`
+pair committed under `docs/design_handoff_conversation_panel/`, which predates this feature and has
+no such section; this one reached the port outside the repository and is not committed anywhere, so
+what it settles is written down here rather than left as a path to follow — and the rules that paint
+it live in `sm-prose.css` section 13, the fourth styling exception this panel already spends: the
+container becomes an ordinary raised card, the same surface every other block in the panel sits on,
+and the whole loud budget moves to one chip in the header — colour, the system's triangle silhouette
+and the word, never colour alone. `PermissionRequest.vue` keeps its full fill exactly as it was,
+because its shape is the one this system's loudness budget was measured against — one row and two
+buttons, nothing inside it to lose to a saturated ground. The two cards still read as one vocabulary
+for "the session cannot go on without you" — both draw from `--status-needs-you-*` and both carry the
+reserved triangle silhouette — but `AskUserQuestion.vue` now spends that vocabulary on a single chip
+rather than on the whole frame, and imports neither `statusColors` nor `STATUS_GLYPH` any more.
 
 ## One renderer, shared with the task inspector — and why it was not forked
 

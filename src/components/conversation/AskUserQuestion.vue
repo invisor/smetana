@@ -12,17 +12,20 @@
    cannot — on a saturated ground nothing inside can be emphasised, so an
    option separated from the background by a border alone and "chosen"
    degraded to a slightly thicker one, the weakest possible signal for the
-   most important state on the screen. The design handoff's own markup
-   contract, section 13
-   (`docs/design_handoff_conversation_panel/markup-contract.md`, kept outside
-   the repository — see `.claude/rules/conversation-panel.md`), draws the fix:
-   the container becomes an ordinary raised card, the same surface every other
-   block in this panel sits on, and the whole loud budget moves to one chip in
-   the header — colour, the system's triangle silhouette and the word, never
-   colour alone. Every rule that paints it lives in `sm-prose.css` section 13,
-   the same fourth styling exception the rest of this panel already spends
-   (CLAUDE.md, Styling) — this file only emits the markup that contract asks
-   for and the state that decides which of it is drawn.
+   most important state on the screen. A section of the design handoff written
+   for exactly this card — not the `markup-contract.md`/`sm-prose.css` pair
+   committed under `docs/design_handoff_conversation_panel/`, which predate
+   this feature and carry no such section; this one reached the port outside
+   the repository and is not committed anywhere, so its reasoning is written
+   down in full in `.claude/rules/conversation-panel.md` rather than left as a
+   path to follow — draws the fix: the container becomes an ordinary raised
+   card, the same surface every other block in this panel sits on, and the
+   whole loud budget moves to one chip in the header — colour, the system's
+   triangle silhouette and the word, never colour alone. Every rule that
+   paints it lives in `sm-prose.css` section 13, the same fourth styling
+   exception the rest of this panel already spends (CLAUDE.md, Styling) —
+   this file only emits the markup that section asks for and the state that
+   decides which of it is drawn.
 
    **This card is not itself a row of the journal, and every selector in that
    section is written as a descendant of `.sm-prose`.** `ConversationView.vue`
@@ -173,11 +176,28 @@ function toggleOption(qi, oi) {
    typing an answer clears whatever was selected for the same question — the
    mutual exclusion `toggleOption` above keeps the other way round. It stays
    here because it is exactly this short; `selectedLabels`, imported above,
-   moved out for the opposite reason, carrying an edge case worth a test. */
-function setCustom(qi, text) {
-  custom[qi] = text
-  if (text) selected[qi] = []
-}
+   moved out for the opposite reason, carrying an edge case worth a test.
+
+   This used to be the freeform field's own `@input` handler, called with
+   `$event.target.value` — a `:value`/`@input` pair, which is not `v-model`
+   and carries none of its guarantees. Vue's own `vModelText` ignores an
+   `input` event while `el.composing` is true and re-syncs once
+   `compositionend` fires, and a handler that writes `custom[qi]` straight
+   from every `input` event has no such guard: an IME mid-composition — this
+   app ships twelve languages — could see its own pre-edit buffer cleared or
+   reordered by a write landing between keystrokes the composition has not
+   settled yet. The template now binds the field with a plain `v-model` on
+   `custom[qi]` directly, which is a valid assignment target on a `reactive`
+   array and gets the same compiled guard any other text input in this tree
+   would; this watcher is only the side effect v-model does not carry —
+   clearing a question's selection the moment its typed answer becomes
+   non-empty, checked for every question rather than tracked by index, since
+   a `deep` watch on the whole array does not say which of them changed. */
+watch(custom, () => {
+  questions.value.forEach((_, qi) => {
+    if (custom[qi] && selected[qi]?.length) selected[qi] = []
+  })
+}, { deep: true })
 
 const complete = ref(false)
 watch([questions, selected, custom], () => {
@@ -269,7 +289,6 @@ const root = { padding: 0, gap: 0 }
 
         <ul
           data-options
-          :data-multi="question.multiSelect ? '' : undefined"
           :role="question.multiSelect ? 'group' : 'radiogroup'"
           :aria-label="question.header || question.question"
         >
@@ -301,12 +320,7 @@ const root = { padding: 0, gap: 0 }
 
         <label v-if="state === 'pending'" data-own>
           <span>Or, in your own words</span>
-          <input
-            type="text"
-            :value="custom[qi]"
-            placeholder="Type an answer"
-            @input="setCustom(qi, $event.target.value)"
-          >
+          <input type="text" v-model="custom[qi]" placeholder="Type an answer">
         </label>
       </div>
 

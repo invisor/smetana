@@ -6407,8 +6407,13 @@ const menuTargetStyle = {
              declined one clears every `data-chosen` and mutes its own
              question text, which is `AskUserQuestion.vue`'s own read of a
              decline discarding the draft rather than keeping it as a ghost
-             answer. -->
-        <div class="sm-prose" :style="{ width: '360px' }">
+             answer. `padding`/`gap` are neutralised the same way `AskUserQuestion.vue`'s own root
+             does, for the identical reason: `.sm-prose`'s own values are written for a column of
+             turns, and both sections here sit in a plain demo column rather than inside
+             `ConversationView.vue`'s own `questionPad` — leaving them in would inset this column
+             on top of `--card-pad` and space the two sections by `--prose-turn-gap` where the real
+             card never draws either. -->
+        <div class="sm-prose" :style="{ width: '360px', padding: 0, gap: 0 }">
           <section data-ask data-state="answered">
             <header>
               <span data-mark>answered</span>
@@ -6440,7 +6445,7 @@ const menuTargetStyle = {
             <div data-question>
               <h6>Platforms</h6>
               <p>Which platforms should the fix be checked on before it merges?</p>
-              <ul data-options data-multi role="group" aria-label="Platforms">
+              <ul data-options role="group" aria-label="Platforms">
                 <li>
                   <input type="checkbox" id="gallery-ask-answered-q1o0" checked disabled>
                   <label for="gallery-ask-answered-q1o0" data-chosen>
@@ -6469,7 +6474,7 @@ const menuTargetStyle = {
           <section data-ask data-state="declined">
             <header>
               <span data-mark>declined</span>
-              <span data-tool data-count="2">AskUserQuestion</span>
+              <span data-tool>AskUserQuestion</span>
               <time>1m</time>
             </header>
             <div data-question>

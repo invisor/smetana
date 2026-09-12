@@ -877,17 +877,22 @@
 
 
 /* 13 · THE AGENT'S QUESTION ================================================
-   Ported from the design handoff's own section 13
-   (docs/design_handoff_conversation_panel/sm-prose.css), which this replaces:
-   a saturated amber fill over the whole block, with option cards and two
-   fields inside it. That fill breaks the ladder's hard rule (1–2 loud
-   elements per screen) by making one element the size of the viewport loud,
-   and it destroys its own hierarchy on the way — on a saturated ground
-   nothing inside can be emphasised, so the options separated from the
-   background by a border only, and "chosen" degraded to a slightly thicker
-   border, the weakest possible signal for the most important state on the
-   screen. Amber is also the panel's needs-you hue: spending it on a container
-   left nothing to mark the one line that actually needs a person.
+   Ported from a section of the design handoff written for exactly this card
+   — not the `markup-contract.md`/`sm-prose-turns.css`/`sm-prose.css` reference
+   committed under `docs/design_handoff_conversation_panel/`, which predates
+   this feature and has no such section; this one reached the port outside
+   the repository and is not committed anywhere, so what it settles is written
+   down in full here and in `.claude/rules/conversation-panel.md` rather than
+   left as a path to follow. What it replaces: a saturated amber fill over the
+   whole block, with option cards and two fields inside it. That fill breaks
+   the ladder's hard rule (1–2 loud elements per screen) by making one element
+   the size of the viewport loud, and it destroys its own hierarchy on the way
+   — on a saturated ground nothing inside can be emphasised, so the options
+   separated from the background by a border only, and "chosen" degraded to a
+   slightly thicker border, the weakest possible signal for the most important
+   state on the screen. Amber is also the panel's needs-you hue: spending it
+   on a container left nothing to mark the one line that actually needs a
+   person.
 
    So: the container is an ordinary raised card, exactly like every other
    surface in the panel, and the loud ink goes to one chip in the header —
