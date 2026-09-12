@@ -38,27 +38,34 @@
    exists for the same reason `waitingLabel` does one level up in
    `ConversationView.vue`: only the store knows the harness's own name.
 
-   **`role="status"` on `waiting` is an implicit `aria-live="polite"`, and the
-   ticking `<time>` inside it is the one thing that must not be read out
-   every second** — a screen reader would otherwise say "Claude Code is
-   thinking 5s", "… 6s", "… 7s" for the length of the turn, drowning the one
-   sentence the region exists to announce. `aria-hidden="true"` on `waiting`'s
-   `<time>` (contract section 9's own allowlist) leaves the sentence announced
-   once, on mount, and the clock a purely visual one from then on — `done` and
-   `failed` carry no `role`, so their own `<time>` needs no such hiding.
+   **`role="status"` on `waiting` and `streaming` is an implicit
+   `aria-live="polite"`, and the ticking `<time>` inside either is the one
+   thing that must not be read out every second** — a screen reader would
+   otherwise say "Claude Code is thinking 5s", "… 6s", "… 7s" for the length
+   of the turn, drowning the one sentence the region exists to announce.
+   `aria-hidden="true"` on their `<time>` (contract section 9's own allowlist)
+   leaves the sentence announced once, on mount or on the switch between the
+   two, and the clock a purely visual one from then on — `done` and `failed`
+   carry no `role`, so their own `<time>` needs no such hiding.
 
-   **The two clocks are deliberately not the same clock.** `done`'s `<time>`
+   **The clocks are deliberately not all the same clock.** `done`'s `<time>`
    is `elapsed.js`'s `formatReceiptDuration`, the wire's own `ms` read to a tenth of a
-   second — a number worth that precision once, after the fact. `waiting` and
-   `failed` read `formatElapsedClock` instead, whole seconds spelled the way a
-   clock somebody is watching move is spelled: `4s`, `2m 14s`. `waiting` is the
-   only one of the three actually ticking — `startedAt` plus a one-second
-   interval, torn down the moment `state` stops being `waiting` so nothing
-   here keeps a timer alive under a turn that has already closed. `failed` has
-   already stopped, so its `ms` — `journal.js`'s own `elapsedSince`, the gap
-   between the `turn-start` that opened the turn and the `error` that closed
-   it, since `EventKind::Error` carries no duration of its own — is read once
-   and never ticks again.
+   second — a number worth that precision once, after the fact. `waiting`,
+   `streaming` and `failed` read `formatElapsedClock` instead, whole seconds
+   spelled the way a clock somebody is watching move is spelled: `4s`,
+   `2m 14s`. `waiting` and `streaming` are the two of the four actually
+   ticking, off one shared `startedAt` plus a one-second interval — `LIVE`
+   below, torn down the moment `state` leaves both so nothing here keeps a
+   timer alive under a turn that has already closed. The watcher restarts the
+   interval on the crossing between the two exactly as it would on entering
+   either fresh, and that is harmless rather than a glitch to fix: the number
+   on screen is computed from `startedAt`, not from the interval's own count,
+   so a reply arriving does not reset how long the turn reads as having been
+   going. `failed` has already stopped, so
+   its `ms` — `journal.js`'s own `elapsedSince`, the gap between the
+   `turn-start` that opened the turn and the `error` that closed it, since
+   `EventKind::Error` carries no duration of its own — is read once and never
+   ticks again.
 
    **Failed is the one place this strip takes a saturated colour**, because
    failed is a status rather than a mood: `--status-failed-fg`, from
