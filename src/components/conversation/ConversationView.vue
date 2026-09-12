@@ -330,8 +330,9 @@ const attachments = ref([])
    test is what makes that true by construction rather than by which pane
    happens to be mounted today, the same reasoning `windowDrops.js`'s own
    header carries. `?view=gallery` draws both components at once outside that
-   `v-if` entirely; `.claude/rules/terminal.md` is where that exception and why
-   it costs nothing are written down. */
+   `v-if` entirely; `.claude/rules/terminal.md` is where that exception is
+   written down, and it is not the `v-if` but the same "neither root is nested
+   in the other" property that still keeps a drop from reaching both there. */
 const panelRoot = ref(null)
 function insidePanel(x, y) {
   if (!panelRoot.value) return false

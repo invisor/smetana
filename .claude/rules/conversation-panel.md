@@ -366,7 +366,8 @@ between the branches, not which of them shares an instance with which. The hit t
 as if a neighbour could answer too — the same discipline `TerminalView.vue` keeps — because that is
 what makes the property hold by construction rather than by which pane happens to be on screen this
 week. `.claude/rules/terminal.md` names the one place both this component and `TerminalView.vue` are
-mounted at once regardless — `?view=gallery` — and why it still costs nothing there.
+mounted at once regardless — `?view=gallery` — and the DOM-subtree property that keeps a drop from
+reaching both there too, geometry not entering into it.
 
 **What is confined is what may become a chip, not what the panel will draw a highlight for.**
 `canAttach` gates both the drop response and the drop itself on `held` — the record `Composer` is

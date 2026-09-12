@@ -473,26 +473,45 @@ is a stronger guarantee than "cannot both answer yes" — there is only ever one
 test is still written as if a neighbour could answer too, which is what makes the property hold by
 construction rather than by which pane a person happens to have open, and is what a reviewer should
 check rather than assume the next time either side of this pair changes. There is still no dispatcher
-between them, and none is wanted.
+between them, and none is wanted. What mutual exclusion buys here, underneath, is that at most one of
+the two roots — `panelRoot` in `ConversationView.vue`, `host` in `TerminalView.vue` — exists in the DOM
+at all; `?view=gallery` is where that stops being true and the property that actually carries the
+weight has to be named on its own, below.
 
-**`?view=gallery` is the one place in the tree both are mounted at once, and it costs nothing.**
-`Gallery.vue` draws every exported component once for the reason `CLAUDE.md`'s Commands section gives —
-catching a broken one by eye — and that includes a `<TerminalView>` and a `<ConversationView>` side by
-side in the same page, outside any `v-if` and outside `DesktopApp.vue`'s mutual exclusion entirely. In
-a browser (`npm run dev`), this changes nothing that matters: `getCurrentWebview()` throws before either
-subscribes, so neither actually listens for a drop regardless of what is mounted next to what. Reached
-inside a real Tauri window instead — nothing stops `?view=gallery` from being requested there, since the
-query string is read the same way in both — both subscriptions would genuinely go live on the same
-window event, and neither pane's gate saves it: `isStarting` only asks whether an id is a string, so
-the terminal fixture's numeric id reads as `live` on the spot, and `conversationFor` never answers
-`null` (`stores/conversation.js`'s own "Never null — see `hold`"), so the conversation fixture's
-`canAttach` is `true` on the spot as well — neither depends on a session the backend actually has. What
-still keeps one drop from reaching both in that scenario is the same hit test doing the same job it
-always does, over a different fact: the gallery's two demo panels sit in separate, non-overlapping
-`<section>`s down the page rather than in the same rectangle two branches of one `v-if` would occupy, so
-a point can be inside at most one of them. Worth knowing before assuming the mutual-exclusion argument
-above covers every page this pair can be drawn on — it covers `DesktopApp.vue` alone, and the gallery is
-kept safe by a different property.
+**`?view=gallery` is the one place in the tree both are mounted at once, and the question this
+section is about — does one drop reach two consumers — still comes out no.** `Gallery.vue` draws
+every exported component once for the reason `CLAUDE.md`'s Commands section gives — catching a
+broken one by eye — and that includes a `<TerminalView>` and a `<ConversationView>` on the same
+page, outside `DesktopApp.vue`'s `v-if` entirely, so for once both roots are really there together.
+What keeps a drop from reaching both is not geometry: `document.elementFromPoint` answers a point
+with exactly one element, and each hit test asks `contains` against its own root, so both calls can
+come back true for the same point only if one root is a descendant of the other — nested, not merely
+adjacent. The gallery's two roots are siblings, and the Agent tab's terminal and the conversation
+panel above satisfy the same "neither nested in the other" condition even more simply, since at most
+one of them is ever present at all — nesting cannot arise between a root and one that does not
+exist. Either way, neither `contains` call can ever answer for the other's element. This is the one
+property both pages actually lean on; lay the gallery's two demos on top of each other with a
+transform, a negative margin or absolute positioning and it still holds, because `elementFromPoint`
+still answers with one element belonging to one subtree — the arrangement that would break it is
+nesting one root inside the other's, which neither page does. The geometry is true as an aside and
+nothing more: the two `<section>`s do sit one after another down the page and scroll translates the
+whole document uniformly, so no scroll position or viewport width puts one section's rectangle under
+a point the other answers for either — but that is a second, weaker reason arriving at the same
+answer, not the one the property depends on.
+
+Whether the question behind this section is the only cost is a separate matter, and the answer there
+is narrower. In a browser (`npm run dev`), it does not arise at all: `getCurrentWebview()` throws
+before either subscribes, so neither actually listens for a drop. Reached inside a real Tauri window
+instead — nothing stops `?view=gallery` from being requested there, since the query string is read
+the same way in both — both subscriptions would genuinely go live on the same window event, and
+neither pane's own gate refuses on its own account: `isStarting` only asks whether an id is a
+string, so the terminal fixture's numeric id reads as `live` on the spot, and `conversationFor`
+never answers `null` (`stores/conversation.js`'s own "Never null — see `hold`"), so the conversation
+fixture's `canAttach` is `true` on the spot as well. A drop actually taken there would still do
+something: `send` would write to a session id the worker has never heard of, which the backend
+refuses. That is harness nonsense from asking a fixture to behave like a live session, not a defect
+in the property above — the drop still reaches only one pane, exactly as the section's own question
+asks.
 
 The response — a frame and one line of caption over the terminal — is drawn only while a live session
 is behind the panel. `send` already drops what is written to a session still coming up, so there is
