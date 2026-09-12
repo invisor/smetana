@@ -11,9 +11,9 @@ paths:
 `.claude/rules/terminal.md` is where a driven session's *identity* is decided — which harness, which
 id, which tab it is drawn under. This file is the other half: what the panel that shows one actually
 puts on screen, and what the epic that built it (`smetana-qix9`) decided against on the way there.
-The markup contract itself — every element, every `data-` attribute, the four rendered combinations —
-is `docs/design_handoff_conversation_panel/markup-contract.md`; this file does not repeat it, only
-the reasoning behind the choices in it that are not otherwise written down anywhere in the tree.
+The markup contract itself — every element, every `data-` attribute — is
+`docs/design_handoff_conversation_panel/markup-contract.md`; this file does not repeat it, only the
+reasoning behind the choices in it that are not otherwise written down anywhere in the tree.
 
 ## The fourth inline-style exception
 
@@ -47,10 +47,9 @@ the renderer is a `Markdown`/`MarkdownInline` pair recursing over a parsed tree 
 `innerHTML` assignment, and every new block type is a new branch of that `v-else-if` chain rather
 than a new string template. The bubble's own "tail" is the same decision at the level of one glyph:
 the person's turn gets a squared corner (`border-radius`, section 1 of the contract) rather than a
-drawn speech-bubble
-triangle, because a triangle is either an SVG or a `::before` shape hack, and either way is one more
-thing an HTML-injection path would have had to be trusted to allow. Side and shape carry the
-distinction instead, with nothing for a sanitiser to admit or refuse.
+drawn speech-bubble triangle, because a triangle is either an SVG or a `::before` shape hack, and
+either way is one more thing an HTML-injection path would have had to be trusted to allow. Side and
+shape carry the distinction instead, with nothing for a sanitiser to admit or refuse.
 
 ## The bubble, and why `rail` was dropped
 
