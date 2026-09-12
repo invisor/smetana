@@ -23,6 +23,34 @@
    what keeps this drawable in `?view=gallery` with no window and no desktop
    behind it.
 
+   **The name and the cross are two controls now, not one (smetana-4x3w) — and
+   the name is a control at all only for some attachments.** The cross always
+   removes; clicking an openable name raises `open-attachment` with the bare
+   path and leaves deciding what that means to whoever is drawing this —
+   `ConversationView.vue`, which already owns the identical decision for a
+   figure and a local link in the prose above the field, through
+   `attachmentAction.js` beside it. This component cannot ask that question
+   itself (it stays drawable in `?view=gallery` with no store and no window
+   behind it, see the header above), so `openAttachments` arrives as a prop:
+   the subset of `attachments` worth a click. A path outside it draws as
+   plain text, `chipNameStatic` below rather than `chipNameStyle`, with no
+   button, no hover and no cursor of its own — there is genuinely nowhere for
+   such a click to go (an editor tab needs the attachment inside the open
+   project, and the image window only takes a picture), so a control that
+   looked pressable and did nothing would be the one lie a disabled state
+   elsewhere in this system never tells. Two separate `<button>`s side by
+   side rather than one wrapping the other for the openable case, because a
+   button inside a button is not markup this system draws anywhere else, and
+   the two already do different things: one opens, one removes. Hover is
+   tracked per chip in `hoveredAttachment` rather than through
+   `useInteractive` — that composable is written for one control per component
+   instance, and this row draws one name button per attachment, the same
+   reason `AskUserQuestion.vue`'s own `hoveredKey` gives for its options.
+   `aria-label="Open …"` carries a verb the visible, possibly-ellipsized name
+   does not — without it the cross beside it, labelled "Remove …", would read
+   as the only action a screen reader can hear on the chip. Not the native
+   `title`: `IconButton.vue` rules that out for this system already.
+
    **`waiting` is a second flag and deliberately not folded into `busy`.**
    `busy` means a turn is in flight and draws Stop; while the agent is holding
    an open question or an open permission request it is not busy at all — there
@@ -60,6 +88,9 @@ const props = defineProps({
   modelValue: { type: String, default: '' },
   /* Absolute paths, in the order they were attached. */
   attachments: { type: Array, default: () => [] },
+  /* The subset of `attachments` worth drawing as a control — see the header
+     above for why this component cannot work that out for itself. */
+  openAttachments: { type: Array, default: () => [] },
   /* A turn is in flight: the one button is Stop. */
   busy: { type: Boolean, default: false },
   /* The agent is holding a question or a permission request open above this
@@ -71,7 +102,16 @@ const props = defineProps({
   waiting: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['update:modelValue', 'update:attachments', 'send', 'stop'])
+const emit = defineEmits([
+  'update:modelValue',
+  'update:attachments',
+  'send',
+  'stop',
+  /* The bare path, raised only for an attachment `openAttachments` names;
+     whoever draws this decides whether it is a picture or a file — see the
+     header above. */
+  'open-attachment'
+])
 
 const field = ref(null)
 const focus = ref(false)
@@ -132,6 +172,10 @@ const remove = (path) =>
     props.attachments.filter((other) => other !== path)
   )
 
+/* Which chip's name is under the pointer right now — see the header above
+   for why this is a plain ref keyed by path rather than `useInteractive`. */
+const hoveredAttachment = ref(null)
+
 const root = {
   display: 'flex',
   flexDirection: 'column',
@@ -145,7 +189,12 @@ const strip = { display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }
 
 /* The same chip `UserMessage.vue` draws a sent attachment as, plus the one
    thing that tells the two apart: this one can be taken off again. A file's
-   name is an identifier, so mono. */
+   name is an identifier, so mono.
+
+   The left padding is `--space-2`, matching the right rather than the
+   `--space-3` it used to be on its own — reduced by about what the name
+   button below now spends on its own left inset, so the hover surface
+   `chipNameStyle` draws does not read as the chip quietly growing wider. */
 const chip = {
   display: 'inline-flex',
   alignItems: 'center',
@@ -153,7 +202,7 @@ const chip = {
   maxWidth: '100%',
   minWidth: 0,
   height: 'var(--control-h-sm)',
-  padding: '0 var(--space-2) 0 var(--space-3)',
+  padding: '0 var(--space-2)',
   background: 'var(--surface-raised)',
   border: 'var(--border-w) solid var(--border-subtle)',
   borderRadius: 'var(--radius-3)',
@@ -161,7 +210,56 @@ const chip = {
   font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)'
 }
 
-const chipName = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+/* The name, as its own control (smetana-4x3w) when there is somewhere for a
+   click to go: a click opens the attachment, the way `UserMessage.vue`'s own
+   chip does once it is sent. `cursor: 'default'` matches
+   `Button.vue`/`IconButton.vue` — every real button in this system reads as
+   one by the surface stepping up under a pointer, not by the cursor changing
+   shape — and the hover step is `--surface-hover` on a flat
+   `background:transparent` otherwise, never a colour change
+   (`core/interactive.js`'s own rule), eased by the same
+   `--transition-control` the message half's `:hover` rule uses, rather than
+   snapping. Reset to a plain span's box model since the browser's own button
+   chrome has no place here: no border, text inheriting the chip's own colour
+   and font rather than a button's defaults. `--space-1` on either side is a
+   small inset so the hover surface reads as a control's own box rather than
+   a highlighted word flush against the text — `chip`'s own left padding above
+   is reduced to keep the row from visibly growing wider for it. */
+function chipNameStyle(path) {
+  return {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    padding: '0 var(--space-1)',
+    border: 0,
+    borderRadius: 'var(--radius-2)',
+    background: hoveredAttachment.value === path ? 'var(--surface-hover)' : 'transparent',
+    color: 'inherit',
+    font: 'inherit',
+    textAlign: 'left',
+    cursor: 'default',
+    transition: 'var(--transition-control)'
+  }
+}
+
+/* The same box, for an attachment `openAttachments` does not name — a
+   non-picture outside the open project, with no channel this app can open it
+   through (see the header above). Same layout as `chipNameStyle`'s own —
+   the same padding and the same ellipsis rule, so a chip does not visibly
+   resize depending on whether it happens to be openable — and nothing else:
+   no `cursor`, no `background` and no `transition`, because there is no hover
+   state to ease into and no pointer affordance to draw. No `cursor` key at
+   all, rather than `'auto'` written out, lets the browser's own default
+   stand — which is what a run of plain inline text gets when nothing has
+   asked for anything else. */
+const chipNameStatic = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  padding: '0 var(--space-1)'
+}
 
 /* Smaller than the `sm` box, the way `Tab.vue` sizes its own close: an ordinary
    icon button is as tall as the chip it would sit inside. */
@@ -231,7 +329,16 @@ const lockHint = {
     <div v-if="attachments.length" :style="strip">
       <span v-for="path in attachments" :key="path" :style="chip">
         <Icon name="paperclip" :size="11" />
-        <span :style="chipName">{{ basename(path) }}</span>
+        <button
+          v-if="openAttachments.includes(path)"
+          type="button"
+          :aria-label="`Open ${basename(path)}`"
+          :style="chipNameStyle(path)"
+          @mouseenter="hoveredAttachment = path"
+          @mouseleave="hoveredAttachment = null"
+          @click="emit('open-attachment', path)"
+        >{{ basename(path) }}</button>
+        <span v-else :style="chipNameStatic">{{ basename(path) }}</span>
         <IconButton
           icon="x"
           :label="`Remove ${basename(path)}`"

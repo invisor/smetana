@@ -63,6 +63,7 @@ import EmptyState from '../core/EmptyState.vue'
 import Icon from '../core/Icon.vue'
 import StatusBadge from '../status/StatusBadge.vue'
 import { isAskUserQuestion } from './askUserQuestion.js'
+import { attachmentAction } from './attachmentAction.js'
 import { isBusy, journalRows } from './journal.js'
 import { basename } from '../../paths.js'
 /* Four stores beside the conversation's own, and each is here because this
@@ -97,7 +98,24 @@ import { basename } from '../../paths.js'
 
    The other two are the header's, and neither is on the wire: `session_attach`
    answers with the journal, its sequence number and the state, and nothing
-   else. */
+   else.
+
+   `openAttachment` (smetana-4x3w) is this panel's one handler for both
+   attachment chips — `Composer`'s, before a message is sent, and
+   `UserMessage`'s, once it is: both raise `open-attachment` with the bare
+   path and leave the branch here rather than making it themselves, since
+   neither is allowed to import `stores/attachments.js` (`Composer` stays
+   drawable in `?view=gallery` with no store at all, `UserMessage` is a
+   library component under `components/index.js` and may not know Tauri
+   exists — the same rule `Markdown.vue`'s own header states about this exact
+   store). `attachmentAction.js` beside this file makes the same decision the
+   two channels below already answer to: the same image window a figure's
+   expand control opens, or the same editor tab a local link's
+   `data-kind="file"` does — and, for the one case neither channel has
+   anywhere to go, neither at all. `openableAttachments` below is the other half
+   of what that module buys: `UserMessage` and `Composer` cannot ask it
+   themselves, so this file asks on their behalf and hands back which of
+   their own attachments are worth drawing as a control at all. */
 import { agentLabel } from '../../stores/agents.js'
 import { openExternal, openImageWindow } from '../../stores/app.js'
 import { filesState } from '../../stores/files.js'
@@ -396,6 +414,33 @@ async function send() {
 const stop = () => stopConversation(props.sessionId)
 const answer = (decision, answers) => answerQuestion(props.sessionId, question.value.id, decision, answers)
 
+/* The one handler for both attachment chips, `Composer`'s and `UserMessage`'s
+   — see the header above for why the branch lives here and not in either of
+   them. Nothing runs for the third outcome: a chip `openableAttachments`
+   below leaves out of its answer is drawn as plain text in both callers,
+   with no click handler bound to it at all, so this is only ever reached for
+   the two channels `attachmentAction` does answer. Its own `path` for the
+   `'file'` case is already project-relative — see that module's header for
+   why it does the conversion rather than handing back a bare tag for this
+   handler to convert a second time. */
+function openAttachment(path) {
+  const action = attachmentAction(path, filesState.root ?? '')
+  if (!action) return
+  if (action.kind === 'image') openImageWindow(path, basename(path))
+  else emit('open-local', { path: action.path, kind: 'file' })
+}
+
+/* Which of `UserMessage`'s or `Composer`'s own attachments is worth drawing
+   as a control at all — the other half of `attachmentAction.js` neither of
+   them may ask for themselves. Passed down as the subset of an `attachments`
+   array that is openable, rather than a parallel array of booleans or of
+   `attachmentAction`'s own answers, because the two draw the same thing
+   either way it comes out — a `<button>` — and neither reads which channel a
+   path would open through before it is actually clicked. */
+function openableAttachments(paths) {
+  return paths.filter((path) => attachmentAction(path, filesState.root ?? '') !== null)
+}
+
 const root = {
   position: 'relative',
   display: 'flex',
@@ -628,11 +673,13 @@ const refusal = {
             v-if="row.kind === 'user'"
             :text="row.text"
             :attachments="row.attachments"
+            :open-attachments="openableAttachments(row.attachments)"
             :root="filesState.root ?? ''"
             :base="base"
             @open="openExternal"
             @open-local="emit('open-local', $event)"
             @open-image="(picture) => openImageWindow(picture.path, picture.name)"
+            @open-attachment="openAttachment"
           />
           <AgentMessage
             v-else-if="row.kind === 'agent'"
@@ -704,11 +751,13 @@ const refusal = {
         v-if="held"
         v-model="held.draft"
         :attachments="attachments"
+        :open-attachments="openableAttachments(attachments)"
         :busy="busy"
         :waiting="waitingForAnswer"
         @update:attachments="attachments = $event"
         @send="send"
         @stop="stop"
+        @open-attachment="openAttachment"
       />
     </div>
   </div>
