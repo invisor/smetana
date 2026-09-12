@@ -44,8 +44,7 @@
    the two already do different things: one opens, one removes. Hover is
    tracked per chip in `hoveredAttachment` rather than through
    `useInteractive` — that composable is written for one control per component
-   instance, and this row draws one name button per attachment, the same
-   reason `AskUserQuestion.vue`'s own `hoveredKey` gives for its options.
+   instance, and this row draws one name button per attachment.
    `aria-label="Open …"` carries a verb the visible, possibly-ellipsized name
    does not — without it the cross beside it, labelled "Remove …", would read
    as the only action a screen reader can hear on the chip. Not the native

@@ -6374,14 +6374,127 @@ const menuTargetStyle = {
           <!-- `AskUserQuestion`'s own card, beside `PermissionRequest` rather
                than inside it — see `askUserQuestion.js`'s own header for why
                the two never share a component. Two questions in one call,
-               the second `multiSelect`, is the shape worth checking: both
-               questions' options wrap their descriptions rather than
-               clipping them, and toggling a second option on the
-               `multiSelect` question leaves the first one chosen. -->
+               the second `multiSelect`, is the shape worth checking against
+               `sm-prose.css` section 13: the container is an ordinary raised
+               card with no saturated fill, the whole loud budget sits on the
+               header chip alone, options are hairline-separated rows inside
+               one bordered list rather than cards of their own, a chosen row
+               reads by surface + inset edge + filled marker at once, and the
+               single-select question is a real radiogroup — reachable and
+               steerable by keyboard, with a visible focus ring. Send answer
+               stays disabled until both questions have something, from either
+               a choice or the freeform field, and the footer's hint counts
+               them. This card carries no `asked-at`, so it draws no header
+               clock — the two settled columns beside it are what a real one
+               looks like once it has one and once it has closed. -->
           <AskUserQuestion :input="ASK_USER_QUESTION_INPUT" @answer="onAskUserQuestionAnswer" />
           <div :style="{ font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
             {{ askUserQuestionAnswer ? `decision: ${askUserQuestionAnswer.decision}, answers: ${JSON.stringify(askUserQuestionAnswer.answers)}` : 'no answer yet' }}
           </div>
+        </div>
+
+        <!-- The other two states `section[data-ask]` draws, written out by
+             hand rather than through the live component — the same reason
+             `hr[data-session]` a few columns over is static markup: the
+             component's own `data-state` only ever reaches `answered` or
+             `declined` after a press nobody here can script, and `?view=gallery`
+             is what has to show every state a stylesheet paints regardless.
+             Both drop out of the attention ladder completely: flat surface,
+             no shadow, a quiet chip (a tick for the answered one), and
+             neither the freeform field nor the footer is emitted. The
+             answered column keeps its chosen rows exactly as picked — one
+             radio, both boxes of the `multiSelect` question — and the
+             declined one clears every `data-chosen` and mutes its own
+             question text, which is `AskUserQuestion.vue`'s own read of a
+             decline discarding the draft rather than keeping it as a ghost
+             answer. -->
+        <div class="sm-prose" :style="{ width: '360px' }">
+          <section data-ask data-state="answered">
+            <header>
+              <span data-mark>answered</span>
+              <span data-tool data-count="2">AskUserQuestion</span>
+              <time>4m</time>
+            </header>
+            <div data-question>
+              <h6>Approach</h6>
+              <p>Which approach fixes the worktree collision?</p>
+              <ul data-options role="radiogroup" aria-label="Approach">
+                <li>
+                  <input type="radio" name="gallery-ask-answered-q0" id="gallery-ask-answered-q0o0" checked disabled>
+                  <label for="gallery-ask-answered-q0o0" data-chosen>
+                    <span data-ring></span>
+                    <strong>Replace the separator</strong>
+                    <span data-why>Leaves old worktrees alone; what the rest of the tree already does.</span>
+                  </label>
+                </li>
+                <li>
+                  <input type="radio" name="gallery-ask-answered-q0" id="gallery-ask-answered-q0o1" disabled>
+                  <label for="gallery-ask-answered-q0o1">
+                    <span data-ring></span>
+                    <strong>Store the folder beside the branch</strong>
+                    <span data-why>Needs a migration for every worktree already on disk.</span>
+                  </label>
+                </li>
+              </ul>
+            </div>
+            <div data-question>
+              <h6>Platforms</h6>
+              <p>Which platforms should the fix be checked on before it merges?</p>
+              <ul data-options data-multi role="group" aria-label="Platforms">
+                <li>
+                  <input type="checkbox" id="gallery-ask-answered-q1o0" checked disabled>
+                  <label for="gallery-ask-answered-q1o0" data-chosen>
+                    <span data-box></span>
+                    <strong>macOS</strong>
+                  </label>
+                </li>
+                <li>
+                  <input type="checkbox" id="gallery-ask-answered-q1o1" checked disabled>
+                  <label for="gallery-ask-answered-q1o1" data-chosen>
+                    <span data-box></span>
+                    <strong>Linux</strong>
+                  </label>
+                </li>
+                <li>
+                  <input type="checkbox" id="gallery-ask-answered-q1o2" disabled>
+                  <label for="gallery-ask-answered-q1o2">
+                    <span data-box></span>
+                    <strong>Windows</strong>
+                  </label>
+                </li>
+              </ul>
+            </div>
+          </section>
+
+          <section data-ask data-state="declined">
+            <header>
+              <span data-mark>declined</span>
+              <span data-tool data-count="2">AskUserQuestion</span>
+              <time>1m</time>
+            </header>
+            <div data-question>
+              <h6>Approach</h6>
+              <p>Which approach fixes the worktree collision?</p>
+              <ul data-options role="radiogroup" aria-label="Approach">
+                <li>
+                  <input type="radio" name="gallery-ask-declined-q0" id="gallery-ask-declined-q0o0" disabled>
+                  <label for="gallery-ask-declined-q0o0">
+                    <span data-ring></span>
+                    <strong>Replace the separator</strong>
+                    <span data-why>Leaves old worktrees alone; what the rest of the tree already does.</span>
+                  </label>
+                </li>
+                <li>
+                  <input type="radio" name="gallery-ask-declined-q0" id="gallery-ask-declined-q0o1" disabled>
+                  <label for="gallery-ask-declined-q0o1">
+                    <span data-ring></span>
+                    <strong>Store the folder beside the branch</strong>
+                    <span data-why>Needs a migration for every worktree already on disk.</span>
+                  </label>
+                </li>
+              </ul>
+            </div>
+          </section>
         </div>
 
         <div class="sm-prose" :style="{ width: '280px', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }">

@@ -47,6 +47,8 @@
   --prose-dot:7px;           /* activity mark */
   --prose-caret-w:2px;       /* streaming live edge */
   --prose-icon:13px;         /* copy / expand control glyph box */
+  --prose-radio:13px;        /* answer-option chooser ring/box */
+  --prose-radio-dot:5px;     /* its filled centre when chosen */
 
   /* ---- scroll affordance -------------------------------------------------
      Blocks that scroll sideways inside the panel draw their trough at all
@@ -56,8 +58,18 @@
   --prose-scroll-track:var(--surface-sunken);
   --prose-scroll-thumb:var(--border-strong);
 
+  /* ---- the agent's question -----------------------------------------------
+     An ask is the one block in the panel a person must act on, so it is the
+     one block allowed to spend the loud level of the attention ladder — and it
+     spends it on a single chip, never on a fill. --prose-ask-min is the
+     narrowest an option row may get before its description drops to a second
+     line, which is the width the two-line row is designed for. */
+  --prose-ask-min:200px;
+
   /* ---- typed affordances (content strings, not decoration) --------------- */
   --prose-external-glyph:"\2197";  /* leaves the app */
   --prose-dir-glyph:"/";           /* the local target is a folder */
   --prose-meta-sep:" \00B7 ";      /* the system's separator, per the guide */
+  --prose-ask-glyph:"\25B3";       /* needs-you: the system's triangle silhouette */
+  --prose-answered-glyph:"\2713";  /* the ask is settled */
 }
