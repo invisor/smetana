@@ -95,6 +95,15 @@ export { parseAnsi } from './agent/ansi.js'
    `views/Gallery.vue` imports either of them, so either could be renamed for
    two lines — which is worth knowing before treating this as settled. */
 export { default as AgentMessage } from './conversation/AgentMessage.vue'
+export { default as AskUserQuestion } from './conversation/AskUserQuestion.vue'
+export {
+  ASK_USER_QUESTION_TOOL,
+  buildAnswers,
+  formatAnswer,
+  isAskUserQuestion,
+  isComplete as askUserQuestionIsComplete,
+  parseQuestions
+} from './conversation/askUserQuestion.js'
 export { default as Composer } from './conversation/Composer.vue'
 /* The panel itself, and the one export here that imports a store —
    `TerminalView` below is the other, and the two are the same exception for the

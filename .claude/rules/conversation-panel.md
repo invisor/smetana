@@ -177,6 +177,121 @@ never a raw `stream_event` line, which was checked against the installed CLI rat
 and `session::history::is_past` refuses the event kind a second time regardless, the deliberate
 filter both `model.rs` and `history.rs` carry as the reason not to rest on the first fact alone.
 
+## `AskUserQuestion` answers through the permission channel, and draws its own card
+
+`AskUserQuestion` is a tool like any other on the wire `permission.rs` serves — Claude Code routes
+every tool call through `--permission-prompt-tool` alike, this one included — and before smetana-63kn
+that meant it got `PermissionRequest.vue` and nothing else: a yellow card reading "AskUserQuestion
+needs your permission" with Allow and Deny, no question, no options, because
+`agents::claude::tool_detail` has one line to give a tool's whole call and this one needed a form.
+Whatever a person pressed answered a call the agent never actually receives an answer to, and the
+conversation went on as if it had not been asked.
+
+**There is no second channel, and that is the fix rather than a workaround.** The Agent SDK's own
+documented contract serves this tool *inside* the permission flow: the reply is an ordinary allow,
+with `updatedInput` carrying `{ questions, answers }` in place of the call's own input echoed back
+unchanged. `permission::decision_payload` is the one function that knows the difference — `answers:
+None` behaves exactly as it always did, and `answers: Some(map)` is the one branch that builds this
+shape instead, echoing `input.questions` back rather than re-deriving it, so a person's answers can
+never disagree with the questions that were actually asked.
+
+Three places had to learn to carry a shape richer than a bare `Decision`, and each is a widening
+rather than a new vocabulary: `EventKind::Permission` grew an `input` field (`session/model.rs`) —
+the tool call's own arguments, untouched, since `detail` remains one line and cannot hold four
+questions with their own options; `EventKind::PermissionAnswered` grew `answers: Option<BTreeMap<String,
+String>>`, `None` for an ordinary allow/deny and for a decline; and `session_answer` grew a fourth
+argument from the front end's own side — the Rust signature counts five, the extra one being the
+`State<'_, SessionHandle>` every `#[tauri::command]` takes and no `invoke` call ever sends — optional
+and of the same shape, threaded through `Request::Answer` to both the journal and
+`PermissionServer::answer`. None of this touches `Decision` itself — `allow`/`allow-always`/`deny`
+are still the whole of what a person may answer with, and a decline to answer *is* `Decision::Deny`
+with no `answers`, exactly like refusing any other tool.
+
+**`Permission::input` is generic but not universal, and that is a bound rather than an oversight.**
+Every asking tool's `Permission` carries the field — a second structured tool needs no second field,
+only a second name — but `session::service::question` fills it in for exactly one name today,
+`agents::claude::ASK_USER_QUESTION_TOOL`, and writes `Value::Null` for every other tool's event.
+That gate exists because the field is not free: this event is appended to a journal that lives for
+the life of a session, is cloned whole on every attach and shipped on every `session:events` batch,
+and a driven session asks on every `Write`, `Edit`, `MultiEdit` and `Task` — carrying whole file
+bodies and whole subagent prompts through it unconditionally would have broken `journal::BUDGET`'s
+own promise that each event is small, a promise this file has already had to repair once, for
+`TextDelta` (`smetana-6we6`, the section above).
+
+**The front end draws two components off the same `question`, chosen by tool name.**
+`ConversationView.vue` computes `isAskUserQuestionCard` from `question.tool` and switches between
+`AskUserQuestion.vue` and `PermissionRequest.vue` at the one place either card is drawn — the foot of
+the panel, over the composer, exactly where the ordinary card always stood. Every other tool's card
+is untouched: `PermissionRequest.vue` still reads `tool`, `detail` and `options` and still draws
+Allow/Deny (or Allow/Allow-always/Deny), and nothing about its props or its behaviour moved.
+`AskUserQuestion.vue` reads `question.input` instead — the raw arguments, parsed by
+`askUserQuestion.js` beside it, pure and tested there for the reason every rule in this family lives
+outside its component: a `.vue` file is the one thing no runner in this repository can reach.
+`parseQuestions` degrades a malformed field to an empty one rather than throwing, since this is the
+one place in the front end reading a tool's own JSON argument rather than a value this app minted.
+
+**A custom answer always wins over a selection, for one question at a time**, per the Design section
+of smetana-63kn: a person may always answer in their own words rather than pick from the agent's own
+options, and the two are mutually exclusive in the component's own state — choosing an option clears
+whatever was typed for that question, and typing clears whatever was chosen. `formatAnswer` in
+`askUserQuestion.js` is the one place that resolves the two into the single string the wire wants.
+
+**Which options end up selected is `toggle` in `askUserQuestion.js`, pure and tested there rather than
+left inside `AskUserQuestion.vue`** — a `multiSelect` question allows more than one option at once, an
+ordinary one allows exactly one, and clicking a chosen option deselects it either way, which is one of
+this task's own acceptance criteria and belongs in the one file a test here can reach: an edit that
+made single-select accumulate or multi-select replace would ship with both gates green and reach the
+agent as one label where four were chosen. `toggle` itself joins nothing — it answers with the array of
+whatever now identifies the selected options — and `formatAnswer` is the only join in the file, several
+chosen labels with a comma, since a single-select answer is one label and needs none.
+
+**The join is `', '`, a comma and a space, which is a decision rather than the obvious reading of
+"joined by commas" in the task's own Design section.** It was kept over a bare `','` because free
+text is an accepted answer in this same protocol — a person may always type their own sentence
+instead of choosing — so whatever reads `answers` on the far side already has to cope with a string
+that is not a machine-parseable list at all, and a comma with nothing after it degrades that reading
+to an odd-looking valid answer rather than to an error. Nothing in this repository can test that
+reading: the far side is the agent's own model, not code this tree owns, so this is a judgement call
+recorded here rather than a behaviour pinned by a test.
+
+**The order of a `multiSelect` answer is click order, not the order the options were offered in** —
+`toggle` appends to the end of whatever is already selected, so choosing `Windows` and then `macOS`
+sends `"Windows, macOS"` even though the call listed `macOS` first. This was chosen rather than fallen
+into: the alternative is sorting the chosen labels back into the options' own order before joining
+them, which reads tidier but would silently reorder a person's own emphasis — naming the one they
+actually meant first — for no reader on the far side known to care about the difference. `isComplete` gates the card's own
+Send button — every question in one call is answered in one reply, never a partial `answers` for a
+call that named four, since the agent asked all of them at once and there is nothing to be gained by
+making it wait through several short replies for what one round trip already fits.
+
+**The component itself keys a question's selection by option index, never by label**, and `toggle`'s
+own parameter is named for that: not `label`, but the identity-agnostic `id`, since the function only
+ever compares it for equality and is handed a label in `askUserQuestion.js`'s own tests and an index
+by the one real caller. `parseQuestions` defaults a missing `label` to `''`, so two options that both
+lost theirs would otherwise be one value as far as `toggle` and the `v-for`'s own `:key` are
+concerned — an observation made while fixing this, over a hand-built fixture rather than one in the
+tree, and there is nothing under `Gallery.vue` today that shows it: that showcase's one
+`AskUserQuestion` fixture has well-formed labels throughout, on purpose, since it is meant to read as
+an ordinary call rather than as a test of malformed input. `askUserQuestion.js`'s own tests are what
+actually pin the degenerate case now. `selectedLabels(questions, selectedByIndex)`, exported from
+that same file rather than left as a `.vue` method, is the one place index and label meet — mapping
+the chosen indices back to `question.options[i].label`, `''` for an index past the end of `options`
+too — right before `buildAnswers` and `isComplete` are called, since those take the wire's own
+vocabulary and index is this component's alone. `setCustom`'s own mutual exclusion — typing clears a
+selection — stays in the component, being short enough that moving it out would cost more than it
+saves; it is still a rule, and the file's own header says so rather than claiming the component holds
+none.
+
+**Drawn at the same `loud` weight as `PermissionRequest.vue`, deliberately**: the harness is holding
+the very same tool call open either way, so `AskUserQuestion.vue` reads `statusColors('needs-you')`
+and `STATUS_GLYPH` off the identical pair rather than choosing a softer treatment — the two cards read
+as one vocabulary for "the session cannot go on without you", and only the shape inside the frame
+says which tool is asking. The frame itself — the fill, the border, the outer padding and radius,
+the head row's icon and gap — is written out twice, once per component, and kept in step by hand
+rather than shared: that duplication is deliberate for now rather than an oversight to fold away, and
+nothing fails if only one of the two moves, which is worth knowing before assuming a shared frame
+already exists.
+
 ## One renderer, shared with the task inspector — and why it was not forked
 
 `Markdown.vue` and `sm-prose.css` are not this panel's alone: `TaskInspector.vue` draws every one of

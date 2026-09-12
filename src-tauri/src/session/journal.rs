@@ -10,15 +10,26 @@ use super::model::{Event, EventKind};
 /// them and each is small; the ceiling is here so that a session left running
 /// for a week cannot grow without bound.
 ///
-/// **That "each is small" is no longer true of every event, and `append`'s own
-/// `TextDelta` collapse below is what keeps it true in practice.** One
-/// substantial streamed reply is several hundred `TextDelta`s where it used to
-/// be a single `Text` (smetana-6we6); left uncollapsed, this budget would be
-/// spent by five to fifteen ordinary turns rather than the "long night" or
-/// "week" this comment has always promised — a promise that was never
-/// re-measured against the granularity the wire actually carries once it
-/// changed. It holds again only because a closed reply's deltas do not stay in
-/// the journal once it closes.
+/// **That "each is small" is no longer true of every event, and it has now
+/// been broken and repaired twice.** One substantial streamed reply is
+/// several hundred `TextDelta`s where it used to be a single `Text`
+/// (smetana-6we6); left uncollapsed, this budget would be spent by five to
+/// fifteen ordinary turns rather than the "long night" or "week" this comment
+/// has always promised. `append`'s own `TextDelta` collapse below is what
+/// keeps that one true in practice, since a closed reply's deltas do not stay
+/// in the journal once it closes.
+///
+/// `EventKind::Permission`'s `input` (smetana-63kn) is the second: a driven
+/// session asks on every `Write`, `Edit`, `MultiEdit` and `Task`, and that
+/// field is the tool call's own arguments, untouched — whole file bodies,
+/// whole subagent prompts. What keeps the promise this time is not a
+/// collapse but a gate one file over: `session::service::question` only
+/// carries a real value through for the one tool whose panel reads it
+/// structured (`AskUserQuestion`) and writes `Value::Null` for every other
+/// tool's `Permission`, so the field stays cheap on the path that fires on
+/// every file this app touches. A second structured tool answered the same
+/// way stays inside this budget; one carried through unconditionally would
+/// not.
 pub const BUDGET: usize = 4000;
 
 pub struct Journal {
@@ -175,6 +186,7 @@ mod tests {
             tool: "Bash".into(),
             detail: "ls".into(),
             options: vec![],
+            input: serde_json::json!({ "command": "ls" }),
         }
     }
 
@@ -266,7 +278,7 @@ mod tests {
         let mut journal = Journal::new();
         journal.append(permission("p1"), at());
         journal.append(
-            EventKind::PermissionAnswered { id: "p1".into(), decision: Decision::Allow },
+            EventKind::PermissionAnswered { id: "p1".into(), decision: Decision::Allow, answers: None },
             at(),
         );
         for n in 0..BUDGET + 10 {

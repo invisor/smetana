@@ -33,7 +33,7 @@
 //! whether a session is recorded and under what name, asked from here rather
 //! than restated.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use portable_pty::CommandBuilder;
@@ -116,7 +116,12 @@ pub enum Request {
     /// conversation with a hole in it.
     Since(SessionId, u64, oneshot::Sender<Result<Option<Vec<Event>>, SessionError>>),
     Send(SessionId, String, Vec<String>, oneshot::Sender<Result<(), SessionError>>),
-    Answer(SessionId, String, Decision, oneshot::Sender<Result<(), SessionError>>),
+    /// A person's answer. The last field is `AskUserQuestion`'s own —
+    /// `Some` only when a question was answered with chosen or typed text
+    /// rather than a plain allow/deny — and travels through unchanged to both
+    /// the journal (`EventKind::PermissionAnswered`) and the permission
+    /// listener, which is what builds `updatedInput` from it.
+    Answer(SessionId, String, Decision, Option<BTreeMap<String, String>>, oneshot::Sender<Result<(), SessionError>>),
     Stop(SessionId, oneshot::Sender<Result<(), SessionError>>),
     /// The one reply that is not a `oneshot`: it is awaited from the exit
     /// event, on a synchronous thread, and only `std::sync::mpsc` can put a
@@ -741,7 +746,7 @@ fn handle(
                 Err(SessionError::Spawn(UNREACHABLE.into()))
             });
         }
-        Request::Answer(id, question, decision, tx) => {
+        Request::Answer(id, question, decision, answers, tx) => {
             let Some(live) = sessions.get_mut(&id) else {
                 let _ = tx.send(Err(SessionError::NoSuchSession(id)));
                 return;
@@ -769,11 +774,14 @@ fn handle(
                 app,
                 id,
                 live,
-                vec![EventKind::PermissionAnswered { id: question.clone(), decision }],
+                vec![EventKind::PermissionAnswered { id: question.clone(), decision, answers: answers.clone() }],
             );
             // Some harnesses take a decision over stdin instead of a channel of
             // their own; Claude Code answers `None` here and is served by the
-            // listener below.
+            // listener below. Nothing here passes `answers` down that road: it
+            // exists only for `AskUserQuestion`, which Claude Code serves
+            // through the permission listener like every other tool, never
+            // over stdin.
             let bytes = match live.talking.as_mut() {
                 Some(talking) => talking.driver.answer(&question, decision),
                 None => None,
@@ -783,7 +791,7 @@ fn handle(
                     lost(app, id, live);
                 }
             }
-            let delivered = permission.is_some_and(|server| server.answer(&question, decision));
+            let delivered = permission.is_some_and(|server| server.answer(&question, decision, answers));
             let _ = tx.send(if delivered {
                 Ok(())
             } else {
@@ -885,10 +893,25 @@ fn absorb(
 /// nothing else: the answer is a person's, and until they give one this session
 /// says nothing further — the harness is holding its own tool call open.
 fn question(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, asked: Asked) {
-    let Asked { session, id, tool, detail } = asked;
+    let Asked { session, id, tool, detail, input } = asked;
     let Some(live) = sessions.get_mut(&session) else {
         log::warn!("[session {session}] a question arrived for a session that is not here");
         return;
+    };
+    // Gated to the short list of tools whose panel actually reads `input`
+    // structured — today just `AskUserQuestion` — and never left universal.
+    // This event is appended to a journal that lives for the life of a
+    // session, is cloned whole on every attach and shipped on every
+    // `session:events` batch, and a driven session asks on every `Write`,
+    // `Edit`, `MultiEdit` and `Task`: an unclipped `input` on all of them
+    // would carry whole file bodies and whole subagent prompts through a
+    // budget (`journal::BUDGET`) sized on the promise that each event is
+    // small. A second structured tool is a second name added here, in the
+    // one place this is gated, rather than a second field on the event.
+    let input = if tool == crate::agents::claude::ASK_USER_QUESTION_TOOL {
+        input
+    } else {
+        serde_json::Value::Null
     };
     append(
         app,
@@ -903,6 +926,7 @@ fn question(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, asked: Ask
             // remembers a standing permission, so the button would be one that
             // asked again on the very next tool call.
             options: vec![Decision::Allow, Decision::Deny],
+            input,
         }],
     );
 }
