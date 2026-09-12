@@ -364,6 +364,13 @@ impl Profile for Claude {
 const MAX_TEXT: usize = 200;
 pub(crate) const MAX_DETAIL: usize = 140;
 
+/// The one tool this permission channel also carries a structured form for.
+/// `session::service::question` is what actually gates `Permission::input` on
+/// this name — this constant is the one place it is spelled, so a second
+/// structured tool is a second name added to the list there rather than a
+/// second string to keep in step with this one.
+pub(crate) const ASK_USER_QUESTION_TOOL: &str = "AskUserQuestion";
+
 /// Whitespace collapsed and the whole thing on one line — a pane row is a row —
 /// and every other control character dropped.
 ///
@@ -426,7 +433,7 @@ pub(crate) fn tool_detail(name: &str, input: &serde_json::Value) -> String {
         // the log's own one-liner, the first question's own text, for
         // whatever still reads `detail` rather than `input` — a diagnostic
         // line, never a source of truth.
-        "AskUserQuestion" => input
+        ASK_USER_QUESTION_TOOL => input
             .get("questions")
             .and_then(serde_json::Value::as_array)
             .and_then(|questions| questions.first())

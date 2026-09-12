@@ -5,7 +5,8 @@ import {
   formatAnswer,
   isAskUserQuestion,
   isComplete,
-  parseQuestions
+  parseQuestions,
+  toggle
 } from '../../../src/components/conversation/askUserQuestion.js'
 
 describe('isAskUserQuestion', () => {
@@ -79,6 +80,26 @@ describe('parseQuestions', () => {
       { label: '', description: '' },
       { label: 'ok', description: '' }
     ])
+  })
+})
+
+describe('toggle', () => {
+  it('replaces whatever was chosen for an ordinary, single-select question', () => {
+    expect(toggle(['Rewrite'], 'Patch', false)).toEqual(['Patch'])
+  })
+
+  it('adds a second label for a multiSelect question rather than replacing the first', () => {
+    expect(toggle(['Rewrite'], 'Patch', true)).toEqual(['Rewrite', 'Patch'])
+  })
+
+  it('removes a label already chosen, for either shape of question', () => {
+    expect(toggle(['Rewrite'], 'Rewrite', false)).toEqual([])
+    expect(toggle(['Rewrite', 'Patch'], 'Patch', true)).toEqual(['Rewrite'])
+  })
+
+  it('starts from nothing selected when given none', () => {
+    expect(toggle(undefined, 'Rewrite', false)).toEqual(['Rewrite'])
+    expect(toggle(undefined, 'Rewrite', true)).toEqual(['Rewrite'])
   })
 })
 

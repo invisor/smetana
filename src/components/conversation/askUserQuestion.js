@@ -42,6 +42,23 @@ export function parseQuestions(input) {
   }))
 }
 
+/* What clicking one option does to the labels selected for its question —
+   one of this task's own acceptance criteria, and so pulled out here rather
+   than left in the component: a `multiSelect` question allows more than one
+   option at once, an ordinary one allows exactly one, and clicking a chosen
+   option deselects it either way. `AskUserQuestion.vue` is the one thing in
+   this repository no test can reach, and an edit that made single-select
+   accumulate or multi-select replace would ship with both gates green and
+   reach the agent as one label where four were chosen — the bug this task
+   exists to fix, one layer up. */
+export function toggle(selected, label, multiSelect) {
+  const current = selected ?? []
+  if (multiSelect) {
+    return current.includes(label) ? current.filter((chosen) => chosen !== label) : [...current, label]
+  }
+  return current.includes(label) ? [] : [label]
+}
+
 /* The one string a single question's answer becomes on the wire: a person's
    own words when they wrote any, the selected options joined by a comma
    otherwise — the only join in this file, since a single-select answer is

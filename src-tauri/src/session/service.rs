@@ -898,6 +898,21 @@ fn question(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, asked: Ask
         log::warn!("[session {session}] a question arrived for a session that is not here");
         return;
     };
+    // Gated to the short list of tools whose panel actually reads `input`
+    // structured — today just `AskUserQuestion` — and never left universal.
+    // This event is appended to a journal that lives for the life of a
+    // session, is cloned whole on every attach and shipped on every
+    // `session:events` batch, and a driven session asks on every `Write`,
+    // `Edit`, `MultiEdit` and `Task`: an unclipped `input` on all of them
+    // would carry whole file bodies and whole subagent prompts through a
+    // budget (`journal::BUDGET`) sized on the promise that each event is
+    // small. A second structured tool is a second name added here, in the
+    // one place this is gated, rather than a second field on the event.
+    let input = if tool == crate::agents::claude::ASK_USER_QUESTION_TOOL {
+        input
+    } else {
+        serde_json::Value::Null
+    };
     append(
         app,
         session,

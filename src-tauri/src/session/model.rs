@@ -80,14 +80,23 @@ pub enum EventKind {
     Reasoning { text: String },
     ToolUse { id: String, name: String, detail: String },
     ToolResult { id: String, ok: bool, summary: String },
-    /// `input` is the tool call's own arguments, untouched. Every other tool's
-    /// panel draws `detail` alone, but `AskUserQuestion`'s own card
-    /// (`src/components/conversation/AskUserQuestion.vue`) reads its
-    /// `questions` out of this field instead — `detail` is `tool_detail`'s
-    /// one-line summary of it and cannot carry four questions, each with its
-    /// own options and descriptions. Carried for every tool rather than only
-    /// this one so that a second structured tool never needs a second field
-    /// here.
+    /// The tool call's own arguments, untouched, **for the short list of
+    /// tools that need them structured** — today just `AskUserQuestion`,
+    /// whose own card (`src/components/conversation/AskUserQuestion.vue`)
+    /// reads its `questions` out of this field, since `detail` is
+    /// `tool_detail`'s one-line summary and cannot carry four questions each
+    /// with its own options. Every other tool's `Permission` carries
+    /// `Value::Null` here and keeps drawing from `detail` alone.
+    ///
+    /// The field itself is generic — on every `Permission` event whatever the
+    /// tool — so that a second structured tool needs no second field, only a
+    /// second name in the list `session::service::question` gates this on.
+    /// It is *not* filled in unconditionally: this event is appended to a
+    /// journal that lives for the life of a session and is cloned whole on
+    /// every attach (`journal::BUDGET` holds because each event is small,
+    /// and a driven session asks on every `Write`, `Edit`, `MultiEdit` and
+    /// `Task` — a bound that a universal, unclipped `input` would break by
+    /// carrying whole file bodies and whole subagent prompts through it).
     Permission { id: String, tool: String, detail: String, options: Vec<Decision>, input: serde_json::Value },
     /// `answers` is `Some` only for a person's own answer to `AskUserQuestion`
     /// — the text of each question mapped to what was chosen or typed, the

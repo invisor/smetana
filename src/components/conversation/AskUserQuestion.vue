@@ -36,7 +36,7 @@ import Button from '../core/Button.vue'
 import Icon from '../core/Icon.vue'
 import Input from '../core/Input.vue'
 import { STATUS_GLYPH, statusColors } from '../status/status.js'
-import { buildAnswers, isComplete, parseQuestions } from './askUserQuestion.js'
+import { buildAnswers, isComplete, parseQuestions, toggle } from './askUserQuestion.js'
 
 const props = defineProps({
   /* `Permission::input` off the wire — the raw arguments of the
@@ -50,13 +50,17 @@ const props = defineProps({
    all. */
 const emit = defineEmits(['answer'])
 
-const questions = ref(parseQuestions(props.input))
+const questions = ref([])
 
-/* Per question: the labels currently chosen, and whatever a person typed
-   instead. Rebuilt whenever the questions themselves change — a fresh
-   `AskUserQuestion` call is a fresh form, never the last one's state showing
-   through a new set of options — which in practice means every time, since
-   `ConversationView.vue` keys this component on the permission's own id. */
+/* Per question: the **indices** of the options currently chosen, and
+   whatever a person typed instead. Indices rather than labels, because
+   `parseQuestions` defaults a missing `label` to `''`, and two options that
+   both lost theirs would otherwise be the same value as far as selection is
+   concerned — picking one would toggle both. Rebuilt whenever the questions
+   themselves change — a fresh `AskUserQuestion` call is a fresh form, never
+   the last one's state showing through a new set of options — which in
+   practice means every time, since `ConversationView.vue` keys this
+   component on the permission's own id. */
 const selected = reactive([])
 const custom = reactive([])
 
@@ -72,20 +76,19 @@ function reset(parsed) {
 reset(parseQuestions(props.input))
 watch(() => props.input, (next) => reset(parseQuestions(next)))
 
-function isSelected(qi, label) {
-  return selected[qi]?.includes(label) ?? false
+function isSelected(qi, oi) {
+  return selected[qi]?.includes(oi) ?? false
 }
 
-function toggleOption(qi, label) {
-  const question = questions.value[qi]
-  const current = selected[qi] ?? []
-  if (question.multiSelect) {
-    selected[qi] = current.includes(label)
-      ? current.filter((chosen) => chosen !== label)
-      : [...current, label]
-  } else {
-    selected[qi] = current.includes(label) ? [] : [label]
-  }
+/* The multiSelect/single-select/deselect rule itself is `toggle` in
+   `askUserQuestion.js`, pure and tested there — this is one of this task's
+   own acceptance criteria, and a `.vue` file is the one thing no runner here
+   can reach. It is generic over what identifies an option, and it is handed
+   an index here rather than a label for `isSelected`'s own reason. What is
+   left here is plain state plumbing: which question, and the mutual
+   exclusion with the typed answer. */
+function toggleOption(qi, oi) {
+  selected[qi] = toggle(selected[qi], oi, questions.value[qi].multiSelect)
   // A selection and a typed answer are mutually exclusive for one question —
   // see this file's own header for why picking an option clears the field.
   custom[qi] = ''
@@ -96,13 +99,23 @@ function setCustom(qi, text) {
   if (text) selected[qi] = []
 }
 
+/* `askUserQuestion.js`'s rules take the chosen **labels**, not indices — that
+   is the wire's own vocabulary (`formatAnswer`'s join, `buildAnswers`'s
+   keys), and the boundary is worth keeping even though this component holds
+   indices for the reason above. This is the one place the two meet. */
+function selectedLabels() {
+  return questions.value.map((question, qi) =>
+    (selected[qi] ?? []).map((oi) => question.options[oi]?.label ?? '')
+  )
+}
+
 const complete = ref(false)
 watch([questions, selected, custom], () => {
-  complete.value = isComplete(questions.value, selected, custom)
+  complete.value = isComplete(questions.value, selectedLabels(), custom)
 }, { immediate: true, deep: true })
 
 function send() {
-  emit('answer', 'allow', buildAnswers(questions.value, selected, custom))
+  emit('answer', 'allow', buildAnswers(questions.value, selectedLabels(), custom))
 }
 
 function decline() {
@@ -127,9 +140,14 @@ const card = {
   fontFamily: 'var(--font-sans)'
 }
 
+/* `alignItems: 'flex-start'` rather than `center`: below about 330px the
+   sentence wraps to two lines, and centring the icon against the *block*
+   put the triangle floating between them rather than sitting on the first
+   line it is announcing. Flex-start pins it to the top, level with the
+   first line, whether the sentence wraps or not. */
 const head = {
   display: 'flex',
-  alignItems: 'center',
+  alignItems: 'flex-start',
   gap: 'var(--space-3)',
   font: 'var(--weight-medium) var(--text-sm)/var(--leading-snug) var(--font-sans)'
 }
@@ -149,10 +167,16 @@ const questionBlock = (i) => ({
   borderTop: i > 0 ? 'var(--border-w) solid var(--surface-raised)' : 'none'
 })
 
+/* Sans, sentence case, no transform: `header` is the agent's own prose — a
+   short label it wrote, not an identifier and not this system's own copy —
+   and CLAUDE.md's rule is flat about both halves of that. Uppercase mono is
+   also the silhouette `StatusBadge` reserves for a status; spending it on
+   arbitrary agent text would put a badge's own idiom on a string that has
+   nothing to do with status. Weight and size are what set it apart from
+   `questionText` below instead of a transform or a second ink this card has
+   no colour budget left for. */
 const questionHeader = {
-  font: 'var(--weight-semibold) var(--text-xs)/var(--leading-snug) var(--font-mono)',
-  textTransform: 'uppercase',
-  letterSpacing: 'var(--tracking-tight)'
+  font: 'var(--weight-medium) var(--text-xs)/var(--leading-snug) var(--font-sans)'
 }
 
 const questionText = {
@@ -163,13 +187,26 @@ const optionsList = { display: 'flex', flexDirection: 'column', gap: 'var(--spac
 
 /* One option, drawn by hand rather than through `Button.vue`: that component
    is one line, centred and fixed-height, and an option here carries a label
-   and a wrapping description on the line under it. Interaction is still a
-   surface step and never a colour change on its own account (`core/
-   interactive.js`'s own rule) — hover only thickens the border, selecting is
-   the one state allowed to invert the card's own ink and fill, the same
-   ink-on-paper idiom the primary button uses elsewhere in this system. */
-function optionStyle(qi, label, hovered) {
-  const on = isSelected(qi, label)
+   and a wrapping description on the line under it — auto-height, since
+   nothing here declares one.
+
+   **The border is always the same width, `var(--border-w-strong)`, and only
+   its colour ever moves — never absent, only invisible**, the same device
+   `sm-prose.css`'s copy control uses (`.claude/rules/conversation-panel.md`,
+   "The copy button is always visible") and for the identical reason: with no
+   height declared, `box-sizing: border-box` has nothing to absorb a wider
+   border into, so a version that swapped `--border-w` for `--border-w-strong`
+   on hover or on selection grew the box by the difference — 2px taller, the
+   label a pixel lower, and the next question's first option shifted under
+   the pointer, which in a `multiSelect` question is exactly where the next
+   click was going. Interaction is still a surface step and never a colour
+   change on its own account (`core/interactive.js`'s own rule) — hover shows
+   the reserved border rather than growing one, and selecting is the one
+   state allowed to invert the card's own ink and fill, the same ink-on-paper
+   idiom the primary button uses elsewhere in this system; a selected option
+   needs no border of its own; the fill already says what a border would. */
+function optionStyle(qi, oi, hovered) {
+  const on = isSelected(qi, oi)
   return {
     display: 'flex',
     flexDirection: 'column',
@@ -180,7 +217,7 @@ function optionStyle(qi, label, hovered) {
     padding: 'var(--space-3) var(--space-4)',
     background: on ? 'var(--surface-raised)' : 'transparent',
     color: on ? c.fg : 'var(--surface-raised)',
-    border: `${on || hovered ? 'var(--border-w-strong)' : 'var(--border-w)'} solid var(--surface-raised)`,
+    border: `var(--border-w-strong) solid ${!on && hovered ? 'var(--surface-raised)' : 'transparent'}`,
     borderRadius: 'var(--radius-3)',
     font: 'inherit',
     cursor: 'default',
@@ -191,16 +228,37 @@ function optionStyle(qi, label, hovered) {
 const optionLabel = { font: 'var(--weight-medium) var(--text-sm)/var(--leading-snug) var(--font-sans)' }
 const optionDescription = { font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-sans)' }
 
-const customRow = { display: 'flex' }
+/* The free-text field has to read as a different kind of thing from an
+   option at a glance, and colour is not available to spend on it — both a
+   selected option and `Input.vue`'s own box resolve to the identical
+   `var(--surface-raised)` fill, `--radius-3` corner and full width, so in
+   the `Platforms` question with `Windows` chosen the card drew three
+   indistinguishable rounded boxes in a row, the last of which answers
+   nothing. A hairline above it separates it from the option list as its own
+   zone, a caption gives it the label an option never carries, and the
+   `pencil` prefix inside the field itself (`Input`'s own `prefix` slot) says
+   "type here" before anyone reads a word — three token-only cues, none of
+   them a hue. */
+const customRow = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-2)',
+  paddingTop: 'var(--space-3)',
+  borderTop: 'var(--border-w) solid var(--surface-raised)'
+}
+
+const customLabel = { font: 'var(--weight-regular) var(--text-xs)/var(--leading-snug) var(--font-sans)' }
 
 const actions = { display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)' }
 
 /* Tracked per option rather than through `useInteractive` — that composable
    is written for one control per component instance, and this card draws up
    to sixteen of them (four questions, up to four options apiece). A single
-   hovered key is all a pointer can be over at once. */
+   hovered key is all a pointer can be over at once, and it is built from the
+   same `(qi, oi)` pair selection is, for the reason `selected` itself is
+   indexed rather than labelled. */
 const hoveredKey = ref(null)
-const keyOf = (qi, label) => `${qi}:${label}`
+const keyOf = (qi, oi) => `${qi}:${oi}`
 </script>
 
 <template>
@@ -215,26 +273,29 @@ const keyOf = (qi, label) => `${qi}:${label}`
         <div :style="questionText">{{ question.question }}</div>
         <div :style="optionsList">
           <button
-            v-for="option in question.options"
-            :key="option.label"
+            v-for="(option, oi) in question.options"
+            :key="oi"
             type="button"
-            :style="optionStyle(qi, option.label, hoveredKey === keyOf(qi, option.label))"
-            :aria-pressed="isSelected(qi, option.label)"
-            @mouseenter="hoveredKey = keyOf(qi, option.label)"
+            :style="optionStyle(qi, oi, hoveredKey === keyOf(qi, oi))"
+            :aria-pressed="isSelected(qi, oi)"
+            @mouseenter="hoveredKey = keyOf(qi, oi)"
             @mouseleave="hoveredKey = null"
-            @click="toggleOption(qi, option.label)"
+            @click="toggleOption(qi, oi)"
           >
             <span :style="optionLabel">{{ option.label }}</span>
             <span v-if="option.description" :style="optionDescription">{{ option.description }}</span>
           </button>
         </div>
         <div :style="customRow">
+          <div :style="customLabel">Or, in your own words</div>
           <Input
             :model-value="custom[qi]"
-            placeholder="Or answer in your own words"
+            placeholder="Type an answer"
             size="sm"
             @update:model-value="setCustom(qi, $event)"
-          />
+          >
+            <template #prefix><Icon name="pencil" :size="12" /></template>
+          </Input>
         </div>
       </div>
     </div>

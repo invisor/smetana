@@ -199,11 +199,24 @@ Three places had to learn to carry a shape richer than a bare `Decision`, and ea
 rather than a new vocabulary: `EventKind::Permission` grew an `input` field (`session/model.rs`) —
 the tool call's own arguments, untouched, since `detail` remains one line and cannot hold four
 questions with their own options; `EventKind::PermissionAnswered` grew `answers: Option<BTreeMap<String,
-String>>`, `None` for an ordinary allow/deny and for a decline; and `session_answer` grew a fifth,
-optional argument of the same shape, threaded through `Request::Answer` to both the journal and
+String>>`, `None` for an ordinary allow/deny and for a decline; and `session_answer` grew a fourth
+argument from the front end's own side — the Rust signature counts five, the extra one being the
+`State<'_, SessionHandle>` every `#[tauri::command]` takes and no `invoke` call ever sends — optional
+and of the same shape, threaded through `Request::Answer` to both the journal and
 `PermissionServer::answer`. None of this touches `Decision` itself — `allow`/`allow-always`/`deny`
 are still the whole of what a person may answer with, and a decline to answer *is* `Decision::Deny`
 with no `answers`, exactly like refusing any other tool.
+
+**`Permission::input` is generic but not universal, and that is a bound rather than an oversight.**
+Every asking tool's `Permission` carries the field — a second structured tool needs no second field,
+only a second name — but `session::service::question` fills it in for exactly one name today,
+`agents::claude::ASK_USER_QUESTION_TOOL`, and writes `Value::Null` for every other tool's event.
+That gate exists because the field is not free: this event is appended to a journal that lives for
+the life of a session, is cloned whole on every attach and shipped on every `session:events` batch,
+and a driven session asks on every `Write`, `Edit`, `MultiEdit` and `Task` — carrying whole file
+bodies and whole subagent prompts through it unconditionally would have broken `journal::BUDGET`'s
+own promise that each event is small, a promise this file has already had to repair once, for
+`TextDelta` (`smetana-6we6`, the section above).
 
 **The front end draws two components off the same `question`, chosen by tool name.**
 `ConversationView.vue` computes `isAskUserQuestionCard` from `question.tool` and switches between
@@ -221,19 +234,46 @@ one place in the front end reading a tool's own JSON argument rather than a valu
 of smetana-63kn: a person may always answer in their own words rather than pick from the agent's own
 options, and the two are mutually exclusive in the component's own state — choosing an option clears
 whatever was typed for that question, and typing clears whatever was chosen. `formatAnswer` in
-`askUserQuestion.js` is the one place that resolves the two into the single string the wire wants;
-`multiSelect` is the one difference `toggleOption` reads, joining several chosen labels with a comma
-where `formatAnswer` is the only join in the file, since a single-select answer is one label and needs
-none. `isComplete` gates the card's own Send button — every question in one call is answered in one
-reply, never a partial `answers` for a call that named four, since the agent asked all of them at once
-and there is nothing to be gained by making it wait through several short replies for what one round
-trip already fits.
+`askUserQuestion.js` is the one place that resolves the two into the single string the wire wants.
+
+**Which options end up selected is `toggle` in `askUserQuestion.js`, pure and tested there rather than
+left inside `AskUserQuestion.vue`** — a `multiSelect` question allows more than one label at once, an
+ordinary one allows exactly one, and clicking a chosen option deselects it either way, which is one of
+this task's own acceptance criteria and belongs in the one file a test here can reach: an edit that
+made single-select accumulate or multi-select replace would ship with both gates green and reach the
+agent as one label where four were chosen. `toggle` itself joins nothing — it answers with the array of
+labels now selected — and `formatAnswer` is the only join in the file, several chosen labels with a
+comma, since a single-select answer is one label and needs none.
+
+**The join is `', '`, a comma and a space, which is a decision rather than the obvious reading of
+"joined by commas" in the task's own Design section.** It was kept over a bare `','` because free
+text is an accepted answer in this same protocol — a person may always type their own sentence
+instead of choosing — so whatever reads `answers` on the far side already has to cope with a string
+that is not a machine-parseable list at all, and a comma with nothing after it degrades that reading
+to an odd-looking valid answer rather than to an error. Nothing in this repository can test that
+reading: the far side is the agent's own model, not code this tree owns, so this is a judgement call
+recorded here rather than a behaviour pinned by a test. `isComplete` gates the card's own
+Send button — every question in one call is answered in one reply, never a partial `answers` for a
+call that named four, since the agent asked all of them at once and there is nothing to be gained by
+making it wait through several short replies for what one round trip already fits.
+
+**The component itself keys a question's selection by option index, never by label.**
+`parseQuestions` defaults a missing `label` to `''`, so two options that both lost theirs would
+otherwise be one value as far as `toggle` and the `v-for`'s own `:key` are concerned — a second
+`AskUserQuestion` fixture with such a pair drew a Vue duplicate-key warning and toggled both options
+as one. `selectedLabels()` is the one place index and label meet, mapping the chosen indices back to
+`question.options[i].label` right before `askUserQuestion.js`'s own functions are called, since those
+take the wire's vocabulary and index is this component's own.
 
 **Drawn at the same `loud` weight as `PermissionRequest.vue`, deliberately**: the harness is holding
 the very same tool call open either way, so `AskUserQuestion.vue` reads `statusColors('needs-you')`
 and `STATUS_GLYPH` off the identical pair rather than choosing a softer treatment — the two cards read
 as one vocabulary for "the session cannot go on without you", and only the shape inside the frame
-says which tool is asking.
+says which tool is asking. The frame itself — the fill, the border, the outer padding and radius,
+the head row's icon and gap — is written out twice, once per component, and kept in step by hand
+rather than shared: that duplication is deliberate for now rather than an oversight to fold away, and
+nothing fails if only one of the two moves, which is worth knowing before assuming a shared frame
+already exists.
 
 ## One renderer, shared with the task inspector — and why it was not forked
 
