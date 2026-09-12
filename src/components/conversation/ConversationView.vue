@@ -112,6 +112,7 @@ import {
   statusOf,
   stopConversation
 } from '../../stores/conversation.js'
+import { watchWindowDrops } from '../../stores/windowDrops.js'
 
 /* Which session this panel draws, handed in rather than read from the store —
    the same split `TerminalView.vue`'s own prop is written up under, and for the
@@ -298,18 +299,75 @@ onMounted(() => {
 })
 onBeforeUnmount(() => sizes?.disconnect())
 
-/* What is going with the next message, and nothing puts anything in it yet.
+/* What is going with the next message.
 
-   The plan asks for files dropped on this panel to land here. They do not: a
-   drop never reaches the webview — Tauri reports it against the *window* — and
-   the two subscriptions that exist for that event both belong elsewhere,
-   `watchSessionDrops` to the terminal store this subsystem must not depend on
-   and `watchDrops` to the attachment store, which lives in the New task
-   window's webview precisely so that no drop is heard twice
-   (`.claude/rules/attachments.md`). A third copy of that lifecycle in here
-   would be the thing both of those notes warn against, so the list stays a prop
-   of `Composer` with removable chips, and filling it is its own task. */
+   The plan asked for files dropped on this panel to land here, and for as long
+   as this comment said otherwise they did not: a drop never reaches the
+   webview — Tauri reports it against the *window* — and the two subscriptions
+   that existed for that event both belonged elsewhere, `watchSessionDrops` to
+   the terminal store this subsystem must not depend on and `watchDrops` to the
+   attachment store, which lives in the New task window's webview precisely so
+   that no drop is heard twice (`.claude/rules/attachments.md`). A third copy of
+   that lifecycle in here would have been the thing both of those notes warned
+   against — which is why `smetana-h8vq` moved the lifecycle itself into
+   `stores/windowDrops.js` instead of writing a third one: this panel
+   subscribes through it below, the list stays a prop of `Composer` with
+   removable chips, and this file's own part is the hit test, same as
+   `TerminalView.vue`'s. */
 const attachments = ref([])
+
+/* Whose drop this is, mirroring `TerminalView.vue`'s own `insideHost`: the
+   point arrives in CSS pixels from the top left of the viewport, already
+   converted by `windowDrops.js`, so `document.elementFromPoint` can be asked
+   outright what is drawn there, and this panel takes only what lands inside
+   its own root — bar, journal and composer alike, since a file let go over any
+   of the three is dropped "on this panel" just as plainly.
+
+   There is no arbiter to argue with in practice either: the Agent tab draws
+   this component or `TerminalView.vue`, never both — one `v-if` in
+   `DesktopApp.vue` on which kind of session it is aimed at — so the two hit
+   tests are never both live at the same point at once. This test is what
+   makes that true by construction rather than by which pane happens to be
+   mounted today, the same reasoning `windowDrops.js`'s own header carries. */
+const panelRoot = ref(null)
+function insidePanel(x, y) {
+  if (!panelRoot.value) return false
+  const el = document.elementFromPoint(x, y)
+  return !!el && panelRoot.value.contains(el)
+}
+
+/* Whether a file is over this panel right now, and how many came with it —
+   the same pair `TerminalView.vue` keeps, for the same caption shape. */
+const dropping = ref(false)
+const dropCount = ref(0)
+
+/* A session to attach to: `held` is what `Composer` is drawn under (`v-if` in
+   the template below), so a drop with nothing behind it has nowhere to put a
+   chip that could ever be sent. */
+const canAttach = computed(() => !!held.value)
+
+let stopDrops = null
+onMounted(() => {
+  stopDrops = watchWindowDrops({
+    over: ({ x, y, paths }) => {
+      if (paths) dropCount.value = paths.length
+      dropping.value = canAttach.value && insidePanel(x, y)
+    },
+    leave: () => {
+      dropping.value = false
+    },
+    drop: ({ x, y, paths }) => {
+      dropping.value = false
+      if (!canAttach.value || !paths || !insidePanel(x, y)) return
+      attachments.value = [...attachments.value, ...paths]
+    }
+  })
+})
+onBeforeUnmount(() => stopDrops?.())
+
+const dropCaption = computed(() =>
+  dropCount.value > 1 ? `Drop to attach ${dropCount.value} files` : 'Drop to attach the file'
+)
 
 async function send() {
   const record = held.value
@@ -328,12 +386,43 @@ const stop = () => stopConversation(props.sessionId)
 const answer = (decision, answers) => answerQuestion(props.sessionId, question.value.id, decision, answers)
 
 const root = {
+  position: 'relative',
   display: 'flex',
   flexDirection: 'column',
   flex: 1,
   minWidth: 0,
   minHeight: 0,
   background: 'var(--surface)'
+}
+
+/* The response while a file is over the panel, the same shape
+   `TerminalView.vue` draws over its host and for the same reason: without it
+   the gesture is invisible and indistinguishable from the broken state this
+   replaced. `pointerEvents: 'none'` is load-bearing rather than tidy — the hit
+   test is `document.elementFromPoint` at the drag's own position, and this
+   element sits over the whole panel as a sibling of everything else in
+   `root`; taking pointer events would make it the answer to that question and
+   the response would switch itself off the moment it appeared. */
+const dropStyle = {
+  position: 'absolute',
+  inset: 'var(--space-3)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: 'var(--border-w) solid var(--border-strong)',
+  borderRadius: 'var(--radius-3)',
+  background: 'var(--overlay-scrim)',
+  pointerEvents: 'none'
+}
+const dropLabelStyle = {
+  padding: 'var(--space-3) var(--space-5)',
+  background: 'var(--surface-overlay)',
+  border: 'var(--border-w) solid var(--border-strong)',
+  borderRadius: 'var(--radius-pill)',
+  boxShadow: 'var(--shadow-overlay)',
+  color: 'var(--text-primary)',
+  fontSize: 'var(--text-ui-size)',
+  lineHeight: 'var(--leading-normal)'
 }
 
 /* The session's identity, in the bar the pane's own header is: the agent, the
@@ -483,7 +572,10 @@ const refusal = {
 </script>
 
 <template>
-  <div :style="root">
+  <div ref="panelRoot" :style="root">
+    <div v-if="dropping" :style="dropStyle">
+      <span :style="dropLabelStyle">{{ dropCaption }}</span>
+    </div>
     <div :style="bar">
       <StatusBadge :status="status" size="sm" :style="{ flex: '0 0 auto' }" />
       <span :style="agentName">{{ label }}</span>

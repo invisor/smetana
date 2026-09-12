@@ -1969,6 +1969,14 @@ describe('the agent counts behind the headline', () => {
    deltas do — the store's part is the units and the plumbing, and nothing else:
    whose drop it is belongs to the pane that can ask what is drawn at the point.
 
+   `watchSessionDrops` is a plain re-export of `watchWindowDrops` in
+   `windowDrops.js` now (`smetana-h8vq`), so these tests exercise the shared
+   subscription through this store's own name for it — kept here rather than
+   deleted, since `TerminalView.vue` still imports it from this file and a
+   passing suite is what says the re-export changed nothing. `windowDrops.test.js`
+   pins the same contract directly, once, for every caller rather than through
+   any one of them.
+
    `onDragDropEvent` is four `listen` calls deep, each one a round trip through
    the mocked transport, so the subscription is not in place on the next
    microtask. */

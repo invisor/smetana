@@ -1,6 +1,10 @@
-/* Whether the active project is set up for runs, and with what. The seventh
-   file in this directory that knows Tauri exists; components see a reactive
-   object and two computeds.
+/* Whether the active project is set up for runs, and with what. One of the
+   files in this directory that know Tauri exists — see the list in CLAUDE.md
+   rather than a number written here, since an ordinal is written once and the
+   list keeps growing under it (this one used to say "The seventh", already
+   wrong against the tree by the time `smetana-h8vq` noticed while checking the
+   list for an unrelated addition). Components see a reactive object and two
+   computeds.
 
    Deliberately small, like git.js: this is a file read, there is no worker
    behind it, and freshness comes from switching projects, from window focus,

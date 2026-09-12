@@ -1,6 +1,9 @@
-/* Images attached to a task that has not been filed yet. Seventh of the files
-   in this directory that know Tauri exists; components see a reactive object
-   and a few functions.
+/* Images attached to a task that has not been filed yet. One of the files in
+   this directory that know Tauri exists — see the list in CLAUDE.md rather
+   than a number written here, since an ordinal is written once and the list
+   keeps growing under it (this file's own used to say "Seventh", which
+   `smetana-h8vq` found already wrong against the tree it was touching for an
+   unrelated reason). Components see a reactive object and a few functions.
 
    Three gestures put a picture in this list — the picker, Cmd+V and a drop on
    the window — and they arrive as only two kinds of thing. A file already on
@@ -43,8 +46,8 @@ import { reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { downloadDir } from '@tauri-apps/api/path'
 import { open } from '@tauri-apps/plugin-dialog'
-import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { dirname } from '../paths.js'
+import { watchWindowDrops } from './windowDrops.js'
 
 /* What the picker offers. The list is the same four formats `sniff` in
    `attachments.rs` recognises — a filter is a convenience, and Rust is the one
@@ -423,12 +426,14 @@ export function clearAttachments() {
 
 /* Drops on the window.
 
-   The webview never sees a file drop: Tauri handles it and reports it here,
-   against the window rather than against an element. The whole window is
-   therefore the drop target, and now that the window is the dialog that is the
-   answer rather than an approximation of one — narrowing it to the dialog's
-   rectangle would mean doing its layout arithmetic here to refuse a gesture
-   nobody can make.
+   The webview never sees a file drop: Tauri handles it and reports it against
+   the window rather than against an element. The whole window is therefore the
+   drop target, and now that the window is the dialog that is the answer rather
+   than an approximation of one — narrowing it to the dialog's rectangle would
+   mean doing its layout arithmetic here to refuse a gesture nobody can make.
+   So this is the one caller of the shared subscription in `windowDrops.js`
+   that never reads the point it hands back — there is nothing here to hit-test
+   against.
 
    `accepting` is a function rather than a flag this store keeps: whether
    anything is collecting images is the view's business, and asking it is what
@@ -437,39 +442,20 @@ export function clearAttachments() {
    open — and it keeps the question because the caller is the one that knows
    that, not this file.
 
-   In a browser there is no webview to ask, and getCurrentWebview throws
-   before the subscription — a normal mode, the same one settings.js reads a
-   throw from getCurrentWindow as, so it is logged at debug and nothing else
-   happens. */
+   `windowDrops.js` carries the browser case, the coordinate conversion nobody
+   here needs, and the half-mounted unsubscribe; this file's own part is
+   `accepting` and the shape `attachmentsState.dragging` follows. */
 export function watchDrops(accepting) {
-  let webview
-  try {
-    webview = getCurrentWebview()
-  } catch {
-    console.debug('[attachments] no webview: drops are a Tauri-only gesture')
-    return () => {}
-  }
-  let stop = null
-  let stopped = false
-  webview
-    .onDragDropEvent(({ payload }) => {
-      if (!accepting()) return
-      if (payload.type === 'enter' || payload.type === 'over') {
-        attachmentsState.dragging = true
-        return
-      }
+  return watchWindowDrops({
+    over: () => {
+      if (accepting()) attachmentsState.dragging = true
+    },
+    leave: () => {
       attachmentsState.dragging = false
-      if (payload.type === 'drop') importPaths(payload.paths)
-    })
-    .then((unlisten) => {
-      stop = unlisten
-      /* The view unmounted while the subscription was still on its way. */
-      if (stopped) stop()
-    })
-    .catch((err) => console.error('[attachments] listening for drops failed:', err))
-
-  return () => {
-    stopped = true
-    if (stop) stop()
-  }
+    },
+    drop: ({ paths }) => {
+      attachmentsState.dragging = false
+      if (accepting()) importPaths(paths)
+    }
+  })
 }

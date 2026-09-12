@@ -31,6 +31,13 @@ paths:
   # Where the two kinds meet: `agentAim` and `showAgentTab` decide which of them
   # the Agent tab draws, and every road into a session is in this file.
   - "src/views/DesktopApp.vue"
+  # The drop subscription "Dropping a file on the panel" below describes is
+  # shared with the new-task dialog and the conversation panel now, and lives
+  # here rather than under `components/terminal/`; a change to either file
+  # changes what this section says without touching anything the glob above
+  # would catch.
+  - "src/stores/windowDrops.js"
+  - "src/dropPoint.js"
 ---
 
 # The terminal: agent sessions, and one shell
@@ -388,10 +395,15 @@ shell sees a word, and single quotes do not reach it — a line feed or a carria
 per path, never stripped or escaped: a repaired path would no longer name the file somebody dropped,
 and the other files of the same drop still go in.
 
-`watchSessionDrops` in `terminals.js` is the subscription, over the webview's `onDragDropEvent`,
-mirroring `watchDrops` in attachments.js down to the browser case — `getCurrentWebview` throws there,
-which is an ordinary mode and gets one debug line. It hands over CSS pixels measured from the top left
-of the viewport, and no opinion about whose drop it is.
+`watchSessionDrops` in `terminals.js` is a thin re-export now — `export const watchSessionDrops =
+watchWindowDrops` — kept under this name because `TerminalView.vue` already imports it from here and
+the terminal is still one of the two panes a drop can land on. The subscription itself, over the
+webview's `onDragDropEvent`, moved to `stores/windowDrops.js` in `smetana-h8vq`, shared with `watchDrops`
+in `attachments.js` and, since the same task, with the conversation panel
+(`.claude/rules/conversation-panel.md`'s own "Dropping a file on the panel"): one lifecycle, including
+the browser case — `getCurrentWebview` throws there, which is an ordinary mode and gets one debug
+line — rather than three copies of it agreeing by having been written by copying one another. It hands
+over CSS pixels measured from the top left of the viewport, and no opinion about whose drop it is.
 
 **Getting to those CSS pixels is not one division, and believing it was is smetana-uoux.** Tauri types
 the event's position `PhysicalPosition` on every platform, and on two of the three it is nothing of
@@ -407,14 +419,20 @@ uniform. Nothing threw — `elementFromPoint` answers for any point on the scree
 
 Which of the two arrives is a fact about the build, so it comes from `drag_drop_space` in
 `src-tauri/src/window.rs` — a `#[cfg]` and two words — for the same reason `window_chrome` beside it
-does: the front end cannot ask what it was built for, and a user-agent string is a guess. The store
-asks once per window and waits for the answer before it starts listening, rather than converting a
-point whose units it does not know. `components/terminal/dropPoint.js` is the arithmetic and the
-closed list of the two words, pure and outside the component beside `dropPaths.js`
-(`tests/components/terminal/dropPoint.test.js`); a word neither side knows is read as physical, which
-is what every platform got before this was measured, so a rename costs the fix rather than the
-gesture. The position is **not** screen-relative and does **not** move with the window — the repro
-that led here suspected that, and the sources say otherwise.
+does: the front end cannot ask what it was built for, and a user-agent string is a guess.
+`windowDrops.js` asks once per window and waits for the answer before it starts listening, rather than
+converting a point whose units it does not know. `src/dropPoint.js` is the arithmetic and the closed
+list of the two words, pure and outside any component (`tests/dropPoint.test.js`); a word neither side
+knows is read as physical, which is what every platform got before this was measured, so a rename
+costs the fix rather than the gesture. The position is **not** screen-relative and does **not** move
+with the window — the repro that led here suspected that, and the sources say otherwise.
+
+`dropPoint.js` used to live under `components/terminal/`, beside `dropPaths.js`, for the reason both
+were outside their component. It moved to the top of `src/` in `smetana-h8vq`, when the subscription
+that reads it stopped being the terminal's alone — the same move `paths.js` and `appearance.js` made
+for the identical reason, a rule two parts of the interface want with no "under" to put it in.
+`dropPaths.js` did not move with it: turning a path into characters for a PTY is still the terminal's
+own business, and only its, so it stayed exactly where it was.
 
 **Whose drop it is is a hit test, not layout arithmetic.** `TerminalView.vue` asks
 `document.elementFromPoint` at that point and takes the drop only if what is drawn there is inside its
@@ -425,23 +443,40 @@ the answer to the hit test, and it would switch off the instant it appeared.
 There used to be a second subscriber to argue with — the attachment store, listening on this same
 window for a file dropped onto the new task dialog — and the scrim of that modal was what kept the
 two apart: with it open the point landed on the scrim, so the panel refused of its own accord. **That
-mechanism is gone, and what replaced it is stronger.** The new task dialog is an OS window of its own
-now (`smetana-at3`), Tauri delivers a drop only to the window it landed on, and the two subscriptions
-are in different webviews: `watchSessionDrops` has one caller, `TerminalView.vue`, which is only ever
-drawn inside `DesktopApp.vue`, and `watchDrops` has one caller, `DialogWindow.vue`. `App.vue` gives a
-webview exactly one view, and `dialog_window_open` always builds a separate window, so no page can
-carry both. The attachment store accordingly accepts every drop it hears (`() => true`); the hit test
-above is now the panel's own business alone — which pane of this window, not which feature.
+mechanism is gone, and what replaced it is stronger, for that pair.** The new task dialog is an OS
+window of its own now (`smetana-at3`), Tauri delivers a drop only to the window it landed on, and the
+two subscriptions are in different webviews: `watchSessionDrops` has one caller, `TerminalView.vue`,
+which is only ever drawn inside `DesktopApp.vue`, and `watchDrops` has one caller, `DialogWindow.vue`.
+`App.vue` gives a webview exactly one view, and `dialog_window_open` always builds a separate window,
+so no page can carry both. The attachment store accordingly accepts every drop it hears (`() =>
+true`); the hit test above settled which pane of *this* window a drop belonged to, not which feature,
+because there was only one feature in it.
 
-The lesson to carry forward is the property rather than the scrim: two subscribers to one window
-event are kept apart by never being on one window, and an overlay added inside *this* one has no such
-separation and would need the hit test to settle it. There is still no dispatcher between them, and
-none is wanted.
+**`smetana-h8vq` is the overlay this file used to warn about, added inside this same window on
+purpose.** The conversation panel drops a file too now
+(`.claude/rules/conversation-panel.md`), and it is drawn inside the very webview
+`TerminalView.vue` is — the Agent tab, in `DesktopApp.vue`. Window separation cannot be the answer for
+this pair the way it is for the dialog, because there is no second window to put either of them in;
+what holds instead is the property the paragraph above names ahead of it: two subscribers to one
+window event are kept apart by a hit test that cannot give them both the same drop, and *that* still
+holds here, for a reason stronger than either hit test alone. The Agent tab draws `ConversationView.vue`
+or `TerminalView.vue`, never both — one `v-if` in `DesktopApp.vue` on which kind of session it is
+aimed at (`agentAim`, "three branches over two components" above) — so the two components are never
+both mounted at once, and a shell's own tab is the same `TerminalView.vue` instance with its
+`sessionId` prop moved rather than a second instance drawn beside the Agent tab's. At most one hit
+test exists in the DOM at any moment this window is showing an agent, which is a stronger guarantee
+than "cannot both answer yes" — there is only ever one side to ask. Each hit test is still written as
+if a neighbour could answer too, which is what makes the property hold by construction rather than by
+which pane a person happens to have open, and is what a reviewer should check rather than assume the
+next time either side of this pair changes. There is still no dispatcher between them, and none is
+wanted.
 
 The response — a frame and one line of caption over the terminal — is drawn only while a live session
 is behind the panel. `send` already drops what is written to a session still coming up, so there is
 nothing to promise in that state and nothing is promised. Without any response at all the gesture is
 invisible and indistinguishable from the broken state this replaced, which is the reason it exists.
+The conversation panel draws the identical shape over itself, token for token, described in
+`.claude/rules/conversation-panel.md`.
 
 | file | what it does |
 |---|---|

@@ -4,6 +4,13 @@ paths:
   - "src/components/markdown/**"
   - "src/stores/conversation.js"
   - "src/styles/sm-prose.css"
+  # The shared drop subscription this panel's own attachments section below
+  # reads through, beside the terminal and the new-task dialog. Editing it
+  # without this rule loaded is how a second copy of its lifecycle gets
+  # written back into this panel — see `.claude/rules/terminal.md` for the
+  # first two copies and why they became one.
+  - "src/stores/windowDrops.js"
+  - "src/dropPoint.js"
 ---
 
 # The conversation panel: what it renders, and why
@@ -322,3 +329,53 @@ file, and needs no `[data-turn-style="bubble-right"]` selector because the bubbl
 default. Vendoring the exploration file into the app bundle to keep the other three treatments
 "available" was never on the table: a treatment nobody can reach from a setting is a dead branch with
 a maintenance cost, not a feature.
+
+## Dropping a file on the panel
+
+`smetana-h8vq` is what filled the gap `ConversationView.vue` used to name in its own header: a file
+let go over this panel now becomes a chip in `Composer`, the same list `send` already knew how to
+carry along with the words and clear only after a successful send. What took as long as it did was
+never the chip or the send — `attachments = ref([])`, the strip and the clearing rule were all
+already there, described in the Architecture section of `CLAUDE.md` — it was that nothing put a path
+into the list, because the subscription this panel would have needed already existed twice, once for
+the terminal (`watchSessionDrops` in `stores/terminals.js`) and once for the new-task dialog
+(`watchDrops` in `stores/attachments.js`), and a third copy of that lifecycle in here was exactly what
+both of those files' own headers warned against. `stores/windowDrops.js` is the fix: the subscription
+lifecycle — the browser case, the coordinate conversion, the half-mounted unsubscribe — moved out of
+both into one shared store, and this panel is its third caller rather than a fourth copy.
+
+**The hit test is this panel's own, the same shape as `TerminalView.vue`'s `insideHost`.** The point
+`windowDrops.js` hands back is already in CSS pixels from the top left of the viewport — the space
+`document.elementFromPoint` reads — so `insidePanel` asks the browser what is drawn at that point and
+takes the drop only if it is inside this component's own root, `panelRoot` in the template. The root
+and not the journal alone: a file let go over the bar, the journal or the composer itself is dropped
+"on this panel" just as plainly in all three, and narrowing the target to one of them would refuse a
+drop for a reason a person watching the panel could not see.
+
+**There is no arbiter here either, and the reason is stronger than a hit test.** `smetana-3j8` rejected
+a shared dispatcher for this event in general, and `.claude/rules/terminal.md` carries the fuller
+argument for why one is not wanted; what makes it safe for this pane in particular is that the Agent
+tab draws this component or `TerminalView.vue`, never both at once — one `v-if` in `DesktopApp.vue`
+on which kind of session it is aimed at (`.claude/rules/terminal.md`'s "three branches over two
+components"). So the two hit tests are never asked about the same point at the same moment: at most
+one of them exists in the DOM at all while the Agent tab is open, and a terminal tab beside it is the
+same `TerminalView.vue` instance with its `sessionId` prop swapped rather than a second one mounted
+alongside this panel. The hit test is still written as if a neighbour could answer too — the same
+discipline `TerminalView.vue` keeps — because that is what makes the property hold by construction
+rather than by which pane happens to be on screen this week.
+
+**What is confined is what may become a chip, not what the panel will draw a highlight for.**
+`canAttach` gates both the drop response and the drop itself on `held` — the record `Composer` is
+drawn under — because a drop with no session behind it has nowhere a chip could ever be sent from;
+the empty state drawn in that case already says there is nothing here to attach to. Nothing here
+copies a file or reads its bytes, the same restraint `terminal.md`'s own note on dropping a path
+carries and for the identical reason: what travels to `session_send` is the path, and what the agent
+does with it is the agent's decision, not this panel's.
+
+**The response is the same shape `TerminalView.vue` draws, token for token** — a frame and one line of
+caption over the panel, `dropStyle`/`dropLabelStyle` beside the terminal's own `dropStyle` — because a
+highlight is either a token-only computed style object or it does not exist in this system (CLAUDE.md,
+Styling), and there was no reason to invent a second treatment for the same gesture. `pointerEvents:
+'none'` is load-bearing here for the same reason it is on the terminal's: the response sits over the
+whole panel as a sibling, and taking pointer events would make it the answer to the very hit test that
+draws it, switching itself off the instant it appeared.
