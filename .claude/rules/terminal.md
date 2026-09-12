@@ -462,14 +462,37 @@ window event are kept apart by a hit test that cannot give them both the same dr
 holds here, for a reason stronger than either hit test alone. The Agent tab draws `ConversationView.vue`
 or `TerminalView.vue`, never both — one `v-if` in `DesktopApp.vue` on which kind of session it is
 aimed at (`agentAim`, "three branches over two components" above) — so the two components are never
-both mounted at once, and a shell's own tab is the same `TerminalView.vue` instance with its
-`sessionId` prop moved rather than a second instance drawn beside the Agent tab's. At most one hit
-test exists in the DOM at any moment this window is showing an agent, which is a stronger guarantee
-than "cannot both answer yes" — there is only ever one side to ask. Each hit test is still written as
-if a neighbour could answer too, which is what makes the property hold by construction rather than by
-which pane a person happens to have open, and is what a reviewer should check rather than assume the
-next time either side of this pair changes. There is still no dispatcher between them, and none is
-wanted.
+both mounted at once. A shell's own tab is a *second* `v-else-if` branch rendering the same
+`<TerminalView>` tag, and it is not the first branch's instance with its `sessionId` prop swapped: Vue's
+compiler gives every `v-if`/`v-else-if` branch its own implicit key by branch position
+(`compiler-core`'s `createChildrenCodegenNode`), so switching from the Agent tab's terminal to a shell's
+unmounts the one and mounts the other, same as switching to `ConversationView.vue` does. What still
+holds is the mutual exclusion itself, not instance identity: exactly one branch's condition is true at
+a time, so at most one hit test exists in the DOM at any moment this window is showing an agent, which
+is a stronger guarantee than "cannot both answer yes" — there is only ever one side to ask. Each hit
+test is still written as if a neighbour could answer too, which is what makes the property hold by
+construction rather than by which pane a person happens to have open, and is what a reviewer should
+check rather than assume the next time either side of this pair changes. There is still no dispatcher
+between them, and none is wanted.
+
+**`?view=gallery` is the one place in the tree both are mounted at once, and it costs nothing.**
+`Gallery.vue` draws every exported component once for the reason `CLAUDE.md`'s Commands section gives —
+catching a broken one by eye — and that includes a `<TerminalView>` and a `<ConversationView>` side by
+side in the same page, outside any `v-if` and outside `DesktopApp.vue`'s mutual exclusion entirely. In
+a browser (`npm run dev`), this changes nothing that matters: `getCurrentWebview()` throws before either
+subscribes, so neither actually listens for a drop regardless of what is mounted next to what. Reached
+inside a real Tauri window instead — nothing stops `?view=gallery` from being requested there, since the
+query string is read the same way in both — both subscriptions would genuinely go live on the same
+window event, and neither pane's gate saves it: `isStarting` only asks whether an id is a string, so
+the terminal fixture's numeric id reads as `live` on the spot, and `conversationFor` never answers
+`null` (`stores/conversation.js`'s own "Never null — see `hold`"), so the conversation fixture's
+`canAttach` is `true` on the spot as well — neither depends on a session the backend actually has. What
+still keeps one drop from reaching both in that scenario is the same hit test doing the same job it
+always does, over a different fact: the gallery's two demo panels sit in separate, non-overlapping
+`<section>`s down the page rather than in the same rectangle two branches of one `v-if` would occupy, so
+a point can be inside at most one of them. Worth knowing before assuming the mutual-exclusion argument
+above covers every page this pair can be drawn on — it covers `DesktopApp.vue` alone, and the gallery is
+kept safe by a different property.
 
 The response — a frame and one line of caption over the terminal — is drawn only while a live session
 is behind the panel. `send` already drops what is written to a session still coming up, so there is

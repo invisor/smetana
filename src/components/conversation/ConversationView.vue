@@ -325,10 +325,13 @@ const attachments = ref([])
 
    There is no arbiter to argue with in practice either: the Agent tab draws
    this component or `TerminalView.vue`, never both — one `v-if` in
-   `DesktopApp.vue` on which kind of session it is aimed at — so the two hit
-   tests are never both live at the same point at once. This test is what
-   makes that true by construction rather than by which pane happens to be
-   mounted today, the same reasoning `windowDrops.js`'s own header carries. */
+   `DesktopApp.vue` on which kind of session it is aimed at — so within that
+   view the two hit tests are never both live at the same point at once. This
+   test is what makes that true by construction rather than by which pane
+   happens to be mounted today, the same reasoning `windowDrops.js`'s own
+   header carries. `?view=gallery` draws both components at once outside that
+   `v-if` entirely; `.claude/rules/terminal.md` is where that exception and why
+   it costs nothing are written down. */
 const panelRoot = ref(null)
 function insidePanel(x, y) {
   if (!panelRoot.value) return false

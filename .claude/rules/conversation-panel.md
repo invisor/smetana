@@ -358,11 +358,15 @@ argument for why one is not wanted; what makes it safe for this pane in particul
 tab draws this component or `TerminalView.vue`, never both at once — one `v-if` in `DesktopApp.vue`
 on which kind of session it is aimed at (`.claude/rules/terminal.md`'s "three branches over two
 components"). So the two hit tests are never asked about the same point at the same moment: at most
-one of them exists in the DOM at all while the Agent tab is open, and a terminal tab beside it is the
-same `TerminalView.vue` instance with its `sessionId` prop swapped rather than a second one mounted
-alongside this panel. The hit test is still written as if a neighbour could answer too — the same
-discipline `TerminalView.vue` keeps — because that is what makes the property hold by construction
-rather than by which pane happens to be on screen this week.
+one of them exists in the DOM at all while the Agent tab is open. A terminal tab beside it is a
+*second*, separately-mounted `TerminalView.vue` — Vue keys each `v-if`/`v-else-if` branch by position,
+so switching between the Agent tab's terminal and a shell's unmounts one and mounts the other rather
+than swapping a prop on one instance — but the property this section leans on is the mutual exclusion
+between the branches, not which of them shares an instance with which. The hit test is still written
+as if a neighbour could answer too — the same discipline `TerminalView.vue` keeps — because that is
+what makes the property hold by construction rather than by which pane happens to be on screen this
+week. `.claude/rules/terminal.md` names the one place both this component and `TerminalView.vue` are
+mounted at once regardless — `?view=gallery` — and why it still costs nothing there.
 
 **What is confined is what may become a chip, not what the panel will draw a highlight for.**
 `canAttach` gates both the drop response and the drop itself on `held` — the record `Composer` is

@@ -1637,7 +1637,7 @@ pub fn home_dir() -> Option<String> {
 }
 
 /// Which units and origin a drag-drop event's `position` arrives in, as one of
-/// the two names `src/components/terminal/dropPoint.js` holds.
+/// the two names `src/dropPoint.js` holds.
 ///
 /// Tauri types that field `PhysicalPosition` on every platform, and on two of
 /// the three it is not physical at all. wry reads the point out of the toolkit
@@ -1738,7 +1738,7 @@ mod tests {
 
     /// The two words this command may answer with, named here in full for the
     /// reason the pair above are: they are a contract with
-    /// `src/components/terminal/dropPoint.js`, and that module falls back to
+    /// `src/dropPoint.js`, and that module falls back to
     /// dividing by the device pixel ratio for a word it has not heard of. A
     /// rename on either side therefore costs the fix rather than failing —
     /// on a Retina Mac the agent panel goes back to taking a drop only over
@@ -1747,7 +1747,7 @@ mod tests {
     fn the_front_end_is_told_which_units_a_drop_arrives_in() {
         assert!(
             matches!(drag_drop_space(), "logical" | "physical"),
-            "drag_drop_space answered {:?}, which components/terminal/dropPoint.js reads as physical",
+            "drag_drop_space answered {:?}, which src/dropPoint.js reads as physical",
             drag_drop_space()
         );
         #[cfg(target_os = "windows")]
