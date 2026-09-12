@@ -610,7 +610,7 @@ fn section(
 const LIGHT: &str = "color-scheme:light;\
 --canvas:#eaeeef;--surface-sunken:#e1e6e7;--surface:#f4f7f7;--surface-raised:#ffffff;\
 --border-subtle:#dde3e3;--border:#c9d1d2;--border-strong:#a9b4b6;\
---text-primary:#16201f;--text-secondary:#4a565a;--text-muted:#6b777c;\
+--text-primary:#16201f;--text-secondary:#4a565a;--text-muted:#5e686d;\
 --text-link:#1f5d8f;--text-link-hover:#123f63;\
 --focus-ring:#1c6fd0;--selection-bg:#c6dcf0;--scrollbar-thumb:#c2caca;\
 --status-done-fg:#3f6b54;--status-done-bg:#e6eee9;--status-done-border:#c0d3c8;\
