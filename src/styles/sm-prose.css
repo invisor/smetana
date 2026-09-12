@@ -877,13 +877,14 @@
 
 
 /* 13 · THE AGENT'S QUESTION ================================================
-   Ported from a section of the design handoff written for exactly this card
-   — not the `markup-contract.md`/`sm-prose-turns.css`/`sm-prose.css` reference
-   committed under `docs/design_handoff_conversation_panel/`, which predates
-   this feature and has no such section; this one reached the port outside
-   the repository and is not committed anywhere, so what it settles is written
-   down in full here and in `.claude/rules/conversation-panel.md` rather than
-   left as a path to follow. What it replaces: a saturated amber fill over the
+   Ported from a section of the design handoff written for exactly this card.
+   The handoff committed under `docs/design_handoff_conversation_panel/`
+   (`README.md`, `markup-contract.md`, `reference.html`, `sm-prose-turns.css`)
+   predates this feature and carries no section for it; this one reached the
+   port outside the repository and is not committed anywhere, so what it
+   settles is written down in full here and in
+   `.claude/rules/conversation-panel.md` rather than left as a path to
+   follow. What it replaces: a saturated amber fill over the
    whole block, with option cards and two fields inside it. That fill breaks
    the ladder's hard rule (1–2 loud elements per screen) by making one element
    the size of the viewport loud, and it destroys its own hierarchy on the way

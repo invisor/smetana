@@ -13,12 +13,13 @@
    option separated from the background by a border alone and "chosen"
    degraded to a slightly thicker one, the weakest possible signal for the
    most important state on the screen. A section of the design handoff written
-   for exactly this card — not the `markup-contract.md`/`sm-prose.css` pair
-   committed under `docs/design_handoff_conversation_panel/`, which predate
-   this feature and carry no such section; this one reached the port outside
-   the repository and is not committed anywhere, so its reasoning is written
-   down in full in `.claude/rules/conversation-panel.md` rather than left as a
-   path to follow — draws the fix: the container becomes an ordinary raised
+   for exactly this card draws the fix. The handoff committed under
+   `docs/design_handoff_conversation_panel/` (`README.md`, `markup-contract.md`,
+   `reference.html`, `sm-prose-turns.css`) predates this feature and carries no
+   section for it; this one reached the port outside the repository and is
+   not committed anywhere, so its reasoning is written down in full in
+   `.claude/rules/conversation-panel.md` rather than left as a path to
+   follow: the container becomes an ordinary raised
    card, the same surface every other block in this panel sits on, and the
    whole loud budget moves to one chip in the header — colour, the system's
    triangle silhouette and the word, never colour alone. Every rule that

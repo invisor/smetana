@@ -19,8 +19,10 @@ paths:
 id, which tab it is drawn under. This file is the other half: what the panel that shows one actually
 puts on screen, and what the epic that built it (`smetana-qix9`) decided against on the way there.
 The markup contract itself — every element, every `data-` attribute — is
-`docs/design_handoff_conversation_panel/markup-contract.md`; this file does not repeat it, only the
-reasoning behind the choices in it that are not otherwise written down anywhere in the tree.
+`docs/design_handoff_conversation_panel/markup-contract.md`, with one exception this file carries in
+full rather than pointing at (the agent's question card, below); this file does not repeat the rest of
+it, only the reasoning behind the choices in it that are not otherwise written down anywhere in the
+tree.
 
 ## The fourth inline-style exception
 
@@ -309,11 +311,12 @@ than a drift to repair.** Before it, `AskUserQuestion.vue` read `statusColors('n
 same saturated amber — which is sized correctly for one row and two buttons and was not for two
 questions, six options and two fields: on a saturated ground nothing inside could be emphasised, so a
 chosen option read as a border a shade thicker and nothing else. A section of the design handoff
-written for exactly this card draws the replacement — not the `markup-contract.md`/`sm-prose.css`
-pair committed under `docs/design_handoff_conversation_panel/`, which predates this feature and has
-no such section; this one reached the port outside the repository and is not committed anywhere, so
-what it settles is written down here rather than left as a path to follow — and the rules that paint
-it live in `sm-prose.css` section 13, the fourth styling exception this panel already spends: the
+written for exactly this card draws the replacement. The handoff committed under
+`docs/design_handoff_conversation_panel/` (`README.md`, `markup-contract.md`, `reference.html`,
+`sm-prose-turns.css`) predates this feature and carries no section for it; this one reached the port
+outside the repository and is not committed anywhere, so what it settles is written down here rather
+than left as a path to follow — and the rules that paint it live in `sm-prose.css` section 13, the
+fourth styling exception this panel already spends: the
 container becomes an ordinary raised card, the same surface every other block in the panel sits on,
 and the whole loud budget moves to one chip in the header — colour, the system's triangle silhouette
 and the word, never colour alone. `PermissionRequest.vue` keeps its full fill exactly as it was,
