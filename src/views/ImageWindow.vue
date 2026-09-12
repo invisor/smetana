@@ -22,12 +22,21 @@
    **What travels is the path, and the bytes stay where they are.** An
    attachment's `url` is a `data:` URL of up to 8 MiB of base64: it fits in no
    URL, and sending it over the event channel would be eleven megabytes per
-   click. This window reads the file itself with `readAttachment`, which is one
-   command — `attachment_reopen`, already confined to the store by
-   `cleanup::in_store` — and keeps nothing. It is the one reader of
-   `stores/attachments.js` that holds no list and hears no drop, and that is
-   what leaves the rule in `.claude/rules/attachments.md` intact: the list still
-   belongs to the New task window alone, and a command is not a subscription. */
+   click. This window reads the file itself with `readImagePath`, which is
+   `image_read` under one command — the same one a figure in a task's prose
+   is read through, not `attachment_reopen` any more: this window shows
+   whatever a click aimed it at, a New task window's own thumbnail or a
+   picture an agent wrote into its prose, and only the first of those still
+   lives in `cleanup::in_store`'s attachment folder. `image_read` reads any
+   path an absolute one already names, so nothing here narrowed; a stored
+   attachment's own path still resolves exactly as it always did.
+   `attachment_reopen` stays in place for the one thing that still needs the
+   store's own confinement — restoring a draft's thumbnails after a project
+   switch, in `stores/attachments.js`'s own `restorePaths` — and this window
+   keeps nothing either way. It is the one reader of `stores/attachments.js`
+   that holds no list and hears no drop, and that is what leaves the rule in
+   `.claude/rules/attachments.md` intact: the list still belongs to the New
+   task window alone, and a command is not a subscription. */
 import { onMounted, onUnmounted, reactive, ref, watchEffect } from 'vue'
 import EmptyState from '../components/core/EmptyState.vue'
 import ImageViewer from '../components/overlays/ImageViewer.vue'
@@ -35,7 +44,7 @@ import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appeara
 import { paintRoot, usePrefersDark } from './useAppearance.js'
 import { readSharedSettings, watchSharedSettings } from '../stores/settings.js'
 import { announceWindowReady, closeWindow, watchImageShow } from '../stores/app.js'
-import { readAttachment } from '../stores/attachments.js'
+import { readImagePath } from '../stores/attachments.js'
 
 const props = defineProps({
   /* The query string's two overrides, passed down rather than read here so that
@@ -120,21 +129,22 @@ async function show(path, name) {
   }
   reading.value = true
   try {
-    const attachment = await readAttachment(path)
+    const attachment = await readImagePath(path)
     if (seq !== showSeq) return
     picture.value = attachment
-    /* The record's own name wins over the one on the URL: it is what the store
-       actually holds, and the caption under the picture has to be the file. */
+    /* The record's own name wins over the one on the URL: it is what was
+       actually read, and the caption under the picture has to be the file. */
     label.value = attachment.name || label.value
   } catch (err) {
     if (seq !== showSeq) return
-    /* An ordinary outcome, not a fault: the Storage tab's button sweeps files
-       no open task refers to, and a draft can still be naming one of them. It
-       is said in the empty state below, with the name of what is missing —
+    /* An ordinary outcome, not a fault: a stored attachment can be swept by
+       the Storage tab's button while a draft still names it, and a figure's
+       own file can be moved or deleted like any file on a person's disk. Both
+       are said in the empty state below, with the name of what is missing —
        which is why this is `debug` and not `error`. A red line in the console
-       for a state the window is already explaining would be the app reporting a
-       bug it does not have. */
-    console.debug('[image-window] that picture is not in the store:', err)
+       for a state the window is already explaining would be the app reporting
+       a bug it does not have. */
+    console.debug('[image-window] that picture could not be read:', err)
     picture.value = null
   } finally {
     /* Behind the guard, unlike the two above it only in what it costs to get
@@ -263,17 +273,18 @@ const emptyStyle = {
          milliseconds, and an empty state in that window would say a picture was
          gone every time one is opened. -->
     <div v-else-if="!reading" :style="emptyStyle">
-      <!-- The file is not in the store any more, which is an ordinary state
-           rather than a fault: the Storage tab's button sweeps what no open
-           task refers to, and a draft can still be naming one of them. The name
-           goes in the `detail` slot because that is where this system puts an
+      <!-- The file could not be read, which is an ordinary state rather than a
+           fault: a stored attachment can be swept from the Storage tab while
+           a draft still names it, and a figure's own file can just as well be
+           moved or deleted, like any file on a person's disk. The name goes
+           in the `detail` slot because that is where this system puts an
            identifier — and it is the only thing left that says which picture
            this window was about. -->
       <EmptyState
         v-if="label"
         icon="image-off"
-        title="This picture is not in the store any more."
-        description="It was cleared from the Storage tab, or the file was moved. The task can still be filed without it."
+        title="This picture could not be read."
+        description="It may have been cleared from the Storage tab, moved or deleted. The task can still be filed without it."
       >
         <template #detail>{{ label }}</template>
       </EmptyState>

@@ -409,7 +409,10 @@ fn compare_query(repo: &str, branch: &str) -> String {
 /// The bytes stay where they are. An attachment's `url` in the front end is a
 /// `data:` URL of up to 8 MiB of base64, which fits in no URL and would be
 /// eleven megabytes over IPC per click; the window reads the file itself with
-/// `attachment_reopen`, which is already confined to the store.
+/// `image_read` (`attachments::figure`), which takes the path exactly as it
+/// stands and asks nothing of a base — a stored attachment's path is already
+/// absolute, and so is the path a figure in a task's prose was read through
+/// in the first place.
 fn image_query(path: &str, name: &str) -> String {
     format!("&path={}&name={}", encode(path), encode(name))
 }

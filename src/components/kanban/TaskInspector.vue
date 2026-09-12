@@ -34,13 +34,26 @@ const props = defineProps({
      anything was asked, `'copied'` or `'failed'` after. It changes the text of
      one tooltip and nothing else. The copying is the view's — this panel
      imports no store and acts on nothing. */
-  copyState: { type: String, default: '' }
+  copyState: { type: String, default: '' },
+  /* The active project's absolute path, or `''` where there is none — passed
+     to `Markdown.vue` as `base`, the directory a relative illustration
+     resolves from, and deliberately never as `root`: a task in the inspector
+     has no session and no working tree, which is exactly the case
+     `MarkdownInline.vue`'s own header already draws a local link inert for,
+     and giving this component a `root` would turn every plain path in an
+     issue's prose into a link nothing here was asked to add. A figure has no
+     such alternative — an illustration with nowhere to resolve from is one
+     that never draws — so it is handed the project root anyway, `Markdown.vue`'s
+     own fallback for exactly this case. */
+  base: { type: String, default: '' }
 })
 
 /* A link inside one of the prose fields, raised rather than opened: no
    component in `src/components/` knows Tauri exists, so the view binds
-   `openExternal` — the app's one link-opening path — to this. */
-const emit = defineEmits(['open', 'copy-id'])
+   `openExternal` — the app's one link-opening path — to this. `open-image` is
+   forwarded the same way, to whatever can reach `views/window.rs`'s image
+   window. */
+const emit = defineEmits(['open', 'copy-id', 'open-image'])
 
 /* What the id's tooltip says, from `copyId.js` — the same three words the
    card's id uses, in the one place a test can read them. */
@@ -230,7 +243,7 @@ const divider = {
          no use for. Still read-only: nothing here is editable, and a task
          item's box is drawn by the stylesheet rather than by a control. -->
     <div v-if="issue.description" class="sm-prose" :style="flatProse">
-      <Markdown :text="issue.description" @open="emit('open', $event)" />
+      <Markdown :text="issue.description" :base="base" @open="emit('open', $event)" @open-image="emit('open-image', $event)" />
     </div>
 
     <!-- bd's other prose, in a fixed order: the two that are the spec first,
@@ -240,21 +253,21 @@ const divider = {
     <div v-if="issue.acceptance_criteria" :style="proseSection">
       <span :style="rowLabel">Acceptance criteria</span>
       <div class="sm-prose" :style="flatProse">
-        <Markdown :text="issue.acceptance_criteria" @open="emit('open', $event)" />
+        <Markdown :text="issue.acceptance_criteria" :base="base" @open="emit('open', $event)" @open-image="emit('open-image', $event)" />
       </div>
     </div>
 
     <div v-if="issue.design" :style="proseSection">
       <span :style="rowLabel">Design</span>
       <div class="sm-prose" :style="flatProse">
-        <Markdown :text="issue.design" @open="emit('open', $event)" />
+        <Markdown :text="issue.design" :base="base" @open="emit('open', $event)" @open-image="emit('open-image', $event)" />
       </div>
     </div>
 
     <div v-if="issue.notes" :style="proseSection">
       <span :style="rowLabel">Notes</span>
       <div class="sm-prose" :style="flatProse">
-        <Markdown :text="notesText" @open="emit('open', $event)" />
+        <Markdown :text="notesText" :base="base" @open="emit('open', $event)" @open-image="emit('open-image', $event)" />
       </div>
     </div>
 
@@ -273,7 +286,7 @@ const divider = {
     <div v-if="issue.close_reason" :style="closeReasonBox">
       <span :style="rowLabel">Close reason</span>
       <div class="sm-prose" :style="flatProse">
-        <Markdown :text="issue.close_reason" @open="emit('open', $event)" />
+        <Markdown :text="issue.close_reason" :base="base" @open="emit('open', $event)" @open-image="emit('open-image', $event)" />
       </div>
     </div>
   </div>

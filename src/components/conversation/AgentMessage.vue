@@ -16,15 +16,19 @@
    is a colour, a radius or a spacing value any more, it is markup over a
    known contract.
 
-   `open` and `open-local` are forwarded rather than answered. `Markdown` opens
-   no link itself: it raises one or the other at every level of its tree, and
-   whatever draws this binds `open` to `openExternal` in `stores/app.js`,
-   because a navigation inside the webview would replace the app, and
-   `open-local` to whatever can reach the file tree — `ConversationView.vue`'s
-   own header says why that is not this component and not `Markdown` either.
-   `root` rides along beside them, since a local link needs it to build a
-   working `href` at all (`MarkdownInline.vue`). Binding `:text` alone ships
-   an agent's prose with links that do nothing, and no test in this project
+   `open`, `open-local` and `open-image` are forwarded rather than answered.
+   `Markdown` opens no link itself and reads no file itself either: it raises
+   one of the three at every level of its tree, and whatever draws this binds
+   `open` to `openExternal` in `stores/app.js`, because a navigation inside
+   the webview would replace the app, `open-local` to whatever can reach the
+   file tree — `ConversationView.vue`'s own header says why that is not this
+   component and not `Markdown` either — and `open-image` to `openImageWindow`
+   in that same store, since a figure the agent drew opens in the app's one
+   image window and never a second. `root` rides along beside them, since a
+   local link needs it to build a working `href` at all (`MarkdownInline.vue`);
+   a figure's own base is `Markdown.vue`'s to default from `root`, so nothing
+   about it needs a matching prop here. Binding `:text` alone ships an agent's
+   prose with links and figures that do nothing, and no test in this project
    can catch that.
 
    `.sm-prose` no longer wraps this message. The contract's own root is the
@@ -42,11 +46,17 @@ defineProps({
   root: { type: String, default: '' }
 })
 
-const emit = defineEmits(['open', 'open-local'])
+const emit = defineEmits(['open', 'open-local', 'open-image'])
 </script>
 
 <template>
   <article data-turn="agent">
-    <Markdown :text="text" :root="root" @open="emit('open', $event)" @open-local="emit('open-local', $event)" />
+    <Markdown
+      :text="text"
+      :root="root"
+      @open="emit('open', $event)"
+      @open-local="emit('open-local', $event)"
+      @open-image="emit('open-image', $event)"
+    />
   </article>
 </template>

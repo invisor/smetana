@@ -12,10 +12,10 @@
 
    The words are markdown too. A person pastes a path, a fenced snippet, a list
    of three things, and the agent receives it as markdown, so drawing it as
-   anything else would show one thing and send another. `open` and `open-local`
-   are forwarded for the reason `AgentMessage.vue` gives — a person's own
-   message can carry a local path exactly as the agent's can, and `root` is
-   what makes one operable.
+   anything else would show one thing and send another. `open`, `open-local`
+   and `open-image` are forwarded for the reason `AgentMessage.vue` gives — a
+   person's own message can carry a local path or a figure exactly as the
+   agent's can, and `root` is what makes a link operable.
 
    An attachment is a path and nothing more — that is what `session_send` sends
    and what the journal keeps (`EventKind::UserMessage`). No thumbnail, then:
@@ -45,12 +45,18 @@ defineProps({
   root: { type: String, default: '' }
 })
 
-const emit = defineEmits(['open', 'open-local'])
+const emit = defineEmits(['open', 'open-local', 'open-image'])
 </script>
 
 <template>
   <article data-turn="person">
-    <Markdown :text="text" :root="root" @open="emit('open', $event)" @open-local="emit('open-local', $event)" />
+    <Markdown
+      :text="text"
+      :root="root"
+      @open="emit('open', $event)"
+      @open-local="emit('open-local', $event)"
+      @open-image="emit('open-image', $event)"
+    />
     <ul v-if="attachments.length" data-attachments>
       <li v-for="path in attachments" :key="path">{{ basename(path) }}</li>
     </ul>

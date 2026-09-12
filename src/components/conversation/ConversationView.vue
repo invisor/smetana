@@ -88,11 +88,16 @@ import { basename } from '../../paths.js'
    `Markdown.vue` and `MarkdownInline.vue` needs a value from somewhere, and
    this file already reads four stores of its own.
 
+   `openImageWindow` answers `open-image` the same direct way: a figure in a
+   turn's prose is opened in the existing image window, never a second one,
+   and there is nothing here for this panel to own the way it owns nothing
+   about `open` either — both are read straight off `stores/app.js`.
+
    The other two are the header's, and neither is on the wire: `session_attach`
    answers with the journal, its sequence number and the state, and nothing
    else. */
 import { agentLabel } from '../../stores/agents.js'
-import { openExternal } from '../../stores/app.js'
+import { openExternal, openImageWindow } from '../../stores/app.js'
 import { filesState } from '../../stores/files.js'
 import { settings } from '../../stores/settings.js'
 import {
@@ -500,6 +505,7 @@ const refusal = {
             :root="filesState.root ?? ''"
             @open="openExternal"
             @open-local="emit('open-local', $event)"
+            @open-image="(picture) => openImageWindow(picture.path, picture.name)"
           />
           <AgentMessage
             v-else-if="row.kind === 'agent'"
@@ -507,6 +513,7 @@ const refusal = {
             :root="filesState.root ?? ''"
             @open="openExternal"
             @open-local="emit('open-local', $event)"
+            @open-image="(picture) => openImageWindow(picture.path, picture.name)"
           />
           <Reasoning
             v-else-if="row.kind === 'reasoning'"
@@ -515,6 +522,7 @@ const refusal = {
             :root="filesState.root ?? ''"
             @open="openExternal"
             @open-local="emit('open-local', $event)"
+            @open-image="(picture) => openImageWindow(picture.path, picture.name)"
           />
           <ToolCall
             v-else-if="row.kind === 'tool'"

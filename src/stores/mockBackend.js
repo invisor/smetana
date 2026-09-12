@@ -1246,6 +1246,31 @@ export function installMockBackend() {
       }
       return { path, name, bytes: 72, mime: 'image/png', data: MOCK_IMAGE_BASE64 }
     }
+    /* `image_read` answers too, for the same reason `attachment_reopen` does:
+       a figure in a task's prose is drawn through `Markdown.vue`'s own
+       `smReadImage`, provided in `views/Gallery.vue` and `views/DesktopApp.vue`
+       from this store, and `?view=gallery`'s own samples are `data:` sources
+       that never call it at all — but a real project's own prose, read by a
+       person under `npm run dev`, can still name a bare path, and an absent
+       answer would strand every figure it wrote in `data-state="loading"`
+       forever rather than in a state a browser can actually reach.
+       There is no disk here to read a path off, so this is a fixture rather
+       than an attempted read: the same eight-pixel PNG `attachment_reopen`
+       answers with, and `path` is `base` and `src` joined by hand rather than
+       resolved the way Rust's `image_read` really would, since nothing here
+       needs the two directories a browser has no way to tell apart anyway.
+       The same `missing`-named refusal gives this command's own empty state a
+       door too. */
+    if (command === 'image_read') {
+      const base = payload?.base ?? ''
+      const src = payload?.src ?? ''
+      const name = src.split('/').pop() || 'fig.png'
+      const path = src.startsWith('/') || /^[a-z]:[\\/]/i.test(src) ? src : `${base}/${src}`
+      if (name.startsWith('missing')) {
+        throw { kind: 'io', message: `${path}: no such file` }
+      }
+      return { path, name, bytes: 72, mime: 'image/png', data: MOCK_IMAGE_BASE64 }
+    }
     /* `run_start` and `run_stop` are deliberately absent: they fall through to
        the refusal at the bottom, like every other write. A run that looked like
        it had started would be worse than none — there is no worker, no session

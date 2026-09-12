@@ -290,6 +290,7 @@ pub fn run() {
       attachments::attachment_write,
       attachments::attachments_survey,
       attachments::attachments_clean,
+      attachments::figure::image_read,
       git::git_head,
       vcs::commands::vcs_repos,
       vcs::commands::vcs_status,

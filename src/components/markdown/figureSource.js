@@ -27,15 +27,21 @@
    the current origin's scheme (`new URL('//evil.example.com/x', location.href)`
    is `http://evil.example.com/x` in the dev server and in a Windows release
    alike), so it is exactly as live a request as a written-out `http://` and
-   is refused before the scheme test ever runs.
+   is refused before the scheme test ever runs. `\\host\path` is the same hole
+   wearing a different mark: a browser's own URL resolver treats a backslash
+   exactly like a forward slash, so this app's own image-reading command
+   refuses it too — see `isNetworkPath` below — and the front-end gate refuses
+   it first, on the same test as `//host/path`, rather than on a second
+   `startsWith` this module would owe a second gap in.
 
-   What is accepted: a source with no scheme at all and no leading `//` — a
-   relative or an absolute filesystem path, `./a.png` among them — and a
-   self-contained `data:` URI whose media type is `image/…`, since it asks the
-   network for nothing. Loading a path's bytes into the front end is not this
-   module's question and not yet built at all (the wire still carries only a
-   path); what this module decides is narrower — which sources the renderer
-   may even attempt to draw. */
+   What is accepted: a source with no scheme at all and no leading pair of
+   slash-like characters — a relative or an absolute filesystem path, `./a.png`
+   among them — and a self-contained `data:` URI whose media type is
+   `image/…`, since it asks the network for nothing. A bare path is never
+   handed to `<img src>` directly any more: `MarkdownFigure.vue` resolves it
+   through `image_read`, off the machine's own disk rather than the webview's
+   origin, and what this module decides is narrower than that — only which
+   sources the renderer may even attempt to draw at all. */
 
 /* A scheme, by RFC 3986's own grammar (`ALPHA *( ALPHA / DIGIT / "+" / "-" /
    "." )`), with one restriction this module adds on top: at least two
@@ -48,9 +54,67 @@
    confused with `javascript:` at this gate. */
 const SCHEME = /^([a-z][a-z0-9+.-]+):/i
 
+/* Whether `src` opens over the network the moment it is resolved rather than
+   naming a file on this machine — `//host/path`, which has no scheme by
+   RFC 3986's own grammar and is resolved against the current origin's by
+   every renderer, and `\\host\path`, its Windows-UNC twin, which a browser's
+   own URL resolver treats exactly the same way. One test rather than two
+   `startsWith`s: both are "a leading pair of slash-like characters", checked
+   without caring which of `/` and `\` supplied either one, so `/\host\p.png`
+   and `\\host/p.png` — mixed on purpose by whoever is testing the gate, or by
+   an accident of copy-paste — are refused by the same line as the two
+   canonical spellings. `src-tauri/src/attachments/figure.rs`'s `is_network_path`
+   is this same test again, in Rust, for `image_read` — one string check on
+   each side of the boundary rather than trusting the other one to have run. */
+export function isNetworkPath(src) {
+  return typeof src === 'string' && /^[/\\]{2}/.test(src.trim())
+}
+
+/* One `data:` URI taken apart once, into the three questions everything below
+   asks separately: what does it claim to be (`mediaType`), how is its payload
+   encoded (`base64`), and what is the payload itself. `null` for anything
+   that is not a `data:` URI with an actual payload separator — the `,` RFC
+   2397 requires between the parameters and the data — since a URI with
+   nothing after its parameters has nothing for `readInlineSvg` to decode and
+   no media type worth trusting either.
+
+   The parameter half (`params`, kept as the raw string between the media type
+   and the comma) is deliberately not parsed into a closed grammar of
+   `;name=value` pairs: a hand-written diagram's `data:` URI is exactly the
+   place a stray or doubled `;` shows up (`;;base64`, `;=utf8`, `;utf8;`,
+   `;charset*=utf-8`, `;x.y=1` are all real shapes a browser still renders),
+   and a parser that refuses the ones it has not enumerated is a parser that
+   quietly drops the source into the wrong branch below rather than reading
+   it. Whether the payload is base64 is answered the only way that generalises
+   to all of them: a literal `base64` token bounded by `;` or the edges of the
+   parameter string, found anywhere in it rather than matched against a
+   position — `isInlineSvgSrc` and `decodeSvgPayload` both call this once
+   rather than each guessing at the grammar their own way, which is the one
+   property that has to hold: every source the first accepts as `image/svg+xml`
+   the second must decode the same way. */
+function parseDataUri(src) {
+  if (typeof src !== 'string') return null
+  const trimmed = src.trim()
+  if (!/^data:/i.test(trimmed)) return null
+  const rest = trimmed.slice('data:'.length)
+  const comma = rest.indexOf(',')
+  if (comma === -1) return null
+  const header = rest.slice(0, comma)
+  const payload = rest.slice(comma + 1)
+  const semi = header.indexOf(';')
+  const mediaType = (semi === -1 ? header : header.slice(0, semi)).trim().toLowerCase()
+  const params = semi === -1 ? '' : header.slice(semi)
+  const base64 = /;base64(?:;|$)/i.test(params)
+  return { mediaType, params, payload, base64 }
+}
+
 /* The media type of a `data:` URI, lower-cased, stopping at the first `;` or
    `,` the way the URI's own grammar does — `data:image/svg+xml;base64,AAAA`
-   answers `image/svg+xml`, `data:text/html,<script>` answers `text/html`. */
+   answers `image/svg+xml`, `data:text/html,<script>` answers `text/html`.
+   Lenient on purpose, unlike `parseDataUri` above: this is only ever used to
+   *name* a source in a message a person reads, on a URI that may carry no
+   payload separator at all, and refusing to answer at all would be a worse
+   error message than a media type read off a malformed URI. */
 function dataUriMediaType(src) {
   const rest = src.slice('data:'.length)
   const end = rest.search(/[;,]/)
@@ -61,44 +125,46 @@ export function isAllowedFigureSrc(src) {
   if (typeof src !== 'string') return false
   const trimmed = src.trim()
   if (trimmed === '') return false
-  /* Protocol-relative first, ahead of the scheme test: `//host/path` has no
-     scheme by the grammar below, and would otherwise fall through the "no
-     scheme" branch as though it were a filesystem path. */
-  if (trimmed.startsWith('//')) return false
+  if (isNetworkPath(trimmed)) return false
   const scheme = SCHEME.exec(trimmed)
   if (!scheme) return true
   if (scheme[1].toLowerCase() !== 'data') return false
   /* A `data:` URI is only ever accepted as a picture — `data:text/html,…` is
      inert inside the `<img>`/`readInlineSvg` doors this module opens, but
      admitting it here would be an unforced "any media type will do" answer
-     nobody asked for. */
+     nobody asked for. `dataUriMediaType`'s lenient scan is enough here: this
+     question only needs to know what the source *claims* to be. */
   return dataUriMediaType(trimmed).startsWith('image/')
 }
 
+/* Whether an accepted source is a filesystem path rather than a `data:` URI —
+   everything `isAllowedFigureSrc` admits that does not open with the `data:`
+   scheme. `MarkdownFigure.vue` is the one caller: a path is the one shape of
+   source this renderer cannot simply hand to an `<img src>` or decode itself,
+   and has to ask `image_read` about instead. */
+export function isPathFigureSrc(src) {
+  if (!isAllowedFigureSrc(src)) return false
+  return SCHEME.exec(src.trim())?.[1]?.toLowerCase() !== 'data'
+}
+
 /* Whether a source is the one shape that can ever become the preferred,
-   inline `<svg>` form — a self-contained `data:image/svg+xml` URI, with
-   arbitrary parameters ahead of its payload (`;base64`, `;charset=utf-8`,
-   the common non-standard `;utf8`, any order, any of them absent). The
-   parameter list is deliberately not a closed set: the one thing that must
-   never happen is `isAllowedFigureSrc` accepting an `image/svg+xml` source
-   this regexp does not also recognise, since that source would then reach
-   the raster `<img>` branch un-walked — an SVG with an arbitrary payload,
+   inline `<svg>` form — a self-contained `data:image/svg+xml` URI, whatever
+   parameters sit ahead of its payload. The one property that has to hold:
+   every `image/svg+xml` source `isAllowedFigureSrc` accepts must also be one
+   this function recognises, since that source would otherwise reach the
+   raster `<img>` branch un-walked — an SVG with an arbitrary payload,
    including a hard-coded colour, painted matted and unchecked. Nothing else
    carries literal markup for this renderer to draw: an ordinary path or a
    `data:image/png` source is always the raster branch. */
-const DATA_SVG = /^data:image\/svg\+xml((?:;[a-z0-9_-]+(?:=[^;,]*)?)*),([\s\S]*)$/i
-
 export function isInlineSvgSrc(src) {
-  return typeof src === 'string' && DATA_SVG.test(src.trim())
+  return parseDataUri(src)?.mediaType === 'image/svg+xml'
 }
 
 function decodeSvgPayload(src) {
-  const match = DATA_SVG.exec(src.trim())
-  if (!match) return null
-  const [, params, payload] = match
-  const base64 = /(^|;)base64(;|$)/i.test(params)
+  const parsed = parseDataUri(src)
+  if (!parsed || parsed.mediaType !== 'image/svg+xml') return null
   try {
-    return base64 ? atob(payload) : decodeURIComponent(payload)
+    return parsed.base64 ? atob(parsed.payload) : decodeURIComponent(parsed.payload)
   } catch {
     /* Neither valid base64 nor a valid percent-encoding — not a payload this
        data URI's own rules allow, so nothing here reads it as one. */

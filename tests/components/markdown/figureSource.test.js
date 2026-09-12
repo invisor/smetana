@@ -3,6 +3,8 @@ import {
   describeFigureSrc,
   isAllowedFigureSrc,
   isInlineSvgSrc,
+  isNetworkPath,
+  isPathFigureSrc,
   readInlineSvg
 } from '../../../src/components/markdown/figureSource.js'
 
@@ -51,6 +53,20 @@ describe('isAllowedFigureSrc', () => {
   it('refuses a protocol-relative source', () => {
     expect(isAllowedFigureSrc('//evil.example.com/x.png')).toBe(false)
     expect(isAllowedFigureSrc('//attacker.tld/p.png?t=abc')).toBe(false)
+  })
+
+  /* A browser's own URL resolver treats `\` exactly like `/`, so a UNC path
+     is exactly as live a network address as `//host/path` once anything
+     resolves it — the hole `figure.rs`'s `is_network_path` refuses again on
+     the Rust side, and the same one live-checked in a browser's Network tab. */
+  it('refuses a UNC path the same way it refuses a protocol-relative one', () => {
+    expect(isAllowedFigureSrc('\\\\host\\p.png')).toBe(false)
+    expect(isAllowedFigureSrc('\\\\attacker.tld\\share\\p.png')).toBe(false)
+  })
+
+  it('refuses a source mixing / and \\ in its leading pair', () => {
+    expect(isAllowedFigureSrc('/\\host\\p.png')).toBe(false)
+    expect(isAllowedFigureSrc('\\/host/p.png')).toBe(false)
   })
 
   it('refuses a data URI whose media type is not a picture at all', () => {
@@ -113,6 +129,64 @@ describe('isInlineSvgSrc', () => {
       expect(isAllowedFigureSrc(src)).toBe(true)
       expect(isInlineSvgSrc(src)).toBe(true)
     }
+  })
+
+  /* The five malformed-but-real parameter shapes the tracker note names —
+     the ones the closed grammar this module used to carry did not
+     recognise, so a source spelled this way reached the raster `<img>`
+     branch with an unchecked, unvalidated colour. `parseDataUri`'s single
+     scan for a `;base64` token, rather than a grammar of `;name=value`
+     pairs, is what closes all five at once. */
+  it('recognises every malformed parameter shape the tracker note names', () => {
+    const sources = [
+      'data:image/svg+xml;;base64,PHN2Zz48L3N2Zz4=',
+      'data:image/svg+xml;=utf8,<svg></svg>',
+      'data:image/svg+xml;utf8;,<svg></svg>',
+      'data:image/svg+xml;charset*=utf-8,<svg></svg>',
+      'data:image/svg+xml;x.y=1,<svg></svg>'
+    ]
+    for (const src of sources) {
+      expect(isAllowedFigureSrc(src)).toBe(true)
+      expect(isInlineSvgSrc(src)).toBe(true)
+    }
+  })
+})
+
+describe('isNetworkPath', () => {
+  it('recognises both canonical spellings', () => {
+    expect(isNetworkPath('//host/p.png')).toBe(true)
+    expect(isNetworkPath('\\\\host\\p.png')).toBe(true)
+  })
+
+  it('recognises a leading pair mixing / and \\', () => {
+    expect(isNetworkPath('/\\host\\p.png')).toBe(true)
+    expect(isNetworkPath('\\/host/p.png')).toBe(true)
+  })
+
+  it('leaves an ordinary path alone', () => {
+    expect(isNetworkPath('./a.png')).toBe(false)
+    expect(isNetworkPath('/Users/ada/fig.png')).toBe(false)
+    expect(isNetworkPath('C:\\Users\\ada\\fig.png')).toBe(false)
+  })
+})
+
+describe('isPathFigureSrc', () => {
+  it('accepts a relative and an absolute filesystem path', () => {
+    expect(isPathFigureSrc('./a.png')).toBe(true)
+    expect(isPathFigureSrc('/Users/ada/fig.png')).toBe(true)
+    expect(isPathFigureSrc('C:\\Users\\ada\\fig.png')).toBe(true)
+  })
+
+  it('refuses a data URI, whatever it carries', () => {
+    expect(isPathFigureSrc('data:image/png;base64,AAAA')).toBe(false)
+    expect(isPathFigureSrc('data:image/svg+xml,<svg></svg>')).toBe(false)
+  })
+
+  it('refuses anything isAllowedFigureSrc already refused', () => {
+    expect(isPathFigureSrc('https://example.com/s.png')).toBe(false)
+    expect(isPathFigureSrc('//evil.example.com/x.png')).toBe(false)
+    expect(isPathFigureSrc('\\\\host\\p.png')).toBe(false)
+    expect(isPathFigureSrc('javascript:alert(1)')).toBe(false)
   })
 })
 
@@ -216,6 +290,23 @@ describe('readInlineSvg', () => {
       encodeURIComponent('<svg viewBox="0 0 10 10"><rect width="4" height="4" fill="currentColor"/></svg>')
     expect(readInlineSvg(src).ok).toBe(true)
   })
+
+  /* Every malformed-but-real parameter shape reaches the same render check —
+     a diagram painting only tokens passes regardless of which one precedes
+     its payload, and one hard-coding a hex colour fails the same way under
+     every one of them. Two forms rather than one apiece: the property this
+     module exists to hold is that the two never disagree. */
+  it.each([';;base64', ';=utf8', ';utf8;', ';charset*=utf-8', ';x.y=1'])(
+    'checks the render the same way under the %s parameter',
+    (params) => {
+      const tokenSvg = '<svg viewBox="0 0 10 10"><rect width="4" height="4" fill="currentColor"/></svg>'
+      const hexSvg = '<svg viewBox="0 0 10 10"><rect width="4" height="4" fill="#ff0000"/></svg>'
+      const base64 = /base64/i.test(params)
+      const encode = (markup) => (base64 ? btoa(markup) : encodeURIComponent(markup))
+      expect(readInlineSvg(`data:image/svg+xml${params},${encode(tokenSvg)}`).ok).toBe(true)
+      expect(readInlineSvg(`data:image/svg+xml${params},${encode(hexSvg)}`).ok).toBe(false)
+    }
+  )
 
   /* `svg` names only the document's own root — a diagram carries no viewport
      of its own to reason about, and the vocabulary's own comment says so. */
