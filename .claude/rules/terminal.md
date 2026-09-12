@@ -17,10 +17,14 @@ paths:
   - "src/stores/tabs.js"
   - "src/components/shell/**"
   # The other kind of agent session, which shares this subsystem's one tab: a
-  # driven conversation. Until it has a rule of its own, this file is the only
-  # written account of why the Agent tab is aimed by a per-project field rather
-  # than by a watcher, and of what stands between a Codex machine and a dead
-  # "+ New agent" — so it has to load for whoever edits either end of that.
+  # driven conversation. This file is the written account of why the Agent tab
+  # is aimed by a per-project field rather than by a watcher, and of what
+  # stands between a Codex machine and a dead "+ New agent" — so it has to
+  # load for whoever edits either end of that. It is not the account of how a
+  # driven session's own panel renders a turn: that is
+  # `.claude/rules/conversation-panel.md`'s question, and the two paths that
+  # rule is about are named there too for exactly this reason — this file no
+  # longer claims either one alone.
   - "src/stores/conversation.js"
   - "src/components/conversation/**"
   - "src-tauri/src/session/**"

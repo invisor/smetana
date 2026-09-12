@@ -216,6 +216,7 @@ cannot make it.
 | the branch in the scope bar, the branch list | `.claude/rules/git-head.md` |
 | the Git panel: status, merge, rebase, conflicts | `.claude/rules/vcs-panel.md` |
 | PTY sessions, the output ring, attention detection | `.claude/rules/terminal.md` |
+| the conversation panel: markdown, figures, activity | `.claude/rules/conversation-panel.md` |
 | CLI agent profiles, intents, prompts, the skill library | `.claude/rules/agents.md` |
 | a parked task and the way back from one | `.claude/rules/parked-tasks.md` |
 | images on a task, and the one thing that deletes | `.claude/rules/attachments.md` |
