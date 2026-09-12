@@ -349,7 +349,15 @@ const inputRowStyle = {
 
 /* **No focus ring, and that is the point.** In this system colour means state,
    and a saturated border around the one field on screen was the first of the six
-   faults this redraw exists to fix. The panel's own border is the affordance. */
+   faults this redraw exists to fix. The panel's own border is the affordance.
+
+   Left transparent this way, the field sits directly on `panelStyle`'s own
+   `--surface-overlay`, where `--text-muted`'s placeholder falls to 4.32:1 in
+   dark — under the 4.5:1 floor `tokens/base.css`'s `::placeholder` rule was
+   measured against a different fill (`Input`/`Textarea`'s `--surface-raised`).
+   The `data-placeholder="secondary"` attribute on the input below raises this one
+   field to `--text-secondary` rather than moving every placeholder in the
+   tree to rescue it; see `base.css` for the full measurement. */
 const inputStyle = {
   flex: 1,
   minWidth: 0,
@@ -632,6 +640,7 @@ const legendStyle = {
           autocomplete="off"
           placeholder="Search tasks by id, title or meaning"
           aria-label="Search tasks by id, title or meaning"
+          data-placeholder="secondary"
           :aria-expanded="rows.length > 0"
           :aria-controls="listId"
           :aria-activedescendant="rows.length ? rowId(sel) : undefined"

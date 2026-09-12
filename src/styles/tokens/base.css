@@ -24,11 +24,42 @@ body{margin:0;background:var(--canvas);color:var(--text-primary);font-family:var
    draws it in a fixed mid-grey that ignores `data-theme`, and measured
    against `--surface-raised` that default falls to 3.49:1 in dark — under
    the 4.5:1 floor for text this size. `--text-muted` clears 4.5:1 in both
-   themes against that same fill (light 4.61:1, dark 4.59:1) and follows the
+   themes against that same fill (light 5.71:1, dark 4.59:1) and follows the
    theme switch, which the user-agent default never did. `opacity:1`
    overrides Firefox's own dimming of the pseudo-element, which would
    otherwise eat back the margin this token already has. */
 ::placeholder{color:var(--text-muted);opacity:1}
+/* `--text-muted` was measured once, against `Input`/`Textarea`'s own
+   `--surface-raised`, and the rule above reaches every placeholder in the
+   tree — including three fields that do not sit on that fill and fall under
+   4.5:1 there: `CommandPalette` and `Dropdown`'s search field both leave
+   their input transparent over the panel's `--surface-overlay` on purpose,
+   which is `--text-muted` at 4.32:1 in dark (`--text-secondary` clears it at
+   7.09; light already passes at 5.71, both tokens' fields being pure white
+   there). `GitPanel`'s branch filter steps its own row to `--surface-active`
+   on focus, which is the one cell that fails in *both* themes — `--text-muted`
+   at 4.27 light and 3.83 dark, `--text-secondary` clearing both at 5.67 and
+   6.29. Every other field that draws a placeholder this way was checked and
+   clears the floor already, including the one that most resembles the
+   failing pair: `BranchPicker.vue`'s own filter (the branch-compare window's,
+   not `GitPanel`'s inline one) sits on `--surface-raised` with no
+   focus-driven step, at 5.71 light / 4.59 dark.
+
+   The fix is not the rule above — raising it to `--text-secondary` for
+   every field in the tree would flatten "muted but readable" into ordinary
+   secondary prose everywhere a placeholder already clears the floor, to
+   rescue three that do not. And it is not those three fields' own fill
+   either: the transparent input is `CommandPalette`'s deliberate choice, and
+   the surface step on focus is `GitPanel`'s — both documented in place, and
+   neither is a placeholder-contrast decision to begin with. So the three
+   inputs that fail carry `data-placeholder="secondary"` themselves (the
+   `GitPanel` one only while focused, since unfocused it sits on
+   `--surface-raised` and already clears 4.5:1 same as `Input`/`Textarea`),
+   naming the token the rule paints rather than borrowing a word from the
+   attention scale (`data-attention="loud"` already means something else in
+   this system) or from the surface scale — and only those get bumped a step
+   up the same text scale already in use everywhere else. */
+[data-placeholder="secondary"]::placeholder{color:var(--text-secondary)}
 a{color:var(--text-link);text-decoration:none;border-bottom:1px solid transparent}
 a:hover{color:var(--text-link-hover);border-bottom-color:currentColor}
 :focus{outline:none}
