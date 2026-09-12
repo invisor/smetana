@@ -692,10 +692,18 @@ export async function sendMessage(id, text, attachments = []) {
 /* A person's answer to a permission question. `question` is the id off the
    `permission` event, which is what the worker looks the waiting tool call up
    by — the journal on the Rust side is the only thing that knows which session
-   was asked, and it checks. */
-export async function answerQuestion(id, question, decision) {
+   was asked, and it checks.
+
+   `answers` is `AskUserQuestion`'s own: the text of each question mapped to
+   what was chosen or typed, built by `askUserQuestion.js` and handed over by
+   `AskUserQuestion.vue`. `null` — never `undefined`, which `invoke` would
+   drop from the payload entirely and leave Rust reading a missing field
+   rather than an absent one — for the ordinary allow/deny every other tool's
+   `PermissionRequest.vue` still sends, and for a decline to answer, which is
+   a plain `deny` whatever tool it is refusing. */
+export async function answerQuestion(id, question, decision, answers = null) {
   try {
-    await invoke('session_answer', { id, question, decision })
+    await invoke('session_answer', { id, question, decision, answers })
     conversationState.lastError = null
   } catch (err) {
     report(id, 'answering a question', err)

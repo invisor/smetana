@@ -25,6 +25,7 @@ import {
   AgentMessage,
   AgentSettings,
   AppShell,
+  AskUserQuestion,
   Assignee,
   AttachmentStrip,
   BranchList,
@@ -2477,6 +2478,47 @@ const GALLERY_ACTIVITY_STARTED_AT = new Date(Date.now() - 4000).toISOString()
 /* What a press on the loud card raised, so the emitted decision is visible
    rather than taken on trust. In the app this is `answerQuestion`. */
 const permissionAnswer = ref(null)
+
+/* `AskUserQuestion`'s own fixture: two questions in one call, the shape
+   `Permission::input` actually carries — one ordinary single-select with
+   descriptions worth reading, one `multiSelect` so the checkable behaviour
+   is on screen rather than only in a test. */
+const ASK_USER_QUESTION_INPUT = {
+  questions: [
+    {
+      question: 'Which approach fixes the worktree collision?',
+      header: 'Approach',
+      multiSelect: false,
+      options: [
+        {
+          label: 'Replace the separator',
+          description: 'Leaves old worktrees alone; what the rest of the tree already does.'
+        },
+        {
+          label: 'Store the folder beside the branch',
+          description: 'Needs a migration for every worktree already on disk.'
+        }
+      ]
+    },
+    {
+      question: 'Which platforms should the fix be checked on before it merges?',
+      header: 'Platforms',
+      multiSelect: true,
+      options: [
+        { label: 'macOS', description: '' },
+        { label: 'Linux', description: '' },
+        { label: 'Windows', description: '' }
+      ]
+    }
+  ]
+}
+
+/* What the card raised — `{ decision, answers }` or `null` before a press,
+   the same shape `answerQuestion` takes beyond the session and question ids. */
+const askUserQuestionAnswer = ref(null)
+const onAskUserQuestionAnswer = (decision, answers) => {
+  askUserQuestionAnswer.value = { decision, answers }
+}
 
 /* The identity bar's three parts, seeded, and this is arrangement rather than
    decoration.
@@ -6278,6 +6320,20 @@ const menuTargetStyle = {
           />
           <div :style="{ font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
             {{ permissionAnswer ? `answer: ${permissionAnswer}` : 'no answer yet' }}
+          </div>
+        </div>
+
+        <div :style="{ width: '360px', display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
+          <!-- `AskUserQuestion`'s own card, beside `PermissionRequest` rather
+               than inside it — see `askUserQuestion.js`'s own header for why
+               the two never share a component. Two questions in one call,
+               the second `multiSelect`, is the shape worth checking: both
+               questions' options wrap their descriptions rather than
+               clipping them, and toggling a second option on the
+               `multiSelect` question leaves the first one chosen. -->
+          <AskUserQuestion :input="ASK_USER_QUESTION_INPUT" @answer="onAskUserQuestionAnswer" />
+          <div :style="{ font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
+            {{ askUserQuestionAnswer ? `decision: ${askUserQuestionAnswer.decision}, answers: ${JSON.stringify(askUserQuestionAnswer.answers)}` : 'no answer yet' }}
           </div>
         </div>
 

@@ -3,6 +3,8 @@
 //! do. The outer `Result` is about delivery to the worker, the inner one about
 //! the operation itself.
 
+use std::collections::BTreeMap;
+
 use tauri::State;
 use tokio::sync::oneshot;
 
@@ -74,14 +76,19 @@ pub async fn session_send(
 /// A person's answer to a permission question. `question` is the id carried by
 /// the `Permission` event; `noSuchQuestion` means nothing was waiting for it —
 /// it was answered already, or the harness gave up and went.
+///
+/// `answers` is `AskUserQuestion`'s own: the text of each question mapped to
+/// what was chosen or typed, or `None` for an ordinary allow/deny and for a
+/// decline to answer. Every other tool's card never sends one.
 #[tauri::command]
 pub async fn session_answer(
     handle: State<'_, SessionHandle>,
     id: SessionId,
     question: String,
     decision: Decision,
+    answers: Option<BTreeMap<String, String>>,
 ) -> Result<(), SessionError> {
-    ask(&handle, |tx| Request::Answer(id, question, decision, tx)).await?
+    ask(&handle, |tx| Request::Answer(id, question, decision, answers, tx)).await?
 }
 
 /// Stop the turn in flight, by whatever means this harness leaves open. For
