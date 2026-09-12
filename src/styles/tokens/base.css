@@ -17,6 +17,18 @@ html{color-scheme:light}
 [data-theme="dark"]{color-scheme:dark}
 body{margin:0;background:var(--canvas);color:var(--text-primary);font-family:var(--font-sans);font-size:var(--text-body-size);line-height:var(--leading-normal);-webkit-font-smoothing:antialiased}
 ::selection{background:var(--selection-bg);color:var(--text-primary)}
+/* Placeholder text, the other pseudo-element an inline style object cannot
+   reach — `Input.vue` and `Textarea.vue` both draw their field on
+   `--surface-raised` and have no way to style `::placeholder` themselves, so
+   it lives here instead of in either component. Left unset, the user agent
+   draws it in a fixed mid-grey that ignores `data-theme`, and measured
+   against `--surface-raised` that default falls to 3.49:1 in dark — under
+   the 4.5:1 floor for text this size. `--text-muted` clears 4.5:1 in both
+   themes against that same fill (light 4.61:1, dark 4.59:1) and follows the
+   theme switch, which the user-agent default never did. `opacity:1`
+   overrides Firefox's own dimming of the pseudo-element, which would
+   otherwise eat back the margin this token already has. */
+::placeholder{color:var(--text-muted);opacity:1}
 a{color:var(--text-link);text-decoration:none;border-bottom:1px solid transparent}
 a:hover{color:var(--text-link-hover);border-bottom-color:currentColor}
 :focus{outline:none}
