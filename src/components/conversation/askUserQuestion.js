@@ -12,10 +12,11 @@
 
    What travels back is `answers`, keyed by the question's own text — a
    person's typed words when there are any, the selected options joined by a
-   comma otherwise. `buildAnswers` and `isComplete` are the two rules
-   `ConversationView.vue` calls before it will let a press through; the
-   component itself only tracks which option is selected and what a person
-   typed, both of them plain state with no rule of their own. */
+   comma otherwise. `toggle`, `selectedLabels`, `buildAnswers` and
+   `isComplete` are the rules `AskUserQuestion.vue` calls before it will let
+   a press through; what stays in the component is plainer — which question
+   a click was on, and `setCustom`'s own small rule that typing clears
+   whatever was selected. */
 
 /** The one tool this whole family exists for. */
 export const ASK_USER_QUESTION_TOOL = 'AskUserQuestion'
@@ -42,21 +43,46 @@ export function parseQuestions(input) {
   }))
 }
 
-/* What clicking one option does to the labels selected for its question —
-   one of this task's own acceptance criteria, and so pulled out here rather
-   than left in the component: a `multiSelect` question allows more than one
-   option at once, an ordinary one allows exactly one, and clicking a chosen
-   option deselects it either way. `AskUserQuestion.vue` is the one thing in
-   this repository no test can reach, and an edit that made single-select
-   accumulate or multi-select replace would ship with both gates green and
-   reach the agent as one label where four were chosen — the bug this task
-   exists to fix, one layer up. */
-export function toggle(selected, label, multiSelect) {
+/* What clicking one option does to the identities selected for its question
+   — one of this task's own acceptance criteria, and so pulled out here
+   rather than left in the component: a `multiSelect` question allows more
+   than one option at once, an ordinary one allows exactly one, and clicking
+   a chosen option deselects it either way. `AskUserQuestion.vue` is the one
+   thing in this repository no test can reach, and an edit that made
+   single-select accumulate or multi-select replace would ship with both
+   gates green and reach the agent as one label where four were chosen — the
+   bug this task exists to fix, one layer up.
+
+   Generic over what `id` is, deliberately: the tests below pass labels, the
+   one real caller passes an option's own **index**, and this function does
+   not care which — it only ever compares `id` for equality and never reads
+   through it. The component keys by index rather than by label because
+   `parseQuestions` can default two options to the same empty label, which a
+   label-keyed selection would toggle as one; `selectedLabels` below is
+   where an index is turned back into the label the wire actually wants. */
+export function toggle(selected, id, multiSelect) {
   const current = selected ?? []
   if (multiSelect) {
-    return current.includes(label) ? current.filter((chosen) => chosen !== label) : [...current, label]
+    return current.includes(id) ? current.filter((chosen) => chosen !== id) : [...current, id]
   }
-  return current.includes(label) ? [] : [label]
+  return current.includes(id) ? [] : [id]
+}
+
+/* The one place an option's **index** and its **label** meet. A question's
+   selection is kept by index in `AskUserQuestion.vue` (`toggle`'s own header
+   says why), but `buildAnswers` and `isComplete` below take the wire's own
+   vocabulary — the chosen labels — so this is the boundary, moved out here
+   rather than left as a `.vue` method for the same reason `toggle` was: it
+   is short, but it is still a rule, including what happens at its two edges.
+   `''` is the answer for an option whose own label defaulted to empty
+   (`parseQuestions` again) and for an index that does not name an option at
+   all — past the end of `options`, which cannot happen from a click on a
+   real button but is worth answering rather than throwing on, since nothing
+   here has minted `options` and nothing guarantees its shape. */
+export function selectedLabels(questions, selectedOptionIndices) {
+  return questions.map((question, qi) =>
+    (selectedOptionIndices[qi] ?? []).map((oi) => question.options[oi]?.label ?? '')
+  )
 }
 
 /* The one string a single question's answer becomes on the wire: a person's

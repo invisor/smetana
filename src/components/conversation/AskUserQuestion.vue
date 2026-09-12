@@ -10,11 +10,13 @@
 
    The wire is `session::model::EventKind::Permission`'s `input` — the tool
    call's own arguments, untouched — and `askUserQuestion.js` beside this file
-   is the whole of the parsing and the answer-building rule, pure and tested
-   there for the reason every file in this family is out of its component: a
-   `.vue` file is the one thing no runner here can reach. This component's own
-   state is only which option is selected and what a person typed per
-   question, both plain and neither a rule of its own.
+   holds the parsing and the answer-building rules, pure and tested there for
+   the reason every file in this family is out of its component: a `.vue`
+   file is the one thing no runner here can reach. This component's own state
+   is which option is selected (by index — see `toggle`'s own header) and
+   what a person typed per question; what it still decides on its own is
+   plainer but is a rule nonetheless — `setCustom` below is the one place
+   that says typing clears a selection.
 
    **A custom answer always wins over a selection, for one question at a
    time.** Choosing an option clears whatever was typed for it and typing
@@ -36,7 +38,7 @@ import Button from '../core/Button.vue'
 import Icon from '../core/Icon.vue'
 import Input from '../core/Input.vue'
 import { STATUS_GLYPH, statusColors } from '../status/status.js'
-import { buildAnswers, isComplete, parseQuestions, toggle } from './askUserQuestion.js'
+import { buildAnswers, isComplete, parseQuestions, selectedLabels, toggle } from './askUserQuestion.js'
 
 const props = defineProps({
   /* `Permission::input` off the wire — the raw arguments of the
@@ -94,28 +96,23 @@ function toggleOption(qi, oi) {
   custom[qi] = ''
 }
 
+/* The one rule left in this component rather than in `askUserQuestion.js`:
+   typing an answer clears whatever was selected for the same question — the
+   mutual exclusion `toggleOption` above keeps the other way round. It stays
+   here because it is exactly this short; `selectedLabels`, imported above,
+   moved out for the opposite reason, carrying an edge case worth a test. */
 function setCustom(qi, text) {
   custom[qi] = text
   if (text) selected[qi] = []
 }
 
-/* `askUserQuestion.js`'s rules take the chosen **labels**, not indices — that
-   is the wire's own vocabulary (`formatAnswer`'s join, `buildAnswers`'s
-   keys), and the boundary is worth keeping even though this component holds
-   indices for the reason above. This is the one place the two meet. */
-function selectedLabels() {
-  return questions.value.map((question, qi) =>
-    (selected[qi] ?? []).map((oi) => question.options[oi]?.label ?? '')
-  )
-}
-
 const complete = ref(false)
 watch([questions, selected, custom], () => {
-  complete.value = isComplete(questions.value, selectedLabels(), custom)
+  complete.value = isComplete(questions.value, selectedLabels(questions.value, selected), custom)
 }, { immediate: true, deep: true })
 
 function send() {
-  emit('answer', 'allow', buildAnswers(questions.value, selectedLabels(), custom))
+  emit('answer', 'allow', buildAnswers(questions.value, selectedLabels(questions.value, selected), custom))
 }
 
 function decline() {
@@ -199,14 +196,27 @@ const optionsList = { display: 'flex', flexDirection: 'column', gap: 'var(--spac
    on hover or on selection grew the box by the difference — 2px taller, the
    label a pixel lower, and the next question's first option shifted under
    the pointer, which in a `multiSelect` question is exactly where the next
-   click was going. Interaction is still a surface step and never a colour
-   change on its own account (`core/interactive.js`'s own rule) — hover shows
-   the reserved border rather than growing one, and selecting is the one
-   state allowed to invert the card's own ink and fill, the same ink-on-paper
-   idiom the primary button uses elsewhere in this system; a selected option
-   needs no border of its own; the fill already says what a border would. */
+   click was going.
+
+   **Three colours for three states, and the middle one is a genuine colour
+   change on hover** — `core/interactive.js`'s "never a colour change" rule
+   is written for a control on the app's own neutral surface ladder
+   (`--surface` → `--surface-hover` → `--surface-active`), and this card has
+   no such ladder to step on: its ground is `c.fg`, a saturated fill, and
+   stepping *that* would mean a second, brighter status hue with nothing in
+   this design system to draw it from. What meets the rule's actual purpose —
+   a control in a dense list cannot jump — is the reserved border alone: rest
+   is `c.border`, the same status's own dimmer step (`statusColors`'s
+   three-tier ramp, already computed above as `c` and already read for the
+   card's own fill; nothing new is spent), present but quiet, so an option
+   reads as bounded before anyone points at it; hover is `var(--surface-raised)`,
+   the card's full ink, a clearly stronger ring than rest; and a selected
+   option carries no border of its own — `transparent`, since the inverted
+   fill already says what a border would, the same ink-on-paper idiom the
+   primary button uses elsewhere in this system. */
 function optionStyle(qi, oi, hovered) {
   const on = isSelected(qi, oi)
+  const borderColor = on ? 'transparent' : hovered ? 'var(--surface-raised)' : c.border
   return {
     display: 'flex',
     flexDirection: 'column',
@@ -217,7 +227,7 @@ function optionStyle(qi, oi, hovered) {
     padding: 'var(--space-3) var(--space-4)',
     background: on ? 'var(--surface-raised)' : 'transparent',
     color: on ? c.fg : 'var(--surface-raised)',
-    border: `var(--border-w-strong) solid ${!on && hovered ? 'var(--surface-raised)' : 'transparent'}`,
+    border: `var(--border-w-strong) solid ${borderColor}`,
     borderRadius: 'var(--radius-3)',
     font: 'inherit',
     cursor: 'default',

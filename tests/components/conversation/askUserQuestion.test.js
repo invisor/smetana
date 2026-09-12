@@ -6,6 +6,7 @@ import {
   isAskUserQuestion,
   isComplete,
   parseQuestions,
+  selectedLabels,
   toggle
 } from '../../../src/components/conversation/askUserQuestion.js'
 
@@ -100,6 +101,42 @@ describe('toggle', () => {
   it('starts from nothing selected when given none', () => {
     expect(toggle(undefined, 'Rewrite', false)).toEqual(['Rewrite'])
     expect(toggle(undefined, 'Rewrite', true)).toEqual(['Rewrite'])
+  })
+
+  /* The shape that actually ships: `AskUserQuestion.vue` hands this an
+     option's own index, not its label — see the function's own header for
+     why. Pinning the numeric case is what stops somebody reading the label
+     examples above as the real contract and keying selection by label again. */
+  it('works on option indices exactly as it does on labels, since it is generic', () => {
+    expect(toggle([0], 1, false)).toEqual([1])
+    expect(toggle([0], 1, true)).toEqual([0, 1])
+    expect(toggle([0, 1], 1, true)).toEqual([0])
+  })
+})
+
+describe('selectedLabels', () => {
+  const questions = parseQuestions({
+    questions: [
+      { question: 'Which approach?', options: [{ label: 'Rewrite' }, { label: 'Patch' }] },
+      { question: 'Ship it today?', options: [{ label: 'Yes' }, { label: 'No' }] }
+    ]
+  })
+
+  it('maps each chosen index back to that option’s own label', () => {
+    expect(selectedLabels(questions, [[0], [1]])).toEqual([['Rewrite'], ['No']])
+  })
+
+  it('answers an unselected question with an empty list, not undefined', () => {
+    expect(selectedLabels(questions, [[], [0]])).toEqual([[], ['Yes']])
+  })
+
+  it('reads an option whose own label defaulted to empty as an empty string', () => {
+    const withBlankLabel = parseQuestions({ questions: [{ question: 'Q?', options: [{}, { label: 'ok' }] }] })
+    expect(selectedLabels(withBlankLabel, [[0, 1]])).toEqual([['', 'ok']])
+  })
+
+  it('answers an index past the end of options with an empty string rather than throwing', () => {
+    expect(selectedLabels(questions, [[5], []])).toEqual([[''], []])
   })
 })
 

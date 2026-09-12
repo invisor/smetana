@@ -250,9 +250,11 @@ describe('the conversation store', () => {
 
   /* `answers` is `AskUserQuestion`'s own, and `null` — never `undefined`,
      which `invoke` would drop from the payload — is what every other tool's
-     ordinary allow/deny still sends, one argument short of the wire's own
-     five. A caller that forgot the argument entirely must not send Rust a
-     payload missing the field outright. */
+     ordinary allow/deny still sends, as the fourth of the wire's own four
+     keys (`id`, `question`, `decision`, `answers`; the Rust signature counts
+     a fifth, `State<'_, SessionHandle>`, which no `invoke` call ever sends).
+     A caller that forgot the argument entirely must not send Rust a payload
+     missing the field outright. */
   it('answers a plain permission with no answers at all', async () => {
     const { ipc, stores } = await ready({ events: [permission(1)], seq: 1, state: 'needs-you' })
     ipc.on('session_answer', null)

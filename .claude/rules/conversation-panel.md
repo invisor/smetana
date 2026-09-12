@@ -237,13 +237,13 @@ whatever was typed for that question, and typing clears whatever was chosen. `fo
 `askUserQuestion.js` is the one place that resolves the two into the single string the wire wants.
 
 **Which options end up selected is `toggle` in `askUserQuestion.js`, pure and tested there rather than
-left inside `AskUserQuestion.vue`** — a `multiSelect` question allows more than one label at once, an
+left inside `AskUserQuestion.vue`** — a `multiSelect` question allows more than one option at once, an
 ordinary one allows exactly one, and clicking a chosen option deselects it either way, which is one of
 this task's own acceptance criteria and belongs in the one file a test here can reach: an edit that
 made single-select accumulate or multi-select replace would ship with both gates green and reach the
 agent as one label where four were chosen. `toggle` itself joins nothing — it answers with the array of
-labels now selected — and `formatAnswer` is the only join in the file, several chosen labels with a
-comma, since a single-select answer is one label and needs none.
+whatever now identifies the selected options — and `formatAnswer` is the only join in the file, several
+chosen labels with a comma, since a single-select answer is one label and needs none.
 
 **The join is `', '`, a comma and a space, which is a decision rather than the obvious reading of
 "joined by commas" in the task's own Design section.** It was kept over a bare `','` because free
@@ -252,18 +252,35 @@ instead of choosing — so whatever reads `answers` on the far side already has 
 that is not a machine-parseable list at all, and a comma with nothing after it degrades that reading
 to an odd-looking valid answer rather than to an error. Nothing in this repository can test that
 reading: the far side is the agent's own model, not code this tree owns, so this is a judgement call
-recorded here rather than a behaviour pinned by a test. `isComplete` gates the card's own
+recorded here rather than a behaviour pinned by a test.
+
+**The order of a `multiSelect` answer is click order, not the order the options were offered in** —
+`toggle` appends to the end of whatever is already selected, so choosing `Windows` and then `macOS`
+sends `"Windows, macOS"` even though the call listed `macOS` first. This was chosen rather than fallen
+into: the alternative is sorting the chosen labels back into the options' own order before joining
+them, which reads tidier but would silently reorder a person's own emphasis — naming the one they
+actually meant first — for no reader on the far side known to care about the difference. `isComplete` gates the card's own
 Send button — every question in one call is answered in one reply, never a partial `answers` for a
 call that named four, since the agent asked all of them at once and there is nothing to be gained by
 making it wait through several short replies for what one round trip already fits.
 
-**The component itself keys a question's selection by option index, never by label.**
-`parseQuestions` defaults a missing `label` to `''`, so two options that both lost theirs would
-otherwise be one value as far as `toggle` and the `v-for`'s own `:key` are concerned — a second
-`AskUserQuestion` fixture with such a pair drew a Vue duplicate-key warning and toggled both options
-as one. `selectedLabels()` is the one place index and label meet, mapping the chosen indices back to
-`question.options[i].label` right before `askUserQuestion.js`'s own functions are called, since those
-take the wire's vocabulary and index is this component's own.
+**The component itself keys a question's selection by option index, never by label**, and `toggle`'s
+own parameter is named for that: not `label`, but the identity-agnostic `id`, since the function only
+ever compares it for equality and is handed a label in `askUserQuestion.js`'s own tests and an index
+by the one real caller. `parseQuestions` defaults a missing `label` to `''`, so two options that both
+lost theirs would otherwise be one value as far as `toggle` and the `v-for`'s own `:key` are
+concerned — an observation made while fixing this, over a hand-built fixture rather than one in the
+tree, and there is nothing under `Gallery.vue` today that shows it: that showcase's one
+`AskUserQuestion` fixture has well-formed labels throughout, on purpose, since it is meant to read as
+an ordinary call rather than as a test of malformed input. `askUserQuestion.js`'s own tests are what
+actually pin the degenerate case now. `selectedLabels(questions, selectedByIndex)`, exported from
+that same file rather than left as a `.vue` method, is the one place index and label meet — mapping
+the chosen indices back to `question.options[i].label`, `''` for an index past the end of `options`
+too — right before `buildAnswers` and `isComplete` are called, since those take the wire's own
+vocabulary and index is this component's alone. `setCustom`'s own mutual exclusion — typing clears a
+selection — stays in the component, being short enough that moving it out would cost more than it
+saves; it is still a rule, and the file's own header says so rather than claiming the component holds
+none.
 
 **Drawn at the same `loud` weight as `PermissionRequest.vue`, deliberately**: the harness is holding
 the very same tool call open either way, so `AskUserQuestion.vue` reads `statusColors('needs-you')`
