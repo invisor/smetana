@@ -28,13 +28,25 @@
    an open question or an open permission request it is not busy at all — there
    is nothing to stop, and Stop would be a lie. `waiting` locks the field and
    the send affordance instead, and refuses rather than pretends, the same
-   discipline `nothingToSend` already keeps: the field turns the colour a
-   disabled `Input` does and says in words that something above it is waiting
-   on an answer, since a control that quietly does nothing reads as a broken
-   app. It says only that much and never which of the two calls is open —
-   `ConversationView.vue` derives one flag off the same `question` it already
-   computes for either card, and this component has no business knowing which
-   of them it was. */
+   discipline `nothingToSend` already keeps: the ground and the border turn the
+   way a disabled `Input` does, and a caption under the field says in words
+   that something above it is waiting on an answer, since a control that
+   quietly does nothing reads as a broken app.
+
+   **The lock stops short of dimming the words, on both counts.** Following
+   `Input.vue`'s own disabled treatment all the way through — `--text-muted`
+   on top of the sunken ground — measures under the 4.5:1 floor in the light
+   theme, on the caption and on the draft alike; `tokens/color-type.css`
+   already carries a measured warning about exactly this pairing
+   (`--text-secondary`, not `--text-muted`, on a sunken ground). The caption
+   is the whole of what says why the field stopped taking input, and the
+   draft is the person's own unsent words, the one thing they still need to
+   read while they decide how to answer what is open above — so both stay at
+   `--text-secondary`/`--text-primary`, which clear the floor, rather than
+   `--text-muted`. It says only that much and never which of the two calls is
+   open — `ConversationView.vue` derives one flag off the same `question` it
+   already computes for either card, and this component has no business
+   knowing which of them it was. */
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import Button from '../core/Button.vue'
 import Icon from '../core/Icon.vue'
@@ -188,7 +200,7 @@ const fieldStyle = computed(() => ({
   maxHeight: 'calc(var(--row-h) * 6)',
   padding: 'var(--space-2) var(--space-3)',
   background: 'transparent',
-  color: props.waiting ? 'var(--text-muted)' : 'var(--text-primary)',
+  color: 'var(--text-primary)',
   border: 0,
   outline: 'none',
   /* Prose, so sans — a person's message to an agent is a sentence and not an
@@ -209,7 +221,7 @@ const lockHint = {
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-2)',
-  color: 'var(--text-muted)',
+  color: 'var(--text-secondary)',
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-sans)'
 }
 </script>
