@@ -145,20 +145,36 @@ ticking `<time>` inside it carries `aria-hidden="true"` for exactly one reason: 
 reader would announce "thinking, 5s… 6s… 7s" for the length of the whole turn, drowning the one
 sentence the region exists to announce once.
 
-## Streaming: not here yet, and what it is waiting on
+## Streaming, and the one harness it actually reaches
 
-`sm-prose.css` section 11 already names four moments for the activity strip — "waiting, streaming,
-done, failed" — and carries a rule for `span[data-edge]`, the live caret meant to sit at the end of a
-message still arriving. Neither is wired to anything as this task lands: `journal.js`'s fold only
-ever produces `waiting`, `done` or `failed`, `session/model.rs`'s `EventKind` has no delta variant,
-and nothing under `src/components/conversation/` ever sets `data-activity="streaming"` or renders a
-`data-edge` element. The CSS is not dead code so much as a hook cut ahead of the wire that will use
-it: text deltas on the wire from both harnesses this app drives, which is exactly what
-`smetana-6we6` (in flight in a sibling worktree as this task is written) is building on the
-`src-tauri/src/session/` side. **This paragraph is provisional and belongs to whoever lands that
-task to correct**: once deltas exist, `journal.js` gains a fourth state, `TurnResult.vue` (or a
-sibling) grows a live caret, and this section should describe what shipped rather than what was
-merely reserved for it.
+`sm-prose.css` section 11's four moments and its `span[data-edge]` rule were cut ahead of the wire
+that would use them; `smetana-6we6` is what wired them. `session/model.rs`'s `EventKind` grew
+`TextDelta`, one incremental piece of a reply, and `journal.js`'s fold — `streamingRow` in its own
+header — stitches a run of them into one growing `agent` row (`streaming: true`) and closes it on the
+existing whole `Text` event, replacing the stitched text with that event's own authoritative copy
+rather than trusting the concatenation. `TurnResult.vue` gained the fourth `data-activity` word,
+`streaming`, sharing `waiting`'s own clock — a reply arriving is the same wait resolving, not a second
+thing starting. `Markdown.vue` gained a `streaming` prop and draws `span[data-edge]` as the last
+child of the last block while one is true, propagated through a blockquote or a list to whichever
+nested block is actually last; a table, a definition list or a rule as the literal last block draws
+no caret, recorded as a narrow gap in that file's own header rather than solved.
+
+**This reaches Claude Code alone, and that is not a phase one of two.** `session::service::driver_for`
+answers `"claude" => ClaudeDriver, _ => None` and `ClaudeDriver` is the only `impl Driver` in the
+tree — a Codex session never reaches `journal.js`, `EventKind`, or anything else this file is about; it
+runs the PTY road `.claude/rules/terminal.md` describes, start to finish. The original wording of this
+paragraph asked for "text deltas on the wire from both harnesses this app drives", which rested on a
+belief about the tree rather than anything true of it — there was no second driver for a delta to
+travel down before this task and there still is not one after it, and building one is a subsystem of
+its own, not a line item a streaming task picks up in passing. Claude Code's own half of the wire is
+`--include-partial-messages` (`agents/claude_driver.rs`'s own header carries the CLI flag and the
+shape it was verified against), read only for `content_block_delta`/`text_delta` — reasoning and a
+tool call's arguments still arrive whole, from the same consolidated `assistant` event this driver
+already produced, because streaming either of those was out of this task's scope rather than out of
+reach. A resumed session never replays a stray delta either, and not by any filter written for the
+occasion: Claude Code's own persisted transcript holds only the consolidated records this driver
+always read, never a raw `stream_event` line, which was checked against the installed CLI rather than
+assumed.
 
 ## One renderer, shared with the task inspector — and why it was not forked
 
