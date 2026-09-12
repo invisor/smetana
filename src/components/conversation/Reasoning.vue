@@ -18,28 +18,42 @@
    `--attn-quiet-opacity` on top of `--text-muted` would not have.
 
    The text is markdown, drawn by the shared component like every other piece of
-   prose here, and `open` is forwarded for the reason `AgentMessage.vue` gives:
-   a link inside reasoning is still a link, and it must leave for the person's
-   own browser rather than replace the app.
+   prose here, and `open` and `open-local` are forwarded for the reason
+   `AgentMessage.vue` gives: a link inside reasoning is still a link, whichever
+   breed it is, and `root` rides along beside them for the same reason.
 
    `summary` says `Reasoning`, the word the contract's own example spells —
    `<summary>Reasoning<time>18s</time></summary>` — and not this component's
-   older `Thinking`. There is deliberately no `<time>` here yet: the elapsed
-   clock is section 6's "the agent is working" strip, which this task does not
-   own (smetana-epzb), and this component has no elapsed value to put in one —
-   `expanded` is the only prop past the text. Whoever picks that task up adds
-   it here rather than finding a `<summary>` that already looks finished
-   without it.
+   older `Thinking`. **The `<time>` is here now** (smetana-epzb): a reasoning
+   block carries no duration of its own on the wire —
+   `session::model::EventKind::Reasoning` is `{ text }`, full stop — so what it
+   shows is `journal.js`'s own `elapsedSince`, the gap between the turn's own
+   `turn-start` and this event's timestamp, which is the honest reading of "how
+   long the agent had been going when it said this" available from two
+   timestamps the wire already sends. `ms` is `null` where there was no open
+   turn to measure against, which draws no `<time>` at all rather than a
+   guessed zero — the same omission `TurnResult.vue` gives a cost the harness
+   did not report. The spelling is `elapsed.js`'s `formatElapsedClock`, the
+   same compact, whole-second voice the strip's own `waiting` and `failed`
+   moments use, and deliberately not `formatReceiptDuration`'s decimal one: this is a
+   number read once, after the fact, the way `waiting`'s ticking clock is read
+   while it moves, not the receipt's own tenth-of-a-second precision.
 
-   The `.sm-prose` here is interim too, for the reason `AgentMessage.vue`'s
+   `.sm-prose` no longer wraps this block, for the reason `AgentMessage.vue`'s
    header gives: the contract's own root is the journal `ConversationView.vue`
-   draws, which is smetana-e3mc's, not this task's. Until it lands this block
-   carries its own `.sm-prose` around its one `details` child. */
-import { ref, toRef, watch } from 'vue'
+   draws now, so `details[data-reasoning]` is emitted bare, as a direct
+   sibling of the other turns under that one root, rather than inside a second
+   `.sm-prose` of its own. */
+import { computed, ref, toRef, watch } from 'vue'
 import Markdown from '../markdown/Markdown.vue'
+import { formatElapsedClock } from './elapsed.js'
 
 const props = defineProps({
   text: { type: String, default: '' },
+  /* How long the turn had been going when this was said, in milliseconds —
+     `journal.js`'s `elapsedSince`, or `null` where there was no open turn to
+     measure against. */
+  ms: { type: Number, default: null },
   /* What it opens as, and nothing more — the fold is the component's own state
      from the first press onwards. Default `false`, so "folded by default" is
      the behaviour whether or not anybody passes this.
@@ -50,10 +64,12 @@ const props = defineProps({
      and the same watch, and the gallery opens one of its three the same way.
      That file says nothing about why, so the shared motive is read off the two
      uses rather than quoted from it. */
-  expanded: { type: Boolean, default: false }
+  expanded: { type: Boolean, default: false },
+  /* Passed straight through to `Markdown`, unread here — see its own header. */
+  root: { type: String, default: '' }
 })
 
-const emit = defineEmits(['open'])
+const emit = defineEmits(['open', 'open-local'])
 
 const open = ref(props.expanded)
 watch(toRef(props, 'expanded'), (value) => { open.value = value })
@@ -64,13 +80,13 @@ watch(toRef(props, 'expanded'), (value) => { open.value = value })
 function onToggle(event) {
   open.value = event.target.open
 }
+
+const elapsedText = computed(() => (props.ms == null ? '' : formatElapsedClock(props.ms)))
 </script>
 
 <template>
-  <div class="sm-prose">
-    <details data-reasoning :open="open" @toggle="onToggle">
-      <summary>Reasoning</summary>
-      <Markdown :text="text" @open="emit('open', $event)" />
-    </details>
-  </div>
+  <details data-reasoning :open="open" @toggle="onToggle">
+    <summary>Reasoning<time v-if="elapsedText">{{ elapsedText }}</time></summary>
+    <Markdown :text="text" :root="root" @open="emit('open', $event)" @open-local="emit('open-local', $event)" />
+  </details>
 </template>

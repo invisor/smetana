@@ -2,7 +2,7 @@
 /* Dev harness: renders every component in the library once, so a broken port
    shows up here rather than in the product. Not part of the shipped app —
    reachable at ?view=gallery. */
-import { computed, ref, watchEffect } from 'vue'
+import { computed, provide, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { branchMenuItems } from '../components/git/branchMenu.js'
 import { CHANGE_MENU_W, changeMenuItems } from '../components/git/changeMenu.js'
@@ -138,6 +138,7 @@ import { MOCK_TREE } from '../stores/mockBackend.js'
    inspector's raise `copy-id` and know nothing about a clipboard, so the thing
    drawing them has to answer — here as in `DesktopApp.vue`. */
 import { copyText, openExternal } from '../stores/app.js'
+import { readFigureImage } from '../stores/attachments.js'
 /* The harness catalogue, so the agent picker on this page is the one the
    settings window draws rather than a second list written out here. Read once
    at startup in `main.js`; in a browser `mockBackend.js` answers it. */
@@ -145,6 +146,23 @@ import { agents } from '../stores/agents.js'
 import { settings } from '../stores/settings.js'
 import { fileIconUrl } from '../catppuccinIcon.js'
 import { documentTheme } from '../documentTheme.js'
+
+/* `Markdown.vue`'s code blocks inject `smCopyText` for their copy button
+   rather than importing a store themselves, the same shape `overlays/Modal.vue`
+   reaches `views/DialogWindow.vue` through. This page is this project's only
+   verification of anything under `src/components/`, so without this the
+   button below would copy through the browser fallback alone and the app's
+   own `copyText` — the one path this button takes in the packaged build —
+   would go unchecked here exactly as the hazard `useCopyFeedback`'s own
+   header warns about. */
+provide('smCopyText', copyText)
+/* `smReadImage`, provided beside it for the same reason: most of this page's
+   own figure samples are `data:` sources and never call it, but
+   `MARKDOWN_FIGURE_PATH_SAMPLE` below is a bare path and does — a library
+   component's one path to Rust must still be the real one here, the same
+   argument the copy button's provide makes, and `mockBackend.js`'s own
+   `image_read` fixture is what answers it in a browser. */
+provide('smReadImage', readFigureImage)
 
 /* Two attachments for the strip and for the dialog above it. Eight-pixel PNGs
    written out as data URLs, which is exactly the shape `attachments.js` builds
@@ -1672,9 +1690,20 @@ const CONFLICT = {
 /* Every construct the parser supports, in one issue description: a heading at
    each of the two sizes, a paragraph carrying strong, emphasis, code and both
    link forms, a task list with a nested list under it, a numbered list, a
-   quote, a fenced block and a rule. The last paragraph is the invariant on
-   screen — a table, a reference link, an HTML tag and a link this app may not
-   open are none of them supported, and every character of them is still drawn.
+   quote, a fenced block, a rule, and — since smetana-zi8k — two tables: a
+   narrow one matching the contract's own example, plus a centred column to
+   exercise `data-align="center"` and a column with no alignment at all in
+   the same table — `null` is the case `data-align` has to skip rather than
+   invent, and a table that never carries one would leave that branch
+   untested. Beside it, a five-column one wide enough to carry `data-wide`,
+   its `cdhash` column holding a 40-character hash inside `code` so the
+   wrapper's scroll is the thing that gives, never the panel. The last
+   paragraph is the invariant on screen — a reference link, an HTML tag and a
+   link this app may not open are none of them supported, and every
+   character of them is still drawn; the pipes inside that paragraph read as
+   plain text rather than a third table, because a real GFM table needs a
+   blank line ahead of it and a delimiter row, and that sentence has
+   neither.
 
    One constant for two places: the card below looks at the component on its
    own, and `FULL_ISSUE` reads the same text through the inspector, where the
@@ -1733,8 +1762,32 @@ const MARKDOWN_SAMPLE = [
   ': the opacity a finished badge dims to',
   ': shown twice, since a term may carry more than one definition',
   '',
+  '| Step | Where | ms |',
+  '|---|:---:|---:|',
+  '| identity | local | 12 |',
+  '| notarize | remote | 640 |',
+  '',
+  '| Path | Stage | Result | ms | cdhash |',
+  '|---|---|---|---:|---|',
+  '| `src-tauri/target/release/bundle/macos/smetana.app` | codesign | ok | 812 | `da39a3ee5e6b4b0d3255bfef95601890afd80709` |',
+  '',
   '```sh',
   'npm test -- tests/components/kanban/boardView.test.js',
+  '```',
+  '',
+  'A fence with no language declared, so the figure carries no `figcaption` and',
+  'no `data-lang`:',
+  '',
+  '```',
+  'no language on this fence',
+  '```',
+  '',
+  'And one whose first line is long enough to prove the figure scrolls the code',
+  'sideways instead of growing to fit it, with the copy button staying put in',
+  'the header band rather than sliding off with the line:',
+  '',
+  '```sh',
+  'xcrun notarytool submit build/App.dmg --keychain-profile "notarytool-password" --team-id ABCDE12345WXYZ --wait --timeout 30m --output json',
   '```',
   '',
   'See [the design system](https://claude.ai/design) and',
@@ -1800,6 +1853,16 @@ const MARKDOWN_FIGURE_PAIR_SAMPLE = [
   `![Release pipeline](${FIGURE_SVG_SRC})`
 ].join('\n')
 
+/* A bare path rather than a `data:` source — the one figure on this page that
+   actually reaches `image_read`, through `smReadImage` (`provide`d above) and
+   `mockBackend.js`'s own fixture for it, rather than resolving inside the
+   browser the way every other sample here does. It is what makes the expand
+   button checkable at all: that control exists only for a figure `image_read`
+   answered for, never for a `data:` source or a validated inline `<svg>`
+   (`MarkdownFigure.vue`'s own header), so the raster and vector samples above
+   can never draw one. */
+const MARKDOWN_FIGURE_PATH_SAMPLE = '![A screenshot on disk](./assets/fig-path-demo.png)'
+
 /* `data-state="loading"` has no markdown spelling — nothing in a task's prose
    ever asks for it, since it is the shape a figure holds for the moment
    between the frame existing and a real `<img>` resolving, which
@@ -1810,6 +1873,40 @@ const MARKDOWN_FIGURE_PAIR_SAMPLE = [
    own way of drawing the control without `Icon.vue`'s `style` attribute,
    copied here rather than exported, since nothing outside that file needs it. */
 const expandIconChildren = iconNodes['maximize-2']?.[2] || []
+
+/* The two breeds of link, section 5 of the markup contract: an external one,
+   leaving for the person's own browser, and a local one, opened in this app.
+
+   The first two local links write the target as its own label — `[path](path)`,
+   the markup contract's own example, a path written twice over — which is
+   what `markdown.js`'s `link()` reads as "nothing here but the path" and
+   splits into a head and a tail rather than showing the label whole. The
+   file one is about 90 characters, so the head-truncation is checkable at
+   the 420px column the specimen below is drawn at, and it carries a line
+   number, which is what the tail is for: the file name and the line survive
+   whatever the head loses to the ellipsis. The directory link beside it has
+   no line, and no trailing slash of its own — `sm-prose.css` draws that
+   glyph, and a slash already in the markup would draw two.
+
+   The third is the other half of the same rule: a label that says something
+   the target does not (`markdown.js`'s own fixed BLOCKING finding) is kept
+   whole rather than replaced by the path — no head, the label as the tail,
+   unsplit and unparsed. `data-path` still carries the real target underneath
+   it, which is what a click and a copy-link both answer to. */
+const MARKDOWN_LINKS_SAMPLE = [
+  'See [the design system](https://claude.ai/design) for the source of truth.',
+  '',
+  'The replay is stitched in',
+  '[src-tauri/src/session/claude_driver/conversation_history_replay_and_stitching_logic.rs:184](src-tauri/src/session/claude_driver/conversation_history_replay_and_stitching_logic.rs:184),',
+  'read from [src/components/markdown/](src/components/markdown/) — see also',
+  '[the manifest](src-tauri/tauri.conf.json).'
+].join('\n')
+
+/* The active project's absolute path this page pretends to have, so the
+   local specimen above can build a working `data-path` and `href` — nothing
+   here is ever opened for real, since `?view=gallery` has no Tauri behind it,
+   but the shape has to be right to be checkable by eye. */
+const GALLERY_ROOT = '/Users/flexo/Desktop/Projects/smetana'
 
 /* This page's own copy of what `DesktopApp.vue` keeps for the id somebody
    clicked, in the small: a card and an inspector raise `copy-id` and take back
@@ -1855,10 +1952,13 @@ const FULL_ISSUE = {
   ].join('\n'),
   design:
     'A quiet strip above the columns rather than a replacement of them: the board stays usable while it says the data may be stale.',
-  // Two lines on purpose: every `bd note` appends, and the panel owes the
-  // whole log, latest line included.
+  // Three lines on purpose: two separate `bd note` calls, each its own
+  // record and its own paragraph (`noteEntries.js`), and a third, indented
+  // line — a person's own continuation inside the second call, broken across
+  // two lines by hand — which stays folded onto it rather than reading as a
+  // third record (smetana-k2mo).
   notes:
-    'parked: needs a decision on where the strip sits\nparked: still waiting on the design call',
+    'parked: needs a decision on where the strip sits\nparked: still waiting on the design call\n  checked again at the next stand-up, still nothing',
   priority: 1,
   issue_type: 'bug',
   owner: 'merazent@gmail.com',
@@ -2338,8 +2438,15 @@ const CONVERSATION_USER_TEXT =
   'Rename the worktree when the branch changes, and keep `wt/` off the folder name.'
 
 /* Paths and nothing else, which is what `session_send` carries and what the
-   journal keeps: the chips draw `basename`, and the bytes stay on disk. */
-const CONVERSATION_ATTACHMENTS = ['/Users/you/Desktop/20260910-141202-collision.png', '/tmp/worktree.log']
+   journal keeps: the chips draw `basename`, and the bytes stay on disk. The
+   third is deliberately long — a name this width has to ellipsize inside the
+   chip rather than widen the bubble, and widening it is the failure a short
+   name would never show at either 420px or 320px. */
+const CONVERSATION_ATTACHMENTS = [
+  '/Users/you/Desktop/20260910-141202-collision.png',
+  '/tmp/worktree.log',
+  '/Users/you/Desktop/2026-09-10-full-notarization-pipeline-failure-transcript-with-timestamps.log'
+]
 
 const CONVERSATION_REASONING = [
   'The branch name reaches three places: the folder, the tab label and the',
@@ -2353,6 +2460,13 @@ const CONVERSATION_REASONING = [
 const CONVERSATION_LONG_COMMAND =
   'git worktree add --checkout -b feature/smetana-ihz2-conversation-log-components ' +
   '/Users/you/Desktop/Projects/smetana/.worktrees/smetana-ihz2-conversation-log-components feat/redesign-agents'
+
+/* The activity strip's own `waiting` moment needs a clock to tick from,
+   which is the one thing about it `TurnResult.vue` cannot be handed as a
+   literal — nothing pure can know "now". Read once, on this view's own
+   setup, so the strip below opens already a few seconds in rather than at
+   zero, which is closer to what the state actually looks like on screen. */
+const GALLERY_ACTIVITY_STARTED_AT = new Date(Date.now() - 4000).toISOString()
 
 /* What a press on the loud card raised, so the emitted decision is visible
    rather than taken on trust. In the app this is `answerQuestion`. */
@@ -3524,6 +3638,19 @@ const menuTargetStyle = {
             </article>
           </div>
         </div>
+        <!-- The one figure on this page read through `image_read` rather than
+             resolved as a `data:` source — see `MARKDOWN_FIGURE_PATH_SAMPLE`'s
+             own comment. Its expand button is the only one this page can draw
+             at all; `@open-image` is a no-op like the samples above it, since
+             `image_window_open` opens a real OS window this harness has
+             nowhere to check the result of. -->
+        <div :style="{ width: '320px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown :text="MARKDOWN_FIGURE_PATH_SAMPLE" @open-image="() => {}" />
+            </article>
+          </div>
+        </div>
         <!-- `data-state="loading"` has no markdown spelling — see
              `expandIconChildren`'s own comment above for why this is written
              out by hand rather than reached through `Markdown`. -->
@@ -3552,6 +3679,45 @@ const menuTargetStyle = {
                   </svg>
                 </button>
               </figure>
+            </article>
+          </div>
+        </div>
+      </div>
+      <!-- Section 5 of the markup contract: the two breeds of link, side by
+           side at the panel's own 420px column so the local target's
+           head-truncation is checkable — narrower than the two boxes above,
+           which are about the rest of prose and were never meant to test
+           this. The left specimen carries a `root`, the way
+           `ConversationView.vue` does, and draws the local links as the
+           interactive anchors the contract shows: mono, a hairline
+           underline, the head ellipsised and the tail — the file name and
+           its line, or a distinct label kept whole — never lost. The right
+           one carries none, `TaskInspector.vue`'s own case (no session, no
+           working tree — its own out-of-scope note says the local breed does
+           not arise there), and the same source draws the same three links
+           as plain text: no anchor, no underline, nothing that looks
+           pressable over a click nothing here could answer. `@open-local`
+           has nowhere real to go in this harness — there
+           is no file tree behind `?view=gallery` — so it is a no-op, the same
+           standing every other event this page cannot wire for real already
+           takes. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start' }">
+        <div :style="{ width: '420px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown
+                :text="MARKDOWN_LINKS_SAMPLE"
+                :root="GALLERY_ROOT"
+                @open="openExternal"
+                @open-local="() => {}"
+              />
+            </article>
+          </div>
+        </div>
+        <div :style="{ width: '420px' }">
+          <div class="sm-prose">
+            <article data-turn="agent">
+              <Markdown :text="MARKDOWN_LINKS_SAMPLE" @open="openExternal" />
             </article>
           </div>
         </div>
@@ -6015,19 +6181,34 @@ const menuTargetStyle = {
            between the themes, compact tightens the spacing without touching a
            colour or a radius, the file-type icon on a tool call is legible on
            both grounds, and the filled permission card carries readable text in
-           the light theme, where its ink inverts to `var(--surface-raised)`. -->
+           the light theme, where its ink inverts to `var(--surface-raised)`.
+           The loud colour in this section is `failed` — the two activity
+           strips and the third tool call take `--status-failed-fg`, and
+           nothing else does.
+
+           The prose columns below carry `class="sm-prose"` themselves, with
+           `--panel-pad` left to the class rather than zeroed: since
+           smetana-e3mc, `UserMessage`, `AgentMessage` and `Reasoning` emit
+           their bare `article`/`details` and expect an ancestor root to space
+           and inset them, exactly as `ConversationView.vue`'s journal is that
+           root in the app — a demo column with the padding zeroed would teach
+           a panel inset the real one does not draw. `ToolCall` and
+           `TurnResult` are not part of the contract, and paint themselves
+           with no horizontal inset of their own any more (their own headers
+           say why) so they line up with the prose rather than doubling this
+           root's `--panel-pad`. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
-        <div :style="{ width: '360px', display: 'flex', flexDirection: 'column' }">
+        <div class="sm-prose" :style="{ width: '360px' }">
           <UserMessage
             :text="CONVERSATION_USER_TEXT"
             :attachments="CONVERSATION_ATTACHMENTS"
             @open="openExternal"
           />
           <AgentMessage :text="CONVERSATION_AGENT_TEXT" @open="openExternal" />
-          <TurnResult :tokens-in="12480" :tokens-out="416" :cost-usd="0.0312" :ms="4200" />
+          <TurnResult state="done" :tokens-in="12480" :tokens-out="416" :cost-usd="0.0312" :ms="4200" />
         </div>
 
-        <div :style="{ width: '360px', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }">
+        <div class="sm-prose" :style="{ width: '360px', gap: 'var(--space-4)' }">
           <!-- The three states a tool call has: still open, done, and failed.
                The first two carry a path, so the glyph comes from
                `catppuccinIcon.js`; the third carries a command, so it does
@@ -6043,14 +6224,17 @@ const menuTargetStyle = {
             detail="cargo test --manifest-path src-tauri/Cargo.toml"
             :result="{ ok: false, summary: 'exit 101' }"
           />
-          <!-- A folded block and an open one. Both are `quiet`; opening one
-               costs no loudness, which is what the pair is here to show. -->
-          <Reasoning :text="CONVERSATION_REASONING" />
-          <Reasoning :text="CONVERSATION_REASONING" expanded @open="openExternal" />
+          <!-- A folded block and an open one. Both are dimmed by colour and
+               size, not by opacity — `sm-prose.css`'s own reasoning rule — and
+               both carry a `<summary><time>`: how long the turn had already
+               been going when the agent said this, `journal.js`'s own
+               `elapsedSince`. -->
+          <Reasoning :text="CONVERSATION_REASONING" :ms="6000" />
+          <Reasoning :text="CONVERSATION_REASONING" :ms="134000" expanded @open="openExternal" />
           <!-- A turn the harness priced, and one it said nothing about: the
                cost is omitted rather than drawn as `$0`. -->
-          <TurnResult :tokens-in="860" :tokens-out="120" :cost-usd="0.0041" :ms="840" />
-          <TurnResult :tokens-in="4100" :tokens-out="2210" :cost-usd="null" :ms="124300" />
+          <TurnResult state="done" :tokens-in="860" :tokens-out="120" :cost-usd="0.0041" :ms="840" />
+          <TurnResult state="done" :tokens-in="4100" :tokens-out="2210" :cost-usd="null" :ms="124300" />
         </div>
 
         <div :style="{ width: '360px', display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
@@ -6078,6 +6262,53 @@ const menuTargetStyle = {
           <div :style="{ font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
             {{ permissionAnswer ? `answer: ${permissionAnswer}` : 'no answer yet' }}
           </div>
+        </div>
+
+        <div class="sm-prose" :style="{ width: '280px', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }">
+          <!-- One element, three moments — `markup-contract.md` section 6,
+               its own example values. `waiting`'s clock is genuinely ticking
+               here, off `GALLERY_ACTIVITY_STARTED_AT`; `done` and both
+               `failed` rows are fixed. Nothing spins, and `failed` is the
+               one strip in the whole gallery that turns the mark into a
+               square. -->
+          <TurnResult state="waiting" label="claude-1 is thinking" :started-at="GALLERY_ACTIVITY_STARTED_AT" />
+          <TurnResult state="done" :tokens-in="72515" :tokens-out="1204" :cost-usd="0.81" :ms="13000" />
+          <!-- The harness said what happened. -->
+          <TurnResult state="failed" text="exit 101 in wt/bd-3c9d" :ms="134000" />
+          <!-- It did not: `Stop`, or the process simply ending, closes the
+               turn with no `Error` on the wire at all — `journal.js`'s own
+               `TURN_ENDED` sentence is the panel's, not the agent's. -->
+          <TurnResult
+            state="failed"
+            text="The session ended while this turn was still open."
+            :ms="30000"
+          />
+        </div>
+
+        <!-- `hr[data-session]` — a full-bleed break between sessions,
+             distinct from a plain `hr` inside a message's own markdown
+             (section 2 of the contract). No live conversation in this app
+             ever draws one yet: a panel holds exactly one session's journal,
+             and `session::history`'s own header is explicit that a resumed
+             session's past and its live half are stitched with no marker
+             between them and none wanted, so there is nothing today for two
+             sessions to sit either side of. This is the markup and the
+             styling the contract asks for, stood up here rather than
+             invented in `ConversationView.vue` against nothing. -->
+        <div class="sm-prose" :style="{ width: '360px' }">
+          <article data-turn="agent">
+            <p>Notarization is failing intermittently. I'll pull the last run's log.</p>
+          </article>
+          <article data-turn="person">
+            <p>Thanks — that's enough for tonight, I'll pick it up tomorrow.</p>
+          </article>
+          <hr data-session>
+          <article data-turn="person">
+            <p>Back on this — did the log say anything about the keychain?</p>
+          </article>
+          <article data-turn="agent">
+            <p>Yes: the temporary keychain wasn't unlocked before <code>codesign</code> ran.</p>
+          </article>
         </div>
       </div>
     </section>

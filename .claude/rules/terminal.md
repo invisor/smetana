@@ -262,12 +262,15 @@ conversation — that is not also a start; it is reached from a row click and fr
 watcher both, so a run handing over to its next batch moves the aim as well.
 
 Beside the field is a **count per project, raised by `showAgentTab` on every call**, and it is there for
-the one caller that puts an aim *back* after an await — aiming before one is ordinary, and most of the
+the callers that put an aim *back* after an await — aiming before one is ordinary, and most of the
 callers above do it. `newAgent` aims the tab and then waits about a second for `createSession`, and
-comparing the aim afterwards cannot tell its own `null` from somebody else's — every road to a PTY
+`resumeSession` does the same at two points of its own — an early return on `badCwd`, before
+`showAgentTab` has been called on that road at all, and its own `createSession` catch, after it has —
+each tested against the count it took at its own point rather than the other's. Comparing the aim
+afterwards cannot tell its own `null` from somebody else's — every road to a PTY
 agent calls `showAgentTab()` with no argument and writes that same `null`, so a guard on the value read
-a row click as "untouched" and restored over the agent a run had just handed the person. A failed start therefore puts the previous aim back only while the count is unmoved. The one
-writer that is not `showAgentTab` is that restore: it writes the field directly **because going through
+a row click as "untouched" and restored over the agent a run had just handed the person. A failed start therefore puts the previous aim back only while the count is unmoved. The
+writers that are not `showAgentTab` are these restores: each writes the field directly **because going through
 the function would bring the tab forward again**, and in the case the restore exists for the watch on
 `hasAgentTab` has just taken the person to the board. What is restored is where the tab points, not
 where they are standing — and the count stays where it is, a restore not being a move.
@@ -1099,7 +1102,11 @@ fixed in the app and not in the harness leaves the harness reproducing a defect 
 has — indistinguishable by eye from a real one. `tests/components/core/copyFeedback.test.js` is what
 now sees the rule at all; it was entirely inside `.vue` files before, which no runner here can read.
 How long a confirmation stands is still `COPIED_MS` in `kanban/copyId.js`, borrowed by the composable
-rather than declared again, so the pure rule modules stay free of Vue.
+rather than declared again, so the pure rule modules stay free of Vue. `useCopyFeedback` takes it as an
+optional second argument now rather than reading the constant unconditionally, because one caller does
+not hold to it: the prose code block's copy button (`components/markdown/Markdown.vue`, the conversation
+panel's markup contract) confirms for 1600ms, the handoff's own figure, and passes it there instead of
+being folded into `COPIED_MS` or given a second constant to drift from the first.
 
 **Open log, Reveal log and Open working directory are three commands of ours, not the opener
 plugin's, and they are three rather than one on purpose.** The plugin's `open_path` is refused by its

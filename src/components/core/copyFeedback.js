@@ -36,7 +36,7 @@ import { COPIED_MS } from '../kanban/copyId.js'
    controls both reading `Copied` would be a claim about a clipboard that holds
    one thing.
 
-   How long a confirmation stands is `COPIED_MS`, borrowed from
+   How long a confirmation stands is `COPIED_MS` by default, borrowed from
    `kanban/copyId.js` rather than declared again. That number was written out
    three times before that module took it, and it stays one number by being
    borrowed here too — this file is the only thing in the tree that waits it
@@ -45,13 +45,23 @@ import { COPIED_MS } from '../kanban/copyId.js'
    composable would end that. Reaching across two groups for it is what
    `agent/sessionMenu.js` already does with the same constant, for the same
    reason. Nothing here wants a token instead: `tokens/motion.css` is about
-   transitions, and this is a dwell. */
+   transitions, and this is a dwell.
+
+   The duration is a second argument rather than a fixed read of `COPIED_MS`,
+   because one caller does not keep that number: the prose code block's copy
+   button (`markdown/Markdown.vue`) holds to the markup contract's own 1600ms,
+   longer than the 1200ms every id-copying control on this list already agrees
+   on. `COPIED_MS`'s own header explains why the two are allowed to differ
+   rather than being forced into one; this parameter is what lets them without
+   a second copy of the machine around the second number. */
 
 /**
  * The copy-confirmation policy, once.
  *
  * @param {(text: string) => Promise<boolean>} write what puts it on the
  *   clipboard — `copyText` from `stores/app.js` in both windows that call this.
+ * @param {number} [ms] how long the confirmation stands before it reverts —
+ *   `COPIED_MS` unless a caller has its own duration to keep to.
  * @returns {{
  *   target: import('vue').Ref<*>,
  *   state: import('vue').Ref<string>,
@@ -61,7 +71,7 @@ import { COPIED_MS } from '../kanban/copyId.js'
  *   copy: (id: *, text: string, noun?: string) => Promise<void>
  * }}
  */
-export function useCopyFeedback(write) {
+export function useCopyFeedback(write, ms = COPIED_MS) {
   /* What was copied last, by whatever id its owner tells rows apart by. */
   const target = ref(null)
   /* '' | 'copied' | 'failed' */
@@ -94,7 +104,7 @@ export function useCopyFeedback(write) {
     /* Again, and this is not the same clear as the one above. Two presses on
        the same row both get past that guard, and the second one's `setTimeout`
        would overwrite the first's handle while the first timer went on running
-       with nothing pointing at it. It then fires `COPIED_MS` after the *first*
+       with nothing pointing at it. It then fires `ms` after the *first*
        copy resolved: soon enough to cut this confirmation short, and — since it
        puts `target` back to null — soon enough to make a later copy's own guard
        bail on it, so a copy that worked would say nothing at all. A
@@ -106,7 +116,7 @@ export function useCopyFeedback(write) {
       target.value = null
       state.value = ''
       noun.value = ''
-    }, COPIED_MS)
+    }, ms)
   }
 
   /* `onScopeDispose` rather than `onUnmounted`, which is what the four copies

@@ -9,7 +9,7 @@
    The core moment this screen is built for: you come back after two hours and
    read, in three seconds, what finished, what stalled, and what is waiting for
    you. Hence the loud budget — exactly one card and one callout shout here. */
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch, watchEffect } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, watch, watchEffect } from 'vue'
 import ScopeIndicator from '../components/shell/ScopeIndicator.vue'
 import Panel from '../components/shell/Panel.vue'
 import Resizer from '../components/shell/Resizer.vue'
@@ -378,6 +378,17 @@ const props = defineProps({
     validator: (value) => CHROME_STATES.includes(value)
   }
 })
+
+/* `Markdown.vue` injects `smCopyText` for its code blocks' copy button rather
+   than importing a store itself — the same shape `overlays/Modal.vue` reaches
+   `views/DialogWindow.vue` through — and this window is one of the two that
+   draw anything with a `Markdown` under it (`TaskInspector`, and
+   `ConversationView`'s three turn kinds). Provided once, here, rather than
+   threaded down through either: `provide` reaches every depth of both trees
+   in one call, where a prop would have to cross `TaskInspector`,
+   `ConversationView`, `UserMessage`, `AgentMessage` and `Reasoning` for a
+   value none of them otherwise has a reason to know about. */
+provide('smCopyText', copyText)
 
 /* The two halves of the window's state that do change while it is open. The
    chrome itself does not — it is what the platform gave us, and it arrives as a
@@ -2769,13 +2780,15 @@ const activeTerminal = computed(() => terminalTab(project.activeTab))
 
    One field and one count beside it: `agentAimWrites` below is raised by that
    same function on every call, whatever is written. Plenty of callers aim before
-   an await; **`newAgent` is the only one that puts its aim back after one**, and
-   the count is what lets it ask first whether it is still the last thing to have
-   aimed this project.
+   an await; **`newAgent` and `resumeSession` are the only ones that put an aim
+   back after one**, and the count is what lets each ask first whether it is
+   still the last thing to have aimed this project.
 
-   There is a second writer and it is deliberate: `newAgent`'s catch puts the
-   previous aim back when a press started nothing, and it writes this Map
-   directly rather than calling `showAgentTab`. **Going through that function
+   There is a second kind of writer and it is deliberate: `newAgent`'s catch and
+   `resumeSession`'s two restore sites — its early return on `badCwd` and its own
+   `createSession` catch — put the previous aim back when a press started
+   nothing, and each writes this Map directly rather than calling
+   `showAgentTab`. **Going through that function
    would bring the tab forward again**, which is exactly wrong in the case the
    restore exists for — with no other agent in the project, the fallback's own
    failed ticket has just taken `hasAgentTab` false and the watcher below has
@@ -2829,8 +2842,8 @@ const agentAim = reactive(new Map())
    to would cost an untouched project its restore.
 
    Not reactive, unlike the aim: nothing draws it. It is read imperatively, and
-   by one caller — `newAgent`, the only one that puts an aim *back* after an
-   await — so a reactive version would only offer render dependencies on a
+   by two callers — `newAgent` and `resumeSession`, the only ones that put an
+   aim *back* after an await — so a reactive version would only offer render dependencies on a
    number that means nothing on screen. Nothing clears it either, for the reason
    nothing clears the aim — one small entry per project this window has aimed,
    dying with the window. */
@@ -2857,11 +2870,12 @@ const agentAimWrites = new Map()
 
    **Every call raises that project's write count**, whatever it aims at and
    whether or not the tab itself moves — a call for a project that is no longer
-   in front still aimed it. That count is what `newAgent` reads to tell an aim of
-   its own from somebody else's a second later, and this being the only place it
-   is raised is what keeps that true however long the list of callers grows. The
-   one write that goes around this function, `newAgent`'s catch, goes around the
-   count with it, on purpose. */
+   in front still aimed it. That count is what `newAgent` and `resumeSession`
+   read to tell an aim of their own from somebody else's a second later, and
+   this being the only place it is raised is what keeps that true however long
+   the list of callers grows. The writes that go around this function —
+   `newAgent`'s catch and `resumeSession`'s two restore sites — go around the
+   count with them, on purpose. */
 function showAgentTab(conversation = null, path = activePath.value) {
   agentAim.set(path, conversation)
   agentAimWrites.set(path, (agentAimWrites.get(path) ?? 0) + 1)
@@ -3895,6 +3909,13 @@ async function resumeSession(session, { fork = false } = {}) {
     title: session.title ?? null,
     fork
   }
+  /* What to put back if nothing starts, and the count to test it against —
+     `newAgent`'s own pair, read here before either road's first `await` for
+     the same reason: both roads below can fail after the tab has already come
+     forward, and what is owed on a press that started nothing is the aim it
+     found, not `null`. */
+  const aimed = agentAim.get(path) ?? null
+  const aimWrites = agentAimWrites.get(path)
   let refused = null
 
   project.sideTab = 'agents'
@@ -3918,12 +3939,20 @@ async function resumeSession(session, { fork = false } = {}) {
        only refuse again, a round trip later, and put a second corner toast on
        screen saying the very sentence already there. That doubling is what
        `lastError`'s shape was reshaped to prevent. */
-    if (conversationState.lastError?.kind === 'badCwd') return
+    if (conversationState.lastError?.kind === 'badCwd') {
+      /* `showAgentTab` has not been called on this road — only `activeTab`
+         moved, above — so the count taken before the first `await` is still
+         the one to test: restore the aim only if nobody has aimed this
+         project since the press, `newAgent`'s own guard and its own reason. */
+      if (agentAimWrites.get(path) === aimWrites) agentAim.set(path, aimed)
+      return
+    }
     // Off the screen for the fallback, and back again below if that fails too.
     refused = conversationState.lastError
     conversationState.lastError = null
   }
 
+  let ownAimWrites
   try {
     /* `path` and not the default, which would be `activePath` read *after* the
        await above. `newAgent` passes it for this reason and `showAgentTab`'s own
@@ -3932,9 +3961,15 @@ async function resumeSession(session, { fork = false } = {}) {
        now looking at, and its Agent tab brought forward over nothing, while the
        session starts in the one they pressed in. */
     showAgentTab(null, path)
+    /* The aim just written, taken by its number rather than by its value —
+       `newAgent`'s own guard, read the same way here: this road's own write
+       raises the count, and the catch below tests against the count taken
+       right after it rather than the one taken at the top of this function. */
+    ownAimWrites = agentAimWrites.get(path)
     await createSession(path, intent)
   } catch {
     // already reported — see comment above
+    if (agentAimWrites.get(path) === ownAimWrites) agentAim.set(path, aimed)
     if (refused && !conversationState.lastError) conversationState.lastError = refused
   }
 }
@@ -4964,6 +4999,28 @@ async function revealInTree(path) {
   for (const dir of unread) {
     if (!filesState.dirs.has(dir)) listDir(dir)
   }
+}
+
+/* The other half of the agent panel's prose links — `MarkdownInline.vue`'s
+   `open-local`, bubbled up through `Markdown.vue` and `ConversationView.vue`
+   unchanged, since neither of those knows a file tree exists. This is where
+   it lands: `data-kind="file"` opens the same permanent tab a click in the
+   tree opens, and `data-kind="dir"` reveals it exactly where a click on a
+   folder would — this function is what both already run through, so a path
+   an agent named reads the same as a path a person clicked. `openFile` alone
+   is enough for the file case: setting `project.activeTab` is what the
+   `activeFilePath` watch below reacts to, and that watch is what expands the
+   tree above whichever file just became active — calling `revealInTree` here
+   as well would be the same read twice. A directory has no tab to open, so it
+   is `revealInTree`'s alone, given the path unchanged: that function already
+   treats "reveal" as "select this path and open every folder above it",
+   which is exactly right for a folder as well as for the file it was written
+   for. `openExternal` needs none of this: `ConversationView.vue` still binds
+   that event itself, since it is the one thing this panel could already do
+   without a file tree in front of it. */
+function onConversationLocalLink({ path, kind }) {
+  if (kind === 'dir') revealInTree(path)
+  else openFile(path, { permanent: true })
 }
 
 /* `immediate`, and that is the startup case rather than tidiness: `activeTab` is
@@ -6805,7 +6862,11 @@ const toastStackStyle = {
                and no abstraction over the two back ends behind them. The terminal
                is going away when the last intent moves, and a seam built to
                outlive that migration would. -->
-          <ConversationView v-else-if="conversationPanelOpen" :session-id="conversationId" />
+          <ConversationView
+            v-else-if="conversationPanelOpen"
+            :session-id="conversationId"
+            @open-local="onConversationLocalLink"
+          />
           <TerminalView
             v-else-if="project.activeTab === 'terminal'"
             :session-id="terminalState.activeId"

@@ -52,12 +52,16 @@ const iconUrl = computed(() => (isPath.value ? fileIconUrl(props.detail, documen
 const running = computed(() => props.result == null)
 const ok = computed(() => props.result?.ok === true)
 
+/* No horizontal inset of its own: this row is a direct child of the journal's
+   `.sm-prose` (`ConversationView.vue`), which now spends `--panel-pad` once
+   for the whole column. A second copy here lined up with the prose only by
+   coincidence before that root existed and doubled the inset once it did. */
 const row = {
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-3)',
   minHeight: 'var(--row-h)',
-  padding: '0 var(--panel-pad)',
+  padding: 0,
   color: 'var(--text-primary)'
 }
 

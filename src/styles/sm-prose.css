@@ -100,10 +100,16 @@
   padding:var(--space-0);
   list-style:none;
 }
+/* `display:block` and not `flex`: on a flex container the li's own text
+   becomes an anonymous flex item, and `text-overflow:ellipsis` has nothing of
+   that shape to act on — the name hard-clips mid-character with no "…"
+   instead. `min-width:0` is still needed here, and for a different reason: the
+   li is itself a flex item of `ul[data-attachments]` above, and without it a
+   long name refuses to shrink below its own content width and pushes the
+   panel wide rather than wrapping to the next chip. */
 .sm-prose ul[data-attachments] > li{
-  display:flex;
-  align-items:center;
-  gap:var(--space-2);
+  display:block;
+  min-width:0;
   max-width:100%;
   padding:var(--space-1) var(--space-3);
   border:var(--border-w) solid var(--prose-chip-border);
@@ -116,7 +122,10 @@
   overflow:hidden;
   text-overflow:ellipsis;
 }
+/* The optional size, inline after the name rather than flex-gapped from it,
+   since the li above is no longer a flex container. */
 .sm-prose ul[data-attachments] > li > span{
+  margin-left:var(--space-2);
   color:var(--text-muted);
 }
 

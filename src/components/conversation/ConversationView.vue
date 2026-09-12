@@ -19,7 +19,37 @@
    like on screen.
 
    **The scroll rule is the one non-obvious thing left in this file**, and it is
-   written where it is enforced, on `stick` below. */
+   written where it is enforced, on `stick` below.
+
+   **The journal is also the markup contract's own root** (`class="sm-prose"`
+   below, `docs/design_handoff_conversation_panel/markup-contract.md`, section
+   1): one flex column with `gap:var(--prose-turn-gap)` and
+   `padding:var(--panel-pad)`, both spent by `sm-prose.css` rather than by the
+   `journal` style object here, which only adds what the scrolling viewport
+   needs beyond the contract — `flex`, `minWidth`/`minHeight` and the
+   `overflow` pair. `UserMessage.vue`, `AgentMessage.vue` and `Reasoning.vue`
+   used to carry a `.sm-prose` of their own, one turn per root, because this
+   shared one did not exist yet; each now emits its turn bare and this div is
+   the only root the class appears on. `ToolCall.vue` and `TurnResult.vue` are
+   not part of the contract — they take the flex gap like any other sibling —
+   but they are not unchanged either: both used to carry their own horizontal
+   `--panel-pad` to line up with the per-turn `.sm-prose` that no longer wraps
+   their neighbours, and now that this root spends the inset once for the
+   whole column, a second copy on either row would double it against the prose
+   beside it. Their own headers carry the fix; the `failure` row a few screens
+   down, drawn inside this same journal, got the identical correction.
+
+   **`hr[data-session]` has no live trigger here, and that is a fact about the
+   wire rather than a gap in this file.** The contract draws it as a break
+   between sessions, but a panel holds exactly one session's journal
+   (`journalRows` below has no notion of "session" at all), and
+   `session::history`'s own header is explicit that a resumed session's past
+   and its live half are stitched with no marker between them and none
+   wanted — the first live `TurnStart` is the seam, and it is invisible on
+   purpose. So there is nothing in this journal two sessions could sit either
+   side of yet; the element and its styling are ready in `sm-prose.css` for
+   whoever wires a real boundary, and `Gallery.vue` shows its appearance with
+   static markup rather than a synthesised one here. */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import AgentMessage from './AgentMessage.vue'
 import Composer from './Composer.vue'
@@ -33,10 +63,11 @@ import Icon from '../core/Icon.vue'
 import StatusBadge from '../status/StatusBadge.vue'
 import { isBusy, journalRows } from './journal.js'
 import { basename } from '../../paths.js'
-/* Three stores beside the conversation's own, and each is here because this
-   component is the one that has to answer rather than raise.
+/* Four stores beside the conversation's own, and each is here because this
+   component is the one that has to answer rather than raise — with one
+   exception, named where it is bound below.
 
-   `openExternal` is the sharpest of the three, and it goes against
+   `openExternal` is the sharpest of the four, and it goes against
    `kanban/TaskInspector.vue`, which raises `open` for the view to bind.
    Deliberately: that panel imports no store at all, while this one already
    does, and the failure the other way round is silent — `Markdown` re-emits an
@@ -44,11 +75,25 @@ import { basename } from '../../paths.js'
    `@open` ships an agent's prose with links that do nothing, which no test in
    this project can catch. The panel that owns the session owns its links.
 
+   A local link's own `path` cannot be answered here the same way, and that is
+   a fact about where the rest of the file tree lives rather than a change of
+   heart about the paragraph above: opening a tab is `stores/tabs.js`'s
+   `openFile`, cheap enough to call directly, but revealing a folder needs
+   `views/DesktopApp.vue`'s own `revealInTree` — the tree's expanded set, its
+   selection and a directory read all live in that view, not in a store, and
+   duplicating the walk here would be a second copy of `revealInTree` to keep
+   in step with the first. So `open-local` (`emit` below) is raised rather
+   than answered, the one link event this panel does not own outright — and
+   `filesState.root` is read directly, since a prop threaded down through
+   `Markdown.vue` and `MarkdownInline.vue` needs a value from somewhere, and
+   this file already reads four stores of its own.
+
    The other two are the header's, and neither is on the wire: `session_attach`
    answers with the journal, its sequence number and the state, and nothing
    else. */
 import { agentLabel } from '../../stores/agents.js'
 import { openExternal } from '../../stores/app.js'
+import { filesState } from '../../stores/files.js'
 import { settings } from '../../stores/settings.js'
 import {
   answerQuestion,
@@ -70,6 +115,12 @@ import {
 const props = defineProps({
   sessionId: { type: [String, Number], default: null }
 })
+
+/* `open-local` alone: `open` (the external breed) is answered here directly,
+   through `openExternal`, and never leaves this component — see the note on
+   the store imports above for why the local breed is the one link event this
+   panel raises rather than owns. */
+const emit = defineEmits(['open-local'])
 
 /* The record this panel is drawing.
 
@@ -114,9 +165,15 @@ onBeforeUnmount(() => {
   if (attached !== null) detach(attached)
 })
 
+const state = computed(() => held.value?.state ?? 'starting')
+const busy = computed(() => isBusy(state.value))
+
 /* The journal as rows to draw — `journal.js`, which is where the fold and the
-   translation are written and tested. */
-const rows = computed(() => journalRows(held.value?.events ?? []))
+   translation are written and tested. `state` is the second argument for one
+   row alone: a turn the events never closed (`Chunk::Eof` with no `Error`,
+   which is what `Stop` itself reaches) is read against it rather than left
+   `waiting` forever next to a header that already reads `failed`. */
+const rows = computed(() => journalRows(held.value?.events ?? [], state.value))
 
 /* The question the session is waiting on, derived by the store and never stored
    there — see its own note. Drawn at the foot of the panel rather than in the
@@ -130,9 +187,6 @@ const ourRefusal = computed(() =>
     ? conversationState.lastError.text
     : ''
 )
-
-const state = computed(() => held.value?.state ?? 'starting')
-const busy = computed(() => isBusy(state.value))
 
 /* Who is on the other end. None of this is on the wire — `session_attach`
    answers with the journal, the sequence number and the state, and nothing
@@ -151,6 +205,12 @@ const busy = computed(() => isBusy(state.value))
 const label = computed(() => agentLabel(settings.agent))
 const model = computed(() => settings.model)
 const folder = computed(() => (settings.activeProject ? basename(settings.activeProject) : ''))
+
+/* The activity strip's own `waiting` sentence — the same label the bar
+   already reads, put to the one other sentence this panel says on its
+   behalf. `TurnResult.vue`'s own header carries the rest of the strip's
+   reasoning; this is the one word it needs that only the store can give. */
+const waitingLabel = computed(() => `${label.value} is thinking`)
 
 /* `session::model::SessionState` in this design system's words, from the store
    for the reason the terminal's own translation lives in `terminals.js`. */
@@ -321,6 +381,15 @@ const sep = {
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
 }
 
+/* The scrolling viewport, and — via `class="sm-prose"` on the same element in
+   the template — the contract's own root. `display` and `flexDirection` are
+   left to the class, which already spends them (`gap`, `padding` and the font
+   go the same way); an inline style only ever wins over a class for the
+   properties it actually sets, so leaving one out here is what lets the
+   class's own value reach the element rather than being silently shadowed by
+   a copy of it that could drift the day the class changes. `alignItems` stays
+   inline because the class does not spend it — flex's own default is already
+   `stretch`, but writing it down is what the comment below is about. */
 const journal = {
   flex: 1,
   minWidth: 0,
@@ -330,8 +399,6 @@ const journal = {
   /* The end of a short conversation sits at the top of the panel rather than
      floating in the middle of it: a journal is read from its first line down,
      and centring it would move every row as the second one arrived. */
-  display: 'flex',
-  flexDirection: 'column',
   alignItems: 'stretch'
 }
 
@@ -347,15 +414,23 @@ const foot = {
 
 const questionPad = { padding: 'var(--panel-pad) var(--panel-pad) 0' }
 
-/* An `Error` event, which is the worker saying what happened where an answer
-   would have gone — a message that did not reach the agent, a line the harness
-   wrote to stderr. Prose, so sans; the failed hue and the status glyph, so it
-   is not mistaken for the agent's own words. */
+/* A bare `error` row — an `Error` event `journal.js` found no open turn to
+   fold into, which is the worker saying a message never reached the agent at
+   all rather than a turn that opened and then failed. A turn's own failure is
+   the activity strip's `failed` moment now (`TurnResult.vue`), drawn where
+   `row.kind === 'activity'` is below; this is what is left over for the one
+   case that is not a turn ending. Prose, so sans; the failed hue and the
+   status glyph, so it is not mistaken for the agent's own words.
+
+   No horizontal `--panel-pad` of its own: this row is drawn inside the
+   journal, a direct child of its `.sm-prose` root, which already insets the
+   whole column. Unlike `refusal` below — drawn in `foot`, outside that root,
+   and still owing its own inset — a second one here would double it. */
 const failure = {
   display: 'flex',
   alignItems: 'flex-start',
   gap: 'var(--space-3)',
-  padding: 'var(--space-4) var(--panel-pad)',
+  padding: 'var(--space-4) 0',
   color: 'var(--status-failed-fg)',
   font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-sans)'
 }
@@ -394,7 +469,7 @@ const refusal = {
       </span>
     </div>
 
-    <div ref="viewport" :style="journal" @scroll="onScroll">
+    <div ref="viewport" class="sm-prose" :style="journal" @scroll="onScroll">
       <EmptyState
         v-if="!sessionId"
         icon="message-square"
@@ -422,10 +497,25 @@ const refusal = {
             v-if="row.kind === 'user'"
             :text="row.text"
             :attachments="row.attachments"
+            :root="filesState.root ?? ''"
             @open="openExternal"
+            @open-local="emit('open-local', $event)"
           />
-          <AgentMessage v-else-if="row.kind === 'agent'" :text="row.text" @open="openExternal" />
-          <Reasoning v-else-if="row.kind === 'reasoning'" :text="row.text" @open="openExternal" />
+          <AgentMessage
+            v-else-if="row.kind === 'agent'"
+            :text="row.text"
+            :root="filesState.root ?? ''"
+            @open="openExternal"
+            @open-local="emit('open-local', $event)"
+          />
+          <Reasoning
+            v-else-if="row.kind === 'reasoning'"
+            :text="row.text"
+            :ms="row.ms"
+            :root="filesState.root ?? ''"
+            @open="openExternal"
+            @open-local="emit('open-local', $event)"
+          />
           <ToolCall
             v-else-if="row.kind === 'tool'"
             :name="row.name"
@@ -433,7 +523,11 @@ const refusal = {
             :result="row.result"
           />
           <TurnResult
-            v-else-if="row.kind === 'result'"
+            v-else-if="row.kind === 'activity'"
+            :state="row.state"
+            :label="waitingLabel"
+            :started-at="row.startedAt"
+            :text="row.text"
             :tokens-in="row.tokensIn"
             :tokens-out="row.tokensOut"
             :cost-usd="row.costUsd"
