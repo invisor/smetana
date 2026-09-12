@@ -2438,6 +2438,11 @@ const CONVERSATION_AGENT_TEXT = [
 const CONVERSATION_USER_TEXT =
   'Rename the worktree when the branch changes, and keep `wt/` off the folder name.'
 
+/* A reply caught mid-sentence: no terminal punctuation, which is what makes
+   the live edge after it read as a caret rather than a stray mark. Section 6
+   of the contract uses almost this exact sentence as its own example. */
+const CONVERSATION_STREAMING_TEXT = 'The identity is read once and passed down as'
+
 /* Paths and nothing else, which is what `session_send` carries and what the
    journal keeps: the chips draw `basename`, and the bytes stay on disk. The
    third is deliberately long — a name this width has to ellipsize inside the
@@ -6197,6 +6202,29 @@ const menuTargetStyle = {
           <TurnResult state="done" :tokens-in="12480" :tokens-out="416" :cost-usd="0.0312" :ms="4200" />
         </div>
 
+        <!-- The fourth moment (smetana-6we6): a reply still arriving, both
+             halves of it at once — the strip reading `streaming` instead of
+             `waiting`, and the live edge, `span[data-edge]`, at the end of
+             the partial message's own last line. `CONVERSATION_STREAMING_TEXT`
+             deliberately ends mid-thought with no terminal punctuation, which
+             is what a genuinely partial reply looks like; `Markdown`'s own
+             `streaming` prop is what draws the caret rather than anything
+             here, and it has to sit inside this `.sm-prose` root to paint at
+             all — `.smetana/project.toml`'s hazard list names this one
+             directly ("the strip has to sit inside the journal to be drawn
+             at all"), off the smetana-epzb merge that landed a gallery
+             activity column with no prose root and every strip painting as
+             plain text, both failed rows indistinguishable from ordinary
+             prose. -->
+        <div class="sm-prose" :style="{ width: '280px' }">
+          <AgentMessage :text="CONVERSATION_STREAMING_TEXT" streaming @open="openExternal" />
+          <TurnResult
+            state="streaming"
+            streaming-label="claude-1 is responding"
+            :started-at="GALLERY_ACTIVITY_STARTED_AT"
+          />
+        </div>
+
         <div class="sm-prose" :style="{ width: '360px', gap: 'var(--space-4)' }">
           <!-- The three states a tool call has: still open, done, and failed.
                The first two carry a path, so the glyph comes from
@@ -6254,13 +6282,20 @@ const menuTargetStyle = {
         </div>
 
         <div class="sm-prose" :style="{ width: '280px', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }">
-          <!-- One element, three moments — `markup-contract.md` section 6,
-               its own example values. `waiting`'s clock is genuinely ticking
-               here, off `GALLERY_ACTIVITY_STARTED_AT`; `done` and both
-               `failed` rows are fixed. Nothing spins, and `failed` is the
-               one strip in the whole gallery that turns the mark into a
-               square. -->
+          <!-- One element, four moments — `markup-contract.md` section 6,
+               its own example values. `waiting`'s and `streaming`'s clocks
+               are both genuinely ticking, off the same
+               `GALLERY_ACTIVITY_STARTED_AT` `journal.js` would hand both —
+               a reply arriving is the same wait resolving, not a second
+               clock starting; `done` and both `failed` rows are fixed.
+               Nothing spins, and `failed` is the one strip in the whole
+               gallery that turns the mark into a square. -->
           <TurnResult state="waiting" label="claude-1 is thinking" :started-at="GALLERY_ACTIVITY_STARTED_AT" />
+          <TurnResult
+            state="streaming"
+            streaming-label="claude-1 is responding"
+            :started-at="GALLERY_ACTIVITY_STARTED_AT"
+          />
           <TurnResult state="done" :tokens-in="72515" :tokens-out="1204" :cost-usd="0.81" :ms="13000" />
           <!-- The harness said what happened. -->
           <TurnResult state="failed" text="exit 101 in wt/bd-3c9d" :ms="134000" />

@@ -92,6 +92,28 @@
    session at all, and reads its figures against the project root instead,
    the fallback above exists for.
 
+   **The live edge (smetana-6we6).** `streaming` says a reply is still being
+   written, and while it is, the last child of the *last* block gets one more
+   element after it: `span[data-edge]`, section 6's own "Streaming edge",
+   which `sm-prose.css` paints as the caret pinned to the last character
+   produced. It travels with `streaming` down every recursive call this file
+   makes of itself — a blockquote or a list carries the flag to its own last
+   nested block, `isLast` composed with the group index at each level, since
+   the tree the caret belongs at the end of is the whole document's, not any
+   one level of it. Handled here: a paragraph, a heading, and a fenced code
+   block still being typed — the shapes a reply is actually still arriving as
+   in the ordinary case. **Not handled, and recorded rather than papered
+   over**: a table, a definition list, a rule or a run of images as the
+   literal last block while a reply is mid-sentence inside one — none of
+   those is where an agent's prose is normally still open, and the contract's
+   own example is a paragraph; such a reply is complete prose with no visible
+   caret for as long as that block is the last one, which corrects itself the
+   moment the next block opens. Nothing else about the tree changes for
+   `streaming` — the mark this file draws over is the one JS row `journal.js`
+   is already forwarding as `AgentMessage`'s own `streaming` prop, so a
+   finished reply and a partial one differ by exactly this one element, as
+   the acceptance criteria ask.
+
    The bytes themselves are never this file's to fetch, and `readInlineSvg`
    aside, this component does not even decide whether a picture loaded: that
    is `MarkdownFigure.vue`'s own state machine, fed by a function rather than
@@ -126,7 +148,11 @@ const props = defineProps({
      computed below falls back to `root` the moment this prop is left unset,
      so `''` only takes effect for a caller that passes it explicitly, the way
      an empty `root` means "no project" for a link. */
-  base: { type: String, default: '' }
+  base: { type: String, default: '' },
+  /* Whether this whole message is still arriving — see this file's own
+     header, "The live edge". `false` for a recursive call the caret's group
+     is not the last of, so only one `span[data-edge]` ever exists at once. */
+  streaming: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['open', 'open-local', 'open-image'])
@@ -158,6 +184,23 @@ const groups = computed(() => {
   }
   return entries
 })
+
+/* Is this the last group of the whole message — where the live edge belongs
+   while `streaming`. A plain index compare rather than a computed of its own:
+   it is asked once per group at render time, off `groups.value.length`, which
+   is already reactive. */
+function isLast(index) {
+  return index === groups.value.length - 1
+}
+
+/* Whether *this* group, at this level of recursion, is where the caret
+   belongs — this file's own `streaming` prop, narrowed to the one group the
+   whole document's last block is inside. Every recursive call below passes
+   exactly this back in as its own `streaming` prop, so the flag is `true` at
+   one place across the whole nested tree or nowhere in it. */
+function edgeHere(index) {
+  return props.streaming && isLast(index)
+}
 
 /* `data-task` lives on the `<ul>`, not per item, so it is decided once for the
    whole list, off a single item — `markdown.js`'s `takeList` is what actually
@@ -251,6 +294,7 @@ function isCodeCopied(index) {
           @open="emit('open', $event)"
           @open-local="emit('open-local', $event)"
         />
+        <span v-if="edgeHere(index)" data-edge></span>
       </component>
 
       <p v-else-if="group.block.type === 'paragraph'">
@@ -260,6 +304,7 @@ function isCodeCopied(index) {
           @open="emit('open', $event)"
           @open-local="emit('open-local', $event)"
         />
+        <span v-if="edgeHere(index)" data-edge></span>
       </p>
 
       <figure v-else-if="group.block.type === 'code'" data-code :data-lang="group.block.lang || undefined">
@@ -275,7 +320,7 @@ function isCodeCopied(index) {
           <Icon name="check" data-icon="check" />
           <span>{{ isCodeCopied(index) ? 'Copied' : 'Copy' }}</span>
         </button>
-        <pre><code>{{ group.block.text }}</code></pre>
+        <pre><code>{{ group.block.text }}<span v-if="edgeHere(index)" data-edge></span></code></pre>
       </figure>
 
       <hr v-else-if="group.block.type === 'rule'" />
@@ -285,6 +330,7 @@ function isCodeCopied(index) {
           :blocks="group.block.blocks"
           :root="root"
           :base="effectiveBase"
+          :streaming="edgeHere(index)"
           @open="emit('open', $event)"
           @open-local="emit('open-local', $event)"
           @open-image="emit('open-image', $event)"
@@ -306,6 +352,7 @@ function isCodeCopied(index) {
             :blocks="entry.blocks"
             :root="root"
             :base="effectiveBase"
+            :streaming="edgeHere(index) && at === group.block.items.length - 1"
             @open="emit('open', $event)"
             @open-local="emit('open-local', $event)"
             @open-image="emit('open-image', $event)"

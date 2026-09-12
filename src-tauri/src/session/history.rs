@@ -104,8 +104,18 @@ fn events_of_value(value: &Value, at: &str) -> Vec<Past> {
 /// `system`/`init` record today, so this filter is usually about nothing; the
 /// day one appears it is the difference between a panel that works and a panel
 /// that is wedged, with nothing failing anywhere to say so.
+///
+/// **`TextDelta` is excluded for the same reason and belongs to a fact that
+/// has already been checked rather than merely hoped for.** Claude Code's own
+/// `.jsonl` transcript — what `read_file` below streams — never contains a
+/// `stream_event` record; `one_event` only ever produces one from a *live*
+/// `content_block_delta` line, and this file's caller is the one place that
+/// would otherwise hand a stray one to `journal.js` on a re-entry, leaving a
+/// caret pinned to a reply nothing is still writing. Excluding it here costs
+/// nothing on the ordinary path and does not depend on that fact staying
+/// true if some later transcript format ever changes.
 fn is_past(kind: &EventKind) -> bool {
-    !matches!(kind, EventKind::TurnStart { .. })
+    !matches!(kind, EventKind::TurnStart { .. } | EventKind::TextDelta { .. })
 }
 
 /// The conversation a session has already had, oldest first.
@@ -271,6 +281,18 @@ mod tests {
         // never comes back.
         let init = r#"{"type":"system","subtype":"init","session_id":"x"}"#;
         assert!(kinds(init).is_empty());
+    }
+
+    /// The acceptance criterion smetana-6we6 is explicit about: a re-entry
+    /// never leaves a scrap of a partial reply behind. A `stream_event` line
+    /// never actually reaches a `.jsonl` transcript (this file's own header
+    /// carries the check that established that), but `is_past` refuses one on
+    /// its own account too, so the guarantee does not stand on that fact
+    /// alone.
+    #[test]
+    fn a_stray_partial_delta_in_a_transcript_is_never_replayed() {
+        let line = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}}"#;
+        assert!(kinds(line).is_empty());
     }
 
     #[test]

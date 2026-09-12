@@ -12,6 +12,74 @@
 //! What a tool's call is doing is not decided again in here.
 //! `claude::tool_detail` is the reference formatter's table of which field of
 //! which tool says so, and it is borrowed rather than copied.
+//!
+//! **Streaming text deltas (smetana-6we6).** `--include-partial-messages` is
+//! documented on the installed CLI (2.1.269) as "Include partial message
+//! chunks as they arrive (only works with --print and
+//! --output-format=stream-json)" — both of which this driver already passes —
+//! and was verified rather than trusted: `claude -p --output-format
+//! stream-json --input-format stream-json --include-partial-messages` against
+//! a live model wraps the ordinary Messages API SSE shape one line per event,
+//! `{"type":"stream_event","event":{...}}`, with no `data:` prefix. The one
+//! piece this driver reads out of it is `content_block_delta` whose `delta`
+//! carries `{"type":"text_delta","text":"..."}` — `EventKind::TextDelta`
+//! below. Everything else the flag adds — `message_start`,
+//! `content_block_start`/`content_block_stop` for every block kind,
+//! `thinking_delta`, `signature_delta`, `input_json_delta` for a tool call's
+//! arguments streaming in, `message_delta`, `message_stop` — produces nothing,
+//! on the same rule as an event kind this file has never heard of, and on
+//! purpose: reasoning and tool-call streaming are out of scope for this task,
+//! and the whole consolidated `assistant` message this driver already turned
+//! into `Text` still arrives once a block completes, unchanged. That whole
+//! message is what actually closes a streamed reply — there is no separate
+//! "stream finished" event to wait for, and none is needed.
+//!
+//! **The flag has no version probe on this line, and that absence was
+//! decided rather than overlooked.** This driver's own command line already
+//! puts `--input-format stream-json`, `--mcp-config` and
+//! `--append-system-prompt` on every driven session unconditionally, none of
+//! them behind a check either, and Claude Code is the person's own install
+//! rather than a pinned sidecar (`.claude/rules/agents.md`; unlike `bd`,
+//! CLAUDE.md's own section on it) — so an install too old for any one of
+//! those already refuses the whole session at spawn, before this task. What
+//! was established rather than guessed: `~/.claude/cache/changelog.md`
+//! records `--include-partial-messages` as landing at **1.0.109**
+//! ("SDK: Added partial message streaming support via
+//! `--include-partial-messages` CLI flag"), while every other fact this file
+//! and `claude.rs` already carry about the installed CLI — the permission
+//! dialog's frame, the `--session-id` flag, the model aliases `--help`
+//! documents — was read off builds in the 2.1.1xx-2.1.269 range, over a
+//! thousand releases later. An install new enough to run a driven session at
+//! all, on the evidence already written into this file before this task
+//! touched it, is new enough by a wide margin for this one flag; there is no
+//! version this project already assumes that lacks it. A probe would be
+//! answering a question this file's own history already settles.
+//!
+//! **What was actually verified, against what was inferred from it, said
+//! precisely because the two were nearly written down as one thing.** The
+//! live run above settles the SSE envelope's shape — that
+//! `--include-partial-messages` wraps `content_block_delta`/`text_delta`
+//! exactly as documented, one JSON object per line — and that much is
+//! measured. What this codec's design *rests on*, and what that one capture
+//! only ever showed rather than proved, is that Claude Code emits one
+//! consolidated `assistant` event per content block, as that block completes,
+//! before the next block's deltas begin: the captured trace had exactly two
+//! blocks, `thinking` then `text`, in that order, with no tool call and no
+//! second text block to say whether the guarantee holds generally or was
+//! this reply's coincidence. `content_block_delta` carries the block's own
+//! `index`, and this driver reads only `delta.text` off it — the index is
+//! decoded and thrown away, and neither this driver nor `journal.js`'s fold
+//! knows which block a delta belongs to. If the premise is ever false —
+//! two text blocks whose deltas interleave, or a consolidated event arriving
+//! late relative to the next block's own deltas — the visible failure is a
+//! stitched row reading the two blocks concatenated ("onetwo"), which the
+//! closing `Text` then shrinks back down to one block's own content while
+//! pushing a second row for the other: a reflow at exactly the moment the
+//! acceptance criteria forbid one. A `[thinking, text]` turn misordered the
+//! same way would draw the `Reasoning` row *below* the reply it was supposed
+//! to precede. Nothing in this file or in `journal.js` guards against that;
+//! the guard, if the premise ever needs one, is carrying `index` on
+//! `TextDelta` and starting a fresh stitched row whenever it changes.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -297,6 +365,34 @@ pub(crate) fn one_event(event: &Value) -> Vec<EventKind> {
             cost_usd: event.get("total_cost_usd").and_then(Value::as_f64),
             ms: event.get("duration_ms").and_then(Value::as_u64).unwrap_or(0),
         }],
+        // `--include-partial-messages`'s own wrapper — see this file's header
+        // for where the shape was read. Only a text delta produces anything;
+        // every other nested `event.type` (`message_start`,
+        // `content_block_start`/`content_block_stop` whichever block they
+        // name, `thinking_delta`, `signature_delta`, `input_json_delta`,
+        // `message_delta`, `message_stop`) is out of scope for this task or
+        // carries nothing the front end does not already get from the
+        // consolidated `assistant` event above, and produces nothing, on this
+        // function's own standing rule for a shape it has not been told about.
+        "stream_event" => match event.pointer("/event/type").and_then(Value::as_str) {
+            Some("content_block_delta") => {
+                match event.pointer("/event/delta/type").and_then(Value::as_str) {
+                    Some("text_delta") => {
+                        let raw =
+                            event.pointer("/event/delta/text").and_then(Value::as_str).unwrap_or("");
+                        let text = prose(raw);
+                        // Never `text.trim().is_empty()`, the guard `Text`
+                        // itself uses above: a delta that is a lone space or
+                        // newline between two words is real content, and
+                        // trimming it away would glue two words together on
+                        // the wire with nothing to say so.
+                        if text.is_empty() { Vec::new() } else { vec![EventKind::TextDelta { text }] }
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        },
         _ => Vec::new(),
     }
 }
@@ -321,7 +417,10 @@ impl Driver for ClaudeDriver {
         // Both halves of the stream are required together: `--input-format
         // stream-json` is refused without `--output-format stream-json`, and
         // `--verbose` is what makes the output one event per line rather than
-        // one blob at the end.
+        // one blob at the end. `--include-partial-messages` is the fourth —
+        // documented on the installed CLI as needing `--print` and
+        // `--output-format stream-json`, both already here — and is what
+        // this file's own header describes turning into `EventKind::TextDelta`.
         //
         // Appended rather than put in front the way `batch_args` is.
         // `CommandBuilder` can only be pushed to, so leading the line would mean
@@ -329,9 +428,15 @@ impl Driver for ClaudeDriver {
         // environment across by hand — a real risk of dropping something, to buy
         // tidiness the parser does not care about: the same probe showed both
         // orderings parse identically.
-        for arg in
-            ["-p", "--verbose", "--output-format", "stream-json", "--input-format", "stream-json"]
-        {
+        for arg in [
+            "-p",
+            "--verbose",
+            "--output-format",
+            "stream-json",
+            "--input-format",
+            "stream-json",
+            "--include-partial-messages",
+        ] {
             cmd.arg(arg);
         }
         // Where this session asks about permissions. Both flags or neither:
@@ -434,6 +539,24 @@ mod tests {
     const INIT: &str =
         r#"{"type":"system","subtype":"init","model":"claude-opus-5","session_id":"abc"}"#;
     const TEXT: &str = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Reading the file now."}]}}"#;
+    /// One `content_block_delta` under `--include-partial-messages`, captured
+    /// against the installed CLI (2.1.269) rather than invented — see this
+    /// file's own header for the run that produced it.
+    const TEXT_DELTA: &str =
+        r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"hi"}}}"#;
+    /// The neighbouring `thinking_delta`, out of scope for this task — only
+    /// the reply's own text streams, never the agent's reasoning.
+    const THINKING_DELTA: &str =
+        r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"weighing it"}}}"#;
+    /// A tool call's arguments streaming in, also out of scope.
+    const INPUT_JSON_DELTA: &str =
+        r#"{"type":"stream_event","event":{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"path\""}}}"#;
+    const MESSAGE_START: &str =
+        r#"{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_1"}}}"#;
+    const CONTENT_BLOCK_START_TEXT: &str = r#"{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}}"#;
+    const CONTENT_BLOCK_STOP: &str =
+        r#"{"type":"stream_event","event":{"type":"content_block_stop","index":1}}"#;
+    const MESSAGE_STOP: &str = r#"{"type":"stream_event","event":{"type":"message_stop"}}"#;
     const TOOL: &str = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cargo test"}}]}}"#;
     const TOOL_RESULT: &str = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"ok\nok\nok"}]}}"#;
     const RESULT: &str = r#"{"type":"result","subtype":"success","duration_ms":4200,"total_cost_usd":0.031,"usage":{"input_tokens":120,"output_tokens":40}}"#;
@@ -513,6 +636,71 @@ mod tests {
         assert_eq!(
             events(&mut driver, TEXT),
             vec![EventKind::Text { text: "Reading the file now.".into() }]
+        );
+    }
+
+    #[test]
+    fn a_text_delta_carries_only_its_own_incremental_piece() {
+        // Never accumulated here — `journal.js` is what stitches a run of
+        // these together, and `TextDelta`'s own doc comment says why.
+        let mut driver = ClaudeDriver::new(None);
+        assert_eq!(events(&mut driver, TEXT_DELTA), vec![EventKind::TextDelta { text: "hi".into() }]);
+    }
+
+    #[test]
+    fn a_delta_of_a_lone_space_is_kept_rather_than_trimmed_away() {
+        // The guard this pins is deliberately `text.is_empty()` and not
+        // `text.trim().is_empty()`: a chunk that is only a space or a newline
+        // between two words is real content on the wire, and the `Text` guard
+        // one arm up would silently glue two words together if it were reused
+        // here unchanged.
+        let mut driver = ClaudeDriver::new(None);
+        let line = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":" "}}}"#;
+        assert_eq!(events(&mut driver, line), vec![EventKind::TextDelta { text: " ".into() }]);
+    }
+
+    #[test]
+    fn an_empty_text_delta_draws_no_row() {
+        let mut driver = ClaudeDriver::new(None);
+        let line = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":""}}}"#;
+        assert!(events(&mut driver, line).is_empty());
+    }
+
+    #[test]
+    fn reasoning_and_tool_input_streaming_in_are_out_of_scope_and_draw_nothing() {
+        // Only the reply's own text streams — smetana-6we6's own boundary.
+        // Reasoning and a tool call's arguments still arrive whole, from the
+        // consolidated `assistant` event, exactly as before this task.
+        let mut driver = ClaudeDriver::new(None);
+        assert!(events(&mut driver, THINKING_DELTA).is_empty());
+        assert!(events(&mut driver, INPUT_JSON_DELTA).is_empty());
+    }
+
+    #[test]
+    fn the_rest_of_the_partial_message_envelope_draws_nothing() {
+        // `message_start`, a block opening or closing, and `message_stop` are
+        // structure this driver does not need: the block's own consolidated
+        // `assistant` event is what closes a streamed reply, not any of these.
+        let mut driver = ClaudeDriver::new(None);
+        for line in [MESSAGE_START, CONTENT_BLOCK_START_TEXT, CONTENT_BLOCK_STOP, MESSAGE_STOP] {
+            assert!(events(&mut driver, line).is_empty(), "{line} produced an event");
+        }
+    }
+
+    #[test]
+    fn a_streamed_reply_still_ends_on_the_same_whole_text_event_as_before() {
+        // The wire decision this task made: deltas are additive, and the
+        // existing consolidated `assistant` event — unchanged — is still what
+        // a reader relies on for the authoritative, final copy of the reply.
+        let mut driver = ClaudeDriver::new(None);
+        let mut all = events(&mut driver, TEXT_DELTA);
+        all.extend(events(&mut driver, TEXT));
+        assert_eq!(
+            all,
+            vec![
+                EventKind::TextDelta { text: "hi".into() },
+                EventKind::Text { text: "Reading the file now.".into() }
+            ]
         );
     }
 
@@ -694,6 +882,18 @@ mod tests {
             let at = args.iter().position(|arg| arg == flag).expect("the flag is on the line");
             assert_eq!(args.get(at + 1).map(String::as_str), Some("stream-json"), "{args:?}");
         }
+    }
+
+    #[test]
+    fn the_command_line_asks_for_partial_message_chunks() {
+        // Without this flag Claude Code buffers a whole reply and this file
+        // never sees a `content_block_delta` at all — smetana-6we6's whole
+        // premise, verified against the installed CLI rather than assumed.
+        let args = argv(&ClaudeDriver::new(None).start(&launch()));
+        assert!(
+            args.iter().any(|arg| arg == "--include-partial-messages"),
+            "--include-partial-messages is missing from {args:?}"
+        );
     }
 
     #[test]

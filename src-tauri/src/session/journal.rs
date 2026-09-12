@@ -9,6 +9,16 @@ use super::model::{Event, EventKind};
 /// How many events a session keeps. A long night of tool calls is thousands of
 /// them and each is small; the ceiling is here so that a session left running
 /// for a week cannot grow without bound.
+///
+/// **That "each is small" is no longer true of every event, and `append`'s own
+/// `TextDelta` collapse below is what keeps it true in practice.** One
+/// substantial streamed reply is several hundred `TextDelta`s where it used to
+/// be a single `Text` (smetana-6we6); left uncollapsed, this budget would be
+/// spent by five to fifteen ordinary turns rather than the "long night" or
+/// "week" this comment has always promised — a promise that was never
+/// re-measured against the granularity the wire actually carries once it
+/// changed. It holds again only because a closed reply's deltas do not stay in
+/// the journal once it closes.
 pub const BUDGET: usize = 4000;
 
 pub struct Journal {
@@ -34,6 +44,39 @@ impl Journal {
         let event = Event { seq: self.next, at, kind };
         self.next += 1;
         self.events.push(event.clone());
+        // The `TextDelta`s a closing `Text` supersedes do not go on living in
+        // the journal beside it. Without this, one substantial streamed reply
+        // is several hundred events where it used to be one, and `BUDGET`
+        // arrives in five to fifteen turns rather than the week this file's
+        // own comment on it promises — see that comment for the reasoning in
+        // full.
+        //
+        // **`trimmed_through` is deliberately untouched.** That field is
+        // `since`'s floor: below it, a cursor is told to re-snapshot rather
+        // than trust a vec with a hole in it. Moving it here would claim the
+        // same thing `trim` claims — "everything below this line is gone for
+        // a reason a caller must recover from" — which is false of a delta a
+        // live client already received in full. `since(seq)` only ever
+        // filters by `event.seq > seq`; it does not ask whether a particular
+        // `seq` is present, so a delta's absence from `self.events` is
+        // invisible to a cursor already past the collapsed run, and a fresh
+        // attacher's `snapshot()` simply never sees deltas a reply has
+        // already closed over. A cursor sitting *inside* the collapsed run —
+        // holding a `seq` this retain just removed — would get a real gap
+        // instead: `since` answers fewer events than a contiguous read
+        // expects, the same shape `conversation.js`'s `absorb` already
+        // treats as a signal to re-`snapshot()` rather than draw a hole. Safe
+        // either way, and moot today besides: nothing under `src/` calls
+        // `session_since` at all — the command's only callers are the mock
+        // and its own test.
+        //
+        // A stream can only ever have one reply's worth of deltas held at
+        // once, by construction: the very last time a `Text` was appended, it
+        // ran this same retain and cleared every delta that came before it.
+        // So this always removes exactly the run just superseded, never more.
+        if matches!(&event.kind, EventKind::Text { .. }) {
+            self.events.retain(|held| !matches!(held.kind, EventKind::TextDelta { .. }));
+        }
         self.trim();
         event
     }
@@ -116,6 +159,10 @@ mod tests {
 
     fn text(body: &str) -> EventKind {
         EventKind::Text { text: body.into() }
+    }
+
+    fn delta(piece: &str) -> EventKind {
+        EventKind::TextDelta { text: piece.into() }
     }
 
     fn at() -> String {
@@ -253,6 +300,105 @@ mod tests {
         let mut journal = Journal::new();
         journal.append(EventKind::TurnStart { by: Actor::Person }, at());
         assert_eq!(journal.events().len(), 1);
+    }
+
+    /// The blocking finding smetana-6we6's review came back with: a
+    /// substantial streamed reply is several hundred `TextDelta`s where it
+    /// used to be one `Text`, and `BUDGET` would arrive in five to fifteen
+    /// turns rather than the week `BUDGET`'s own comment promises. The closing
+    /// `Text` has to take its deltas with it.
+    #[test]
+    fn a_closing_text_drops_the_deltas_it_superseded() {
+        let mut journal = Journal::new();
+        journal.append(EventKind::TurnStart { by: Actor::Agent }, at());
+        journal.append(delta("The identity"), at());
+        journal.append(delta(" is read once"), at());
+        journal.append(text("The identity is read once."), at());
+
+        let kinds: Vec<&EventKind> = journal.events().iter().map(|event| &event.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                &EventKind::TurnStart { by: Actor::Agent },
+                &EventKind::Text { text: "The identity is read once.".into() }
+            ],
+            "the deltas must not go on living beside the reply that closed over them"
+        );
+    }
+
+    /// A reply that streamed for a long time can still be several hundred
+    /// deltas wide the instant before it closes — this is the shape that
+    /// blew the budget open, pinned directly rather than only through its
+    /// consequence above.
+    #[test]
+    fn many_deltas_collapse_to_one_event_on_close() {
+        let mut journal = Journal::new();
+        for n in 0..500 {
+            journal.append(delta(&n.to_string()), at());
+        }
+        assert_eq!(journal.events().len(), 500);
+        journal.append(text("the whole reply"), at());
+        assert_eq!(journal.events().len(), 1);
+    }
+
+    /// Only the run just superseded goes — an earlier, already-closed reply's
+    /// words stay exactly as they were, and a *second* stream's deltas are
+    /// left standing until their own close, not swept early by someone else's.
+    #[test]
+    fn closing_one_stream_never_touches_an_earlier_reply_or_a_later_one() {
+        let mut journal = Journal::new();
+        journal.append(text("the first reply"), at());
+        journal.append(delta("the second"), at());
+        journal.append(text("the second reply"), at());
+        journal.append(delta("a third, still open"), at());
+
+        let kinds: Vec<&EventKind> = journal.events().iter().map(|event| &event.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                &EventKind::Text { text: "the first reply".into() },
+                &EventKind::Text { text: "the second reply".into() },
+                &EventKind::TextDelta { text: "a third, still open".into() }
+            ]
+        );
+    }
+
+    /// `trimmed_through` is deliberately untouched by the collapse: it is
+    /// `since`'s floor, and moving it would tell a cursor holder to
+    /// re-snapshot over a gap that cost it nothing, since it already had the
+    /// deltas live before they were dropped.
+    #[test]
+    fn dropping_superseded_deltas_does_not_move_the_since_floor() {
+        let mut journal = Journal::new();
+        journal.append(delta("a"), at());
+        journal.append(delta("b"), at());
+        let (_, before_close) = journal.snapshot();
+        journal.append(text("ab"), at());
+
+        assert!(
+            journal.since(before_close).is_some(),
+            "a cursor that watched the stream live is not told to re-snapshot"
+        );
+        assert_eq!(journal.since(before_close).expect("checked above").len(), 1);
+    }
+
+    /// A fresh attacher after the close sees the consolidated reply and none
+    /// of the deltas it was built from — the live-journal half of the
+    /// acceptance criterion the transcript-replay half already covered.
+    #[test]
+    fn a_snapshot_taken_after_the_close_holds_no_deltas_at_all() {
+        let mut journal = Journal::new();
+        journal.append(EventKind::TurnStart { by: Actor::Agent }, at());
+        for piece in ["The ", "identity ", "is read once."] {
+            journal.append(delta(piece), at());
+        }
+        journal.append(text("The identity is read once."), at());
+
+        let (events, _) = journal.snapshot();
+        assert!(
+            !events.iter().any(|event| matches!(event.kind, EventKind::TextDelta { .. })),
+            "a fresh attacher must never see a delta the reply it belongs to has already closed"
+        );
     }
 }
 

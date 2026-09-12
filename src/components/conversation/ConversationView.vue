@@ -226,6 +226,10 @@ const folder = computed(() => (settings.activeProject ? basename(settings.active
    reasoning; this is the one word it needs that only the store can give. */
 const waitingLabel = computed(() => `${label.value} is thinking`)
 
+/* `streaming`'s own sentence, `markup-contract.md` section 6's own example
+   word for word but for the harness's own name in place of `claude-1`. */
+const streamingLabel = computed(() => `${label.value} is responding`)
+
 /* `session::model::SessionState` in this design system's words, from the store
    for the reason the terminal's own translation lives in `terminals.js`. */
 const status = computed(() => statusOf(state.value))
@@ -520,6 +524,7 @@ const refusal = {
           <AgentMessage
             v-else-if="row.kind === 'agent'"
             :text="row.text"
+            :streaming="row.streaming === true"
             :root="filesState.root ?? ''"
             :base="base"
             @open="openExternal"
@@ -546,6 +551,7 @@ const refusal = {
             v-else-if="row.kind === 'activity'"
             :state="row.state"
             :label="waitingLabel"
+            :streaming-label="streamingLabel"
             :started-at="row.startedAt"
             :text="row.text"
             :tokens-in="row.tokensIn"
