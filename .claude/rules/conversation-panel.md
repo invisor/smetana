@@ -18,7 +18,7 @@ the reasoning behind the choices in it that are not otherwise written down anywh
 ## The fourth inline-style exception
 
 `src/styles/sm-prose.css`, scoped entirely under `.sm-prose`, is the **fourth** declared exception to
-"inline style objects, never CSS classes" (CLAUDE.md, Constraints), beside `files/editor/theme.js`,
+"inline style objects, never CSS classes" (CLAUDE.md, Styling), beside `files/editor/theme.js`,
 `terminal/theme.js` and `runs/report.rs`. The reason is mechanical, the same shape as the other three:
 `::marker`, `::-webkit-scrollbar`, `:focus-visible`, `:hover` and `@media (prefers-reduced-motion)`
 have no computed-style-object equivalent, and a design that needs a custom list marker, a themed
@@ -29,23 +29,25 @@ this design needed and the system did not already have, with no `#hex`, no `px` 
 anywhere in the file — and it licenses only those five selector shapes, on that one root class.
 
 **It does not license `v-html`.** The markup this file paints is still emitted by Vue's own
-templates — `Markdown.vue`'s tree of `<p>`, `<ul>`, `<blockquote>` and the rest, one component per
-element, the same as every other view in this tree. A stylesheet answers "how does this element
-look"; it says nothing about how the element got there, and nothing about that changed.
+templates — `Markdown.vue`'s tree of `<p>`, `<ul>`, `<blockquote>` and the rest, one element per
+block node, emitted by one `v-else-if` chain, the same as every other view in this tree. A
+stylesheet answers "how does this element look"; it says nothing about how the element got there,
+and nothing about that changed.
 
 ## Why `v-html` never appeared
 
 The markup contract describes finished HTML — a `<ul data-task>`, a `figure[data-code]` — which reads
 as an argument for building a string of markup and injecting it. `Markdown.vue`'s own header states
 the decision made instead, in so many words: **no `v-html`, deliberately and permanently**. The tree
-is drawn as Vue nodes, one component per block and per inline span, so an issue's text — bd's own
-prose fields, an agent's, a person's — can never become markup, because it is never parsed as markup
-in the first place past `parseMarkdown`'s own AST; there is no sanitiser anywhere in this family of
-files because there is nothing for one to guard. The cost is real and paid on purpose: the renderer is
-a `Markdown`/`MarkdownInline` pair recursing over a parsed tree rather than one `innerHTML` assignment,
-and every new block type is a new branch of a `<template v-else-if>` rather than a new string
-template. The bubble's own "tail" is the same decision at the level of one glyph: the person's turn
-gets a squared corner (`border-radius`, section 2 of the contract) rather than a drawn speech-bubble
+is drawn as Vue nodes, one element per block node, emitted by one `v-else-if` chain, so an issue's
+text — bd's own prose fields, an agent's, a person's — can never become markup, because it is never
+parsed as markup in the first place past `parseMarkdown`'s own AST; there is no sanitiser anywhere in
+this family of files because there is nothing for one to guard. The cost is real and paid on purpose:
+the renderer is a `Markdown`/`MarkdownInline` pair recursing over a parsed tree rather than one
+`innerHTML` assignment, and every new block type is a new branch of that `v-else-if` chain rather
+than a new string template. The bubble's own "tail" is the same decision at the level of one glyph:
+the person's turn gets a squared corner (`border-radius`, section 1 of the contract) rather than a
+drawn speech-bubble
 triangle, because a triangle is either an SVG or a `::before` shape hack, and either way is one more
 thing an HTML-injection path would have had to be trusted to allow. Side and shape carry the
 distinction instead, with nothing for a sanitiser to admit or refuse.
@@ -60,11 +62,12 @@ Side and shape carry the distinction on purpose, not hue: saturated colour is re
 that already means something specific in this app.
 
 The turn-treatment exploration tried four answers to "how does a person know whose sentence they are
-reading" (`docs/design_handoff_conversation_panel/sm-prose-turns.css`, kept as a record of what was
-compared, `Turn variants.dc.html`). The one before the bubble — `rail`, a raised surface with a
-neutral bar down its left edge — was the previous default and was dropped for a specific reason
-written into that file's own header: **a left bar is what a quotation uses**, and this panel's own
-`blockquote` is two steps away, inside the very same turn. A person's message framed with the
+reading" — `docs/design_handoff_conversation_panel/sm-prose-turns.css`, kept as a record of what was
+compared; the design project's own `Turn variants` page walked the same four side by side, but that
+page lives in the design project, not this repository. The one before the bubble — `rail`, a raised
+surface with a neutral bar down its left edge — was the previous default, and `sm-prose-turns.css`'s
+own `rail` block carries the reason it was dropped: **a left bar is what a quotation uses**, and this
+panel's own `blockquote` is two steps away, inside the very same turn. A person's message framed with the
 quotation's own device would read as the panel quoting the person rather than the person speaking,
 exactly backwards from what a chat turn is supposed to say. The bubble's side-and-corner treatment
 shares no device with `blockquote` at all, which is why it, not `rail`, is what shipped.
@@ -85,14 +88,14 @@ item drops to `--text-muted` — done is quiet, the same idiom `data-attention="
 `sm-prose.css` section 8 states this one directly: zebra striping fills a second alternating rhythm
 over a column that already alternates raised person turns against the agent's plain ground, so a
 zebra table inside an agent turn would compete with the turn structure itself rather than sit inside
-it quietly. Striping is also the first thing to go muddy at compact density, where rows sit four
-points apart — a stripe that thin reads as noise rather than as a row boundary. A hairline
+it quietly. Striping is also the first thing to go muddy at compact density, where rows sit 4px
+apart — a stripe that thin reads as noise rather than as a row boundary. A hairline
 `border-bottom` on every cell plus a weighted header does the same job — telling one row from the
 next — with one border instead of a second fill colour, and it survives compact density unchanged.
 
 ## The figure's mat, and the inline `<svg>` that gets none
 
-This landed an hour before this task, in `smetana-je5v`; the reasoning is `MarkdownFigure.vue`'s and
+This landed in `smetana-je5v`, immediately before this task; the reasoning is `MarkdownFigure.vue`'s and
 `figureSource.js`'s own, restated here because it is a decision the next session could otherwise
 re-litigate. Two accepted forms answer the same dark-theme failure case differently:
 
@@ -120,11 +123,14 @@ caption row draws without the control rather than with a dead one.
 ## The copy button is always visible, never hover-revealed
 
 A code block's copy control sits in the header band rather than floating over the first line, and it
-is drawn at rest — muted text, no border — rather than appearing on hover. `sm-prose.css` section 9
-gives the reason: this panel is read by keyboard as much as by pointer, and a control that only
-appears on hover is a control that does not exist for someone who has just tabbed to it. Its resting
-weight keeps the budget close to nothing when nobody is using it, but "not there until proven wanted"
-was rejected in favour of "there, quietly, until pressed."
+is drawn at rest — muted text, no visible border — rather than appearing on hover. Its border is not
+absent, only invisible: `border:var(--border-w) solid transparent`, load-bearing rather than
+decorative, since it reserves the same box the hover state's real border fills, and without it the
+control would shift by a border's width the moment a pointer found it. `sm-prose.css` section 9
+gives the resting-versus-hover reason itself: this panel is read by keyboard as much as by pointer,
+and a control that only appears on hover is a control that does not exist for someone who has just
+tabbed to it. Its resting weight keeps the budget close to nothing when nobody is using it, but "not
+there until proven wanted" was rejected in favour of "there, quietly, until pressed."
 
 ## Waiting does not spin — it ticks
 
@@ -179,10 +185,9 @@ description would sit inset twice. The block-level rules (`:where(p,ul,ol,…)` 
 `docs/design_handoff_conversation_panel/sm-prose-turns.css` holds the three turn treatments not
 taken plus the retired `rail` default, gated behind `data-turn-style` on the `.sm-prose` root. It
 lives under `docs/`, not `src/`, and stays there: it is the exploration the bubble was chosen from,
-kept so a reader can see what was compared, not a feature this app ships. `data-turn-style` never
-appears anywhere in `src/` — nothing in the front end sets it, and the shipped stylesheet
-(`src/styles/sm-prose.css`) needs no `[data-turn-style="bubble-right"]` selector because the bubble is
-simply the default. Vendoring the exploration file into the app bundle to keep the other three
-treatments "available" was never on the table: a treatment nobody can reach from a setting is a dead
-branch with a maintenance cost, not a feature, and the four rendered combinations
-(`Conversation panel.dc.html`) already say which one shipped.
+kept so a reader can see what was compared, not a feature this app ships. Nothing in `src/` sets
+`data-turn-style` — the shipped stylesheet names it once, in a comment pointing at the exploration
+file, and needs no `[data-turn-style="bubble-right"]` selector because the bubble is simply the
+default. Vendoring the exploration file into the app bundle to keep the other three treatments
+"available" was never on the table: a treatment nobody can reach from a setting is a dead branch with
+a maintenance cost, not a feature.
