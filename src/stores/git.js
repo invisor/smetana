@@ -1,5 +1,9 @@
-/* The active project's branch, for the scope bar. Sixth of the files in this
-   directory that know Tauri exists; components see a reactive object.
+/* The active project's branch, for the scope bar. One of the files in this
+   directory that know Tauri exists — see the list in CLAUDE.md rather than a
+   number written here, since an ordinal is written once and the list keeps
+   growing under it (this one used to say "Sixth", already wrong against the
+   tree by the time `smetana-h8vq` noticed while checking the list for an
+   unrelated addition). Components see a reactive object.
 
    Deliberately the smallest store here: git is read, never written, there is
    one value, and it costs a file read. Freshness comes from window focus and

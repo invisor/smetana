@@ -19,6 +19,10 @@ paths:
   # command that mirrors `attachment_reopen` on purpose.
   - "src/components/markdown/Markdown.vue"
   - "src/components/markdown/MarkdownFigure.vue"
+  # `watchDrops` below is a thin wrapper over this store since smetana-h8vq,
+  # shared with the terminal and the conversation panel; the "no drop is heard
+  # twice" argument now leans on it directly.
+  - "src/stores/windowDrops.js"
 ---
 
 # Attachments: pictures on a task nobody has filed yet
@@ -100,17 +104,23 @@ answers it beside `attach`, `files` and `remove`, so `AttachmentStrip.vue` stays
 window nobody can resize, so "the picture, larger" came out the size of the dialog it was opened
 from.
 
-**No drop is heard twice, and the reason is the webviews rather than anything in this file.** The only
-other subscriber to a window's drag-drop event in the whole tree is `watchSessionDrops` in
-`terminals.js`, which types a dropped path into a live agent; it is subscribed from `TerminalView.vue`
-and therefore lives in the app window's webview, while this store now lives in the dialog's. Tauri
-delivers a drop only to the window it landed on, so the two never see the same event and need no
-arbiter — there is deliberately none. That is what makes `() => true` safe here, and it is safe **only
-for as long as this store stays out of the app window**: importing it into `DesktopApp.vue` again, or
-widening either side's acceptance, puts both subscribers back on one webview, where a single file is
-copied into a draft task *and* typed into somebody's running agent, with nothing on either side to
-catch it. `.claude/rules/terminal.md` carries the full argument, beside the hit test that settles
-which pane of the app window a drop belongs to.
+**No drop is heard twice, and the reason is the webviews rather than anything in this file.** The other
+subscribers to a window's drag-drop event in the whole tree are `watchSessionDrops` in `terminals.js`,
+which types a dropped path into a live agent, and, since `smetana-h8vq`, the conversation panel
+(`.claude/rules/conversation-panel.md`); both are subscribed from inside `DesktopApp.vue` — one
+directly by `TerminalView.vue`, one by `ConversationView.vue` — and therefore live in the app window's
+webview, while this store now lives in the dialog's. Tauri delivers a drop only to the window it
+landed on, so this store's subscription never sees the same event either of theirs does, and needs no
+arbiter with either — there is deliberately none. That is what makes `() => true` safe here, and it is
+safe **only for as long as this store stays out of the app window**: importing it into `DesktopApp.vue`
+again, or widening its acceptance, puts it on the same webview the terminal and the conversation panel
+already share, where a single file is copied into a draft task *and* typed into somebody's running
+agent, with nothing on either side to catch it. `.claude/rules/terminal.md` carries the full argument
+for that pair — including why *they* can share one webview safely and this store must not join
+them — beside the hit test that settles which pane of the app window a drop belongs to. All three now
+subscribe through the one lifecycle in `stores/windowDrops.js` rather than three copies of it, which is
+plumbing rather than a change to any of this: the window each one lives in is still what keeps this
+store's drop from being anybody else's.
 
 Nothing is *collected* twice either, which is the smaller half: `attachment_import` and
 `attachment_write` are commands rather than subscriptions, so the move added no second observer and

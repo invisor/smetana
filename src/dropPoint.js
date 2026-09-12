@@ -23,9 +23,15 @@
    user-agent string, the same way `shell/windowChrome.js` learns which chrome
    the window has.
 
-   Outside `TerminalView.vue` because a `.vue` file is the one thing no test in
-   this repository can reach, and beside `dropPaths.js` for the same reason it
-   is: that file decides the characters, this one decides the point. */
+   This used to live under `components/terminal/`, beside `dropPaths.js`, for
+   the reason both were outside their component: a `.vue` file is the one thing
+   no test in this repository can reach. It moved to the top of `src/` when the
+   subscription that uses it — `stores/windowDrops.js` — stopped being the
+   terminal's alone: the conversation panel wants the same point read the same
+   way, and there is no "under" to put a rule two parts of the interface both
+   want, the same reasoning `paths.js` and `appearance.js` carry for the same
+   move. `dropPaths.js` stayed in `components/terminal/` — turning a path into
+   characters for a PTY is still that pane's own business, and only its. */
 
 /** Points already in CSS pixels from the top left of the webview: macOS, Linux. */
 export const DROP_SPACE_LOGICAL = 'logical'

@@ -246,8 +246,20 @@ describe('images attached to a task that has not been filed', () => {
        next microtask. */
     const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
 
+    /* `watchDrops` is a thin wrapper over the shared subscription in
+       `windowDrops.js` now, which asks the back end once per window which
+       units a drop's position arrives in — this store never reads the answer,
+       since the dialog accepts a drop anywhere on it, but the ask still
+       happens and a test that left it unregistered would print a console line
+       nobody asked for. */
+    async function readyToDrop() {
+      const loaded = await loadStores()
+      loaded.ipc.on('drag_drop_space', 'physical')
+      return loaded
+    }
+
     it('a drop while the dialog is open attaches every path in it', async () => {
-      const { ipc, emit, stores } = await loadStores()
+      const { ipc, emit, stores } = await readyToDrop()
       ipc.on('attachment_import', ({ path }) => stored(path.split('/').pop()))
       stores.attachments.watchDrops(() => true)
       await settle()
@@ -265,7 +277,7 @@ describe('images attached to a task that has not been filed', () => {
        and it is asked. Without the gate a drop anywhere in the app would file
        images into a list nobody has open. */
     it('a drop with nothing collecting is ignored', async () => {
-      const { ipc, emit, stores } = await loadStores()
+      const { ipc, emit, stores } = await readyToDrop()
       ipc.on('attachment_import', () => stored('one.png'))
       stores.attachments.watchDrops(() => false)
       await settle()
@@ -278,7 +290,7 @@ describe('images attached to a task that has not been filed', () => {
     })
 
     it('dragging over the window and away again is only a flag', async () => {
-      const { emit, stores } = await loadStores()
+      const { emit, stores } = await readyToDrop()
       stores.attachments.watchDrops(() => true)
       await settle()
 
@@ -290,7 +302,7 @@ describe('images attached to a task that has not been filed', () => {
     })
 
     it('after unsubscribing a drop reaches nothing', async () => {
-      const { ipc, emit, stores } = await loadStores()
+      const { ipc, emit, stores } = await readyToDrop()
       vi.spyOn(console, 'warn').mockImplementation(() => {})
       ipc.on('attachment_import', () => stored('one.png'))
       const stop = stores.attachments.watchDrops(() => true)
@@ -308,7 +320,7 @@ describe('images attached to a task that has not been filed', () => {
        `onDragDropEvent` may still be in flight — without the flag the listener
        would be installed after its owner was gone and would never come off. */
     it('unsubscribing before the subscription lands still leaves nothing listening', async () => {
-      const { ipc, emit, stores } = await loadStores()
+      const { ipc, emit, stores } = await readyToDrop()
       vi.spyOn(console, 'warn').mockImplementation(() => {})
       ipc.on('attachment_import', () => stored('one.png'))
 

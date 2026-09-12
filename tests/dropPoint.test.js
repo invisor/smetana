@@ -5,7 +5,7 @@ import {
   DROP_SPACES,
   dropSpaceFromPlatform,
   viewportPoint
-} from '../../../src/components/terminal/dropPoint.js'
+} from '../src/dropPoint.js'
 
 describe('dropSpaceFromPlatform', () => {
   it('keeps either of the two words the back end may answer with', () => {

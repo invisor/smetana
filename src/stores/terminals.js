@@ -15,17 +15,14 @@
 import { computed, reactive, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { basename } from '../paths.js'
-import { dropSpaceFromPlatform, viewportPoint } from '../components/terminal/dropPoint.js'
 /* The pure half of what the Sessions tab's two launching verbs may do, borrowed
    rather than asked again: whether the configured agent can pick a recorded
    conversation up at all is one rule, and a second reading of it here would be
-   free to disagree with the one that greys the menu row. The direction is the
-   same as `dropPoint.js` above — a store reaching for a rule that has no Vue
-   and no Tauri in it. */
+   free to disagree with the one that greys the menu row. */
+import { basename } from '../paths.js'
 import { resumeAvailability, resumeReasonLine } from '../components/agent/sessionMenu.js'
 import { can } from './agents.js'
+import { watchWindowDrops } from './windowDrops.js'
 /* The audible half of what the app has to say. Here rather than in a watcher
    over the session list, because the list holds the active project only and the
    marks below hold every project — and somebody supervising two overnight is
@@ -1363,92 +1360,20 @@ export async function resize(id, cols, rows) {
   }
 }
 
-/* Which units the drag-drop event's position arrives in, asked once per window
-   and kept: it is a fact about the build, not about the drag, and it cannot
-   change while the app is running. The subscription below waits for the answer
-   before it starts listening rather than converting a point it cannot read —
-   the wait is one round trip at mount, long before anybody picks a file up.
-
-   The fallback for a command that is not there lives in `dropSpaceFromPlatform`
-   and nowhere else, so a browser and an unknown answer are the same case.
-
-   In this store rather than in app.js, where the other compile-time fact
-   (`window_chrome`) lives: that one is about the window every view is drawn in,
-   this one is about the units of an event only this file reads. */
-let askedDropSpace = null
-function dropSpace() {
-  if (!askedDropSpace) {
-    askedDropSpace = invoke('drag_drop_space')
-      .catch((err) => {
-        console.debug('[terminals] nothing to ask which units a drop arrives in:', err)
-        return null
-      })
-      .then(dropSpaceFromPlatform)
-  }
-  return askedDropSpace
-}
-
 /* A file dragged over the window, and where it was let go.
 
-   Tauri intercepts file drops before the webview sees them — `dragDropEnabled`
-   is on by default and this app leaves it on — so there is no `dragover` and no
-   `drop` to listen for in a component: the gesture arrives as a window event
-   carrying absolute paths. That is why the subscription is here at all, beside
-   `watchDrops` in attachments.js, which is the same event read for the other
-   consumer: only a store may import Tauri.
+   The subscription itself — the browser case, the coordinate conversion, the
+   half-mounted unsubscribe — used to be written out here in full; it is now
+   `watchWindowDrops` in `windowDrops.js`, shared with `watchDrops` in
+   attachments.js and with the conversation panel, which used to have no
+   subscription of its own at all (`smetana-h8vq`). This name stays, because
+   `TerminalView.vue` already imports it and the terminal is still one of the
+   two panes a drop can land on: it is a re-export rather than a copy, so this
+   file makes no promise `windowDrops.js`'s own header does not already carry.
 
-   What this hands over is a point in CSS pixels from the top left of the
-   viewport — exactly the space `document.elementFromPoint` reads — and the
-   paths, and no opinion about whose drop it is. Tauri calls the position
-   physical on every platform and on macOS and Linux it is not:
-   `components/terminal/dropPoint.js` holds the whole of that argument and does
-   the arithmetic, this file only asks which of the two arrived. Deciding
-   whether the point is inside a particular pane is the pane's own business, and
-   has to be: two subscribers on one window event need no arbiter as long as a
-   hit test cannot give them both the same drop, and it cannot.
-
-   `paths` rides along with `over` too, because the enter event is the only one
-   that carries them and a caller wanting to say how many are coming has nowhere
-   else to read it; the events in the middle of a drag carry `null`.
-
-   In a browser there is no webview to ask, and getCurrentWebview throws before
-   the subscription — a normal mode, the same one attachments.js reads a throw
-   as, so it is logged at debug and nothing else happens. */
-export function watchSessionDrops({ over, leave, drop } = {}) {
-  let webview
-  try {
-    webview = getCurrentWebview()
-  } catch {
-    console.debug('[terminals] no webview: drops are a Tauri-only gesture')
-    return () => {}
-  }
-  let stop = null
-  let stopped = false
-  dropSpace()
-    .then((space) =>
-      webview.onDragDropEvent(({ payload }) => {
-        /* Anything that is not the drag being over the window ends it, which is
-           `leave` and also whatever a future Tauri adds beside it: forgetting the
-           response is the safe reading of an event this code does not know. */
-        if (payload.type !== 'enter' && payload.type !== 'over' && payload.type !== 'drop') {
-          leave?.()
-          return
-        }
-        const { x, y } = viewportPoint(payload.position, space, window.devicePixelRatio)
-        const at = { x, y, paths: payload.paths ?? null }
-        if (payload.type === 'drop') drop?.(at)
-        else over?.(at)
-      })
-    )
-    .then((unlisten) => {
-      stop = unlisten
-      /* The view unmounted while the subscription was still on its way. */
-      if (stopped) stop()
-    })
-    .catch((err) => console.error('[terminals] listening for drops failed:', err))
-
-  return () => {
-    stopped = true
-    if (stop) stop()
-  }
-}
+   Deciding whether a given point is inside the terminal's own host is
+   `TerminalView.vue`'s `insideHost`, unchanged — the store still has no
+   opinion about whose drop it is, and still does not need one: two panes on
+   one window's drops are kept apart by never being mounted over the same
+   point at once, not by an arbiter here. */
+export const watchSessionDrops = watchWindowDrops
