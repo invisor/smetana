@@ -316,19 +316,19 @@ describe('a streamed reply', () => {
      into two rows and never one one running on. */
   it('starts a fresh stitched row after a tool call interrupts the stream', () => {
     const rows = journalRows([
-      event(0, 'turn-start', { by: 'agent' }),
-      event(1, 'text-delta', { text: 'Reading the file' }),
-      event(2, 'text', { text: 'Reading the file first.' }),
-      event(3, 'tool-use', { id: 't1', name: 'Read', detail: 'src/main.js' }),
-      event(4, 'tool-result', { id: 't1', ok: true, summary: '10 lines' }),
-      event(5, 'text-delta', { text: 'Found it' })
+      event(1, 'turn-start', { by: 'agent' }),
+      event(2, 'text-delta', { text: 'Reading the file' }),
+      event(3, 'text', { text: 'Reading the file first.' }),
+      event(4, 'tool-use', { id: 't1', name: 'Read', detail: 'src/main.js' }),
+      event(5, 'tool-result', { id: 't1', ok: true, summary: '10 lines' }),
+      event(6, 'text-delta', { text: 'Found it' })
     ])
 
     expect(rows).toEqual([
-      { key: 1, kind: 'agent', text: 'Reading the file first.', streaming: false },
-      { key: 3, kind: 'tool', name: 'Read', detail: 'src/main.js', result: { ok: true, summary: '10 lines' } },
-      { key: 5, kind: 'agent', text: 'Found it', streaming: true },
-      { key: 0, kind: 'activity', state: 'streaming', startedAt: '2026-09-10T12:00:00Z' }
+      { key: 2, kind: 'agent', text: 'Reading the file first.', streaming: false },
+      { key: 4, kind: 'tool', name: 'Read', detail: 'src/main.js', result: { ok: true, summary: '10 lines' } },
+      { key: 6, kind: 'agent', text: 'Found it', streaming: true },
+      { key: 1, kind: 'activity', state: 'streaming', startedAt: '2026-09-10T12:00:00Z' }
     ])
   })
 

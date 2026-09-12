@@ -119,9 +119,11 @@
    cleared at `result` or at a turn-closing `error`), and `streamingRow`
    tracks the *stream*, and the two can come apart once a journal is long
    enough to trim the `turn-start` off its front while later `text-delta`s
-   survive — an ordinary shape once a single reply is substantial, since a
-   trim drops from the front regardless of which kind of event it meets
-   (`journal.rs`'s own header on `BUDGET`). `error`'s clear is therefore
+   survive — a trim drops from the front regardless of which kind of event it
+   meets, and a reply's own deltas no longer accumulate past its own close
+   (`journal.rs`'s own `Journal::append`), so this is reachable rather than
+   ordinary: it takes one reply's still-open stream alone reaching `BUDGET`
+   deltas to evict its own `turn-start`. `error`'s clear is therefore
    outside its own `openAt != null` branch, and the trailing `else if` exists
    for the same reason applied to the tail of the fold: a `streamingRow` still
    open when the loop ends with no `openAt` at all has nothing above it left
@@ -158,6 +160,20 @@
    there is no event sequence this fold could ever see that ends on an
    unclosed `streamingRow`, other than the live, still-open turn the trailing
    branch below already handles on purpose.
+
+   **The mirror of that Rust-side collapse does not belong on this side, and
+   that is worth writing down before somebody reaches for it.**
+   `stores/conversation.js`'s `held.events` is push-only for the life of an
+   attachment — it never had a budget and this task did not give it one, so a
+   window open long enough keeps every delta it was ever sent. That is not
+   this fold's problem to solve, but the obvious fix looks like one:
+   dropping a held `text-delta` the moment its `text` arrives would make this
+   very fold take the *plain* `text` branch instead of the closing one, which
+   keys the new row on the `text` event's own `seq` rather than the first
+   delta's. That is the reflow the acceptance criteria protect against,
+   reintroduced by the fix meant to save memory — a row remounting at exactly
+   the moment it finishes. Any future trim of `held.events` has to preserve
+   the *key* a stream opened under, not merely the words.
 
    **The elapsed figure is the gap to the *last event this batch still
    holds*, not to the moment the child actually died** — `journal.js` has no
@@ -322,11 +338,10 @@ export function journalRows(events = [], state) {
       // The caret close is deliberately outside the `openAt != null` branch
       // below: `openAt` tracks the *turn*, not the stream, and the two can
       // come apart once a journal is long enough to trim a `turn-start` away
-      // while a `text-delta` appended after it survives — an everyday event
-      // once a substantial reply is hundreds of them (`journal.rs`'s own
-      // `BUDGET` header). A `streamingRow` orphaned that way must still lose
-      // its caret on any event that says the words stopped, whether or not
-      // this fold can still see the turn that opened them.
+      // while a `text-delta` appended after it survives. A `streamingRow`
+      // orphaned that way must still lose its caret on any event that says
+      // the words stopped, whether or not this fold can still see the turn
+      // that opened them.
       if (streamingRow) {
         streamingRow.streaming = false
         streamingRow = null

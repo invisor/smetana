@@ -59,9 +59,16 @@ impl Journal {
         // live client already received in full. `since(seq)` only ever
         // filters by `event.seq > seq`; it does not ask whether a particular
         // `seq` is present, so a delta's absence from `self.events` is
-        // invisible to a cursor holder who long since moved past it, and a
-        // fresh attacher's `snapshot()` simply never sees deltas a reply has
-        // already closed over.
+        // invisible to a cursor already past the collapsed run, and a fresh
+        // attacher's `snapshot()` simply never sees deltas a reply has
+        // already closed over. A cursor sitting *inside* the collapsed run —
+        // holding a `seq` this retain just removed — would get a real gap
+        // instead: `since` answers fewer events than a contiguous read
+        // expects, the same shape `conversation.js`'s `absorb` already
+        // treats as a signal to re-`snapshot()` rather than draw a hole. Safe
+        // either way, and moot today besides: nothing under `src/` calls
+        // `session_since` at all — the command's only callers are the mock
+        // and its own test.
         //
         // A stream can only ever have one reply's worth of deltas held at
         // once, by construction: the very last time a `Text` was appended, it
