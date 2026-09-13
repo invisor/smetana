@@ -660,6 +660,40 @@ const STANDING: &str =
     "What follows is a standing instruction from the person you are working with. It holds for \
      this whole session, whatever the work below turns out to be:";
 
+/// How a picture reaches the person, which is the other end of `IMAGES_ONE`'s
+/// question rather than a second copy of it: that block names the pictures a
+/// task already carries, coming *in*, and this one is the way a picture goes
+/// back *out* — a screenshot of what was built, a file from the tree somebody
+/// asked to see.
+///
+/// It is a constant here rather than a skill for two reasons. It is a pair of
+/// facts, not a process, and a skill is the wrong shape for a fact. And the
+/// library is delivered per intent: the two sessions where somebody is most
+/// likely to ask for a picture, "+ New agent" and "Ask agent to edit", are
+/// exactly the two handed no skill at all.
+///
+/// What it exists to close is a silent failure rather than an awkward one.
+/// Every agent this app spawns has a tool that reads an image, and reading one
+/// *shows it to the agent*: the picture arrives, the agent describes it
+/// accurately, and the person is told about something they were never shown.
+/// Nothing errors and nothing is logged — the answer reads exactly like one
+/// that worked — which is the same shape as a translated `## Acceptance
+/// Criteria`, and the reason this sits with the language paragraphs rather
+/// than in the work.
+///
+/// The network clause is the panel's own rule restated, not a caution:
+/// `figureSource.js` refuses an `http(s)://` or `//host` source outright,
+/// because this app fetches nothing of its own accord and an illustration is
+/// painted unattended. An agent that writes one has written a figure that
+/// draws a placeholder.
+const PICTURES: &str =
+    "To show me a picture — a screenshot, a diagram, a file out of the project — write it into \
+     your answer as markdown, `![what it is](/absolute/path.png)`, naming a file on this machine. \
+     Opening an image with a tool of your own shows it to you and not to me: what I see is what \
+     your answer says, so a picture you looked at and did not write out is one I was never shown. \
+     A path over the network is refused rather than fetched, so an http:// or https:// address \
+     draws nothing.";
+
 /// Whether somebody is in this session to be talked to, which is the whole of
 /// what `agentPrompt` is about.
 ///
@@ -754,6 +788,16 @@ pub fn build(
     if leaves_a_run_report(intent) {
         out.push_str("\n\n");
         out.push_str(&report_language(crate::agents::language_name(&languages.report)));
+    }
+    // How to show a picture, in every session somebody is there to be shown
+    // one. It rides with the language paragraphs rather than with the work for
+    // the reason `PICTURES` gives: like a translated heading, getting this
+    // wrong fails silently, and it is about how the agent talks rather than
+    // about what it has been asked to do. Before the person's own standing
+    // instruction, so that somebody who writes across it gets what they wrote.
+    if talks_to_a_person(intent) {
+        out.push_str("\n\n");
+        out.push_str(PICTURES);
     }
     // After the four language paragraphs and before the work, which is a
     // decision rather than an order that fell out. Near the front for the
@@ -2104,16 +2148,23 @@ mod tests {
         // where every one of those three is true — `Run` is the other and
         // always was — because a person there says "commit this" and "file
         // tasks for this" in the same breath. `Run` alone takes the fourth
-        // paragraph as well, which is why this equality is three and not four.
+        // language paragraph, which is why three of them are named here.
+        //
+        // `PICTURES` closes the equality and is not a language paragraph: it
+        // is how an answer reaches the person's eyes, and a bare session is
+        // the one where it is asked for most. The equality is exhaustive on
+        // purpose — it is what makes a paragraph added to every conversation
+        // later a decision somebody takes rather than one that arrives.
         let text = build(&Intent::Bare, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "", None)
             .expect("a bare session opens on the language sentences");
         assert_eq!(
             text,
             format!(
-                "{}\n\n{}\n\n{}",
+                "{}\n\n{}\n\n{}\n\n{}",
                 conversation("English"),
                 task_language("English"),
-                commit_language("English")
+                commit_language("English"),
+                PICTURES
             )
         );
 
@@ -3432,6 +3483,53 @@ mod tests {
             let text = with_standing(&intent, delivery, "Always use pnpm.");
             assert!(!text.contains("Always use pnpm."), "{delivery:?}: {text}");
             assert!(!text.contains(STANDING), "{delivery:?}: {text}");
+        }
+    }
+
+    #[test]
+    fn every_session_somebody_is_in_is_told_how_to_show_a_picture() {
+        // Including the two that are handed no skill at all, which is half the
+        // reason this is a constant here rather than a page in the library:
+        // "+ New agent" and "Ask agent to edit" are where somebody asks to be
+        // shown something most often.
+        for intent in every_conversation() {
+            for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+                let text = with_standing(&intent, delivery, "");
+                assert!(text.contains(PICTURES), "{intent:?}/{delivery:?}: {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_run_is_never_told_how_to_show_a_picture() {
+        // The same exclusion the standing instruction takes, and for the same
+        // reason rather than a parallel one: there is nobody in a run's
+        // conversation to show a picture to. What a run has to hand back is
+        // its report, which is a document on disk with its own rules.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let intent = run_intent(run_settings(RunMode::Auto, RunScope::Queue));
+            let text = with_standing(&intent, delivery, "Always use pnpm.");
+            assert!(!text.contains(PICTURES), "{delivery:?}: {text}");
+        }
+    }
+
+    #[test]
+    fn the_picture_rule_stands_before_the_person_s_own_words() {
+        // Order as a decision, the way the standing instruction's own test
+        // pins it: a reader resolves a contradiction in favour of what came
+        // later, so a person who writes across this rule gets what they wrote.
+        // And both precede the work, for `build`'s reason about seven
+        // kilobytes of skill text pushing the front of a prompt off the top.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let intent = Intent::EditTask { id: "x-1".into(), title: "T".into() };
+            let text = with_standing(&intent, delivery, "Always use pnpm.");
+            let language = text.find("Write the prose of any bd issue").expect("a task language");
+            let pictures = text.find(PICTURES).expect("the picture rule is there");
+            let standing = text.find(STANDING).expect("the framing line is there");
+            let work = text.find("Read the issue first").expect("the work");
+            assert!(language < pictures, "{delivery:?}: {text}");
+            assert!(pictures < standing, "{delivery:?}: {text}");
+            assert!(standing < work, "{delivery:?}: {text}");
         }
     }
 

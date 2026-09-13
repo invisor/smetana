@@ -647,6 +647,26 @@ predicate and never reaches it — `build` refuses it a prompt on its first line
 would be dead code wearing the clothes of a decision. `agents::oneshot` is outside all of this too:
 it is one question with its answer on stdout, not a conversation anything can be carried into.
 
+`PICTURES` is the second passenger on that predicate, and the first thing carried by it that is not
+a person's own words: **how an answer puts a picture in front of somebody.** A markdown
+`![what it is](/absolute/path.png)` naming a file on this machine is what the conversation panel
+draws; `figureSource.js` refuses an `http(s)://` or `//host` source outright, so an agent that writes
+one has written a placeholder. It rides with the language paragraphs rather than with the work
+because it fails the same way they do — silently. Every harness this app spawns has a tool that reads
+an image, and reading one shows it *to the agent*: the picture arrives, the agent describes it
+correctly, and the person is told about something they were never shown, with nothing erroring and
+nothing logged. That is a translated `## Acceptance Criteria` wearing different clothes.
+
+A constant rather than a skill, and the reason is the library's own shape rather than a preference.
+Skills are delivered per intent, and the two sessions where somebody is likeliest to ask to be shown
+something — `Bare` ("+ New agent") and `EditTask` ("Ask agent to edit") — are exactly the two handed
+no skill at all. A page in `resources/smetana/skills/` would reach neither, and on an `Inline` harness
+it would buy kilobytes for what is two facts rather than a process. It sits **before** `STANDING`, on
+the same reasoning the languages sit before it: a person writing across the rule gets what they
+wrote. `a_bare_session_opens_on_the_languages_and_nothing_else` pins the whole composition of a bare
+prompt by equality, which is what keeps the next paragraph added to every conversation a decision
+somebody takes rather than one that arrives.
+
 Claude Code's `--append-system-prompt` was the rejected alternative, and it would have been a real
 system prompt, closer to what the field is called. Only one of the two supported harnesses has such a
 switch: Codex has no per-session equivalent — the same asymmetry that already forces
