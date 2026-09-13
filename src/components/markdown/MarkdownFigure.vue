@@ -112,7 +112,17 @@ const pathError = ref(null)
 let seq = 0
 
 watch(
-  () => [props.block.src, props.base],
+  /* One source per getter, rather than one getter answering an array of both,
+     and that is not a style choice. `parseMarkdown` re-runs over the whole
+     reply on every streamed delta and hands this component a fresh `block`
+     object each time, so a getter *returning* `[src, base]` builds a new array
+     `Object.is` can never match, and the reset below fired on every delta of a
+     reply whose picture had not changed at all — tearing the `<img>` out for
+     the placeholder and re-reading the same file over IPC several times a
+     second, which on screen is a figure flickering under the text still being
+     typed beneath it. Watched one at a time, Vue compares each string by value
+     and an unchanged source never reaches the callback. */
+  [() => props.block.src, () => props.base],
   ([src]) => {
     const at = ++seq
     failed.value = false
