@@ -386,6 +386,34 @@ const errorStyle = {
 
 <template>
   <div>
+    <!-- First on the tab and above every caption, bare rather than in a group
+         of its own: this is the one row that decides what the rest of the tab
+         looks like in use — where a session is drawn at all — and a caption
+         over one switch would be a heading for its own sake. It sat last inside
+         Agents and models once, under five dropdowns, which read as a footnote
+         to the model pairs rather than as the choice it is. Not on the General
+         tab either, where it would be a fact about an agent filed under the
+         app.
+
+         The description says what each position gives rather than naming the
+         panel twice, since the switch's own two positions cannot: on is the
+         app's own reading of a session — a file it names opened by a click, a
+         link handed to the browser, a picture drawn rather than spelled out —
+         and off is not "no interface", it is the terminal tab every agent
+         opened in before the panel existed, which is a preference and not a
+         downgrade. "An agent you start" rather than "every agent", for the
+         distinction the standing instruction row below draws as carefully: a
+         run's batches open in a terminal whichever way this switch is set. -->
+    <SettingsRow
+      label="Conversation panel"
+      description="Shows an agent you start in the app's own view of a session: its replies drawn as text, a file it names opened with a click, a link opened in your browser, a picture shown rather than spelled out as a path. With it off, that agent opens in a terminal tab instead — the plain view, the way it worked before, which some people prefer. Takes effect on the next session started."
+    >
+      <Switch
+        :model-value="props.conversationPanel"
+        @update:model-value="emit('update:conversationPanel', $event)"
+      />
+    </SettingsRow>
+
     <!-- Which agent and which model each kind of call gets. Five rows, and the
          first of them is what used to be the Agent row on its own: the same
          `agent` field, drawn once, with the model it is chosen against beside
@@ -421,29 +449,6 @@ const errorStyle = {
             />
           </div>
         </div>
-      </SettingsRow>
-
-      <!-- Last in the group and under every pair, because it is about the same
-           agents rather than about a sixth kind of call: which interface the
-           harness above opens in. Here and not in a group of its own — a
-           caption over one switch would be a heading for its own sake — and not
-           on the General tab, where it would be a fact about an agent filed
-           under the app.
-
-           The description names what happens instead, since the switch's own
-           two positions cannot: off is not "no interface", it is the terminal
-           tab every agent opened in before the panel existed. "An agent you
-           start" rather than "every agent", for the distinction the standing
-           instruction row below draws as carefully: a run's batches open in a
-           terminal whichever way this switch is set. -->
-      <SettingsRow
-        label="Conversation panel"
-        description="Opens an agent this app can drive in the conversation panel. With it off, an agent you start opens in a terminal tab instead, the way it did before. Takes effect on the next session started."
-      >
-        <Switch
-          :model-value="props.conversationPanel"
-          @update:model-value="emit('update:conversationPanel', $event)"
-        />
       </SettingsRow>
     </SettingsGroup>
 

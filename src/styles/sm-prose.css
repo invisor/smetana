@@ -53,6 +53,10 @@
      Compact shrinks spacing and leaves the type alone, so a space token wide
      enough for "10." in comfortable is too narrow for it in compact. */
   --prose-indent-ol:calc(var(--text-sm) * 3);
+  /* The radius a figure's own children are cut to, inside its border. The
+     frame cannot clip them — see section 12 for why — so each one carries
+     the corner it sits in. */
+  --prose-figure-radius:calc(var(--radius-3) - var(--border-w));
   --prose-pad:var(--card-pad);
 
   --prose-rule:var(--border-subtle);
@@ -783,21 +787,69 @@
 
    The renderer enforces that rule; the stylesheet just stops guessing. */
 
+/* The frame is the picture's size, not the column's. `fit-content` rather
+   than a width, so a small picture keeps a small frame and the caption row
+   under it stays as wide as what it captions. Two things it does not bound:
+   a caption longer than the picture is wide widens the frame back out to the
+   ceiling, and a picture the height ceiling catches leaves the frame wider
+   than the picture, since a max-height does not feed back into shrink-to-fit
+   — which is what justify-self below is for.
+
+   **There is no `overflow:hidden` here, and that is not an omission.** It
+   used to be what rounded the picture's top corners off, and it cannot stay
+   now that the frame sizes itself to its content: in chrome, a grid whose
+   width is fit-content and whose overflow is hidden resolves its own height
+   from a width it later revises, so the frame came out around 60% of the
+   picture's height and cut the bottom of every figure — and the caption row
+   under it — clean off. The corners are cut by giving each child the radius
+   it sits in instead, which is what --prose-figure-radius is for. */
 .sm-prose figure[data-figure]{
   display:grid;
   grid-template-columns:1fr auto;
+  width:fit-content;
+  max-width:min(100%, var(--prose-figure-max-w));
   border:var(--border-w) solid var(--prose-rule);
   border-radius:var(--radius-3);
-  overflow:hidden;
 }
 .sm-prose figure[data-figure] > :where(img,svg,div[data-placeholder]){
   grid-area:1 / 1 / 2 / -1;
+  /* Both axes are set away from the grid's own `stretch`, and the block one
+     is not cosmetic: a replaced element left to stretch is measured before
+     its own aspect ratio is applied, and the row came out shorter than the
+     picture standing in it. */
+  align-self:start;
+  justify-self:center;
   display:block;
-  width:100%;
   height:auto;
   max-width:100%;
   border-bottom:var(--border-w) solid var(--prose-rule);
+  border-radius:var(--prose-figure-radius) var(--prose-figure-radius) 0 0;
 }
+/* A raster has a size of its own and is drawn at it, and the height half of
+   the ceiling is what catches a tall one. A vector has no size of its own,
+   so it still takes the width it is given — the ceiling is the only thing
+   that stops it, and scaling a vector up is not the defect this is about.
+
+   A percentage would be the obvious width for the other two, and it is the
+   wrong one: inside a frame that is sizing itself to its content there is
+   nothing for it to be a percentage OF, so it collapses. They take the
+   ceiling as a width instead, and the max-width above brings them back in in
+   a column narrower than that.
+
+   The placeholder is left out of the height ceiling deliberately: it is the
+   only one of the three that holds words, and the frame clips. */
+.sm-prose figure[data-figure] > :where(img,svg){
+  max-height:var(--prose-figure-max-h);
+}
+.sm-prose figure[data-figure] > img{ width:auto }
+.sm-prose figure[data-figure] > svg{ width:var(--prose-figure-max-w) }
+/* Loading and failed are the two states with no picture to be sized by, so
+   the frame takes the ceiling itself and the placeholder fills it — a width
+   on the placeholder instead would leave it standing outside a frame that a
+   narrower column had already pulled in, with nothing clipping it now. This
+   is also what reserves the space before the picture lands. */
+.sm-prose figure[data-figure][data-state]{ width:var(--prose-figure-max-w) }
+.sm-prose figure[data-figure] > div[data-placeholder]{ width:100% }
 .sm-prose figure[data-figure] > img{
   padding:var(--space-4);
   background:var(--prose-figure-mat);
@@ -836,6 +888,10 @@
   font-size:var(--text-xs);
   line-height:var(--leading-snug);
   color:var(--text-muted);
+  /* Both bottom corners, not one. With no expand control beside it the
+     caption spans the row and owns them both; with one, the right corner it
+     carries is inside the frame where nothing can see it. */
+  border-radius:0 0 var(--prose-figure-radius) var(--prose-figure-radius);
 }
 .sm-prose figure[data-figure] > button[data-expand]{
   grid-area:2 / 2;
@@ -844,7 +900,7 @@
   padding:var(--space-0) var(--space-4);
   height:auto;
   align-self:stretch;
-  border-radius:var(--radius-0);
+  border-radius:0 0 var(--prose-figure-radius) 0;
   border-left:var(--border-w) solid var(--prose-rule);
 }
 

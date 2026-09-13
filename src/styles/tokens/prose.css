@@ -24,6 +24,13 @@
   --prose-figure-mat:#f4f7f7;
   /* Narrowest a figure may get in a two-up row before the row wraps. */
   --prose-figure-min:132px;
+  /* Largest a picture is drawn at, and it is a ceiling rather than a size: a
+     picture smaller than this is drawn at its own size and never blown up.
+     The panel is designed around a 420px column, so a figure that filled the
+     column was near enough its own size there — in a wide window it was not,
+     and a 1024px icon was painting a metre tall over the whole panel. */
+  --prose-figure-max-w:400px;
+  --prose-figure-max-h:300px;
   /* Height of the skeleton stand-in while an illustration loads, when the
      markup declares no intrinsic size. */
   --prose-figure-loading-h:128px;

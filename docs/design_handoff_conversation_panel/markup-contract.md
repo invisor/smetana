@@ -319,6 +319,15 @@ dark-theme failure case.
   because it is part of the panel. The renderer enforces that rule; the
   stylesheet stops guessing. (Text inside an agent-drawn diagram is styled by
   us: mono, `--text-2xs`, `fill:currentColor`.)
+- **A picture is drawn at its own size, up to a ceiling, and the frame is
+  drawn around whatever that comes to.** The ceiling is 400×300; under it a
+  picture keeps its own size and is never blown up to fill the column, which
+  is what the frame used to do — harmless at the 420px column this panel is
+  designed around, and a 1024px icon painted over the whole panel in a window
+  wider than that. A vector is exempt from the no-upscaling half: it has no
+  size of its own, so it takes the width it is given and only the ceiling
+  stops it. Loading and failed have no picture to be sized by, so there the
+  frame takes the ceiling itself and holds the space.
 - **The frame** is a 2-row grid: the picture, then a caption row. The caption
   row is always present; `figcaption` is optional. **Superseded by the
   decision below**: this paragraph originally went on to say the row always
