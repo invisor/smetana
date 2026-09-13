@@ -37,6 +37,22 @@
   --prose-tight-gap:var(--space-2);
   --prose-heading-gap:var(--space-7);
   --prose-indent:var(--space-6);
+  /* An ordered list hangs wider than a bulleted one, and the number is why:
+     its marker is mono at --text-sm, ~0.6em per character, so "10." measures
+     three advances where a disc measures well under one. A marker that does
+     not fit the padding is not dropped — the UA paints it to the LEFT of the
+     padding box, outside the panel, where the scroller cuts it in half. At
+     --prose-indent even a single digit was already over the edge.
+
+     Measured in chrome: "10." plus the UA's own marker-to-text gap comes to
+     27.6px, "100." to 34.8px. Three times the marker's type size clears both
+     and still sits under the UA's own 40px default for a list.
+
+     Off the type scale rather than the space scale, and the same in both
+     densities on purpose: this is not spacing, it is the width of a string.
+     Compact shrinks spacing and leaves the type alone, so a space token wide
+     enough for "10." in comfortable is too narrow for it in compact. */
+  --prose-indent-ol:calc(var(--text-sm) * 3);
   --prose-pad:var(--card-pad);
 
   --prose-rule:var(--border-subtle);
@@ -302,7 +318,7 @@
 .sm-prose ul ul ul{ list-style:circle }
 .sm-prose ul ul ul > li::before{ content:none }
 
-.sm-prose ol{ list-style:decimal }
+.sm-prose ol{ list-style:decimal; padding-left:var(--prose-indent-ol) }
 .sm-prose ol ol{ list-style:lower-alpha }
 .sm-prose li::marker{ color:var(--text-muted) }
 .sm-prose ol > li::marker{ font-family:var(--font-mono); font-size:var(--text-sm) }

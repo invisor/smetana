@@ -102,7 +102,11 @@ Decisions worth knowing:
   buttons.
 - **Nested lists**: level 1 is a disc, level 2 is an en dash, level 3 is a
   circle, so two levels never look like one list. `ol` markers are mono and
-  muted; an `ol` inside a `ul` keeps decimal numbering.
+  muted; an `ol` inside a `ul` keeps decimal numbering. A numbered list hangs
+  wider than a bulleted one, and the same amount in both densities: the
+  marker is a string three mono characters long where a disc is a dot, and an
+  indent that does not hold it puts the number outside the panel rather than
+  dropping it.
 - **Task lists** — the box is **drawn in CSS**, not `<input type="checkbox"
   disabled>`:
 
