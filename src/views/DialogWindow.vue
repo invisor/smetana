@@ -76,6 +76,7 @@ import RenameBranchModal from '../components/git/RenameBranchModal.vue'
 import ReviewChangesDialog from '../components/git/ReviewChangesDialog.vue'
 import RunModal from '../components/run/RunModal.vue'
 import SetupProjectModal from '../components/run/SetupProjectModal.vue'
+import StartProjectModal from '../components/run/StartProjectModal.vue'
 import { dialogVerb } from './dialogKeys.js'
 import { dialogWidth, isDialogKind } from './dialogRegistry.js'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
@@ -128,6 +129,7 @@ const COMPONENTS = {
   'rename-branch': RenameBranchModal,
   'promote-column': PromoteColumnModal,
   'setup-project': SetupProjectModal,
+  'start-project': StartProjectModal,
   'project-settings': ProjectSettingsModal,
   'delete-task': DeleteTaskModal,
   'ready-task': ReadyTaskModal,

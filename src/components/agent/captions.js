@@ -53,7 +53,11 @@ export const CAPTION = {
      row that merely showed a sentence would be indistinguishable from a filing
      agent's draft. */
   resumeSession: 'Resumed session',
-  setup: 'Project setup'
+  setup: 'Project setup',
+  /* The founding session: named for the folder it starts in rather than for
+     the file it ends by writing, since the person watching it is answering
+     questions about a project that does not exist yet. */
+  bootstrap: 'Starting a project'
 }
 
 /* A row's caption, in two pieces because they are set differently: `label` is

@@ -836,3 +836,15 @@ that existed, and kept the board's play buttons hidden behind the same `configur
 The width is the fix: a key over a set cannot be lost, and it is scoped to one project. That the key
 is a **string** is what keeps the two wholesale reassignments of `terminalState.sessions` quiet — an
 unchanged set of working sessions produces an unchanged key and no read at all.
+
+**An empty folder is offered a founding session instead of the setup.** `survey::is_empty` (nothing
+but `.beads`, `.smetana`, `.git`, `.gitignore`, `.DS_Store`) rides on the `project_config` reply as
+`empty`, and `components/run/setupGate.js` turns `state × empty` into `needsSetup` and `needsStart` —
+one rule for the marks, the tile's menu and the dialog after Add project, so the three cannot
+disagree. `StartProjectModal.vue` says what will happen; `startBootstrap` in `DesktopApp.vue` runs
+`initBd` first and then starts `Intent::Bootstrap`, whose skill (`starting-a-project`) agrees the
+project with the person before creating a file and ends by running `project-setup` itself. Nothing is
+stored: once the folder holds anything, the next `loadConfig` reads `empty: false` and the ordinary
+setup pair lights, which is also the safety net for a founding session that stopped short. See
+`.smetana/docs/superpowers/specs/2026-09-14-empty-project-bootstrap-design.md` for the alternatives
+weighed.

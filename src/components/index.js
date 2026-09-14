@@ -256,6 +256,7 @@ export { default as ReportView } from './run/ReportView.vue'
 export { default as RunBar } from './run/RunBar.vue'
 export { default as RunModal } from './run/RunModal.vue'
 export { default as SetupProjectModal } from './run/SetupProjectModal.vue'
+export { default as StartProjectModal } from './run/StartProjectModal.vue'
 
 // settings
 export { default as AboutSettings } from './settings/AboutSettings.vue'

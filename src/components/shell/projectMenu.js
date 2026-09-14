@@ -56,8 +56,13 @@ const ELSEWHERE = 'Switch to this project first'
 
    `canAddAgent` is taken because the caller has it and the row's own plus reads
    it, and it deliberately decides nothing here — see the note at the top about
-   which half of each row rule the menu keeps. */
-export function projectMenuItems({ active, configured, configBroken, canAddAgent }) {
+   which half of each row rule the menu keeps.
+
+   `empty` is `needsStart` off `setupGate.js`, measured for the active project
+   alone for the same reason `configured` and `configBroken` are — probing
+   every row would be a command per project for a mark nobody reads — so it is
+   read here only when this row *is* that project. */
+export function projectMenuItems({ active, configured, configBroken, empty, canAddAgent }) {
   const here = Boolean(active)
   /* A file is there, parseable or not — which is the whole of what the setup
      dialog needs in order to choose its words, and why a damaged configuration
@@ -65,20 +70,38 @@ export function projectMenuItems({ active, configured, configBroken, canAddAgent
      this menu exists for: the row draws no gear for it, and the route out used
      to be a button in the run dialog. */
   const existing = here && Boolean(configured || configBroken)
+  /* An empty folder on the active row is offered a founding session instead
+     of the setup: the setup agent would have nothing to describe there. A row
+     that already has a file — working or damaged — keeps the ordinary setup
+     item, since `empty` only ever answers true beside `state: 'missing'` and
+     `existing` is exactly the case that excludes. */
+  const founding = here && !existing && Boolean(empty)
 
   return [
     ...(here ? [] : [{ type: 'label', label: ELSEWHERE }]),
-    {
-      kind: 'setup',
-      label: existing ? 'Set up again' : 'Set up',
-      icon: 'settings-2',
-      /* What `SetupProjectModal` opens on: its copy differs between a project
-         being set up for the first time and one being set up over. Carried on
-         the item rather than worked out again by whoever handles the pick, so
-         the words in the menu and the words in the dialog cannot disagree. */
-      existing,
-      disabled: !here
-    },
+    ...(founding
+      ? [
+          {
+            kind: 'start',
+            label: 'Start a project',
+            icon: 'sparkles',
+            disabled: false
+          }
+        ]
+      : [
+          {
+            kind: 'setup',
+            label: existing ? 'Set up again' : 'Set up',
+            icon: 'settings-2',
+            /* What `SetupProjectModal` opens on: its copy differs between a
+               project being set up for the first time and one being set up
+               over. Carried on the item rather than worked out again by
+               whoever handles the pick, so the words in the menu and the words
+               in the dialog cannot disagree. */
+            existing,
+            disabled: !here
+          }
+        ]),
     {
       /* Editing `[defaults]` in the project's own file, without starting
          anything. The setup item

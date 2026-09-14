@@ -79,6 +79,30 @@ describe('projectMenuItems', () => {
     const items = projectMenuItems({ ...base, canAddAgent: false })
     expect(find(items, 'add-agent').disabled).toBe(false)
   })
+
+  it('offers to start a project on the active row while its folder is empty', () => {
+    const items = projectMenuItems({ ...base, active: true, configured: false, empty: true })
+    expect(find(items, 'start')).toMatchObject({ label: 'Start a project', disabled: false })
+    // The setup is not offered beside it: there is nothing to describe yet.
+    expect(find(items, 'setup')).toBeUndefined()
+  })
+
+  it('does not offer to start a project on another row, or once the folder has content', () => {
+    expect(
+      find(projectMenuItems({ ...base, active: false, configured: false, empty: true }), 'start')
+    ).toBeUndefined()
+    expect(
+      find(projectMenuItems({ ...base, active: true, configured: false, empty: false }), 'start')
+    ).toBeUndefined()
+  })
+
+  it('does not offer to start a project over a file that already exists, empty or not', () => {
+    // `empty` only means anything beside `state: 'missing'`; a row with a
+    // working or a damaged configuration keeps the ordinary setup item.
+    const items = projectMenuItems({ ...base, active: true, configured: true, empty: true })
+    expect(find(items, 'start')).toBeUndefined()
+    expect(find(items, 'setup')).toMatchObject({ label: 'Set up again' })
+  })
 })
 
 describe('the project settings item', () => {
