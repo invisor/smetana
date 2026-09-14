@@ -164,7 +164,7 @@ fn own_bd(current: &Option<Project>, dir: &Path) -> Option<Bd> {
 /// Troubles come in three kinds and must not be confused. A one-off bd failure
 /// clears itself: the next successful call is the proof that things work again.
 /// "Wrong bd version" is about the binary: it survives both a successful
-/// `bd list` and a project switch. "No .beads directory", "the watcher died",
+/// `bd list` and a project switch. "No bd tracker", "the watcher died",
 /// "no project selected" are about the open folder: they have to survive a
 /// successful call, but die together with the project they belonged to.
 struct HealthReporter {
@@ -508,11 +508,11 @@ async fn open(
 
     // Before asking whether there is a tracker in here at all, because a folder
     // the operating system is refusing answers "no" to every question about
-    // itself and the answer means nothing. `has_tracker` is an `is_dir`, and
-    // macOS lets a `stat` through while refusing the `read_dir` underneath — so
-    // without this the notice would offer "Initialize bd" over a folder that
-    // already has a `.beads` nobody is allowed to open, and pressing it would
-    // put a second tracker inside the first.
+    // itself and the answer means nothing. `has_tracker` only reads file
+    // metadata, and macOS lets a `stat` through while refusing the `read_dir`
+    // underneath — so without this the notice would offer "Initialize bd" over
+    // a folder that already has a `.beads` nobody is allowed to open, and
+    // pressing it would put a second tracker inside the first.
     //
     // `tracked: false`, for the reason it is false in a folder with no tracker:
     // nothing here can be read and nothing may be written. So the sixty-second
@@ -527,7 +527,7 @@ async fn open(
     if !project::has_tracker(&dir) {
         health.degrade_project(
             HealthState::NotABeadsRepo,
-            format!("no .beads directory in {}", dir.display()),
+            format!("no bd tracker in {}", dir.display()),
         );
         // The folder stays open anyway: bd init is done in it.
         return Some(Project { dir, bd, _watcher: None, tracked: false });
