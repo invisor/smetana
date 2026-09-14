@@ -182,6 +182,9 @@ pub async fn browser_tools(app: AppHandle, project: String) -> BrowserTools {
 #[tauri::command]
 pub async fn agent_usage(app: AppHandle, agent: Option<String>) -> AgentUsage {
     let limits = crate::settings::subscription(&app);
+    // Cloned rather than moved in whole: the probe below needs the handle
+    // again once the first blocking call has already taken it.
+    let app_for_probe = app.clone();
     let profile = tokio::task::spawn_blocking(move || {
         // The run lead's row, which is the harness a run would actually
         // start, and therefore the subscription a run would actually spend.
@@ -205,8 +208,15 @@ pub async fn agent_usage(app: AppHandle, agent: Option<String>) -> AgentUsage {
     let Some(profile) = profile else { return usage::report(None, None, limits) };
     // `read` answers `None` for a profile with no `usage_command` without
     // spawning anything, so this costs nothing for Codex; `report` is what
-    // tells that `None` apart from a probe's.
-    let reading = tokio::task::spawn_blocking(move || usage::read(profile)).await.unwrap_or(None);
+    // tells that `None` apart from a probe's. The probe's own working
+    // directory is resolved here and handed in — never `/`, never the
+    // project root — see `runs::usage`'s header for why.
+    let reading = tokio::task::spawn_blocking(move || {
+        let cwd = crate::agents::probe_dir(&app_for_probe).ok()?;
+        usage::read(profile, &cwd)
+    })
+    .await
+    .unwrap_or(None);
     usage::report(Some(profile), reading, limits)
 }
 
