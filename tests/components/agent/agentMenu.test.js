@@ -3,10 +3,12 @@ import {
   AGENT_MENU_W,
   CLEAR_LABEL,
   CLOSE_LABEL,
+  CLOSE_OTHERS_LABEL,
   PIN_LABEL,
   UNPIN_LABEL,
   agentMenuItems,
-  agentMenuLabel
+  agentMenuLabel,
+  closableOthers
 } from '../../../src/components/agent/agentMenu.js'
 
 const kinds = (items) => items.filter((item) => !item.type).map((item) => item.kind)
@@ -28,8 +30,16 @@ describe('what an agent row offers', () => {
   /* The verbs and their order are the acceptance criteria of this task, and the
      consuming side of the pair is a `.vue` file no runner here can read — so
      this is the only mechanical check either half gets. */
-  it('offers the three verbs, pinning first and closing last', () => {
-    expect(kinds(agentMenuItems(row()))).toEqual(['pin', 'clear', 'close'])
+  it('offers the four verbs, pinning first and the two closes last', () => {
+    expect(kinds(agentMenuItems(row()))).toEqual(['pin', 'clear', 'close', 'close-others'])
+  })
+
+  /* The fourth row, offered plainly whenever there is something for it to
+     take. */
+  it('closes every other row when there is something else to close', () => {
+    const items = agentMenuItems(row({ others: 3 }))
+    expect(labelOf(items, 'close-others')).toBe(CLOSE_OTHERS_LABEL)
+    expect(disabled(items, 'close-others')).toBe(false)
   })
 
   /* The label is the act and not the state: a row already pinned offers the way
@@ -147,6 +157,52 @@ describe('what it refuses, and in what words', () => {
     expect(disabled(agentMenuItems({ conversation: 'conv-a', state: 'running' }), 'clear')).toBe(
       true
     )
+  })
+
+  /* A list of one row, or a list where everything else is pinned or still
+     starting, leaves nothing for this verb to take — greyed and worded, never
+     left out, the reasoning every refusal in this file carries. */
+  it('refuses to close other agents when there is nothing else to close, and says so', () => {
+    const items = agentMenuItems(row({ others: 0 }))
+    expect(disabled(items, 'close-others')).toBe(true)
+    expect(labelOf(items, 'close-others')).toBe(`${CLOSE_OTHERS_LABEL} — nothing else to close`)
+  })
+})
+
+describe('which rows Close other agents reaches', () => {
+  /* A row shaped enough for `closableOthers` to read: `id` is what it
+     matches on, `conversation` is what a pin is kept under, and `starting`
+     is the other refusal the cross already carries. */
+  const agentRow = (id, over = {}) => ({ id, conversation: null, starting: false, ...over })
+
+  it('excludes the row the menu is open on, by its id and not its conversation', () => {
+    const rows = [
+      agentRow('a', { conversation: 'conv-a' }),
+      agentRow('b'),
+      agentRow('c')
+    ]
+    expect(closableOthers(rows, 'a', []).map((row) => row.id)).toEqual(['b', 'c'])
+  })
+
+  it('excludes a pinned row', () => {
+    const rows = [agentRow('a'), agentRow('b', { conversation: 'conv-b' }), agentRow('c')]
+    expect(closableOthers(rows, 'a', ['conv-b']).map((row) => row.id)).toEqual(['c'])
+  })
+
+  it('excludes a row that has not started yet', () => {
+    const rows = [agentRow('a'), agentRow('b', { starting: true }), agentRow('c')]
+    expect(closableOthers(rows, 'a', []).map((row) => row.id)).toEqual(['c'])
+  })
+
+  /* Offline and driven rows are not refused: the cross closes them exactly as
+     it closes a live session, so this verb does too. */
+  it('includes an offline row, the same as the cross does', () => {
+    const rows = [agentRow('a'), agentRow('b', { restored: true, state: 'done' })]
+    expect(closableOthers(rows, 'a', []).map((row) => row.id)).toEqual(['b'])
+  })
+
+  it('answers nothing to close on a list of one', () => {
+    expect(closableOthers([agentRow('a')], 'a', [])).toEqual([])
   })
 })
 

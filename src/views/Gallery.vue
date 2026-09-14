@@ -941,9 +941,10 @@ const agentRows = [
   /* A driven conversation, which is what "+ New agent" starts under Claude Code.
      Nothing about it is drawn differently — that is the point of the row, and of
      the panel being one flat list — so what is worth opening is its menu: two of
-     the three verbs are refused at once, `Pin to top — nothing to remember it
-     by` and `Clear session — this agent cannot do it`, and Close is the one that
-     works.
+     the four verbs are refused at once, `Pin to top — nothing to remember it
+     by` and `Clear session — this agent cannot do it`, and the two closes are
+     what work on it — `Close agent` ends this row alone, `Close other agents`
+     reaches every row but itself, the pinned one and the one still starting.
 
      **`conversation: null` is one of the two cases rather than the rule**, and
      the row is here as that case. A driven session is recorded like any other

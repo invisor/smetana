@@ -86,6 +86,7 @@ import IconButton from '../components/core/IconButton.vue'
 import { CommandPalette, ConversationView, TaskSearchButton, TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import { agentKey, conversationsOf, orderAgents } from '../components/agent/agentOrder.js'
+import { closableOthers } from '../components/agent/agentMenu.js'
 /* What a driven conversation is in the three places this file counts agents:
    the panel's rows, the footer's numbers and the rail's map. The rule is pure
    and lives there rather than here for the reason every rule in this app does —
@@ -2866,6 +2867,22 @@ function removeAgentRow(id) {
     return
   }
   removeSession(id)
+}
+
+/* `Close other agents`, applied. `id` is the row the menu was open on —
+   `AgentList.vue` already asked `closableOthers` the same question once to
+   grey the item, and this is that same pure rule read a second time against
+   this window's own copy of the rows and the pins, over the list snapshotted
+   **before** the loop starts: `removeAgentRow` below can change what
+   `orderedAgentRows` computes to on its way out, and a list re-read mid-loop
+   would let one removal skip or repeat a row still waiting its turn. Every
+   row it names is closed through the very function the cross already calls,
+   so a live session, an offline record and a driven conversation each go the
+   way they always have — no new removal path exists for this verb. */
+function removeOtherAgentRows(id) {
+  for (const row of closableOthers(orderedAgentRows.value, id, project.pinnedAgents)) {
+    removeAgentRow(row.id)
+  }
 }
 
 /* The one start this window does not make: a run asks the terminal worker
@@ -6860,6 +6877,7 @@ const toastStackStyle = {
                 :pinned="project.pinnedAgents"
                 @select="selectAgent"
                 @remove="removeAgentRow"
+                @remove-others="removeOtherAgentRows"
                 @reorder="reorderAgents"
                 @pin="project.pinnedAgents = $event"
                 @clear="clearSession"
