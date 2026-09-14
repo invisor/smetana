@@ -792,37 +792,71 @@ fn handle(
             };
             let id = *next_id;
             *next_id += 1;
-            // Only a Setup session pays for the walk, and it happens here
-            // rather than in the front end so that what the agent is told is
-            // what the disk says at the moment the session starts.
-            let facts = matches!(intent, agents::Intent::Setup).then(|| {
-                // Before the agent writes anything, so the folder it is about
-                // to create is already ignored when it appears rather than
-                // after somebody has staged it. Failing costs a line in a
-                // .gitignore; refusing to start the session over it would cost
-                // the whole feature, so this is logged and stepped over.
-                if let Err(err) = crate::runs::gitignore::ensure(Path::new(&project)) {
-                    // Not ".smetana/": `ensure` writes whatever of its own
-                    // list the file is missing, and that list has grown.
-                    log::warn!("[runs] could not amend .gitignore: {err}");
+            // A Setup session pays for the survey and the browser walk; a
+            // Bootstrap session pays for the browser walk alone — there is
+            // nothing in an empty folder to survey, and `project-setup`'s
+            // `live_check` section still needs to know what this machine can
+            // drive. Both happen here rather than in the front end so that
+            // what the agent is told is what the disk says at the moment the
+            // session starts.
+            let facts = match &intent {
+                agents::Intent::Setup | agents::Intent::Bootstrap => {
+                    // Before the agent writes anything, so the folder it is
+                    // about to create is already ignored when it appears
+                    // rather than after somebody has staged it. Failing costs
+                    // a line in a .gitignore; refusing to start the session
+                    // over it would cost the whole feature, so this is logged
+                    // and stepped over.
+                    //
+                    // Setup's folder may or may not be a repository yet, and
+                    // `ensure`'s own guard is right for it — a `.gitignore`
+                    // meaning nothing to nobody is not this app's to create.
+                    // Bootstrap's folder is `survey::is_empty`, which is
+                    // never a repository: `bd init` has run and `git init`
+                    // has not, so `ensure`'s guard would skip it outright and
+                    // the repository the skill creates a few lines later
+                    // would open with `.smetana/` already untracked.
+                    // `ensure_before_git` is the same write without that
+                    // guard, safe here because git picks up whatever
+                    // `.gitignore` already exists the moment `git init`
+                    // creates the repository over it.
+                    let wrote = if matches!(intent, agents::Intent::Bootstrap) {
+                        crate::runs::gitignore::ensure_before_git(Path::new(&project))
+                    } else {
+                        crate::runs::gitignore::ensure(Path::new(&project))
+                    };
+                    if let Err(err) = wrote {
+                        // Not ".smetana/": `ensure` writes whatever of its own
+                        // list the file is missing, and that list has grown.
+                        log::warn!("[runs] could not amend .gitignore: {err}");
+                    }
+                    let root = Path::new(&project);
+                    // Two blocks and not one for Setup: the scan says what
+                    // this project is, and the browser facts say what the
+                    // machine it will be worked on can do. Only
+                    // `[live_check].mode = "browser"` reaches outside the
+                    // repository for a tool, so it is the one part of the
+                    // file the folder alone cannot answer. Bootstrap gets the
+                    // second block only — the folder is empty, so there is
+                    // nothing for `survey::run` to find, but the founding
+                    // session ends by running `project-setup` itself and its
+                    // `live_check` section reads the same browser facts.
+                    //
+                    // No busy project, deliberately: that is one run holding
+                    // Playwright's single profile at this moment, and the
+                    // question here is whether the tool is installed at all.
+                    let mut facts = String::new();
+                    if matches!(intent, agents::Intent::Setup) {
+                        facts.push_str(&crate::runs::survey::render(&crate::runs::survey::run(root)));
+                        facts.push('\n');
+                    }
+                    facts.push_str(&crate::runs::browser::render(&crate::runs::browser::detect(
+                        root, None,
+                    )));
+                    Some(facts)
                 }
-                let root = Path::new(&project);
-                // Two blocks and not one: the scan says what this project is,
-                // and the browser facts say what the machine it will be worked
-                // on can do. Only `[live_check].mode = "browser"` reaches
-                // outside the repository for a tool, so it is the one part of
-                // the file the folder alone cannot answer.
-                //
-                // No busy project, deliberately: that is one run holding
-                // Playwright's single profile at this moment, and the question
-                // here is whether the tool is installed at all.
-                let mut facts = crate::runs::survey::render(&crate::runs::survey::run(root));
-                facts.push('\n');
-                facts.push_str(&crate::runs::browser::render(&crate::runs::browser::detect(
-                    root, None,
-                )));
-                facts
-            });
+                _ => None,
+            };
             // Taken before the intent is handed to the launch, which consumes
             // it. Nothing else is kept from it: the rest is the agent's
             // briefing, not the panel's caption.

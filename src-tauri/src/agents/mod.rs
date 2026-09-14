@@ -331,6 +331,13 @@ pub enum Intent {
     /// `.smetana/project.toml`. Started from the dialog a person gets when
     /// they add a project, and from the project row afterwards.
     Setup,
+    /// Agree with the person what goes in an empty folder, lay the foundation
+    /// — first files, first commit — and then write `.smetana/project.toml`
+    /// the way `Setup` would. Started from the dialog a person gets when they
+    /// add an empty folder, and from the project row while it stays empty.
+    /// `bd init` has already run by the time this starts; see `startBootstrap`
+    /// in `DesktopApp.vue`.
+    Bootstrap,
     /// Review what one branch adds to another — in one repository or in
     /// several — and write the result up for somebody to read afterwards.
     ///
@@ -476,6 +483,7 @@ impl Intent {
             // second caption nobody asked for.
             Intent::ResumeSession { title, .. } => W::ResumeSession { title: title.clone() },
             Intent::Setup => W::Setup,
+            Intent::Bootstrap => W::Bootstrap,
             // The report's path and not the pairs, which is the reading a
             // conflict's file list gets: the row draws where the answer is
             // going to be, and the refs are the briefing — a review of four
@@ -910,13 +918,14 @@ pub fn role_of(intent: &Intent) -> Role {
         Intent::FixTask { .. } | Intent::ResolveConflict { .. } => Role::Code,
         Intent::Run { .. } => Role::RunLead,
         Intent::ReviewBranch { .. } => Role::ReviewBranch,
-        // `Bare`, `Setup`, `RepairTracker` — and, deliberately,
+        // `Bare`, `Setup`, `Bootstrap`, `RepairTracker` — and, deliberately,
         // `ResumeSession`. A resumed conversation keeps the model it was
         // started with and is never told one at all (`Launch::model`), so the
         // row it nominally belongs to costs it nothing either way; putting it
         // anywhere else would only invite somebody to make that row reach it.
         Intent::Bare
         | Intent::Setup
+        | Intent::Bootstrap
         | Intent::RepairTracker { .. }
         | Intent::ResumeSession { .. } => Role::Default,
     }
@@ -1543,6 +1552,14 @@ mod tests {
     }
 
     #[test]
+    fn a_bootstrap_intent_arrives_as_its_kind_alone() {
+        use crate::terminal::model::SessionWork as W;
+        let intent: Intent = serde_json::from_str(r#"{"kind":"bootstrap"}"#).expect("deserializes");
+        assert!(matches!(intent, Intent::Bootstrap));
+        assert_eq!(Intent::Bootstrap.work(), W::Bootstrap);
+    }
+
+    #[test]
     fn an_intent_reduces_to_the_work_the_panel_names_it_by() {
         use crate::terminal::model::SessionWork as W;
         assert_eq!(Intent::Bare.work(), W::Bare);
@@ -1861,6 +1878,7 @@ mod tests {
         let cases: Vec<(Intent, Role)> = vec![
             (Intent::Bare, Default),
             (Intent::Setup, Default),
+            (Intent::Bootstrap, Default),
             (
                 Intent::RepairTracker {
                     dir: "/p".into(),
@@ -1921,7 +1939,7 @@ mod tests {
                 Default,
             ),
         ];
-        assert_eq!(cases.len(), 11, "every variant of Intent has a row here");
+        assert_eq!(cases.len(), 12, "every variant of Intent has a row here");
         for (intent, expected) in cases {
             assert_eq!(role_of(&intent), expected, "wrong role for {intent:?}");
         }

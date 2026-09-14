@@ -149,6 +149,8 @@ pub enum SessionWork {
     /// rather than inventing a name for it.
     ResumeSession { title: Option<String> },
     Setup,
+    /// Starting a project in an empty folder; the caption is the front end's.
+    Bootstrap,
     /// A branch review, by the path its report is written to, and the one work
     /// in this list that names a file which does not exist yet: the two
     /// documents appear when the agent is finished, and this is where the app
@@ -206,6 +208,7 @@ pub enum WorkKind {
     RepairTracker,
     ResumeSession,
     Setup,
+    Bootstrap,
     ReviewBranch,
     Run,
     Shell,
@@ -225,6 +228,7 @@ impl SessionWork {
             SessionWork::RepairTracker => WorkKind::RepairTracker,
             SessionWork::ResumeSession { .. } => WorkKind::ResumeSession,
             SessionWork::Setup => WorkKind::Setup,
+            SessionWork::Bootstrap => WorkKind::Bootstrap,
             SessionWork::ReviewBranch { .. } => WorkKind::ReviewBranch,
             SessionWork::Run => WorkKind::Run,
             SessionWork::Shell => WorkKind::Shell,
@@ -599,9 +603,13 @@ mod tests {
         // every tile grey.
         let shell = SessionWork::Shell.kind();
         assert_eq!(shell, WorkKind::Shell);
-        for agent in
-            [SessionWork::Bare, SessionWork::Run, SessionWork::Setup, SessionWork::EditTask { id: "x".into() }]
-        {
+        for agent in [
+            SessionWork::Bare,
+            SessionWork::Run,
+            SessionWork::Setup,
+            SessionWork::Bootstrap,
+            SessionWork::EditTask { id: "x".into() },
+        ] {
             assert_ne!(agent.kind(), WorkKind::Shell, "an agent's work is not a shell: {agent:?}");
         }
     }
@@ -632,6 +640,7 @@ mod tests {
                 SessionWork::ResumeSession { title: Some("Move the card to done".into()) }
             }
             WorkKind::Setup => SessionWork::Setup,
+            WorkKind::Bootstrap => SessionWork::Bootstrap,
             WorkKind::ReviewBranch => {
                 SessionWork::ReviewBranch { report: ".smetana/reviews/2026-08-31-main".into() }
             }
@@ -662,6 +671,7 @@ mod tests {
             WorkKind::RepairTracker,
             WorkKind::ResumeSession,
             WorkKind::Setup,
+            WorkKind::Bootstrap,
             WorkKind::ReviewBranch,
             WorkKind::Run,
             WorkKind::Shell,
