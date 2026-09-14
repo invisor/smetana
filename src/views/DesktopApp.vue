@@ -219,6 +219,7 @@ import {
   basename,
   initActive,
   projectRows,
+  refreshProbes,
   removeProject,
   switchTo
 } from '../stores/projects.js'
@@ -2538,16 +2539,33 @@ const closeStart = () => {
 /* bd first, then the session: the board is live before the agent's first
    line, and the agent's scope is the foundation, the commit and the file —
    leaving `bd init` to the agent would show "No tracker here" over a running
-   session until it got to it (the design's own reasoning). `initBd` reports
-   its own failure through `trackerState.lastError` and rethrows; caught here
-   so the dialog stays open and nothing is started, since a session told bd is
-   ready when it is not would be filing its first commit against nothing. */
+   session until it got to it (the design's own reasoning).
+
+   **`initBd` is called only when there is genuinely no tracker yet.**
+   `needsStart` is the stale probe — it moves on the next `loadConfig`, which
+   is not guaranteed to have run again between two presses of Start — and
+   `tracker_init` refuses a folder that already has a `.beads` (which is a
+   housekeeping name `survey::is_empty` accepts, so an empty folder can easily
+   have gained one: a hand-run `bd init`, or a first press of Start that got
+   this far and was then closed before the agent wrote anything). Asking
+   unconditionally makes a second press permanently inert. `trackerState`'s
+   own live health is what `initHere` beside this gates on for the identical
+   reason, and it is read here instead.
+
+   `path !== activePath.value` refuses for `openStart`'s own reason:
+   `tracker_init` takes no path and acts on whatever folder the worker
+   currently holds, so a window that outlived a project switch could
+   otherwise initialise bd in a folder nobody asked about. */
 const startBootstrap = async () => {
   const path = startFor.value
   if (!path || starting.value) return
+  if (path !== activePath.value) return
   starting.value = true
   try {
-    await initBd()
+    if (trackerState.health.state === 'not-a-beads-repo') {
+      await initBd()
+      await refreshProbes()
+    }
     if (await startAgent(path, { kind: 'bootstrap' })) closeStart()
   } catch {
     // already reported by initBd; the dialog stays open on it.
@@ -6665,21 +6683,38 @@ const toastStackStyle = {
           @toggle="applyLeftChrome(nextFromHeader(layout))"
           @expand="applyLeftChrome(nextFromRail())"
         >
-          <!-- The three marks the project row used to carry, for the selected
-               project alone, with the glyphs, colours and words they had there.
-               None of them is told from the others by hue: the missing tracker
-               is a lone muted triangle with nothing beside it that fixes it; the
-               missing run configuration is a red triangle bonded to the gear
-               that opens the setup it is asking for; and a configuration that
-               cannot be parsed is a red page-with-a-cross, standing alone. The
-               last needs its own glyph precisely because it stands alone —
-               beside the tracker's lone triangle the two would differ in nothing
-               but colour. It offers no button on purpose: a file that exists and
-               cannot be read must not be answered by a button that starts an
-               agent writing over it, and the way out is the tile's menu, whose
-               setup item is live over a damaged file. -->
+          <!-- The marks the project row used to carry, for the selected
+               project alone, with the glyphs, colours and words they had
+               there — read the `v-if`s below for which ones there are rather
+               than trusting a count written out here, which is wrong the
+               moment a fourth or a fifth is added and nobody remembers to
+               update the sentence naming how many. None of them is told
+               from the others by hue: the missing tracker is a lone muted
+               triangle with nothing beside it that fixes it; the missing
+               run configuration is a red triangle bonded to the gear that
+               opens the setup it is asking for; and a configuration that
+               cannot be parsed is a red page-with-a-cross, standing alone.
+               The configuration mark needs its own glyph precisely because
+               it stands alone — beside the tracker's lone triangle the two
+               would differ in nothing but colour. It offers no button on
+               purpose: a file that exists and cannot be read must not be
+               answered by a button that starts an agent writing over it,
+               and the way out is the tile's menu, whose setup item is live
+               over a damaged file.
+
+               The empty-folder mark takes the tracker's own triangle —
+               `needsStart` — and suppresses the "No bd tracker here" mark
+               beside it while it holds: an empty folder having no tracker is
+               the same fact said twice, and the new mark is the one with
+               something beside it that fixes it, which is what keeps "the
+               tracker's lone triangle" above true rather than a third
+               identical glyph added to a row this comment already struggles
+               to describe. -->
           <template #marks>
-            <Tooltip v-if="activePath && !activeProjectTracked" label="No bd tracker here">
+            <Tooltip
+              v-if="activePath && !activeProjectTracked && !needsStart"
+              label="No bd tracker here"
+            >
               <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
             </Tooltip>
             <!-- Muted rather than the failed red the setup mark takes below:

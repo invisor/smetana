@@ -993,7 +993,16 @@ export function installMockBackend() {
     if (command === 'tracker_access_repair') return 'unavailable'
     if (command === 'tracker_set_project') return snapshot
     if (command === 'tracker_probe') {
-      return MOCK_PROJECTS.map((path) => ({ path, tracked: path !== UNTRACKED }))
+      /* `EMPTY_PROJECT` is untracked for the same reason `UNTRACKED` is —
+         `survey::is_empty` says the folder holds nothing, and a folder
+         holding nothing holds no `.beads` either. Without this the fixture
+         drew a tracker the real app can never have there, which is exactly
+         the state `needsStart`'s own tracker-mark suppression exists to
+         handle and hid the bug this fixture was added to show. */
+      return MOCK_PROJECTS.map((path) => ({
+        path,
+        tracked: path !== UNTRACKED && path !== EMPTY_PROJECT
+      }))
     }
     /* One project per state — set up, not set up, and damaged: without one of
        each there is nowhere to see any of them under npm run dev. The `ok` branch
