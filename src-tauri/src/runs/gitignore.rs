@@ -252,6 +252,17 @@ mod tests {
         std::fs::remove_dir_all(&root).expect("remove temp root");
     }
 
+    /// `ensure_before_git`'s own docstring claims `.gitignore` is one of
+    /// `survey::HOUSEKEEPING`'s entries, and until now nothing but that
+    /// sentence held the two files together — the pairing could drift with
+    /// nobody noticing except a founding session at the moment it runs. This
+    /// closes it mechanically: `.gitignore` alone, the only entry the file
+    /// this module writes ever holds by itself, must still read as empty.
+    #[test]
+    fn the_file_this_module_writes_is_itself_one_of_surveys_housekeeping_names() {
+        assert!(crate::runs::survey::is_empty_listing(&[".gitignore".to_string()]));
+    }
+
     /// The founding session's own path: no `.git` at all yet, unlike every
     /// other caller of this module. `ensure` would refuse a folder in this
     /// shape outright; this is the one entry point that writes into it anyway.

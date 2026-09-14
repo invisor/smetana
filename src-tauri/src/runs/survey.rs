@@ -159,14 +159,25 @@ pub fn is_empty_listing(names: &[String]) -> bool {
 ///
 /// An unreadable directory answers `false` rather than `true`: nothing can be
 /// created inside a folder the app cannot even list, so there is nothing to
-/// found a project in and "Start a project" must not be offered over it.
+/// found a project in and "Start a project" must not be offered over it. The
+/// same direction is taken for two narrower failures that are easy to miss:
+/// an entry `read_dir` cannot read and a file name that is not valid UTF-8
+/// both answer `false` for the whole call rather than being skipped, because
+/// either one silently dropped would make a folder that *does* hold work
+/// read as emptier than it is — the one outcome this gate exists to prevent.
+///
+/// A folder holding a complete `.smetana/project.toml` can still answer
+/// `true`: `.smetana` is itself a housekeeping name, and this function never
+/// looks inside it. Callers that also care about a project already being
+/// configured read `state` beside this flag and decide what to do when both
+/// are true.
 pub fn is_empty(root: &Path) -> bool {
     let Ok(entries) = std::fs::read_dir(root) else { return false };
-    let names: Vec<String> = entries
-        .flatten()
-        .take(MAX_ENTRIES)
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .collect();
+    let mut names = Vec::new();
+    for entry in entries.take(MAX_ENTRIES) {
+        let Ok(entry) = entry else { return false };
+        names.push(entry.file_name().to_string_lossy().into_owned());
+    }
     is_empty_listing(&names)
 }
 
@@ -419,6 +430,15 @@ mod tests {
         std::fs::remove_dir_all(&root).expect("clean up");
         assert!(!is_empty(&root), "a folder that does not exist is not empty");
     }
+
+    // No test creates a file with a name that is not valid UTF-8: on APFS
+    // (this project's development and CI platform) the OS itself refuses to
+    // create one — `open`/`mkdir` with an undecodable byte sequence fails
+    // with "Illegal byte sequence" before `read_dir` ever gets a chance to
+    // see it, which was checked directly rather than assumed. A fixture that
+    // only exists on Linux ext4 would be a test nobody here could run, so
+    // `is_empty`'s own change of direction (refuse the whole call rather
+    // than silently drop the entry) is the guarantee standing in its place.
 
     #[test]
     fn a_repository_at_the_root_is_the_monorepo_case() {
