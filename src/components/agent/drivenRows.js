@@ -175,8 +175,16 @@ export function mergeAgentRows(rows, sessions) {
    `agentMenu.js`'s choice one file over and the same reason: a word added to
    `SessionState` and not yet to this list reads as a live agent, and a counter
    that is one too high for a state nobody has heard of is a better failure than
-   one that quietly stops counting a working agent. */
-const ENDED = ['done', 'failed']
+   one that quietly stops counting a working agent.
+
+   Exported since `components/files/attachTarget.js` grew the identical need —
+   a row is live only while its state is neither of these — and a second copy
+   is the one that goes stale the day a third ending word joins `SessionState`
+   and `statusOf`: the menu row would light over a finished agent instead of
+   greying, and the send behind it would fail as a toast rather than never
+   having been offered. `agentMenu.js`'s own `OFFLINE_STATES` is a third copy
+   this does not reach for — it is that file's own concern, not this task's. */
+export const ENDED = ['done', 'failed']
 
 const liveCount = (sessions) => (sessions ?? []).filter((s) => !ENDED.includes(s.state)).length
 

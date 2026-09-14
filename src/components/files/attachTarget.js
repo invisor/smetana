@@ -18,13 +18,7 @@
    handed the merged rows and the selected id, and it is handed them as plain
    data, so a test can build both by hand. */
 
-import { drivenSessionOf } from '../agent/drivenRows.js'
-
-/* The two states nothing can be typed into any more, on both roads —
-   `drivenRows.js` keeps the identical pair for a driven session's ending, and
-   `toUiState` in `stores/terminals.js` folds a PTY session's own `exited` into
-   one of them. A row not in this list and not still starting is live. */
-const ENDED = ['done', 'failed']
+import { ENDED, drivenSessionOf } from '../agent/drivenRows.js'
 
 function isLive(row) {
   return Boolean(row) && !row.starting && !ENDED.includes(row.state)
@@ -55,10 +49,12 @@ export function hasLiveAgent(rows = []) {
 
    The one branch is `drivenSessionOf`: a row whose id is this window's driven
    prefix answers with the conversation the worker holds it under, and the
-   caller owes that id `sendMessage` rather than `send` — the two deliveries
-   named in the spec this module answers, `pty` writing bytes into a
-   pseudoterminal and `driven` handing the worker a turn it knows how to
-   attach. */
+   caller delivers to that id by a different door than a PTY target — `pty`
+   writes bytes into a pseudoterminal, `driven` lands the path in that
+   conversation's own draft (`conversationFor(id).draft` in
+   `stores/conversation.js`), never a submitted turn — see `attachToAgent` in
+   `DesktopApp.vue` for why. This module decides only which agent and which
+   road; the delivery itself is the caller's. */
 export function selectedAttachTarget({ selectedId = null, rows = [] } = {}) {
   if (selectedId === null) return null
   const row = rows.find((candidate) => candidate.id === selectedId)

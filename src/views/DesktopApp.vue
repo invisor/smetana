@@ -151,11 +151,11 @@ import {
    built to outlive that migration would. */
 import {
   canDrive,
+  conversationFor,
   conversationState,
   conversationsIn,
   drivenSessions,
   forget,
-  sendMessage,
   startConversation,
   statusOf,
   stopConversation
@@ -5439,21 +5439,28 @@ const attachTarget = computed(() =>
    somebody moves it. */
 const hasAnyLiveAgent = computed(() => attachHasLiveAgent(orderedAgentRows.value))
 
-/* Delivery is not one thing, and the spec behind this function says so in as
-   many words: the two roads answer to different verbs, and that is part of
-   the work rather than a seam to paper over. On the PTY road a path is the
-   drag-and-drop gesture by another route, so it goes through the same
-   `dropText` that drop uses: it quotes the path, ends it in one space and
-   refuses outright a name carrying a control character — see
+/* Delivery is not one thing, and that is part of the work rather than a seam
+   to paper over — the two roads answer to different verbs. On the PTY road a
+   path is the drag-and-drop gesture by another route, so it goes through the
+   same `dropText` that drop uses: it quotes the path, ends it in one space
+   and refuses outright a name carrying a control character — see
    `terminal/dropPaths.js` for why that last one is a refusal rather than a
    repair — and lands as bytes typed into a line discipline, with Return never
    among them, so the person sees it land and writes around it.
 
-   A driven conversation has no such line to type into: `sendMessage` in
-   `stores/conversation.js` is this app's one road to a driven agent's turn,
-   and there is no narrower one that lands text without also submitting it.
-   So the path is handed over there as an ordinary message and the turn goes
-   in whole — no quoting, since nothing here parses it as a shell would. */
+   A driven conversation has no line to type into, and `session_send` is not
+   the narrower road it might look like: it journals a `TurnStart` and writes
+   to the child's stdin the moment it is called, with no check for a question
+   already open — smetana-kteg's `composerShown` in `ConversationView.vue`
+   hides the field itself for exactly that state, and a path handed to
+   `sendMessage` would be the one door past it, firing a turn on an agent
+   sitting on a permission card. So the path goes into the draft instead,
+   through `conversationFor(id).draft` — the same field the composer's own
+   textarea is bound to, which `stores/conversation.js` documents as
+   outliving a hidden composer and `ConversationView.vue` as surviving under
+   one. It waits there exactly as a PTY prompt does, and it cannot fail: there
+   is no worker round trip to report, so this branch raises no toast of its
+   own. */
 async function attachToAgent(path) {
   const target = attachTarget.value
   if (!target) {
@@ -5465,13 +5472,19 @@ async function attachToAgent(path) {
     return
   }
   if (target.road === 'driven') {
+    /* Appended rather than replaced, the way the PTY road's own `dropText`
+       joins several paths of one drop: a second attach while the first is
+       still sitting unsent must not erase it. A space in front only when
+       there is already something to join it to, so the field never opens on
+       a leading space nobody typed. */
+    const held = conversationFor(target.id)
+    held.draft = held.draft ? `${held.draft} ${path} ` : `${path} `
     /* Aim the tab at this conversation and bring it forward: the row was
        already the panel's selection, so this is the one case that can move
        nothing on screen, and it is what puts the person in front of the
        path landing whenever they were standing somewhere else — the board,
        another agent's tab — when the menu was opened. */
     showAgentTab(target.id)
-    await sendMessage(target.id, path)
     return
   }
   const text = dropText([path])
