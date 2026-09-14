@@ -807,7 +807,25 @@ fn handle(
                     // a line in a .gitignore; refusing to start the session
                     // over it would cost the whole feature, so this is logged
                     // and stepped over.
-                    if let Err(err) = crate::runs::gitignore::ensure(Path::new(&project)) {
+                    //
+                    // Setup's folder may or may not be a repository yet, and
+                    // `ensure`'s own guard is right for it — a `.gitignore`
+                    // meaning nothing to nobody is not this app's to create.
+                    // Bootstrap's folder is `survey::is_empty`, which is
+                    // never a repository: `bd init` has run and `git init`
+                    // has not, so `ensure`'s guard would skip it outright and
+                    // the repository the skill creates a few lines later
+                    // would open with `.smetana/` already untracked.
+                    // `ensure_before_git` is the same write without that
+                    // guard, safe here because git picks up whatever
+                    // `.gitignore` already exists the moment `git init`
+                    // creates the repository over it.
+                    let wrote = if matches!(intent, agents::Intent::Bootstrap) {
+                        crate::runs::gitignore::ensure_before_git(Path::new(&project))
+                    } else {
+                        crate::runs::gitignore::ensure(Path::new(&project))
+                    };
+                    if let Err(err) = wrote {
                         // Not ".smetana/": `ensure` writes whatever of its own
                         // list the file is missing, and that list has grown.
                         log::warn!("[runs] could not amend .gitignore: {err}");

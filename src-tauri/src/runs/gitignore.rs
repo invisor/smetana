@@ -14,6 +14,9 @@
 //!
 //! The pure half is `amend`, which is where the tests are; `ensure` is the disk
 //! and does nothing a person did not already ask for by setting the project up.
+//! `ensure_before_git` is the same write for the one caller that runs ahead of
+//! `git init` rather than after it — a founding session, where `bd init` has
+//! already run and there is no `.git` yet for `ensure`'s guard to find.
 
 use std::io;
 use std::path::Path;
@@ -111,6 +114,23 @@ pub fn ensure(root: &Path) -> io::Result<bool> {
     if !root.join(".git").exists() {
         return Ok(false);
     }
+    ensure_before_git(root)
+}
+
+/// The same write as `ensure`, without its guard — for the one caller that
+/// runs *before* `git init` rather than after it.
+///
+/// A founding session starts in a folder `bd init` has already touched and
+/// `git init` has not, so `ensure`'s guard would answer `false` on every such
+/// session and the repository, once created, would open with no `.gitignore`
+/// at all: nothing else ever revisits it, and `.smetana/` would sit
+/// untracked from the first commit onward — exactly the failure this module
+/// exists to prevent, on the one path it exists for. Writing the file first
+/// is safe and loses nothing: git reads whatever `.gitignore` already exists
+/// the instant a repository is created over it, and `.gitignore` is itself
+/// one of `survey::HOUSEKEEPING`'s entries, so the folder still answers
+/// `survey::is_empty` while this runs.
+pub fn ensure_before_git(root: &Path) -> io::Result<bool> {
     let path = root.join(".gitignore");
     let current = match std::fs::read_to_string(&path) {
         Ok(text) => text,
@@ -228,6 +248,29 @@ mod tests {
 
         assert!(!ensure(&root).expect("second pass"), "already covered, so nothing to write");
         assert_eq!(std::fs::read_to_string(root.join(".gitignore")).expect("read again"), written);
+
+        std::fs::remove_dir_all(&root).expect("remove temp root");
+    }
+
+    /// The founding session's own path: no `.git` at all yet, unlike every
+    /// other caller of this module. `ensure` would refuse a folder in this
+    /// shape outright; this is the one entry point that writes into it anyway.
+    #[test]
+    fn a_folder_with_no_git_at_all_still_gets_the_entries() {
+        let root =
+            std::env::temp_dir().join(format!("smetana-gitignore-before-git-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create empty folder");
+        assert!(!root.join(".git").exists(), "the whole point of this case");
+
+        assert!(ensure_before_git(&root).expect("write the entries"));
+        let written = std::fs::read_to_string(root.join(".gitignore")).expect("read it back");
+        assert_eq!(written, BLOCK);
+
+        assert!(
+            !ensure_before_git(&root).expect("second pass"),
+            "already covered, so nothing to write"
+        );
 
         std::fs::remove_dir_all(&root).expect("remove temp root");
     }

@@ -369,10 +369,11 @@ const SETUP: &str = "Work out what this project is made of and write .smetana/pr
 /// a model handed an empty folder and a stack it likes is one step from
 /// scaffolding it before anybody has said what the project is.
 const BOOTSTRAP: &str = "This folder is empty — Smetana checked, and bd is already initialised in \
-     it — before you create a single file, agree with me what this project is, which stack it is \
-     built on and what it is called. Then lay the foundation — the first files, one command that \
-     passes so a gate has something to check, and the first commit — and when it stands, set the \
-     project up for runs by writing .smetana/project.toml the way the project-setup skill says.";
+     it. Your first job, before you create a single file, is to agree with me what this project \
+     is, which stack it is built on and what it is called. Then lay the foundation — the first \
+     files, one command that passes so a gate has something to check, and the first commit — and \
+     when it stands, set the project up for runs by writing .smetana/project.toml the way the \
+     project-setup skill says.";
 
 /// What a branch review is, said in the prompt rather than left to the skill,
 /// and the reason is `SETUP`'s: an `Inline` harness may find no skill text at

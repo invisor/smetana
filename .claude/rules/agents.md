@@ -449,14 +449,14 @@ is a settings screen nobody reads, and it would still not have separated a run's
 subagents it delegates to, since both live behind `Run`.
 
 `agents::role_of` is the mapping, pure and here rather than in `settings/` for the reason
-`prompt::build` is pure: reading somebody's file is not a rule about intents, and this half has to be
-testable without a disk. `NewTask`, `EditTask` and `ResolveTask` are `Tasks`; `FixTask` and
+`prompt::build` is pure: reading somebody's file is not a rule about intents, and this half has to
+be testable without a disk. `NewTask`, `EditTask` and `ResolveTask` are `Tasks`; `FixTask` and
 `ResolveConflict` are `Code`; `Run` is `RunLead`; `ReviewBranch` is its own; `Bare`, `Setup`,
 `Bootstrap`, `RepairTracker` and `ResumeSession` fall to `Default`. `Bootstrap` is `Setup` for an
 empty folder — it agrees the project with the person and lays the foundation before it writes the
-file; it is the one of those four that commits, so the commit-language paragraph reaches it
-(`commits_to_git`). A test walks all twelve and names the role of each, so a variant added to
-`Intent` meets a decision rather than a wildcard.
+file; it is the second of those five that commits, beside `Bare`, so the commit-language paragraph
+reaches it (`commits_to_git`). A test walks all twelve and names the role of each, so a variant
+added to `Intent` meets a decision rather than a wildcard.
 
 **The lead is its own role and not the code one**, which is the distinction the whole feature turns
 on. A run's session is a lead: it reads the board, claims a batch, cuts the worktrees and delegates
@@ -544,45 +544,44 @@ road into a session, which is what reading them in one place exists to prevent.
 What each moves is not the same, and `prompt.rs` carries one predicate per language for it. The
 conversation language goes into **every** intent. The commit language goes where the agent's own
 hands reach git — `commits_to_git`, which is `Run`, `ResolveConflict`, `FixTask`, `Bare` and
-`Bootstrap` — and it leaves
-whatever sits in front of the colon exactly as the project already writes it, along with any
-identifier in the message and anything git wrote itself. **It names no form**, and the paragraph
-saying `type: subject` with the six Conventional Commits types is the version that was thrown away:
-the session prompt said nothing about commit form before this setting existed, `smetana:merging`
-commits `merge: <branch> into <target>` with a word that is not one of the six, and
-`smetana:provisioning` greps that subject for the branch name afterwards — so a prompt asserting a
-convention costs a rewritten merge subject and a blocker nobody can find. This repository's own
-commit subjects are Russian words in front of the colon, which is the second reason: a language
-field has no business moving a project's conventions into English. `oneshot::commit_prompt` still
-names the six, and the difference is who writes the message — there the app composes the whole of
-it, so the form is its own to choose. `Bare` is in for the reason the conversation sentence is in
-every intent — the ordinary session is exactly where somebody says "commit this" — `FixTask` is
-in because committing the correction is half of what its prompt asks for, and `Bootstrap` is in
-because a founding session's whole job includes the first commit, unlike the setup session it ends
-by running. `NewTask`, `EditTask`, `ResolveTask`, `Setup` and `RepairTracker` are out because they
-commit nothing: what `NewTask` writes goes under `.smetana/`, which is not in the repository at all,
-`Setup` writes the one file in the same folder, and a repair session works on `.beads`, which bd
-commits for itself. The task language goes where the agent may write
-into bd — `Bare`, `NewTask`, `EditTask`, `ResolveTask`, `FixTask` and `Run`. `Bare` is in for
+`Bootstrap` — and it leaves whatever sits in front of the colon exactly as the project already
+writes it, along with any identifier in the message and anything git wrote itself. **It names no
+form**, and the paragraph saying `type: subject` with the six Conventional Commits types is the
+version that was thrown away: the session prompt said nothing about commit form before this setting
+existed, `smetana:merging` commits `merge: <branch> into <target>` with a word that is not one of
+the six, and `smetana:provisioning` greps that subject for the branch name afterwards — so a prompt
+asserting a convention costs a rewritten merge subject and a blocker nobody can find. This
+repository's own commit subjects are Russian words in front of the colon, which is the second
+reason: a language field has no business moving a project's conventions into English.
+`oneshot::commit_prompt` still names the six, and the difference is who writes the message — there
+the app composes the whole of it, so the form is its own to choose. `Bare` is in for the reason the
+conversation sentence is in every intent — the ordinary session is exactly where somebody says
+"commit this" — `FixTask` is in because committing the correction is half of what its prompt asks
+for, and `Bootstrap` is in because a founding session's whole job includes the first commit, unlike
+the setup session it ends by running. `NewTask`, `EditTask`, `ResolveTask`, `Setup` and
+`RepairTracker` are out because they commit nothing: what `NewTask` writes goes under `.smetana/`,
+which is not in the repository at all, `Setup` writes the one file in the same folder, and a repair
+session works on `.beads`, which bd commits for itself. The task language goes where the agent may
+write into bd — `Bare`, `NewTask`, `EditTask`, `ResolveTask`, `FixTask` and `Run`. `Bare` is in for
 the same reason it is in the commit half: "+ New agent" is exactly where somebody says "file tasks
-for this", and a bare session left out of it filed English issues under a Russian setting. The price
-is that session opening on three language paragraphs before any work, taken knowingly — and it is
-the shape `Run` has always had, since a lead is the other intent in which the conversation, the
-issues and the commits are all three true at once, so the cost is one already in the tree rather
-than a new one. `Run` carries a fourth on top of those, the report language below, and `Bare` does
-not: a bare session writes no batch file. `Setup`, `Bootstrap`, `ResolveConflict` and `RepairTracker`
-stay out because none of the four files an issue — and the last of them could not if it wanted to,
-since bd is what is broken. The paragraph carries a caveat that is not optional, because what the setting
-must never move is a string some other piece of software matches on. The
+for this", and a bare session left out of it filed English issues under a Russian setting. The
+price is that session opening on three language paragraphs before any work, taken knowingly — and
+it is the shape `Run` has always had, since a lead is the other intent in which the conversation,
+the issues and the commits are all three true at once, so the cost is one already in the tree
+rather than a new one. `Run` carries a fourth on top of those, the report language below, and
+`Bare` does not: a bare session writes no batch file. `Setup`, `Bootstrap`, `ResolveConflict` and
+`RepairTracker` stay out because none of the four files an issue — and the last of them could not
+if it wanted to, since bd is what is broken. The paragraph carries a caveat that is not optional,
+because what the setting must never move is a string some other piece of software matches on. The
 `##` section headings, since `bd create --validate` matches the wording of a heading and nothing
 else, so a translated `## Acceptance Criteria` is bd refusing the issue. And the markers a note
-begins with: `parked:` and `resolved:` are matched as literals by
-`components/kanban/parked.js`, so a translated one empties `openQuestions` and the parked card's
-dialog says nothing is open while the Ready warning goes quiet — silent, and landing on somebody
-trying to answer a parked task. What the setting moves is the title, the body of the description,
-the criteria themselves and what follows the colon in a note. Specifications and plans are English
-whatever either setting says (`IN_ENGLISH` in `prompt.rs`): they are read by whoever picks the work
-up months later and by every agent after them.
+begins with: `parked:` and `resolved:` are matched as literals by `components/kanban/parked.js`, so
+a translated one empties `openQuestions` and the parked card's dialog says nothing is open while
+the Ready warning goes quiet — silent, and landing on somebody trying to answer a parked task. What
+the setting moves is the title, the body of the description, the criteria themselves and what
+follows the colon in a note. Specifications and plans are English whatever either setting says
+(`IN_ENGLISH` in `prompt.rs`): they are read by whoever picks the work up months later and by every
+agent after them.
 
 The report language is the narrowest of the four: `leaves_a_run_report` is `Intent::Run` and nothing
 else, since a run's lead is the only session that ever writes
