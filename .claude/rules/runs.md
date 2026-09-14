@@ -848,3 +848,23 @@ stored: once the folder holds anything, the next `loadConfig` reads `empty: fals
 setup pair lights, which is also the safety net for a founding session that stopped short. See
 `.smetana/docs/superpowers/specs/2026-09-14-empty-project-bootstrap-design.md` for the alternatives
 weighed.
+
+**A human promote of a `deferred` finding leaves its own trail, and the marker is `promoted:`**
+(smetana-fpw7). `spawned-from:` findings a batch files itself stay `deferred` on purpose — the
+`running-tasks` skill's own rule is that only a person moves one to `open`, which is what keeps a
+run from spinning on its own output — but a promote by hand used to write the status alone. The next
+run's lead, finding the very same task back in `bd ready`, had no machine-readable way to tell "a
+person did this" from "the status slipped", read it as the second and wrote the task straight back
+to `deferred`, undoing a person's decision. `components/run/promotedNote.js`, beside
+`readyPromote.js` in the same pure-module family this file already names throughout, is the one rule
+for the note text and the three call sites in `DesktopApp.vue` that write it: starting a run over a
+card (`startTheRun`, gated the same as `readyPromoteNote` above — `promotesToReady`), promoting a
+whole Deferred column (`confirmPromote`, behind `PromoteColumnModal.vue`, described in
+`.claude/rules/kanban-board.md`), and a direct status change from the card menu or the inspector
+header (`setTaskStatus`). All three send the status and the note in one `bd update` —
+`append_notes`, the same flag `queue::release`'s own `parked:` note above rides on — so a promote and
+its trace can never land as two writes with a crash between them. The marker is a third of the same
+kind as `parked:` and `resolved:`: two words a program can grep for, then Russian prose for whoever
+reads the task next, and `running-tasks` now tells a lead outright that a `spawned` finding turning
+up in the queue is an ordinary task to pick up rather than a fault to correct — never revert a status
+nobody on this batch wrote in the first place.

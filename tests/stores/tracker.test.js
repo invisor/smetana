@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadStores } from '../support/stores.js'
 import { delta, edge, issue, snapshot } from '../support/fixtures.js'
+import { promotedNote } from '../../src/components/run/promotedNote.js'
 
 let ipc
 let emit
@@ -545,6 +546,25 @@ describe('writes', () => {
       owner: 'merazent@gmail.com',
       assignee: 'smetana-run-7'
     })
+  })
+
+  /* smetana-fpw7: a human promote (the run start over a card, the whole-column
+     promote, or a direct status change) writes the status and a `promoted:`
+     note in the very same `tracker_update` call — never two calls — so a run
+     recovering after a crash between them can never find one without the
+     other. `append_notes` rides through `updateIssue`'s patch unchanged; this
+     pins the one command the call actually goes out as. */
+  it('a human promote writes the status and the promoted: note in one update', async () => {
+    await start(snapshot({ issues: [issue({ id: 'bd-1', status: 'deferred' })] }))
+    ipc.on('tracker_update', () =>
+      issue({ id: 'bd-1', status: 'open', notes: promotedNote('run') })
+    )
+
+    await tracker.updateIssue('bd-1', { status: 'open', append_notes: promotedNote('run') })
+
+    expect(ipc.calls('tracker_update')).toEqual([
+      { id: 'bd-1', patch: { status: 'open', append_notes: promotedNote('run') } }
+    ])
   })
 
   it('a refusal rolls the edit back if nobody touched it', async () => {

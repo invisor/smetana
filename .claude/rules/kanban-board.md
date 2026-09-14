@@ -80,6 +80,16 @@ confirmed would describe a set nobody agreed to. Each issue costs about two seco
 twenty is most of a minute: the dialog owes progress rather than a spinner, and afterwards how many
 landed and how many did not.
 
+**Every id in that column came out of Deferred, so the write it makes leaves a trail beside the
+status.** `confirmPromote`'s loop (`DesktopApp.vue`) sends `status: 'open'` and `append_notes:
+promotedNote('column')` in the same `bd update` — the note text is `components/run/promotedNote.js`,
+beside `readyPromote.js` for the reason that whole family lives outside a `.vue` file — because a run
+finding the very same task back in `bd ready` a batch later has no other way to tell a person's
+promote from a status that merely slipped (smetana-fpw7). The other two places a person can move a
+task to ready the same way — starting a run over one card, and a direct status change from the card
+menu or the inspector header — leave the identical `promoted:` note; see `.claude/rules/runs.md` for
+the marker itself and why the running-tasks skill reads it as the sign nothing needs undoing.
+
 `components/run/branchChoice.js` is the next of that family and was pulled out for the same reason:
 a `.vue` file is the one thing no test in this repository can reach, so the whole of the rule filling
 the run dialog's branch field lives outside the component. `pickBranch` is three steps in one order —

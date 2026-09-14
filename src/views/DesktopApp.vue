@@ -298,6 +298,7 @@ import { dropText } from '../components/terminal/dropPaths.js'
 import { resolveLocalLinkPath } from '../components/conversation/localLinkTarget.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { needsReady, promotesToReady } from '../components/run/readyPromote.js'
+import { promotedNote } from '../components/run/promotedNote.js'
 import { runTitle, scopeBusyReason } from '../components/run/runScopes.js'
 import { limitVoice } from '../components/run/limitVoice.js'
 import { DEFAULTS_FALLBACK, draftFrom } from '../components/run/projectDefaults.js'
@@ -2167,7 +2168,11 @@ const startTheRun = async (chosen) => {
        (`runFailure`) rather than starting something that ends at once. */
     const aimedAt = chosen.scope?.kind === 'task' ? issueById(chosen.scope.id) : null
     if (aimedAt && promotesToReady(aimedAt.status, hasBlocker(aimedAt.id))) {
-      await updateIssue(aimedAt.id, { status: READY })
+      /* smetana-fpw7: a human promote leaves its own trail — a `promoted:`
+         note beside the status, in the same `bd update` — so a later lead
+         reading `bd ready` can tell this move from a slipped status rather
+         than guessing from `updated_at` and undoing it. */
+      await updateIssue(aimedAt.id, { status: READY, append_notes: promotedNote('run') })
       /* The same check the rest of this file makes after every await, and the
          same reason: somebody can switch projects while a write is in flight,
          and from that moment the tracker worker points at another folder. The
@@ -3720,7 +3725,11 @@ const confirmPromote = async () => {
   try {
     for (const id of promoteIds.value) {
       try {
-        await updateIssue(id, { status: 'open' })
+        /* smetana-fpw7: every id here came out of the Deferred column, so
+           writing `open` is always a human promote — the same `promoted:`
+           trail `startTheRun` leaves, one `bd update` for the status and the
+           note together. */
+        await updateIssue(id, { status: 'open', append_notes: promotedNote('column') })
         moved += 1
         promoted.value = moved
       } catch {
@@ -4353,7 +4362,19 @@ const writingId = ref(null)
 const setTaskStatus = async (id, status) => {
   writingId.value = id
   try {
-    await updateIssue(id, { status })
+    /* smetana-fpw7: this is the card menu's and the Task & details header's
+       write, `moveToReadyAnyway` below included — the third of the three
+       places a person can promote a task by hand. A `promoted:` note rides
+       beside the status in the same `bd update` only where the write is
+       genuinely a promote: the target is ready and the issue's own status
+       (read fresh, not the menu's possibly stale copy) still needs the move.
+       Every other status this menu can write — done, blocked, a project's own
+       custom one, or ready written over a task already there — gets no note,
+       since nothing was promoted. */
+    const before = issueById(id)?.status
+    const patch =
+      status === READY && needsReady(before) ? { status, append_notes: promotedNote('status') } : { status }
+    await updateIssue(id, patch)
   } catch {
     // the message already sits in trackerState.lastError
   } finally {
