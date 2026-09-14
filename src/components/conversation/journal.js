@@ -54,9 +54,13 @@
    "now" is, which is `TurnResult.vue`'s own clock to tick. But `Chunk::Eof`
    (`session::service`, an agent process ending on its own) sets the session's
    own state `failed` while appending **no** `Error` at all — closing a shell
-   window, and `Stop` itself, both end there, since `ClaudeDriver::interrupt`
-   answers `None` and `Request::Stop` reaches for `start_kill()` outright. A
-   turn read against the events alone would stay `waiting` forever in that
+   window still ends there, and so does `Stop` on any harness whose
+   `interrupt` answers `None`, since `Request::Stop` then reaches for
+   `start_kill()` outright. Claude Code's own `interrupt` no longer does
+   (smetana-y7mv): a Stop against it closes the turn on an ordinary `result`
+   event instead, the `done` path two paragraphs up rather than this one —
+   see `claude_driver.rs`'s own header for the measurement. A turn read
+   against the events alone would stay `waiting` forever in the `Chunk::Eof`
    case, its clock still climbing next to a header that already reads
    `failed` and a composer already reading Send again — which is why `state`
    is the second argument here.

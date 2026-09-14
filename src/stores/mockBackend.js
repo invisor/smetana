@@ -1775,12 +1775,12 @@ export function installMockBackend() {
        sake, answered before a caller arrives rather than after somebody meets
        the rejection.
 
-       The four that write — `session_start`, `session_send`, `session_answer`
-       and `session_stop` — are deliberately not answered here and fall through
-       to the rejection below, exactly as `terminal_create` and `terminal_shell`
-       do and for the same reason: there is no child process in a browser, and a
-       message that looked as though it had reached an agent would be worse than
-       one that plainly did not. */
+       The ones that write — `session_start`, `session_send`, `session_answer`,
+       `session_stop` and `session_close` — are deliberately not answered here
+       and fall through to the rejection below, exactly as `terminal_create` and
+       `terminal_shell` do and for the same reason: there is no child process in
+       a browser, and a message that looked as though it had reached an agent
+       would be worse than one that plainly did not. */
     if (command === 'session_attach') {
       /* A fresh array per answer, the way a worker's reply is its own object:
          the store assigns this straight to the conversation and pushes into it,

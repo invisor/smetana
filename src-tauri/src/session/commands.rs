@@ -92,12 +92,28 @@ pub async fn session_answer(
 }
 
 /// Stop the turn in flight, by whatever means this harness leaves open. For
-/// Claude Code that is killing the child: it has no documented way of being
-/// asked to stop one.
+/// Claude Code that is a `control_request` over stdin (smetana-y7mv,
+/// `ClaudeDriver::interrupt`) that ends the turn without killing the child; a
+/// harness with no such answer still loses the child. This is never what ends
+/// a session outright — see `session_close` below for that.
 #[tauri::command]
 pub async fn session_stop(
     handle: State<'_, SessionHandle>,
     id: SessionId,
 ) -> Result<(), SessionError> {
     ask(&handle, |tx| Request::Stop(id, tx)).await?
+}
+
+/// End the session outright — the cross on a driven agent row, never the
+/// composer's Stop (smetana-y7mv). Always kills the child, whatever a
+/// driver's `interrupt` answers, so the cleanup that used to follow every
+/// Stop unconditionally — forgetting the permission token, dropping the
+/// `.smetana/agents.json` record, deleting the `--mcp-config` file — still
+/// runs for the one gesture that is actually asking for it.
+#[tauri::command]
+pub async fn session_close(
+    handle: State<'_, SessionHandle>,
+    id: SessionId,
+) -> Result<(), SessionError> {
+    ask(&handle, |tx| Request::Close(id, tx)).await?
 }

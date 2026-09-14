@@ -151,14 +151,14 @@ import {
    built to outlive that migration would. */
 import {
   canDrive,
+  closeConversation,
   conversationFor,
   conversationState,
   conversationsIn,
   drivenSessions,
   forget,
   startConversation,
-  statusOf,
-  stopConversation
+  statusOf
 } from '../stores/conversation.js'
 import {
   boardColumns,
@@ -309,6 +309,7 @@ import { dropText } from '../components/terminal/dropPaths.js'
 import { resolveLocalLinkPath } from '../components/conversation/localLinkTarget.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { needsReady, promotesToReady } from '../components/run/readyPromote.js'
+import { promotedNote } from '../components/run/promotedNote.js'
 import { runTitle, scopeBusyReason } from '../components/run/runScopes.js'
 import { limitVoice } from '../components/run/limitVoice.js'
 import { DEFAULTS_FALLBACK, draftFrom } from '../components/run/projectDefaults.js'
@@ -2178,7 +2179,11 @@ const startTheRun = async (chosen) => {
        (`runFailure`) rather than starting something that ends at once. */
     const aimedAt = chosen.scope?.kind === 'task' ? issueById(chosen.scope.id) : null
     if (aimedAt && promotesToReady(aimedAt.status, hasBlocker(aimedAt.id))) {
-      await updateIssue(aimedAt.id, { status: READY })
+      /* smetana-fpw7: a human promote leaves its own trail — a `promoted:`
+         note beside the status, in the same `bd update` — so a later lead
+         reading `bd ready` can tell this move from a slipped status rather
+         than guessing from `updated_at` and undoing it. */
+      await updateIssue(aimedAt.id, { status: READY, append_notes: promotedNote('run') })
       /* The same check the rest of this file makes after every await, and the
          same reason: somebody can switch projects while a write is in flight,
          and from that moment the tracker worker points at another folder. The
@@ -2843,15 +2848,25 @@ function reorderAgents(rows) {
    what it has is a record in the project's own registry, so the file is what is
    written and `terminal_remove` is never called: it would ask the worker to end
    a session it has never held, and answer that it has no such id. A driven row
-   is the third, and it is two acts rather than one: the conversation is stopped
+   is the third, and it is two acts rather than one: the conversation is closed
    and the record forgotten.
 
    Neither of those is awaited and neither is guarded on the other's answer. The
    record is this window's own bookkeeping — the store keeps a driven session
-   until somebody closes it, and this cross is that somebody — so a stop the
+   until somebody closes it, and this cross is that somebody — so a close the
    worker refused is a sentence for the toast corner rather than a reason to
-   leave a row standing that the person has just dismissed. `stopConversation`
-   reports rather than throws, which is what lets this be an ordinary call. */
+   leave a row standing that the person has just dismissed. `closeConversation`
+   reports rather than throws, which is what lets this be an ordinary call.
+
+   **`closeConversation`, never `stopConversation` (smetana-y7mv).** The two
+   used to be the same act, because killing the child was the only thing Stop
+   ever did to any harness. It no longer is: Claude Code's own `interrupt` now
+   answers the composer's Stop by ending the turn in flight and leaving the
+   child running, so a cross wired to that verb would dismiss the row while
+   the process, its permission token and its `--mcp-config` file all stayed
+   behind — `session/service.rs`'s own doc comment on `Request::Close` carries
+   the trace. This is the one place in the front end that ends a session
+   outright; the composer's own Stop button stays on `stopConversation`. */
 function removeAgentRow(id) {
   const conversation = drivenSessionOf(id)
   if (conversation !== null) {
@@ -2867,7 +2882,7 @@ function removeAgentRow(id) {
        session behind it, and asking the worker to forget a record it has
        already dropped writes nothing. */
     const recorded = orderedAgentRows.value.find((row) => row.id === id)?.conversation
-    stopConversation(conversation)
+    closeConversation(conversation)
     forget(conversation)
     if (recorded) forgetRestored(recorded)
     return
@@ -3721,7 +3736,11 @@ const confirmPromote = async () => {
   try {
     for (const id of promoteIds.value) {
       try {
-        await updateIssue(id, { status: 'open' })
+        /* smetana-fpw7: every id here came out of the Deferred column, so
+           writing `open` is always a human promote — the same `promoted:`
+           trail `startTheRun` leaves, one `bd update` for the status and the
+           note together. */
+        await updateIssue(id, { status: 'open', append_notes: promotedNote('column') })
         moved += 1
         promoted.value = moved
       } catch {
@@ -4354,7 +4373,19 @@ const writingId = ref(null)
 const setTaskStatus = async (id, status) => {
   writingId.value = id
   try {
-    await updateIssue(id, { status })
+    /* smetana-fpw7: this is the card menu's and the Task & details header's
+       write, `moveToReadyAnyway` below included — the third of the three
+       places a person can promote a task by hand. A `promoted:` note rides
+       beside the status in the same `bd update` only where the write is
+       genuinely a promote: the target is ready and the issue's own status
+       (read fresh, not the menu's possibly stale copy) still needs the move.
+       Every other status this menu can write — done, blocked, a project's own
+       custom one, or ready written over a task already there — gets no note,
+       since nothing was promoted. */
+    const before = issueById(id)?.status
+    const patch =
+      status === READY && needsReady(before) ? { status, append_notes: promotedNote('status') } : { status }
+    await updateIssue(id, patch)
   } catch {
     // the message already sits in trackerState.lastError
   } finally {

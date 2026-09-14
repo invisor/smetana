@@ -149,6 +149,21 @@ bd update "$id" --status deferred
 breaks the loop**: a filed task waits there until a person moves it to `open`. You never
 promote one — not in this run, not in a later one — and you never claim one.
 
+**The other half of the rule is one you do not un-promote either.** A `spawned` finding
+that later turns up in `bd ready` is, by that fact alone, a task a person moved there —
+nothing else writes `open` over `deferred`. Take it up like any other queued task. Do not
+write it back to `deferred` on a guess that the move was accidental, and do not read
+`updated_at` or the absence of dependencies as evidence either way — a status write moves
+`updated_at` on its own, so it tells a promote from a stale reading only by comparing the
+time and not the date, and the app already leaves the mark that answers the question
+outright: a person promoting a task from this app writes a note beginning `promoted:`
+beside the status, in the same `bd update` — one more of this project's own markers,
+beside `parked:` and `resolved:`. The rule generalises past this one label: **you do not
+change the status of a task you did not file this batch.** If you are ever unsure whether
+a status is a person's decision or a fluke, that note (or its absence) is the fact to read,
+never a guess about the field beside it — and where the doubt survives even that, ask
+rather than reverting silently.
+
 **How it is written is `filing-a-task`'s business, and that skill applies here in full**
 — the required sections, `--validate`, and above all its standard: whoever picks this up
 can finish it without asking anybody. You are filing it having just read the code and
@@ -725,6 +740,9 @@ So, after the report above and before you hand back, write the file the prompt n
   person to notice (smetana-0u7).
 - **Never abort the whole batch for one task.** Park it, or ask, and move on.
 - **Never promote a `deferred` task, and never claim one.** Only a person does that.
+- **Never change the status of a task you did not file this batch.** A `spawned` finding
+  that turns up in `bd ready` was moved there by a person — look for a `promoted:` note —
+  and it is picked up like any other queued task, never written back to `deferred`.
 - **Only mechanical conflicts resolve themselves.** Anything needing a judgement about
   what the program should do stops.
 - **You own the tracker and the worktrees.** Nobody you spawned runs either, and nobody
