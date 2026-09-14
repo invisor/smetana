@@ -2413,18 +2413,20 @@ const onAddProject = async () => {
   if (needsSetup.value) openSetup(added, false)
 }
 
-/* The setup agent runs inside this window's own terminal tab, so the person
-   watching it never leaves and never returns — window focus, which is how
-   every other outside writer (an agent on a branch, a person in a terminal)
-   gets noticed, simply never fires. terminalState.sessions already carries
-   state for every session, active or not (see stores/terminals.js), so that is
-   the signal to watch instead of a timer: every time a session of this project
-   stops working, or one starts, the file may have changed and loadConfig reads
-   it again. Both edges, deliberately — the key is what is working now, not
-   what has just finished — so a session going idle, picking up again and then
-   exiting costs two reads rather than one. That is the frequency to weigh
-   before touching this channel, and it is a small toml parse against a
-   `catchUp` that re-lists every expanded directory.
+/* The setup agent runs inside this window itself and never in one of its own —
+   a terminal tab, or, since smetana-osut, the conversation panel — so the
+   person watching it never leaves and never returns: window focus, which is
+   how every other outside writer (an agent on a branch, a person in a
+   terminal) gets noticed, simply never fires. terminalState.sessions already
+   carries state for every PTY session, active or not (see stores/terminals.js),
+   so that used to be the whole of the signal to watch instead of a timer:
+   every time a session of this project stops working, or one starts, the file
+   may have changed and loadConfig reads it again. Both edges, deliberately —
+   the key is what is working now, not what has just finished — so a session
+   going idle, picking up again and then exiting costs two reads rather than
+   one. That is the frequency to weigh before touching this channel, and it is
+   a small toml parse against a `catchUp` that re-lists every expanded
+   directory.
 
    The rule is `workingKey`, and it lives outside this file for the reason the
    whole `branchChoice.js` family does. What it replaces was a watcher created
@@ -2441,14 +2443,40 @@ const onAddProject = async () => {
    ended: this only asks the question again, and `needsSetup` moves when the
    answer comes back `ok`.
 
+   **Handed both kinds of session, merged, and not `terminalState.sessions`
+   alone — the same shape `finishedReviews` above takes and for the identical
+   reason.** `Intent::Setup` and `Intent::Bootstrap` take `startAgent`'s own
+   fork like every other intent since smetana-osut, so a setup opens driven far
+   more often than not under the shipped defaults, and a driven setup session
+   lives in `drivenSessions`, never in `terminalState.sessions` — a rule fed
+   the PTY list alone never moves for one, and `.smetana/project.toml` goes on
+   reading as unset after the agent that wrote it has finished. `WORKING`'s two
+   words, `starting` and `running`, are the same raw kebab-case
+   `SessionState` writes on both workers' wire, so no translation is owed
+   before `workingKey` reads either list — only the untranslated `state`,
+   never `statusOf`'s. Each driven id is passed through `drivenRowId` before
+   the merge, for `finishedReviews`' own reason: `workingKey` joins raw ids
+   into its key, and an unprefixed PTY session 3 and a driven session 3 — both
+   workers count from one — could otherwise mask each other's transition in
+   and out of `WORKING` inside the one joined string.
+
    A project switch moves the key too, and pays for up to two extra reads of a
-   small file — the sessions of the project just left stop matching, then
-   loadSessions brings the new project's in. The activePath watcher below reads
-   the same file at the same moment; loadConfig is idempotent and guarded
-   against its own stale response, so the duplicate costs the read and nothing
-   else. */
+   small file — the PTY sessions of the project just left stop matching, then
+   loadSessions brings the new project's in; `drivenSessions` needs no such
+   refresh, since it already holds every project's conversations at once and
+   `workingKey`'s own `project` filter is what narrows it. The activePath
+   watcher below reads the same file at the same moment; loadConfig is
+   idempotent and guarded against its own stale response, so the duplicate
+   costs the read and nothing else. */
 watch(
-  () => workingKey(terminalState.sessions, activePath.value),
+  () =>
+    workingKey(
+      [
+        ...terminalState.sessions,
+        ...drivenSessions.value.map((session) => ({ ...session, id: drivenRowId(session.id) }))
+      ],
+      activePath.value
+    ),
   () => {
     if (activePath.value) loadConfig(activePath.value)
   }
