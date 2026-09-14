@@ -62,7 +62,8 @@ preview, deletes nothing and exits zero.
 Which directory that is comes from `src-tauri/src/project.rs` — the vocabulary the tracker and the
 settings share: `has_tracker`, `nearest_tracked_ancestor` and `default_project` for the very first
 run. `has_tracker` is not "does `.beads` exist": a `.beads` counts only if it also holds one of
-`metadata.json`, `config.yaml` or `embeddeddolt/` — what `bd where` itself accepts — because every
+`metadata.json`, `config.yaml`, `embeddeddolt/` or `redirect` (the last is a worktree's own `.beads`,
+pointing `bd where` at a workspace kept elsewhere) — what `bd where` itself accepts — because every
 machine that has run bd carries a bare `.beads/eventsData` at `~/.beads`, bd's own global folder, and
 without the marker check every folder under the home directory would resolve to the home directory
 (smetana-0hrt). `nearest_tracked_ancestor` climbs to that marked ancestor, so a folder inside a

@@ -8,12 +8,17 @@ use std::path::{Path, PathBuf};
 
 /// What inside a `.beads` directory makes it an actual bd workspace, rather
 /// than bd's own global folder. `bd where`, run against the sidecar binary,
-/// accepts any one of these — a `.beads` holding only `eventsData/` is not a
-/// workspace to bd either, and that is exactly what `~/.beads` holds on any
-/// machine that has ever run bd: nothing chosen, just bd's own bookkeeping.
-/// Without this list, every folder under the home directory would resolve to
-/// the home directory itself, because `~/.beads` would pass as a tracker.
-const TRACKER_MARKERS: &[&str] = &["metadata.json", "config.yaml", "embeddeddolt"];
+/// accepts any one of these — `metadata.json` or `config.yaml` own the
+/// workspace directly, `embeddeddolt/` is the database itself, and
+/// `redirect` points `bd where` at a workspace kept elsewhere (a worktree's
+/// own `.beads` holding nothing but that file still resolves, `(via redirect
+/// from …)`, to the tracker it points at). A `.beads` holding only
+/// `eventsData/` is not a workspace to bd, and that is exactly what
+/// `~/.beads` holds on any machine that has ever run bd: nothing chosen, just
+/// bd's own bookkeeping. Without this list, every folder under the home
+/// directory would resolve to the home directory itself, because `~/.beads`
+/// would pass as a tracker.
+const TRACKER_MARKERS: &[&str] = &["metadata.json", "config.yaml", "embeddeddolt", "redirect"];
 
 /// A folder has a tracker if it holds a `.beads` directory carrying at least
 /// one of `TRACKER_MARKERS`. A file named `.beads` does not make one, and
@@ -133,6 +138,18 @@ mod tests {
     }
 
     #[test]
+    fn a_beads_folder_with_only_a_redirect_is_tracked() {
+        // A worktree's own .beads holds nothing but this file and points
+        // `bd where` at the real workspace elsewhere; bd accepts it as a
+        // workspace, so this app must too (smetana-0hrt review pass 1).
+        let root = scratch("redirect");
+        fs::create_dir_all(root.join(".beads")).unwrap();
+        fs::write(root.join(".beads/redirect"), "/elsewhere/.beads").unwrap();
+        assert!(has_tracker(&root));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn the_search_climbs_to_the_nearest_ancestor() {
         let root = scratch("ancestor");
         let deep = root.join("a/b/c");
@@ -225,6 +242,17 @@ mod tests {
         fs::create_dir_all(root.join(".beads")).unwrap();
         fs::write(root.join(".beads/metadata.json"), "{}").unwrap();
         assert_eq!(nearest_tracked_ancestor(&root).as_deref(), Some(root.as_path()));
+
+        // The path `project_root` actually takes on every folder pick inside a
+        // tracked repository: start below the root, not at it. Checking only
+        // the root itself proves the first loop iteration orders the checks
+        // correctly and nothing else — swapping the tracker and git checks
+        // inside the loop would still pass that assertion while breaking this
+        // one (smetana-0hrt review pass 1).
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        assert_eq!(nearest_tracked_ancestor(&src).as_deref(), Some(root.as_path()));
+
         let _ = fs::remove_dir_all(&root);
     }
 }

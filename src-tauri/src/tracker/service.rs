@@ -164,7 +164,7 @@ fn own_bd(current: &Option<Project>, dir: &Path) -> Option<Bd> {
 /// Troubles come in three kinds and must not be confused. A one-off bd failure
 /// clears itself: the next successful call is the proof that things work again.
 /// "Wrong bd version" is about the binary: it survives both a successful
-/// `bd list` and a project switch. "No .beads directory", "the watcher died",
+/// `bd list` and a project switch. "No bd tracker", "the watcher died",
 /// "no project selected" are about the open folder: they have to survive a
 /// successful call, but die together with the project they belonged to.
 struct HealthReporter {
