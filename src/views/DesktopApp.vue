@@ -155,6 +155,7 @@ import {
   conversationsIn,
   drivenSessions,
   forget,
+  sendMessage,
   startConversation,
   statusOf,
   stopConversation
@@ -285,6 +286,16 @@ import {
 import { initUpdates } from '../stores/updates.js'
 import { liveCheckBlock } from '../components/run/browserTools.js'
 import { folderOf, parentOf, relativePath } from '../components/files/fileMenu.js'
+/* Which agent "Attach to agent" reaches, and whether there is one to pick at
+   all — pure, over the merged agent rows this file already builds, so the
+   rule can be tested where no `.vue` can be reached. `hasLiveAgent` is
+   aliased on the way in: this file already has a local `hasAnyLiveAgent`
+   computed built from it, and importing the two under the same name would
+   shadow the function the computed is built from. */
+import {
+  hasLiveAgent as attachHasLiveAgent,
+  selectedAttachTarget
+} from '../components/files/attachTarget.js'
 import { isFolderRecord } from '../components/git/changeMenu.js'
 import { pasteSource } from '../components/files/fileClipboard.js'
 import { checkNewName } from '../components/files/newEntry.js'
@@ -5376,76 +5387,107 @@ watch(
   }
 )
 
-/* Which agent a path lands in: the selected one, and only ever the selected
-   one, when it is an agent that can be typed into.
+/* Which agent a path lands in: the one the agents panel is actually
+   highlighting, and only ever that one, when it is live enough to write to —
+   on whichever of the two roads it happens to be standing on.
 
-   The whole safety of this gesture is that the text is *typed* rather than sent,
-   so the person sees it land and writes around it. That only holds if it lands
-   where they are looking, and the centre draws `terminalState.activeId` — so
-   this is that id or nothing. There used to be a fall-back to the newest live
-   row, and it broke exactly that: a finished agent stays in the list and stays
-   selectable, and `createSession` parks a *string* ticket in `activeId` for the
-   second a spawn takes, so in both cases the path went into a session the tab
-   was not showing and sat there in somebody else's half-written prompt, with
-   nothing on screen to say it had.
+   The whole safety of this gesture is that it reaches the agent the person is
+   looking at and never a substitute, whatever the delivery underneath turns
+   out to be. What the panel highlights is `activeAgentRow` — a driven
+   conversation's row for as long as the Agent tab is aimed at one,
+   `terminalState.activeId` otherwise (see that field's own header, above).
+   Reading `terminalState.activeId` alone here was smetana-2p84: with a driven
+   conversation on screen and no live PTY session this read `null` and greyed
+   the row over a live agent in the next column; with a live PTY session it
+   went on naming that session regardless, so the pick re-aimed the tab away
+   from the conversation being watched and wrote the path into somebody
+   else's session. `attachTarget` and `hasAnyLiveAgent` below ask
+   `selectedAttachTarget`/`hasLiveAgent` from `components/files/attachTarget.js`
+   over `orderedAgentRows` — the one list the panel is actually drawn from,
+   PTY and driven rows already merged — so the row this menu reaches back is
+   never a row the panel is not showing as selected. There used to be a
+   fall-back to the newest live row before that, and it broke the same
+   invariant a different way: a finished agent stays in the list and stays
+   selectable, and `createSession` parks a *string* ticket in `activeId` for
+   the second a spawn takes, so in both cases the path went into a session the
+   tab was not showing.
 
    Narrowing rather than moving the selection is the other half of the choice.
-   `selectAgent` sets `activeId` and the tab together and is welcome to; this
-   menu is built on not moving anything — a secondary click is a question about
-   a row, not a visit to it — and an item that quietly repointed the agents panel
-   would be the same surprise one panel over.
+   `selectAgent` sets the selection and the tab together and is welcome to;
+   this menu is built on not moving anything — a secondary click is a question
+   about a row, not a visit to it — and an item that quietly repointed the
+   agents panel would be the same surprise one panel over.
 
-   Exited rows are excluded because there is nothing behind them to write to, and
-   start tickets because a ticket is not a session and has no id the worker would
-   accept. */
-const liveAgentRows = computed(() =>
-  agentRows.value.filter(
-    (row) => !row.starting && row.state !== 'done' && row.state !== 'failed'
-  )
+   A row that has ended is excluded because there is nothing behind it to
+   write to, and a start ticket because it is not a session yet and has no id
+   either worker would accept — `selectedAttachTarget` reads all three off the
+   row's own `state` and `starting`, whichever road it is on. */
+const attachTarget = computed(() =>
+  selectedAttachTarget({ selectedId: activeAgentRow.value, rows: orderedAgentRows.value })
 )
 
-const attachTarget = computed(
-  () => liveAgentRows.value.find((row) => row.id === terminalState.activeId)?.id ?? null
-)
+/* Whether there is an agent here to pick at all, on either road — the same
+   population `attachTarget` is narrowed out of by the selection. It decides
+   nothing about whether the item is off: it decides which reason the off row
+   gives, because "no agent to type into" is plainly false with one running
+   one column over, and that is the ordinary state rather than a corner.
+   Nothing moves the selection when a session ends — `finish` leaves
+   `terminalState.activeId` alone and the repair in `loadSessions` treats an
+   exited row as a live selection, and a driven conversation's own row stays
+   `activeAgentRow`'s answer until something else is picked — so an agent
+   finishing while another runs leaves the selection on the finished one until
+   somebody moves it. */
+const hasAnyLiveAgent = computed(() => attachHasLiveAgent(orderedAgentRows.value))
 
-/* Whether there is an agent here to pick at all — the same population, before
-   the selection narrows it. It decides nothing about whether the item is off:
-   it decides which reason the off row gives, because "no agent to type into" is
-   plainly false with one running one column over, and that is the ordinary
-   state rather than a corner. Nothing moves `activeId` when a session ends —
-   `finish` leaves it alone and the repair in `loadSessions` treats an exited row
-   as a live selection — so an agent finishing while another runs leaves the
-   selection on the finished one until somebody moves it. */
-const hasLiveAgent = computed(() => liveAgentRows.value.length > 0)
+/* Delivery is not one thing, and the spec behind this function says so in as
+   many words: the two roads answer to different verbs, and that is part of
+   the work rather than a seam to paper over. On the PTY road a path is the
+   drag-and-drop gesture by another route, so it goes through the same
+   `dropText` that drop uses: it quotes the path, ends it in one space and
+   refuses outright a name carrying a control character — see
+   `terminal/dropPaths.js` for why that last one is a refusal rather than a
+   repair — and lands as bytes typed into a line discipline, with Return never
+   among them, so the person sees it land and writes around it.
 
-/* A file handed to an agent is the drag-and-drop gesture by another route, so
-   it is the same bytes through the same function: `dropText` quotes the path,
-   ends it in one space and refuses outright a name carrying a control character
-   — see `terminal/dropPaths.js` for why that last one is a refusal rather than
-   a repair. A second way to write a path into a prompt would be a second quoting
-   rule to keep correct. Return stays with the person either way. */
+   A driven conversation has no such line to type into: `sendMessage` in
+   `stores/conversation.js` is this app's one road to a driven agent's turn,
+   and there is no narrower one that lands text without also submitting it.
+   So the path is handed over there as an ordinary message and the turn goes
+   in whole — no quoting, since nothing here parses it as a shell would. */
 async function attachToAgent(path) {
-  const id = attachTarget.value
-  const text = dropText([path])
-  if (!id || !text) {
+  const target = attachTarget.value
+  if (!target) {
     sayFileMenu({
       tone: 'error',
       title: 'Nothing was attached',
-      /* The second branch is a race and nothing else: the row was drawn live,
-         so there was an agent selected when the menu opened, and it stopped
-         being one before the pick. The label's own two sentences are about the
-         menu; this is about the moment after it. */
-      description: !text
-        ? 'That name carries a character that would press Return in an agent.'
-        : 'The selected agent went away before the path could reach it.'
+      description: 'The selected agent went away before the path could reach it.'
     })
     return
   }
-  /* The tab and nothing else: `id` is already `terminalState.activeId`, which is
-     what this tab draws once the tab is aimed at a PTY session again, so the
-     path lands in the session that comes up. */
+  if (target.road === 'driven') {
+    /* Aim the tab at this conversation and bring it forward: the row was
+       already the panel's selection, so this is the one case that can move
+       nothing on screen, and it is what puts the person in front of the
+       path landing whenever they were standing somewhere else — the board,
+       another agent's tab — when the menu was opened. */
+    showAgentTab(target.id)
+    await sendMessage(target.id, path)
+    return
+  }
+  const text = dropText([path])
+  if (!text) {
+    sayFileMenu({
+      tone: 'error',
+      title: 'Nothing was attached',
+      description: 'That name carries a character that would press Return in an agent.'
+    })
+    return
+  }
+  /* The tab and nothing else: `target.id` is already `terminalState.activeId`,
+     which is what this tab draws once it is aimed at a PTY session again, so
+     the path lands in the session that comes up. */
   showAgentTab()
-  await send(id, text)
+  await send(target.id, text)
 }
 
 /* A branch's whole name on the clipboard, from the Git panel's row menu. The
@@ -6803,7 +6845,7 @@ const toastStackStyle = {
                 :expanded="expanded"
                 :selected-path="project.selectedPath ?? undefined"
                 :can-attach="attachTarget !== null"
-                :has-live-agent="hasLiveAgent"
+                :has-live-agent="hasAnyLiveAgent"
                 :clipboard="pasteRecord"
                 @toggle="toggleDir"
                 @select="onSelectFile"

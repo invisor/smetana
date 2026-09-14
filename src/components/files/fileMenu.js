@@ -54,12 +54,15 @@ export function isMacUserAgent(userAgent = '') {
    the width.
 
    Two sentences, because there are two reasons and only one of them is "there
-   is no agent". The verb types into the agent the centre is *showing*, which is
-   the selected one and never whichever happens to be newest — `DesktopApp.vue`
-   records why a path delivered into a session nobody is looking at is the one
-   failure this gesture cannot afford. So the row can be refused with a live
-   agent on screen one column over, and that case is ordinary rather than exotic:
-   an agent finishing while another still runs leaves the selection on the one
+   is no agent". The verb reaches the agent the panel is *highlighting* —
+   `DesktopApp.vue`'s `activeAgentRow`, whichever of the two roads it names —
+   and never whichever happens to be newest: that file's own header on
+   `attachTarget` records why a path delivered into a session nobody is
+   looking at is the one failure this gesture cannot afford, and
+   `components/files/attachTarget.js` is where the row is actually picked out
+   of the panel's own merged list. So the row can be refused with a live agent
+   on screen one column over, and that case is ordinary rather than exotic: an
+   agent finishing while another still runs leaves the selection on the one
    that finished, and nothing moves it back.
 
    Between them the two cover every state the item can be off in — no agent in
@@ -102,8 +105,9 @@ const PASTE_INTO_SELF = 'cannot paste a folder into itself'
    `canAttach` is deliberately not called `hasAgentSession`, which is a different
    question and a live export of `stores/terminals.js`: that one counts a start
    ticket and an exited session, because what hangs off it is whether the centre
-   has an Agent tab at all. This one is whether the *selected* agent can be typed
-   into right now, which excludes both. Two names, because a prop wired to the
+   has an Agent tab at all. This one is whether the *selected* agent — PTY or a
+   driven conversation, whichever the panel is highlighting — can be reached
+   right now, which excludes both. Two names, because a prop wired to the
    store's answer by somebody reading the name rather than the comment would
    light this row over a session that would swallow the path.
 
