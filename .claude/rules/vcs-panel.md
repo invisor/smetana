@@ -2285,8 +2285,9 @@ space, a hash or a word in another alphabet, and any of those is either a direct
 or a filename an OS argues about. A name that reduces to nothing at all is `review`, since a path
 ending in the minute is a file named after a clock.
 
-Then `createSession(project, { kind: 'reviewBranch', pairs, report })` — an ordinary agent session, a
-tab in the centre column, in the harness `settings.json` names, exactly like `New agent`. And only
+Then `startAgent(project, { kind: 'reviewBranch', pairs, report })` — an ordinary agent session, in the
+harness `settings.json` names, exactly like `New agent`: the conversation panel when `canDrive`
+answers true, a tab in the centre column otherwise (`.claude/rules/terminal.md`). And only
 then does the window close, which is the opposite of every other write behind a dialog in
 `DesktopApp.vue` and shares its reason with `delete-branch`: what the window is drawing while this runs
 — the fetch, and then which repositories it could not reach — is said nowhere else, so closing first

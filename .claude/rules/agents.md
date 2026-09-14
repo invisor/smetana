@@ -55,6 +55,21 @@ finished now by **asking** rather than by guessing, since an agent that decides 
 an issue nobody asked it to touch. `no_prompt_stops_mid_sentence` walks every intent and both
 deliveries and refuses a prompt ending in dangling punctuation.
 
+That is the PTY road's own channel, and it stopped being the only one a driven session takes
+(`.claude/rules/terminal.md`, `.claude/rules/conversation-panel.md`). `--input-format stream-json`
+discards the positional argument Claude Code would otherwise be handed, so `ClaudeDriver::start` puts
+`prompt::build`'s text on `--append-system-prompt` for `Intent::Bare` alone — a standing instruction
+about how to talk, which is exactly what that channel is for — and `Driver::opening` hands the very
+same composed text to the worker for every other intent, to be written over stdin as the session's
+first turn once the child has spawned. Composed by the identical pure function either way: what moves
+is the wire the worker puts the words on, never the words themselves or the rule that finishes them.
+
+**A driven session's own opening turn is the one already-composed prompt the panel refuses to draw
+whole** (`.claude/rules/conversation-panel.md`'s "The opening turn"). What the journal records instead
+is `Intent::opening_words()` — the new-task dialog's own text and pictures, or nothing for the seven
+intents nobody typed a word into — never the finished prompt itself, which stays what only the harness
+reads.
+
 **Part of that text has a second reader, and rewording it without knowing that is silent.** A prompt
 is submitted as the session's first message, so it lands in Claude Code's transcript as a record the
 person is down as having typed — and `sessions/kickoff.rs` reads it back out to answer the Sessions
@@ -395,11 +410,12 @@ what a person picks a session out of that list for is the conversation, not whic
 being written into.
 
 It is also the one intent that opens on **no prompt at all**, and `prompt::build`
-refuses it before it composes a word. A prompt rides as the positional argument and both harnesses
-*submit* it as the session's first message; a resumed conversation already has somebody's words in
-it, so even the conversation-language paragraph — which reaches every other intent, `Bare`
-included — would be this app talking over the person whose session it is. Whatever was settled in
-there was settled before this window existed.
+refuses it before it composes a word. A prompt rides as the positional argument on the PTY road, and
+over stdin through `Driver::opening` on the driven one (this file's own "Every prompt is a whole
+instruction" section, above); either way it reaches the session as its first message — a resumed
+conversation already has somebody's words in it, so even the conversation-language paragraph — which
+reaches every other intent, `Bare` included — would be this app talking over the person whose session
+it is. Whatever was settled in there was settled before this window existed.
 
 `agents::IDS` is the single copy of the agent-id list, and `settings/model.rs` validates against it
 rather than repeating it — the side-tab hazard again: a value that survives the session and silently
@@ -717,9 +733,10 @@ list, while withholding it removes the feature with nothing on screen to say so.
 over it keeps its own name, which lets the prompt say `superpowers:brainstorming` in both cases.
 
 **Filing a task is an agent session, not a write.** `NewTaskModal` no longer emits an issue: its
-fields become a `TaskDraft` inside a `NewTask` intent, and `DesktopApp.vue` switches to the agents
-side tab and the terminal centre tab and calls `createSession`, exactly as "Ask agent to edit" does.
-The agent runs `bd create` itself and the watcher puts the card on the board — and `createIssue`,
+fields become a `TaskDraft` inside a `NewTask` intent, and `DesktopApp.vue`'s `submitNewTask` calls
+`startAgent`, exactly as "Ask agent to edit" does — the conversation panel when `canDrive` answers
+true, the terminal otherwise (`.claude/rules/terminal.md`). The agent runs `bd create` itself and the
+watcher puts the card on the board — and `createIssue`,
 `tracker_create`, `NewIssue` and `create_args` are deleted rather than left unused, because a live
 write path into the tracker that nothing calls is the kind of thing that gets called again in six
 months.

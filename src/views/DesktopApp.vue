@@ -616,11 +616,11 @@ onMounted(initRuns)
    there is no race to lose here. */
 onMounted(initUpdates)
 
-/* A new agent becomes the one you're looking at right away: that is what it was
-   created for. Which of the two kinds of session it is depends on the harness
-   and on the person's own switch, and on nothing else this button knows —
-   `canDrive` in the conversation store is where both live, and this file asks
-   it rather than reading either.
+/* The one road into a session, for every start a person talks to. Which of
+   the two kinds of session it lands in depends on the harness and on the
+   person's own switch, and on nothing else this function knows — `canDrive`
+   in the conversation store is where both live, and this file asks it rather
+   than reading either.
 
    **Claude Code takes the driven road while the conversation panel is
    switched on**: the worker parses its protocol and the Agent tab draws a
@@ -679,48 +679,68 @@ onMounted(initUpdates)
    or of the selected agent's terminal, or of the empty state if there was
    neither. The tab is aimed once there is something to aim it at.
 
-   The project is read once, at the top, and carried through both awaits. Every
-   other await in this file re-checks `activePath.value` afterwards for the same
-   reason: a switch during that second would otherwise write this session's id
-   into whichever project is on screen when the worker answers, and take the tab
-   there off whatever it was showing.
+   `path` is read by the caller rather than here, and carried through both
+   awaits, for the same reason every other await in this file re-checks
+   `activePath.value` afterwards: a switch during either await would otherwise
+   write this session's id into whichever project is on screen when the worker
+   answers, and take the tab there off whatever it was showing. Most callers
+   read `path` from `activePath.value` a line above their own call and never
+   await anything before it, so `path === activePath.value` holds by
+   construction the whole way through. Two do not: the branch review's own
+   fetch takes up to a minute before it calls this, and the tracker repair's
+   own `trackerFailure()` read is an await of its own in front of the same
+   call — so the two writes that bring the tab forward, `project.sideTab` here
+   and `project.activeTab` below, are each guarded on the two still naming the
+   same project, the way `showAgentTab` already guards its own. For every
+   other caller the guard is never false, and it costs nothing to keep asking
+   it there too.
 
-   The side tab is set here even though the button that calls this only exists
-   while the panel is already on Agents: where a session is started from is not
-   what should decide where the window ends up, and the routes into a session
-   say the same two lines so that adding another is one decision rather than
-   two.
+   The side tab is set here even though every caller is a button that already
+   lives on the Agents side tab or one of its dialogs: where a session is
+   started from is not what should decide where the window ends up, and every
+   route into a session says the same line so that adding another is one
+   decision rather than one more copy of it.
 
-   The one `try` left is around `createSession`, which is the only call here that
-   rejects: `startConversation` reports and answers `null` instead, which is what
-   makes the choice between the two roads an ordinary `if` rather than control
-   flow through an exception. */
-async function newAgent() {
-  const path = activePath.value
-  /* The guard its neighbours carry. Nothing reaches this without a project
-     today — the button is drawn beside a project's own tabs — but the capture
-     above is what would otherwise file an aim under `undefined` and hand the
-     same to the worker, and that should be a fact about this function rather
-     than about whoever draws the button. */
-  if (!path) return
+   `true` when something started, `false` when both roads refused. Nothing
+   here throws — the one `try` is around `createSession`, the only call that
+   rejects, and every caller is an event handler with nobody above it to catch
+   one. */
+async function startAgent(path, intent) {
+  if (!path) return false
   /* What to put back if nothing starts: where the tab was aimed before the
      press, and whatever the driven road had to say for itself. `?? null` because
      a project nobody has aimed yet reads the same as one aimed at its PTY agent
      — `conversationId` folds the two together — so restoring `null` restores
      exactly what was there. */
   const aimed = agentAim.get(path) ?? null
+  /* The count at entry, before either road has written anything — read here
+     for the `badCwd` early return below, which happens before this function's
+     own `showAgentTab(null, path)` on the fallback road. The fallback road
+     takes a second count of its own, right after that write, since a second
+     comparison against this one would count its own write as somebody else's
+     aim. */
+  const aimWrites = agentAimWrites.get(path)
   let refused = null
 
-  project.sideTab = 'agents'
+  if (path === activePath.value) project.sideTab = 'agents'
   if (canDrive(settings.agent)) {
     /* The tab comes forward on the press; the aim follows the id, so a spawn
        that answers leaves the panel on the new conversation and one that does
        not leaves nothing pointing at a session that was never made. */
-    project.activeTab = 'terminal'
-    const id = await startConversation(path, { kind: 'bare' })
+    if (path === activePath.value) project.activeTab = 'terminal'
+    const id = await startConversation(path, intent)
     if (id !== null) {
       showAgentTab(id, path)
-      return
+      return true
+    }
+    /* A refusal about the directory ends it here and the sentence stands:
+       both workers ask `sessions::model::resume_cwd` of the same path, so a
+       resumed session's PTY road could only refuse again and put the same
+       toast up a second time. Every other intent's `session_cwd` never
+       answers this tag, so this branch is inert for them. */
+    if (conversationState.lastError?.kind === 'badCwd') {
+      if (agentAimWrites.get(path) === aimWrites) agentAim.set(path, aimed)
+      return false
     }
     // Off the screen for the fallback, and back again below if that fails too.
     refused = conversationState.lastError
@@ -731,16 +751,20 @@ async function newAgent() {
   /* The aim just written, taken by its number rather than by its value.
      `showAgentTab` raises a count beside the aim on every call, and that count
      is what the catch below compares to find out whether this function is still
-     the last thing to have aimed the project. */
-  const aimWrites = agentAimWrites.get(path)
+     the last thing to have aimed the project. Its own count and not the one
+     taken at entry: this write already moved that one, and comparing against
+     it would read this function's own write as somebody else's aim. */
+  const ownAimWrites = agentAimWrites.get(path)
   try {
-    await createSession(path, { kind: 'bare' })
+    await createSession(path, intent)
+    return true
   } catch {
     /* Both roads refused. `createSession` has already logged its own and taken
-       back everything it put on screen; what is left to undo is this function's
-       own two changes. There is no rethrow because there is nobody above to
-       catch one — this is an event handler — and the catch is also what stops
-       Vue's unhandled-rejection warning repeating what the store already said.
+       back everything it put on screen; what is left to undo is this
+       function's own two changes. There is no rethrow because there is
+       nobody above to catch one — every caller is an event handler — and the
+       catch is also what stops Vue's unhandled-rejection warning repeating
+       what the store already said.
 
        **Only if nobody has aimed this project since**, which is the guard
        `createSession` puts on `terminalState.activeId` around its own await and
@@ -768,9 +792,17 @@ async function newAgent() {
        was already there is not one of the moves being counted, and raising it
        would only make a second press's own restore look like somebody else's
        aim. */
-    if (agentAimWrites.get(path) === aimWrites) agentAim.set(path, aimed)
+    if (agentAimWrites.get(path) === ownAimWrites) agentAim.set(path, aimed)
     if (refused && !conversationState.lastError) conversationState.lastError = refused
+    return false
   }
+}
+
+/* A new agent becomes the one you're looking at right away: that is what it
+   was created for. Everything about which of the two kinds of session it
+   becomes, and what happens if either road refuses, is `startAgent`'s. */
+async function newAgent() {
+  await startAgent(activePath.value, { kind: 'bare' })
 }
 
 /* A shell of the person's own, in the project's root, in a tab of its own.
@@ -1695,34 +1727,30 @@ async function startReview(form) {
        the path is what a person reads afterwards, and `origin-feature-x` would
        be naming a remote in a filename. */
     const report = reportPath(form?.head?.ref, new Date())
-    /* Both switches the way `newAgent` sets them — this is the same act by
-       another door, and a tab that appears a second later leaves the button a
-       person pressed looking as though it did nothing — but **only while this is
-       still the project on screen**. `project` is `settings.project`, the active
-       project's own section, and the fetch above it is up to a minute of
-       network: somebody who moved on during it would have another project's
-       tabs flipped by a review they started somewhere else. The session is
-       unaffected either way, since `createSession` is given the path this
-       started from rather than whatever is selected now. */
-    if (activePath.value === path) {
-      project.sideTab = 'agents'
-      showAgentTab()
-    }
     /* `fetchFailed` rides beside the pairs so that the report can say so about
        itself. Without it the sentence lived only on screen and in a toast, and
        somebody who saw neither had nothing to learn it from — an `origin/main`
        a week old reads exactly like one a minute old. */
-    await createSession(path, {
-      kind: 'reviewBranch',
-      pairs: reviewPairs(form),
-      report,
-      fetchFailed: missed
-    })
-    closeDialog('review-changes')
+    /* `startAgent`'s own two tab writes are each guarded on `path` still
+       naming the project on screen — this is one of the two callers that can
+       fail that guard, since the fetch above is up to a minute of network and
+       somebody may have moved to another project during it. The session
+       itself is unaffected either way: `startAgent` is given the path this
+       started from rather than whatever is selected now. */
+    if (
+      await startAgent(path, {
+        kind: 'reviewBranch',
+        pairs: reviewPairs(form),
+        report,
+        fetchFailed: missed
+      })
+    ) {
+      closeDialog('review-changes')
+    }
   } catch {
-    /* Already reported by `createSession`, which sets `terminalState.lastError`
-       and draws it as a toast. The window stays open over the failure, the way
-       every other dialog behind a failed start does. */
+    /* `fetchIn` and `fetchTargets` report their own refusal before rejecting;
+       `startAgent` never throws. The window stays open over the failure, the
+       way every other dialog behind a failed start does. */
   } finally {
     reviewStarting.value = false
   }
@@ -1906,7 +1934,7 @@ const setFavoriteBranches = (favorites) => {
    same three lines "Ask agent to edit" is: the agents panel, the terminal in
    the centre, and one session.
 
-   The path handed to `createSession` is the **project**, as every other session
+   The path handed to `startAgent` is the **project**, as every other session
    here is: a session's directory is the project directory and there is no
    second one. Which repository inside it the work is in rides in the intent,
    named absolutely, and the prompt is what says so. */
@@ -1915,25 +1943,19 @@ const resolveConflictWithAgent = async () => {
   const path = activePath.value
   if (!conflict || !path) return
   dismissConflict()
-  project.sideTab = 'agents'
-  showAgentTab()
-  try {
-    await createSession(path, {
-      kind: 'resolveConflict',
-      repo: conflict.repo,
-      op: conflict.op,
-      ours: conflict.ours ?? '',
-      /* An unknown branch crosses as the empty string, the way `ours` above
-         already does: `Intent::ResolveConflict` takes two `String`s, and
-         `prompt.rs::resolve_conflict` has an arm for each of them being empty.
-         A rebase this app did not start has no `theirs` at all — the branch it
-         is going onto is readable nowhere a git process can see. */
-      theirs: conflict.theirs ?? '',
-      files: conflict.files
-    })
-  } catch {
-    // already reported — see newAgent above
-  }
+  await startAgent(path, {
+    kind: 'resolveConflict',
+    repo: conflict.repo,
+    op: conflict.op,
+    ours: conflict.ours ?? '',
+    /* An unknown branch crosses as the empty string, the way `ours` above
+       already does: `Intent::ResolveConflict` takes two `String`s, and
+       `prompt.rs::resolve_conflict` has an arm for each of them being empty.
+       A rebase this app did not start has no `theirs` at all — the branch it
+       is going onto is readable nowhere a git process can see. */
+    theirs: conflict.theirs ?? '',
+    files: conflict.files
+  })
 }
 
 const runScope = ref({ kind: 'queue' })
@@ -2391,18 +2413,20 @@ const onAddProject = async () => {
   if (needsSetup.value) openSetup(added, false)
 }
 
-/* The setup agent runs inside this window's own terminal tab, so the person
-   watching it never leaves and never returns — window focus, which is how
-   every other outside writer (an agent on a branch, a person in a terminal)
-   gets noticed, simply never fires. terminalState.sessions already carries
-   state for every session, active or not (see stores/terminals.js), so that is
-   the signal to watch instead of a timer: every time a session of this project
-   stops working, or one starts, the file may have changed and loadConfig reads
-   it again. Both edges, deliberately — the key is what is working now, not
-   what has just finished — so a session going idle, picking up again and then
-   exiting costs two reads rather than one. That is the frequency to weigh
-   before touching this channel, and it is a small toml parse against a
-   `catchUp` that re-lists every expanded directory.
+/* The setup agent runs inside this window itself and never in one of its own —
+   a terminal tab, or, since smetana-osut, the conversation panel — so the
+   person watching it never leaves and never returns: window focus, which is
+   how every other outside writer (an agent on a branch, a person in a
+   terminal) gets noticed, simply never fires. terminalState.sessions already
+   carries state for every PTY session, active or not (see stores/terminals.js),
+   so that used to be the whole of the signal to watch instead of a timer:
+   every time a session of this project stops working, or one starts, the file
+   may have changed and loadConfig reads it again. Both edges, deliberately —
+   the key is what is working now, not what has just finished — so a session
+   going idle, picking up again and then exiting costs two reads rather than
+   one. That is the frequency to weigh before touching this channel, and it is
+   a small toml parse against a `catchUp` that re-lists every expanded
+   directory.
 
    The rule is `workingKey`, and it lives outside this file for the reason the
    whole `branchChoice.js` family does. What it replaces was a watcher created
@@ -2419,14 +2443,40 @@ const onAddProject = async () => {
    ended: this only asks the question again, and `needsSetup` moves when the
    answer comes back `ok`.
 
+   **Handed both kinds of session, merged, and not `terminalState.sessions`
+   alone — the same shape `finishedReviews` above takes and for the identical
+   reason.** `Intent::Setup` and `Intent::Bootstrap` take `startAgent`'s own
+   fork like every other intent since smetana-osut, so a setup opens driven far
+   more often than not under the shipped defaults, and a driven setup session
+   lives in `drivenSessions`, never in `terminalState.sessions` — a rule fed
+   the PTY list alone never moves for one, and `.smetana/project.toml` goes on
+   reading as unset after the agent that wrote it has finished. `WORKING`'s two
+   words, `starting` and `running`, are the same raw kebab-case
+   `SessionState` writes on both workers' wire, so no translation is owed
+   before `workingKey` reads either list — only the untranslated `state`,
+   never `statusOf`'s. Each driven id is passed through `drivenRowId` before
+   the merge, for `finishedReviews`' own reason: `workingKey` joins raw ids
+   into its key, and an unprefixed PTY session 3 and a driven session 3 — both
+   workers count from one — could otherwise mask each other's transition in
+   and out of `WORKING` inside the one joined string.
+
    A project switch moves the key too, and pays for up to two extra reads of a
-   small file — the sessions of the project just left stop matching, then
-   loadSessions brings the new project's in. The activePath watcher below reads
-   the same file at the same moment; loadConfig is idempotent and guarded
-   against its own stale response, so the duplicate costs the read and nothing
-   else. */
+   small file — the PTY sessions of the project just left stop matching, then
+   loadSessions brings the new project's in; `drivenSessions` needs no such
+   refresh, since it already holds every project's conversations at once and
+   `workingKey`'s own `project` filter is what narrows it. The activePath
+   watcher below reads the same file at the same moment; loadConfig is
+   idempotent and guarded against its own stale response, so the duplicate
+   costs the read and nothing else. */
 watch(
-  () => workingKey(terminalState.sessions, activePath.value),
+  () =>
+    workingKey(
+      [
+        ...terminalState.sessions,
+        ...drivenSessions.value.map((session) => ({ ...session, id: drivenRowId(session.id) }))
+      ],
+      activePath.value
+    ),
   () => {
     if (activePath.value) loadConfig(activePath.value)
   }
@@ -2437,12 +2487,7 @@ const startSetup = async () => {
   if (!path || settingUp.value) return
   settingUp.value = true
   try {
-    project.sideTab = 'agents'
-    showAgentTab()
-    await createSession(path, { kind: 'setup' })
-    closeSetup()
-  } catch {
-    // already reported by createSession; the dialog stays open
+    if (await startAgent(path, { kind: 'setup' })) closeSetup()
   } finally {
     settingUp.value = false
   }
@@ -2517,27 +2562,35 @@ function selectAgent(id) {
      is the conversation panel, which is `showAgentTab(conversation)`; and
      `terminalState.activeId` is deliberately left where it was, since pointing
      the terminal at something nobody holds is the same failure the restored row
-     below guards against. There is no work behind a bare conversation, so the
-     right column and the board keep what they were showing — which is what a
-     bare PTY agent does too, and the whole behaviour rather than a gap in it.
+     below guards against.
 
-     **That last parity is bought by the line below and not inherited**, which
-     is the one thing about this branch a reader cannot work out from the two
-     above it. Every reader of `rightFocus` goes through `focusIsLive`, and that
-     compares the focus to `terminalState.activeId` — so a bare *PTY* row gets
-     the fallback for free, its click moving `activeId` out from under a focus
-     left on some other agent. This row moves nothing, by the paragraph above,
-     so the same focus would stay live: a run's `ClaimedTasks` — another agent's
-     claimed issues — would go on standing in the right column while the person
-     is now watching a conversation. Letting the focus go is what makes the two
-     kinds of bare row answer a click alike, and it costs nothing else.
-     `rightPanel` falls back to `'board'`, whose watch writes only on the way
-     *out* of the board, so the tab somebody is standing on is left alone and
-     the board's own selection is drawn exactly as it was. */
+     `rightFocus` is set from `work.kind` the way the PTY branch below does,
+     and for the identical reason: a filing's draft is the one piece of a
+     driven row's right-column content this window already opens on the start
+     that created it (`submitNewTask`'s own `rightFocus.value =
+     activeAgentRow.value`), and a click that could start it but never bring it
+     back would lose the draft for the life of the session the moment somebody
+     glanced at the board. `editTask`, `resolveTask` and `fixTask` are
+     deliberately left out here, unlike the PTY branch's own — those open their
+     issue on the board's own selection rather than in this column, and
+     building that for a driven row is real work nobody has asked this branch
+     to take on yet. So every driven row but a filing still answers a click the
+     way a bare PTY agent's does — the right column and the board keep
+     whatever they were showing — and the explicit `null` in that case is what
+     keeps a focus left on some *other* agent from going on reading as live
+     once this row is on screen instead: `focusIsLive` compares against
+     `activeAgentRow`, which *does* move to this row's own key the moment
+     `showAgentTab(conversation)` answers, so leaving `rightFocus` untouched
+     here would have a run's `ClaimedTasks` go on standing in the right column
+     under a conversation with none. `rightPanel` falls back to `'board'`,
+     whose watch writes only on the way *out* of the board, so the tab
+     somebody is standing on is left alone and the board's own selection is
+     drawn exactly as it was. */
   const conversation = drivenSessionOf(id)
   if (conversation !== null) {
-    rightFocus.value = null
     showAgentTab(conversation)
+    const row = orderedAgentRows.value.find((candidate) => candidate.id === id)
+    rightFocus.value = row?.work?.kind === 'newTask' ? id : null
     return
   }
   /* A restored row has no session behind it, and its id is a conversation's
@@ -2784,32 +2837,33 @@ const activeTerminal = computed(() => terminalTab(project.activeTab))
    **One field, written by `showAgentTab` below** — so what aims this tab is that
    function's callers, whatever the list grows to, rather than a list here
    somebody has to remember to extend. They fall into two kinds, and one caller
-   stands under both. Aiming at a conversation is `newAgent`, which starts one,
-   and `selectAgent` on a driven row, which picks one that is already going.
-   Against those: every road that puts a PTY agent in front, which today is the
-   `createSession` roads, each moving the aim while starting something;
+   stands under both. Aiming at a conversation is `startAgent`, the one function
+   every one of the ten starts that talk to an agent now calls, and `selectAgent`
+   on a driven row, which picks one that is already going. Against those: every
+   road that puts a PTY agent in front, which today is `startAgent`'s own
+   fallback to `createSession`, moving the aim while starting something;
    `selectAgent` again, on any other row, moving it while starting nothing; and
    `attachToAgent`, which moves it as a side effect of handing a dropped path to
    whichever agent is selected.
 
    One field and one count beside it: `agentAimWrites` below is raised by that
    same function on every call, whatever is written. Plenty of callers aim before
-   an await; **`newAgent` and `resumeSession` are the only ones that put an aim
-   back after one**, and the count is what lets each ask first whether it is
-   still the last thing to have aimed this project.
+   an await; **`startAgent` is the only one that puts an aim back after one**,
+   and the count is what lets it ask first whether it is still the last thing to
+   have aimed this project. `newAgent` and `resumeSession` used to carry a copy
+   of this apiece, one each; it is `startAgent`'s alone now, for every caller.
 
-   There is a second kind of writer and it is deliberate: `newAgent`'s catch and
-   `resumeSession`'s two restore sites — its early return on `badCwd` and its own
-   `createSession` catch — put the previous aim back when a press started
-   nothing, and each writes this Map directly rather than calling
-   `showAgentTab`. **Going through that function
-   would bring the tab forward again**, which is exactly wrong in the case the
-   restore exists for — with no other agent in the project, the fallback's own
-   failed ticket has just taken `hasAgentTab` false and the watcher below has
-   landed somebody on the board. The restore is about what the tab is aimed at if
-   they go back to it, not about putting them on it, and it leaves the count
-   alone for the same reason: putting back what was there is not a move. Do not
-   "unify" the two; the bypass is the point.
+   There is a second kind of writer and it is deliberate: `startAgent`'s own two
+   restore sites — its early return on `badCwd` and its own `createSession`
+   catch — put the previous aim back when a press started nothing, and each
+   writes this Map directly rather than calling `showAgentTab`. **Going through
+   that function would bring the tab forward again**, which is exactly wrong in
+   the case the restore exists for — with no other agent in the project, the
+   fallback's own failed ticket has just taken `hasAgentTab` false and the
+   watcher below has landed somebody on the board. The restore is about what the
+   tab is aimed at if they go back to it, not about putting them on it, and it
+   leaves the count alone for the same reason: putting back what was there is
+   not a move. Do not "unify" the two; the bypass is the point.
 
    `selectAgent` is worth naming on its own three times over: it is reached from
    a row click *and* from the `lastRunStart` watcher, so a run handing over to
@@ -2856,8 +2910,8 @@ const agentAim = reactive(new Map())
    to would cost an untouched project its restore.
 
    Not reactive, unlike the aim: nothing draws it. It is read imperatively, and
-   by two callers — `newAgent` and `resumeSession`, the only ones that put an
-   aim *back* after an await — so a reactive version would only offer render dependencies on a
+   by one caller — `startAgent`, the only one that puts an aim *back* after an
+   await — so a reactive version would only offer render dependencies on a
    number that means nothing on screen. Nothing clears it either, for the reason
    nothing clears the aim — one small entry per project this window has aimed,
    dying with the window. */
@@ -2873,23 +2927,26 @@ const agentAimWrites = new Map()
    a driven conversation.
 
    **The project is a parameter because one caller aims after an await.**
-   `newAgent` reads the path before it starts a session and hands it back here a
-   second later; read fresh, a project switch inside that second would file this
-   session's id under whichever project is on screen now. And the tab itself
-   moves only for the project being aimed: `project` is the *active* project's
-   record, so a start that answered after somebody switched away must leave the
-   project now in front on whatever tab they put it. The same guard the review
-   road a few hundred lines up makes with `activePath.value === path`, and for
-   the same reason.
+   `startAgent` reads the path once, from its own `path` parameter, and hands it
+   back here a second later; read fresh off `activePath.value` instead, a
+   project switch inside that second would file this session's id under
+   whichever project is on screen now. And the tab itself moves only for the
+   project being aimed: `project` is the *active* project's record, so a start
+   that answered after somebody switched away must leave the project now in
+   front on whatever tab they put it. `startAgent` guards both of its own tab
+   writes with `path === activePath.value` for the identical reason, which is
+   what makes it safe for the two callers whose own await can run long before
+   they reach it — the branch review's fetch, and the tracker repair's own
+   `trackerFailure()` read — and a no-op guard for every other, which never
+   awaits anything before calling it.
 
    **Every call raises that project's write count**, whatever it aims at and
    whether or not the tab itself moves — a call for a project that is no longer
-   in front still aimed it. That count is what `newAgent` and `resumeSession`
-   read to tell an aim of their own from somebody else's a second later, and
-   this being the only place it is raised is what keeps that true however long
-   the list of callers grows. The writes that go around this function —
-   `newAgent`'s catch and `resumeSession`'s two restore sites — go around the
-   count with them, on purpose. */
+   in front still aimed it. That count is what `startAgent` reads to tell an
+   aim of its own from somebody else's a second later, and this being the only
+   place it is raised is what keeps that true however long the list of callers
+   grows. The writes that go around this function — `startAgent`'s own two
+   restore sites — go around the count with them, on purpose. */
 function showAgentTab(conversation = null, path = activePath.value) {
   agentAim.set(path, conversation)
   agentAimWrites.set(path, (agentAimWrites.get(path) ?? 0) + 1)
@@ -2922,6 +2979,18 @@ const conversationId = computed(() => {
 const activeAgentRow = computed(() =>
   conversationId.value !== null ? drivenRowId(conversationId.value) : terminalState.activeId
 )
+
+/* The caption of the row the panel is drawing, for its opening turn: label and
+   the mono identifiers beside it, joined the way the row reads them — this is
+   the sentence `ConversationView` substitutes when the turn itself carries no
+   words of the person's own (`.claude/rules/conversation-panel.md`, "The
+   opening turn"). `''` for a row that is not (yet) in `orderedAgentRows`,
+   which the panel reads as `UserMessage`'s own default. */
+const conversationCaption = computed(() => {
+  const row = orderedAgentRows.value.find((candidate) => candidate.id === activeAgentRow.value)
+  if (!row) return ''
+  return [row.label, ...row.tasks].filter(Boolean).join(' ')
+})
 
 /* Whether that panel is on screen this moment.
 
@@ -3270,11 +3339,9 @@ const repairHere = async () => {
 const askAgentAboutTracker = async () => {
   const path = activePath.value
   if (!path) return
-  project.sideTab = 'agents'
-  showAgentTab()
   try {
     const failure = await trackerFailure()
-    await createSession(path, {
+    await startAgent(path, {
       kind: 'repairTracker',
       dir: failure.dir || path,
       bdVersion: failure.bdVersion,
@@ -3282,13 +3349,9 @@ const askAgentAboutTracker = async () => {
       stderr: failure.stderr
     })
   } catch {
-    /* Both awaits report their own refusal before rejecting — `createSession`
-       into `terminalState.lastError`, `trackerFailure` into
-       `trackerState.lastError` — and both draw as a toast. That second half is
-       why the store wraps its `invoke` rather than handing the promise
-       straight over: the tabs have already moved by the time either is
-       awaited, so a silent rejection is a button that takes somebody somewhere
-       else and then does nothing. */
+    /* `trackerFailure` reports its own refusal into `trackerState.lastError`,
+       drawn as a toast; `startAgent` never throws, so the only rejection this
+       catches is that one. */
   }
 }
 
@@ -3847,22 +3910,24 @@ async function deleteSession(session) {
 
 /* A session read off disk, brought back as a live agent.
 
-   **The same fork `newAgent` has, and it is the same one decision said once.**
-   Under a harness this app can drive, a resume opens the conversation panel on
-   the transcript it reopened; under any other, it is the PTY road this has
-   always taken. `canDrive` is that question — `settings.agent` and the person's
-   own `conversationPanel` switch — and it is asked here rather than at either
-   of the two gestures that reach this function, because a second copy of it in
-   `selectAgent` and a third in `onSessionAction` would be two copies of one
-   rule to drift apart. Both doors are the same verb, so there is one function
-   and one fork.
+   **The same fork every other start that talks to an agent has, and it is the
+   same one decision said once.** Under a harness this app can drive, a resume
+   opens the conversation panel on the transcript it reopened; under any other,
+   it is the PTY road this has always taken. `canDrive` is that question —
+   `settings.agent` and the person's own `conversationPanel` switch — and it is
+   asked once, inside `startAgent`, rather than at either of the two gestures
+   that reach this function: this function builds the intent and hands it over,
+   so a second copy of the question in `selectAgent` and a third in
+   `onSessionAction` would be two copies of one rule to drift apart. Both doors
+   call this same function, which calls `startAgent`, so there is one fork for
+   both.
 
-   **The PTY road is unchanged and is still the same road every other agent in
-   this app takes**, which is the whole design of it rather than a detail:
-   `createSession` with an intent, which is `terminal_create`, which is a
-   profile's own command line plus `--resume <id>` and `Pty::spawn`. A second
-   way to start an agent is the place two ways silently diverge. It is also
-   where a driven start that came back with nothing lands — `agents::pick`
+   **The PTY road is unchanged and is still the same road every agent in this
+   app lands on whenever it takes it**, which is the whole design of it rather
+   than a detail: `createSession` with an intent, which is `terminal_create`,
+   which is a profile's own command line plus `--resume <id>` and `Pty::spawn`.
+   A second way to start an agent is the place two ways silently diverge. It is
+   also where a driven start that came back with nothing lands — `agents::pick`
    substitutes the first installed harness silently, so `canDrive` can answer
    `true` on a machine the driver then refuses, and the fall-through resolves
    whatever `pick` would have. A fallback is not a failure and says nothing; the
@@ -3885,26 +3950,20 @@ async function deleteSession(session) {
    in this tab afterwards is that fork's own transcript and an expected outcome
    rather than a duplicate.
 
-   The two lines before the await are `newAgent`'s, for its stated reason: a
-   spawn takes about a second, and a person who pressed this must see the row
-   they asked for rather than nothing at all. What is deliberately *not* here is
-   the third line — `project.rightTab` stays where it is. Somebody standing in
-   the Sessions tab is standing there on purpose, possibly to bring up a second
-   one, and a resume that swung the column onto Task would be the app deciding
-   what they came for. The row does appear in the left column and the terminal
-   comes forward in the centre, which is where a person who pressed this is
-   looking.
+   What is deliberately *not* here is a third tab write — `project.rightTab`
+   stays where it is. Somebody standing in the Sessions tab is standing there
+   on purpose, possibly to bring up a second one, and a resume that swung the
+   column onto Task would be the app deciding what they came for. The row does
+   appear in the left column and the terminal comes forward in the centre,
+   which is where a person who pressed this is looking — `startAgent`'s own
+   two lines, for its stated reason.
 
    The availability is asked again here even though the row that raised this is
    already greyed, and it is not belt and braces about the menu: the card's
    button and the menu row are two doors onto one verb, and the list they are
    drawn from was read when the tab was opened. What this cannot catch — a
    worktree removed in the meantime — is refused by the worker itself, which is
-   the guard standing next to the spawn.
-
-   The catch swallows the rejection for `newAgent`'s reason: `createSession` has
-   already reported it, and this exists only to stop Vue repeating what the
-   store said. */
+   the guard standing next to the spawn. */
 async function resumeSession(session, { fork = false } = {}) {
   const path = activePath.value
   if (!path) return
@@ -3923,69 +3982,7 @@ async function resumeSession(session, { fork = false } = {}) {
     title: session.title ?? null,
     fork
   }
-  /* What to put back if nothing starts, and the count to test it against —
-     `newAgent`'s own pair, read here before either road's first `await` for
-     the same reason: both roads below can fail after the tab has already come
-     forward, and what is owed on a press that started nothing is the aim it
-     found, not `null`. */
-  const aimed = agentAim.get(path) ?? null
-  const aimWrites = agentAimWrites.get(path)
-  let refused = null
-
-  project.sideTab = 'agents'
-  if (canDrive(settings.agent)) {
-    /* The tab comes forward on the press and the aim follows the id, which is
-       `newAgent`'s pair of lines and its reason: a spawn takes about a second,
-       and a person who pressed this must see what they asked for rather than
-       nothing at all. */
-    project.activeTab = 'terminal'
-    const id = await startConversation(path, intent)
-    if (id !== null) {
-      showAgentTab(id, path)
-      return
-    }
-    /* **A refusal about the directory ends it here, and the sentence stands.**
-       The fall-through exists for one thing — `agents::pick` substitutes the
-       first installed harness silently, so `canDrive` can answer `true` on a
-       machine whose driver then refuses — and that is a question about which
-       harness is on the machine. This one is not: both workers ask
-       `sessions::model::resume_cwd` of the same path, so the second road can
-       only refuse again, a round trip later, and put a second corner toast on
-       screen saying the very sentence already there. That doubling is what
-       `lastError`'s shape was reshaped to prevent. */
-    if (conversationState.lastError?.kind === 'badCwd') {
-      /* `showAgentTab` has not been called on this road — only `activeTab`
-         moved, above — so the count taken before the first `await` is still
-         the one to test: restore the aim only if nobody has aimed this
-         project since the press, `newAgent`'s own guard and its own reason. */
-      if (agentAimWrites.get(path) === aimWrites) agentAim.set(path, aimed)
-      return
-    }
-    // Off the screen for the fallback, and back again below if that fails too.
-    refused = conversationState.lastError
-    conversationState.lastError = null
-  }
-
-  let ownAimWrites
-  try {
-    /* `path` and not the default, which would be `activePath` read *after* the
-       await above. `newAgent` passes it for this reason and `showAgentTab`'s own
-       header names the case: a person who switched project inside the second
-       that start took would have this aim written under the project they are
-       now looking at, and its Agent tab brought forward over nothing, while the
-       session starts in the one they pressed in. */
-    showAgentTab(null, path)
-    /* The aim just written, taken by its number rather than by its value —
-       `newAgent`'s own guard, read the same way here: this road's own write
-       raises the count, and the catch below tests against the count taken
-       right after it rather than the one taken at the top of this function. */
-    ownAimWrites = agentAimWrites.get(path)
-    await createSession(path, intent)
-  } catch {
-    // already reported — see comment above
-    if (agentAimWrites.get(path) === ownAimWrites) agentAim.set(path, aimed)
-    if (refused && !conversationState.lastError) conversationState.lastError = refused
-  }
+  await startAgent(path, intent)
 }
 
 /* The session menu's verbs: which one does what. The rows themselves are
@@ -4033,17 +4030,26 @@ const onSessionAction = async ({ kind, session }) => {
 
 /* The row the panel is following. It has to be a lookup rather than a stored
    row: `agentRows` is rebuilt on every state event, and a row held from the
-   moment it was clicked would keep drawing a session's first second forever. */
+   moment it was clicked would keep drawing a session's first second forever.
+
+   `orderedAgentRows` and `activeAgentRow` rather than `agentRows` and
+   `terminalState.activeId`: the selected row may be a driven one now that
+   every intent a person talks to can be driven, and `activeAgentRow` is the
+   one field that already reads as either kind (`.claude/rules/terminal.md`'s
+   "A driven session in the agents panel"). A PTY row is found under the same
+   key either way, since `activeAgentRow` falls back to `terminalState.activeId`
+   whenever the tab is not aimed at a conversation. */
 const selectedAgent = computed(
-  () => agentRows.value.find((row) => row.id === terminalState.activeId) ?? null
+  () => orderedAgentRows.value.find((row) => row.id === activeAgentRow.value) ?? null
 )
 
 /* Whether what `rightFocus` names is still the agent the person is looking at.
-   Every reader of the focus goes through this: a repair that moved `activeId`
-   — a project switch, a removed session — leaves the focus naming an agent that
-   is no longer selected, and the column falls back to the board on its own. */
+   Every reader of the focus goes through this: a repair that moved
+   `activeAgentRow` — a project switch, a removed session, a driven
+   conversation somebody closed — leaves the focus naming an agent that is no
+   longer selected, and the column falls back to the board on its own. */
 const focusIsLive = computed(
-  () => rightFocus.value !== null && rightFocus.value === terminalState.activeId
+  () => rightFocus.value !== null && rightFocus.value === activeAgentRow.value
 )
 
 /* The draft, when one is being drawn. Also guarded on the agent still *being* a
@@ -4145,8 +4151,6 @@ const submitNewTask = async ({ brainstorm, spec, plan, ...draft }) => {
   const path = activePath.value
   if (!path) return false
   creating.value = true
-  project.sideTab = 'agents'
-  showAgentTab()
   try {
     /* The three stages ride beside the draft rather than in it: they are the
        agent's briefing about how to work, and nothing on screen draws them —
@@ -4154,23 +4158,27 @@ const submitNewTask = async ({ brainstorm, spec, plan, ...draft }) => {
     /* `parent` rides inside `draft` by the rest spread above, the way `images`
        does — only the three stages are named here, because only they are a
        briefing about how to work rather than part of the task. */
-    const started = createSession(path, { kind: 'newTask', brainstorm, spec, plan, draft })
+    const ok = await startAgent(path, { kind: 'newTask', brainstorm, spec, plan, draft })
+    if (!ok) return false
     /* Filing a task opens its draft on the right, the same as picking the row
-       would: it is the same selection arriving by another route, and the action
-       giving two different answers depending on what the column happened to be
-       showing was the inconsistency this closes.
+       would: it is the same selection arriving by another route, and the
+       action giving two different answers depending on what the column
+       happened to be showing was the inconsistency this closes.
 
-       Read before the await, not after, and that is the whole reason this is
-       not one line further down. `createSession` picks its start's row
-       synchronously — "the row is there and picked before the worker has
-       answered", pinned by that name in tests/stores/terminals.test.js — so
-       `activeId` is already the ticket, and the draft goes up the moment the
-       dialog closes. Waiting for the session would leave the column on the
-       board for the second the agent takes to come up, showing somebody the
-       board they had just stopped looking at. The handover watcher carries the
-       focus onto the session's own id when it lands. */
-    rightFocus.value = terminalState.activeId
-    await started
+       Read *after* `startAgent` has returned rather than off a ticket the way
+       the PTY road alone used to: `createSession` picks its start's row
+       synchronously and a handover watcher used to carry `rightFocus` from
+       that ticket to the session once it landed, which is a trick the driven
+       road has nothing to mirror — its row exists only once `session_start`
+       has answered, and `showAgentTab(id, path)` is what selects it inside
+       `startAgent`. One read after the shared function returns is what works
+       on both roads: `activeAgentRow` is the driven row's key when the panel
+       just opened one, and `terminalState.activeId`'s own settled value —
+       ticket or session, whichever the road landed on — when it did not. The
+       cost is the one second a PTY spawn takes, no longer covered by a
+       placeholder the moment the dialog closes; the driven road never had
+       that second to hide behind either. */
+    rightFocus.value = activeAgentRow.value
     closeNewTask()
     return true
   } catch {
@@ -4458,13 +4466,7 @@ const resolveFromDialog = () => {
 const askAgentToEdit = async (issue) => {
   const path = activePath.value
   if (!path) return
-  project.sideTab = 'agents'
-  showAgentTab()
-  try {
-    await createSession(path, { kind: 'editTask', id: issue.id, title: issue.title })
-  } catch {
-    // already reported — see newAgent above
-  }
+  await startAgent(path, { kind: 'editTask', id: issue.id, title: issue.title })
 }
 
 /* A session that asks the person what the run could not settle, writes the
@@ -4475,13 +4477,7 @@ const askAgentToEdit = async (issue) => {
 const askAgentToResolve = async (issue) => {
   const path = activePath.value
   if (!path) return
-  project.sideTab = 'agents'
-  showAgentTab()
-  try {
-    await createSession(path, { kind: 'resolveTask', id: issue.id, title: issue.title })
-  } catch {
-    // already reported — see newAgent above
-  }
+  await startAgent(path, { kind: 'resolveTask', id: issue.id, title: issue.title })
 }
 
 /* A session that corrects work already finished and merged. Started exactly the
@@ -4491,13 +4487,7 @@ const askAgentToResolve = async (issue) => {
 const askAgentToFix = async (issue) => {
   const path = activePath.value
   if (!path) return
-  project.sideTab = 'agents'
-  showAgentTab()
-  try {
-    await createSession(path, { kind: 'fixTask', id: issue.id, title: issue.title })
-  } catch {
-    // already reported — see newAgent above
-  }
+  await startAgent(path, { kind: 'fixTask', id: issue.id, title: issue.title })
 }
 
 /* What the tracker's health means where the board would be. The generic
@@ -6324,9 +6314,37 @@ watch(stoppedRuns, () => {
    makes the paragraph above true: during a move the active project changes
    before the session list does, so without it an ending arriving in that gap
    would open a tab into the new project's list, have it overwritten by
-   `applySection`, and be recorded as answered all the same. */
+   `applySection`, and be recorded as answered all the same.
+
+   **`reviewReportTabs` is handed both kinds of session, merged, and not
+   `terminalState.sessions` alone.** Since smetana-osut a branch review takes
+   `startAgent`'s own fork like every other start, so under the shipped
+   defaults it opens driven far more often than not — and a driven session's
+   exit is invisible to a rule that only reads the PTY store. Nothing about the
+   rule itself has to change to read one: `sessionWork.js`'s `workOf` already
+   reduces `Intent::reviewBranch` to `{ kind: 'reviewBranch', report }` on
+   either road, and `drivenSessions`' own `state` is the same raw wire word
+   `terminalState.sessions`' is, `'exited'` included, since neither list
+   translates it before this reads it.
+
+   **The merge is what the id collision `DRIVEN_PREFIX`'s own header warns
+   about, met here rather than avoided.** `reviewReportTabs` de-duplicates by
+   `session.id`, which the PTY worker mints from one counter and the session
+   worker from a second, both starting at 1 — so an untranslated merge would
+   let a driven session 3's finished review collide in `openedReviews` with a
+   PTY session 3's, and one of the two reviews would silently never open. Each
+   driven session is passed through `drivenRowId` before the merge for exactly
+   the reason `agentKey` reads it in the agents panel: the prefix is what parts
+   the two counters' spaces. `reviewReportPath` itself never sees the change —
+   it reads `state`, `project` and `work`, none of which the prefix touches. */
 const finishedReviews = computed(() =>
-  reviewReportTabs(terminalState.sessions, activePath.value)
+  reviewReportTabs(
+    [
+      ...terminalState.sessions,
+      ...drivenSessions.value.map((session) => ({ ...session, id: drivenRowId(session.id) }))
+    ],
+    activePath.value
+  )
 )
 const openedReviews = new Set()
 watch(
@@ -6897,6 +6915,7 @@ const toastStackStyle = {
           <ConversationView
             v-else-if="conversationPanelOpen"
             :session-id="conversationId"
+            :caption="conversationCaption"
             @open-local="onConversationLocalLink"
           />
           <TerminalView

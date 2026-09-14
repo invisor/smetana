@@ -32,6 +32,24 @@ describe('the journal as rows', () => {
     expect(journalRows([event(1, 'user-message', { text: 'hello' })])[0].attachments).toEqual([])
   })
 
+  /* The turn the app opened the session with. What went to the harness is the
+     whole brief; what the row carries is the person's own share of it — and
+     `null` for a start nobody typed a word into, which the panel draws as the
+     session row's caption rather than as an empty bubble. */
+  it('draws the opening turn as the person, with or without words', () => {
+    const withWords = journalRows([
+      event(1, 'turn-start', { by: 'person' }),
+      event(2, 'opening', { text: 'Ring once', attachments: ['/a.png'] })
+    ])
+    expect(withWords[0]).toMatchObject({ key: 2, kind: 'user', text: 'Ring once', attachments: ['/a.png'], opening: true })
+
+    const wordless = journalRows([
+      event(1, 'turn-start', { by: 'person' }),
+      event(2, 'opening', { text: null, attachments: [] })
+    ])
+    expect(wordless[0]).toMatchObject({ kind: 'user', text: null, attachments: [], opening: true })
+  })
+
   /* **The four names the wire actually uses**, which is the one translation in
      the whole front end and the one the tracker singled out: every numeric prop
      of `TurnResult` has a default, so an event handed over raw draws

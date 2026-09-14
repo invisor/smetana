@@ -87,7 +87,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::claude::{clip, one_line, tool_detail, Claude, MAX_DETAIL};
-use crate::agents::Launch;
+use crate::agents::{Intent, Launch};
 use crate::session::driver::{Driver, Input, LineBuffer};
 use crate::session::model::{Actor, Decision, EventKind};
 use crate::session::permission::{permission_tool, PermissionTicket};
@@ -454,34 +454,42 @@ impl Driver for ClaudeDriver {
             cmd.arg("--permission-prompt-tool");
             cmd.arg(permission_tool());
         }
-        // The opening prompt, on the one channel this mode leaves open. The
-        // probe establishes that the text reaches the model and that the flag
-        // is accepted silently beside `--session-id`; it does **not** establish
-        // that the text outranks anything else the model is told, and nothing
-        // here should be read as promising that it does.
+        // The standing instruction, on the one channel this mode leaves open
+        // for one — and **only for a bare session**. A bare launch's whole
+        // prompt is the conversation-language sentence, which is exactly what
+        // a system-prompt clause is for. Every other intent carries a brief,
+        // and a brief is a turn: it goes over stdin through `opening` below,
+        // so that the model reads it as what somebody asked rather than as an
+        // appended rule. The probe that established this flag found that its
+        // text reaches the model; it did not establish that it outranks
+        // anything, and nothing here relies on that.
         //
-        // **Only `Intent::Bare` is expected to reach this today**, and what it
-        // brings is the conversation-language sentence: a standing instruction
-        // about how to talk, which is exactly what a system-prompt clause is
-        // for. A launch carrying a real brief is a different thing on the same
-        // wire. `Intent::Run`'s prompt is the whole of the work — the task, the
-        // project's facts, the person's standing instruction — and routing it
-        // through here would silently reclassify somebody's opening turn as an
-        // appended system-prompt clause, on a channel established as carrying
-        // text to the model and **not** as outranking anything else the model
-        // is told. Whoever first drives a session on another intent should stop
-        // at this line and decide it, rather than find that it appears to work.
-        //
-        // No flag at all when there is no prompt, which is `Intent::ResumeSession`
-        // and is the case that matters: `prompt::build` refuses that intent a
-        // prompt because a resumed conversation already has somebody's words in
-        // it, and an empty `--append-system-prompt` would be this app talking
-        // over them in a quieter voice rather than not talking over them.
-        if let Some(text) = Claude.prompt_text(launch) {
-            cmd.arg("--append-system-prompt");
-            cmd.arg(text);
+        // This decides the question the file's header used to leave open —
+        // "whoever first drives a session on another intent should stop at
+        // this line and decide it": `Bare` keeps the system prompt,
+        // everything else opens on `opening`, and a resume gets neither,
+        // since `prompt::build` refuses that intent a prompt at all and an
+        // empty `--append-system-prompt` would be this app talking over
+        // somebody's words in a quieter voice rather than not talking over
+        // them.
+        if matches!(launch.intent, Intent::Bare) {
+            if let Some(text) = Claude.prompt_text(launch) {
+                cmd.arg("--append-system-prompt");
+                cmd.arg(text);
+            }
         }
         cmd
+    }
+
+    fn opening(&self, launch: &Launch) -> Option<String> {
+        // Everything but the two that open on nothing over stdin: a bare
+        // session's prompt is on the system prompt above, and a resume has
+        // none. `prompt_text` already answers `None` for the resume; the bare
+        // case is the one decided here.
+        if matches!(launch.intent, Intent::Bare) {
+            return None;
+        }
+        Claude.prompt_text(launch)
     }
 
     fn feed(&mut self, bytes: &[u8]) -> Vec<EventKind> {
@@ -618,8 +626,48 @@ mod tests {
         }
     }
 
+    /// A launch that carries a brief rather than a standing instruction.
+    fn new_task_launch() -> Launch {
+        Launch {
+            intent: Intent::NewTask {
+                brainstorm: crate::agents::Stage::Off,
+                spec: crate::agents::Stage::Off,
+                plan: crate::agents::Stage::Off,
+                draft: crate::agents::TaskDraft {
+                    text: "Make the bell ring once".into(),
+                    issue_type: None,
+                    priority: None,
+                    parent: None,
+                    images: vec!["/tmp/shot.png".into()],
+                },
+            },
+            ..launch()
+        }
+    }
+
     fn argv(builder: &portable_pty::CommandBuilder) -> Vec<String> {
         builder.get_argv().iter().map(|arg| arg.to_string_lossy().to_string()).collect()
+    }
+
+    #[test]
+    fn only_a_bare_launch_puts_its_prompt_on_the_system_prompt() {
+        let bare = argv(&ClaudeDriver::new(None).start(&launch()));
+        assert!(bare.iter().any(|arg| arg == "--append-system-prompt"), "{bare:?}");
+
+        let brief = argv(&ClaudeDriver::new(None).start(&new_task_launch()));
+        assert!(!brief.iter().any(|arg| arg == "--append-system-prompt"), "{brief:?}");
+    }
+
+    #[test]
+    fn a_brief_opens_the_session_over_stdin_and_a_bare_launch_does_not() {
+        let driver = ClaudeDriver::new(None);
+        assert_eq!(driver.opening(&launch()), None);
+        assert_eq!(driver.opening(&resume_launch()), None);
+
+        let opening = driver.opening(&new_task_launch()).expect("a brief opens on its prompt");
+        // Byte for byte what the PTY road would have handed over positionally.
+        assert_eq!(Some(opening.clone()), Claude.prompt_text(&new_task_launch()));
+        assert!(opening.contains("Make the bell ring once"), "{opening}");
     }
 
     #[test]

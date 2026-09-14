@@ -25,9 +25,9 @@ async fn ask<T>(
     rx.await.map_err(|_| SessionError::Spawn("the session worker did not answer".into()))
 }
 
-/// Start a driven session in `project`. Only `Intent::Bare` is accepted at this
-/// stage; anything else is refused by the worker with a sentence saying so
-/// rather than started half-supported.
+/// Start a driven session in `project`. Every intent a person talks to is
+/// accepted; a run is refused by the worker with a sentence saying so, since
+/// nobody is in a run's conversation.
 #[tauri::command]
 pub async fn session_start(
     handle: State<'_, SessionHandle>,

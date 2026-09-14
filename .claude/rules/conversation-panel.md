@@ -24,6 +24,39 @@ full rather than pointing at (the agent's question card, below); this file does 
 it, only the reasoning behind the choices in it that are not otherwise written down anywhere in the
 tree.
 
+## The opening turn
+
+Every intent a person talks to can open a driven session now, not only `Bare` and `ResumeSession`
+(`.claude/rules/terminal.md`), and the panel's first bubble is what says so. `EventKind::Opening
+{ text: Option<String>, attachments: Vec<String> }` (`src-tauri/src/session/model.rs`) is the journal's
+own record of it, appended by the worker right after a `TurnStart { by: Person }` and just before the
+same text is written to the child's stdin through `Driver::opening`
+(`.claude/rules/agents.md`). `Intent::opening_words()` is what decides the two fields: `Some(draft.text)`
+and the draft's image paths for `NewTask`, `(None, [])` for every other intent — the new-task dialog is
+the one start where a person actually typed something, and the other seven are a menu row pressed.
+
+**The whole prompt still goes to the harness; the panel draws only the part of it that is the
+person's own.** `Opening` does not carry `prompt::build`'s composed text — that stays Rust's and the
+harness's, exactly as the memory of 2026-08-31 already decided for the terminal's own prompt, whose
+own concealment this does not reopen. `journal.js`'s fold turns an `opening` event into the same row
+shape a `user-message` produces — `{ kind: 'user', text, attachments, opening: true }` — so the panel
+draws it as the person's turn without a second branch in `ConversationView.vue`'s template. `text` is
+`null` for the seven wordless intents, and `ConversationView`'s own `caption` prop
+(`{ type: String, default: '' }`) is what the component substitutes then: `:text="row.text ??
+props.caption"` on `UserMessage`. The fallback is the *panel's* rather than the fold's, because a
+caption is a row's sentence and `journal.js` knows nothing of rows — `journalRows` takes only events. What
+`DesktopApp.vue` hands down as that caption is `conversationCaption`, the very `label` and `tasks` the
+agents-panel row carries (`components/agent/captions.js`), joined the way the row reads them — so the
+bubble over an empty new-task filing and the row's own caption in the list can never disagree.
+
+**Why a new event kind and not a `UserMessage` carrying the caption, written by Rust**: rejected in the
+design this section documents, because the caption is a front-end sentence
+(`captionOf`) and writing it a second time in Rust would be a third copy of a table that already exists
+twice — the very duplication `.claude/rules/terminal.md`'s "A driven session in the agents panel"
+records being collapsed into `sessionWork.js` and `captions.js`. `Opening` carries what Rust actually
+knows — the person's own words, when there are any — and leaves the wording of everything else to the
+side that already owns it.
+
 ## The fourth inline-style exception
 
 `src/styles/sm-prose.css`, scoped entirely under `.sm-prose`, is the **fourth** declared exception to
