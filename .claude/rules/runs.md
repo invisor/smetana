@@ -309,6 +309,21 @@ each batch, so the exhausted case costs no session at all. `service.rs` asks the
 after a session exits non-zero, and there it is not a gate but a classification: a spent limit told
 apart from a harness that fell over.
 
+**The probe's cwd is an empty folder of the app's own, and it took a screenshot of a macOS permission
+dialog to notice it was not** (smetana-48iy). Neither `read` here nor `oneshot::ask_raw` set a
+`current_dir` at all, so the harness inherited whatever the app was started in — `/` for a build
+launched from Finder or by launchd — and Claude Code indexes every file under its cwd the moment it
+starts. Asked from `/` it walked the whole disk in the first three seconds of every probe, the footer's
+and the run gate's alike, and macOS put up an unexplained access prompt for every protected folder it
+crossed on the way. `usage::read` and `oneshot::ask_raw` now take the directory as a `&Path` rather
+than resolving it themselves, which is what keeps both modules free of Tauri; the caller resolves it
+through `agents::probe_dir` (`app.path().app_data_dir()/probe`, made on first use) and hands it in —
+`runs::commands::agent_usage` and `runs::service`'s own gate and crash classification for the usage
+probe, `vcs::commands::vcs_suggest_message` and `tracker::commands::tracker_search_semantic` for the
+one-shot. The project root was considered and refused: the footer's probe has no project to be one of,
+a one-shot question already carries its whole context in the prompt, and either way Claude Code would
+pick up that project's own `CLAUDE.md`, hooks and index on top of answering the question.
+
 **The bands are the person's now**, `settings.json`'s `subscription` section (`.claude/rules/settings.md`),
 and `decide` takes them as an argument where it used to hold them as two constants.
 `PAUSE_THRESHOLD` and `REDUCED_THRESHOLD` are what ships, not what applies. They are read **off the

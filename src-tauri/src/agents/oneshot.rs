@@ -9,8 +9,12 @@
 //!
 //! `runs/usage.rs` is the one place that already did this, and this file is
 //! deliberately the same spawn with the same failure discipline: `std::process`
-//! and no PTY, the login shell's `PATH`, a deadline with a kill behind it. The
-//! difference is what a failure costs. An unreadable allowance is no reason to
+//! and no PTY, the login shell's `PATH`, a deadline with a kill behind it, and
+//! a working directory that is an empty folder of the app's own rather than
+//! the process's inherited one — `runs/usage.rs`'s header carries the whole of
+//! why, and `ask_raw` is handed the path rather than resolving it, for that
+//! module's reason: this file stays free of Tauri. The difference is what a
+//! failure costs. An unreadable allowance is no reason to
 //! hold a run up, so `usage::read` answers `None` for every way of failing and
 //! the caller shrugs; here somebody pressed a button and is watching the field,
 //! so each way of failing keeps its own name and reaches the panel as a
@@ -19,6 +23,7 @@
 //! Pure apart from `ask`: the prompt and the cleaning of what comes back are
 //! ordinary functions, and the tests are at the bottom of this file.
 
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -303,8 +308,37 @@ pub fn ask_raw(
     profile: &'static dyn Profile,
     model: Option<&str>,
     prompt: &str,
+    cwd: &Path,
 ) -> Result<String, OneshotError> {
-    ask_within(profile, model, prompt, TIMEOUT)
+    ask_within(profile, model, prompt, cwd, TIMEOUT)
+}
+
+/// The command line a one-shot runs, built rather than run — the same split
+/// `runs/usage.rs::command` makes, and for the same reason: a test reads
+/// `Command::get_current_dir()` back off it without spawning anything.
+fn command(
+    profile: &'static dyn Profile,
+    args: &'static [&'static str],
+    model_args: &[&str],
+    prompt: &str,
+    cwd: &Path,
+) -> Command {
+    let mut command = Command::new(profile.binary());
+    command
+        .args(args)
+        .args(model_args)
+        .arg(prompt)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // The login shell's PATH, for the reason `vcs/run.rs` and `runs/usage.rs`
+    // both record: a bundled app inherits launchd's, where nothing a person
+    // installed is reachable.
+    if let Some(path) = crate::shell_env::path() {
+        command.env("PATH", path);
+    }
+    command
 }
 
 /// The whole of `ask_raw` with the ceiling handed in.
@@ -312,10 +346,15 @@ pub fn ask_raw(
 /// Split out for `vcs::run::bounded`'s reason, which takes its own timeout as a
 /// parameter: the give-up path is the one with the care in it, and a test of it
 /// against the ninety seconds the product uses would be a test nobody runs.
+///
+/// `cwd` is the caller's to resolve — `runs/usage.rs`'s header carries the
+/// argument for why it is never `/` and never the project root — which is what
+/// keeps this file free of Tauri.
 fn ask_within(
     profile: &'static dyn Profile,
     model: Option<&str>,
     prompt: &str,
+    cwd: &Path,
     timeout: Duration,
 ) -> Result<String, OneshotError> {
     let args =
@@ -327,25 +366,12 @@ fn ask_within(
     // its own reaches. Empty for a harness that cannot be told, and before the
     // prompt, which is positional.
     let model_args = model.map(|model| profile.model_args(model)).unwrap_or_default();
-    let mut command = Command::new(profile.binary());
-    command
-        .args(args)
-        .args(&model_args)
-        .arg(prompt)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // The login shell's PATH, for the reason `vcs/run.rs` and `runs/usage.rs`
-    // both record: a bundled app inherits launchd's, where nothing a person
-    // installed is reachable.
-    if let Some(path) = crate::shell_env::path() {
-        command.env("PATH", path);
-    }
-
-    let mut child = command.spawn().map_err(|err| match err.kind() {
-        std::io::ErrorKind::NotFound => OneshotError::NoAgent(profile.binary().into()),
-        _ => OneshotError::Io(err.to_string()),
-    })?;
+    let mut child = command(profile, args, &model_args, prompt, cwd)
+        .spawn()
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::NotFound => OneshotError::NoAgent(profile.binary().into()),
+            _ => OneshotError::Io(err.to_string()),
+        })?;
 
     // Taken off the child before the wait, so the readers own them: a pipe
     // nobody is emptying is what stalls a child with more to say than the
@@ -418,8 +444,9 @@ pub fn ask(
     profile: &'static dyn Profile,
     model: Option<&str>,
     prompt: &str,
+    cwd: &Path,
 ) -> Result<String, OneshotError> {
-    let message = clean(&ask_raw(profile, model, prompt)?);
+    let message = clean(&ask_raw(profile, model, prompt, cwd)?);
     if message.is_empty() {
         return Err(OneshotError::Failed(format!("{} answered with nothing.", profile.binary())));
     }
@@ -483,8 +510,13 @@ mod spawn_tests {
     #[test]
     fn a_harness_that_prints_more_than_a_pipe_holds_still_answers() {
         let started = Instant::now();
-        let answer = ask_raw(&Sh, None, "printf 'x%.0s' $(seq 1 300000); printf '\nthe answer\n'")
-            .expect("a child that outlives its pipe buffer is not a failure");
+        let answer = ask_raw(
+            &Sh,
+            None,
+            "printf 'x%.0s' $(seq 1 300000); printf '\nthe answer\n'",
+            &std::env::temp_dir(),
+        )
+        .expect("a child that outlives its pipe buffer is not a failure");
         assert!(answer.ends_with("the answer"), "the whole of stdout comes back");
         assert!(
             answer.len() > 300_000,
@@ -502,8 +534,13 @@ mod spawn_tests {
     /// rather than like a full pipe.
     #[test]
     fn a_harness_that_fills_the_error_pipe_stalls_no_more_than_the_other_one() {
-        let answer = ask_raw(&Sh, None, "printf 'e%.0s' $(seq 1 300000) >&2; printf 'the answer\n'")
-            .expect("stderr is drained too");
+        let answer = ask_raw(
+            &Sh,
+            None,
+            "printf 'e%.0s' $(seq 1 300000) >&2; printf 'the answer\n'",
+            &std::env::temp_dir(),
+        )
+        .expect("stderr is drained too");
         assert_eq!(answer, "the answer");
     }
 
@@ -511,7 +548,7 @@ mod spawn_tests {
     /// code, which is what the drained stderr is for.
     #[test]
     fn a_child_that_failed_reaches_the_panel_in_its_own_words() {
-        let err = ask_raw(&Sh, None, "echo 'no model configured' >&2; exit 3")
+        let err = ask_raw(&Sh, None, "echo 'no model configured' >&2; exit 3", &std::env::temp_dir())
             .expect_err("a non-zero exit is a failure");
         assert!(
             matches!(&err, OneshotError::Failed(said) if said == "no model configured"),
@@ -529,8 +566,9 @@ mod spawn_tests {
     /// that is already failing.
     fn within(prompt: &'static str, timeout: Duration, patience: Duration) -> OneshotError {
         let (tx, rx) = std::sync::mpsc::channel();
+        let cwd = std::env::temp_dir();
         std::thread::spawn(move || {
-            let _ = tx.send(ask_within(&Sh, None, prompt, timeout).err());
+            let _ = tx.send(ask_within(&Sh, None, prompt, &cwd, timeout).err());
         });
         match rx.recv_timeout(patience) {
             Ok(Some(err)) => err,
@@ -579,6 +617,15 @@ mod spawn_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Built rather than run, the same as `runs/usage.rs::command`'s own test:
+    /// the cwd is checked without spawning a harness at all.
+    #[test]
+    fn the_command_runs_in_the_cwd_it_is_given() {
+        let dir = Path::new("/tmp/smetana-oneshot-probe-test");
+        let cmd = command(&crate::agents::claude::Claude, &["-p"], &[], "hello", dir);
+        assert_eq!(cmd.get_current_dir(), Some(dir));
+    }
 
     #[test]
     fn ask_still_cleans_what_ask_raw_returns() {

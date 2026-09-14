@@ -316,7 +316,11 @@ pub async fn tracker_search_semantic(
         let issues: Vec<Issue> =
             snapshot.issues.into_iter().filter(|issue| !search::is_lock(issue)).collect();
         let question = search::prompt(&query, &issues);
-        let raw = agent_oneshot::ask_raw(profile, model.as_deref(), &question)?;
+        // Never the project's own root and never '/' — see `runs::usage`'s
+        // header for why a headless probe gets an empty folder of the app's
+        // own to run in.
+        let cwd = crate::agents::probe_dir(&app).map_err(OneshotError::Io)?;
+        let raw = agent_oneshot::ask_raw(profile, model.as_deref(), &question, &cwd)?;
         let known: std::collections::HashSet<String> =
             issues.iter().map(|issue| issue.id.clone()).collect();
         Ok(search::parse(&raw, &known))

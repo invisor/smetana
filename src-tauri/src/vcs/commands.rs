@@ -1036,7 +1036,11 @@ pub async fn vcs_suggest_message(
         let prompt = describe(Path::new(&repo), language)
             .map_err(|err| OneshotError::Git(err.to_string()))?
             .ok_or(OneshotError::Nothing)?;
-        oneshot::ask(profile, model.as_deref(), &prompt)
+        // Never the project's own root and never '/' — an empty folder of the
+        // app's own, so the harness indexes nothing on the way to answering
+        // one line. `runs::usage`'s header carries the whole of why.
+        let cwd = crate::agents::probe_dir(&app).map_err(OneshotError::Io)?;
+        oneshot::ask(profile, model.as_deref(), &prompt, &cwd)
     })
     .await
     .map_err(|err| OneshotError::Io(err.to_string()))?

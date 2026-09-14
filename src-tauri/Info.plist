@@ -25,5 +25,7 @@
 	<string>Smetana reads and edits the files of the project you open in it — including one you keep in your Downloads folder.</string>
 	<key>NSRemovableVolumesUsageDescription</key>
 	<string>Smetana reads and edits the files of the project you open in it — including one you keep on a removable volume.</string>
+	<key>NSAppDataUsageDescription</key>
+	<string>Smetana reads and edits the files of the project you open in it — including a path an agent you started follows into another app's own data folder.</string>
 </dict>
 </plist>
