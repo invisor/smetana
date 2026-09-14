@@ -64,6 +64,12 @@ same composed text to the worker for every other intent, to be written over stdi
 first turn once the child has spawned. Composed by the identical pure function either way: what moves
 is the wire the worker puts the words on, never the words themselves or the rule that finishes them.
 
+Stop rides the same driven road the other way: `ClaudeDriver::interrupt` writes a single
+`control_request` of `subtype: "interrupt"` over stdin to end the turn in flight without killing the
+child — measured against the installed CLI (2.1.270) rather than guessed, and the one place this app
+writes into the SDK's own control channel (`claude_driver.rs`'s own header carries the run;
+`session/permission.rs`'s header says why permissions still do not ride on it).
+
 **A driven session's own opening turn is the one already-composed prompt the panel refuses to draw
 whole** (`.claude/rules/conversation-panel.md`'s "The opening turn"). What the journal records instead
 is `Intent::opening_words()` — the new-task dialog's own text and pictures, or nothing for the seven

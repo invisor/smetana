@@ -3,10 +3,16 @@
 //!
 //! Claude Code, outside its own SDK, has one documented way to route a
 //! permission to a client: `--permission-prompt-tool`, naming a tool on an MCP
-//! server it connects to. So the app hosts one. The raw `control_request`
-//! channel the official SDK uses for `canUseTool` is an SDK internal and is
-//! deliberately not built on — `.claude/rules/agents.md` records what guessing
-//! at a CLI's vocabulary has already cost this project.
+//! server it connects to. So the app hosts one. Permissions still ride on
+//! this channel and not on the raw `control_request` one the official SDK
+//! uses for `canUseTool` — that stays an SDK internal, and
+//! `.claude/rules/agents.md` records what guessing at a CLI's vocabulary has
+//! already cost this project. One line of that raw channel is written now
+//! regardless:
+//! `ClaudeDriver::interrupt` (smetana-y7mv) sends a single `control_request`
+//! of `subtype: "interrupt"` to end a turn, licensed by the measurement in
+//! `claude_driver.rs`'s own header rather than by a guess at the channel's
+//! shape.
 //!
 //! The server lives **inside the Tauri process**: an HTTP listener on
 //! `127.0.0.1`, port 0 so the operating system picks a free one — a fixed port

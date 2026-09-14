@@ -151,13 +151,13 @@ import {
    built to outlive that migration would. */
 import {
   canDrive,
+  closeConversation,
   conversationState,
   conversationsIn,
   drivenSessions,
   forget,
   startConversation,
-  statusOf,
-  stopConversation
+  statusOf
 } from '../stores/conversation.js'
 import {
   boardColumns,
@@ -2837,15 +2837,25 @@ function reorderAgents(rows) {
    what it has is a record in the project's own registry, so the file is what is
    written and `terminal_remove` is never called: it would ask the worker to end
    a session it has never held, and answer that it has no such id. A driven row
-   is the third, and it is two acts rather than one: the conversation is stopped
+   is the third, and it is two acts rather than one: the conversation is closed
    and the record forgotten.
 
    Neither of those is awaited and neither is guarded on the other's answer. The
    record is this window's own bookkeeping — the store keeps a driven session
-   until somebody closes it, and this cross is that somebody — so a stop the
+   until somebody closes it, and this cross is that somebody — so a close the
    worker refused is a sentence for the toast corner rather than a reason to
-   leave a row standing that the person has just dismissed. `stopConversation`
-   reports rather than throws, which is what lets this be an ordinary call. */
+   leave a row standing that the person has just dismissed. `closeConversation`
+   reports rather than throws, which is what lets this be an ordinary call.
+
+   **`closeConversation`, never `stopConversation` (smetana-y7mv).** The two
+   used to be the same act, because killing the child was the only thing Stop
+   ever did to any harness. It no longer is: Claude Code's own `interrupt` now
+   answers the composer's Stop by ending the turn in flight and leaving the
+   child running, so a cross wired to that verb would dismiss the row while
+   the process, its permission token and its `--mcp-config` file all stayed
+   behind — `session/service.rs`'s own doc comment on `Request::Close` carries
+   the trace. This is the one place in the front end that ends a session
+   outright; the composer's own Stop button stays on `stopConversation`. */
 function removeAgentRow(id) {
   const conversation = drivenSessionOf(id)
   if (conversation !== null) {
@@ -2861,7 +2871,7 @@ function removeAgentRow(id) {
        session behind it, and asking the worker to forget a record it has
        already dropped writes nothing. */
     const recorded = orderedAgentRows.value.find((row) => row.id === id)?.conversation
-    stopConversation(conversation)
+    closeConversation(conversation)
     forget(conversation)
     if (recorded) forgetRestored(recorded)
     return
