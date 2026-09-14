@@ -848,7 +848,11 @@ against the kind of the tab there. "Cannot be closed" is **drawn rather than enf
 has no cross at all, and its menu says `Unpin` where an ordinary row's says `Pin to top`. Closing one
 is two gestures on purpose, and the menu's refusal says which. The point of the whole feature is that
 a pin outlives its agent: the session ends, the row comes back after a restart as an `offline` one
-under the same name, and it comes back at the top.
+under the same name, and it comes back at the top. The menu's fourth row, `Close other agents`, leans
+on the same pin for the ordinary case it is built for — one agent still worth watching among several
+that are done — closing every row but the one the menu is open on except the pinned and the
+still-starting, through the same `removeAgentRow` the cross already calls; `agentMenu.js`'s
+`closableOthers` is the whole of which rows that reaches.
 
 **That name is the conversation id and never `SessionId`.** The worker's counter starts at 1 on every
 launch and no process survives a restart, so an order — let alone a pin — kept under it would hand

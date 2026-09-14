@@ -36,7 +36,7 @@ import IconButton from '../core/IconButton.vue'
 import { useInteractive } from '../core/interactive.js'
 import PointerMenu from '../overlays/PointerMenu.vue'
 import { STATUS_GLYPH, attentionLevel } from '../status/status.js'
-import { AGENT_MENU_W, agentMenuItems } from './agentMenu.js'
+import { AGENT_MENU_W, agentMenuItems, closableOthers } from './agentMenu.js'
 import { agentKey, isPinned, moveAgent, orderAgents, togglePin } from './agentOrder.js'
 
 const props = defineProps({
@@ -60,8 +60,12 @@ const props = defineProps({
 
    `pin` carries the whole new list, the way `BranchList` emits its favourites:
    the toggle is a pure rule and belongs beside the others rather than in the
-   caller. */
-const emit = defineEmits(['select', 'remove', 'reorder', 'pin', 'clear'])
+   caller. `remove-others` carries the id of the row the menu was open on and
+   nothing more — the same shape `remove` already has, and the caller asks
+   `closableOthers` the same question this component just asked it, from the
+   rows and the pins it already owns, rather than being handed a list of ids
+   to remove one by one. */
+const emit = defineEmits(['select', 'remove', 'reorder', 'pin', 'clear', 'remove-others'])
 
 const body = { flex: 1, minHeight: 0, overflow: 'auto' }
 
@@ -364,7 +368,13 @@ const items = computed(() =>
        does not say, which is the same refusal the prop's default was: a row
        promising on a guess would send a clearing line nobody confirmed as the
        first line of somebody's prompt. */
-    clearable: Boolean(menuRow.value?.clearable)
+    clearable: Boolean(menuRow.value?.clearable),
+    /* How many rows `Close other agents` would actually reach: every drawn
+       row but this one, minus the pinned and the still-starting.
+       `closableOthers` takes `id` and not `agentKey` — see its own header —
+       so the row the menu is open on is excluded by the same field the
+       cross itself is pressed with. */
+    others: menuRow.value ? closableOthers(view.value, menuRow.value.id, props.pinned).length : 0
   })
 )
 
@@ -387,6 +397,7 @@ const pick = (item, key) => {
      hands the id to the store and Rust composes the line. */
   else if (item.kind === 'clear') emit('clear', row.id)
   else if (item.kind === 'close') emit('remove', row.id)
+  else if (item.kind === 'close-others') emit('remove-others', row.id)
 }
 
 const rowStyle = (row) => ({

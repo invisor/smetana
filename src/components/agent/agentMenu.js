@@ -8,7 +8,7 @@
    `AgentList.vue`, which turns each into an event of its own, the same seam
    `branchMenu.js` has with `BranchList.vue`. The test pins this side.
 
-   **Three verbs and no more.** The panel is 236px wide by default and a row is
+   **Four verbs and no more.** The panel is 236px wide by default and a row is
    one line; everything else an agent can be asked to do is a gesture somewhere
    else in the app — starting one is the project tile's menu, watching one is
    the row's own click, answering one is the terminal.
@@ -23,41 +23,67 @@
    the ids that clear, beside two more in `sessionMenu.js` for the ids that
    resume and fork.
 
-   The order is pinning, clearing, closing. Pinning first because it is wanted
-   most often, closing last because every destructive row in this app is last,
-   and clearing between them because it is neither: it deletes nothing — the
-   transcript stays a file and the Sessions tab goes on listing it — which is
-   also why it asks for no confirmation where `DeleteSessionModal` must.
+   Closing every other row was the fourth, from its own task (smetana-t6x4): the
+   ordinary case this panel is built for is one agent still worth watching among
+   several that are done, closed one cross at a time today. `closableOthers`
+   below is the whole of which rows that press reaches — every row but the one
+   the menu is open on, minus the pinned and the still-starting, which is
+   exactly the set that already carries a cross of its own.
+
+   The order is pinning, clearing, closing, closing every other row. Pinning
+   first because it is wanted most often, clearing between pinning and closing
+   because it is neither — it deletes nothing, the transcript stays a file and
+   the Sessions tab goes on listing it, which is also why it asks for no
+   confirmation where `DeleteSessionModal` must — and the two closes last,
+   because every destructive row in this app is last. `close-others` sits after
+   `close` and not before it: it is the wider of the pair, and a menu opened by
+   a roughly aimed pointer keeps its widest, most destructive row at the very
+   foot.
 
    `pin` is the glyph — the same one the board's `pinned` status draws — `x` is
    the close, which is the mark the row already carries for that verb, and
    `eraser` is the clear, deliberately not the bin: the bin is deletion and
-   these two verbs must not look alike. */
+   these two verbs must not look alike. `close-others` takes `x` again rather
+   than a glyph of its own: it is the same verb applied more widely, not a
+   different one, and no glyph was added to `core/icons.js` for it. */
+
+/* Whether a row is one of the pinned ones — `closableOthers` below reads the
+   very rule `agentOrder.js` keeps rather than a second copy of it, since two
+   readings of "is this pinned" is exactly the kind of pair that drifts. */
+import { isPinned } from './agentOrder.js'
 
 /* How wide the menu may get. A ceiling and not a width — `ContextMenu` draws
    itself as wide as its widest row and clips there with an ellipsis, and a menu
    row has neither a tooltip nor a `title`, so whatever does not fit is gone
    with no way back.
 
-   The longest label this file can produce is `Clear session — this agent cannot
-   do it` at 39 characters, against `Pin to top — nothing to remember it by` and
-   `Clear session — it has not started yet` at 38 apiece, `Close agent — it has
-   not started yet` at 36 and `Close agent` at 11. `sessionMenu.js` measured a
-   menu row at 6.4px a character of `--text-sm` in `--font-sans` and
-   `ContextMenu` at 70px of chrome around the label (`MENU_W` in
-   `kanban/taskMenu.js` itemises where those pixels go), which puts the binding
-   row at about 320px. 340 leaves the same seventh
-   of headroom for Segoe UI and Noto Sans that the other three left, and the
-   trade is the one every `MENU_W` in this app carries: px does not follow the
-   app-wide font size, so a person running the interface large loses the tail of
-   that one row.
+   The longest label this file can produce is `Close other agents — nothing
+   else to close` at 42 characters, against `Clear session — this agent cannot
+   do it` at 39, `Pin to top — nothing to remember it by` and `Clear session —
+   it has not started yet` at 38 apiece, `Close agent — it has not started
+   yet` at 36, `Close other agents` at 18 on its own and `Close agent` at 11.
+   `sessionMenu.js` measured a menu row at 6.4px a character of `--text-sm` in
+   `--font-sans` and `ContextMenu` at 70px of chrome around the label (`MENU_W`
+   in `kanban/taskMenu.js` itemises where those pixels go), which puts the
+   binding row at about 339px. 340 leaves almost nothing over that row and the
+   same seventh of headroom for Segoe UI and Noto Sans the other three left
+   over theirs, and the trade is the one every `MENU_W` in this app carries:
+   px does not follow the app-wide font size, so a person running the
+   interface large loses the tail of that one row first.
 
    **The ceiling is what the refusals are worded against, not the other way
    round**, which is `sessionMenu.js`'s rule and it bites harder here: this menu
-   opens over the narrowest panel in the app. So each fragment is as short as it
-   can be and still be a reason — the clear row's four are what the ceiling cost
-   most, since its label is two characters longer than the close's and its
-   refusals had to fit under the same 42. */
+   opens over the narrowest panel in the app. In characters that ceiling is
+   `floor((340 − 70) / 6.4) = 42`, and it is now exactly met rather than merely
+   approached: close-others' full label is 42 characters and comes to 338.8px,
+   a fifth of one character under 340 rather than the wider margin the other
+   three left. So each fragment is as short as it can be and still be a
+   reason — the close-others row is what the ceiling cost most now, since its
+   label is seven characters longer than the close's own and its one refusal
+   still had to leave room under 42: `nothing else to close` is the shortest
+   sentence that says a list of one row, or a list where everything else is
+   pinned or starting, has nothing left for this verb to take. Whatever is
+   worded here next has no room left under this ceiling at all. */
 export const AGENT_MENU_W = 340
 
 /* Why one of the three cannot be pressed, as lowercase fragments joined onto the
@@ -108,13 +134,19 @@ const AGENT_REASON = {
      tell the two apart, and do it on a flag the row carries rather than by
      guessing from `clearable`, since a Codex PTY row says these same words
      truthfully. */
-  cannotClear: 'this agent cannot do it'
+  cannotClear: 'this agent cannot do it',
+  /* A list of one row, or a list where every other row is pinned or still
+     starting, leaves this verb nothing to take. Drawn rather than left out,
+     the same reasoning every other refusal here carries — a row that
+     vanishes on a list of one tells nobody the verb was ever there. */
+  nothingElse: 'nothing else to close'
 }
 
 export const PIN_LABEL = 'Pin to top'
 export const UNPIN_LABEL = 'Unpin'
 export const CLEAR_LABEL = 'Clear session'
 export const CLOSE_LABEL = 'Close agent'
+export const CLOSE_OTHERS_LABEL = 'Close other agents'
 
 
 /* The states in which there is no process behind the row to write into.
@@ -134,7 +166,34 @@ export function agentMenuLabel(label, reason) {
   return reason ? `${label} — ${reason}` : label
 }
 
-/* The three rows.
+/* Which rows a `Close other agents` press would close: every row but the one
+   the menu is open on, minus the pinned and the still-starting — exactly the
+   set that already carries a cross of its own. Exported and pure, so
+   `agentMenuItems` can grey the row from its length and the caller — the
+   `remove-others` handler — can act on the very list this counted rather than
+   asking the same three questions a second time.
+
+   Matched by `id` and never by `agentKey`. What closes a row downstream is
+   `removeAgentRow(row.id)`: `drivenSessionOf` reads the `conversation:`
+   prefix off it and every other branch looks the id up in the session list or
+   the restored records by that same field, so `id` is the one identity this
+   panel's removal path actually understands. A row's `agentKey` — its
+   conversation id where it has one — is a different string from its `id` the
+   moment a conversation exists, and excluding the menu's own row by that key
+   would leave the row the menu is open on inside the very list this verb is
+   about to close.
+
+   Pinned and starting are refused for the reason the cross beside each of
+   them already is: a pinned row has no cross to press, and a starting row's
+   id is this window's own with no session behind it yet to end. Offline and
+   driven rows are not refused — the cross closes them exactly as it closes a
+   live session, so this verb does too. */
+export function closableOthers(rows, keptId, pinned) {
+  const list = Array.isArray(rows) ? rows : []
+  return list.filter((row) => row?.id !== keptId && !row?.starting && !isPinned(row, pinned))
+}
+
+/* The four rows.
 
    `pinned` and `starting` are facts about the row; `conversation` is the id the
    row carries, and its absence is what refuses the pin. `state` is the row's ui
@@ -149,24 +208,32 @@ export function agentMenuLabel(label, reason) {
    `agents::pick` actually started, for the reason `sessionMenu.js` records
    about the same substitution.
 
-   Two of the three ask nothing about what kind of row this is: the panel is one
-   flat list on purpose, and a live session, a start and an offline record can
-   be pinned, dragged and closed alike — closing an offline row takes its record
-   away rather than ending a process, which is `AgentList`'s caller's business
-   and not this file's. Clearing is the one that has to know, because it is the
-   one that writes into a process, and a row with none is refused here rather
-   than at the wire.
+   Three of the four ask nothing about what kind of row this is: the panel is
+   one flat list on purpose, and a live session, a start and an offline record
+   can be pinned, dragged and closed alike — closing an offline row takes its
+   record away rather than ending a process, which is `AgentList`'s caller's
+   business and not this file's, and closing every other row is the same verb
+   spent on every row but one. Clearing is the one that has to know, because it
+   is the one that writes into a process, and a row with none is refused here
+   rather than at the wire.
 
    The pin's label is the act and not the state: a row already pinned offers the
    way back out, which is the whole of what tells somebody the mark is theirs to
    remove. `branchMenu.js`'s favourite row is the same rule, written down there
-   first. */
+   first.
+
+   `others` is the one argument none of the row's own facts can answer: how
+   many rows a `close-others` press would actually reach is a fact about the
+   whole panel, not about the row the menu is open on, so it arrives counted
+   rather than computed here — `closableOthers(...).length`, from a caller that
+   has the whole list. This module stays pure and does not read it twice. */
 export function agentMenuItems({
   pinned = false,
   conversation = null,
   starting = false,
   state = null,
-  clearable = false
+  clearable = false,
+  others = 0
 } = {}) {
   /* Asked in this order because a pinned row cannot also be one with no
      conversation — pinning is what needed the id in the first place — so the
@@ -197,6 +264,11 @@ export function agentMenuItems({
           ? AGENT_REASON.waiting
           : null
 
+  /* Nothing about this row refuses it — the row the menu is open on is never
+     one of its own targets, so the only way it has nothing to do is a panel
+     that gave it nothing: `others` counted to zero. */
+  const closeOthersReason = others === 0 ? AGENT_REASON.nothingElse : null
+
   return [
     {
       kind: 'pin',
@@ -215,6 +287,12 @@ export function agentMenuItems({
       label: agentMenuLabel(CLOSE_LABEL, closeReason),
       icon: 'x',
       disabled: Boolean(closeReason)
+    },
+    {
+      kind: 'close-others',
+      label: agentMenuLabel(CLOSE_OTHERS_LABEL, closeOthersReason),
+      icon: 'x',
+      disabled: Boolean(closeOthersReason)
     }
   ]
 }
