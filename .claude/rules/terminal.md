@@ -721,21 +721,31 @@ deliberately does **not** say which of the two wrote it — an offline row is ta
 the project's harness can take *now*, and a field saying how the session was recorded would be one
 more thing to disagree with.
 
-**Stop takes the record with it on a harness with no answer for `Driver::interrupt`, and that is the
-honest reading rather than a third removal.** The spec named two — a session that left on its own,
-and the cross on the row — and the driven panel's Stop was neither by name, for such a harness:
-`Request::Stop` kills the child, and that child *is* the session. What follows is `Chunk::Eof`, the
-same arrival a self-exit makes, and the conversation is over either way — so it is offered back no
-more than any other finished agent is, which is exactly the rule the terminal worker keeps at
-`Chunk::Gone` for a PTY child killed by anything at all. **Claude Code left that group at
-smetana-y7mv**: `ClaudeDriver::interrupt` answers `Some` now, a `control_request` over stdin ends the
-turn without touching the child, and the session — record included — is still there for the next
-message; `claude_driver.rs`'s own header carries the measurement behind it. What follows is about a
-harness still in the group, Codex today. The thing to know before changing it: **the worker cannot
-tell such a harness's three apart, and there is no command by which it could.** `Request` is Start,
-Attach, Since, Send, Answer, Stop and ShutDown, and `session/commands.rs` exposes six commands with no
-removal among them — so the cross is `session_stop` exactly as the composer's Stop button is, and a
-self-exit is no request at all. A drop moved onto `Stop` would therefore separate none of the three
+**The record used to leave with Stop, on every harness, because the cross reused that very command —
+and smetana-y7mv is why it no longer can.** The spec named two ways a session ends outside a restart:
+a session that left on its own, and the cross on the row. Before this task the driven panel's Stop
+was folded into the first without a name of its own — `Driver::interrupt` answered `None` for every
+harness this app drove, `Request::Stop` killed the child regardless of which UI gesture sent it, and
+the cross called `stopConversation` for exactly that reason, since there was nothing else to call.
+`ClaudeDriver::interrupt` answers `Some` now: a `control_request` over stdin ends the turn and leaves
+the child running, `claude_driver.rs`'s own header carries the measurement, and a cross still wired to
+`Request::Stop` would dismiss the row while the process, its permission token and its `--mcp-config`
+file all stayed behind. `Request::Close`/`session_close` is the cross's own command as of this task —
+deliberately the blunt one, killing the child unconditionally the way `Request::Stop` always used to,
+and doing nothing else: the cleanup a self-exit already gets (forgetting the permission token,
+dropping the `.smetana/agents.json` record, deleting the `--mcp-config` file) is still entirely
+`Chunk::Eof`'s, reached the same way it always was, because `Close` does not shortcut it.
+
+Splitting the request buys the worker no way to tell the three apart once a child has actually died.
+Self-exit, a `Close`-triggered kill, and — on a harness whose `interrupt` still answers `None` — a
+`Stop`-triggered kill all still arrive as the identical `Chunk::Eof`, with nothing riding along to say
+which caused it; that group is **empty today**, since `ClaudeDriver` is the only `impl Driver` this
+app has and a driven session refuses anything else outright (`driver_for`, `service.rs`), so the
+`None` branch is kept for whichever driven harness is added next rather than for one running now. The
+conversation is over either way it happens — so it is offered back no more than any other finished
+agent is, which is exactly the rule the terminal worker keeps at `Chunk::Gone` for a PTY child killed
+by anything at all — and that is still why the cleanup lives at `Eof` and nowhere else: a drop moved
+onto `Close` (or, on a harness still answering `None`, onto `Stop`) would separate none of the three
 and would miss the self-exit outright. `Eof` is the one arrival all of them make, which is why the
 drop is there. (The cross does reach Rust a second time, and about this very record: `removeAgentRow`
 calls `forgetRestored`, which is `terminal_forget`. That is the front end taking away the *offer* it

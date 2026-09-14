@@ -595,10 +595,11 @@ function noteConversation(id, conversation) {
    ask for this conversation again, and a journal kept for it would grow in a
    window that draws none of it, which is the cost `detach` exists to avoid.
 
-   Stopping the session is the caller's other half and deliberately not done
-   here: what a stop costs the harness is `stopConversation`'s to say, and a
-   refusal of it is a sentence for the toast corner rather than a reason to keep
-   a row somebody has just dismissed. */
+   Ending the session is the caller's other half and deliberately not done
+   here: what that costs the harness is `closeConversation`'s to say (Stop's
+   own `stopConversation` is a different verb since smetana-y7mv and does not
+   end a session at all), and a refusal of it is a sentence for the toast
+   corner rather than a reason to keep a row somebody has just dismissed. */
 export function forget(id) {
   const at = started.findIndex((session) => session.id === id)
   if (at !== -1) started.splice(at, 1)
@@ -695,16 +696,37 @@ export async function answerQuestion(id, question, decision, answers = null) {
   }
 }
 
-/* Stop the turn in flight. What that costs the harness is the driver's
-   business: for Claude Code it is one `control_request` over stdin that ends
-   the turn and leaves the session open (smetana-y7mv,
-   `src-tauri/src/agents/claude_driver.rs`'s own header carries the
-   measurement); a harness with no such answer still loses the child. */
+/* Stop the turn in flight — the composer's Stop button, and never the row's
+   cross. What that costs the harness is the driver's business: for Claude
+   Code it is one `control_request` over stdin that ends the turn and leaves
+   the session open (smetana-y7mv, `src-tauri/src/agents/claude_driver.rs`'s
+   own header carries the measurement); a harness with no such answer still
+   loses the child. `closeConversation` below is the other one, for ending a
+   session outright. */
 export async function stopConversation(id) {
   try {
     await invoke('session_stop', { id })
     conversationState.lastError = null
   } catch (err) {
     report(id, 'stopping a session', err)
+  }
+}
+
+/* End the session outright — the cross on a driven agent row
+   (`DesktopApp.vue`'s `removeAgentRow`), never the composer's Stop. Always
+   kills the child, on every harness, so the worker's own cleanup on the
+   child's exit still runs: the permission token is forgotten, the
+   `.smetana/agents.json` record is dropped and the `--mcp-config` file goes
+   with it (`session/service.rs`'s `Request::Close`, smetana-y7mv). Before
+   this existed `stopConversation` did that job too, because killing the
+   child was the only thing Stop ever did for any harness; once Claude Code's
+   own `interrupt` started leaving the child alive, `stopConversation` could
+   no longer be trusted to end a session at all. */
+export async function closeConversation(id) {
+  try {
+    await invoke('session_close', { id })
+    conversationState.lastError = null
+  } catch (err) {
+    report(id, 'closing a session', err)
   }
 }

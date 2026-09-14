@@ -114,24 +114,37 @@
 //! **every** turn, not only the first — so the second `init` above is this
 //! harness's ordinary behaviour, not an artefact of interrupting.
 //!
-//! `interrupt` below writes exactly that one `control_request` line. Nothing
-//! else in this file had to change for it: `"result"` already becomes
-//! `EventKind::Result` in `one_event` regardless of `subtype` or `is_error`, so
-//! `error_during_execution` closes the turn the same way `success` does, and
-//! `control_response` is a `type` this codec has never been told about, which
-//! already produces nothing. The interrupted turn's own
+//! `interrupt` below writes exactly that one `control_request` line, save for
+//! `request_id`: the capture's `"req-1"` was this measurement's own, and the
+//! driver writes `smetana-interrupt-<n>` instead, unique per call rather than
+//! per line captured. Nothing else in this file had to change for it:
+//! `"result"` already becomes `EventKind::Result` in `one_event` regardless of
+//! `subtype` or `is_error`, so `error_during_execution` closes the turn the
+//! same way `success` does, and `control_response` is a `type` this codec has
+//! never been told about, which already produces nothing. The interrupted turn's own
 //! `"[Request interrupted by user]"` text arrives as a `user` message, and this
 //! codec already reads a `user` message only for its `tool_result` blocks — the
 //! sentence is discarded on purpose and is not drawn anywhere.
 //!
-//! **Not measured: Stop pressed while the session sits on a permission card**
-//! — a child blocked inside `--permission-prompt-tool`, waiting on the
-//! listener in `permission.rs`. Nobody ran that scenario for this task: it
-//! wants the desktop app itself and a live approval dialog on screen, not the
-//! stdin/stdout harness the three runs above used. Whether the same
-//! `control_request` reaches a child in that state, and what the permission
-//! card and the composer do afterwards, is still open — try it by hand in
-//! `npm run tauri dev` before trusting either answer.
+//! **Not measured, but predictable from what the rest of this tree already
+//! settles: Stop pressed while the session sits on a permission card.**
+//! Nobody ran that scenario for this task — it wants the desktop app itself
+//! and a live approval dialog on screen, not the stdin/stdout harness the
+//! three runs above used — so what follows is a prediction to be confirmed
+//! or refuted, never a fourth measurement. The composer draws Stop over a
+//! permission card in the first place, since `BUSY = ['running',
+//! 'needs-you']` (`journal.js`) never blocks it; `state_of`
+//! (`session::model`) clears a card's `pending` entry only on
+//! `EventKind::PermissionAnswered`, which the `Answer` request path in
+//! `service.rs` appends before it ever touches the listener; and
+//! `permission.rs` drops an unmatched `notifications/cancelled` with a bare
+//! `202` rather than acting on it. Put together, the likely shape is that
+//! the card and its `needs-you` state survive an interrupt untouched, and
+//! the person still has to press the card's own Allow or Deny; if so, the
+//! one visible cost is that answering the now-stale card may still reach
+//! `session_answer` and draw one spurious error toast, since the turn it was
+//! asked on has already closed underneath it. Try it by hand in
+//! `npm run tauri dev` before trusting any of this.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -599,7 +612,8 @@ impl Driver for ClaudeDriver {
             "request_id": format!("smetana-interrupt-{}", self.interrupts),
             "request": { "subtype": "interrupt" },
         });
-        let mut bytes = serde_json::to_vec(&message).unwrap_or_default();
+        let mut bytes = serde_json::to_vec(&message)
+            .expect("a literal control_request of two string fields always serializes");
         bytes.push(b'\n');
         Some(bytes)
     }

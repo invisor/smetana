@@ -368,6 +368,7 @@ pub fn run() {
       session::commands::session_send,
       session::commands::session_answer,
       session::commands::session_stop,
+      session::commands::session_close,
     ])
     // build + run instead of .run(context): we need the exit event. This is
     // exactly what Builder::run does — build, then run — plus our callback.

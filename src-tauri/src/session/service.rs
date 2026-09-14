@@ -122,7 +122,19 @@ pub enum Request {
     /// the journal (`EventKind::PermissionAnswered`) and the permission
     /// listener, which is what builds `updatedInput` from it.
     Answer(SessionId, String, Decision, Option<BTreeMap<String, String>>, oneshot::Sender<Result<(), SessionError>>),
+    /// End the turn in flight and nothing more. `ClaudeDriver::interrupt`
+    /// (smetana-y7mv) answers `Some` for this harness, so the child survives
+    /// it — see `claude_driver.rs`'s own header for the measurement — and a
+    /// harness with no such answer still falls to `start_kill()`.
     Stop(SessionId, oneshot::Sender<Result<(), SessionError>>),
+    /// End the session outright: the cross on a driven agent row, not the
+    /// composer's Stop (smetana-y7mv). Always kills the child regardless of
+    /// what a driver's `interrupt` answers, so the cleanup `Chunk::Eof` already
+    /// does — forgetting the permission token, dropping the `.smetana/
+    /// agents.json` record, deleting the `--mcp-config` file — still runs. A
+    /// harness whose `interrupt` now leaves the turn open and the child alive
+    /// needs a real end distinct from `Stop`, which this is.
+    Close(SessionId, oneshot::Sender<Result<(), SessionError>>),
     /// The one reply that is not a `oneshot`: it is awaited from the exit
     /// event, on a synchronous thread, and only `std::sync::mpsc` can put a
     /// ceiling on a blocking receive. The same shape the terminal's has, for
@@ -832,9 +844,11 @@ fn handle(
             // (smetana-y7mv, `ClaudeDriver::interrupt` — see its own header
             // for the measurement): a `control_request` closes the open turn
             // and leaves the child alive to answer the next message. A
-            // harness with no such answer — everything but Claude Code today
-            // — still falls to `start_kill()` below, which is the loss this
-            // branch existed to record before the measurement.
+            // harness with no such answer — none is driven at all today, `Claude`
+            // being the only `impl Driver` this app has — still falls to
+            // `start_kill()` below, which is the loss this branch existed to
+            // record before the measurement, kept for whichever harness is
+            // driven next and answers `None`.
             let bytes = live.talking.as_mut().and_then(|talking| talking.driver.interrupt());
             match bytes {
                 Some(bytes) => {
@@ -847,6 +861,24 @@ fn handle(
                         let _ = child.start_kill();
                     }
                 }
+            }
+            let _ = tx.send(Ok(()));
+        }
+        Request::Close(id, tx) => {
+            let Some(live) = sessions.get_mut(&id) else {
+                let _ = tx.send(Err(SessionError::NoSuchSession(id)));
+                return;
+            };
+            // Unconditional, unlike `Stop` above: this is the cross on the
+            // row, which means the session ends regardless of what a driver's
+            // `interrupt` answers. Killing the child is what makes `Chunk::Eof`
+            // arrive, and `Eof`'s own arm is the *only* place that forgets the
+            // permission token, drops the `.smetana/agents.json` record and
+            // deletes the `--mcp-config` file (`McpConfig::drop`, by dropping
+            // `Talking`) — so this reaches all of that by the same road it
+            // always has, rather than repeating it here.
+            if let Some(child) = live.child.as_mut() {
+                let _ = child.start_kill();
             }
             let _ = tx.send(Ok(()));
         }
@@ -881,9 +913,13 @@ fn absorb(
             // row it would draw after the next restart would be an offer to
             // reopen a finished agent. `forget_session` one worker over is the
             // same two lines, and this is deliberately the *only* place a
-            // driven session's record is dropped — the cross on the row stops
-            // the session, which kills the child, which ends this stream, which
-            // arrives here. **The app's own exit does not take this path**:
+            // driven session's record is dropped — the cross on the row sends
+            // `Request::Close` (smetana-y7mv), which kills the child
+            // unconditionally, which ends this stream, which arrives here. The
+            // composer's own Stop no longer takes this road for a harness whose
+            // `interrupt` answers `Some`: the turn closes and the child lives
+            // on, so nothing here runs from a Stop press any more on such a
+            // harness. **The app's own exit does not take this path**:
             // `Request::ShutDown` returns out of the worker's loop before any
             // of its kills reaches `absorb`, which is what leaves the records in
             // place for the next launch.
