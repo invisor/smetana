@@ -363,6 +363,17 @@ const SETUP: &str = "Work out what this project is made of and write .smetana/pr
      the file Smetana reads before it runs anything here. Check the commands before you write \
      them in, and ask me about anything the folder does not answer.";
 
+/// What a founding session is for, said here rather than left to the skill
+/// for `SETUP`'s reason: an `Inline` harness may find no skill text at all.
+/// The one sentence that must survive is the order — talk, then files — since
+/// a model handed an empty folder and a stack it likes is one step from
+/// scaffolding it before anybody has said what the project is.
+const BOOTSTRAP: &str = "This folder is empty — Smetana checked, and bd is already initialised in \
+     it — before you create a single file, agree with me what this project is, which stack it is \
+     built on and what it is called. Then lay the foundation — the first files, one command that \
+     passes so a gate has something to check, and the first commit — and when it stands, set the \
+     project up for runs by writing .smetana/project.toml the way the project-setup skill says.";
+
 /// What a branch review is, said in the prompt rather than left to the skill,
 /// and the reason is `SETUP`'s: an `Inline` harness may find no skill text at
 /// all, and a session that could not read one must still know what it was
@@ -479,19 +490,21 @@ fn task_language(language: &str) -> String {
 /// three things is the smaller evil than a setting that does not reach the
 /// place it is used from.
 ///
-/// `Setup`, `ResolveConflict` and `RepairTracker` stay out. A setup session
-/// writes one toml file, a conflict session finishes a merge or a rebase git
-/// stopped on, a repair session is looking at the tracker's own database —
-/// none of the three files an issue, and the last of them could not if it
-/// wanted to, since bd is what is broken. Telling any of them how to word one
-/// would be prose about something that is not going to happen.
+/// `Setup`, `Bootstrap`, `ResolveConflict` and `RepairTracker` stay out. A
+/// setup session writes one toml file, a founding session writes files of its
+/// own choosing and the same toml at the end but never a bd issue, a conflict
+/// session finishes a merge or a rebase git stopped on, a repair session is
+/// looking at the tracker's own database — none of the four files an issue,
+/// and the last of them could not if it wanted to, since bd is what is
+/// broken. Telling any of them how to word one would be prose about something
+/// that is not going to happen.
 ///
 /// `ReviewBranch` stays out too, and it is the one that is **written down**
 /// rather than left to the fall-through — which is why this is a `match` and
-/// no longer a `matches!`. The other four are quiet about it because nothing
-/// else in the app claims otherwise; a review's prompt says in its first
-/// paragraph that it files nothing, and a reader checking that claim against
-/// this function has to find it answered rather than absent.
+/// no longer a `matches!`. The rest are quiet about it because nothing else in
+/// the app claims otherwise; a review's prompt says in its first paragraph
+/// that it files nothing, and a reader checking that claim against this
+/// function has to find it answered rather than absent.
 ///
 /// `FixTask` is in for one sentence of its prompt: it leaves a note on the
 /// issue saying what was put right, and a note is prose somebody reads.
@@ -569,6 +582,10 @@ fn commit_language(language: &str) -> String {
 /// here: it corrects the code behind a closed task rather than the task's own
 /// prose, and its prompt asks for that correction to be committed — which is
 /// the whole difference between it and the `EditTask` in the paragraph below.
+/// `Bootstrap` is in for the reason `Setup` is out: a founding session's job is
+/// exactly to lay a foundation and commit it, unlike the setup session it ends
+/// by running, which only ever writes the one file `runs::gitignore` keeps out
+/// of the repository.
 ///
 /// The rest are out because they do not touch a repository at all — the
 /// `match` below is the list, and a number written here would be wrong the
@@ -588,7 +605,9 @@ fn commits_to_git(intent: &Intent) -> bool {
         Intent::Run { .. }
         | Intent::ResolveConflict { .. }
         | Intent::FixTask { .. }
-        | Intent::Bare => true,
+        | Intent::Bare
+        // The founding session makes the first commit.
+        | Intent::Bootstrap => true,
         // Named for the reason it is named one function up: the review prompt
         // forbids a commit in so many words, and the predicate behind that
         // sentence has to say the same thing where somebody would look for it.
@@ -887,6 +906,7 @@ fn body(
         // decision rather than a wildcard.
         Intent::ResumeSession { .. } => None,
         Intent::Setup => Some(setup(delivery, skills, facts)),
+        Intent::Bootstrap => Some(bootstrap(delivery, skills, facts)),
         Intent::ReviewBranch { pairs, report, fetch_failed } => {
             Some(review_branch(pairs, report, fetch_failed, delivery, skills, text.reviewing_branch))
         }
@@ -1366,6 +1386,34 @@ fn setup(delivery: SkillDelivery, skills: &Skills, facts: Option<&str>) -> Strin
                 out,
                 "What the file holds is described at {} — read it first.",
                 skill.display()
+            );
+        }
+    }
+    if let Some(facts) = facts {
+        out.push_str("\n\n");
+        out.push_str(facts.trim_end());
+    }
+    out
+}
+
+fn bootstrap(delivery: SkillDelivery, skills: &Skills, facts: Option<&str>) -> String {
+    let mut out = String::from(BOOTSTRAP);
+    out.push_str("\n\n");
+    match delivery {
+        SkillDelivery::PluginDir => {
+            out.push_str(
+                "Use the smetana:starting-a-project skill for the order of things, and the \
+                 smetana:project-setup skill for what the file holds.",
+            );
+        }
+        SkillDelivery::Inline => {
+            let starting = skills.smetana.join("skills/starting-a-project/SKILL.md");
+            let setup = skills.smetana.join("skills/project-setup/SKILL.md");
+            let _ = write!(
+                out,
+                "The order of things is described at {} and what the file holds at {} — read both first.",
+                starting.display(),
+                setup.display()
             );
         }
     }
@@ -3365,6 +3413,60 @@ mod tests {
         assert!(!text.contains("The title says what needs doing"), "nothing is filed here");
     }
 
+    #[test]
+    fn starting_a_project_says_talk_first_and_names_its_skill() {
+        let text = build(
+            &Intent::Bootstrap,
+            SkillDelivery::PluginDir,
+            ImageDelivery::InPrompt,
+            &skills(),
+            Some(FACTS),
+            nothing(),
+            &english(),
+            "",
+            None,
+        )
+        .expect("a founding session opens on something");
+        assert!(text.contains("before you create a single file"), "{text}");
+        assert!(text.contains("smetana:starting-a-project"), "{text}");
+        assert!(text.contains("smetana:project-setup"), "and ends by setting the project up: {text}");
+    }
+
+    #[test]
+    fn an_inline_harness_is_given_the_starting_skill_s_path() {
+        let text = build(
+            &Intent::Bootstrap,
+            SkillDelivery::Inline,
+            ImageDelivery::InPrompt,
+            &skills(),
+            None,
+            nothing(),
+            &english(),
+            "",
+            None,
+        )
+        .expect("a founding session opens on something");
+        assert!(text.contains("skills/starting-a-project/SKILL.md"), "{text}");
+    }
+
+    #[test]
+    fn a_founding_session_is_told_the_commit_language() {
+        assert!(commits_to_git(&Intent::Bootstrap), "the founding session makes the first commit");
+        let text = build(
+            &Intent::Bootstrap,
+            SkillDelivery::PluginDir,
+            ImageDelivery::InPrompt,
+            &skills(),
+            None,
+            nothing(),
+            &english(),
+            "",
+            None,
+        )
+        .expect("a founding session opens on something");
+        assert!(text.contains(&commit_language("English")), "{text}");
+    }
+
     /// Every intent there is, in both deliveries — the walk the language tests
     /// below share, since what makes a language rule worth anything is that no
     /// session escapes it.
@@ -3372,6 +3474,7 @@ mod tests {
         vec![
             Intent::Bare,
             Intent::Setup,
+            Intent::Bootstrap,
             Intent::EditTask { id: "x-1".into(), title: "T".into() },
             Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
             Intent::FixTask { id: "x-1".into(), title: "T".into() },
@@ -3624,10 +3727,11 @@ mod tests {
     fn only_a_session_that_touches_git_is_told_the_commit_language() {
         // The ones that make a commit with their own hands: a run's lead
         // commits and merges all night, a conflict session finishes the merge
-        // or the rebase git stopped on, and a bare session is where a person
-        // says "commit this". The `matches!` below is the list, and no count is
-        // written here — the comment that did say one was already off by one
-        // before `RepairTracker` made it off by two.
+        // or the rebase git stopped on, a bare session is where a person
+        // says "commit this", and a founding session makes the first commit.
+        // The `matches!` below is the list, and no count is written here —
+        // the comment that did say one was already off by one before
+        // `RepairTracker` made it off by two.
         //
         // The rest write into bd, or into `.smetana/`, or into `.beads` which
         // bd commits for itself, and none of those is a commit of this
@@ -3642,6 +3746,7 @@ mod tests {
                         | Intent::ResolveConflict { .. }
                         | Intent::FixTask { .. }
                         | Intent::Bare
+                        | Intent::Bootstrap
                 );
                 assert_eq!(commits_to_git(intent), commits, "{intent:?}");
 
