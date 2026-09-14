@@ -2807,32 +2807,33 @@ const activeTerminal = computed(() => terminalTab(project.activeTab))
    **One field, written by `showAgentTab` below** — so what aims this tab is that
    function's callers, whatever the list grows to, rather than a list here
    somebody has to remember to extend. They fall into two kinds, and one caller
-   stands under both. Aiming at a conversation is `newAgent`, which starts one,
-   and `selectAgent` on a driven row, which picks one that is already going.
-   Against those: every road that puts a PTY agent in front, which today is the
-   `createSession` roads, each moving the aim while starting something;
+   stands under both. Aiming at a conversation is `startAgent`, the one function
+   every one of the ten starts that talk to an agent now calls, and `selectAgent`
+   on a driven row, which picks one that is already going. Against those: every
+   road that puts a PTY agent in front, which today is `startAgent`'s own
+   fallback to `createSession`, moving the aim while starting something;
    `selectAgent` again, on any other row, moving it while starting nothing; and
    `attachToAgent`, which moves it as a side effect of handing a dropped path to
    whichever agent is selected.
 
    One field and one count beside it: `agentAimWrites` below is raised by that
    same function on every call, whatever is written. Plenty of callers aim before
-   an await; **`newAgent` and `resumeSession` are the only ones that put an aim
-   back after one**, and the count is what lets each ask first whether it is
-   still the last thing to have aimed this project.
+   an await; **`startAgent` is the only one that puts an aim back after one**,
+   and the count is what lets it ask first whether it is still the last thing to
+   have aimed this project. `newAgent` and `resumeSession` used to carry a copy
+   of this apiece, one each; it is `startAgent`'s alone now, for every caller.
 
-   There is a second kind of writer and it is deliberate: `newAgent`'s catch and
-   `resumeSession`'s two restore sites — its early return on `badCwd` and its own
-   `createSession` catch — put the previous aim back when a press started
-   nothing, and each writes this Map directly rather than calling
-   `showAgentTab`. **Going through that function
-   would bring the tab forward again**, which is exactly wrong in the case the
-   restore exists for — with no other agent in the project, the fallback's own
-   failed ticket has just taken `hasAgentTab` false and the watcher below has
-   landed somebody on the board. The restore is about what the tab is aimed at if
-   they go back to it, not about putting them on it, and it leaves the count
-   alone for the same reason: putting back what was there is not a move. Do not
-   "unify" the two; the bypass is the point.
+   There is a second kind of writer and it is deliberate: `startAgent`'s own two
+   restore sites — its early return on `badCwd` and its own `createSession`
+   catch — put the previous aim back when a press started nothing, and each
+   writes this Map directly rather than calling `showAgentTab`. **Going through
+   that function would bring the tab forward again**, which is exactly wrong in
+   the case the restore exists for — with no other agent in the project, the
+   fallback's own failed ticket has just taken `hasAgentTab` false and the
+   watcher below has landed somebody on the board. The restore is about what the
+   tab is aimed at if they go back to it, not about putting them on it, and it
+   leaves the count alone for the same reason: putting back what was there is
+   not a move. Do not "unify" the two; the bypass is the point.
 
    `selectAgent` is worth naming on its own three times over: it is reached from
    a row click *and* from the `lastRunStart` watcher, so a run handing over to
@@ -2879,8 +2880,8 @@ const agentAim = reactive(new Map())
    to would cost an untouched project its restore.
 
    Not reactive, unlike the aim: nothing draws it. It is read imperatively, and
-   by two callers — `newAgent` and `resumeSession`, the only ones that put an
-   aim *back* after an await — so a reactive version would only offer render dependencies on a
+   by one caller — `startAgent`, the only one that puts an aim *back* after an
+   await — so a reactive version would only offer render dependencies on a
    number that means nothing on screen. Nothing clears it either, for the reason
    nothing clears the aim — one small entry per project this window has aimed,
    dying with the window. */
@@ -2896,23 +2897,25 @@ const agentAimWrites = new Map()
    a driven conversation.
 
    **The project is a parameter because one caller aims after an await.**
-   `newAgent` reads the path before it starts a session and hands it back here a
-   second later; read fresh, a project switch inside that second would file this
-   session's id under whichever project is on screen now. And the tab itself
-   moves only for the project being aimed: `project` is the *active* project's
-   record, so a start that answered after somebody switched away must leave the
-   project now in front on whatever tab they put it. The same guard the review
-   road a few hundred lines up makes with `activePath.value === path`, and for
-   the same reason.
+   `startAgent` reads the path once, from its own `path` parameter, and hands it
+   back here a second later; read fresh off `activePath.value` instead, a
+   project switch inside that second would file this session's id under
+   whichever project is on screen now. And the tab itself moves only for the
+   project being aimed: `project` is the *active* project's record, so a start
+   that answered after somebody switched away must leave the project now in
+   front on whatever tab they put it. `startAgent` guards both of its own tab
+   writes with `path === activePath.value` for the identical reason, which is
+   what makes it safe for the one caller whose own await can run to a minute —
+   the branch review's fetch — and a no-op guard for every other, which never
+   awaits anything before calling it.
 
    **Every call raises that project's write count**, whatever it aims at and
    whether or not the tab itself moves — a call for a project that is no longer
-   in front still aimed it. That count is what `newAgent` and `resumeSession`
-   read to tell an aim of their own from somebody else's a second later, and
-   this being the only place it is raised is what keeps that true however long
-   the list of callers grows. The writes that go around this function —
-   `newAgent`'s catch and `resumeSession`'s two restore sites — go around the
-   count with them, on purpose. */
+   in front still aimed it. That count is what `startAgent` reads to tell an
+   aim of its own from somebody else's a second later, and this being the only
+   place it is raised is what keeps that true however long the list of callers
+   grows. The writes that go around this function — `startAgent`'s own two
+   restore sites — go around the count with them, on purpose. */
 function showAgentTab(conversation = null, path = activePath.value) {
   agentAim.set(path, conversation)
   agentAimWrites.set(path, (agentAimWrites.get(path) ?? 0) + 1)
@@ -3876,22 +3879,24 @@ async function deleteSession(session) {
 
 /* A session read off disk, brought back as a live agent.
 
-   **The same fork `newAgent` has, and it is the same one decision said once.**
-   Under a harness this app can drive, a resume opens the conversation panel on
-   the transcript it reopened; under any other, it is the PTY road this has
-   always taken. `canDrive` is that question — `settings.agent` and the person's
-   own `conversationPanel` switch — and it is asked here rather than at either
-   of the two gestures that reach this function, because a second copy of it in
-   `selectAgent` and a third in `onSessionAction` would be two copies of one
-   rule to drift apart. Both doors are the same verb, so there is one function
-   and one fork.
+   **The same fork every other start that talks to an agent has, and it is the
+   same one decision said once.** Under a harness this app can drive, a resume
+   opens the conversation panel on the transcript it reopened; under any other,
+   it is the PTY road this has always taken. `canDrive` is that question —
+   `settings.agent` and the person's own `conversationPanel` switch — and it is
+   asked once, inside `startAgent`, rather than at either of the two gestures
+   that reach this function: this function builds the intent and hands it over,
+   so a second copy of the question in `selectAgent` and a third in
+   `onSessionAction` would be two copies of one rule to drift apart. Both doors
+   call this same function, which calls `startAgent`, so there is one fork for
+   both.
 
-   **The PTY road is unchanged and is still the same road every other agent in
-   this app takes**, which is the whole design of it rather than a detail:
-   `createSession` with an intent, which is `terminal_create`, which is a
-   profile's own command line plus `--resume <id>` and `Pty::spawn`. A second
-   way to start an agent is the place two ways silently diverge. It is also
-   where a driven start that came back with nothing lands — `agents::pick`
+   **The PTY road is unchanged and is still the same road every agent in this
+   app lands on whenever it takes it**, which is the whole design of it rather
+   than a detail: `createSession` with an intent, which is `terminal_create`,
+   which is a profile's own command line plus `--resume <id>` and `Pty::spawn`.
+   A second way to start an agent is the place two ways silently diverge. It is
+   also where a driven start that came back with nothing lands — `agents::pick`
    substitutes the first installed harness silently, so `canDrive` can answer
    `true` on a machine the driver then refuses, and the fall-through resolves
    whatever `pick` would have. A fallback is not a failure and says nothing; the

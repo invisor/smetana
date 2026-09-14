@@ -410,11 +410,12 @@ what a person picks a session out of that list for is the conversation, not whic
 being written into.
 
 It is also the one intent that opens on **no prompt at all**, and `prompt::build`
-refuses it before it composes a word. A prompt rides as the positional argument and both harnesses
-*submit* it as the session's first message; a resumed conversation already has somebody's words in
-it, so even the conversation-language paragraph — which reaches every other intent, `Bare`
-included — would be this app talking over the person whose session it is. Whatever was settled in
-there was settled before this window existed.
+refuses it before it composes a word. A prompt rides as the positional argument on the PTY road, and
+over stdin through `Driver::opening` on the driven one (this file's own "Every prompt is a whole
+instruction" section, above); either way it reaches the session as its first message — a resumed
+conversation already has somebody's words in it, so even the conversation-language paragraph — which
+reaches every other intent, `Bare` included — would be this app talking over the person whose session
+it is. Whatever was settled in there was settled before this window existed.
 
 `agents::IDS` is the single copy of the agent-id list, and `settings/model.rs` validates against it
 rather than repeating it — the side-tab hazard again: a value that survives the session and silently
@@ -732,9 +733,10 @@ list, while withholding it removes the feature with nothing on screen to say so.
 over it keeps its own name, which lets the prompt say `superpowers:brainstorming` in both cases.
 
 **Filing a task is an agent session, not a write.** `NewTaskModal` no longer emits an issue: its
-fields become a `TaskDraft` inside a `NewTask` intent, and `DesktopApp.vue` switches to the agents
-side tab and the terminal centre tab and calls `createSession`, exactly as "Ask agent to edit" does.
-The agent runs `bd create` itself and the watcher puts the card on the board — and `createIssue`,
+fields become a `TaskDraft` inside a `NewTask` intent, and `DesktopApp.vue`'s `submitNewTask` calls
+`startAgent`, exactly as "Ask agent to edit" does — the conversation panel when `canDrive` answers
+true, the terminal otherwise (`.claude/rules/terminal.md`). The agent runs `bd create` itself and the
+watcher puts the card on the board — and `createIssue`,
 `tracker_create`, `NewIssue` and `create_args` are deleted rather than left unused, because a live
 write path into the tracker that nothing calls is the kind of thing that gets called again in six
 months.

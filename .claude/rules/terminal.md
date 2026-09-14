@@ -796,13 +796,14 @@ list* — is answered rather than overruled. The row is explicitly not a live on
 (`state: 'done'`, which is what `attentionLevel` reads and `AgentList` dims by), it says `offline`
 where an elapsed time would be, it is counted by neither `liveAgentCount` nor `hasAgentSession` — so
 a freshly launched app does not open on an empty Agent tab — and its whole content is an offer. The
-click is the offer, and it takes `resumeSession` in `DesktopApp.vue`, which since smetana-477m forks
-the same way "+ New agent" does: `canDrive` → `startConversation` with an `Intent::ResumeSession`, and
-otherwise `createSession` with the very same intent. Either way it is `--resume <id>` in the record's
-own directory, and the one function is deliberate — `selectAgent` on this row and the Sessions tab's
-own two verbs are three doors onto one verb, and a second fork in any of them would be a copy to
-drift. A worktree removed after its task merged is the ordinary case and is refused by `resume_cwd`,
-which reaches the person as a sentence in the toast corner like every other session verb's refusal.
+click is the offer, and it takes `resumeSession` in `DesktopApp.vue`, which since smetana-477m builds
+an `Intent::ResumeSession` and forks the same way "+ New agent" does — `startAgent`'s own `canDrive` →
+`startConversation`, and otherwise `createSession`, with the very same intent either road. Either way
+it is `--resume <id>` in the record's own directory, and the one function is deliberate — `selectAgent`
+on this row and the Sessions tab's own two verbs are three doors onto one verb, and a second fork in
+any of them would be a copy to drift. A worktree removed after its task merged is the ordinary case and
+is refused by `resume_cwd`, which reaches the person as a sentence in the toast corner like every other
+session verb's refusal.
 
 **The other refusal is the front end's own and is asked before the worker is**: a record is written
 only for a session whose conversation id this app knows, but the row is drawn whatever agent the
@@ -1286,12 +1287,14 @@ session opened on a prompt assembled out of the transcript, which is a new inten
 `prompt.rs` for something the fork gives whole and more accurately.
 
 **There is one road to a PTY and this takes it**, and since smetana-477m there is a road that is not
-one. `resumeSession` in `DesktopApp.vue` asks `canDrive` the same question "+ New agent" asks, in the
-same one place: under a harness this app drives, a resume opens the **conversation panel** on the
-transcript it reopened; under any other, and with the person's own switch off, it calls
-`createSession` with an `Intent::ResumeSession`, which is `terminal_create`, which is the profile's
-own command line plus `--resume <id>` and `Pty::spawn` — the same road a filing session and a run's
-batch still take. The intent is one object built once and handed to whichever road answers, which is
+one. `resumeSession` in `DesktopApp.vue` builds an `Intent::ResumeSession` and hands it to `startAgent`,
+which asks `canDrive` the same question every one of the ten starts that talk to an agent now asks, in
+the one place: under a harness this app drives, a resume opens the **conversation panel** on the
+transcript it reopened; under any other, and with the person's own switch off, `startAgent` falls
+through to `createSession` with the very same intent, which is `terminal_create`, which is the
+profile's own command line plus `--resume <id>` and `Pty::spawn` — the same road a run's batch always
+takes, and the road a resume, a filing session or any of the other eight takes too whenever `canDrive`
+refuses. The intent is one object built once and handed to whichever road answers, which is
 also why the fork is a `fork` flag on that one variant rather than a road of its own: everything but
 the arguments is shared. The driven half is `session::service`, which since smetana-osut accepts every
 intent but `Run` — `ResumeSession` among them, and the one this door is about. What a resume carries a
@@ -1358,10 +1361,10 @@ its trigger stands in.
 
 **The row must not lie about what it is doing.** A resumed session has no tracker work — nothing
 claimed it and there is no issue behind it — so `SessionWork::ResumeSession` carries the session's
-own title and `captionOf` in `stores/terminals.js` draws "Resumed session: …". The title goes in the
-label rather than beside it because `tasks` is set in mono, where a person's own sentence would read
-as an identifier; the id is on the card in full and not on the row, since a 36-character UUID tells
-nobody which conversation this is.
+own title and `captionOf` in `components/agent/captions.js` draws "Resumed session: …". The title goes
+in the label rather than beside it because `tasks` is set in mono, where a person's own sentence would
+read as an identifier; the id is on the card in full and not on the row, since a 36-character UUID
+tells nobody which conversation this is.
 
 **A fork draws that same row**, deliberately and by the customer's choice: `Intent::work` reads
 `fork` and throws it away. What matters in the agents list is which conversation is going, not which
