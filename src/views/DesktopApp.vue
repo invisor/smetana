@@ -2534,27 +2534,33 @@ function selectAgent(id) {
      the terminal at something nobody holds is the same failure the restored row
      below guards against.
 
-     `rightFocus` is dropped explicitly rather than left to `focusIsLive`'s own
-     comparison. That comparison is against `activeAgentRow`, which *does* move
-     to this row's own key the moment `showAgentTab(conversation)` below
-     answers — so a driven row whose `work` is a filing, an edit or a run's own
-     claimed list would, by that comparison alone, go on reading as focused.
-     What is not built yet is this branch reading `work.kind` the way
-     `selectAgent`'s PTY branch does below: a driven row's right-column content
-     is only ever opened by the start that created it
-     (`submitNewTask`'s own `rightFocus.value = activeAgentRow.value`), not by
-     picking the row back up afterwards. So every driven row answers a click
-     the same way a bare PTY agent's does — the right column and the board
-     keep whatever they were showing — until that gap is closed, and the line
-     below is what keeps a focus left on some *other* agent from going on
-     reading as live once this row is on screen instead. `rightPanel` falls
-     back to `'board'`, whose watch writes only on the way *out* of the board,
-     so the tab somebody is standing on is left alone and the board's own
-     selection is drawn exactly as it was. */
+     `rightFocus` is set from `work.kind` the way the PTY branch below does,
+     and for the identical reason: a filing's draft is the one piece of a
+     driven row's right-column content this window already opens on the start
+     that created it (`submitNewTask`'s own `rightFocus.value =
+     activeAgentRow.value`), and a click that could start it but never bring it
+     back would lose the draft for the life of the session the moment somebody
+     glanced at the board. `editTask`, `resolveTask` and `fixTask` are
+     deliberately left out here, unlike the PTY branch's own — those open their
+     issue on the board's own selection rather than in this column, and
+     building that for a driven row is real work nobody has asked this branch
+     to take on yet. So every driven row but a filing still answers a click the
+     way a bare PTY agent's does — the right column and the board keep
+     whatever they were showing — and the explicit `null` in that case is what
+     keeps a focus left on some *other* agent from going on reading as live
+     once this row is on screen instead: `focusIsLive` compares against
+     `activeAgentRow`, which *does* move to this row's own key the moment
+     `showAgentTab(conversation)` answers, so leaving `rightFocus` untouched
+     here would have a run's `ClaimedTasks` go on standing in the right column
+     under a conversation with none. `rightPanel` falls back to `'board'`,
+     whose watch writes only on the way *out* of the board, so the tab
+     somebody is standing on is left alone and the board's own selection is
+     drawn exactly as it was. */
   const conversation = drivenSessionOf(id)
   if (conversation !== null) {
-    rightFocus.value = null
     showAgentTab(conversation)
+    const row = orderedAgentRows.value.find((candidate) => candidate.id === id)
+    rightFocus.value = row?.work?.kind === 'newTask' ? id : null
     return
   }
   /* A restored row has no session behind it, and its id is a conversation's

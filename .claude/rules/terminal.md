@@ -101,8 +101,8 @@ session that never began is not held. What happens to somebody standing on that 
 afterwards depends on what else the project has: in a project with no other agent and no earlier
 conversation the fallback's own `createSession` ticket takes `hasAgentTab` true and then false again,
 so the watch above fires and lands them on the board; where the tab is standing for something else it
-does not fire, which is correct — there is still a tab, and `newAgent` puts its aim back where it found
-it, so whatever was being watched is still being watched unless somebody has aimed the tab elsewhere
+does not fire, which is correct — there is still a tab, and `startAgent` puts its aim back where it
+found it, so whatever was being watched is still being watched unless somebody has aimed the tab elsewhere
 in the second the failed start took.
 
 The one seam that costs something: `project.activeTab` **is** remembered, so a project last left
@@ -268,21 +268,24 @@ on which kind of session it is aimed at: `ConversationView.vue` with a driven se
 same `TerminalView.vue` with `terminalState.activeId`. What decides is `agentAim` in `DesktopApp.vue`,
 one field per project written by `showAgentTab` — so what aims the tab is that function's callers,
 however many there come to be, rather than a list to keep in step with it. They fall into two kinds,
-with one caller under both: aiming at a conversation is `newAgent`, which starts one, and `selectAgent`
-on a driven row, which picks one that is already going; against every road that puts a PTY agent in
-front — the `createSession` roads, which move the aim while starting something; `selectAgent` again on
-any other row, moving it while starting nothing; and `attachToAgent`, which moves it as a side effect
-of handing a dropped path to the selected agent. **`selectAgent` is the only gesture that deliberately
+with one caller under both: aiming at a conversation is `startAgent`, the one function every start a
+person talks to now calls, and `selectAgent` on a driven row, which picks one that is already going;
+against every road that puts a PTY agent in front — `startAgent`'s own fallback to `createSession`,
+which moves the aim while starting something; `selectAgent` again on any other row, moving it while
+starting nothing; and `attachToAgent`, which moves it as a side effect of handing a dropped path to the
+selected agent. **`selectAgent` is the only gesture that deliberately
 picks an agent that already exists**, which makes it the only way back — to a PTY agent or to a
 conversation — that is not also a start; it is reached from a row click and from the `lastRunStart`
 watcher both, so a run handing over to its next batch moves the aim as well.
 
 Beside the field is a **count per project, raised by `showAgentTab` on every call**, and it is there for
 the callers that put an aim *back* after an await — aiming before one is ordinary, and most of the
-callers above do it. `newAgent` aims the tab and then waits about a second for `createSession`, and
-`resumeSession` does the same at two points of its own — an early return on `badCwd`, before
-`showAgentTab` has been called on that road at all, and its own `createSession` catch, after it has —
-each tested against the count it took at its own point rather than the other's. Comparing the aim
+callers above do it. `startAgent` aims the tab and then waits about a second for whichever road
+answers, and puts the aim back at two points of its own — an early return on `badCwd`, before
+`showAgentTab` has been called on the fallback road at all, and its own `createSession` catch, after it
+has — each tested against the count it took at its own point rather than the other's. It is one
+function carrying both now, for every one of the ten starts that talk to an agent, where `newAgent` and
+`resumeSession` used to each carry a copy of this for their own two callers alone. Comparing the aim
 afterwards cannot tell its own `null` from somebody else's — every road to a PTY
 agent calls `showAgentTab()` with no argument and writes that same `null`, so a guard on the value read
 a row click as "untouched" and restored over the agent a run had just handed the person. A failed start therefore puts the previous aim back only while the count is unmoved. The
@@ -1290,9 +1293,13 @@ transcript it reopened; under any other, and with the person's own switch off, i
 own command line plus `--resume <id>` and `Pty::spawn` — the same road a filing session and a run's
 batch still take. The intent is one object built once and handed to whichever road answers, which is
 also why the fork is a `fork` flag on that one variant rather than a road of its own: everything but
-the arguments is shared. The driven half is `session::service`, which accepts `Bare` and
-`ResumeSession` and nothing else — every other intent carries a brief, and this harness's driven form
-would put one on `--append-system-prompt`.
+the arguments is shared. The driven half is `session::service`, which since smetana-osut accepts every
+intent but `Run` — `ResumeSession` among them, and the one this door is about. What a resume carries a
+brief in is neither road's problem any more: `prompt::build` refuses `ResumeSession` a prompt at all,
+because a reopened conversation already has somebody's words in it, so there is nothing for
+`Driver::opening` to send over stdin and nothing for `ClaudeDriver::start` to put on
+`--append-system-prompt` either — see `.claude/rules/agents.md` and `.claude/rules/conversation-panel.md`
+for the brief every other intent now carries instead.
 
 **What the panel opens on is the conversation that already happened.** Under `--input-format
 stream-json` the harness replays nothing at all, so `session::history` reads the transcript before the

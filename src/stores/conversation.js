@@ -440,10 +440,11 @@ function listenToState() {
 
    A driven session is one whose protocol the worker parses itself, and only
    Claude Code has a driver: `session::service::driver_for` refuses every other
-   profile, and `Request::Start` refuses every intent but `Run` — nobody is in
-   a run's conversation. So the front end asks before it takes this road at
-   all — a person whose harness is Codex pressing any of the starts that talk
-   to an agent must get the PTY they have always had.
+   profile, and `Request::Start` refuses `Run` alone — nobody is in a run's
+   conversation, and every other intent is accepted. So the front end asks
+   before it takes this road at all — a person whose harness is Codex pressing
+   any of the starts that talk to an agent must get the PTY they have always
+   had.
 
    **This is a cheap front door and cannot be the only gate, because it cannot
    see `PATH`.** It is asked of `settings.agent`, and the first half of that

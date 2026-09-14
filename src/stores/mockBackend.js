@@ -470,7 +470,17 @@ const MOCK_UNTRACKED = 'notes/todo.txt'
    journal holds one of each — both halves of the conversation, a tool call that
    finished and one still open, a thinking block, what a turn cost — and ends on
    a question nobody has answered, which is the loud card and the state
-   `session::model::state_of` folds these events down to. */
+   `session::model::state_of` folds these events down to.
+
+   The first two turns are the `opening` event's own two shapes
+   (`.claude/rules/conversation-panel.md`, "The opening turn"): the new-task
+   dialog's own words and picture, and the wordless start every other intent
+   this road now accepts produces. Without them here neither shape is drawn
+   anywhere a person can look — `?view=gallery` and `npm run dev` are this
+   project's only verification of anything under `src/components/`, and this
+   fixture is `ConversationView`'s whole share of it. Each closes with its own
+   `result` so the two read as finished turns rather than as the one still
+   open, which stays the fixture's own closing permission below. */
 const CONVERSATION_AT = '2026-09-10T12:00:00Z'
 
 /* The second turn's own clock, relative to now rather than to `CONVERSATION_AT`
@@ -486,12 +496,28 @@ const recentAt = (msAgo) => new Date(Date.now() - msAgo).toISOString()
 const journalEvent = (seq, kind, fields) => ({ seq, at: CONVERSATION_AT, kind, ...fields })
 
 const MOCK_CONVERSATION = [
+  /* The new-task dialog's own words and picture, exactly as `Intent::NewTask`
+     hands them to `Intent::opening_words()`: the draft's text and its image
+     paths, nothing else. */
   journalEvent(1, 'turn-start', { by: 'person' }),
-  journalEvent(2, 'user-message', {
+  journalEvent(2, 'opening', {
+    text: 'File a task: the worktree keeps the branch name verbatim, so a slash in it names a folder that does not exist.',
+    attachments: ['/Users/you/Desktop/20260910-141202-collision.png']
+  }),
+  journalEvent(3, 'result', { tokens_in: 340, tokens_out: 12, cost_usd: 0.0008, ms: 900 }),
+  /* The wordless start: every intent but a filing opens on this shape, and
+     the panel substitutes the session row's own caption where `text` is
+     `null` — `Gallery.vue`'s `GALLERY_CONVERSATION_CAPTION` is what stands in
+     for that row here. */
+  journalEvent(4, 'turn-start', { by: 'person' }),
+  journalEvent(5, 'opening', { text: null, attachments: [] }),
+  journalEvent(6, 'result', { tokens_in: 210, tokens_out: 4, cost_usd: 0.0002, ms: 400 }),
+  journalEvent(7, 'turn-start', { by: 'person' }),
+  journalEvent(8, 'user-message', {
     text: 'Rename the worktree when the branch changes, and keep `wt/` off the folder name.',
     attachments: []
   }),
-  journalEvent(3, 'text', {
+  journalEvent(9, 'text', {
     text: [
       'The collision is in `rename`: the worktree keeps the branch name verbatim, so a',
       'branch with a slash in it names a folder that does not exist.',
@@ -507,11 +533,11 @@ const MOCK_CONVERSATION = [
       '```'
     ].join('\n')
   }),
-  journalEvent(4, 'tool-use', { id: 't1', name: 'Read', detail: 'src-tauri/src/vcs/worktree.rs' }),
-  journalEvent(5, 'tool-result', { id: 't1', ok: true, summary: '180 lines' }),
-  journalEvent(6, 'result', { tokens_in: 12480, tokens_out: 416, cost_usd: 0.0312, ms: 4200 }),
-  journalEvent(7, 'turn-start', { by: 'person', at: recentAt(18000) }),
-  journalEvent(8, 'user-message', {
+  journalEvent(10, 'tool-use', { id: 't1', name: 'Read', detail: 'src-tauri/src/vcs/worktree.rs' }),
+  journalEvent(11, 'tool-result', { id: 't1', ok: true, summary: '180 lines' }),
+  journalEvent(12, 'result', { tokens_in: 12480, tokens_out: 416, cost_usd: 0.0312, ms: 4200 }),
+  journalEvent(13, 'turn-start', { by: 'person', at: recentAt(18000) }),
+  journalEvent(14, 'user-message', {
     text: 'Do the first one, and run the tests.',
     /* The second name is deliberately long — the chip has to ellipsize it
        rather than let the bubble grow to fit, which a short name never
@@ -522,7 +548,7 @@ const MOCK_CONVERSATION = [
     ],
     at: recentAt(17800)
   }),
-  journalEvent(9, 'reasoning', {
+  journalEvent(15, 'reasoning', {
     text: [
       'The branch name reaches three places: the folder, the tab label and the',
       'record in `.smetana/agents.json`. Only the first one has a filesystem',
@@ -530,15 +556,15 @@ const MOCK_CONVERSATION = [
     ].join('\n'),
     at: recentAt(12000)
   }),
-  journalEvent(10, 'tool-use', {
+  journalEvent(16, 'tool-use', {
     id: 't2',
     name: 'Edit',
     detail: 'src-tauri/src/vcs/worktree.rs',
     at: recentAt(9000)
   }),
-  journalEvent(11, 'tool-result', { id: 't2', ok: true, summary: '2 edits', at: recentAt(8000) }),
-  journalEvent(12, 'tool-use', { id: 't3', name: 'Grep', detail: 'fn worktree_path', at: recentAt(6000) }),
-  journalEvent(13, 'permission', {
+  journalEvent(17, 'tool-result', { id: 't2', ok: true, summary: '2 edits', at: recentAt(8000) }),
+  journalEvent(18, 'tool-use', { id: 't3', name: 'Grep', detail: 'fn worktree_path', at: recentAt(6000) }),
+  journalEvent(19, 'permission', {
     id: 'q1',
     tool: 'Bash',
     detail: 'cargo test --manifest-path src-tauri/Cargo.toml worktree',
