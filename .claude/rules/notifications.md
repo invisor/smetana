@@ -165,6 +165,33 @@ window opened. A watcher in `DesktopApp.vue`, the shape report delivery uses, wa
 second of these: `terminalState.sessions` holds the active project only, so the sound would have
 gone quiet for exactly the second project the rail exists for.
 
+**The driven road rings the identical sound now, and it did not until smetana-kf6x.** Every intent
+with a person behind it can open a driven session since smetana-osut — a filing, an edit, a conflict,
+a setup, a tracker repair, a branch review, beside `Bare` and `ResumeSession` — and under this app's
+own defaults (`agent: claude`, the conversation panel on) that is the ordinary road rather than the
+PTY one, so the hole smetana-kf6x closed was not a corner case. The chime is rung from
+`listenToState` in `conversation.js`, the `session:state` listener, comparing the state a session's
+own record in `started` held before against the one arriving, on the way *in* only — the same
+transition rule, next to the same write, for the same reason: reading a stale `before` from anywhere
+else would let the write and the check disagree the first time somebody changed one without the
+other. Nothing here chimes on `session_attach`'s own snapshot either, the driven road's equivalent of
+`terminal_marks`'s first read — a session already waiting when the snapshot lands was waiting before
+this window opened, exactly as on the PTY road.
+
+**The watcher rejected above for the PTY road is not rejected again here for the same reason, and
+that is worth being exact about.** `terminalState.sessions` is the one objection that graph carries,
+and it does not apply to the driven road at all: `started` already holds every project's driven
+sessions, the same reach `marks` buys the PTY side, so a `DesktopApp.vue` watcher over it would not
+have gone quiet for a second project the way one over `terminalState.sessions` would. What still rules
+a watcher out is the other half of the PTY decision, restated rather than re-litigated: the transition
+check has to sit beside the write it is comparing against, in the one listener that receives every
+`session:state` event for every session this window has started — a watcher over `drivenSessions`
+would see only derived snapshots on Vue's own schedule, with no guaranteed one-tick-per-event
+correspondence to compare a `before` against, and would either miss a wait answered and re-asked
+inside one flush or read a batched update as more transitions than happened. Keeping the check in the
+listener is the one arrangement that cannot lose or double an event, on either road, so the same
+answer holds here for a different reason than it holds there.
+
 The third rule is **not a shell**, and it is the one the sound was written without at first. The
 listener asks `isShellSession` before it rings, which is `projectStates`' rule by the same word,
 because a shell reaches `needs-you` by the shortest path there is: any BEL byte sets `bell_pending`
@@ -176,6 +203,12 @@ through the same function; a sound that did not would have been the third popula
 one, going off while both of those read zero with nothing on screen to explain it. It is asked as
 "is a shell" rather than "is an agent" for the reason `isShellSession` gives — work this front end
 has never heard of is an agent, and still rings.
+
+**The driven listener asks nothing of the kind, and that is a fact about `Intent` rather than a gap
+left for later.** A shell has no `Intent` behind it at all — `SessionWork::Shell` is the one session
+kind whose whole `model.rs` entry says so — and `terminal_shell` never calls `session_start`, so
+nothing a driven session's record in `started` can ever describe is a shell. The guard the PTY
+listener needs has nothing to guard against on this road.
 
 The sound is also the one announcement the deliveries above do not divide, **the switch included**.
 It plays whether the report went to a tab, to the bell, or nowhere at all, because it is about the

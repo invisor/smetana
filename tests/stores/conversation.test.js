@@ -1,7 +1,17 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mockIPC } from '@tauri-apps/api/mocks'
 import { loadStores } from '../support/stores.js'
 import { installIpc } from '../support/ipc.js'
+
+/* The DOM half of the sound, stood in for — the same seam `terminals.test.js`
+   uses for the identical reason: what this store is answerable for is which
+   sound it asks for and under which option, not whether an element played it. */
+const chime = vi.fn()
+vi.mock('../../src/chime.js', () => ({ chime: (id, options) => chime(id, options) }))
+
+beforeEach(() => {
+  chime.mockClear()
+})
 
 /* One journal event as the worker writes it: `seq`, `at`, and the kind's own
    fields flattened in beside a kebab-case `kind` — the serde shape of
@@ -706,6 +716,125 @@ describe('the conversation store', () => {
         'failed'
       ])
       expect(statusOf('hibernating')).toBe('hibernating')
+    })
+  })
+
+  /* The driven road's half of `.claude/rules/notifications.md`'s "beside the
+     bell there is a sound" — smetana-kf6x. Before this, `listenToState` wrote
+     the state and nothing else, so a session going `needs-you` down this road
+     — every intent with a person behind it now, under `agent: claude` with the
+     conversation panel on — never rang, where the identical wait on the PTY
+     road always has. */
+  describe('the sound an agent waiting for an answer makes', () => {
+    it('plays once on the way into needs-you, and not on every state after it', async () => {
+      const { ipc, stores, emit, nextTick } = await ready()
+      ipc.on('session_start', 7)
+      stores.settings.settings.notifications.needsAttention = 'sound-4'
+      await stores.conversation.startConversation('/p')
+
+      await emit('session:state', { id: 7, state: 'needs-you' })
+      await nextTick()
+      expect(chime).toHaveBeenCalledWith('sound-4', { unlessFocused: true })
+      expect(chime).toHaveBeenCalledTimes(1)
+
+      await emit('session:state', { id: 7, state: 'needs-you' })
+      await nextTick()
+      expect(chime).toHaveBeenCalledTimes(1)
+
+      // Answered, then asked again: that is a second wait and a second sound.
+      await emit('session:state', { id: 7, state: 'running' })
+      await emit('session:state', { id: 7, state: 'needs-you' })
+      await nextTick()
+      expect(chime).toHaveBeenCalledTimes(2)
+    })
+
+    /* `started` holds every project this window is driving a session in, the
+       same reach `marks` buys the PTY road — a person supervising two projects
+       overnight is waiting on both. */
+    it('rings for a session of a project that is not the one on screen', async () => {
+      const { ipc, stores, emit, nextTick } = await ready()
+      ipc.on('session_start', 7)
+      await stores.conversation.startConversation('/other')
+
+      await emit('session:state', { id: 7, state: 'needs-you' })
+      await nextTick()
+
+      expect(chime).toHaveBeenCalledTimes(1)
+    })
+
+    /* The chime sits above `held`'s own early return: a background agent no
+       panel is attached to must still ring, exactly as one nobody has ever
+       opened the terminal tab for still does on the PTY road. Never calling
+       `attach` here is the arrangement, not an oversight — `held` stays empty
+       throughout. */
+    it('rings for a session whose panel was never attached', async () => {
+      const { ipc, stores, emit, nextTick } = await ready()
+      ipc.on('session_start', 7)
+      await stores.conversation.startConversation('/p')
+
+      // `attach` is never called: `held` stays empty for session 7 throughout,
+      // the state this test exists to check the chime does not depend on.
+      await emit('session:state', { id: 7, state: 'needs-you' })
+      await nextTick()
+
+      expect(chime).toHaveBeenCalledTimes(1)
+      expect(stores.conversation.drivenSessions.value[0].state).toBe('needs-you')
+    })
+
+    /* A state event for a session this window never started has no record to
+       compare against, and must stay silent rather than read a missing `before`
+       as a transition. */
+    it('is silent about a session it never started', async () => {
+      const { ipc, stores, emit, nextTick } = await ready()
+      ipc.on('session_start', 7)
+      await stores.conversation.startConversation('/p')
+
+      await emit('session:state', { id: 9, state: 'needs-you' })
+      await nextTick()
+
+      expect(chime).not.toHaveBeenCalled()
+    })
+
+    /* `forget` takes the row out of `started` without necessarily ending the
+       session in the worker, so a state event can still arrive afterwards for
+       one this window has explicitly stopped caring about — ringing about it
+       would undo the dismissal the cross on the row asked for. */
+    it('is silent about a session that was forgotten before the state arrived', async () => {
+      const { ipc, stores, emit, nextTick } = await ready()
+      ipc.on('session_start', 7)
+      await stores.conversation.startConversation('/p')
+      stores.conversation.forget(7)
+
+      await emit('session:state', { id: 7, state: 'needs-you' })
+      await nextTick()
+
+      expect(chime).not.toHaveBeenCalled()
+    })
+
+    it('off is silence, not a default sound', async () => {
+      const { ipc, stores, emit, nextTick } = await ready()
+      ipc.on('session_start', 7)
+      stores.settings.settings.notifications.needsAttention = 'off'
+      await stores.conversation.startConversation('/p')
+
+      await emit('session:state', { id: 7, state: 'needs-you' })
+      await nextTick()
+
+      // `chime` refuses `off` itself, so there is one place that knows what
+      // silence is.
+      expect(chime).toHaveBeenCalledWith('off', { unlessFocused: true })
+    })
+
+    it('hands the focus switch over as it stands, and never decides it here', async () => {
+      const { ipc, stores, emit, nextTick } = await ready()
+      ipc.on('session_start', 7)
+      stores.settings.settings.notifications.onlyWhenUnfocused = false
+      await stores.conversation.startConversation('/p')
+
+      await emit('session:state', { id: 7, state: 'needs-you' })
+      await nextTick()
+
+      expect(chime).toHaveBeenCalledWith('sound-2', { unlessFocused: false })
     })
   })
 })

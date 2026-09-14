@@ -27,6 +27,11 @@ import { workOf } from '../components/agent/sessionWork.js'
    own functions — and the cycle this closes (settings → tabs → conversation)
    is the one `settings.js` already records as harmless for that reason. */
 import { settings } from './settings.js'
+/* The one sound `listenToState` below rings, the same call `terminal:state`
+   makes in `terminals.js` — see that file and `.claude/rules/notifications.md`
+   for the sound itself and for `onlyWhenUnfocused`, neither of which is this
+   file's to decide. */
+import { chime } from '../chime.js'
 
 export const conversationState = reactive({
   /* Whether the listeners are up. Nothing branches on it today; it is here for
@@ -422,6 +427,18 @@ function listenToEvents() {
 function listenToState() {
   return listen('session:state', (event) => {
     const { id, state, conversation } = event.payload
+    /* The state this session was last known to be in, read before `noteState`
+       overwrites it below — the same shape `before` takes in `terminals.js`'s
+       own `terminal:state` listener, and for the same reason: the transition
+       the chime below fires on is read against what this session was doing a
+       moment ago, not against what it is about to become.
+
+       Looked up directly rather than through `noteState`'s own find, because
+       the guard below needs a second thing `noteState` does not answer —
+       whether this window is still holding a record for the session at all —
+       see that guard for why. */
+    const record = started.find((session) => session.id === id)
+    const before = record?.state
     /* Before the drop below, and deliberately not under it: the row in the
        agents panel hangs on this. The journal is emptied by `detach` and the
        record is not, so a window whose conversation panel has gone must still
@@ -430,6 +447,40 @@ function listenToState() {
        somebody last looked at it. */
     noteState(id, state)
     noteConversation(id, conversation)
+    /* An agent that has stopped to ask something rings the same sound
+       `terminal:state` rings for a PTY session — same sound, same
+       `onlyWhenUnfocused`, same rule: on the way *in* only, so a session
+       re-announcing the same wait costs nothing.
+
+       This sits above the `held` lookup and its early return on purpose,
+       and for the PTY listener's own reason: `held` is this project's panel,
+       emptied by `detach` the moment it leaves the screen, while the chime is
+       owed for every project a session is running in. `started` already
+       reaches all of them — "every driven session this window has, whichever
+       project it belongs to" is its own header two screens up — which is the
+       same reach `marks` buys the PTY side, so nothing here has to repeat the
+       watcher `DesktopApp.vue` was refused for that road: there is no
+       single-project store standing between this listener and every project's
+       sessions the way `terminalState.sessions` stands on the PTY side.
+
+       `record` has to still be there, and not only `before` have missed a
+       match. `forget` takes a session out of `started` without necessarily
+       ending it in the worker (see `forget`'s own header) — a `session:state`
+       can still arrive afterwards for a session this window has explicitly
+       stopped caring about, and ringing about one the person already
+       dismissed would undo the dismissal.
+
+       No `isShellSession` guard, unlike the PTY listener: nothing on this road
+       is ever a shell. `session::service::drivable` starts a session from an
+       `Intent`, and `SessionWork::Shell` is the one kind of session in this
+       app with no `Intent` behind it at all — `terminal_shell` never calls
+       `session_start`, so a shell can never be a member of `started` for this
+       guard to have to ask about. */
+    if (record && before !== 'needs-you' && state === 'needs-you') {
+      chime(settings.notifications.needsAttention, {
+        unlessFocused: settings.notifications.onlyWhenUnfocused
+      })
+    }
     const held = conversations.get(id)
     if (!held) return
     held.state = state
