@@ -2570,23 +2570,19 @@ const GALLERY_CONVERSATION = 1
    fallback is unchecked by either verification this project has. */
 const GALLERY_CONVERSATION_CAPTION = 'Editing smetana-agh'
 
-/* The composer on its own, in the three states the panel cannot show at the
-   same time: a draft with files on it, a turn in flight where the one button
-   is Stop, and locked while a question or a permission request above it
-   waits on an answer. Local refs, so all three are live enough to type
-   into — which is the only way to see the field grow to its ceiling and then
-   scroll, and the only way to see a locked field keep whatever was typed
-   into it. The panel beside them draws the third state too, in situ: its own
-   fixture journal ends on an open permission request, so `ConversationView`'s
-   own composer is locked there for the same reason. */
+/* The composer on its own, in the two states the panel cannot show at the
+   same time: a draft with files on it, and a turn in flight where the one
+   button is Stop. Local refs, so both are live enough to type into — which
+   is the only way to see the field grow to its ceiling and then scroll.
+   There used to be a third variant here, `waiting`, drawn locked under a
+   caption while a question or a permission request sat above it; smetana-kteg
+   removed the prop along with the lock, since the panel now hides the
+   composer outright for that stretch instead — the panel beside these,
+   whose own fixture journal ends on an open permission request, is where
+   that is checkable, by there being no composer under the card at all. */
 const composerText = ref('Rename the worktree when the branch changes, and keep `wt/` off the folder name.')
 const composerAttachments = ref([...CONVERSATION_ATTACHMENTS])
 const composerBusyText = ref('')
-/* Waiting on a question or a permission request above: a draft typed before
-   the lock landed, held rather than lost or sent. `waiting` is what smetana-x7sp
-   added, and the non-empty text here is the point of the fixture — a locked
-   field with nothing in it would not show that the draft survives it. */
-const composerWaitingText = ref('Once the tests are green,')
 
 const sectionStyle = {
   display: 'flex', flexDirection: 'column', gap: 'var(--space-5)',
@@ -6591,13 +6587,15 @@ const menuTargetStyle = {
            journal scrolls and the bar and the composer do not, and the panel
            sticks to the end of the journal only while it is already there —
            scroll up and the panel stays put, scroll back down and it follows
-           again. The composer beside it is where the field is typed into: it
-           grows to six rows and then scrolls, Enter sends and shift+Enter does
-           not, and while `busy` the one button is Stop. This fixture's own
-           journal ends on an open permission request rather than a turn in
-           flight, so this composer is the locked one — a word for why is
-           printed under the field, and neither the field nor Send takes
-           input by click, by keyboard or by Enter. -->
+           again. Where there is a composer at all it is where the field is
+           typed into: it grows to six rows and then scrolls, Enter sends and
+           shift+Enter does not, and while `busy` the one button is Stop.
+           This fixture's own journal ends on an open permission request
+           rather than a turn in flight, so this panel draws no composer at
+           all — check that there is no textarea, no Stop and no lock caption
+           anywhere under the permission card, and that the card itself keeps
+           its own inset on all four sides rather than running into the
+           panel's bottom border. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
         <div
           :style="{
@@ -6634,11 +6632,6 @@ const menuTargetStyle = {
           <!-- A turn in flight: one button, and it is Stop. -->
           <div :style="{ border: 'var(--border-w) solid var(--border)', borderRadius: 'var(--radius-3)' }">
             <Composer v-model="composerBusyText" busy />
-          </div>
-          <!-- Waiting on the question or the permission request above: the
-               field and Send both refuse, in words, and the draft stays put. -->
-          <div :style="{ border: 'var(--border-w) solid var(--border)', borderRadius: 'var(--radius-3)' }">
-            <Composer v-model="composerWaitingText" waiting />
           </div>
         </div>
       </div>
