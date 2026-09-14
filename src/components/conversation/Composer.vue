@@ -50,30 +50,13 @@
    as the only action a screen reader can hear on the chip. Not the native
    `title`: `IconButton.vue` rules that out for this system already.
 
-   **`waiting` is a second flag and deliberately not folded into `busy`.**
-   `busy` means a turn is in flight and draws Stop; while the agent is holding
-   an open question or an open permission request it is not busy at all — there
-   is nothing to stop, and Stop would be a lie. `waiting` locks the field and
-   the send affordance instead, and refuses rather than pretends, the same
-   discipline `nothingToSend` already keeps: the ground and the border turn the
-   way a disabled `Input` does, and a caption under the field says in words
-   that something above it is waiting on an answer, since a control that
-   quietly does nothing reads as a broken app.
-
-   **The lock stops short of dimming the words, on both counts.** Following
-   `Input.vue`'s own disabled treatment all the way through — `--text-muted`
-   on top of the sunken ground — measures under the 4.5:1 floor in the light
-   theme, on the caption and on the draft alike; `tokens/color-type.css`
-   already carries a measured warning about exactly this pairing
-   (`--text-secondary`, not `--text-muted`, on a sunken ground). The caption
-   is the whole of what says why the field stopped taking input, and the
-   draft is the person's own unsent words, the one thing they still need to
-   read while they decide how to answer what is open above — so both stay at
-   `--text-secondary`/`--text-primary`, which clear the floor, rather than
-   `--text-muted`. It says only that much and never which of the two calls is
-   open — `ConversationView.vue` derives one flag off the same `question` it
-   already computes for either card, and this component has no business
-   knowing which of them it was. */
+   **This field is never drawn while the agent is holding an open question or
+   an open permission request.** `ConversationView.vue` hides the whole
+   composer for that stretch instead of locking it in place — there is
+   nothing for a person to type until the card above is answered, and a
+   locked field sitting under it was a control that took up room and refused
+   everything typed into it. This component takes no prop for that state and
+   has no business knowing which of the two cards it was. */
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import Button from '../core/Button.vue'
 import Icon from '../core/Icon.vue'
@@ -91,14 +74,7 @@ const props = defineProps({
      above for why this component cannot work that out for itself. */
   openAttachments: { type: Array, default: () => [] },
   /* A turn is in flight: the one button is Stop. */
-  busy: { type: Boolean, default: false },
-  /* The agent is holding a question or a permission request open above this
-     field and will not go on until it is answered. The field and Send refuse
-     input the same way a disabled control does everywhere else in this
-     system, and say why in words. Never true at once with `busy` in practice
-     — the two describe different states of the same session — and where it
-     matters, `busy` still wins the button: see the template. */
-  waiting: { type: Boolean, default: false }
+  busy: { type: Boolean, default: false }
 })
 
 const emit = defineEmits([
@@ -161,7 +137,7 @@ function onKeydown(event) {
      panel's. Without this guard, choosing a word sends the message.  */
   if (event.isComposing) return
   event.preventDefault()
-  if (props.busy || props.waiting || nothingToSend.value) return
+  if (props.busy || nothingToSend.value) return
   emit('send')
 }
 
@@ -268,21 +244,16 @@ const chipClose = { width: 'var(--icon-sm)', height: 'var(--icon-sm)', flex: '0 
    measurement above exact: `scrollHeight` counts padding and leaves out
    borders, so a border on the element being measured would come back one
    border-width short every keystroke. It also puts the button inside the same
-   box as the words, which is what says the two are one control surface.
-
-   `waiting` borrows `Input.vue`'s own disabled treatment — the sunken ground,
-   the same focus ring is simply never reached because the field cannot take
-   focus in a way that matters while it is read-only — rather than inventing a
-   second "locked" look this system has no token for. */
+   box as the words, which is what says the two are one control surface. */
 const row = computed(() => ({
   display: 'flex',
   alignItems: 'flex-end',
   gap: 'var(--space-3)',
   padding: 'var(--space-3)',
-  background: props.waiting ? 'var(--surface-sunken)' : 'var(--surface-raised)',
-  border: `var(--border-w) solid ${focus.value && !props.waiting ? 'var(--focus-ring)' : 'var(--border)'}`,
+  background: 'var(--surface-raised)',
+  border: `var(--border-w) solid ${focus.value ? 'var(--focus-ring)' : 'var(--border)'}`,
   borderRadius: 'var(--radius-3)',
-  boxShadow: focus.value && !props.waiting ? 'inset 0 0 0 1px var(--focus-ring)' : 'none',
+  boxShadow: focus.value ? 'inset 0 0 0 1px var(--focus-ring)' : 'none',
   transition: 'var(--transition-control)'
 }))
 
@@ -304,23 +275,11 @@ const fieldStyle = computed(() => ({
      identifier, whatever paths it happens to hold. */
   font: 'var(--weight-regular) var(--text-sm)/var(--leading-normal) var(--font-sans)',
   overflowY: 'auto',
-  cursor: props.waiting ? 'not-allowed' : 'text',
+  cursor: 'text',
   /* The grip is a browser-drawn control with no place in this system, and the
      field sizes itself anyway. */
   resize: 'none'
 }))
-
-/* The field's own reason, read only while it is locked. Generic on purpose —
-   see the header on `waiting` above: this component draws the same sentence
-   whether a question or a permission request is what is open, and points at
-   "above" rather than naming either. */
-const lockHint = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 'var(--space-2)',
-  color: 'var(--text-secondary)',
-  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-sans)'
-}
 </script>
 
 <template>
@@ -354,32 +313,22 @@ const lockHint = {
         rows="1"
         :value="modelValue"
         placeholder="Message the agent"
-        :readonly="waiting"
-        :aria-disabled="waiting || undefined"
         :style="fieldStyle"
         @input="emit('update:modelValue', $event.target.value)"
         @keydown="onKeydown"
         @focus="focus = true"
         @blur="focus = false"
       />
-      <!-- One control in two states, and never two controls: see the header.
-           `busy` wins the button outright — a turn in flight is never also a
-           question waiting on an answer — and `waiting` only ever reaches the
-           `disabled` branch below it. -->
+      <!-- One control in two states, and never two controls: see the header. -->
       <Button v-if="busy" size="sm" icon="square" @click="emit('stop')">Stop</Button>
       <Button
         v-else
         size="sm"
         variant="primary"
         icon="arrow-up"
-        :disabled="nothingToSend || waiting"
+        :disabled="nothingToSend"
         @click="emit('send')"
       >Send</Button>
-    </div>
-
-    <div v-if="waiting" :style="lockHint">
-      <Icon name="lock" :size="11" />
-      <span>Answer above to keep going</span>
     </div>
   </div>
 </template>

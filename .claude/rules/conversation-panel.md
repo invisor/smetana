@@ -263,7 +263,10 @@ own promise that each event is small, a promise this file has already had to rep
 **The front end draws two components off the same `question`, chosen by tool name.**
 `ConversationView.vue` computes `isAskUserQuestionCard` from `question.tool` and switches between
 `AskUserQuestion.vue` and `PermissionRequest.vue` at the one place either card is drawn — the foot of
-the panel, over the composer, exactly where the ordinary card always stood. Every other tool's card
+the panel, exactly where the ordinary card always stood. `smetana-kteg` is what changed underneath it:
+the composer itself is no longer drawn for as long as a card is open (`composerShown` in
+`ConversationView.vue`, `!!held && !waitingForAnswer`), so the card no longer sits over a locked
+field but alone, with nothing below it until it is answered. Every other tool's card
 is untouched: `PermissionRequest.vue` still reads `tool`, `detail` and `options` and still draws
 Allow/Deny (or Allow/Allow-always/Deny), and nothing about its props or its behaviour moved.
 `AskUserQuestion.vue` reads `question.input` instead — the raw arguments, parsed by
@@ -430,9 +433,11 @@ mounted at once regardless — `?view=gallery` — and the DOM-subtree property 
 reaching both there too, geometry not entering into it.
 
 **What is confined is what may become a chip, not what the panel will draw a highlight for.**
-`canAttach` gates both the drop response and the drop itself on `held` — the record `Composer` is
-drawn under — because a drop with no session behind it has nowhere a chip could ever be sent from;
-the empty state drawn in that case already says there is nothing here to attach to. Nothing here
+`canAttach` gates both the drop response and the drop itself on `composerShown` — the same flag the
+composer's own `v-if` is drawn under, and not on `held` alone since `smetana-kteg` — because a drop
+with no session behind it, or one with the field hidden under an open question, has nowhere a chip
+could ever be sent from; the empty state drawn in the first case and the question card in the second
+already say there is nothing here to attach to right now. Nothing here
 copies a file or reads its bytes, the same restraint `terminal.md`'s own note on dropping a path
 carries and for the identical reason: what travels to `session_send` is the path, and what the agent
 does with it is the agent's decision, not this panel's.

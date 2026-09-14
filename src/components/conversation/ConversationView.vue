@@ -1,6 +1,8 @@
 <script setup>
 /* A driven session, whole: its identity, its journal, the question it is
-   waiting on and the field it is answered in.
+   waiting on and the field the person types their next word into once it is
+   answered — on the card itself, not in that field, which this component
+   hides for as long as the card stands (`composerShown` below).
 
    This is the second component in `src/` that imports a store, and it is the
    analogue of the first: `terminal/TerminalView.vue` is a PTY session's panel
@@ -230,12 +232,23 @@ const question = computed(() => held.value?.question ?? null)
    component). */
 const isAskUserQuestionCard = computed(() => isAskUserQuestion(question.value?.tool))
 
-/* One flag off the same `question`, for `Composer`'s own lock. Both cards
+/* One flag off the same `question`, for `composerShown` below. Both cards
    above hold the same tool call open and without an answer the agent will
    not move, so a question and a permission request are one state as far as
-   the field is concerned — `Composer` takes this single prop rather than one
-   per card, and does not need to know which of the two it is. */
+   the field is concerned — there is one flag for both rather than one per
+   card, and `Composer` itself has no business knowing which of the two it
+   was. */
 const waitingForAnswer = computed(() => !!question.value)
+
+/* Whether the composer is drawn at all. A session with an open question or
+   permission request has nothing for the field to do — the agent will not
+   move until the card above is answered, and a locked field sitting under it
+   was a control that took up room, refused everything typed into it and
+   still offered Stop beside a card asking to go on. Hiding it outright is
+   the fix, not a second "locked" look: the draft and the attachments survive
+   underneath, since `held.draft` lives in the store and `attachments` is this
+   component's own ref, neither of which this `v-if` touches. */
+const composerShown = computed(() => !!held.value && !waitingForAnswer.value)
 
 /* The last refusal, if it is this session's — see `refusal` below for why the
    test is on the session rather than on there being one at all. */
@@ -377,10 +390,12 @@ function insidePanel(x, y) {
 const dropping = ref(false)
 const dropCount = ref(0)
 
-/* A session to attach to: `held` is what `Composer` is drawn under (`v-if` in
-   the template below), so a drop with nothing behind it has nowhere to put a
-   chip that could ever be sent. */
-const canAttach = computed(() => !!held.value)
+/* A session to attach to, and the composer actually on screen to receive it:
+   `composerShown` is the same flag its own `v-if` is drawn under (below), so
+   a drop with no session behind it or with the field hidden under an open
+   question has nowhere to put a chip that could ever be sent — and no drop
+   response is drawn to promise otherwise. */
+const canAttach = computed(() => composerShown.value)
 
 let stopDrops = null
 onMounted(() => {
@@ -592,7 +607,19 @@ const foot = {
   background: 'var(--surface)'
 }
 
-const questionPad = { padding: 'var(--panel-pad) var(--panel-pad) 0' }
+/* The bottom of the three insets in `padding` is conditional and this element
+   owns it, rather than `Composer` supplying it as a side effect of being
+   drawn underneath. While the composer is shown, its own root
+   (`padding: var(--panel-pad)` on all four sides, `Composer.vue`) is what
+   the card actually rests against, and doubling the inset here would push it
+   too far from the field below. While the composer is hidden (`composerShown`
+   false), nothing else in `foot` supplies a floor any more, and without one
+   this card — a filled surface with `border-radius: var(--radius-4)` — runs
+   edge-to-edge into `panelRoot`'s own bottom border and reads as cut off
+   rather than placed. */
+const questionPad = computed(() => ({
+  padding: `var(--panel-pad) var(--panel-pad) ${composerShown.value ? '0' : 'var(--panel-pad)'}`
+}))
 
 /* A bare `error` row — an `Error` event `journal.js` found no open turn to
    fold into, which is the worker saying a message never reached the agent at
@@ -623,15 +650,21 @@ const failure = {
    dismiss and clears only on the next call that answers, so it would have stood
    at the foot of a healthy conversation for as long as the window lived.
    Everything this refuses is drawn by the toast in `DesktopApp.vue`'s corner,
-   which is the reader for whatever has no panel of its own. */
-const refusal = {
+   which is the reader for whatever has no panel of its own.
+
+   The bottom inset is conditional for the identical reason `questionPad`
+   above owns one: while the composer is shown its own padding is what holds
+   this line off the panel's bottom border, and while it is hidden nothing
+   else in `foot` does, so this element supplies the floor itself rather than
+   running its own bottom edge into the panel's. */
+const refusal = computed(() => ({
   display: 'flex',
   alignItems: 'flex-start',
   gap: 'var(--space-3)',
-  padding: 'var(--space-4) var(--panel-pad) 0',
+  padding: `var(--space-4) var(--panel-pad) ${composerShown.value ? '0' : 'var(--panel-pad)'}`,
   color: 'var(--status-failed-fg)',
   font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-sans)'
-}
+}))
 </script>
 
 <template>
@@ -756,12 +789,11 @@ const refusal = {
         <span>{{ ourRefusal }}</span>
       </div>
       <Composer
-        v-if="held"
+        v-if="composerShown"
         v-model="held.draft"
         :attachments="attachments"
         :open-attachments="openableAttachments(attachments)"
         :busy="busy"
-        :waiting="waitingForAnswer"
         @update:attachments="attachments = $event"
         @send="send"
         @stop="stop"
