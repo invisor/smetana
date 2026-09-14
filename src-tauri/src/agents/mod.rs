@@ -1152,9 +1152,11 @@ pub fn pick_with_model(
 /// project root and `std::env::temp_dir()` were both refused.
 ///
 /// `app_data_dir()` for `attachments::store_root`'s reason: it is the folder
-/// this app already owns, so nothing else is indexed by accident. This module
-/// stays otherwise free of Tauri, which is why the caller resolves the path
-/// rather than `usage.rs` or `oneshot.rs` doing it themselves.
+/// this app already owns, so nothing else is indexed by accident. `usage.rs`
+/// and `oneshot.rs` take the path in rather than resolving it themselves so
+/// that neither needs an `AppHandle` to be tested — which is what keeps their
+/// pure half testable at all — and this function is where the `AppHandle`
+/// half of the job lives instead.
 pub fn probe_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()

@@ -32,7 +32,11 @@
 //! project root was refused too: the footer's probe has no project, a one-shot
 //! question gets its whole context in the prompt already, and either way
 //! Claude Code would pick up that project's own `CLAUDE.md`, hooks and index —
-//! paying both the cost and part of the risk this fix removes. `read` is
+//! paying both the cost and part of the risk this fix removes.
+//! `std::env::temp_dir()` was refused as well: it is a folder shared with
+//! whatever else on the machine writes into it, and nothing in it is worth
+//! indexing either — an app-owned folder costs nothing more and shares with
+//! nobody. `read` is
 //! handed the path rather than computing it, so this module never learns Tauri
 //! exists; `agents::probe_dir` is where the caller gets it, off
 //! `app.path().app_data_dir()` and created if it is not there yet.
