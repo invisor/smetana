@@ -80,6 +80,58 @@
 //! to precede. Nothing in this file or in `journal.js` guards against that;
 //! the guard, if the premise ever needs one, is carrying `index` on
 //! `TextDelta` and starting a fresh stitched row whenever it changes.
+//!
+//! **Stop, and what it costs the child (smetana-y7mv).** Claude Code's headless
+//! docs say "To end the turn instead, send SIGINT" — and that was measured
+//! against the installed CLI (2.1.270) rather than trusted, with
+//! `claude -p --input-format stream-json --output-format stream-json --verbose
+//! --include-partial-messages` run three ways against a turn in flight.
+//!
+//! SIGINT to the process: the CLI writes one `result` event,
+//! `{"type":"result","subtype":"error_during_execution","is_error":true}`,
+//! and **exits** (code 0). There is no process left for a second message to
+//! reach, so this is not what `interrupt` below sends.
+//!
+//! A `control_request` of `subtype: "interrupt"` written to stdin — what the
+//! official Agent SDK's own `interrupt()` sends, and not documented for a bare
+//! CLI session — was measured next: the CLI answers a `control_response`,
+//! closes the turn on the same `error_during_execution` result SIGINT
+//! produces, and **stays alive**, answering the next message normally in the
+//! same process. Captured verbatim:
+//!
+//! ```text
+//! → {"type":"control_request","request_id":"req-1","request":{"subtype":"interrupt"}}
+//! ← {"type":"control_response","response":{"subtype":"success","request_id":"req-1","response":{"still_queued":[]}}}
+//! ← {"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]},"parent_tool_use_id":null,"session_id":"…","uuid":"…","timestamp":"…"}
+//! ← {"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":2,…}
+//! → {"type":"user","message":{"role":"user","content":"Reply with exactly the word PONG."}}
+//! ← {"type":"system","subtype":"init",…}
+//! ← {"type":"assistant",…"PONG"…}
+//! ← {"type":"result","subtype":"success","is_error":false,"result":"PONG","num_turns":1,…}
+//! ```
+//!
+//! A third, uninterrupted control run showed `system`/`init` printing on
+//! **every** turn, not only the first — so the second `init` above is this
+//! harness's ordinary behaviour, not an artefact of interrupting.
+//!
+//! `interrupt` below writes exactly that one `control_request` line. Nothing
+//! else in this file had to change for it: `"result"` already becomes
+//! `EventKind::Result` in `one_event` regardless of `subtype` or `is_error`, so
+//! `error_during_execution` closes the turn the same way `success` does, and
+//! `control_response` is a `type` this codec has never been told about, which
+//! already produces nothing. The interrupted turn's own
+//! `"[Request interrupted by user]"` text arrives as a `user` message, and this
+//! codec already reads a `user` message only for its `tool_result` blocks — the
+//! sentence is discarded on purpose and is not drawn anywhere.
+//!
+//! **Not measured: Stop pressed while the session sits on a permission card**
+//! — a child blocked inside `--permission-prompt-tool`, waiting on the
+//! listener in `permission.rs`. Nobody ran that scenario for this task: it
+//! wants the desktop app itself and a live approval dialog on screen, not the
+//! stdin/stdout harness the three runs above used. Whether the same
+//! `control_request` reaches a child in that state, and what the permission
+//! card and the composer do afterwards, is still open — try it by hand in
+//! `npm run tauri dev` before trusting either answer.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -98,6 +150,11 @@ pub struct ClaudeDriver {
     /// `None` for a session that has no ticket — a codec test, and a session
     /// started on a machine where the file could not be written.
     permission: Option<McpConfig>,
+    /// How many times `interrupt` has written a `control_request` for this
+    /// driver, which is folded into that line's own `request_id` so two
+    /// interrupts in the same session never repeat one. Uniqueness within
+    /// this process is all the CLI was measured to need.
+    interrupts: u64,
 }
 
 /// The config file handed to the child, alive for as long as the driver is.
@@ -176,6 +233,7 @@ impl ClaudeDriver {
         Self {
             lines: LineBuffer::new(),
             permission: permission.as_ref().and_then(write_mcp_config),
+            interrupts: 0,
         }
     }
 }
@@ -530,9 +588,20 @@ impl Driver for ClaudeDriver {
     }
 
     fn interrupt(&mut self) -> Option<Vec<u8>> {
-        // A known loss rather than an unfinished job: outside its own SDK,
-        // Claude Code has no documented way of being asked to stop a turn.
-        None
+        // Measured against the installed CLI (2.1.270) rather than guessed —
+        // see this file's own header for the run. A `control_request` of
+        // `subtype: "interrupt"` closes the open turn and leaves the child
+        // alive to answer the next message; `request_id` only has to be
+        // unique within this driver, which the counter gives it.
+        self.interrupts += 1;
+        let message = serde_json::json!({
+            "type": "control_request",
+            "request_id": format!("smetana-interrupt-{}", self.interrupts),
+            "request": { "subtype": "interrupt" },
+        });
+        let mut bytes = serde_json::to_vec(&message).unwrap_or_default();
+        bytes.push(b'\n');
+        Some(bytes)
     }
 }
 
@@ -569,6 +638,16 @@ mod tests {
     const TOOL_RESULT: &str = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"ok\nok\nok"}]}}"#;
     const RESULT: &str = r#"{"type":"result","subtype":"success","duration_ms":4200,"total_cost_usd":0.031,"usage":{"input_tokens":120,"output_tokens":40}}"#;
     const RETRY: &str = r#"{"type":"system","subtype":"api_retry","error":"overloaded","attempt":2}"#;
+    /// What Stop actually closes a turn with (smetana-y7mv) — captured against
+    /// the installed CLI (2.1.270) rather than invented, see this file's own
+    /// header for the run. `error_during_execution` is not `Error`: it is
+    /// still a `result` event, and the turn closes exactly as a successful one
+    /// does.
+    const RESULT_INTERRUPTED: &str = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":900,"usage":{"input_tokens":5,"output_tokens":1}}"#;
+    /// The CLI's own acknowledgement of the `control_request` `interrupt`
+    /// sends. A shape this codec has never been told about, so it produces
+    /// nothing — the same rule as any other unrecognised `type`.
+    const CONTROL_RESPONSE: &str = r#"{"type":"control_response","response":{"subtype":"success","request_id":"req-1","response":{"still_queued":[]}}}"#;
     /// The other half of `content`'s `string | ContentBlock[]`, which the string
     /// fixture above does not reach: a list of blocks, with and without prose
     /// in it. The image block is a `Read` of a PNG, as that tool really answers.
@@ -1103,5 +1182,53 @@ mod tests {
         let args = argv(&ClaudeDriver::new(None).start(&launch()));
         assert!(!args.iter().any(|arg| arg == "--mcp-config"), "{args:?}");
         assert!(!args.iter().any(|arg| arg == "--permission-prompt-tool"), "{args:?}");
+    }
+
+    #[test]
+    fn interrupt_writes_one_control_request_line_with_a_fresh_request_id_each_time() {
+        // smetana-y7mv: Stop closes the turn over stdin now, rather than
+        // killing the child — measured against the installed CLI (2.1.270),
+        // see this file's own header.
+        let mut driver = ClaudeDriver::new(None);
+        let first = driver.interrupt().expect("Claude Code can be asked to stop a turn");
+        let text = String::from_utf8(first).expect("the codec writes utf-8");
+        assert!(text.ends_with('\n'), "a line the child can read ends: {text:?}");
+        let sent: Value = serde_json::from_str(text.trim_end()).expect("one JSON object");
+        assert_eq!(sent["type"], "control_request");
+        assert_eq!(sent["request"]["subtype"], "interrupt");
+        let first_id = sent["request_id"].as_str().expect("a request_id string").to_string();
+        assert!(!first_id.is_empty(), "{sent}");
+
+        let second = driver.interrupt().expect("a second interrupt is answered the same way");
+        let second_text = String::from_utf8(second).expect("the codec writes utf-8");
+        let second_sent: Value =
+            serde_json::from_str(second_text.trim_end()).expect("one JSON object");
+        assert_ne!(
+            second_sent["request_id"].as_str(),
+            Some(first_id.as_str()),
+            "two interrupts must not repeat a request_id: {sent} / {second_sent}"
+        );
+    }
+
+    #[test]
+    fn a_control_response_to_the_interrupt_draws_no_row() {
+        // The CLI's own acknowledgement of the control_request `interrupt`
+        // sends — a `type` this codec has never been told about, on the same
+        // rule as any other one.
+        let mut driver = ClaudeDriver::new(None);
+        assert!(events(&mut driver, CONTROL_RESPONSE).is_empty());
+    }
+
+    #[test]
+    fn an_interrupted_turn_still_closes_on_its_own_result_event() {
+        // The whole reason nothing else in this file had to change for Stop:
+        // "result" becomes EventKind::Result regardless of subtype or
+        // is_error, so error_during_execution closes the turn exactly as
+        // success does — `state_of` reads that as `ready`, not `failed`.
+        let mut driver = ClaudeDriver::new(None);
+        assert_eq!(
+            events(&mut driver, RESULT_INTERRUPTED),
+            vec![EventKind::Result { tokens_in: 5, tokens_out: 1, cost_usd: None, ms: 900 }]
+        );
     }
 }

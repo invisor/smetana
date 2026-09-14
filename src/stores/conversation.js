@@ -695,9 +695,11 @@ export async function answerQuestion(id, question, decision, answers = null) {
   }
 }
 
-/* Stop the turn in flight. What that costs the harness is the driver's business
-   — for Claude Code it is the child, which has no documented way of being asked
-   to stop one turn — and nothing here pretends otherwise. */
+/* Stop the turn in flight. What that costs the harness is the driver's
+   business: for Claude Code it is one `control_request` over stdin that ends
+   the turn and leaves the session open (smetana-y7mv,
+   `src-tauri/src/agents/claude_driver.rs`'s own header carries the
+   measurement); a harness with no such answer still loses the child. */
 export async function stopConversation(id) {
   try {
     await invoke('session_stop', { id })

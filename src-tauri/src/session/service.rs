@@ -828,10 +828,13 @@ fn handle(
                 let _ = tx.send(Err(SessionError::NoSuchSession(id)));
                 return;
             };
-            // Ask first, kill second. Claude Code always answers `None` here —
-            // outside its own SDK it has no documented way of being asked to
-            // stop a turn, which is a loss this stage records rather than one
-            // it hides.
+            // Ask first, kill second. Claude Code answers `Some` here now
+            // (smetana-y7mv, `ClaudeDriver::interrupt` — see its own header
+            // for the measurement): a `control_request` closes the open turn
+            // and leaves the child alive to answer the next message. A
+            // harness with no such answer — everything but Claude Code today
+            // — still falls to `start_kill()` below, which is the loss this
+            // branch existed to record before the measurement.
             let bytes = live.talking.as_mut().and_then(|talking| talking.driver.interrupt());
             match bytes {
                 Some(bytes) => {

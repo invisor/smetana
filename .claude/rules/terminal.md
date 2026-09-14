@@ -721,22 +721,25 @@ deliberately does **not** say which of the two wrote it — an offline row is ta
 the project's harness can take *now*, and a field saying how the session was recorded would be one
 more thing to disagree with.
 
-**Stop takes the record with it, and that is the honest reading rather than a third removal.** The
-spec named two — a session that left on its own, and the cross on the row — and the driven panel's
-Stop is neither by name: `Driver::interrupt` answers `None` for Claude Code, which outside its own SDK
-has no documented way of being asked to stop one turn, so `Request::Stop` kills the child. That child
-*is* the session. What follows is `Chunk::Eof`, the same arrival a self-exit makes, and the
-conversation is over either way — so it is offered back no more than any other finished agent is,
-which is exactly the rule the terminal worker keeps at `Chunk::Gone` for a PTY child killed by
-anything at all. The thing to know before changing it: **the worker cannot tell the three apart, and
-there is no command by which it could.** `Request` is Start, Attach, Since, Send, Answer, Stop and
-ShutDown, and `session/commands.rs` exposes six commands with no removal among them — so the cross is
-`session_stop` exactly as the composer's Stop button is, and a self-exit is no request at all. A drop
-moved onto `Stop` would therefore separate none of the three and would miss the self-exit outright.
-`Eof` is the one arrival all of them make, which is why the drop is there. (The cross does reach Rust
-a second time, and about this very record: `removeAgentRow` calls `forgetRestored`, which is
-`terminal_forget`. That is the front end taking away the *offer* it was drawing, not the worker
-learning which gesture ended the session.)
+**Stop takes the record with it on a harness with no answer for `Driver::interrupt`, and that is the
+honest reading rather than a third removal.** The spec named two — a session that left on its own,
+and the cross on the row — and the driven panel's Stop was neither by name, for such a harness:
+`Request::Stop` kills the child, and that child *is* the session. What follows is `Chunk::Eof`, the
+same arrival a self-exit makes, and the conversation is over either way — so it is offered back no
+more than any other finished agent is, which is exactly the rule the terminal worker keeps at
+`Chunk::Gone` for a PTY child killed by anything at all. **Claude Code left that group at
+smetana-y7mv**: `ClaudeDriver::interrupt` answers `Some` now, a `control_request` over stdin ends the
+turn without touching the child, and the session — record included — is still there for the next
+message; `claude_driver.rs`'s own header carries the measurement behind it. What follows is about a
+harness still in the group, Codex today. The thing to know before changing it: **the worker cannot
+tell such a harness's three apart, and there is no command by which it could.** `Request` is Start,
+Attach, Since, Send, Answer, Stop and ShutDown, and `session/commands.rs` exposes six commands with no
+removal among them — so the cross is `session_stop` exactly as the composer's Stop button is, and a
+self-exit is no request at all. A drop moved onto `Stop` would therefore separate none of the three
+and would miss the self-exit outright. `Eof` is the one arrival all of them make, which is why the
+drop is there. (The cross does reach Rust a second time, and about this very record: `removeAgentRow`
+calls `forgetRestored`, which is `terminal_forget`. That is the front end taking away the *offer* it
+was drawing, not the worker learning which gesture ended the session.)
 
 `RunEvent::Exit` calls `terminal::service::shutdown`, and the worker ends every session the way closing a terminal window
 does: `SIGHUP` to the session's process group — which reaches whatever the

@@ -92,8 +92,9 @@ pub async fn session_answer(
 }
 
 /// Stop the turn in flight, by whatever means this harness leaves open. For
-/// Claude Code that is killing the child: it has no documented way of being
-/// asked to stop one.
+/// Claude Code that is a `control_request` over stdin (smetana-y7mv,
+/// `ClaudeDriver::interrupt`) that ends the turn without killing the child; a
+/// harness with no such answer still loses the child.
 #[tauri::command]
 pub async fn session_stop(
     handle: State<'_, SessionHandle>,
