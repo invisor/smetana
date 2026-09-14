@@ -492,6 +492,16 @@ impl Intent {
             Intent::Run { .. } => W::Run,
         }
     }
+
+    /// What of this intent is the person's own words, for the journal's
+    /// opening turn. A filing carries what they typed and what they attached;
+    /// every other intent was a button, and there is nothing of theirs in it.
+    pub fn opening_words(&self) -> (Option<String>, Vec<String>) {
+        match self {
+            Intent::NewTask { draft, .. } => (Some(draft.text.clone()), draft.images.clone()),
+            _ => (None, Vec::new()),
+        }
+    }
 }
 
 /// The languages a session is started with: the one the agent talks to the
@@ -1211,6 +1221,34 @@ mod tests {
                 title: Some("Move the card to done".into())
             }
         );
+    }
+
+    #[test]
+    fn only_a_new_task_has_words_of_the_persons_own_to_open_on() {
+        let filing = Intent::NewTask {
+            brainstorm: Stage::Off,
+            spec: Stage::Off,
+            plan: Stage::Off,
+            draft: TaskDraft {
+                text: "Make the bell ring once".into(),
+                issue_type: None,
+                priority: None,
+                parent: None,
+                images: vec!["/tmp/shot.png".into()],
+            },
+        };
+        assert_eq!(
+            filing.opening_words(),
+            (Some("Make the bell ring once".to_owned()), vec!["/tmp/shot.png".to_owned()])
+        );
+        for wordless in [
+            Intent::Bare,
+            Intent::Setup,
+            Intent::EditTask { id: "x-1".into(), title: "T".into() },
+            Intent::FixTask { id: "x-1".into(), title: "T".into() },
+        ] {
+            assert_eq!(wordless.opening_words(), (None, Vec::new()), "{wordless:?}");
+        }
     }
 
     #[test]

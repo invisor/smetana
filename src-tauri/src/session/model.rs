@@ -62,6 +62,14 @@ pub enum Decision {
 pub enum EventKind {
     TurnStart { by: Actor },
     UserMessage { text: String, attachments: Vec<String> },
+    /// The turn the app opened this session with on the person's behalf. What
+    /// travelled to the harness is the whole brief — `Driver::opening`, the
+    /// same text the PTY road hands over positionally; what is recorded is the
+    /// part of it that is the person's own: the new-task dialog's text and
+    /// pictures, or nothing at all for a start nobody typed a word into. The
+    /// panel draws `None` as the session row's own caption, which is the
+    /// front end's sentence and is deliberately not written here.
+    Opening { text: Option<String>, attachments: Vec<String> },
     /// Markdown as the agent wrote it. Rendering is the front end's business.
     Text { text: String },
     /// One incremental piece of the reply now being written, in the order it
@@ -368,6 +376,23 @@ mod tests {
         let events = vec![ev(1, EventKind::TurnStart { by: Actor::Agent })];
         assert!(!is_open_question(&events, "q1"));
         assert!(!is_open_question(&[], "q1"));
+    }
+
+    #[test]
+    fn an_opening_turn_reads_as_running_until_the_harness_answers() {
+        let events = vec![
+            ev(1, EventKind::TurnStart { by: Actor::Person }),
+            ev(2, EventKind::Opening { text: Some("hello".into()), attachments: vec![] }),
+        ];
+        assert_eq!(state_of(&events, true), SessionState::Running);
+    }
+
+    #[test]
+    fn an_opening_turn_is_on_the_wire_as_its_own_kind() {
+        let json = serde_json::to_value(EventKind::Opening { text: None, attachments: vec![] }).unwrap();
+        assert_eq!(json["kind"], "opening");
+        assert!(json["text"].is_null());
+        assert_eq!(json["attachments"], serde_json::json!([]));
     }
 
     #[test]

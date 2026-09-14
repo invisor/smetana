@@ -22,6 +22,11 @@
    defined by having neither it nor Vue. The translation is a single call at the
    seam; the rules are all below it. */
 
+/* The caption table and `captionOf` are `components/agent/captions.js`'s now,
+   read the same way `stores/terminals.js` reads them — see that module's own
+   header for why it moved out of both stores. */
+import { captionOf } from './captions.js'
+
 /* The prefix a driven row's id carries, and the whole reason it has one.
 
    `SessionId` is a `u64` counter in the session worker that starts at 1, and
@@ -69,30 +74,6 @@ export function drivenSessionOf(rowId) {
   return Number.isFinite(session) ? session : null
 }
 
-/* What such a row is captioned by, and it is deliberately the store's own
-   words: `CAPTION` in `stores/terminals.js` captions a session started by
-   "+ New agent" as `Agent` and one picked up from a transcript as `Resumed
-   session`, and this is that same pair of buttons' other road. That table is
-   private to the store, and this file could not reach into it without dragging
-   Tauri in behind it, so the copy is what the seam costs — the two are a pair
-   to change together if either is ever worded differently.
-
-   Two entries and no more, because two intents reach this road and no more:
-   `session::service`'s `Request::Start` refuses the rest. The `work` a row
-   carries is `workOf` in `stores/conversation.js`, which is the same reduction
-   `Intent::work()` makes in Rust. */
-const CAPTION = { bare: 'Agent', resumeSession: 'Resumed session' }
-
-/* The title goes *inside* the label rather than beside it, which is
-   `captionOf`'s rule one store over and the same reason: a row's `tasks` are
-   set in mono, where a person's own sentence would read as an identifier. A
-   transcript nobody typed a word into has no title at all, and then the row
-   says what it is and stops. */
-function captionOf(work) {
-  if (work?.kind !== 'resumeSession') return CAPTION.bare
-  return work.title ? `${CAPTION.resumeSession}: ${work.title}` : CAPTION.resumeSession
-}
-
 /* One driven session as a row of the agents panel.
 
    `conversation` is the id the worker minted at the spawn and wrote the
@@ -124,8 +105,7 @@ export function drivenAgentRow({ id, state, elapsed, conversation = null, work }
     clearable: false,
     work: work ?? { kind: 'bare' },
     claimed: [],
-    label: captionOf(work),
-    tasks: [],
+    ...captionOf(work),
     state,
     elapsed
   }

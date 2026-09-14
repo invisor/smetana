@@ -19,8 +19,12 @@ import { listen } from '@tauri-apps/api/event'
    rather than asked again: whether the configured agent can pick a recorded
    conversation up at all is one rule, and a second reading of it here would be
    free to disagree with the one that greys the menu row. */
-import { basename } from '../paths.js'
 import { resumeAvailability, resumeReasonLine } from '../components/agent/sessionMenu.js'
+/* The intent-to-work translation and the caption table, both pure and shared
+   with `stores/conversation.js` and `components/agent/drivenRows.js` — see
+   either file's own module header for why they live outside every store. */
+import { captionOf } from '../components/agent/captions.js'
+import { workOf } from '../components/agent/sessionWork.js'
 import { can } from './agents.js'
 import { watchWindowDrops } from './windowDrops.js'
 /* The audible half of what the app has to say. Here rather than in a watcher
@@ -351,95 +355,6 @@ function startClock() {
   setInterval(() => (now.value = Date.now()), 30000)
 }
 
-/* What a start will call its work once it is a session, worked out from the
-   very intent that is being sent. The `kind` tags on this side and on
-   `SessionWork`'s are the same words by construction — `Intent::work` in
-   `src-tauri/src/agents/mod.rs` maps one onto the other — so the placeholder
-   row and the session's own row say the same thing, and the handover a second
-   later changes nothing on screen. This function is the mirror of that one and
-   has to keep agreeing with it field for field, which is why the draft is
-   spelled out here rather than passed through: `issue_type` is the name bd and
-   the dialog use, `issueType` is the name that comes back over the wire, and a
-   placeholder holding the first would draw Auto over a type somebody chose for
-   the one second before the session lands.
-
-   What an intent carries and this does not is the agent's briefing rather than
-   anything drawn: the paths of the images attached to a task, the brainstorming
-   switch, a run's settings. */
-const workOf = (intent) => {
-  if (intent.kind === 'editTask') return { kind: 'editTask', id: intent.id }
-  if (intent.kind === 'fixTask') return { kind: 'fixTask', id: intent.id }
-  if (intent.kind === 'resolveConflict') {
-    return { kind: 'resolveConflict', repo: intent.repo, theirs: intent.theirs }
-  }
-  /* The title alone, exactly as `Intent::work` sends it on: the id and the
-     directory are the agent's briefing, and the row draws the conversation
-     somebody recognises. */
-  if (intent.kind === 'resumeSession') {
-    return { kind: 'resumeSession', title: intent.title ?? null }
-  }
-  /* The report's path alone, exactly as `Intent::work` sends it on: the pairs
-     are the agent's briefing, and this is what the tab opened afterwards is
-     found by. */
-  if (intent.kind === 'reviewBranch') {
-    return { kind: 'reviewBranch', report: intent.report }
-  }
-  if (intent.kind === 'newTask') {
-    return {
-      kind: 'newTask',
-      text: intent.draft.text,
-      issueType: intent.draft.issue_type ?? null,
-      priority: intent.draft.priority ?? null,
-      /* Spelled the same on both sides of the wire, unlike `issue_type`: the
-         draft panel draws it as a row of its own, and a placeholder without it
-         would drop that row for the second the start lasts and then grow it
-         back when the session lands. */
-      parent: intent.draft.parent ?? null
-    }
-  }
-  return { kind: intent.kind }
-}
-
-/* The prose half of a row's caption. Sentence case, and every one of them is
-   what the session is *for* — the process behind it is `claude-7`, and that
-   name is deliberately not on a row any more: five of them said nothing about
-   who was doing what. */
-const CAPTION = {
-  bare: 'Agent',
-  newTask: 'Creating a task',
-  editTask: 'Editing',
-  /* Shorter than the menu row it is started from ("Answer questions"), and
-     deliberately: the id sits beside it in mono, so the row already reads
-     "Answering smetana-8av" and the word "questions" would only push the id
-     toward the ellipsis. */
-  resolveTask: 'Answering',
-  /* The third caption about one named issue, and the one that is not about the
-     issue's own text: an edit changes what the task says, this changes what
-     was built for it. The id sits beside the word in mono, so the row reads
-     "Fixing smetana-8av". */
-  fixTask: 'Fixing',
-  /* The one caption about a repository rather than an issue. "Conflict" and
-     not "Resolving a conflict": the identifiers beside it are what say which
-     one, and a row 252px wide spends every character it has on them. */
-  resolveConflict: 'Conflict',
-  /* The other caption about no issue at all — there is no id, no path and no
-     branch beside it, because the whole of what this session was given is a
-     briefing about a database. So the words carry it alone, and they name the
-     tracker rather than reading as a bare "Agent": a row that said only that
-     would be indistinguishable from the "+ New agent" beside it, on the one
-     screen where a person has just pressed a button and wants to see that
-     something is happening about it. */
-  repairTracker: 'Repairing the tracker',
-  /* A conversation that existed before this window did, picked up again from
-     its transcript. It says what it is first and names the session second (see
-     `captionOf`), because the one thing this row must not do is read as work
-     taken off the board: there is no issue behind it, nothing claimed it, and a
-     row that merely showed a sentence would be indistinguishable from a filing
-     agent's draft. */
-  resumeSession: 'Resumed session',
-  setup: 'Project setup'
-}
-
 /* The issues a run's session has taken, if this session is one of a run's.
 
    There is no channel that says so: the agent claims an issue by running
@@ -485,43 +400,6 @@ function claimedBy(sessionId) {
     )
     .map((issue) => issue.id)
     .sort()
-}
-
-/* A row's caption, in two pieces because they are set differently: `label` is
-   prose and belongs in sans, `tasks` are identifiers and belong in mono. The
-   component is what knows that; this only says which is which.
-
-   A run with nothing claimed yet reads as a bare agent does, and that is the
-   truth rather than a fallback — it is an agent, and there is no work to name
-   until it takes some. Work this front end has never heard of lands there too:
-   a row that says "Agent" is still a row. */
-function captionOf(work, claimed) {
-  const kind = work?.kind
-  // The three that are about one named issue, and so caption themselves with
-  // it. What they are doing to it differs; that is the label's business.
-  if (kind === 'editTask' || kind === 'resolveTask' || kind === 'fixTask') {
-    return { label: CAPTION[kind], tasks: [work.id] }
-  }
-  /* The two identifiers this one is about, in mono beside the word: which
-     repository — its folder's name, since the absolute path is most of a row
-     on its own and the panel already says which project this is — and the
-     branch that was being brought in. */
-  if (kind === 'resolveConflict') {
-    return { label: CAPTION[kind], tasks: [basename(work.repo ?? ''), work.theirs].filter(Boolean) }
-  }
-  /* The one caption that carries prose beside its own words rather than
-     identifiers, which is why the session's title goes in the *label*: `tasks`
-     is set in mono, and a person's own sentence in a monospaced face would read
-     as an id. The id this row does not draw is deliberate — a 36-character UUID
-     tells nobody which conversation this is, and the card in the Sessions tab
-     has it in full. A resumed session with no title says what it is and stops
-     there. */
-  if (kind === 'resumeSession') {
-    const title = work.title ? String(work.title) : ''
-    return { label: title ? `${CAPTION.resumeSession}: ${title}` : CAPTION.resumeSession, tasks: [] }
-  }
-  if (kind === 'run' && claimed.length) return { label: null, tasks: claimed }
-  return { label: CAPTION[kind] ?? CAPTION.bare, tasks: [] }
 }
 
 /* Everything a row says about the work behind it: the caption the agents panel

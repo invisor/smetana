@@ -421,6 +421,12 @@ fn spawn_session(
     // succeeded: it is what captions the row, exactly as it does one worker
     // over, so a resumed conversation is not drawn as a bare agent.
     let work = intent.work();
+    // The same walk the PTY worker makes for a setup session, through the one
+    // function both call.
+    let facts = crate::runs::setup_facts::for_intent(Path::new(project), &intent);
+    // The person's own share of the brief, for the journal's opening turn.
+    // Taken before the `Launch` consumes the intent, like `work` above.
+    let (opening_text, opening_attachments) = intent.opening_words();
 
     let launch = Launch {
         profile,
@@ -435,8 +441,7 @@ fn spawn_session(
         // value.
         languages: crate::settings::languages(app),
         agent_prompt: crate::settings::agent_prompt(app),
-        // Only a `Setup` intent has any, and this road starts none.
-        facts: None,
+        facts,
         session_id,
         model,
         // A run's subagents, and this stage starts no run.
@@ -500,13 +505,14 @@ fn spawn_session(
     for (kind, at) in past {
         journal.append(kind, at);
     }
-    Ok(Live {
+    let mut live = Live {
         // `Starting` for a session with nothing behind it, which is what
         // `state_of` calls an empty journal; a resumed one opens on a
         // conversation and so opens `Ready`. Asked of the journal rather than
-        // written down, so the two cases cannot come apart. Not emitted: the
-        // front end reads it out of `session_attach`, which is the next thing
-        // it does.
+        // written down, so the two cases cannot come apart. Reassessed below
+        // once the opening turn, if there is one, has gone in — not emitted
+        // either way: the front end reads it out of `session_attach`, which
+        // is the next thing it does.
         state: state_of(journal.events(), true),
         talking: Some(Talking { driver, stdin: stdin_tx }),
         journal,
@@ -515,7 +521,31 @@ fn spawn_session(
         conversation,
         project: project.to_owned(),
         cwd: cwd.to_string_lossy().into_owned(),
-    })
+    };
+
+    // The brief, as the session's first turn. Into the journal before the
+    // bytes go to stdin, for the reason `Request::Send` does the same: the
+    // harness never echoes a turn back. Appended rather than emitted — nothing
+    // has attached to this session yet, it is not even in the worker's map,
+    // and `session_attach` is what hands the whole journal over — which is
+    // also why `state` is asked again afterwards rather than left at what an
+    // empty journal said.
+    if let Some(talking) = live.talking.as_mut() {
+        if let Some(text) = talking.driver.opening(&launch) {
+            let at = chrono::Utc::now().to_rfc3339();
+            live.journal.append(EventKind::TurnStart { by: super::model::Actor::Person }, at.clone());
+            live.journal.append(
+                EventKind::Opening { text: opening_text, attachments: opening_attachments },
+                at,
+            );
+            let bytes = talking.driver.send(Input::Message { text, attachments: Vec::new() });
+            if talking.stdin.send(bytes).is_err() {
+                log::warn!("[session {id}] the child stopped reading before its brief was written");
+            }
+            live.state = state_of(live.journal.events(), true);
+        }
+    }
+    Ok(live)
 }
 
 fn write_stdin(
@@ -625,6 +655,16 @@ fn lost(app: &AppHandle, id: SessionId, live: &mut Live) {
     append(app, id, live, vec![EventKind::Error { text: UNREACHABLE.into() }]);
 }
 
+/// Which intents this road starts. Everything a person talks to, which is
+/// everything but a run: nobody is in a run's conversation — the lead works
+/// overnight against a queue — and the panel would be drawing a session no one
+/// is meant to answer. The brief every other intent carries goes over stdin as
+/// the session's opening turn (`Driver::opening`), which is what made the old
+/// bare-or-resume refusal unnecessary.
+fn drivable(intent: &Intent) -> bool {
+    !matches!(intent, Intent::Run { .. })
+}
+
 fn handle(
     app: &AppHandle,
     sessions: &mut HashMap<SessionId, Live>,
@@ -635,24 +675,9 @@ fn handle(
 ) {
     match request {
         Request::Start(project, intent, tx) => {
-            // The two intents this road can start, and everything else is
-            // refused rather than half-supported: the rest carry a brief, and
-            // `ClaudeDriver::start` puts what it is given on
-            // `--append-system-prompt`, which would silently reclassify
-            // somebody's opening turn as a standing instruction. That file's
-            // own comment records the decision.
-            //
-            // A resume is the one intent that is exempt for a stated reason
-            // rather than by permission: `prompt::build` refuses it a prompt at
-            // all — a reopened conversation already has somebody's words in it
-            // — so `prompt_text` answers `None` and no such flag is written.
-            // The refusal above is about a brief going somewhere it should not,
-            // and a resume has none to send.
-            if !matches!(intent, Intent::Bare | Intent::ResumeSession { .. }) {
+            if !drivable(&intent) {
                 let _ = tx.send(Err(SessionError::Spawn(
-                    "a driven session can only be started bare or picked up again, \
-                     with no task behind it"
-                        .into(),
+                    "a run is not a conversation and cannot be driven".into(),
                 )));
                 return;
             }
@@ -961,4 +986,38 @@ fn refresh_state(app: &AppHandle, id: SessionId, live: &mut Live) {
         "session:state",
         StateChange { id, state, conversation: live.conversation.clone() },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::Intent;
+
+    #[test]
+    fn a_run_is_the_one_intent_this_road_refuses() {
+        assert!(drivable(&Intent::Bare));
+        assert!(drivable(&Intent::Setup));
+        assert!(drivable(&Intent::EditTask { id: "x-1".into(), title: "T".into() }));
+        assert!(drivable(&Intent::ResumeSession {
+            id: "9f1c0a2e-0000-4000-8000-000000000000".into(),
+            cwd: "/p".into(),
+            title: None,
+            fork: false,
+        }));
+        assert!(!drivable(&Intent::Run {
+            settings: crate::runs::model::RunSettings {
+                scope: crate::runs::model::RunScope::Queue,
+                mode: crate::runs::model::RunMode::Auto,
+                target_branch: "main".into(),
+                create_target: false,
+                min_priority: None,
+                max_parallel_tasks: None,
+                live_check: false,
+                file_findings: false,
+            },
+            reports: std::path::PathBuf::from("/p/.smetana/runs/7"),
+            batch: 2,
+            remove_worktrees: true,
+        }));
+    }
 }

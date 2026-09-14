@@ -4,11 +4,12 @@
    no DOM, because a `.vue` file is the one thing no test in this repository can
    reach and this rule is what the mark on a project row hangs off.
 
-   The configuration is written by an agent in this window's own terminal tab,
-   and that is the one writer window focus never notices: somebody watching a
-   setup agent work never leaves and never comes back, so `catchUp` does not
-   fire and neither does a project switch. Something has to notice from inside,
-   and the only thing that moves is the session's own state.
+   The configuration is written by an agent in this window itself — a terminal
+   tab, or, since smetana-osut, the conversation panel — and that is the one
+   writer window focus never notices: somebody watching a setup agent work
+   never leaves and never comes back, so `catchUp` does not fire and neither
+   does a project switch. Something has to notice from inside, and the only
+   thing that moves is the session's own state.
 
    So the signal is the set of the project's sessions that are still working.
    `starting` and `running` are an agent with the keyboard; every other state

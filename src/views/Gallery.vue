@@ -2559,6 +2559,16 @@ settings.activeProject = '/Users/you/dev/smetana/.worktrees/smetana-1a2b-rename-
    imply a relation between a PTY and a conversation that does not exist. */
 const GALLERY_CONVERSATION = 1
 
+/* What the agents-panel row for this conversation would be captioned by, the
+   same `label`/`tasks` join `DesktopApp.vue`'s own `conversationCaption`
+   makes — checkable here because nothing else in this file draws a row for
+   `GALLERY_CONVERSATION` to read one off. It is `ConversationView`'s own
+   fallback for the second `opening` turn in `MOCK_CONVERSATION`, the one with
+   no words of the person's own (`.claude/rules/conversation-panel.md`, "The
+   opening turn"): without handing it in here, that bubble draws empty and the
+   fallback is unchecked by either verification this project has. */
+const GALLERY_CONVERSATION_CAPTION = 'Editing smetana-agh'
+
 /* The composer on its own, in the three states the panel cannot show at the
    same time: a draft with files on it, a turn in flight where the one button
    is Stop, and locked while a question or a permission request above it
@@ -6593,7 +6603,7 @@ const menuTargetStyle = {
             overflow: 'hidden'
           }"
         >
-          <ConversationView :session-id="GALLERY_CONVERSATION" />
+          <ConversationView :session-id="GALLERY_CONVERSATION" :caption="GALLERY_CONVERSATION_CAPTION" />
         </div>
 
         <div :style="{ width: '360px', display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">

@@ -21,6 +21,7 @@ pub mod recovery;
 pub mod registry;
 pub mod report;
 pub mod service;
+pub mod setup_facts;
 pub mod summary;
 pub mod survey;
 pub mod usage;

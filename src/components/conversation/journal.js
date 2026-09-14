@@ -275,6 +275,19 @@ export function journalRows(events = [], state) {
         text: event.text,
         attachments: event.attachments ?? []
       })
+    } else if (event.kind === 'opening') {
+      /* The app's own opening turn, drawn as the person's: it is what they
+         asked for, said on their behalf. `text` is `null` for a start nobody
+         typed into, and the component substitutes the session's caption —
+         the fallback is the panel's rather than this fold's because the
+         caption is a row's sentence and this file knows nothing of rows. */
+      rows.push({
+        key: event.seq,
+        kind: 'user',
+        text: event.text ?? null,
+        attachments: event.attachments ?? [],
+        opening: true
+      })
     } else if (event.kind === 'text-delta') {
       if (streamingRow) {
         streamingRow.text += event.text

@@ -50,17 +50,22 @@ its "+ New agent" row, from the `+` button beside the pinned tabs, or from the t
 agent to edit". The reason the subsystem exists at all is the second half of that sentence: it notices
 when an agent is waiting on a human, including one in a tab nobody is looking at.
 
-**Two of those roads have already left this subsystem.** "+ New agent" starts a *driven* session under
-Claude Code since smetana-5ijg, and picking a recorded conversation up again — the offline row, and the
-Sessions tab's Resume and Continue in a new session — does the same since smetana-477m: no PTY and no
-ring, because the worker parses that harness's protocol itself and the app draws typed events
-(`src-tauri/src/session/`, `src/stores/conversation.js`, `src/components/conversation/`). Every other
-harness keeps this road exactly as it is, since only Claude Code has a driver, and so does every other
-intent whatever the harness. Which of the two a press takes is `canDrive` in the conversation store,
-over `settings.agent` and `settings.conversationPanel` — the switch on the Agents tab that sends every
-harness down this road again (`.claude/rules/settings.md`). A driven session *does* have a row in the
-Agents view (smetana-inl1) and *is* offered back after a restart (smetana-477m); the two sentences
-this paragraph used to end on said otherwise and were true when they were written.
+**Most of what this subsystem started has already left it.** "+ New agent" started a *driven* session
+under Claude Code first, since smetana-5ijg, and picking a recorded conversation up again — the offline
+row, and the Sessions tab's Resume and Continue in a new session — did the same since smetana-477m: no
+PTY and no ring, because the worker parses that harness's protocol itself and the app draws typed
+events (`src-tauri/src/session/`, `src/stores/conversation.js`, `src/components/conversation/`). Since
+smetana-osut every intent a person talks to takes that same road under Claude Code — filing a task,
+editing one, answering a parked one's questions, fixing closed work, a conflict, a setup, a tracker
+repair, a branch review — and only `Intent::Run` stays here for a stated reason: nobody is in a run's
+conversation. Every harness that is not Claude Code keeps this road exactly as it is, since only Claude
+Code has a driver. Which of the two a press takes is `canDrive` in the conversation store, asked once
+by `startAgent` in `DesktopApp.vue` for every one of those starts, over `settings.agent` and
+`settings.conversationPanel` — the switch on the Agents tab that sends every harness down this road
+again (`.claude/rules/settings.md`). A driven session *does* have a row in the Agents view
+(smetana-inl1) and *is* offered back after a restart (smetana-477m); the two sentences this paragraph
+used to end on said otherwise and were true when they were written, and so, until smetana-osut, was the
+sentence naming two roads and no more.
 What is written below is the PTY half and stays true of it; the parts the split changed are marked
 where they are.
 
@@ -96,8 +101,8 @@ session that never began is not held. What happens to somebody standing on that 
 afterwards depends on what else the project has: in a project with no other agent and no earlier
 conversation the fallback's own `createSession` ticket takes `hasAgentTab` true and then false again,
 so the watch above fires and lands them on the board; where the tab is standing for something else it
-does not fire, which is correct — there is still a tab, and `newAgent` puts its aim back where it found
-it, so whatever was being watched is still being watched unless somebody has aimed the tab elsewhere
+does not fire, which is correct — there is still a tab, and `startAgent` puts its aim back where it
+found it, so whatever was being watched is still being watched unless somebody has aimed the tab elsewhere
 in the second the failed start took.
 
 The one seam that costs something: `project.activeTab` **is** remembered, so a project last left
@@ -263,21 +268,24 @@ on which kind of session it is aimed at: `ConversationView.vue` with a driven se
 same `TerminalView.vue` with `terminalState.activeId`. What decides is `agentAim` in `DesktopApp.vue`,
 one field per project written by `showAgentTab` — so what aims the tab is that function's callers,
 however many there come to be, rather than a list to keep in step with it. They fall into two kinds,
-with one caller under both: aiming at a conversation is `newAgent`, which starts one, and `selectAgent`
-on a driven row, which picks one that is already going; against every road that puts a PTY agent in
-front — the `createSession` roads, which move the aim while starting something; `selectAgent` again on
-any other row, moving it while starting nothing; and `attachToAgent`, which moves it as a side effect
-of handing a dropped path to the selected agent. **`selectAgent` is the only gesture that deliberately
+with one caller under both: aiming at a conversation is `startAgent`, the one function every start a
+person talks to now calls, and `selectAgent` on a driven row, which picks one that is already going;
+against every road that puts a PTY agent in front — `startAgent`'s own fallback to `createSession`,
+which moves the aim while starting something; `selectAgent` again on any other row, moving it while
+starting nothing; and `attachToAgent`, which moves it as a side effect of handing a dropped path to the
+selected agent. **`selectAgent` is the only gesture that deliberately
 picks an agent that already exists**, which makes it the only way back — to a PTY agent or to a
 conversation — that is not also a start; it is reached from a row click and from the `lastRunStart`
 watcher both, so a run handing over to its next batch moves the aim as well.
 
 Beside the field is a **count per project, raised by `showAgentTab` on every call**, and it is there for
 the callers that put an aim *back* after an await — aiming before one is ordinary, and most of the
-callers above do it. `newAgent` aims the tab and then waits about a second for `createSession`, and
-`resumeSession` does the same at two points of its own — an early return on `badCwd`, before
-`showAgentTab` has been called on that road at all, and its own `createSession` catch, after it has —
-each tested against the count it took at its own point rather than the other's. Comparing the aim
+callers above do it. `startAgent` aims the tab and then waits about a second for whichever road
+answers, and puts the aim back at two points of its own — an early return on `badCwd`, before
+`showAgentTab` has been called on the fallback road at all, and its own `createSession` catch, after it
+has — each tested against the count it took at its own point rather than the other's. It is one
+function carrying both now, for every one of the ten starts that talk to an agent, where `newAgent` and
+`resumeSession` used to each carry a copy of this for their own two callers alone. Comparing the aim
 afterwards cannot tell its own `null` from somebody else's — every road to a PTY
 agent calls `showAgentTab()` with no argument and writes that same `null`, so a guard on the value read
 a row click as "untouched" and restored over the agent a run had just handed the person. A failed start therefore puts the previous aim back only while the count is unmoved. The
@@ -296,7 +304,7 @@ Which harness takes which road is `canDrive` in `stores/conversation.js`, over `
 the `conversationPanel` switch, and it is **a front door rather than a gate**: `agents::pick` substitutes the first installed profile when the
 configured one is not on `PATH`, silently, so a machine with only Codex on it still answers `true`
 there — `settings.agent` ships as `claude` and `Settings::validate` forces anything unknown back to it.
-What catches that is `newAgent` falling through to `createSession` when a driven start comes back with
+What catches that is `startAgent` falling through to `createSession` when a driven start comes back with
 nothing, which resolves whatever `pick` would have. A fallback is not a failure and says nothing: the
 person asked for an agent and is getting one. The refusals that are worth reporting reach the toast
 corner — `conversationState.lastError` has a `Toast` of its own in `DesktopApp.vue`, drawn only while
@@ -315,6 +323,25 @@ where the two kinds of session meet, through `components/agent/drivenRows.js` �
 importing neither store. Teaching `terminals.js` about a second store was the alternative and was
 refused: it is exactly the growth epic smetana-79j5 shut the door on, and the terminal is the half that
 is going away.
+
+**Every intent a person talks to can be a driven row now, not only `Bare` and `ResumeSession`.**
+`session::service::drivable` refuses `Intent::Run` alone — nobody is in a run's conversation — and
+starts everything else, so a filing, an edit, a conflict, a setup, a tracker repair and a branch review
+each draw a driven row exactly as a bare agent or a resume already did. `work` and the caption it draws
+are no longer a two-entry table of this road's own: `components/agent/sessionWork.js`'s `workOf` and
+`components/agent/captions.js`'s `captionOf` are pure modules shared with `stores/terminals.js`'s PTY
+rows, each the full mirror of `Intent::work()` rather than the narrower copy either side used to keep
+for the two intents this road used to accept — see either module's own header for why neither store
+could hold it alone. `drivenAgentRow` below reads both exactly as `describeWork` in `terminals.js` does.
+
+**`startAgent(path, intent)` in `DesktopApp.vue` is the one road every start a person talks to now
+takes**, PTY or driven — `canDrive` → `startConversation` → a fall-through to `createSession`, with the
+`badCwd` short circuit and the aim restored on a press that started nothing, all in the one function.
+`newAgent`, `resumeSession`, filing a task, "Ask agent to edit"/"Answer questions"/"Fix this", a
+conflict's "Resolve with an agent", the setup dialog, the tracker repair and "Review this branch" are
+its ten callers; `grep -n "createSession(" src/views/DesktopApp.vue` finds exactly one call, inside it.
+Before this, only two of those ten asked `canDrive` at all and the other eight always opened a
+terminal, whatever the conversation panel switch said — the defect smetana-osut was filed against.
 
 Four things about such a row are decisions rather than details.
 
@@ -769,13 +796,14 @@ list* — is answered rather than overruled. The row is explicitly not a live on
 (`state: 'done'`, which is what `attentionLevel` reads and `AgentList` dims by), it says `offline`
 where an elapsed time would be, it is counted by neither `liveAgentCount` nor `hasAgentSession` — so
 a freshly launched app does not open on an empty Agent tab — and its whole content is an offer. The
-click is the offer, and it takes `resumeSession` in `DesktopApp.vue`, which since smetana-477m forks
-the same way "+ New agent" does: `canDrive` → `startConversation` with an `Intent::ResumeSession`, and
-otherwise `createSession` with the very same intent. Either way it is `--resume <id>` in the record's
-own directory, and the one function is deliberate — `selectAgent` on this row and the Sessions tab's
-own two verbs are three doors onto one verb, and a second fork in any of them would be a copy to
-drift. A worktree removed after its task merged is the ordinary case and is refused by `resume_cwd`,
-which reaches the person as a sentence in the toast corner like every other session verb's refusal.
+click is the offer, and it takes `resumeSession` in `DesktopApp.vue`, which since smetana-477m builds
+an `Intent::ResumeSession` and forks the same way "+ New agent" does — `startAgent`'s own `canDrive` →
+`startConversation`, and otherwise `createSession`, with the very same intent either road. Either way
+it is `--resume <id>` in the record's own directory, and the one function is deliberate — `selectAgent`
+on this row and the Sessions tab's own two verbs are three doors onto one verb, and a second fork in
+any of them would be a copy to drift. A worktree removed after its task merged is the ordinary case and
+is refused by `resume_cwd`, which reaches the person as a sentence in the toast corner like every other
+session verb's refusal.
 
 **The other refusal is the front end's own and is asked before the worker is**: a record is written
 only for a session whose conversation id this app knows, but the row is drawn whatever agent the
@@ -1259,16 +1287,22 @@ session opened on a prompt assembled out of the transcript, which is a new inten
 `prompt.rs` for something the fork gives whole and more accurately.
 
 **There is one road to a PTY and this takes it**, and since smetana-477m there is a road that is not
-one. `resumeSession` in `DesktopApp.vue` asks `canDrive` the same question "+ New agent" asks, in the
-same one place: under a harness this app drives, a resume opens the **conversation panel** on the
-transcript it reopened; under any other, and with the person's own switch off, it calls
-`createSession` with an `Intent::ResumeSession`, which is `terminal_create`, which is the profile's
-own command line plus `--resume <id>` and `Pty::spawn` — the same road a filing session and a run's
-batch still take. The intent is one object built once and handed to whichever road answers, which is
+one. `resumeSession` in `DesktopApp.vue` builds an `Intent::ResumeSession` and hands it to `startAgent`,
+which asks `canDrive` the same question every one of the ten starts that talk to an agent now asks, in
+the one place: under a harness this app drives, a resume opens the **conversation panel** on the
+transcript it reopened; under any other, and with the person's own switch off, `startAgent` falls
+through to `createSession` with the very same intent, which is `terminal_create`, which is the
+profile's own command line plus `--resume <id>` and `Pty::spawn` — the same road a run's batch always
+takes, and the road a resume, a filing session or any of the other eight takes too whenever `canDrive`
+refuses. The intent is one object built once and handed to whichever road answers, which is
 also why the fork is a `fork` flag on that one variant rather than a road of its own: everything but
-the arguments is shared. The driven half is `session::service`, which accepts `Bare` and
-`ResumeSession` and nothing else — every other intent carries a brief, and this harness's driven form
-would put one on `--append-system-prompt`.
+the arguments is shared. The driven half is `session::service`, which since smetana-osut accepts every
+intent but `Run` — `ResumeSession` among them, and the one this door is about. What a resume carries a
+brief in is neither road's problem any more: `prompt::build` refuses `ResumeSession` a prompt at all,
+because a reopened conversation already has somebody's words in it, so there is nothing for
+`Driver::opening` to send over stdin and nothing for `ClaudeDriver::start` to put on
+`--append-system-prompt` either — see `.claude/rules/agents.md` and `.claude/rules/conversation-panel.md`
+for the brief every other intent now carries instead.
 
 **What the panel opens on is the conversation that already happened.** Under `--input-format
 stream-json` the harness replays nothing at all, so `session::history` reads the transcript before the
@@ -1327,10 +1361,10 @@ its trigger stands in.
 
 **The row must not lie about what it is doing.** A resumed session has no tracker work — nothing
 claimed it and there is no issue behind it — so `SessionWork::ResumeSession` carries the session's
-own title and `captionOf` in `stores/terminals.js` draws "Resumed session: …". The title goes in the
-label rather than beside it because `tasks` is set in mono, where a person's own sentence would read
-as an identifier; the id is on the card in full and not on the row, since a 36-character UUID tells
-nobody which conversation this is.
+own title and `captionOf` in `components/agent/captions.js` draws "Resumed session: …". The title goes
+in the label rather than beside it because `tasks` is set in mono, where a person's own sentence would
+read as an identifier; the id is on the card in full and not on the row, since a 36-character UUID
+tells nobody which conversation this is.
 
 **A fork draws that same row**, deliberately and by the customer's choice: `Intent::work` reads
 `fork` and throws it away. What matters in the agents list is which conversation is going, not which
