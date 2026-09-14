@@ -686,12 +686,14 @@ onMounted(initUpdates)
    answers, and take the tab there off whatever it was showing. Most callers
    read `path` from `activePath.value` a line above their own call and never
    await anything before it, so `path === activePath.value` holds by
-   construction the whole way through. One caller does not — the branch
-   review's own fetch takes up to a minute before it calls this — so the two
-   writes that bring the tab forward, `project.sideTab` here and
-   `project.activeTab` below, are each guarded on the two still naming the same
-   project, the way `showAgentTab` already guards its own. For every other
-   caller the guard is never false.
+   construction the whole way through. Two do not: the branch review's own
+   fetch takes up to a minute before it calls this, and the tracker repair's
+   own `trackerFailure()` read is an await of its own in front of the same
+   call — so the two writes that bring the tab forward, `project.sideTab` here
+   and `project.activeTab` below, are each guarded on the two still naming the
+   same project, the way `showAgentTab` already guards its own. For every
+   other caller the guard is never false, and it costs nothing to keep asking
+   it there too.
 
    The side tab is set here even though every caller is a button that already
    lives on the Agents side tab or one of its dialogs: where a session is
@@ -1730,8 +1732,8 @@ async function startReview(form) {
        somebody who saw neither had nothing to learn it from — an `origin/main`
        a week old reads exactly like one a minute old. */
     /* `startAgent`'s own two tab writes are each guarded on `path` still
-       naming the project on screen — this is the one caller that can fail
-       that guard, since the fetch above is up to a minute of network and
+       naming the project on screen — this is one of the two callers that can
+       fail that guard, since the fetch above is up to a minute of network and
        somebody may have moved to another project during it. The session
        itself is unaffected either way: `startAgent` is given the path this
        started from rather than whatever is selected now. */
@@ -2905,8 +2907,9 @@ const agentAimWrites = new Map()
    that answered after somebody switched away must leave the project now in
    front on whatever tab they put it. `startAgent` guards both of its own tab
    writes with `path === activePath.value` for the identical reason, which is
-   what makes it safe for the one caller whose own await can run to a minute —
-   the branch review's fetch — and a no-op guard for every other, which never
+   what makes it safe for the two callers whose own await can run long before
+   they reach it — the branch review's fetch, and the tracker repair's own
+   `trackerFailure()` read — and a no-op guard for every other, which never
    awaits anything before calling it.
 
    **Every call raises that project's write count**, whatever it aims at and
@@ -6283,9 +6286,37 @@ watch(stoppedRuns, () => {
    makes the paragraph above true: during a move the active project changes
    before the session list does, so without it an ending arriving in that gap
    would open a tab into the new project's list, have it overwritten by
-   `applySection`, and be recorded as answered all the same. */
+   `applySection`, and be recorded as answered all the same.
+
+   **`reviewReportTabs` is handed both kinds of session, merged, and not
+   `terminalState.sessions` alone.** Since smetana-osut a branch review takes
+   `startAgent`'s own fork like every other start, so under the shipped
+   defaults it opens driven far more often than not — and a driven session's
+   exit is invisible to a rule that only reads the PTY store. Nothing about the
+   rule itself has to change to read one: `sessionWork.js`'s `workOf` already
+   reduces `Intent::reviewBranch` to `{ kind: 'reviewBranch', report }` on
+   either road, and `drivenSessions`' own `state` is the same raw wire word
+   `terminalState.sessions`' is, `'exited'` included, since neither list
+   translates it before this reads it.
+
+   **The merge is what the id collision `DRIVEN_PREFIX`'s own header warns
+   about, met here rather than avoided.** `reviewReportTabs` de-duplicates by
+   `session.id`, which the PTY worker mints from one counter and the session
+   worker from a second, both starting at 1 — so an untranslated merge would
+   let a driven session 3's finished review collide in `openedReviews` with a
+   PTY session 3's, and one of the two reviews would silently never open. Each
+   driven session is passed through `drivenRowId` before the merge for exactly
+   the reason `agentKey` reads it in the agents panel: the prefix is what parts
+   the two counters' spaces. `reviewReportPath` itself never sees the change —
+   it reads `state`, `project` and `work`, none of which the prefix touches. */
 const finishedReviews = computed(() =>
-  reviewReportTabs(terminalState.sessions, activePath.value)
+  reviewReportTabs(
+    [
+      ...terminalState.sessions,
+      ...drivenSessions.value.map((session) => ({ ...session, id: drivenRowId(session.id) }))
+    ],
+    activePath.value
+  )
 )
 const openedReviews = new Set()
 watch(
