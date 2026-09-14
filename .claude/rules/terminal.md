@@ -530,15 +530,22 @@ Whether the question behind this section is the only cost is a separate matter, 
 is narrower. In a browser (`npm run dev`), it does not arise at all: `getCurrentWebview()` throws
 before either subscribes, so neither actually listens for a drop. Reached inside a real Tauri window
 instead — nothing stops `?view=gallery` from being requested there, since the query string is read
-the same way in both — both subscriptions would genuinely go live on the same window event, and
-neither pane's own gate refuses on its own account: `isStarting` only asks whether an id is a
-string, so the terminal fixture's numeric id reads as `live` on the spot, and `conversationFor`
-never answers `null` (`stores/conversation.js`'s own "Never null — see `hold`"), so the conversation
-fixture's `canAttach` is `true` on the spot as well. A drop actually taken there would still do
-something: `send` would write to a session id the worker has never heard of, which the backend
-refuses. That is harness nonsense from asking a fixture to behave like a live session, not a defect
-in the property above — the drop still reaches only one pane, exactly as the section's own question
-asks.
+the same way in both — both subscriptions would genuinely go live on the same window event, and the
+terminal pane's own gate refuses on its own account no more than it ever did: `isStarting` only asks
+whether an id is a string, so the terminal fixture's numeric id reads as `live` on the spot. The
+conversation pane's is narrower than it used to be, and this is worth stating precisely rather than
+by the property alone: `conversationFor` still never answers `null`
+(`stores/conversation.js`'s own "Never null — see `hold`"), so `held` is truthy on the spot as before,
+but `canAttach` in `ConversationView.vue` no longer follows `held` alone — since `smetana-kteg` it
+follows `composerShown`, `!!held && !waitingForAnswer`, and the gallery's own fixture journal
+(`MOCK_CONVERSATION` in `mockBackend.js`) ends on an unanswered `permission` event, so `question` is
+non-null and `canAttach` there is `false`. A drop over the conversation demo is refused outright now,
+where it used to be accepted and write to a session id the worker has never heard of. Either way is
+harness nonsense from asking a fixture to behave like a live session, not a defect in the property
+above, and the property itself is untouched by which way `canAttach` happens to read: the section's
+own question is whether one drop reaches two consumers, and a hit test that only ever answers for one
+root decides that before either pane's own gate is consulted at all — the drop still reaches only one
+pane, exactly as the section's own question asks.
 
 The response — a frame and one line of caption over the terminal — is drawn only while a live session
 is behind the panel. `send` already drops what is written to a session still coming up, so there is
