@@ -39,6 +39,20 @@ pub trait Driver: Send {
     /// `get_cwd` and `iter_extra_env_as_str`.
     fn start(&self, launch: &Launch) -> CommandBuilder;
 
+    /// The text this session opens on **over stdin**, when it opens on a brief:
+    /// a task to file, an issue to edit, a conflict to resolve. `None` when
+    /// nothing is to be written at the start — a bare session, whose only
+    /// prompt is a standing instruction and went on the system prompt in
+    /// `start`, and a resumed one, which already has somebody's words in it.
+    ///
+    /// The worker writes this through the same channel a person's message
+    /// takes, and journals it as `EventKind::Opening` first. It is the whole
+    /// prompt the PTY road would have handed over positionally, byte for byte:
+    /// `--input-format stream-json` discards the positional argument, so this
+    /// is the one channel left that reaches the model as a *turn* rather than
+    /// as a system-prompt clause.
+    fn opening(&self, launch: &Launch) -> Option<String>;
+
     /// Bytes off the child's stdout, as events. Zero events is the commonest
     /// answer and an ordinary one.
     fn feed(&mut self, bytes: &[u8]) -> Vec<EventKind>;

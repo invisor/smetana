@@ -50,17 +50,22 @@ its "+ New agent" row, from the `+` button beside the pinned tabs, or from the t
 agent to edit". The reason the subsystem exists at all is the second half of that sentence: it notices
 when an agent is waiting on a human, including one in a tab nobody is looking at.
 
-**Two of those roads have already left this subsystem.** "+ New agent" starts a *driven* session under
-Claude Code since smetana-5ijg, and picking a recorded conversation up again — the offline row, and the
-Sessions tab's Resume and Continue in a new session — does the same since smetana-477m: no PTY and no
-ring, because the worker parses that harness's protocol itself and the app draws typed events
-(`src-tauri/src/session/`, `src/stores/conversation.js`, `src/components/conversation/`). Every other
-harness keeps this road exactly as it is, since only Claude Code has a driver, and so does every other
-intent whatever the harness. Which of the two a press takes is `canDrive` in the conversation store,
-over `settings.agent` and `settings.conversationPanel` — the switch on the Agents tab that sends every
-harness down this road again (`.claude/rules/settings.md`). A driven session *does* have a row in the
-Agents view (smetana-inl1) and *is* offered back after a restart (smetana-477m); the two sentences
-this paragraph used to end on said otherwise and were true when they were written.
+**Most of what this subsystem started has already left it.** "+ New agent" started a *driven* session
+under Claude Code first, since smetana-5ijg, and picking a recorded conversation up again — the offline
+row, and the Sessions tab's Resume and Continue in a new session — did the same since smetana-477m: no
+PTY and no ring, because the worker parses that harness's protocol itself and the app draws typed
+events (`src-tauri/src/session/`, `src/stores/conversation.js`, `src/components/conversation/`). Since
+smetana-osut every intent a person talks to takes that same road under Claude Code — filing a task,
+editing one, answering a parked one's questions, fixing closed work, a conflict, a setup, a tracker
+repair, a branch review — and only `Intent::Run` stays here for a stated reason: nobody is in a run's
+conversation. Every harness that is not Claude Code keeps this road exactly as it is, since only Claude
+Code has a driver. Which of the two a press takes is `canDrive` in the conversation store, asked once
+by `startAgent` in `DesktopApp.vue` for every one of those starts, over `settings.agent` and
+`settings.conversationPanel` — the switch on the Agents tab that sends every harness down this road
+again (`.claude/rules/settings.md`). A driven session *does* have a row in the Agents view
+(smetana-inl1) and *is* offered back after a restart (smetana-477m); the two sentences this paragraph
+used to end on said otherwise and were true when they were written, and so, until smetana-osut, was the
+sentence naming two roads and no more.
 What is written below is the PTY half and stays true of it; the parts the split changed are marked
 where they are.
 
@@ -296,7 +301,7 @@ Which harness takes which road is `canDrive` in `stores/conversation.js`, over `
 the `conversationPanel` switch, and it is **a front door rather than a gate**: `agents::pick` substitutes the first installed profile when the
 configured one is not on `PATH`, silently, so a machine with only Codex on it still answers `true`
 there — `settings.agent` ships as `claude` and `Settings::validate` forces anything unknown back to it.
-What catches that is `newAgent` falling through to `createSession` when a driven start comes back with
+What catches that is `startAgent` falling through to `createSession` when a driven start comes back with
 nothing, which resolves whatever `pick` would have. A fallback is not a failure and says nothing: the
 person asked for an agent and is getting one. The refusals that are worth reporting reach the toast
 corner — `conversationState.lastError` has a `Toast` of its own in `DesktopApp.vue`, drawn only while
@@ -315,6 +320,25 @@ where the two kinds of session meet, through `components/agent/drivenRows.js` �
 importing neither store. Teaching `terminals.js` about a second store was the alternative and was
 refused: it is exactly the growth epic smetana-79j5 shut the door on, and the terminal is the half that
 is going away.
+
+**Every intent a person talks to can be a driven row now, not only `Bare` and `ResumeSession`.**
+`session::service::drivable` refuses `Intent::Run` alone — nobody is in a run's conversation — and
+starts everything else, so a filing, an edit, a conflict, a setup, a tracker repair and a branch review
+each draw a driven row exactly as a bare agent or a resume already did. `work` and the caption it draws
+are no longer a two-entry table of this road's own: `components/agent/sessionWork.js`'s `workOf` and
+`components/agent/captions.js`'s `captionOf` are pure modules shared with `stores/terminals.js`'s PTY
+rows, each the full mirror of `Intent::work()` rather than the narrower copy either side used to keep
+for the two intents this road used to accept — see either module's own header for why neither store
+could hold it alone. `drivenAgentRow` below reads both exactly as `describeWork` in `terminals.js` does.
+
+**`startAgent(path, intent)` in `DesktopApp.vue` is the one road every start a person talks to now
+takes**, PTY or driven — `canDrive` → `startConversation` → a fall-through to `createSession`, with the
+`badCwd` short circuit and the aim restored on a press that started nothing, all in the one function.
+`newAgent`, `resumeSession`, filing a task, "Ask agent to edit"/"Answer questions"/"Fix this", a
+conflict's "Resolve with an agent", the setup dialog, the tracker repair and "Review this branch" are
+its ten callers; `grep -n "createSession(" src/views/DesktopApp.vue` finds exactly one call, inside it.
+Before this, only two of those ten asked `canDrive` at all and the other eight always opened a
+terminal, whatever the conversation panel switch said — the defect smetana-osut was filed against.
 
 Four things about such a row are decisions rather than details.
 

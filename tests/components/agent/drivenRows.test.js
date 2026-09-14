@@ -111,6 +111,16 @@ describe('a driven conversation among the agents', () => {
       expect(resumed.label).toBe('Resumed session')
     })
 
+    /* Every intent a person talks to can be driven now, so a driven row's
+       caption is the same table a PTY row's is — `components/agent/captions.js`,
+       shared rather than the two-entry copy this file used to keep. */
+    it('captions a driven filing and a driven edit the way a PTY row is captioned', () => {
+      expect(drivenAgentRow({ id: 3, state: 'running', elapsed: 0, work: { kind: 'editTask', id: 'x-1' } }))
+        .toMatchObject({ label: 'Editing', tasks: ['x-1'] })
+      expect(drivenAgentRow({ id: 4, state: 'running', elapsed: 0, work: { kind: 'newTask', text: 'Ring' } }))
+        .toMatchObject({ label: 'Creating a task', tasks: [] })
+    })
+
     /* The whole point of the id reaching the row: the panel's order and its
        pins are kept under the conversation, which is the one name for this
        session that will still mean something tomorrow. */

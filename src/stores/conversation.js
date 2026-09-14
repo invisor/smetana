@@ -17,6 +17,10 @@
 import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+/* The intent-to-work translation, shared with `stores/terminals.js` and
+   `components/agent/drivenRows.js` — see `components/agent/sessionWork.js`'s
+   own header for why it lives outside every store. */
+import { workOf } from '../components/agent/sessionWork.js'
 /* The one thing this store reads out of another, and it is read inside
    `canDrive` alone: whether the person wants the conversation panel at all.
    Nothing happens at import time — `settings.js` reaches Tauri only from its
@@ -436,10 +440,10 @@ function listenToState() {
 
    A driven session is one whose protocol the worker parses itself, and only
    Claude Code has a driver: `session::service::driver_for` refuses every other
-   profile, and `Request::Start` refuses every intent but `Bare` and
-   `ResumeSession`. So the front end asks before it takes this road at all — a
-   person whose harness is Codex pressing "+ New agent", or picking a recorded
-   conversation up, must get the PTY they have always had.
+   profile, and `Request::Start` refuses every intent but `Run` — nobody is in
+   a run's conversation. So the front end asks before it takes this road at
+   all — a person whose harness is Codex pressing any of the starts that talk
+   to an agent must get the PTY they have always had.
 
    **This is a cheap front door and cannot be the only gate, because it cannot
    see `PATH`.** It is asked of `settings.agent`, and the first half of that
@@ -452,7 +456,7 @@ function listenToState() {
    `settings.agent` ships as `claude` and `Settings::validate` forces anything
    unknown back to it, so a machine with only Codex on it answers `true` here and
    is refused by the driver a round trip later. What answers that is the caller:
-   `newAgent` in `views/DesktopApp.vue` falls through to `createSession` when a
+   `startAgent` in `views/DesktopApp.vue` falls through to `createSession` when a
    driven start comes back with nothing, and `createSession` resolves whatever
    `pick` would have. Nothing here should grow a second guess at `PATH` instead —
    the front end does not have one.
@@ -466,12 +470,13 @@ function listenToState() {
    **The person's own switch is inside this answer rather than beside it.**
    `settings.conversationPanel` off makes every harness answer `false` here, so
    every road into a session takes the PTY without a second condition anywhere
-   — a `if (!settings.conversationPanel)` in `newAgent` and a third in
-   `resumeSession` would be two copies of one rule, and copies drift apart.
-   Those two are the whole list of callers today, and each asks it once. It is
-   in front of the list rather than in it: the list is what Rust can drive and
-   is not the person's to edit, and `session::service::driver_for` is untouched
-   by this switch. The front end simply stops asking.
+   — a `if (!settings.conversationPanel)` inside each of the ten starts that
+   talk to an agent would be ten copies of one rule, and copies drift apart.
+   `startAgent` is the one caller now, and every one of those ten routes
+   through it, asking this once per press. It is in front of the list rather
+   than in it: the list is what Rust can drive and is not the person's to
+   edit, and `session::service::driver_for` is untouched by this switch. The
+   front end simply stops asking.
 
    Read at the moment it is asked and never cached, which is the whole of
    "changes what starts, not what runs": a panel already on screen goes on being
@@ -597,27 +602,6 @@ export function forget(id) {
   const at = started.findIndex((session) => session.id === id)
   if (at !== -1) started.splice(at, 1)
   detach(id)
-}
-
-/* What the row for a session started on this intent is captioned by — this
-   store's half of `Intent::work()` in `src-tauri/src/agents/mod.rs`, and the
-   same reduction: which of an intent's payload is drawn, and which of it was
-   only a briefing for the agent.
-
-   Two intents reach this road and no more (`Request::Start` refuses the rest),
-   so the closed list is two lines rather than a translation of the whole enum.
-   A `title` is `null` for a transcript nobody typed a word into, which is an
-   ordinary answer: `drivenRows.js` draws the caption without one.
-
-   Here rather than in `drivenRows.js` because it is about an *intent*, which is
-   this store's side of the wire, and the row is that file's; and outside
-   `startConversation` because a rule with a test on it should not be reachable
-   only through an `invoke`. */
-export function workOf(intent) {
-  if (intent?.kind === 'resumeSession') {
-    return { kind: 'resumeSession', title: intent.title ?? null }
-  }
-  return { kind: 'bare' }
 }
 
 /* Start a driven session and hold it. The id is the answer; `null` means it did

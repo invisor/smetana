@@ -55,6 +55,21 @@ finished now by **asking** rather than by guessing, since an agent that decides 
 an issue nobody asked it to touch. `no_prompt_stops_mid_sentence` walks every intent and both
 deliveries and refuses a prompt ending in dangling punctuation.
 
+That is the PTY road's own channel, and it stopped being the only one a driven session takes
+(`.claude/rules/terminal.md`, `.claude/rules/conversation-panel.md`). `--input-format stream-json`
+discards the positional argument Claude Code would otherwise be handed, so `ClaudeDriver::start` puts
+`prompt::build`'s text on `--append-system-prompt` for `Intent::Bare` alone — a standing instruction
+about how to talk, which is exactly what that channel is for — and `Driver::opening` hands the very
+same composed text to the worker for every other intent, to be written over stdin as the session's
+first turn once the child has spawned. Composed by the identical pure function either way: what moves
+is the wire the worker puts the words on, never the words themselves or the rule that finishes them.
+
+**A driven session's own opening turn is the one already-composed prompt the panel refuses to draw
+whole** (`.claude/rules/conversation-panel.md`'s "The opening turn"). What the journal records instead
+is `Intent::opening_words()` — the new-task dialog's own text and pictures, or nothing for the seven
+intents nobody typed a word into — never the finished prompt itself, which stays what only the harness
+reads.
+
 **Part of that text has a second reader, and rewording it without knowing that is silent.** A prompt
 is submitted as the session's first message, so it lands in Claude Code's transcript as a record the
 person is down as having typed — and `sessions/kickoff.rs` reads it back out to answer the Sessions

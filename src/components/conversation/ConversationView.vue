@@ -139,7 +139,14 @@ import { watchWindowDrops } from '../../stores/windowDrops.js'
    has. `null` is a panel with nothing behind it, which draws the empty state
    rather than nothing at all. */
 const props = defineProps({
-  sessionId: { type: [String, Number], default: null }
+  sessionId: { type: [String, Number], default: null },
+  /* What the opening turn is drawn as when it carries no words of the
+     person's own — the session row's caption, "Editing smetana-abc", handed
+     down by the view so that the list and the panel say the same thing. See
+     `journal.js`'s `opening` fold for why the fallback lives here rather than
+     in that pure module: the caption is a row's sentence, and that file knows
+     nothing of rows. */
+  caption: { type: String, default: '' }
 })
 
 /* `open-local` alone: `open` (the external breed) is answered here directly,
@@ -671,7 +678,7 @@ const refusal = {
         <template v-for="row in rows" :key="row.key">
           <UserMessage
             v-if="row.kind === 'user'"
-            :text="row.text"
+            :text="row.text ?? props.caption"
             :attachments="row.attachments"
             :open-attachments="openableAttachments(row.attachments)"
             :root="filesState.root ?? ''"
