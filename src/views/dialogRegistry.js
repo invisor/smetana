@@ -38,6 +38,12 @@ const REGISTRY = {
   'rename-branch': { width: 440, ground: ['project', 'repo', 'branch'] },
   'promote-column': { width: 440, ground: ['project', 'column'] },
   'setup-project': { width: 440, ground: ['project'] },
+  /* The founding dialog, offered instead of the one above when the project's
+     folder holds nothing but housekeeping (`needsStart` in
+     `components/run/setupGate.js`). Same ground and for the same reason: the
+     folder it is about is the project, and nothing here is resolved against a
+     repository or a branch. */
+  'start-project': { width: 440, ground: ['project'] },
   /* Everything about one project that is not the board: `[defaults]` in the
      project's own `project.toml`. The same ground as the setup window and for
      the same reason: the file belongs to the project, so a window left standing
@@ -130,6 +136,7 @@ const DIALOG_NOUN = {
   'rename-branch': 'rename branch',
   'promote-column': 'promote column',
   'setup-project': 'project setup',
+  'start-project': 'start project',
   'project-settings': 'project settings',
   'delete-task': 'delete',
   'ready-task': 'move to ready',

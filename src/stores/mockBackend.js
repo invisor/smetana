@@ -225,6 +225,16 @@ const DIALOG_PROPS = {
     existing: false,
     busy: false
   },
+  /* The founding dialog, over a folder that holds nothing yet. `name` is
+     deliberately not one of `MOCK_PROJECTS` above: this fixture is what
+     `?view=dialog&kind=start-project` draws in a browser and does not need to
+     agree with any project on the rail, the way `setup-project`'s does not
+     either. */
+  'start-project': {
+    title: 'Start a project here?',
+    name: 'new-thing',
+    busy: false
+  },
   /* The other window about the same file, and the one with fields in it.
      `branches` is the `target_branches` answer above rather than the panel's
      list, for the `run` fixture's reason: the field is filled from the same
@@ -341,13 +351,26 @@ const DIALOG_PROPS = {
    a browser is the only place any of them can be looked at. The third is the
    one that costs nothing to leave out and is worth the most: `broken` is the
    state with no board behind it and no gear on its row, so an omission there
-   does not read as an omission — it reads as a project that is simply quiet. */
-const MOCK_PROJECTS = ['/Users/you/dev/smetana', '/Users/you/dev/notes', '/Users/you/dev/holiday-curb']
+   does not read as an omission — it reads as a project that is simply quiet.
+
+   A fourth is added for the founding dialog: an empty folder, `state:
+   'missing'` and `empty: true`, so `needsStart` and its marks, its menu item
+   and its dialog can all be looked at with no Tauri behind them. */
+const MOCK_PROJECTS = [
+  '/Users/you/dev/smetana',
+  '/Users/you/dev/notes',
+  '/Users/you/dev/holiday-curb',
+  '/Users/you/Projects/empty'
+]
 /* Tracked is about `.beads/`, not about the run configuration: the damaged one
    is a fully tracked project whose board draws, which is exactly the case where
    nothing else on screen would say what is wrong. */
 const UNTRACKED = '/Users/you/dev/notes'
 const BROKEN_CONFIG_PROJECT = '/Users/you/dev/holiday-curb'
+/* Nothing here but housekeeping: `survey::is_empty` on the real backend, faked
+   here so the founding dialog and its marks have a project to be about in a
+   browser. */
+const EMPTY_PROJECT = '/Users/you/Projects/empty'
 
 /* The tree that used to live in views/desktopAppData.js. The real tree comes
    from disk, but a browser has no disk and Gallery needs something to show
@@ -988,6 +1011,7 @@ export function installMockBackend() {
       if (payload?.project === BROKEN_CONFIG_PROJECT) {
         return {
           state: 'broken',
+          empty: false,
           message:
             'TOML parse error at line 14, column 1\n' +
             '   |\n' +
@@ -996,9 +1020,13 @@ export function installMockBackend() {
             'unknown field `gate`, expected one of `setup`, `gates`, `env_files`\n'
         }
       }
+      /* One fixture project reads as empty, so the founding dialog and its
+         marks can be seen in a browser: this store's own "empty" project. */
+      if (payload?.project === EMPTY_PROJECT) return { state: 'missing', empty: true }
       return payload?.project === MOCK_PROJECTS[0]
         ? {
             state: 'ok',
+            empty: false,
             config: {
               project: { repos: ['.'] },
               defaults: {
@@ -1023,7 +1051,7 @@ export function installMockBackend() {
               live_check: { mode: 'browser', command: null, notes: null }
             }
           }
-        : { state: 'missing' }
+        : { state: 'missing', empty: false }
     }
     /* One run, working, holding the session whose `work.kind` is `run` in
        `terminal_list`. A read rather than a rejection, the way it always was —

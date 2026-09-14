@@ -32,8 +32,15 @@ import { syncRunCards } from './notifications.js'
    project's. */
 import { chime } from '../chime.js'
 import { settings } from './settings.js'
+/* The rule that turns `state × empty` into which of two offers a project
+   without a file gets. Pure and outside this store for the reason every file
+   of that family is; kept behind the project check below rather than read
+   directly by a component, so the marks, the tile's menu and the dialog after
+   Add project all read the one computed rather than three copies of the same
+   two lines. */
+import { needsSetup as gateNeedsSetup, needsStart as gateNeedsStart } from '../components/run/setupGate.js'
 
-const NONE = { state: 'missing' }
+const NONE = { state: 'missing', empty: false }
 
 export const runsState = reactive({
   project: null,
@@ -95,8 +102,17 @@ function upsert(run) {
    check: clearing the project resets `config` to the very same `missing`
    NONE a genuinely unconfigured project has, so without it "no project open"
    would read as "this project needs setting up" and the dialog would be
-   offered for nothing. */
-export const needsSetup = computed(() => runsState.project !== null && runsState.config.state === 'missing')
+   offered for nothing.
+
+   `setupGate.js` owns the state × empty arithmetic; this and `needsStart`
+   below add the one thing that rule cannot see for itself — that a project is
+   actually open. */
+export const needsSetup = computed(() => runsState.project !== null && gateNeedsSetup(runsState.config))
+
+/* The founding session's offer: a folder with no file and nothing in it but
+   housekeeping. Mutually exclusive with `needsSetup` by construction — both
+   read the same `config`, and `setupGate.js`'s two functions never agree. */
+export const needsStart = computed(() => runsState.project !== null && gateNeedsStart(runsState.config))
 
 export const configError = computed(() =>
   runsState.config.state === 'broken' ? runsState.config.message : null

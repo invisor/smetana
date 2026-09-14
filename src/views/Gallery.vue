@@ -102,6 +102,7 @@ import {
   SettingsRow,
   RunModal,
   SetupProjectModal,
+  StartProjectModal,
   Skeleton,
   StatusBadge,
   StatusDot,
@@ -3199,6 +3200,11 @@ const menuTargetStyle = {
       </div>
       <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <SetupProjectModal :open="true" name="holiday-curb" existing @close="() => {}" @confirm="() => {}" />
+      </div>
+      <!-- The founding dialog, over a folder that holds nothing yet — offered
+           in place of the pair above when the project is empty. -->
+      <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <StartProjectModal :open="true" name="new-thing" @close="() => {}" @confirm="() => {}" />
       </div>
       <!-- The other window about the same file, and the one that changes it
            without starting anything. Deliberately not on its defaults: a form

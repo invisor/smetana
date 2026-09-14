@@ -34,15 +34,18 @@ const props = defineProps({
   /* path → branch name. Only the active project's head has been read, so this
      holds one entry in the app; the tooltip drops the empty segment itself. */
   branches: { type: Object, default: () => ({}) },
-  /* The three the menu is built from. Measured for the active project alone —
+  /* The four the menu is built from. Measured for the active project alone —
      probing every project would be a command apiece for a mark nobody reads —
      which `projectMenuItems` already knows and words its items around. */
   canAddAgent: { type: Boolean, default: false },
   configured: { type: Boolean, default: false },
-  configBroken: { type: Boolean, default: false }
+  configBroken: { type: Boolean, default: false },
+  /* `needsStart`: the active project's folder holds nothing but housekeeping.
+     Swaps the menu's setup item for a founding one — see `projectMenu.js`. */
+  empty: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['select', 'remove', 'add-agent', 'setup', 'settings', 'add-project'])
+const emit = defineEmits(['select', 'remove', 'add-agent', 'setup', 'settings', 'add-project', 'start'])
 
 /* 28px, the tile's own size: the add button is a place for a project standing
    in a column of projects, so it is the same box. */
@@ -101,6 +104,7 @@ const items = computed(() =>
     active: menuFor.value !== null && menuFor.value === props.activePath,
     configured: props.configured,
     configBroken: props.configBroken,
+    empty: props.empty,
     canAddAgent: props.canAddAgent
   })
 )
@@ -112,6 +116,7 @@ const openMenu = (project, event) => {
 
 const pick = (item, path) => {
   if (item.kind === 'setup') emit('setup', path, item.existing)
+  else if (item.kind === 'start') emit('start', path)
   else if (item.kind === 'settings') emit('settings', path)
   else if (item.kind === 'add-agent') emit('add-agent', path)
   else if (item.kind === 'remove') emit('remove', path)

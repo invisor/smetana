@@ -163,6 +163,7 @@ import {
   clearSemantic,
   deleteIssue,
   dependencyEdges,
+  initBd,
   initTracker,
   isLockIssue,
   issueById,
@@ -272,6 +273,7 @@ import {
   loadConfig,
   loadRun,
   needsSetup,
+  needsStart,
   runsState,
   releaseRuns,
   saveDefaults,
@@ -2405,12 +2407,18 @@ const saveProjectSettings = async (draft) => {
 }
 
 /* Adding a project is a read until this point: the dialog is where it becomes
-   a session and a file in somebody's repository. */
+   a session and a file in somebody's repository.
+
+   `needsStart` is checked first and `needsSetup` is its `else`, never both:
+   `setupGate.js`'s two functions read the same `config` and never agree, so
+   an empty folder gets the founding dialog and nothing else is offered
+   beside it. */
 const onAddProject = async () => {
   const added = await addProject()
   if (!added) return
   await loadConfig(added)
-  if (needsSetup.value) openSetup(added, false)
+  if (needsStart.value) openStart(added)
+  else if (needsSetup.value) openSetup(added, false)
 }
 
 /* The setup agent runs inside this window itself and never in one of its own —
@@ -2490,6 +2498,61 @@ const startSetup = async () => {
     if (await startAgent(path, { kind: 'setup' })) closeSetup()
   } finally {
     settingUp.value = false
+  }
+}
+
+/* The founding dialog, offered in place of the one above when the folder
+   holds nothing but housekeeping (`needsStart`). Held the same shape as
+   `openSetup`/`startSetup`, down to holding the path this is about rather
+   than reading `activePath` at render time: a window that outlived a project
+   switch must fail loudly instead of quietly starting a session in another
+   repository. */
+const startFor = ref(null)
+const starting = ref(false)
+
+const openStart = (path) => {
+  startFor.value = path
+  serveDialog('start-project', {
+    ground: { project: path },
+    props: () => ({
+      /* The frame's caption, in `StartProjectModal`'s own words — it owns
+         them, this repeats them, for `openSetup`'s reason above. */
+      title: 'Start a project here?',
+      name: startFor.value ? basenameOf(startFor.value) : '',
+      busy: starting.value
+    }),
+    forget: () => {
+      startFor.value = null
+    },
+    onResult: (name) => {
+      if (name === 'close') closeStart()
+      if (name === 'confirm') startBootstrap()
+    }
+  })
+}
+
+const closeStart = () => {
+  closeDialog('start-project')
+}
+
+/* bd first, then the session: the board is live before the agent's first
+   line, and the agent's scope is the foundation, the commit and the file —
+   leaving `bd init` to the agent would show "No tracker here" over a running
+   session until it got to it (the design's own reasoning). `initBd` reports
+   its own failure through `trackerState.lastError` and rethrows; caught here
+   so the dialog stays open and nothing is started, since a session told bd is
+   ready when it is not would be filing its first commit against nothing. */
+const startBootstrap = async () => {
+  const path = startFor.value
+  if (!path || starting.value) return
+  starting.value = true
+  try {
+    await initBd()
+    if (await startAgent(path, { kind: 'bootstrap' })) closeStart()
+  } catch {
+    // already reported by initBd; the dialog stays open on it.
+  } finally {
+    starting.value = false
   }
 }
 
@@ -6574,10 +6637,12 @@ const toastStackStyle = {
           :can-add-agent="project.sideTab === 'agents'"
           :configured="configured"
           :config-broken="configBroken"
+          :empty="needsStart"
           @select="switchTo"
           @remove="removeProject"
           @add-agent="newAgent"
           @setup="openSetup"
+          @start="openStart"
           @settings="openProjectSettings"
           @add-project="onAddProject"
         />
@@ -6617,6 +6682,21 @@ const toastStackStyle = {
             <Tooltip v-if="activePath && !activeProjectTracked" label="No bd tracker here">
               <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
             </Tooltip>
+            <!-- Muted rather than the failed red the setup mark takes below:
+                 an empty folder is not a failure, and `needsSetup` is never
+                 true at the same time as this — `setupGate.js`'s two rules
+                 read the same config and never agree. -->
+            <span v-if="needsStart" :style="setupMarkStyle">
+              <Tooltip label="Empty folder: nothing to set up yet">
+                <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
+              </Tooltip>
+              <IconButton
+                icon="sparkles"
+                label="Start a project"
+                size="sm"
+                @click="openStart(activePath)"
+              />
+            </span>
             <span v-if="needsSetup" :style="setupMarkStyle">
               <Tooltip label="Not set up for runs">
                 <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--status-failed-fg)' }" />

@@ -10,7 +10,7 @@ import {
 } from '../../src/views/dialogRegistry.js'
 
 describe('the dialog registry', () => {
-  it('holds the thirteen kinds that became windows', () => {
+  it('holds the fourteen kinds that became windows', () => {
     expect([...DIALOG_KINDS].sort()).toEqual([
       'delete-branch',
       'delete-session',
@@ -24,7 +24,8 @@ describe('the dialog registry', () => {
       'rename-branch',
       'review-changes',
       'run',
-      'setup-project'
+      'setup-project',
+      'start-project'
     ])
   })
 
