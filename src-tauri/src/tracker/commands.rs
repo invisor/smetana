@@ -326,9 +326,9 @@ pub async fn tracker_search_semantic(
 }
 
 /// Whether these folders have a tracker. A question about the filesystem, not
-/// about bd: the worker is not called here and the call costs one `is_dir` per
-/// path. Without it a person would only learn that a folder has no tracker by
-/// clicking on it.
+/// about bd: the worker is not called here and the call costs a few metadata
+/// reads per path. Without it a person would only learn that a folder has no
+/// tracker by clicking on it.
 #[tauri::command]
 pub async fn tracker_probe(paths: Vec<String>) -> Vec<ProjectProbe> {
     paths

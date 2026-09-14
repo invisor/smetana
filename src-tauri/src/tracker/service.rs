@@ -508,11 +508,11 @@ async fn open(
 
     // Before asking whether there is a tracker in here at all, because a folder
     // the operating system is refusing answers "no" to every question about
-    // itself and the answer means nothing. `has_tracker` is an `is_dir`, and
-    // macOS lets a `stat` through while refusing the `read_dir` underneath — so
-    // without this the notice would offer "Initialize bd" over a folder that
-    // already has a `.beads` nobody is allowed to open, and pressing it would
-    // put a second tracker inside the first.
+    // itself and the answer means nothing. `has_tracker` only reads file
+    // metadata, and macOS lets a `stat` through while refusing the `read_dir`
+    // underneath — so without this the notice would offer "Initialize bd" over
+    // a folder that already has a `.beads` nobody is allowed to open, and
+    // pressing it would put a second tracker inside the first.
     //
     // `tracked: false`, for the reason it is false in a folder with no tracker:
     // nothing here can be read and nothing may be written. So the sixty-second
@@ -527,7 +527,7 @@ async fn open(
     if !project::has_tracker(&dir) {
         health.degrade_project(
             HealthState::NotABeadsRepo,
-            format!("no .beads directory in {}", dir.display()),
+            format!("no bd tracker in {}", dir.display()),
         );
         // The folder stays open anyway: bd init is done in it.
         return Some(Project { dir, bd, _watcher: None, tracked: false });
