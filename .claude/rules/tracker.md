@@ -156,8 +156,9 @@ had no way to say so.
 `tracker/access.rs` is where the two are told apart, and it asks **the filesystem**, never bd's
 prose: `ErrorKind::PermissionDenied` on the project directory or its `.beads` is the fact, and bd's
 wording is bd's and moves between releases. `refusal` is checked in `open` before `has_tracker` —
-`has_tracker` is an `is_dir` and macOS lets a `stat` through while refusing the `read_dir`, so
-without that order the notice would offer `bd init` over a `.beads` nobody may open — and again in
+`has_tracker` only reads file metadata (a directory test on `.beads`, then a marker lookup inside
+it), and macOS lets that through while refusing the `read_dir`, so without that order the notice
+would offer `bd init` over a `.beads` nobody may open — and again in
 `HealthReporter::failed`, which is why that method takes the folder the call was made in.
 
 The repair is `tccutil reset <service> <identifier>` and a restart, and it is offered **only where
