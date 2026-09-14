@@ -60,9 +60,17 @@ trigger, because two copies would have drifted the first time bd grew a status. 
 preview, deletes nothing and exits zero.
 
 Which directory that is comes from `src-tauri/src/project.rs` — the vocabulary the tracker and the
-settings share: `has_tracker`, `nearest_tracked_ancestor` (a folder inside a tracked repository
-resolves to its root, so the list, the settings key and the worker all name the same directory) and
-`default_project` for the very first run. Picking a folder is the `tauri-plugin-dialog` open dialog,
+settings share: `has_tracker`, `nearest_tracked_ancestor` and `default_project` for the very first
+run. `has_tracker` is not "does `.beads` exist": a `.beads` counts only if it also holds one of
+`metadata.json`, `config.yaml`, `embeddeddolt/` or `redirect` (the last is a worktree's own `.beads`,
+pointing `bd where` at a workspace kept elsewhere) — what `bd where` itself accepts — because every
+machine that has run bd carries a bare `.beads/eventsData` at `~/.beads`, bd's own global folder, and
+without the marker check every folder under the home directory would resolve to the home directory
+(smetana-0hrt). `nearest_tracked_ancestor` climbs to that marked ancestor, so a folder inside a
+tracked repository resolves to its root and the list, the settings key and the worker all name the
+same directory — but the climb stops at the first ancestor carrying a `.git` (directory or worktree
+file), checking that folder itself and no further, which is the same boundary bd draws around a
+nested repository. Picking a folder is the `tauri-plugin-dialog` open dialog,
 allowed by `dialog:allow-open` in `capabilities/default.json`; the picked path is normalized once,
 by the `project_root` command, before it reaches the list.
 
@@ -148,8 +156,9 @@ had no way to say so.
 `tracker/access.rs` is where the two are told apart, and it asks **the filesystem**, never bd's
 prose: `ErrorKind::PermissionDenied` on the project directory or its `.beads` is the fact, and bd's
 wording is bd's and moves between releases. `refusal` is checked in `open` before `has_tracker` —
-`has_tracker` is an `is_dir` and macOS lets a `stat` through while refusing the `read_dir`, so
-without that order the notice would offer `bd init` over a `.beads` nobody may open — and again in
+`has_tracker` only reads file metadata (a directory test on `.beads`, then a marker lookup inside
+it), and macOS lets that through while refusing the `read_dir`, so without that order the notice
+would offer `bd init` over a `.beads` nobody may open — and again in
 `HealthReporter::failed`, which is why that method takes the folder the call was made in.
 
 The repair is `tccutil reset <service> <identifier>` and a restart, and it is offered **only where

@@ -4524,7 +4524,7 @@ const HEALTH_NOTICE = {
     icon: 'folder-git-2',
     title: 'No tracker here',
     description:
-      'No .beads directory in this folder or any folder above it. Initialize bd to start tracking tasks in it.'
+      'No bd tracker in this folder or in the repository above it. Initialize bd to start tracking tasks in it.'
   },
   'bd-version-mismatch': {
     icon: 'info',

@@ -12,8 +12,12 @@
   What it carries is the sentence macOS shows when it asks for one of the
   protected folders. Without one the prompt names no reason at all, which is
   the worst moment to say nothing: a refusal is stored, and the app cannot ask
-  a second time. Each sentence says what the folder is wanted for — the project
-  somebody opened — rather than what the app is.
+  a second time. Each sentence says what the folder is wanted for, and leads
+  with the actual case that folder's prompt is shown for — the project
+  somebody opened, for the first four; the path an agent in a PTY session
+  follows there at the person's own direction, for the fifth, since macOS
+  shows that one as "would like to access data from other apps" rather than
+  naming a folder at all.
 -->
 <plist version="1.0">
 <dict>
@@ -25,5 +29,7 @@
 	<string>Smetana reads and edits the files of the project you open in it — including one you keep in your Downloads folder.</string>
 	<key>NSRemovableVolumesUsageDescription</key>
 	<string>Smetana reads and edits the files of the project you open in it — including one you keep on a removable volume.</string>
+	<key>NSAppDataUsageDescription</key>
+	<string>Smetana runs the coding agent you start, and the path you point that agent at may lead into another app's own data folder.</string>
 </dict>
 </plist>

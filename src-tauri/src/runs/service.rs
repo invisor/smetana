@@ -252,6 +252,18 @@ pub fn start(
         // is a fraction of a second unless something really is still running.
         recovery::recover(&known).await;
 
+        // The empty folder every headless probe of a harness runs in, for the
+        // life of this worker — see `runs::usage`'s header for why it is
+        // never '/' and never a project root. Resolved once rather than per
+        // run, since nothing about it changes while the app is open;
+        // `probe_dir`'s own `create_dir_all` is the same one-off cost
+        // `write_report` and `drive`'s own report directory already pay
+        // directly on a task like this one. `None` only when the platform
+        // will not name an app data directory at all, which `usage::read`
+        // already treats as an unreadable probe — the gate never blocks on
+        // it.
+        let probe = crate::agents::probe_dir(&app).ok();
+
         // Keyed by each run's token: several runs share a project now, and the
         // token is the one name that is never two runs'. Which project an
         // entry belongs to is `run.project`, the same path the tracker, the
@@ -267,7 +279,16 @@ pub fn start(
             tokio::select! {
                 request = rx.recv() => {
                     let Some(request) = request else { break };
-                    handle(&app, &mut active, &mut next_token, &tracker, &terminal, &report_tx, request);
+                    handle(
+                        &app,
+                        &mut active,
+                        &mut next_token,
+                        &tracker,
+                        &terminal,
+                        &report_tx,
+                        probe.as_deref(),
+                        request,
+                    );
                 }
                 // The loop task's own progress, its one question, and its
                 // ending. It owns no state the front end reads — it hands a
@@ -304,6 +325,11 @@ fn handle(
     tracker: &TrackerHandle,
     terminal: &TerminalHandle,
     report: &mpsc::UnboundedSender<Report>,
+    // Where a headless probe of the run's own harness runs — the usage gate
+    // and the crash classification alike. `None` only where the platform
+    // could not name one; `drive` carries that through to `usage::read` as
+    // no cwd, which reads exactly as an unreadable probe already does.
+    probe: Option<&Path>,
     request: Request,
 ) {
     match request {
@@ -448,6 +474,10 @@ fn handle(
                 terminal.clone(),
                 report.clone(),
                 stop_rx,
+                // Owned rather than borrowed: `drive` is spawned onto a task
+                // of its own and outlives this call, where `probe` above does
+                // not.
+                probe.map(Path::to_path_buf),
             );
             tauri::async_runtime::spawn(async move {
                 // Bound rather than dropped: it has to outlive the loop, since
@@ -724,6 +754,11 @@ async fn drive(
     terminal: TerminalHandle,
     report: mpsc::UnboundedSender<Report>,
     mut stop: mpsc::Receiver<()>,
+    // Where a headless probe of this run's own harness runs — the gate and
+    // the crash classification below alike. `None` only where the platform
+    // could not name an app data directory at all, which both treat exactly
+    // as an unreadable probe: never a reason to hold the run up.
+    probe: Option<PathBuf>,
 ) {
     let say = |run: &Run| {
         let _ = report.send(Report::State { token, run: Box::new(run.clone()) });
@@ -894,6 +929,7 @@ async fn drive(
             settings_path.as_deref(),
             matches!(last_batch, LastBatch::Limited),
             &mut released,
+            probe.as_deref(),
         )
         .await
         else {
@@ -1280,9 +1316,12 @@ async fn drive(
         // otherwise turning it off would turn every exhausted allowance into a
         // crash, and the run would end as `Crashed` after `MAX_CRASHES` with
         // nothing having crashed.
-        let reading = tokio::task::spawn_blocking(move || profile.and_then(usage::read))
-            .await
-            .unwrap_or(None);
+        let probe_now = probe.clone();
+        let reading = tokio::task::spawn_blocking(move || {
+            usage::read(profile?, probe_now.as_deref()?)
+        })
+        .await
+        .unwrap_or(None);
         if usage::spent(reading.as_ref()) {
             // Not a crash: the counter is untouched, and `Limited` is what
             // keeps the next round from reading an unmoved board as stuck.
@@ -1671,9 +1710,14 @@ async fn ask(
     profile: Option<&'static dyn Profile>,
     limits: usage::Limits,
     after_limited: bool,
+    // Where the probe runs — see `runs::usage`'s header. `None` reads exactly
+    // as an unreadable probe already does: no reason to hold the gate up.
+    probe: Option<PathBuf>,
 ) -> (Option<usage::Usage>, Decision) {
     let Some(profile) = profile else { return (None, Decision::Normal) };
-    let read = tokio::task::spawn_blocking(move || usage::read(profile)).await.unwrap_or(None);
+    let read = tokio::task::spawn_blocking(move || usage::read(profile, probe.as_deref()?))
+        .await
+        .unwrap_or(None);
     let decision = usage::gate(read.as_ref(), limits, after_limited);
     (read, decision)
 }
@@ -1701,6 +1745,9 @@ async fn headroom(
     settings_path: Option<&Path>,
     after_limited: bool,
     released: &mut watch::Receiver<bool>,
+    // Where the probe runs, carried straight through to `ask` on every turn
+    // of the poll below.
+    probe: Option<&Path>,
 ) -> Option<Option<u8>> {
     loop {
         // The channel and not `run.stopping`: this task holds its own `Run`,
@@ -1726,7 +1773,7 @@ async fn headroom(
         if *released.borrow() {
             limits.pause_at = usage::OFF;
         }
-        let (reading, decision) = ask(profile, limits, after_limited).await;
+        let (reading, decision) = ask(profile, limits, after_limited, probe.map(Path::to_path_buf)).await;
         journal.say(&journal::gate(reading.as_ref(), &decision));
         match decision {
             Decision::Pause { pct, resets } => {

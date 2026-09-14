@@ -23,8 +23,27 @@
 //! allowance ran out mid-batch — there it is not a gate but a classification,
 //! telling a spent limit apart from a harness that fell over.
 //!
+//! **The probe's working directory is an empty folder of the app's own, never
+//! the process's inherited one.** A bundled app started from Finder or
+//! launchd is sitting in `/`, and Claude Code indexes every file under its cwd
+//! at start-up — asked from `/` it walked the whole disk in the first three
+//! seconds, and macOS put up a permission prompt for every protected folder it
+//! crossed on the way, for data this app never touches (smetana-48iy). The
+//! project root was refused too: the footer's probe has no project, a one-shot
+//! question gets its whole context in the prompt already, and either way
+//! Claude Code would pick up that project's own `CLAUDE.md`, hooks and index —
+//! paying both the cost and part of the risk this fix removes.
+//! `std::env::temp_dir()` was refused as well: it is a folder shared with
+//! whatever else on the machine writes into it, and nothing in it is worth
+//! indexing either — an app-owned folder costs nothing more and shares with
+//! nobody. `read` is
+//! handed the path rather than computing it, so this module never learns Tauri
+//! exists; `agents::probe_dir` is where the caller gets it, off
+//! `app.path().app_data_dir()` and created if it is not there yet.
+//!
 //! Pure apart from `read`, which is the one function here that spawns anything.
 
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -337,24 +356,40 @@ pub fn cap(chosen: Option<u8>, decision: &Decision) -> Option<u8> {
     }
 }
 
-/// Ask the harness. `None` means the question could not be asked or the answer
-/// could not be read, which `decide` treats as no reason to hold anything up.
-///
-/// Blocking, and called from `spawn_blocking`. The output is small — a couple
-/// of kilobytes — so reading it after the wait cannot deadlock on a full pipe
-/// the way a large one would.
-pub fn read(profile: &'static dyn Profile) -> Option<Usage> {
-    let args = profile.usage_command()?;
+/// The probe's command line, built rather than run — the shape
+/// `runs/preflight.rs::curl` uses ("built rather than run, so a test can read
+/// it"), so a test reads `Command::get_current_dir()` back off it without
+/// spawning anything.
+fn command(profile: &'static dyn Profile, args: &'static [&'static str], cwd: &Path) -> Command {
     let mut command = Command::new(profile.binary());
-    command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    command
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
     // The login shell's PATH, for the reason `terminal/service.rs` records at
     // its own `agents::pick`: a bundled app started from Finder inherits
     // launchd's, where nothing a person installed is reachable.
     if let Some(path) = crate::shell_env::path() {
         command.env("PATH", path);
     }
+    command
+}
 
-    let mut child = command.spawn().ok()?;
+/// Ask the harness. `None` means the question could not be asked or the answer
+/// could not be read, which `decide` treats as no reason to hold anything up.
+///
+/// Blocking, and called from `spawn_blocking`. The output is small — a couple
+/// of kilobytes — so reading it after the wait cannot deadlock on a full pipe
+/// the way a large one would.
+///
+/// `cwd` is the caller's to resolve — see this module's header — and it rides
+/// in beside `profile` rather than being read off the disk in here, which is
+/// what keeps this file free of Tauri.
+pub fn read(profile: &'static dyn Profile, cwd: &Path) -> Option<Usage> {
+    let args = profile.usage_command()?;
+    let mut child = command(profile, args, cwd).spawn().ok()?;
     let deadline = Instant::now() + PROBE_TIMEOUT;
     loop {
         match child.try_wait() {
@@ -377,6 +412,15 @@ pub fn read(profile: &'static dyn Profile) -> Option<Usage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Built rather than run: the probe's cwd is never the process's
+    /// inherited one, and this is checked without spawning a harness at all.
+    #[test]
+    fn the_probe_runs_in_the_cwd_it_is_given() {
+        let dir = Path::new("/tmp/smetana-usage-probe-test");
+        let cmd = command(&crate::agents::claude::Claude, &["-p", "/usage"], dir);
+        assert_eq!(cmd.get_current_dir(), Some(dir));
+    }
 
     fn usage(session: u8, week: u8) -> Usage {
         Usage {
