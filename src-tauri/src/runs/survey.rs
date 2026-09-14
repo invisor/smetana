@@ -28,6 +28,17 @@ const MANIFESTS: [(&str, &str); 5] = [
     ("Makefile", "make"),
 ];
 
+/// The names a folder is still allowed to hold and count as empty.
+///
+/// The list is **literal rather than a rule** ("no repository, no manifest"),
+/// and that is the point of it: a folder holding a scatter of scripts with no
+/// `package.json` in sight would pass a manifest-shaped test and the "Start a
+/// project" offer would be a lie over work already there. `.git` covers a
+/// fresh `git init` with no commits yet, `.beads` and `.smetana` are this
+/// app's own bookkeeping, and `.gitignore`/`.DS_Store` are the two stray files
+/// a folder collects before anyone has put a line of the project in it.
+const HOUSEKEEPING: [&str; 5] = [".beads", ".smetana", ".git", ".gitignore", ".DS_Store"];
+
 #[derive(Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Survey {
@@ -132,6 +143,31 @@ pub fn render(survey: &Survey) -> String {
         }
     }
     out
+}
+
+/// Whether a directory listing holds nothing but the housekeeping names.
+///
+/// Pure, and the half of the rule the tests below exercise directly: `is_empty`
+/// is this run over an actual `read_dir`, kept separate so the rule itself
+/// needs no filesystem to check.
+pub fn is_empty_listing(names: &[String]) -> bool {
+    names.iter().all(|name| HOUSEKEEPING.contains(&name.as_str()))
+}
+
+/// Whether `root` holds nothing but the housekeeping names, one level — no
+/// recursion, since a single `README.md` already settles the question.
+///
+/// An unreadable directory answers `false` rather than `true`: nothing can be
+/// created inside a folder the app cannot even list, so there is nothing to
+/// found a project in and "Start a project" must not be offered over it.
+pub fn is_empty(root: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else { return false };
+    let names: Vec<String> = entries
+        .flatten()
+        .take(MAX_ENTRIES)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
+    is_empty_listing(&names)
 }
 
 /// The names of the files (not directories) directly inside `dir`, capped.
@@ -328,6 +364,60 @@ mod tests {
         assert_eq!(survey.compose_files, ["backend/docker-compose.yml"]);
 
         std::fs::remove_dir_all(&root).expect("clean up");
+    }
+
+    #[test]
+    fn an_empty_listing_is_empty() {
+        assert!(is_empty_listing(&[]));
+    }
+
+    #[test]
+    fn only_the_housekeeping_names_is_still_empty() {
+        let names: Vec<String> = HOUSEKEEPING.iter().map(|s| s.to_string()).collect();
+        assert!(is_empty_listing(&names));
+    }
+
+    #[test]
+    fn only_dot_git_is_empty() {
+        assert!(is_empty_listing(&[".git".to_string()]));
+    }
+
+    #[test]
+    fn dot_git_beside_a_readme_is_not_empty() {
+        assert!(!is_empty_listing(&[".git".to_string(), "README.md".to_string()]));
+    }
+
+    #[test]
+    fn a_single_subfolder_is_not_empty() {
+        assert!(!is_empty_listing(&["src".to_string()]));
+    }
+
+    #[test]
+    fn a_dotenv_file_is_not_empty() {
+        // Housekeeping is a literal list, not "any dotfile" — a `.env` a
+        // person put there on purpose is real work already in the folder.
+        assert!(!is_empty_listing(&[".env".to_string()]));
+    }
+
+    #[test]
+    fn a_real_folder_with_only_beads_reads_as_empty() {
+        let root = std::env::temp_dir().join(format!(
+            "smetana-survey-empty-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after the Unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join(".beads")).expect("create the fake tracker folder");
+
+        assert!(is_empty(&root), "a folder holding only .beads is empty");
+
+        std::fs::write(root.join("README.md"), "hello\n").expect("add a real file");
+        assert!(!is_empty(&root), "a folder holding a real file is not empty");
+
+        std::fs::remove_dir_all(&root).expect("clean up");
+        assert!(!is_empty(&root), "a folder that does not exist is not empty");
     }
 
     #[test]

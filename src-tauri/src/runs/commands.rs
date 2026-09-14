@@ -7,17 +7,38 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::oneshot;
 
+use serde::Serialize;
+
 use super::browser::{self, BrowserTools};
 use super::config::{self, ConfigState, LiveCheckMode};
 use super::model::{Run, RunError, RunSettings};
 use super::service::{Request, RunHandle};
+use super::survey;
 use super::usage::{self, AgentUsage};
+
+/// `project_config`'s reply: the file's own state, flattened beside a second
+/// fact about the folder that has nothing to do with the file — whether
+/// anything is in it at all.
+///
+/// `empty` rides on this command rather than a command of its own on purpose.
+/// `loadConfig` in `stores/runs.js` already re-reads on every signal that can
+/// change the folder — a project's own run session stopping, the window
+/// regaining focus, switching project — so a second command would only be a
+/// second round trip answering the same question at the same moments, and the
+/// two could disagree about which folder they last looked at.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProjectConfigReply {
+    #[serde(flatten)]
+    pub state: ConfigState,
+    pub empty: bool,
+}
 
 /// Every outcome is a state, so this cannot fail: a project with no config is
 /// the ordinary case, and an unreadable one is `Broken` with what the OS said.
 #[tauri::command]
-pub fn project_config(project: String) -> ConfigState {
-    config::load(Path::new(&project))
+pub fn project_config(project: String) -> ProjectConfigReply {
+    let root = Path::new(&project);
+    ProjectConfigReply { state: config::load(root), empty: survey::is_empty(root) }
 }
 
 /// The four keys of `[defaults]`, written back — the one part of a run
@@ -330,6 +351,34 @@ mod tests {
     fn config(root: &Path, body: &str) {
         fs::create_dir_all(root.join(".smetana")).expect("create .smetana");
         fs::write(root.join(".smetana/project.toml"), body).expect("write the config");
+    }
+
+    /// `#[serde(flatten)]` over a tagged enum is exactly the thing that changes
+    /// silently — nothing else here would notice `state` sinking into a nested
+    /// object, so this pins the wire shape the front end reads: `state` and
+    /// `empty` both sit at the top level of one JSON object.
+    #[test]
+    fn the_reply_flattens_the_state_beside_empty() {
+        let root = scratch("project-config-reply-shape");
+
+        let missing = serde_json::to_value(project_config(root.to_string_lossy().into_owned()))
+            .expect("serialise the reply");
+        assert_eq!(missing["state"], "missing");
+        assert_eq!(missing["empty"], true);
+        assert!(missing.get("config").is_none(), "{missing:?}");
+
+        config(&root, "[project]\nrepos = [\".\"]\n");
+        // `.smetana` is itself a housekeeping name, so a config living inside it
+        // does not by itself make the folder non-empty — a real file at the
+        // root is what `empty` is watching for.
+        fs::write(root.join("README.md"), "hello\n").expect("add a real file");
+        let ok = serde_json::to_value(project_config(root.to_string_lossy().into_owned()))
+            .expect("serialise the reply");
+        assert_eq!(ok["state"], "ok");
+        assert!(ok.get("config").is_some(), "{ok:?}");
+        assert_eq!(ok["empty"], false);
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
