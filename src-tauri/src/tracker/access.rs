@@ -90,8 +90,8 @@ use super::model::{Health, HealthState, TrackerError};
 /// being refused: on macOS a `stat` of a folder inside `~/Desktop` answers
 /// perfectly well for an app with no Desktop grant, and it is opening the
 /// directory that comes back `EPERM`. That asymmetry is why the reported build
-/// got as far as `error` at all — `project::has_tracker` is an `is_dir`, it
-/// said yes, and only bd found out the truth.
+/// got as far as `error` at all — `project::has_tracker` only reads file
+/// metadata, it said yes, and only bd found out the truth.
 ///
 /// The first entry is read as well as the handle opened. It costs one syscall
 /// and covers the shape where the refusal arrives on the read rather than on
