@@ -262,11 +262,11 @@ describe('the runs in the active project', () => {
     expect(byToken).toEqual({ 1: 'stopped', 2: 'working' })
   })
 
-  it("a new run takes over its own scope's stopped slot and nobody else's", async () => {
-    // The single-run store overwrote its one slot on every start; per scope is
-    // that same behaviour now that there are several slots. A stopped run of
-    // another scope keeps its place — its reason has not been read against
-    // this start.
+  it('a new run clears every stopped run, whatever its scope', async () => {
+    // A solo "Run this" is scoped to the task's own id, so no later run is
+    // ever "the same scope" as it — pruning by scope left every finished
+    // solo run's segment piling up in the footer until the project changed
+    // (smetana-9sat). Starting a new run now clears the whole stopped set.
     const { emit, ipc, stores } = await loadStores()
     ipc.on('project_config', OK)
     ipc.on('run_start', RUN)
@@ -280,7 +280,7 @@ describe('the runs in the active project', () => {
     ipc.on('run_start', NEXT_QUEUE_RUN)
     await stores.runs.startRun('/p', NEXT_QUEUE_RUN.settings)
 
-    expect(stores.runs.runsState.runs.map((r) => r.token)).toEqual([TASK_RUN.token, 3])
+    expect(stores.runs.runsState.runs.map((r) => r.token)).toEqual([3])
   })
 
   it('an event lands on the run it names and only that one', async () => {

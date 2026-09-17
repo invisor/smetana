@@ -15,7 +15,6 @@
 import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { sameScope } from '../components/run/runScopes.js'
 /* The bell's run cards are a function of the list below and of nothing else, so
    they are rebuilt wherever it moves — which is here, in the three places that
    assign it. The import is circular (notifications.js reads `runsState`) and
@@ -54,8 +53,8 @@ export const runsState = reactive({
      reason `config` is: the panel reads `state.kind` and `stopping`, and
      unpacking those into flags is where a state nobody has heard of starts
      reading as one somebody has. A stopped run stays in the list until the
-     project changes or a run of the same scope replaces it, because the
-     reason it stopped is what somebody came back to read. */
+     project changes or any new run starts, because the reason it stopped is
+     what somebody came back to read. */
   runs: [],
   /* What this machine can drive a browser with, for this project — four facts,
      kept whole like the two above. Null means nobody has asked yet, and it is a
@@ -258,14 +257,14 @@ export async function startRun(project, runSettings) {
      configuration, bound for Rust, and the two are not the same thing at all. */
   const run = await invoke('run_start', { project, settings: runSettings })
   if (runsState.project === project) {
-    /* The new run takes over its scope's slot: a stopped run of the same
-       scope stays on screen only until its successor exists, exactly what the
-       single-run store did by overwriting its one slot. Stopped runs of other
-       scopes are left alone — their reasons have not been read against this
-       start. */
-    runsState.runs = runsState.runs.filter(
-      (r) => !(r.state.kind === 'stopped' && sameScope(r.settings.scope, run.settings.scope))
-    )
+    /* Every stopped run is cleared on any new start, whatever its scope: the
+       footer is about what the project is doing now, and a stopped run's
+       report already has a card in the bell (`syncRunCards`'s own `upsert`),
+       so keeping its segment here is a convenience until the next action
+       rather than an archive. A task-scoped solo run never has a successor of
+       its own scope — every card has its own task id — so pruning by scope
+       left every finished "Run this" piling up until the project changed. */
+    runsState.runs = runsState.runs.filter((r) => r.state.kind !== 'stopped')
     upsert(run)
   }
   return run

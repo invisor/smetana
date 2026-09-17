@@ -817,10 +817,17 @@ as `git.js` and `terminals.js` are, and the `run:state` listener carries that gu
 — an event is not a response to anything, so a batch ending just as somebody moves project would
 otherwise post its run under the new project's name. `RunBar` draws one segment per run in the status
 footer, each stop button naming its own token, and keeps a stopped run there until the project changes
-or a run of the same scope replaces it: the reason it stopped is what somebody came back to read, an
-unknown reason is an ordinary outcome rather than a crash, and the endings differ by glyph as well as
-by colour. The scope rule itself is `components/run/runScopes.js`, one of the `branchChoice.js`
-family and shared with the worker's `admit` by vocabulary rather than by code.
+or any new run starts: the reason it stopped is what somebody came back to read, an unknown reason is
+an ordinary outcome rather than a crash, and the endings differ by glyph as well as by colour. Pruning
+by scope was tried first and was a defect rather than a feature — a solo run's scope is the task's own
+id, so no later run is ever "the same scope" and a footer left running for an evening of one-off "Run
+this" presses filled with a stopped segment per task, none of them ever replaced, until they no longer
+fit the row and their labels painted over each other (smetana-9sat). `startRun` now clears every
+stopped run on any start, whatever its scope, which is safe because a stopped run's report already has
+a card of its own in the bell (`notifications.js`'s `syncRunCards`) — the segment here is a convenience
+until the next action, not the archive. `components/run/runScopes.js`'s `sameScope` is unchanged and
+still answers a different question, read by `scopeBusyReason` to grey a play button whose scope is
+already going, shared with the worker's `admit` by vocabulary rather than by code.
 
 That third freshness channel is `components/run/configFreshness.js`, another of that family, and the
 only one that fires while somebody sits and watches a setup agent write `.smetana/project.toml` —
