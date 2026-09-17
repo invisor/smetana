@@ -151,9 +151,11 @@ serialises writes anyway. Every id the cascade will touch is added to `writingId
 Set())` that replaced the single `writingId` ref precisely for this, since a cascade greys several
 cards at once rather than one — before the first write goes out, so a descendant three levels down
 reads as busy from the first frame rather than only once its own turn comes; each id leaves the set the
-moment its own write lands, success or failure alike. The loop stops on the first refusal, the same way
-`confirmPromote`'s does, and a project switch mid-cascade stops it too — what the loop never reached is
-dropped out of `writingIds` in a `finally` rather than left grey for good.
+moment its own write lands, success or failure alike. The loop stops on the first refusal — its own
+rule, and not `confirmPromote`'s: that loop catches a failed write, counts it and carries on, stopping
+only when the project changes underneath it. A project switch mid-cascade stops this loop too, which is
+the one thing the two do share, and what the loop never reached is dropped out of `writingIds` in a
+`finally` rather than left grey for good.
 
 **Only Unblock leaves a `promoted:` trail, and Block leaves none at all.** `promotedNote('unblock')`
 rides beside every `open` write the unlock cascade makes, for the same reason `run`, `column` and

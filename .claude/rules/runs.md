@@ -864,11 +864,12 @@ run's lead, finding the very same task back in `bd ready`, had no machine-readab
 person did this" from "the status slipped", read it as the second and wrote the task straight back
 to `deferred`, undoing a person's decision. `components/run/promotedNote.js`, beside
 `readyPromote.js` in the same pure-module family this file already names throughout, is the one rule
-for the note text and the three call sites in `DesktopApp.vue` that write it: starting a run over a
+for the note text and the four call sites in `DesktopApp.vue` that write it: starting a run over a
 card (`startTheRun`, gated the same as `readyPromoteNote` above — `promotesToReady`), promoting a
 whole Deferred column (`confirmPromote`, behind `PromoteColumnModal.vue`, described in
-`.claude/rules/kanban-board.md`), and a direct status change from the card menu or the inspector
-header (`setTaskStatus`). All three send the status and the note in one `bd update` —
+`.claude/rules/kanban-board.md`), a direct status change from the card menu or the inspector
+header (`setTaskStatus`), and Unblock releasing a manual lock (`toggleLock`, smetana-44mw, described
+in `.claude/rules/kanban-board.md`). All four send the status and the note in one `bd update` —
 `append_notes`, the same flag `queue::release`'s own `parked:` note above rides on — so a promote and
 its trace can never land as two writes with a crash between them. The marker is a third of the same
 kind as `parked:` and `resolved:`: two words a program can grep for, then Russian prose for whoever

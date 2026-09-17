@@ -4383,8 +4383,9 @@ const setTaskStatus = async (id, status) => {
   writingIds.add(id)
   try {
     /* smetana-fpw7: this is the card menu's and the Task & details header's
-       write, `moveToReadyAnyway` below included — the third of the three
-       places a person can promote a task by hand. A `promoted:` note rides
+       write, `moveToReadyAnyway` below included — the third of four
+       places a person can promote a task by hand, `toggleLock`'s Unblock
+       being the fourth. A `promoted:` note rides
        beside the status in the same `bd update` only where the write is
        genuinely a promote: the target is ready and the issue's own status
        (read fresh, not the menu's possibly stale copy) still needs the move.
