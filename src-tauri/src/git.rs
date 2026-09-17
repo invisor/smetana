@@ -113,7 +113,12 @@ pub fn parse_commondir(contents: &str, git_dir: &Path) -> Option<PathBuf> {
 /// A main checkout has no `commondir` file at all — it *is* the common
 /// directory — and so is the answer whenever the file is missing, empty or
 /// unreadable, the same "nothing here is an error" this whole file keeps to.
-fn common_dir(git_dir: &Path) -> PathBuf {
+///
+/// `pub(crate)` rather than private: `project::nearest_tracked_ancestor` reuses
+/// this, together with [`git_dir`], for the one jump a linked worktree's `.git`
+/// file takes to the main checkout that owns the repository — see that
+/// function's own comment for why the jump stops here rather than recursing.
+pub(crate) fn common_dir(git_dir: &Path) -> PathBuf {
     std::fs::read_to_string(git_dir.join("commondir"))
         .ok()
         .and_then(|text| parse_commondir(&text, git_dir))

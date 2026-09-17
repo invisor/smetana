@@ -61,16 +61,35 @@ preview, deletes nothing and exits zero.
 
 Which directory that is comes from `src-tauri/src/project.rs` — the vocabulary the tracker and the
 settings share: `has_tracker`, `nearest_tracked_ancestor` and `default_project` for the very first
-run. `has_tracker` is not "does `.beads` exist": a `.beads` counts only if it also holds one of
-`metadata.json`, `config.yaml`, `embeddeddolt/` or `redirect` (the last is a worktree's own `.beads`,
-pointing `bd where` at a workspace kept elsewhere) — what `bd where` itself accepts — because every
-machine that has run bd carries a bare `.beads/eventsData` at `~/.beads`, bd's own global folder, and
-without the marker check every folder under the home directory would resolve to the home directory
+run. `has_tracker` answers whether `bd list` can actually read something here, not whether `bd where`
+accepts the folder as a workspace — the two questions differ, and only the first one is what this app
+depends on. A `.beads` counts only if it also holds one of `embeddeddolt/`, `dolt/` (bd's own
+`.gitignore` names the database directory both ways across releases) or `redirect` (a worktree's own
+`.beads`, pointing `bd where` at a database kept elsewhere). `metadata.json` and `config.yaml` are
+deliberately not markers, even though `bd where` accepts either alone: bd commits both to git by
+default while the database is never committed, so a plain clone of a repository somebody once ran
+`bd init` in carries both files with no database behind them, and `bd list` there fails with "no beads
+database found" exactly as it would in a folder with no `.beads` at all. Counting either file as a
+tracker sent such a clone into `error` ("bd is failing") instead of `not-a-beads-repo` ("Initialize
+bd"), and "Repair tracker" over it ran a migration with nothing to migrate and failed the same way
+(smetana-uwcu). The marker check also keeps every machine that has run bd from resolving to
+`~/.beads`, bd's own global folder, which carries only a bare `eventsData/` and nothing chosen
 (smetana-0hrt). `nearest_tracked_ancestor` climbs to that marked ancestor, so a folder inside a
 tracked repository resolves to its root and the list, the settings key and the worker all name the
-same directory — but the climb stops at the first ancestor carrying a `.git` (directory or worktree
-file), checking that folder itself and no further, which is the same boundary bd draws around a
-nested repository. Picking a folder is the `tauri-plugin-dialog` open dialog,
+same directory — but the climb stops at the first ancestor carrying a `.git` **directory**, checking
+that folder itself and no further, which is the same boundary bd draws around a nested repository. A
+`.git` **file** is not that boundary: it is a linked worktree, the same repository as whatever its
+`gitdir:` line names, and bd answers straight through it with that checkout's tracker rather than
+stopping at the file — so the climb takes one jump there too, `gitdir` to the worktree's own git
+directory and `commondir` from that to the main checkout's `.git`, both read by the same parsers
+`git.rs` already carries (`main_checkout` in `project.rs`, reusing `git::git_dir` and
+`git::common_dir` rather than a second copy of either), and checks that checkout for a tracker. The
+jump is taken exactly once and never recurses: the main checkout's own `.git` is always a directory,
+so a second pass over it would find the same boundary immediately, and a broken jump — a deleted
+checkout, a `gitdir:` line this cannot parse — answers `None` rather than a second attempt, the same
+honest "no tracker" bd itself gives there (smetana-1wgi; measured with the sidecar against a worktree
+nested under its repository and a worktree beside it, `git worktree add ../x`, both resolving to the
+main checkout the way `bd where` does). Picking a folder is the `tauri-plugin-dialog` open dialog,
 allowed by `dialog:allow-open` in `capabilities/default.json`; the picked path is normalized once,
 by the `project_root` command, before it reaches the list.
 
