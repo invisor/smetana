@@ -362,6 +362,49 @@ for "the session cannot go on without you" — both draw from `--status-needs-yo
 reserved triangle silhouette — but `AskUserQuestion.vue` now spends that vocabulary on a single chip
 rather than on the whole frame, and imports neither `statusColors` nor `STATUS_GLYPH` any more.
 
+## The answer to `AskUserQuestion` is the one `permission-answered` that draws a row
+
+`journal.js`'s own fold used to give no row at all to either half of a permission — `permission`
+is drawn once, at the foot of the panel, from the session's open question, and its answer produced
+nothing, on the reading that the card's own disappearance was the whole of the story. That reading
+held for Allow/Deny on an ordinary tool and broke for exactly one: `AskUserQuestion`'s reply is a
+person's own words, chosen or typed, and the agent goes on as though they had been said to — so a
+press of Send answer that left no trace on the transcript was the defect smetana-58j7 exists to fix,
+not a corner of the rule above nobody had reached yet.
+
+**The fix is narrow, not a reversal of the rule.** `permission-answered` still draws nothing for
+`Write`, `Edit`, `Bash`, or any tool that is not `AskUserQuestion` — a driven session asks permission
+on nearly every turn, and a row for each Allow would turn the transcript into a permission log nobody
+reads, exactly the wall of raw protocol the fold's own header warns against elsewhere. What changed is
+one branch: `AskUserQuestion`'s answer becomes an ordinary `kind: 'user'` row, drawn by `UserMessage.vue`
+exactly as a typed message is — no new component, because it is not a new kind of turn, only a new way
+one got typed. A decline (`decision: 'deny'`, no `answers`) draws the fixed sentence `Declined to
+answer.` rather than nothing, for the same reason: the question still vanishes from the foot of the
+panel, and without a row the agent's next words about the refusal point at nothing on screen. Several
+questions in one call become one row, a markdown list ordered by `input.questions` — the order the
+agent actually asked them in, never `answers`' own key order, which travels the wire as a `BTreeMap`
+sorted by question text and can disagree with it.
+
+**Neither branch trusts `answers` blind — the wire holds no rule that only `AskUserQuestion` ever
+sends one.** `session_answer` takes `answers` straight from the front end and `Request::Answer` writes
+it into `PermissionAnswered` unchanged, with no check anywhere on that road that the id it is
+answering actually named `AskUserQuestion`; what keeps it that way today is the road a press down
+`AskUserQuestion.vue` takes — through `ConversationView.vue`, `conversation.js`, `commands.rs` and
+`service.rs` — never sending one for any other tool, a convention rather than something the type
+enforces. So both branches check the tool itself, through the looked-up `permission`, whenever one is
+still in this journal to check: `isAskUserQuestion(permission.tool)` gates the decline the same way it
+gates the answer, and a `Bash` permission answered `allow` with an `answers` map hung off it draws no
+row either, exactly as an ordinary one does.
+
+**`journal::trim` can carry the answer's own `permission` off the front of the journal before its
+answer, and the two branches do not fail the same way when it does.** A decline still needs a
+`permission` to check — `decision: 'deny'` with no `answers` is otherwise indistinguishable from an
+ordinary Deny — so a trimmed one leaves it silent, the same silence as before this fix. A non-empty
+`answers` does not: with no `permission` left to check the tool against, it draws its row on trust
+rather than on nothing, ordered by the map's own keys rather than by `input.questions` since there is
+nothing left to order it by — the one case a trimmed journal must not lose is the words themselves,
+so the fallback is deliberate rather than a gap the tool check forgot to close.
+
 ## One renderer, shared with the task inspector — and why it was not forked
 
 `Markdown.vue` and `sm-prose.css` are not this panel's alone: `TaskInspector.vue` draws every one of

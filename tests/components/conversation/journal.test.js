@@ -256,6 +256,191 @@ describe('the journal as rows', () => {
     ])
   })
 
+  /* `AskUserQuestion`'s reply is the one `permission-answered` that becomes a
+     row (smetana-58j7): the person's own words, drawn as an ordinary message
+     rather than left to vanish with the card that asked for them. One
+     question draws the answer as-is, with no question text above it — it
+     reads as a sentence a person actually typed or chose. */
+  it('draws a user row for a single AskUserQuestion answer, with no question repeated', () => {
+    const rows = journalRows([
+      event(1, 'permission', {
+        id: 'q1',
+        tool: 'AskUserQuestion',
+        // `agents::claude::tool_detail` answers the first question's own
+        // text for this tool, never `'AskUserQuestion'` itself.
+        detail: 'Which branch should worktrees use?',
+        options: ['allow', 'deny'],
+        input: {
+          questions: [
+            {
+              question: 'Which branch should worktrees use?',
+              header: 'Branch naming',
+              multiSelect: false,
+              options: [{ label: 'Keep the slash', description: '' }]
+            }
+          ]
+        }
+      }),
+      event(2, 'permission-answered', { id: 'q1', decision: 'allow', answers: { 'Which branch should worktrees use?': 'Keep the slash' } })
+    ])
+
+    expect(rows).toEqual([{ key: 2, kind: 'user', text: 'Keep the slash', attachments: [] }])
+  })
+
+  /* The mirror of the guard pinned below for the decline branch, on the
+     answer branch this time: `session_answer` takes `answers` straight from
+     the front end with no tool check on the Rust side, so nothing on the
+     wire stops some other tool's `permission-answered` from carrying one.
+     A `Bash` permission answered `allow` with an `answers` map hung off it
+     must draw no row, the same as an ordinary `Bash` allow — every other
+     test reaching this branch either uses `AskUserQuestion` or has no
+     `permission` at all to check the tool against, so none of them would
+     notice `isAskUserQuestion(permission.tool)` going missing from this
+     condition. */
+  it('draws no row for a Bash permission answered allow with an answers map hung off it', () => {
+    const rows = journalRows([
+      event(1, 'permission', { id: 'q1', tool: 'Bash', detail: 'ls', options: ['allow', 'deny'] }),
+      event(2, 'permission-answered', { id: 'q1', decision: 'allow', answers: { 'Not a real question': 'Not a real answer' } })
+    ])
+
+    expect(rows).toEqual([])
+  })
+
+  /* Several questions in one call become a markdown list, one item per
+     question, in the order the agent actually asked them
+     (`input.questions`) — never in `answers`' own key order, which travels
+     as a `BTreeMap` and so arrives sorted by question text. The two orders
+     disagree here on purpose: alphabetically "Should" sorts before "Which",
+     the reverse of how the call actually asked them. */
+  it('orders several answers by input.questions, not by the answers map’s own key order', () => {
+    const rows = journalRows([
+      event(1, 'permission', {
+        id: 'q1',
+        tool: 'AskUserQuestion',
+        detail: 'Which environment?',
+        options: ['allow', 'deny'],
+        input: {
+          questions: [
+            { question: 'Which environment?', header: '', multiSelect: false, options: [] },
+            { question: 'Should we deploy?', header: '', multiSelect: false, options: [] }
+          ]
+        }
+      }),
+      event(2, 'permission-answered', {
+        id: 'q1',
+        decision: 'allow',
+        answers: { 'Should we deploy?': 'Yes', 'Which environment?': 'Staging' }
+      })
+    ])
+
+    expect(rows).toEqual([
+      {
+        key: 2,
+        kind: 'user',
+        text: '- **Which environment?**: Staging\n- **Should we deploy?**: Yes',
+        attachments: []
+      }
+    ])
+  })
+
+  /* An `answers` key `input.questions` never named — asked about by some
+     other means, or a call the agent's own model answered outside the
+     questions it listed — is not dropped: it is appended after every matched
+     question, in the design's own words, rather than lost for naming
+     something `parseQuestions` never turned up. This is the one case that
+     actually exercises the second loop in `answerText` with a `permission`
+     present; the trimmed-permission test above never runs the first loop at
+     all. The stray key is written *first* in the `answers` literal, matching
+     a `BTreeMap` sorted by question text ("A stray…" before "Which…", the
+     same discipline the sibling ordering test above applies deliberately) —
+     an implementation that walked `Object.keys(answers)` alone, ignoring
+     `input.questions` entirely, would then produce this exact reversed
+     order, so writing the matched key first would have let that
+     implementation pass by accident. */
+  it('appends an answers key that input.questions never named to the end of the list', () => {
+    const rows = journalRows([
+      event(1, 'permission', {
+        id: 'q1',
+        tool: 'AskUserQuestion',
+        detail: 'Which environment?',
+        options: ['allow', 'deny'],
+        input: { questions: [{ question: 'Which environment?', header: '', multiSelect: false, options: [] }] }
+      }),
+      event(2, 'permission-answered', {
+        id: 'q1',
+        decision: 'allow',
+        answers: { 'A stray question nobody parsed': 'Answered anyway', 'Which environment?': 'Staging' }
+      })
+    ])
+
+    expect(rows).toEqual([
+      {
+        key: 2,
+        kind: 'user',
+        text: '- **Which environment?**: Staging\n- **A stray question nobody parsed**: Answered anyway',
+        attachments: []
+      }
+    ])
+  })
+
+  /* Decline to answer is `decision: 'deny'` with no `answers`, exactly like
+     refusing any other tool — the fixed sentence is what tells the two
+     apart, and it only appears once the looked-up `permission` confirms the
+     declined tool actually was `AskUserQuestion`. */
+  it('draws the fixed decline sentence for a declined AskUserQuestion', () => {
+    const rows = journalRows([
+      event(1, 'permission', {
+        id: 'q1',
+        tool: 'AskUserQuestion',
+        detail: 'Which branch?',
+        options: ['allow', 'deny'],
+        input: { questions: [{ question: 'Which branch?', header: '', multiSelect: false, options: [] }] }
+      }),
+      event(2, 'permission-answered', { id: 'q1', decision: 'deny', answers: null })
+    ])
+
+    expect(rows).toEqual([{ key: 2, kind: 'user', text: 'Declined to answer.', attachments: [] }])
+  })
+
+  /* The guard the decline branch actually needs pinned: a `Bash` permission
+     declined the ordinary way must stay silent even though its own
+     `permission` is right there to look up — nothing about `decision: 'deny'`
+     with no `answers` tells this apart from a declined `AskUserQuestion` on
+     its own, and `isAskUserQuestion(permission.tool)` is the one thing that
+     does. Every other case in this file either has no `permission` to check
+     (the trimmed cases) or fails the `decision === 'deny'` half first (the
+     preserved Bash test above, which answers `allow`), so none of them would
+     notice this guard going missing. */
+  it('draws no row for a declined Bash permission even though its own permission survived', () => {
+    const rows = journalRows([
+      event(1, 'permission', { id: 'q1', tool: 'Bash', detail: 'rm -rf /', options: ['allow', 'deny'] }),
+      event(2, 'permission-answered', { id: 'q1', decision: 'deny', answers: null })
+    ])
+
+    expect(rows).toEqual([])
+  })
+
+  /* `journal::trim` can evict an answered `permission` ahead of its own
+     `permission-answered`. With nothing left to check the tool against, a
+     non-empty `answers` draws its row on trust — the one case a trimmed
+     journal must not lose is the words themselves — ordered by the map's own
+     key order since there is no `input.questions` left to order it by. */
+  it('draws a row from answers alone when its own permission has been trimmed out of the journal', () => {
+    const rows = journalRows([
+      event(5, 'permission-answered', { id: 'q1', decision: 'allow', answers: { 'Which branch?': 'Keep the slash' } })
+    ])
+
+    expect(rows).toEqual([{ key: 5, kind: 'user', text: 'Keep the slash', attachments: [] }])
+  })
+
+  /* The mirror case: no `answers` and no `permission` either. An ordinary
+     Deny looks exactly the same on the wire, and there is nothing here to
+     tell the two apart — inventing a decline row would be guessing which
+     tool was declined rather than reading it off the journal. */
+  it('draws no row for a trimmed permission answered with no answers at all', () => {
+    expect(journalRows([event(5, 'permission-answered', { id: 'q1', decision: 'deny', answers: null })])).toEqual([])
+  })
+
   /* **No fallback branch, and that is the rule rather than an omission**: a kind
      this front end has never heard of produces no row, exactly as a line a
      driver does not recognise produces no event on the Rust side. A wall of raw
