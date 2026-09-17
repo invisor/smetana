@@ -33,7 +33,7 @@ const props = defineProps({
   maximized: { type: Boolean, default: false }
 })
 
-defineEmits(['notifications', 'settings', 'minimize', 'toggle-maximize', 'close'])
+defineEmits(['reports', 'notifications', 'settings', 'minimize', 'toggle-maximize', 'close'])
 
 /* Still a plain object, and deliberately: the left inset varies, but it varies
    through a token the document root redefines, not through a prop. A computed
@@ -114,6 +114,10 @@ const badgeStyle = {
          describing know the most of anything. -->
     <slot name="search" />
 
+    <!-- Left of the bell: the Reports tab's own door. A press opens the tab if
+         it is closed and activates it either way — `DesktopApp.vue`'s
+         `openReportsTab`, never a second one laid down beside the first. -->
+    <IconButton icon="scroll-text" size="sm" label="Run reports" @click="$emit('reports')" />
     <span :style="{ position: 'relative', display: 'inline-flex' }">
       <IconButton
         icon="bell"
