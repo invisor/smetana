@@ -525,10 +525,17 @@ async fn open(
     }
 
     if !project::has_tracker(&dir) {
-        health.degrade_project(
-            HealthState::NotABeadsRepo,
-            format!("no bd tracker in {}", dir.display()),
-        );
+        // A `.beads` that exists but carries none of `TRACKER_MARKERS` is bd's
+        // config left over from a clone, not an uninitialized folder — say so,
+        // since "Initialize bd" is the same fix but the two situations read
+        // differently to somebody looking at the empty board (smetana-uwcu).
+        let beads = dir.join(".beads");
+        let message = if beads.is_dir() {
+            format!("no bd database in {} (bd's config is there, the database is not)", beads.display())
+        } else {
+            format!("no bd tracker in {}", dir.display())
+        };
+        health.degrade_project(HealthState::NotABeadsRepo, message);
         // The folder stays open anyway: bd init is done in it.
         return Some(Project { dir, bd, _watcher: None, tracked: false });
     }
