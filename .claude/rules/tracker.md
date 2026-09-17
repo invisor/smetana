@@ -76,9 +76,20 @@ bd"), and "Repair tracker" over it ran a migration with nothing to migrate and f
 `~/.beads`, bd's own global folder, which carries only a bare `eventsData/` and nothing chosen
 (smetana-0hrt). `nearest_tracked_ancestor` climbs to that marked ancestor, so a folder inside a
 tracked repository resolves to its root and the list, the settings key and the worker all name the
-same directory — but the climb stops at the first ancestor carrying a `.git` (directory or worktree
-file), checking that folder itself and no further, which is the same boundary bd draws around a
-nested repository. Picking a folder is the `tauri-plugin-dialog` open dialog,
+same directory — but the climb stops at the first ancestor carrying a `.git` **directory**, checking
+that folder itself and no further, which is the same boundary bd draws around a nested repository. A
+`.git` **file** is not that boundary: it is a linked worktree, the same repository as whatever its
+`gitdir:` line names, and bd answers straight through it with that checkout's tracker rather than
+stopping at the file — so the climb takes one jump there too, `gitdir` to the worktree's own git
+directory and `commondir` from that to the main checkout's `.git`, both read by the same parsers
+`git.rs` already carries (`main_checkout` in `project.rs`, reusing `git::git_dir` and
+`git::common_dir` rather than a second copy of either), and checks that checkout for a tracker. The
+jump is taken exactly once and never recurses: the main checkout's own `.git` is always a directory,
+so a second pass over it would find the same boundary immediately, and a broken jump — a deleted
+checkout, a `gitdir:` line this cannot parse — answers `None` rather than a second attempt, the same
+honest "no tracker" bd itself gives there (smetana-1wgi; measured with the sidecar against a worktree
+nested under its repository and a worktree beside it, `git worktree add ../x`, both resolving to the
+main checkout the way `bd where` does). Picking a folder is the `tauri-plugin-dialog` open dialog,
 allowed by `dialog:allow-open` in `capabilities/default.json`; the picked path is normalized once,
 by the `project_root` command, before it reaches the list.
 

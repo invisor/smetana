@@ -348,9 +348,13 @@ pub async fn tracker_probe(paths: Vec<String>) -> Vec<ProjectProbe> {
 /// repository and its root becomes the project: otherwise the board would say
 /// "there is no tracker here" about a repository that has one, and the button
 /// next to it would create a second `.beads` inside the first. That climb
-/// stops at the nearest `.git` on the way up (see `nearest_tracked_ancestor`):
-/// a subfolder of a *nested* repository does not climb past its own root into
-/// a tracker that belongs to the repository around it.
+/// stops at the nearest `.git` **directory** on the way up (see
+/// `nearest_tracked_ancestor` for the detail): a subfolder of a *nested*
+/// repository does not climb past its own root into a tracker that belongs to
+/// the repository around it. A `.git` **file** is not that stop — it is a
+/// linked worktree, and the climb takes one jump through its
+/// `gitdir:`/`commondir` into the main checkout and carries on from there,
+/// the same repository bd itself answers for.
 ///
 /// A question for the filesystem, not for bd — the worker is not called here.
 /// If there is nothing tracked above, we return the path as is: that is a
