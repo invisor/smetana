@@ -853,6 +853,75 @@ function mockSessions(project) {
   }))
 }
 
+/* The Reports tab's fixture: run documents as `run_reports` reports them,
+   field for field with `reports::ReportEntry`. Five rows, each a case the tab
+   has to draw: an ordinary task report, a batch report with something parked,
+   a night's autopilot report with several batches, one whose board could not
+   be read (every count a dash, never a zero), and a scope long enough to
+   exercise the row's own truncation.
+
+   Built per call and stamped as offsets from now, for the reason
+   `mockSessions` above gives: a fixture with dates baked in reads wrong a year
+   after somebody types it. */
+function mockReports(project) {
+  const stampOf = (ms) => new Date(Date.now() - ms).toISOString().slice(0, 19)
+  const fileOf = (stamp) => `${stamp.slice(0, 10)}-${stamp.slice(11).replace(/:/g, '')}.html`
+  const row = (offsetMs, over) => {
+    const stamp = stampOf(offsetMs)
+    const file = fileOf(stamp)
+    return {
+      path: `${project}/.smetana/reports/${file}`,
+      file,
+      stamp,
+      title: 'Task report',
+      scope: 'smetana-9je',
+      finished: `${stamp.slice(0, 10)} ${stamp.slice(11, 16)}`,
+      closed: 1,
+      parked: 0,
+      batches: 1,
+      total: '12m',
+      ...over
+    }
+  }
+  return [
+    row(2 * HOUR_MS, {}),
+    row(DAY_MS, {
+      title: 'Batch report',
+      scope: 'the ready column',
+      closed: 3,
+      parked: 1,
+      total: '48m'
+    }),
+    row(3 * DAY_MS, {
+      title: 'Run report',
+      scope: 'the queue',
+      closed: 11,
+      parked: 2,
+      batches: 5,
+      total: '2h 14m'
+    }),
+    /* The board could not be read: every count this parser draws for a task
+       is a dash, never a zero — `reports.rs`'s own rule for `None`. The
+       batches count survives, since it does not depend on the board at all. */
+    row(6 * DAY_MS, {
+      title: 'Task report',
+      scope: 'smetana-1wgi',
+      closed: null,
+      parked: null,
+      batches: 1,
+      total: '4m'
+    }),
+    row(21 * DAY_MS, {
+      title: 'Batch report',
+      scope: 'backend, admin and the design-system port all at once',
+      closed: 6,
+      parked: 0,
+      batches: 2,
+      total: '1h 3m'
+    })
+  ]
+}
+
 /* Whether the fixtures are what is answering. `window.__TAURI_INTERNALS__` is
    **not** the way to ask that question from anywhere else in the app: `mockIPC`
    sets that very property itself (`mocks.js` calls `mockInternals`), so it is
@@ -1750,6 +1819,14 @@ export function installMockBackend() {
        two verifications. */
     if (command === 'sessions_list') {
       return mockSessions(payload?.project ?? MOCK_PROJECTS[0])
+    }
+    /* The Reports tab: run documents `.smetana/reports/` holds, which in the
+       app are read and parsed off disk by `runs::reports::list`. A browser
+       has no disk to walk, and the tab is one of the six the centre column
+       can show — without an answer here it would draw nothing but its own
+       empty state in `npm run dev`. */
+    if (command === 'run_reports') {
+      return mockReports(payload?.project ?? MOCK_PROJECTS[0])
     }
     /* The driven session's two reads. Nothing here is `sessions_list` above,
        despite the neighbouring name: that one lists Claude Code's transcripts

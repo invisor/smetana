@@ -12,6 +12,7 @@ use serde::Serialize;
 use super::browser::{self, BrowserTools};
 use super::config::{self, ConfigState, LiveCheckMode};
 use super::model::{Run, RunError, RunSettings};
+use super::reports::{self, ReportEntry};
 use super::service::{Request, RunHandle};
 use super::survey;
 use super::usage::{self, AgentUsage};
@@ -326,6 +327,29 @@ pub async fn run_release(handle: State<'_, RunHandle>) -> Result<(), RunError> {
 #[tauri::command]
 pub async fn run_state(handle: State<'_, RunHandle>, project: String) -> Result<Vec<Run>, RunError> {
     ask(&handle, |tx| Request::State(project, tx)).await
+}
+
+/// The Reports tab's list — every row `.smetana/reports/` holds for this
+/// project, read whole. No `Result`, matching `sessions::commands::sessions_list`
+/// and `reports::list`'s own reasoning: a missing folder and an unreadable
+/// file are both ordinary life for a project nobody has run yet, never
+/// something to fail a tab over.
+///
+/// On the blocking pool for the reason `sessions_list` gives: this opens every
+/// report a project has ever finished with, whole, and a project with 94 of
+/// them is not a read to make on the runtime worker every other command
+/// shares.
+#[tauri::command]
+pub async fn run_reports(project: String) -> Vec<ReportEntry> {
+    tokio::task::spawn_blocking(move || reports::list(Path::new(&project)))
+        .await
+        .unwrap_or_else(|err| {
+            log::error!(
+                "reports: the read of .smetana/reports gave way and is being reported as no \
+                 reports at all: {err}"
+            );
+            Vec::new()
+        })
 }
 
 #[cfg(test)]
