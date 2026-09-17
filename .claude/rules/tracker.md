@@ -61,11 +61,19 @@ preview, deletes nothing and exits zero.
 
 Which directory that is comes from `src-tauri/src/project.rs` — the vocabulary the tracker and the
 settings share: `has_tracker`, `nearest_tracked_ancestor` and `default_project` for the very first
-run. `has_tracker` is not "does `.beads` exist": a `.beads` counts only if it also holds one of
-`metadata.json`, `config.yaml`, `embeddeddolt/` or `redirect` (the last is a worktree's own `.beads`,
-pointing `bd where` at a workspace kept elsewhere) — what `bd where` itself accepts — because every
-machine that has run bd carries a bare `.beads/eventsData` at `~/.beads`, bd's own global folder, and
-without the marker check every folder under the home directory would resolve to the home directory
+run. `has_tracker` answers whether `bd list` can actually read something here, not whether `bd where`
+accepts the folder as a workspace — the two questions differ, and only the first one is what this app
+depends on. A `.beads` counts only if it also holds one of `embeddeddolt/`, `dolt/` (bd's own
+`.gitignore` names the database directory both ways across releases) or `redirect` (a worktree's own
+`.beads`, pointing `bd where` at a database kept elsewhere). `metadata.json` and `config.yaml` are
+deliberately not markers, even though `bd where` accepts either alone: bd commits both to git by
+default while the database is never committed, so a plain clone of a repository somebody once ran
+`bd init` in carries both files with no database behind them, and `bd list` there fails with "no beads
+database found" exactly as it would in a folder with no `.beads` at all. Counting either file as a
+tracker sent such a clone into `error` ("bd is failing") instead of `not-a-beads-repo` ("Initialize
+bd"), and "Repair tracker" over it ran a migration with nothing to migrate and failed the same way
+(smetana-uwcu). The marker check also keeps every machine that has run bd from resolving to
+`~/.beads`, bd's own global folder, which carries only a bare `eventsData/` and nothing chosen
 (smetana-0hrt). `nearest_tracked_ancestor` climbs to that marked ancestor, so a folder inside a
 tracked repository resolves to its root and the list, the settings key and the worker all name the
 same directory — but the climb stops at the first ancestor carrying a `.git` **directory**, checking
