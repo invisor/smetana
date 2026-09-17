@@ -156,7 +156,7 @@ const detailStyle = {
          own `gap` sits on either side of it, so a blank span would space the
          glyph and the buttons of a muted segment twice as far apart as a
          speaking one. -->
-    <span v-if="label" :style="{ whiteSpace: 'nowrap' }">{{ label }}</span>
+    <span v-if="label" :style="{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }">{{ label }}</span>
     <span v-if="detail && !reason.bare" :style="detailStyle">{{ detail }}</span>
     <!-- The label says what stopping actually does rather than "Stop the run":
          the wrapper `Tooltip` that used to say it is gone, since `IconButton`

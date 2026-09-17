@@ -5,9 +5,10 @@
    epics, divide the board between them.
 
    Pure and outside the components for the reason branchChoice.js is: a `.vue`
-   file is the one thing no test in this repository can reach. It is also read
-   by a store — runs.js prunes a replaced run's stopped bar with `sameScope` —
-   which is why nothing of Vue or the DOM may ever land here. */
+   file is the one thing no test in this repository can reach. `scopeBusyReason`
+   is read straight from `DesktopApp.vue`, over the card menu and the column
+   header, to grey a play button whose scope is already going — which is why
+   nothing of Vue or the DOM may ever land here. */
 
 /* `a` and `b` are scope objects of either provenance — the dialog's
    `{ kind, id, title }` or a run's `settings.scope` `{ kind, id }` — and only
