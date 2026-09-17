@@ -16,6 +16,9 @@
 export const PAGE_SIZES = [20, 50, 100]
 export const ORDERS = ['newest', 'oldest']
 
+/* The shipped values, mirroring Rust's `ReportsSettings::default()`. */
+export const REPORTS_DEFAULTS = { perPage: 20, order: 'newest' }
+
 /* What the two `Select`s at the top of the tab offer, labels included — the
    tab draws these rather than writing its own, so the vocabulary and the
    words about it cannot drift apart. */
