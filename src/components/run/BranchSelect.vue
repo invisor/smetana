@@ -31,6 +31,7 @@ const emit = defineEmits(['update:modelValue', 'update:create'])
 const naming = ref(false)
 const draft = ref('')
 const nameField = ref(null)
+const dropdown = ref(null)
 
 const options = computed(() => branchOptions(props.branches))
 
@@ -49,6 +50,23 @@ const startNaming = async (closePanel) => {
   draft.value = ''
   await nextTick()
   nameField.value?.focus()
+}
+
+/* A double-click is the one other way in, and it starts from the name
+   already there rather than a blank one — the opposite of "+ New branch",
+   which is always a fresh name. The first click of the pair has already
+   opened the panel; closing it here is what a single click promised and
+   returns the keyboard to the field on its own, same as any other close. The
+   text is then selected whole, Finder-rename style: typing replaces the name,
+   and a click inside the input is how somebody fixes one letter of it. */
+const startRenaming = async () => {
+  if (props.disabled) return
+  dropdown.value?.close()
+  naming.value = true
+  draft.value = props.modelValue
+  await nextTick()
+  nameField.value?.focus()
+  nameField.value?.select()
 }
 
 /* Enter and losing focus both commit, which is what the field looks like it
@@ -141,6 +159,7 @@ const newRowStyle = {
 
   <Dropdown
     v-else
+    ref="dropdown"
     :model-value="modelValue"
     :options="options"
     :disabled="disabled"
@@ -150,6 +169,7 @@ const newRowStyle = {
     placeholder="Pick a branch"
     :hint="hint"
     @update:model-value="pick"
+    @dblclick="startRenaming"
   >
     <template #header="{ close }">
       <button type="button" :style="newRowStyle" @click="startNaming(close)">
