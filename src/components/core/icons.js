@@ -78,6 +78,7 @@ import {
   Plus,
   RefreshCw,
   Scissors,
+  ScrollText,
   Search,
   SearchCheck,
   Settings,
@@ -298,6 +299,10 @@ export const iconNodes = {
   ellipsis: Ellipsis,
   'chevrons-right': ChevronsRight,
   bell: Bell,
+  /* The Reports tab's button, left of the bell in the scope bar, and the
+     tab's own empty state. A scroll rather than a page: this is a stack of
+     documents a run has already written, not a single file. */
+  'scroll-text': ScrollText,
   /* The storage source's glyph: the attachment store's own weight. */
   'hard-drive': HardDrive,
   settings: Settings,
