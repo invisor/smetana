@@ -20,6 +20,7 @@ pub mod queue;
 pub mod recovery;
 pub mod registry;
 pub mod report;
+pub mod reports;
 pub mod service;
 pub mod setup_facts;
 pub mod summary;
