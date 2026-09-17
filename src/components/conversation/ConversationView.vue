@@ -293,8 +293,12 @@ const status = computed(() => statusOf(state.value))
 const viewport = ref(null)
 
 /* **Stuck to the end while the person is already at the end, and loose the
-   moment they scroll up.** Re-sticking happens when they scroll back down, and
-   never on a new event: a panel that scrolled on every arrival is unreadable
+   moment they scroll up.** Re-sticking happens two ways: scrolling back down,
+   and the person's own send — `send()` and `answer()` below set this back to
+   true before their own call, because pressing Send or answering a question
+   is the person's own action, not an event arriving, and is exactly the case
+   the "never on a new event" rule below is not about. Never on a new event on
+   its own, though: a panel that scrolled on every arrival is unreadable
    during a long turn, which is precisely when somebody is reading it.
 
    Not reactive, because nothing draws it — it is remembered between a scroll
@@ -423,6 +427,20 @@ const dropCaption = computed(() =>
 async function send() {
   const record = held.value
   if (!record) return
+  /* Re-stick and jump before the call, not after: pressing Send is the
+     person's own action, not an event arriving, so the panel is to be at the
+     end the moment it is pressed rather than a tick after the wire answers —
+     `sendMessage` is a round trip, and waiting for it first would mean the
+     jump lands on whatever the message's own echo through `session:events`
+     had already triggered, not before it. With `stick` true again, that
+     echo (and the agent's reply after it, and the composer shrinking back
+     once the draft clears) still docks the panel exactly as it always did;
+     this is only what makes the jump itself immediate rather than late, and
+     it happens the same regardless of what `sendMessage` answers — a failed
+     send is shown at the composer, which is also the end of the journal. */
+  stick = true
+  await nextTick()
+  toEnd()
   await sendMessage(props.sessionId, record.draft, [...attachments.value])
   /* The files go with the words, and only when the words went. The store clears
      a draft on the way out of a call that answered and never before — a send
@@ -434,7 +452,18 @@ async function send() {
 }
 
 const stop = () => stopConversation(props.sessionId)
-const answer = (decision, answers) => answerQuestion(props.sessionId, question.value.id, decision, answers)
+
+async function answer(decision, answers) {
+  const id = question.value.id
+  /* Same re-stick as `send()`, before the call and for the same reason:
+     answering a question is the person's own turn too, and the jump is to
+     land the moment it is pressed rather than a tick after `answerQuestion`
+     answers. */
+  stick = true
+  await nextTick()
+  toEnd()
+  await answerQuestion(props.sessionId, id, decision, answers)
+}
 
 /* The one handler for both attachment chips, `Composer`'s and `UserMessage`'s
    — see the header above for why the branch lives here and not in either of
