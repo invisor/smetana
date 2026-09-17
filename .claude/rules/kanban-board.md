@@ -118,3 +118,83 @@ opened. The cost is that for the length of one call the field can be filled from
 of date, and somebody picking a since-deleted branch inside that window has the choice frozen by
 `branchChosen`, so the run goes out against a branch that is not there. Clearing first made that
 impossible — by keeping Run disabled every time, for everybody.
+
+## Locking a task by hand (smetana-44mw)
+
+`Block` and `Unblock` in the card menu — `taskMenu.js`, directly above `Move to…` — are a person's own
+hold on a task, separate from the dependency the Blocked column already computes. **A lock is bd's own
+stored `blocked` status and not a label**, which was the rejected design: a label would have left a
+locked card sitting in its own column, and the filter that keeps it out of a run's hands would then
+have had to be written three times over — in `runs/queue.rs`, in the prose of two skills an agent
+reads, and in `runnableTask` here — while `bd ready --claim` takes a task atomically before an agent
+reads any of that prose. The stored status needs none of it: `bd ready` already refuses an issue held
+at `blocked`, so the Rust queue and the running-tasks and provisioning skills refuse a locked task
+today, with nothing new to teach any of them. The card moves to the Blocked column for the same reason
+a computed dependency does, and it needs its own look there (`TaskCard.vue`, below) because the two
+things share a column and nothing else — one leaves on its own, the other never does.
+
+**The cascade is `components/kanban/lockCascade.js`**, pure and outside `DesktopApp.vue` for the reason
+this whole family exists: a `.vue` file is the one thing no test here can reach. `lockIds(issues, id)`
+answers every open descendant through `parent`, deepest first, then `id` itself if it is open — so
+locking an epic never leaves it `blocked` over a child still `open`. `unlockIds(issues, id)` answers the
+reverse: `id` first if it is locked, then its locked descendants, shallowest first — so nothing comes
+back before the ancestor that was holding it. A descendant sitting anywhere else — claimed, reviewed,
+parked, deferred, closed, pinned, hooked or a project's own custom status — is left exactly where it
+is, because it is already out of a run's reach for a reason of its own and locking or unlocking it
+would be answering a question nobody asked. `parentBlocked(issues, id)` walks the same `parent` chain
+upward and answers whether any ancestor — not only the immediate parent — is itself locked; the merge
+lock label is filtered out of every one of the three, the same exclusion `boardColumns` makes.
+
+**The write is `DesktopApp.vue`'s `toggleLock`**, one `updateIssue` per id in the cascade's own order,
+the same one-at-a-time shape `confirmPromote` already uses above and for the same reason — bd's worker
+serialises writes anyway. Every id the cascade will touch is added to `writingIds` — a `reactive(new
+Set())` that replaced the single `writingId` ref precisely for this, since a cascade greys several
+cards at once rather than one — before the first write goes out, so a descendant three levels down
+reads as busy from the first frame rather than only once its own turn comes; each id leaves the set the
+moment its own write lands, success or failure alike. The loop stops on the first refusal — its own
+rule, and not `confirmPromote`'s: that loop catches a failed write, counts it and carries on, stopping
+only when the project changes underneath it. A project switch mid-cascade stops this loop too, which is
+the one thing the two do share, and what the loop never reached is dropped out of `writingIds` in a
+`finally` rather than left grey for good.
+
+**Only Unblock leaves a `promoted:` trail, and Block leaves none at all.** `promotedNote('unblock')`
+rides beside every `open` write the unlock cascade makes, for the same reason `run`, `column` and
+`status` already carry one (`.claude/rules/runs.md`): a lead who sees the task back in `bd ready` a
+batch later has no other way to tell a person's own release from a status that merely slipped. Block
+writes nothing beside the status, because the stored `blocked` status *is* the whole of the record and
+the actor who set it already stands in bd's own history — there is nothing here for a later reader to
+mistake for a slip.
+
+**The menu row itself is one row wearing two labels, never two rows.** `taskMenuItems` in `taskMenu.js`
+draws `Block` (glyph `lock`) on a card bd holds `open` — Ready and the computed Blocked column alike —
+and `Unblock` (glyph `lock-open`, registered in `core/icons.js` beside `lock`) on one it holds
+`blocked`; on every other status there is no row at all, the same absent-rather-than-greyed trade the
+`resolve` and `fix` rows above it already make. The new `parentBlocked` argument only ever greys
+Unblock, with the reason written into the row itself — `Unblock — its epic is blocked` — since
+`ContextMenu` clips a row and gives it no tooltip to recover the rest from; it never touches Block,
+because nothing stops a person locking one more task under an epic that is not itself locked. The same
+fact greys `Move to… → Ready` on that card through the second door of the identical menu, and leaves
+Pinned and Done alone — a straight move to Ready would free one task from a lock the epic is still
+holding it under, which is the one write this rule exists to stop. `parentBlocked` is computed once per
+card in `orderedColumns`, the way `runnable` already is, and rides in the task object so the card's own
+menu and the Task & details header's copy of it (`inspectedMenu`) read the identical fact.
+
+**`TaskCard.vue` draws the locked variant only at bd's stored `blocked`** — a card waiting on a
+dependency, in the same column, is untouched. `--surface-sunken` at rest, rising to `--surface` under
+the pointer and never all the way to the `--surface-raised` an ordinary card stands on, so it keeps
+reading as held down even while somebody is looking straight at it; `--status-blocked-border`; the
+title steps from `--text-secondary` to `--text-primary` on hover by colour, deliberately not by
+`--attn-quiet-opacity`, since that token belongs to `done`'s dimming and a locked card is not quiet, it
+is held. No dashed `DependencyBand` — that hatching promises a release nobody is coming to give — while
+the `DependencyMark` counters stay, since the dependency count is still a fact worth showing. The
+footer leads with `StatusBadge status="blocked" size="sm"`, already drawing the lock glyph and the
+`--status-blocked-*` tokens with nothing new to teach it, ahead of `TypeBadge`'s new `muted` prop — a
+bare `--border` outline and `--text-muted`, no fill and no type hue — because a locked card is one
+argument, not two colours competing for the same attention. `selected`, `drop-target`, `dragging` and
+`flash` are untouched: those states win outright over the locked look exactly as they already win over
+the ordinary one.
+
+**`columnHelp('blocked')` names both reasons a card can be in this column** — waiting on another task
+that will move it to Ready by itself, or locked by a person and staying until that same person unlocks
+it — and still says neither `parent` nor `bd`, the same constraint the rest of that table keeps: a
+person hovering a column head is asking about their tasks, not about the tracker.

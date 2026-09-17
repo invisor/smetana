@@ -61,6 +61,7 @@ import {
   Layers,
   LoaderCircle,
   Lock,
+  LockOpen,
   Maximize2,
   MessageCircleQuestion,
   MessageSquare,
@@ -120,6 +121,10 @@ export const iconNodes = {
 
   // the dependency graph
   lock: Lock,
+  /* The card menu's Unblock, on a task a person locked by hand — the open
+     padlock is the reverse of `lock` above, which the same menu draws for
+     Block. */
+  'lock-open': LockOpen,
   'git-fork': GitFork,
   'corner-down-right': CornerDownRight,
 

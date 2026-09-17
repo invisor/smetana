@@ -1,6 +1,9 @@
 /* The note a human promote leaves beside the status it writes, and the one
-   rule the three places in `DesktopApp.vue` that can move a task to ready by a
-   person's own hand all read, rather than each inventing its own sentence.
+   rule the places in `DesktopApp.vue` that can move a task to ready by a
+   person's own hand all read, rather than each inventing its own sentence —
+   four now that Unblock (smetana-44mw) joins starting a run over a card,
+   promoting a whole Deferred column, and a direct status change from the card
+   menu or the inspector header.
 
    The `readyPromote.js` family: pure, with no Vue and no DOM in it, and a file
    of its own for the reason that family exists — a `.vue` file is the one
@@ -42,7 +45,17 @@ const REASON = {
   /* `DesktopApp.vue`'s `setTaskStatus`, behind both the card's own menu and
      the Task & details header — including `moveToReadyAnyway`, which is the
      same write after the open-question warning. */
-  status: 'человек перевёл задачу в ready из меню карточки или из заголовка инспектора.'
+  status: 'человек перевёл задачу в ready из меню карточки или из заголовка инспектора.',
+  /* `DesktopApp.vue`'s `toggleLock`, the Unblock half of the manual lock
+     (smetana-44mw) — the card's own menu and the Task & details header again,
+     the same two doors `status` above already answers for. Block writes no
+     note at all: the stored `blocked` status is the whole of the record, and
+     the actor already stands in bd's own history. Unblock needs one because a
+     lead who sees the task back in `bd ready` a batch later has no other way
+     to tell a person's own release from a status that merely slipped — the
+     same gap `run`, `column` and `status` above already close, one write
+     later in a task's life. */
+  unblock: 'человек снял блокировку с задачи из меню карточки или из заголовка инспектора.'
 }
 
 /* '' for a source this file has not been told about, deliberately: a caller
