@@ -94,6 +94,8 @@ import {
   SectionHeader,
   SegmentedTabs,
   ProjectSettingsModal,
+  ReportList,
+  ReportRow,
   ReportView,
   SessionRow,
   Select,
@@ -610,6 +612,49 @@ the frame lost its sandbox. If you are reading this report, the script did not r
 <script>document.body.style.background='red';document.body.innerHTML='<h1>THE SANDBOX FAILED</h1>'<\/script>
 </body></html>`
 
+/* The Reports tab's fixture: three rows, field for field with `run_reports`'s
+   `ReportEntry`. The third carries `closed`/`parked: null` on purpose — the
+   one row that has to draw a dash rather than a zero, `runs::reports::Head`'s
+   own rule for a board this parser could not read. */
+const REPORT_ROWS = [
+  {
+    path: '/p/.smetana/reports/2026-09-17-143205.html',
+    file: '2026-09-17-143205.html',
+    stamp: '2026-09-17T14:32:05',
+    title: 'Task report',
+    scope: 'smetana-9je',
+    finished: '2026-09-17 14:32',
+    closed: 1,
+    parked: 0,
+    batches: 1,
+    total: '12m'
+  },
+  {
+    path: '/p/.smetana/reports/2026-09-16-091500.html',
+    file: '2026-09-16-091500.html',
+    stamp: '2026-09-16T09:15:00',
+    title: 'Batch report',
+    scope: 'the ready column',
+    finished: '2026-09-16 09:15',
+    closed: 3,
+    parked: 1,
+    batches: 1,
+    total: '48m'
+  },
+  {
+    path: '/p/.smetana/reports/2026-09-15-020000.html',
+    file: '2026-09-15-020000.html',
+    stamp: '2026-09-15T02:00:00',
+    title: 'Task report',
+    scope: 'smetana-1wgi',
+    finished: '2026-09-15 02:00',
+    closed: null,
+    parked: null,
+    batches: 1,
+    total: '4m'
+  }
+]
+
 const props = defineProps({
   theme: { type: String, default: 'dark' },
   density: { type: String, default: 'comfortable' }
@@ -620,6 +665,12 @@ watchEffect(() => {
   el.setAttribute('data-theme', props.theme)
   el.setAttribute('data-density', props.density)
 })
+
+/* The Reports tab's own two controls, held here exactly as the page holds
+   them — plain refs, not settings.json, since the gallery has no store and
+   the point is seeing the two Selects actually change what the list draws. */
+const reportsPerPage = ref(20)
+const reportsOrder = ref('newest')
 
 const text = ref('wt/bd-a1b2')
 const prose = ref('The board flashes a card twice when bd moves it, and once when we do.')
@@ -6197,6 +6248,59 @@ const menuTargetStyle = {
         }"
       >
         <ReportView html="" :theme="theme" />
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Reports tab</div>
+      <!-- The tab's own page: the two Selects, the list and its pagination.
+           `perPage`/`order` are plain refs of the gallery's own — pressing a
+           control here changes what is drawn, exactly as it would in the
+           app, without reaching for settings.json. -->
+      <div
+        :style="{
+          display: 'flex',
+          height: 'calc(var(--space-9) * 8)',
+          border: 'var(--border-w) solid var(--border)'
+        }"
+      >
+        <ReportList
+          :rows="REPORT_ROWS"
+          :per-page="reportsPerPage"
+          :order="reportsOrder"
+          @update:per-page="reportsPerPage = $event"
+          @update:order="reportsOrder = $event"
+          @open="() => {}"
+        />
+      </div>
+      <!-- What the loading and the empty case draw before any report has ever
+           been written — the state a freshly set-up project opens the tab
+           on. -->
+      <div
+        :style="{
+          display: 'flex',
+          height: 'calc(var(--space-9) * 4)',
+          border: 'var(--border-w) solid var(--border)'
+        }"
+      >
+        <ReportList :rows="[]" loading :per-page="20" order="newest" />
+      </div>
+      <div
+        :style="{
+          display: 'flex',
+          height: 'calc(var(--space-9) * 4)',
+          border: 'var(--border-w) solid var(--border)'
+        }"
+      >
+        <ReportList :rows="[]" :per-page="20" order="newest" />
+      </div>
+      <!-- The row on its own, for the one thing the list above cannot single
+           out on demand: the third fixture row, whose closed and parked
+           counts are `null` and have to draw as a dash rather than a blank or
+           a zero — `runs::reports::Head`'s own rule, and `ReportRow.vue`'s
+           `cellText` is the whole of what keeps it. -->
+      <div :style="{ border: 'var(--border-w) solid var(--border)' }">
+        <ReportRow :row="REPORT_ROWS[2]" @open="() => {}" />
       </div>
     </section>
 

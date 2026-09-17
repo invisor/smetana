@@ -532,6 +532,48 @@ impl KanbanSettings {
     }
 }
 
+/// The Reports tab's own two controls: how many rows a page holds and which
+/// end of the list is read first. Global rather than per project, on
+/// `KanbanSettings`'s own argument above — how many rows somebody likes on a
+/// page and which end they read from are habits of a person's, not a fact
+/// about one repository, and the tab has no per-project vocabulary to hang
+/// either on anyway.
+///
+/// Both default to today's opening behaviour, chosen rather than inherited
+/// from an earlier state: this is the first release of the tab, so "today's
+/// behaviour" is simply the two values the design settled on — 20 rows,
+/// newest first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ReportsSettings {
+    pub per_page: u32,
+    /// `newest` or `oldest`.
+    pub order: String,
+}
+
+impl Default for ReportsSettings {
+    fn default() -> Self {
+        Self { per_page: 20, order: "newest".into() }
+    }
+}
+
+/// The two closed lists, written out a second time in
+/// `src/components/run/reportsPage.js` — the same doubling `KANBAN_COLUMNS`
+/// above carries, and with the same obligation: what the tab offers must be a
+/// subset of what this accepts, since a page size or an order refused here
+/// loses itself on the next save with nothing on screen to say so.
+const REPORT_PAGE_SIZES: [u32; 3] = [20, 50, 100];
+const REPORT_ORDERS: [&str; 2] = ["newest", "oldest"];
+
+impl ReportsSettings {
+    fn validate(&mut self) {
+        if !REPORT_PAGE_SIZES.contains(&self.per_page) {
+            self.per_page = 20;
+        }
+        one_of(&mut self.order, &REPORT_ORDERS, "newest");
+    }
+}
+
 /// Collapsed state and width of the side panels — also about the screen, not
 /// about content.
 ///
@@ -1048,6 +1090,9 @@ pub struct Settings {
     /// How the board is drawn. At the root rather than under a project, for the
     /// reason `KanbanSettings` records.
     pub kanban: KanbanSettings,
+    /// The Reports tab's page size and sort order. At the root for the reason
+    /// `ReportsSettings` records.
+    pub reports: ReportsSettings,
     /// What the Git panel may do on its own. At the root for the reason
     /// `GitSettings` records.
     pub git: GitSettings,
@@ -1165,6 +1210,7 @@ impl Default for Settings {
             layout: Layout::default(),
             editor: EditorSettings::default(),
             kanban: KanbanSettings::default(),
+            reports: ReportsSettings::default(),
             git: GitSettings::default(),
             subscription: SubscriptionSettings::default(),
             window: WindowSettings::default(),
@@ -1203,6 +1249,8 @@ pub struct ResolvedSettings {
     pub editor: EditorSettings,
     /// How the board is drawn. See `Settings::kanban`.
     pub kanban: KanbanSettings,
+    /// The Reports tab's page size and sort order. See `Settings::reports`.
+    pub reports: ReportsSettings,
     /// What the Git panel may do on its own. See `Settings::git`.
     pub git: GitSettings,
     /// The run gate's thresholds. See `Settings::subscription`.
@@ -1250,6 +1298,7 @@ impl Default for ResolvedSettings {
             layout: Layout::default(),
             editor: EditorSettings::default(),
             kanban: KanbanSettings::default(),
+            reports: ReportsSettings::default(),
             git: GitSettings::default(),
             subscription: SubscriptionSettings::default(),
             window: WindowSettings::default(),
@@ -1302,6 +1351,7 @@ pub fn parse(text: &str) -> Outcome {
         layout: section(&object, "layout"),
         editor: section(&object, "editor"),
         kanban: section(&object, "kanban"),
+        reports: section(&object, "reports"),
         git: section(&object, "git"),
         subscription: section(&object, "subscription"),
         window: section(&object, "window"),
@@ -1368,6 +1418,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         layout: file.layout.clone(),
         editor: file.editor.clone(),
         kanban: file.kanban.clone(),
+        reports: file.reports.clone(),
         git: file.git.clone(),
         subscription: file.subscription,
         window: file.window.clone(),
@@ -1401,6 +1452,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.layout = resolved.layout;
     file.editor = resolved.editor;
     file.kanban = resolved.kanban;
+    file.reports = resolved.reports;
     file.git = resolved.git;
     file.subscription = resolved.subscription;
     file.window = resolved.window;
@@ -1579,6 +1631,7 @@ impl Settings {
         self.layout.validate();
         self.editor.validate();
         self.kanban.validate();
+        self.reports.validate();
         self.subscription.validate();
         self.notifications.validate();
         for state in self.projects.values_mut() {
@@ -1604,6 +1657,7 @@ impl ResolvedSettings {
         self.layout.validate();
         self.editor.validate();
         self.kanban.validate();
+        self.reports.validate();
         self.subscription.validate();
         self.notifications.validate();
         self.project.validate();
@@ -2429,6 +2483,68 @@ mod tests {
         assert_eq!(written.kanban.columns, "non-empty", "merge must carry them back into the file");
         assert_eq!(written.kanban.always_show, vec!["ready".to_string()]);
         assert_eq!(written.kanban.interval, "day");
+    }
+
+    #[test]
+    fn a_file_written_before_the_reports_tab_existed_opens_at_twenty_newest_first() {
+        let settings = settings_of(r#"{"version":1,"appearance":{"theme":"light"}}"#);
+        assert_eq!(settings.reports, ReportsSettings::default());
+        assert_eq!(settings.reports.per_page, 20);
+        assert_eq!(settings.reports.order, "newest");
+    }
+
+    #[test]
+    fn a_page_size_off_the_list_falls_back_to_twenty() {
+        let settings = settings_of(r#"{"version":1,"reports":{"perPage":37,"order":"oldest"}}"#);
+        assert_eq!(settings.reports.per_page, 20);
+        assert_eq!(settings.reports.order, "oldest", "the neighbouring field must survive");
+
+        for size in [20, 50, 100] {
+            let settings = settings_of(&format!(r#"{{"version":1,"reports":{{"perPage":{size}}}}}"#));
+            assert_eq!(settings.reports.per_page, size, "every offered size is accepted as is");
+        }
+    }
+
+    #[test]
+    fn an_order_off_the_list_falls_back_to_newest() {
+        let settings = settings_of(r#"{"version":1,"reports":{"perPage":50,"order":"soonest"}}"#);
+        assert_eq!(settings.reports.order, "newest");
+        assert_eq!(settings.reports.per_page, 50, "the neighbouring field must survive");
+    }
+
+    #[test]
+    fn a_reports_section_of_the_wrong_type_is_lost_whole() {
+        let settings = settings_of(r#"{"version":1,"reports":"compact","appearance":{"theme":"light"}}"#);
+        assert_eq!(settings.reports, ReportsSettings::default());
+        assert_eq!(settings.appearance.theme, "light", "and it takes nothing with it");
+    }
+
+    #[test]
+    fn the_reports_settings_survive_disk_to_front_end_and_back() {
+        let file = settings_of(r#"{"version":1,"reports":{"perPage":100,"order":"oldest"}}"#);
+        assert_eq!(file.reports.per_page, 100, "parse must read them off the disk");
+
+        let resolved = resolve(&file, None);
+        assert_eq!(resolved.reports.order, "oldest", "resolve must carry them to the front end");
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert_eq!(written.reports.per_page, 100, "merge must carry them back into the file");
+        assert_eq!(written.reports.order, "oldest");
+    }
+
+    #[test]
+    fn a_reports_value_the_front_end_should_not_have_sent_does_not_reach_the_file() {
+        let mut file = Settings::default();
+        let resolved = ResolvedSettings {
+            reports: ReportsSettings { per_page: 37, order: "soonest".into() },
+            ..ResolvedSettings::default()
+        };
+
+        merge(&mut file, resolved, "2026-08-01T09:12:00+00:00".into());
+
+        assert_eq!(file.reports.per_page, 20, "validated on the way in, not only on the way out");
+        assert_eq!(file.reports.order, "newest");
     }
 
     #[test]

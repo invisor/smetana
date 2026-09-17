@@ -39,6 +39,10 @@ import {
   KANBAN_DEFAULTS,
   columnNames
 } from '../components/kanban/boardView.js'
+/* Pure, no Vue and no DOM: the Reports tab's own defaults, mirroring
+   `ReportsSettings::default()` in Rust. Imported for the reason `boardView.js`
+   above is — one number written once rather than copied by hand. */
+import { REPORTS_DEFAULTS } from '../components/run/reportsPage.js'
 /* Pure, no Vue and no DOM: the closed list of notification sounds and the two
    shipped ones. Imported for the reason `boardView.js` above it is — so this
    store and the settings tab cannot disagree about which values are legal, and
@@ -99,6 +103,13 @@ const defaults = () => ({
      every column, every task. The rule these four feed is
      `components/kanban/boardView.js`. */
   kanban: { ...KANBAN_DEFAULTS, alwaysShow: [], unlimited: [] },
+  /* The Reports tab's own two controls — how many rows a page holds and which
+     end of the list is read first. Global rather than per project, on
+     `kanban`'s own argument: a habit of reading, not a fact about one
+     repository. `REPORTS_DEFAULTS` mirrors `ReportsSettings::default()` in
+     Rust, and `reportsPage.js`'s `PAGE_SIZES`/`ORDERS` are what the tab offers
+     — a subset of what Rust accepts. */
+  reports: { ...REPORTS_DEFAULTS },
   /* What the app says when a run ends or an agent stops to ask: which sound
      each of the two announcements makes, or `off` for none, whether those
      sounds wait until nobody is looking, and whether a finished run's report is
@@ -532,6 +543,7 @@ export async function loadSettings() {
     applySection(settings.window, base.window, stored.window)
     applySection(settings.updates, base.updates, stored.updates)
     applySection(settings.kanban, base.kanban, stored.kanban)
+    applySection(settings.reports, base.reports, stored.reports)
     applySection(settings.notifications, base.notifications, stored.notifications)
     applySection(settings.layout, base.layout, stored.layout)
     applySection(settings.project, base.project, stored.project)

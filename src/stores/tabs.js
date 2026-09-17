@@ -4,7 +4,7 @@
 
    The split is by lifetime: the list of open tabs survives a restart and
    therefore lives in settings, the buffers do not and therefore live here. */
-import { computed, reactive } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { settings } from './settings.js'
 import { basenameOf, fileErrorText, filesState, readFile, writeFile } from './files.js'
 import { fileAtHead } from './vcs.js'
@@ -219,6 +219,46 @@ export const terminalTabFor = (session) =>
 
 const project = () => settings.project
 
+/* The Reports tab: the sixth kind, and the first that is neither a file nor
+   derived from a session. Built the same way the diff and terminal ids are —
+   a zero byte no filesystem allows in a name — because it sits in the same
+   row and can land in `project.activeTab` beside them. There is only ever
+   one, so it is a bare id rather than something built per instance.
+
+   Whether it is open is a `ref`, not a line in `settings.json`: the same
+   lifetime a diff tab has, which is what `resetTabs` empties it with and what
+   keeps a restart opening on the board rather than on an empty tab —
+   `ProjectState::validate` already refuses an `activeTab` that is neither
+   pinned nor one of `openTabs`, so no change in Rust was needed for that
+   half. */
+const REPORTS = '\u0000reports'
+export const REPORTS_TAB_ID = REPORTS
+
+export const isReportsTab = (id) => id === REPORTS_TAB_ID
+
+const reportsOpen = ref(false)
+export const reportsTabOpen = computed(() => reportsOpen.value)
+
+/* Opens the tab if it is closed and activates it either way — the button
+   beside the bell never lays a second one down, because there is only ever
+   one to lay. */
+export function openReportsTab() {
+  reportsOpen.value = true
+  project().activeTab = REPORTS_TAB_ID
+}
+
+/* Closes it like a file, through the same `neighbourIn` rule `closeDiff` and
+   `closeTerminalTab` use over the same drawn row, and leaves `activeTab`
+   alone when the tab being closed was not the active one. */
+export function closeReportsTab() {
+  if (!reportsOpen.value) return
+  const next = neighbourIn(movableIds(), REPORTS_TAB_ID)
+  reportsOpen.value = false
+  const state = project()
+  if (state.activeTab !== REPORTS_TAB_ID) return
+  state.activeTab = next ?? 'kanban'
+}
+
 export const isDirty = (path) => {
   const buffer = buffers.get(path)
   /* An error does not make a buffer clean. For a file that could not be
@@ -299,7 +339,13 @@ const rawTabList = computed(() => [
     kind: 'terminal',
     label: tab.label,
     icon: 'terminal'
-  }))
+  })),
+  /* Last of all: the sixth kind, and the only one of the row that names no
+     file, no repository and no session — it is one closeable page about the
+     project as a whole, so there is nowhere else in the row it belongs. Its
+     own kind, prose label and glyph, the same three things a diff or a
+     terminal tab carries for the identical reason. */
+  ...(reportsOpen.value ? [{ id: REPORTS_TAB_ID, kind: 'reports', label: 'Reports', icon: 'scroll-text' }] : [])
 ])
 
 /* The row as it is drawn: the four lists above, reconciled against the order
@@ -850,11 +896,16 @@ export function discardTabs(paths) {
    The Agent tab and the terminal tabs are not here and need nothing: they are
    derived from the session list, which `loadSessions` replaces with the new
    project's on the same move. Deriving them is what makes a project switch free
-   — there is no third list to remember to clear. */
+   — there is no third list to remember to clear.
+
+   The Reports tab goes too, and for the reason the diffs do: it is one page
+   about the project being left, and `stores/reports.js`'s own rows would be
+   the wrong project's the moment this one is asked about. */
 export function resetTabs() {
   buffers.clear()
   sourceTabs.clear()
   diffTabs.length = 0
+  reportsOpen.value = false
 }
 
 /* Restoring after a restart or a project switch. We read everything that was

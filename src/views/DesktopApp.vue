@@ -68,6 +68,7 @@ import { canRestore, draftIsEmpty } from '../components/kanban/taskDraft.js'
 import Button from '../components/core/Button.vue'
 import RunBar from '../components/run/RunBar.vue'
 import ReportView from '../components/run/ReportView.vue'
+import ReportList from '../components/run/ReportList.vue'
 import { isDocumentPath, reportTabPath, reviewReportTabs } from '../components/run/reportTab.js'
 import { deliveryFor } from '../components/run/reportDelivery.js'
 import TaskInspector from '../components/kanban/TaskInspector.vue'
@@ -125,6 +126,9 @@ import {
   revealSessionLog,
   sessionsState
 } from '../stores/sessions.js'
+/* The Reports tab's list: read on activation and again when a run of this
+   project ends while the tab is open — see the two watches below. */
+import { loadReports, reportsState } from '../stores/reports.js'
 import {
   agentCounts,
   agentRows,
@@ -354,6 +358,7 @@ import {
   activeBuffer,
   buffers,
   closeDiff,
+  closeReportsTab,
   closeTab,
   closeTerminalTab,
   confirmUnsaved,
@@ -364,6 +369,7 @@ import {
   hasAgentTab,
   isDiffTab,
   isDirty,
+  isReportsTab,
   isTerminalTab,
   keepMine,
   markGone,
@@ -371,6 +377,7 @@ import {
   onUnsaved,
   openDiff,
   openFile,
+  openReportsTab,
   promote,
   reloadTab,
   renameTab,
@@ -4947,7 +4954,10 @@ const fileTabActive = computed(
        `FileEditor` on one would ask the disk for a path built out of a tab id.
        This computed is what stands between that and the editor, since the
        editor's branch comes first in the template. */
-    !isTerminalTab(project.activeTab)
+    !isTerminalTab(project.activeTab) &&
+    /* And minus the Reports tab, the sixth kind and for the identical reason:
+       it names no file in `openTabs` either. */
+    !isReportsTab(project.activeTab)
 )
 
 /* The text a diff refuses with. `fileErrorText` is the editor's own table and
@@ -6215,6 +6225,9 @@ const onCloseTab = async (id) => {
      session, and one that merely hid a live shell would leave a process nobody
      can see. The store owns both halves of that. */
   if (isTerminalTab(id)) return closeTerminalTab(id)
+  /* The Reports tab holds nothing unsaved either — it is a read of a folder —
+     so closing it is the same unconditional act as closing a diff. */
+  if (isReportsTab(id)) return closeReportsTab()
   if (isDirty(id) && !(await confirmUnsaved([id]))) return
   closeTab(id)
 }
@@ -6536,6 +6549,21 @@ watch(stoppedRuns, () => {
   }
 })
 
+/* The Reports tab's own list, read again on the two occasions its own header
+   names: activation, and a run of this project ending while it is open.
+   There is no watcher on `.smetana/reports/` — the same reasoning
+   `sessions.js` carries for `~/.claude/projects` — so these two watches are
+   the whole of when the folder is walked at all. */
+watch(
+  () => project.activeTab,
+  (tab) => {
+    if (isReportsTab(tab)) loadReports(activePath.value)
+  }
+)
+watch(stoppedRuns, () => {
+  if (isReportsTab(project.activeTab)) loadReports(activePath.value)
+})
+
 /* The other document a finished session leaves, and a much shorter road than
    the one above it: a branch review has no switch, no bell and no choice to
    make. Somebody pressed Review and the report is the whole of what that
@@ -6769,6 +6797,7 @@ const toastStackStyle = {
       :notifications="notificationsState.items.length"
       :window-chrome="barChrome"
       :maximized="maximized"
+      @reports="openReportsTab()"
       @notifications="toggleNotifications"
       @settings="openSettingsWindow()"
       @minimize="minimizeWindow"
@@ -7167,6 +7196,23 @@ const toastStackStyle = {
                corner toggle below, which sends the tab down the editor branch
                with everything an ordinary file tab has. -->
           <ReportView v-if="documentTabActive" :html="activeBuffer?.text ?? ''" :theme="theme" />
+          <!-- The Reports tab: every run report this project has, read by
+               `stores/reports.js` and paged by `reportsPage.js`. Before the
+               editor branch for the reason the document above is: it names no
+               file in `openTabs` and has nothing to save. `perPage`/`order`
+               bind straight onto the global `reports` section — the same two
+               fields the tab itself edits, with nothing in the settings
+               window drawing either. -->
+          <ReportList
+            v-else-if="isReportsTab(project.activeTab)"
+            :rows="reportsState.rows"
+            :loading="reportsState.loading"
+            :per-page="settings.reports.perPage"
+            :order="settings.reports.order"
+            @update:per-page="settings.reports.perPage = $event"
+            @update:order="settings.reports.order = $event"
+            @open="showReport"
+          />
           <!-- A changed file, HEAD against the working tree. Before the editor
                branch for the same reason the report is: it is a tab of its own
                kind, with no buffer behind it and nothing to save. -->

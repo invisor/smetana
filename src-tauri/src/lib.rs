@@ -323,6 +323,7 @@ pub fn run() {
       runs::commands::run_stop,
       runs::commands::run_release,
       runs::commands::run_state,
+      runs::commands::run_reports,
       runs::commands::target_branches,
       runs::commands::agent_usage,
       agents::commands::agents_catalog,
