@@ -95,8 +95,8 @@ const emptyDescription = computed(() => `Nothing in ${String(props.status).repla
       <template v-if="tasks.length">
         <!-- No explicit run-blocked-reason here: the card's own rides in `t`,
              through the same v-bind as `runnable`, and the column-level prop
-             speaks for the header alone. `bdStatus` and `busy` ride the same
-             way, for the same reason. -->
+             speaks for the header alone. `bdStatus`, `busy` and `parentBlocked`
+             ride the same way, for the same reason. -->
         <!-- One `action` carrying its own id, rather than four events wrapped
              here to add one. The header's `run` and `promote` above are about
              a column and stay where they are. -->

@@ -13,7 +13,13 @@ import { typeColors, typeGlyph, typeLabel } from './issueType.js'
 const props = defineProps({
   /* bd's own name for the type. Anything outside bd's six renders neutral. */
   type: { type: String, required: true },
-  size: { type: String, default: 'md' }
+  size: { type: String, default: 'md' },
+  /* Drawn on a card bd holds `blocked`, beside the status badge that already
+     leads it there: the type still has to be legible, but a locked card is
+     one badge, not two arguing for the same amount of attention, so this one
+     gives its fill up entirely — a bare `--border` outline and `--text-muted`
+     rather than either type colour or the neutral `--type-plain-*` pair. */
+  muted: { type: Boolean, default: false }
 })
 
 const c = computed(() => typeColors(props.type))
@@ -25,8 +31,9 @@ const style = computed(() => ({
   gap: 'var(--space-2)',
   height: sm.value ? '15px' : '18px',
   padding: `0 ${sm.value ? 5 : 6}px`,
-  background: c.value.bg,
-  color: c.value.fg,
+  background: props.muted ? 'transparent' : c.value.bg,
+  color: props.muted ? 'var(--text-muted)' : c.value.fg,
+  border: props.muted ? 'var(--border-w) solid var(--border)' : 'none',
   borderRadius: 'var(--radius-2)',
   font: `var(--weight-medium) ${sm.value ? 'var(--text-2xs)' : 'var(--text-xs)'}/1 var(--font-sans)`,
   whiteSpace: 'nowrap'

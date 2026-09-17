@@ -56,6 +56,10 @@ describe('loading', () => {
       interval: 'all',
       unlimited: []
     })
+    /* The Reports tab's opening state before anybody has touched either
+       control — `settings/model.rs`'s `ReportsSettings::default()` carries the
+       same pair. */
+    expect(settings.settings.reports).toEqual({ perPage: 20, order: 'newest' })
     /* Shipped on rather than off, and as two different sounds — a file written
        before this section existed is every file on a person's disk right now,
        and `settings/model.rs` carries the same pair. The report switch beside
@@ -143,6 +147,15 @@ describe('loading', () => {
     expect(settings.settings.kanban.alwaysShow).toEqual(['ready'])
     expect(settings.settings.kanban.interval).toBe('day')
     expect(settings.settings.kanban.unlimited).toEqual([], 'the field the file left out takes its default')
+  })
+
+  it('reads the reports settings off the file', async () => {
+    ipc.on('settings_load', { reports: { perPage: 100 } })
+
+    await settings.loadSettings()
+
+    expect(settings.settings.reports.perPage).toBe(100)
+    expect(settings.settings.reports.order).toBe('newest', 'the field the file left out takes its default')
   })
 
   it('stored values cover the defaults field by field, not section by section', async () => {

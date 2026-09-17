@@ -5,6 +5,7 @@ import Tooltip from '../core/Tooltip.vue'
 import MenuButton from '../overlays/MenuButton.vue'
 import DependencyBand from '../status/DependencyBand.vue'
 import DependencyMark from '../status/DependencyMark.vue'
+import StatusBadge from '../status/StatusBadge.vue'
 import Assignee from './Assignee.vue'
 import TypeBadge from './TypeBadge.vue'
 import { copyLabel } from './copyId.js'
@@ -53,6 +54,12 @@ const props = defineProps({
      about two seconds and a live menu invites a second choice racing the
      first. */
   busy: { type: Boolean, default: false },
+  /* Whether an ancestor of this card is itself locked — `lockCascade.js`'s
+     `parentBlocked`, computed once per card in `orderedColumns` and carried
+     here the way `runnable` already is. It only ever matters on a card bd
+     holds at `blocked`: it greys Unblock in the menu below and says why, in
+     the row itself rather than in a tooltip the row has no room for. */
+  parentBlocked: { type: Boolean, default: false },
   /* What happened to the last attempt to copy *this* card's id: `''` before
      anything was asked, `'copied'` or `'failed'` after. It changes the text of
      one tooltip and nothing else — no colour, no surface, no size. The copying
@@ -87,15 +94,36 @@ const menuItems = computed(() =>
     bdStatus: props.bdStatus,
     runnable: props.runnable,
     runBlockedReason: props.runBlockedReason,
-    busy: props.busy
+    busy: props.busy,
+    parentBlocked: props.parentBlocked
   })
 )
+
+/* A task somebody locked by hand, bd's own stored status rather than the
+   computed Blocked column — a card waiting on a dependency that will leave on
+   its own draws exactly as it does today, and only this one draws the locked
+   variant below. */
+const locked = computed(() => props.bdStatus === 'blocked')
 
 const borderColor = computed(() => {
   if (props.selected) return 'var(--focus-ring)'
   if (drop.value) return 'var(--border-strong)'
   if (loud.value) return 'var(--attn-loud)'
+  if (locked.value) return 'var(--status-blocked-border)'
   return 'var(--border)'
+})
+
+/* A locked card sits a step below the rest of the board — `--surface-sunken`,
+   the same ground `drop.value` already uses for a moment while something is
+   dragged over it — and rises to `--surface` under the pointer, never all the
+   way to the `--surface-raised` an ordinary card stands on: the point is that
+   it keeps reading as held down even while somebody is looking straight at
+   it. `drop.value` still wins outright, the same as it does for the border and
+   for everything else this card can be doing at once. */
+const background = computed(() => {
+  if (drop.value) return 'var(--surface-sunken)'
+  if (locked.value) return hover.value ? 'var(--surface)' : 'var(--surface-sunken)'
+  return 'var(--surface-raised)'
 })
 
 const style = computed(() => ({
@@ -105,7 +133,7 @@ const style = computed(() => ({
   padding: 'var(--card-pad)',
   color: 'var(--text-primary)',
   fontFamily: 'var(--font-sans)',
-  background: drop.value ? 'var(--surface-sunken)' : 'var(--surface-raised)',
+  background: background.value,
   border: `var(--border-w) solid ${borderColor.value}`,
   borderStyle: drop.value ? 'dashed' : 'solid',
   borderRadius: 'var(--radius-3)',
@@ -152,14 +180,20 @@ const newStyle = {
    and because it is the one of the two that also lets the flex column shrink
    below that word: `break-word` breaks the line but still reports the whole token
    as the minimum width, which is how the overflow comes back the moment a panel
-   drag makes the board narrower than one identifier. */
-const titleStyle = {
+   drag makes the board narrower than one identifier.
+
+   `color` is computed rather than fixed for the same reason `background` above
+   is: a locked card steps its title back to `--text-secondary` and forward to
+   `--text-primary` on hover, by colour rather than by `--attn-quiet-opacity` —
+   that token belongs to `done`'s dimming, and a locked card is not quiet, it is
+   held. */
+const titleStyle = computed(() => ({
   fontSize: 'var(--text-sm)',
   lineHeight: 'var(--leading-snug)',
-  color: 'var(--text-primary)',
+  color: locked.value && !hover.value ? 'var(--text-secondary)' : 'var(--text-primary)',
   textWrap: 'pretty',
   overflowWrap: 'anywhere'
-}
+}))
 </script>
 
 <template>
@@ -171,7 +205,11 @@ const titleStyle = {
     @mouseenter="hover = true"
     @mouseleave="hover = false"
   >
-    <DependencyBand :blocked-by="blockedBy" :blocks="blocks" />
+    <!-- A locked card carries no dashed dependency band: the hatching means
+         "waiting on a blocker that will let go on its own", and a lock is
+         neither of those things — it never resolves itself, so drawing the
+         same mark here would promise a release nobody is coming to give. -->
+    <DependencyBand v-if="!locked" :blocked-by="blockedBy" :blocks="blocks" />
     <div :style="{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }">
       <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
         <!-- `.stop`, so a click on the id is a question about the id and not a
@@ -214,7 +252,13 @@ const titleStyle = {
       </div>
       <div :style="titleStyle">{{ title }}</div>
       <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-5)', flexWrap: 'wrap' }">
-        <TypeBadge v-if="type" :type="type" size="sm" />
+        <!-- The lock badge leads, the same order the type badge already keeps
+             beside a status badge in the task inspector's own header: status
+             first, type second. It carries the glyph, the capitalised mono and
+             the border `StatusBadge` already draws for `blocked` — nothing new
+             to teach it. -->
+        <StatusBadge v-if="locked" status="blocked" size="sm" />
+        <TypeBadge v-if="type" :type="type" size="sm" :muted="locked" />
         <span :style="{ flex: 1 }" />
         <DependencyMark
           :blocked-by="blockedBy"

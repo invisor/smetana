@@ -45,9 +45,9 @@ describe('statusOptions', () => {
 })
 
 describe('taskMenuItems', () => {
-  it('offers the five actions, with delete last and behind a separator', () => {
+  it('offers the six actions on an open card, with delete last and behind a separator', () => {
     const items = taskMenuItems(base)
-    expect(kinds(items)).toEqual(['run', 'ask-agent', 'follow-up', 'move', 'delete'])
+    expect(kinds(items)).toEqual(['run', 'ask-agent', 'follow-up', 'lock', 'move', 'delete'])
     expect(items.at(-2)).toEqual({ type: 'separator' })
     expect(find(items, 'delete').tone).toBe('danger')
   })
@@ -68,9 +68,9 @@ describe('taskMenuItems', () => {
     })
   })
 
-  it('still offers the other four on a card that cannot be run', () => {
+  it('still offers the other five on a card that cannot be run', () => {
     const items = taskMenuItems({ ...base, runnable: false })
-    for (const kind of ['ask-agent', 'follow-up', 'move', 'delete']) {
+    for (const kind of ['ask-agent', 'follow-up', 'lock', 'move', 'delete']) {
       expect(find(items, kind).disabled).toBeFalsy()
     }
   })
@@ -79,7 +79,7 @@ describe('taskMenuItems', () => {
     // Between the two rows that are also about what an agent does with a task's
     // text, and above the move — which is about the board rather than the work.
     const items = taskMenuItems(base)
-    expect(kinds(items)).toEqual(['run', 'ask-agent', 'follow-up', 'move', 'delete'])
+    expect(kinds(items)).toEqual(['run', 'ask-agent', 'follow-up', 'lock', 'move', 'delete'])
     expect(find(items, 'follow-up')).toMatchObject({
       label: 'Follow-up task',
       icon: 'git-branch-plus',
@@ -127,7 +127,7 @@ describe('taskMenuItems', () => {
 
   it('greys every row while a write is in flight', () => {
     const items = taskMenuItems({ ...base, busy: true })
-    for (const kind of ['run', 'ask-agent', 'follow-up', 'move', 'delete']) {
+    for (const kind of ['run', 'ask-agent', 'follow-up', 'lock', 'move', 'delete']) {
       expect(find(items, kind).disabled).toBe(true)
     }
     expect(find(items, 'move').children.every((c) => c.disabled)).toBe(true)
@@ -201,5 +201,67 @@ describe('taskMenuItems', () => {
   it('greys the fix while a write is in flight, like every other row', () => {
     const items = taskMenuItems({ ...base, bdStatus: 'closed', busy: true })
     expect(find(items, 'fix').disabled).toBe(true)
+  })
+})
+
+describe('the manual lock row (smetana-44mw)', () => {
+  it('offers Block on an open card, directly above Move to…', () => {
+    const items = taskMenuItems({ ...base, bdStatus: 'open' })
+    const order = kinds(items)
+    expect(order.indexOf('lock')).toBe(order.indexOf('move') - 1)
+    expect(find(items, 'lock')).toMatchObject({ label: 'Block', icon: 'lock', disabled: false })
+  })
+
+  it('offers Unblock on a locked card, in the same place', () => {
+    const items = taskMenuItems({ ...base, bdStatus: 'blocked' })
+    const order = kinds(items)
+    expect(order.indexOf('lock')).toBe(order.indexOf('move') - 1)
+    expect(find(items, 'lock')).toMatchObject({ label: 'Unblock', icon: 'lock-open', disabled: false })
+  })
+
+  it('offers neither row on any other status', () => {
+    for (const bdStatus of [
+      'in_progress', 'ready_to_merge', 'parked', 'deferred', 'pinned', 'hooked', 'closed', ''
+    ]) {
+      expect(find(taskMenuItems({ ...base, bdStatus }), 'lock')).toBeUndefined()
+    }
+  })
+
+  it('greys Block while a write is in flight', () => {
+    const items = taskMenuItems({ ...base, bdStatus: 'open', busy: true })
+    expect(find(items, 'lock').disabled).toBe(true)
+  })
+
+  it('greys Unblock while a write is in flight', () => {
+    const items = taskMenuItems({ ...base, bdStatus: 'blocked', busy: true })
+    expect(find(items, 'lock').disabled).toBe(true)
+  })
+
+  it('greys Unblock and names the reason in the row when an ancestor is locked', () => {
+    const items = taskMenuItems({ ...base, bdStatus: 'blocked', parentBlocked: true })
+    expect(find(items, 'lock')).toMatchObject({
+      label: 'Unblock — its epic is blocked',
+      disabled: true
+    })
+  })
+
+  it('never greys Block for a parent-blocked reason — nothing stops locking one more task under an open epic', () => {
+    const items = taskMenuItems({ ...base, bdStatus: 'open', parentBlocked: true })
+    expect(find(items, 'lock')).toMatchObject({ label: 'Block', disabled: false })
+  })
+
+  it('greys Ready under Move to… on a descendant of a locked epic, and leaves Pinned and Done alone', () => {
+    const children = find(
+      taskMenuItems({ ...base, bdStatus: 'blocked', parentBlocked: true }),
+      'move'
+    ).children
+    expect(children.find((c) => c.value === 'open').disabled).toBe(true)
+    expect(children.find((c) => c.value === 'pinned').disabled).toBe(false)
+    expect(children.find((c) => c.value === 'closed').disabled).toBe(false)
+  })
+
+  it('does not grey Ready under Move to… when nothing is parent-blocked', () => {
+    const children = find(taskMenuItems({ ...base, bdStatus: 'blocked' }), 'move').children
+    expect(children.find((c) => c.value === 'open').disabled).toBe(false)
   })
 })

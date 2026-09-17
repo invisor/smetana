@@ -227,6 +227,37 @@ describe('boardColumns', () => {
     expect(card.blockedBy).toBe(0)
   })
 
+  it('a task locked by hand stays in Blocked after its dependency closes: only Unblock releases it', async () => {
+    // smetana-44mw: the stored `blocked` status is a person's own lock, not
+    // the computed column above, and it does not clear itself the way a
+    // satisfied dependency does — the two look alike on the board but only one
+    // of them is undone by the blocker going away.
+    const blocked = () =>
+      tracker.boardColumns.value.find((c) => c.status === 'blocked')?.tasks.map((t) => t.id) ?? []
+
+    await start(
+      snapshot({
+        issues: [
+          issue({ id: 'bd-1' }),
+          issue({
+            id: 'bd-2',
+            status: 'blocked',
+            dependencies: [edge({ issue_id: 'bd-2', depends_on_id: 'bd-1' })]
+          })
+        ]
+      })
+    )
+
+    expect(blocked()).toEqual(['bd-2'])
+
+    await emit('tracker:delta', delta({ upserted: [issue({ id: 'bd-1', status: 'closed' })] }))
+
+    expect(blocked()).toEqual(['bd-2'])
+    const card = tracker.boardColumns.value.flatMap((c) => c.tasks).find((t) => t.id === 'bd-2')
+    expect(card.bdStatus).toBe('blocked')
+    expect(card.blockedBy).toBe(0)
+  })
+
   it('carries bd\'s own status beside the column the card is drawn in', async () => {
     // Blocked is a column, not a status anybody writes: the issue is `open`
     // with an unfinished blocker. A menu offering to move it needs the word bd

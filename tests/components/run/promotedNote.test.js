@@ -20,10 +20,17 @@ describe('promotedNote', () => {
     )
   })
 
+  it('names an Unblock as the source, covering the card menu and the inspector header alike', () => {
+    expect(promotedNote('unblock')).toBe(
+      'promoted: человек снял блокировку с задачи из меню карточки или из заголовка инспектора.'
+    )
+  })
+
   it('starts every note with the same marker, so a program can find it whichever source it came from', () => {
     expect(promotedNote('run').startsWith('promoted:')).toBe(true)
     expect(promotedNote('column').startsWith('promoted:')).toBe(true)
     expect(promotedNote('status').startsWith('promoted:')).toBe(true)
+    expect(promotedNote('unblock').startsWith('promoted:')).toBe(true)
   })
 
   it('says nothing about a source it has not been told about, rather than guessing at one', () => {

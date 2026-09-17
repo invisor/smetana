@@ -243,6 +243,19 @@ whose two closed lists are written out there and again in `model.rs`: the doubli
 the storage ladder carry, with the same obligation — what the front end offers must be a subset of
 what Rust accepts, or the value loses itself on the next save with nothing on screen to say so.
 
+`reports` is the other section that is **global rather than per project**, on `kanban`'s own
+argument one line up: how many rows a page of the Reports tab holds (`perPage`, one of `20`, `50`,
+`100`) and which end of the list is read first (`order`, `newest` or `oldest`) are a person's own
+habits of reading, and the tab has no per-project vocabulary to hang either on — a report belongs to
+whichever project wrote it, but how many of them somebody wants on a page at once does not. Both
+default to `20` and `newest`, which is what the tab opens on before anybody has touched either
+control; the two closed lists are written out a second time in `components/run/reportsPage.js`
+(`PAGE_SIZES`, `ORDERS`), under the same obligation `kanban`'s doubling carries — what the tab offers
+must stay a subset of what `ReportsSettings::validate` accepts, or a value refused here reverts to the
+default on the next save with nothing on screen to say so. Neither field is drawn in the settings
+window: both are edited on the tab itself, so `sharedSettings` is not widened for them. The rule that
+reads the pair is `.claude/rules/runs.md`.
+
 `editor` holds the two the code editor in the centre column reads, and the second of them is the
 one whose default argument runs the other way from `git.autoFetch`'s. `wordWrap` says whether a line
 longer than the pane wraps instead of scrolling sideways, and it **ships off**, because off is

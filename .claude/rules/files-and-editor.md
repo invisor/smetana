@@ -465,7 +465,18 @@ row is files, and two of its kinds are **derived rather than remembered**: the A
 only while the project has an agent session, and one tab per shell session. Both come from
 `terminals.js` and both are `.claude/rules/terminal.md`'s to explain; what matters here is that
 neither is in `openTabs`, so nothing about them survives a restart, and a consumer of `tabList` has to
-switch on `kind` rather than assume a tab id is a path. The split is by
+switch on `kind` rather than assume a tab id is a path.
+
+**A sixth kind sits at the very end of the row: Reports**, one closeable page about the project as a
+whole rather than about any one file, repository or session (`.claude/rules/runs.md`). Whether it is
+open is `reportsOpen`, a `ref` in `tabs.js` beside `diffTabs` and for the identical reason — the same
+lifetime a diff tab has, so `resetTabs` empties it on a project switch and a restart never has to
+repair it: `REPORTS_TAB_ID` can never appear in `openTabs`, and `ProjectState::validate` already
+refuses an `activeTab` that is neither pinned nor one of them, so it falls back to the board with no
+change in Rust at all. Its id is built the same zero-byte way the diff and terminal ids are, for the
+same reason — it sits in the tab row and can land in `activeTab` beside a path, so it has to be a
+string no file can be called. Opening it is idempotent (`openReportsTab`), closing it goes through
+the row's own `neighbourIn`, the same as a diff or a shell tab (`closeReportsTab`). The split is by
 lifetime: the list of open tabs survives a restart and lives in settings, the buffers do not and live
 here. The mechanics are VS Code's: a single click opens a preview tab that the next single click
 replaces in place, a double click makes it permanent, and so does the first edit — which is what

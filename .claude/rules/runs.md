@@ -35,6 +35,7 @@ touching any of the three.
 | `queue.rs` | what is left to do and whether to run another batch — pure, and where the tests are |
 | `summary.rs` | what the run did, as a diff of the board between its first read and its last — pure, and where those tests are |
 | `report.rs` | that summary and the batches' own accounts, rendered into a self-contained HTML document — pure, and where those tests are |
+| `reports.rs` | the Reports tab's list: `report.rs`'s own documents read back into a row apiece — pure over text, and where the round-trip test against `render` lives |
 | `journal.rs` | every decision the loop made, stamped and written as it is made — the line builders are pure and carry the tests, `Journal` is the write-through |
 | `awake.rs` | one power assertion for as long as any run is live anywhere — the counting rule, pure, and where those tests are |
 | `service.rs` | the worker: the loop, one run per scope per project |
@@ -864,11 +865,12 @@ run's lead, finding the very same task back in `bd ready`, had no machine-readab
 person did this" from "the status slipped", read it as the second and wrote the task straight back
 to `deferred`, undoing a person's decision. `components/run/promotedNote.js`, beside
 `readyPromote.js` in the same pure-module family this file already names throughout, is the one rule
-for the note text and the three call sites in `DesktopApp.vue` that write it: starting a run over a
+for the note text and the four call sites in `DesktopApp.vue` that write it: starting a run over a
 card (`startTheRun`, gated the same as `readyPromoteNote` above — `promotesToReady`), promoting a
 whole Deferred column (`confirmPromote`, behind `PromoteColumnModal.vue`, described in
-`.claude/rules/kanban-board.md`), and a direct status change from the card menu or the inspector
-header (`setTaskStatus`). All three send the status and the note in one `bd update` —
+`.claude/rules/kanban-board.md`), a direct status change from the card menu or the inspector
+header (`setTaskStatus`), and Unblock releasing a manual lock (`toggleLock`, smetana-44mw, described
+in `.claude/rules/kanban-board.md`). All four send the status and the note in one `bd update` —
 `append_notes`, the same flag `queue::release`'s own `parked:` note above rides on — so a promote and
 its trace can never land as two writes with a crash between them. The marker is a third of the same
 kind as `parked:` and `resolved:`: two words a program can grep for, then Russian prose for whoever
