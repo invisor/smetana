@@ -121,13 +121,21 @@ export const boardColumns = computed(() => {
     const blockedByIds = blockedBy.get(issue.id) ?? []
     const blockingIds = blocking.get(issue.id) ?? []
 
-    /* Blocked is a column, not a status anybody writes. bd has no `blocked`
-       status on these issues — they are `open` with an unfinished blocker, and
-       `bd ready` works out the difference on every query rather than storing
-       it. The board does the same: closing a blocker moves its dependants into
-       Ready by itself, with nothing to update and nothing that can be left
-       stale. Storing it instead would put a write between a blocker closing and
-       the work becoming available. */
+    /* Blocked is a column, and it draws two different things. An `open` issue
+       with an unfinished blocker is computed into it fresh on every read — bd
+       stores no status for that at all, `bd ready` works out the difference on
+       every query, and closing the blocker moves the card into Ready by
+       itself, with nothing to update and nothing that can be left stale.
+       Storing it instead would put a write between a blocker closing and the
+       work becoming available.
+
+       The stored `blocked` status is a different fact: a person's own lock
+       (smetana-44mw), put on and taken off only by the card menu's Block and
+       Unblock. It lands in this same column because it is exactly the thing
+       Ready must never hand a run, but it is not computed and does not clear
+       itself — an issue closing its blocker leaves a *locked* card locked,
+       since the lock was never about that dependency in the first place, and
+       only `Unblock` writes it back to `open`. */
     const column = blockedByIds.length && issue.status === OPEN ? BLOCKED : issue.status
 
     // A status that is not in bd's set still has to be visible.

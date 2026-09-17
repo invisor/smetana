@@ -2962,6 +2962,48 @@ const menuTargetStyle = {
             @copy-id="copyId"
           />
         </div>
+        <!-- Locked by hand (smetana-44mw): sunken ground, the `blocked` border,
+             a secondary title until the pointer arrives, no dashed dependency
+             band, and the lock badge leading a muted type badge in the
+             footer. Bd still holds it at `blocked` (`status` is the column, the
+             same `blocked` word here), and its menu offers Unblock rather than
+             Block. -->
+        <div :style="{ width: '212px' }">
+          <TaskCard
+            id="bd-lk01"
+            title="Wait for the design review before touching the schema"
+            status="blocked"
+            bd-status="blocked"
+            type="feature"
+            :blocks="2"
+            :copy-state="copyStateFor('bd-lk01')"
+            @copy-id="copyId"
+          />
+        </div>
+        <!-- The same lock, selected and under an epic that is itself locked:
+             `parentBlocked` greys Unblock in its own menu — open it to see the
+             reason written into the row — and Move to…'s Ready with it. -->
+        <div :style="{ width: '212px' }">
+          <TaskCard
+            id="bd-lk02"
+            title="Rename the shared schema column everywhere it is read"
+            status="blocked"
+            bd-status="blocked"
+            type="chore"
+            selected
+            parent-blocked
+            spawned-from="bd-lk00"
+            :copy-state="copyStateFor('bd-lk02')"
+            @copy-id="copyId"
+          />
+        </div>
+      </div>
+      <!-- The muted type badge a locked card's footer draws beside the lock
+           badge: a bare `--border` outline and `--text-muted`, no fill and no
+           type hue — the type still has to be legible, but it is not the
+           argument a locked card is making. -->
+      <div :style="rowStyle">
+        <TypeBadge v-for="t in types" :key="`muted-${t}`" :type="t" muted />
       </div>
       <!-- The board grows to fill its parent, so the harness has to give it one
            with a height. Drag a column by its header, or focus one and press

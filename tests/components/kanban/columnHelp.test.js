@@ -13,7 +13,7 @@ const SAID = {
   ready: 'Ready to start — nothing unfinished is holding it up. A run takes its batch from here.',
   running: 'Being worked on right now: an agent has claimed it and is on it.',
   blocked:
-    'Waiting on another task: something it depends on is not finished. When that one is done, the card moves to Ready on its own.',
+    'Two kinds of card land here. One is waiting on another task — something it depends on is not finished — and moves to Ready by itself the moment that one is done. The other carries a lock badge: a person locked it by hand, and only that same person unlocking it moves it back.',
   done: 'Finished and closed. Nothing left to do here.',
   deferred:
     'Put off on purpose, with nothing holding it up. Findings that turned up outside their own task land here. A run never picks one up — only a person moves it back to Ready.',
@@ -53,6 +53,13 @@ describe('columnHelp', () => {
     // `parent-child` does not, so the sentence names neither parents nor bd.
     expect(SAID.blocked.toLowerCase()).not.toContain('parent')
     expect(SAID.blocked.toLowerCase()).not.toContain('bd')
+  })
+
+  it('names both reasons a card sits in Blocked: a dependency that resolves itself, and a manual lock only a person clears', () => {
+    const said = SAID.blocked.toLowerCase()
+    expect(said).toContain('depends on')
+    expect(said).toContain('ready by itself')
+    expect(said).toContain('lock')
   })
 
   it('gives a status it has never heard of a sentence rather than silence', () => {

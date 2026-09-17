@@ -128,12 +128,47 @@ const runLabel = (reason) => (reason ? `Run this — ${reason}` : 'Run this')
    on the ordinary menu, which is the thing this rule exists to change. */
 const isDone = (bdStatus) => bdStatus === CLOSED || normalizeStatus(bdStatus) === 'done'
 
-export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy }) {
+/* bd's own word for a task somebody has locked by hand — a stored status, not
+   the computed Blocked column, and the front end's one copy of it beside
+   `READY` above. `lockCascade.js` keeps the identical string for the same
+   reason `parked.js` keeps `PARKED`: the two never meet, so there is nothing
+   to import it from without pulling that whole module in for one word. */
+const LOCKED = 'blocked'
+
+export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy, parentBlocked = false }) {
   /* A write in flight greys everything: a bd call takes about two seconds, and
      a live menu for those two seconds invites a second choice racing the
      first. */
   const frozen = Boolean(busy)
   const done = isDone(bdStatus)
+
+  /* Block on an `open` card — Ready and the computed Blocked column alike,
+     which is every card this menu ever sees at that status — and Unblock on
+     one bd already holds `blocked`. Neither row on anything else: `done` has
+     nothing left to lock, and every status in between (`in_progress`,
+     `ready_to_merge`, `parked`, `deferred`, `pinned`, `hooked`, a project's own
+     custom word) is an agent's business or already out of `bd ready`'s reach
+     for a reason of its own, so a lock row there would ask a question nobody
+     needs answered. Absent rather than greyed, the same trade `resolve` and
+     `fix` above make: a row dead everywhere but a handful of cards is a row a
+     person learns to read past.
+
+     `parentBlocked` only ever greys Unblock — a descendant of a locked epic
+     cannot be freed on its own, since the epic would then be locked over an
+     open child, exactly the state locking an epic exists to prevent. It never
+     touches Block: nothing stops a person locking one more task under an epic
+     that is not locked itself. */
+  const lockRow =
+    bdStatus === READY
+      ? [{ kind: 'lock', label: 'Block', icon: 'lock', disabled: frozen }]
+      : bdStatus === LOCKED
+        ? [{
+            kind: 'lock',
+            label: parentBlocked ? 'Unblock — its epic is blocked' : 'Unblock',
+            icon: 'lock-open',
+            disabled: frozen || parentBlocked
+          }]
+        : []
 
   return [
     /* First, above the play, and only on a parked card. A parked task is one an
@@ -218,6 +253,7 @@ export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy }) {
       icon: 'git-branch-plus',
       disabled: frozen
     },
+    ...lockRow,
     {
       kind: 'move',
       label: 'Move to…',
@@ -231,7 +267,12 @@ export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy }) {
            write that changes nothing, and two seconds of a greyed board for
            nothing is worse than an option that cannot be pressed. */
         icon: option.value === bdStatus ? 'check' : undefined,
-        disabled: frozen || option.value === bdStatus
+        /* Ready is refused a second way on a descendant of a locked epic: the
+           lock row above already refuses Unblock for the same reason, and this
+           is the other door onto the identical rule — a straight move to
+           Ready would free this one task from a lock the epic is still
+           holding it under. */
+        disabled: frozen || option.value === bdStatus || (parentBlocked && option.value === READY)
       }))
     },
     { type: 'separator' },

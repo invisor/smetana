@@ -58,6 +58,7 @@ import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
 import { isParked, needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
+import { lockIds, parentBlocked as parentBlockedOf, unlockIds } from '../components/kanban/lockCascade.js'
 /* The whole of what happens on screen after a copy — the board's id and a
    session row's menu both, one policy and one duration for the two of them, and
    the same one the gallery answers with. */
@@ -4362,16 +4363,24 @@ watch(
   { immediate: true }
 )
 
-/* The status write, tracked by the id it was asked for rather than by a bare
+/* Every id with a status write in flight, tracked by id rather than by a bare
    boolean — the reason `deletingId` below already is one. There are two
    triggers for the same menu now and they disagree about which issue they are
    over: the card's acts on whichever card it was opened from, the Task &
    details header's on the selected one. A bd call takes about two seconds, and
    a flag shared between issues would grey the wrong one of the two for those
-   two seconds — which is what makes the id load-bearing rather than tidy. */
-const writingId = ref(null)
+   two seconds — which is what makes the id load-bearing rather than tidy.
+
+   A set rather than one id since `toggleLock` below joined `setTaskStatus`
+   here: locking or unlocking an epic writes several issues one after another,
+   and every card the cascade touches has to grey for the whole of it — the
+   card whose menu was pressed and every descendant riding along with it —
+   not only whichever one is being written this instant. `reactive`, the way
+   `stores/tabs.js`'s own `sourceTabs` is, so `add` and `delete` are seen by
+   `orderedColumns` without a reassignment on every write. */
+const writingIds = reactive(new Set())
 const setTaskStatus = async (id, status) => {
-  writingId.value = id
+  writingIds.add(id)
   try {
     /* smetana-fpw7: this is the card menu's and the Task & details header's
        write, `moveToReadyAnyway` below included — the third of the three
@@ -4389,16 +4398,69 @@ const setTaskStatus = async (id, status) => {
   } catch {
     // the message already sits in trackerState.lastError
   } finally {
-    writingId.value = null
+    writingIds.delete(id)
+  }
+}
+
+/* Block and Unblock, and the cascade either carries across an epic's open or
+   locked descendants — `lockCascade.js`'s whole reason for existing. One
+   `updateIssue` per id, in the order that module settles, the same
+   one-at-a-time shape `confirmPromote` above already uses and for the same
+   reason: bd's own worker serialises writes anyway, and firing them all at
+   once would only bury the order they are meant to land in.
+
+   Every id the cascade will touch greys at once, before the first write goes
+   out — `writingIds` holds the whole set for as long as any of it is
+   unwritten, so a card three levels down from the epic that was pressed reads
+   as busy from the first frame, not only once its own turn comes. Each id
+   leaves the set the moment its own write lands, success or failure alike,
+   which is what lets the rest of the board keep reading while one write is
+   still out.
+
+   The loop stops on the first refusal — the message is already in
+   `trackerState.lastError` and draws as a toast — and a project switch mid-
+   cascade stops it exactly as `confirmPromote` stops there, since every
+   remaining write would be aimed at a tracker this window has moved off of.
+   Either way, whatever the loop never reached is dropped from `writingIds` in
+   the `finally` below rather than left grey for good. */
+const toggleLock = async (id) => {
+  const issue = issueById(id)
+  if (!issue) return
+  const issues = [...trackerState.issues.values()]
+  const locking = issue.status === READY
+  const unlocking = issue.status === 'blocked'
+  if (!locking && !unlocking) return
+  const ids = locking ? lockIds(issues, id) : unlockIds(issues, id)
+  if (!ids.length) return
+  const path = activePath.value
+  for (const oneId of ids) writingIds.add(oneId)
+  try {
+    for (const oneId of ids) {
+      try {
+        await updateIssue(
+          oneId,
+          locking ? { status: 'blocked' } : { status: READY, append_notes: promotedNote('unblock') }
+        )
+      } catch {
+        // the message already sits in trackerState.lastError
+        return
+      } finally {
+        writingIds.delete(oneId)
+      }
+      if (activePath.value !== path) return
+    }
+  } finally {
+    for (const oneId of ids) writingIds.delete(oneId)
   }
 }
 
 /* Which issue bd is being asked to delete, or null. An id and not a bare
-   boolean, matching `writingId` above: the selection can move while bd is still
-   working, and a flag shared between issues would answer for the wrong one.
+   boolean, matching `writingIds` above: the selection can move while bd is
+   still working, and a flag shared between issues would answer for the wrong
+   one.
 
-   It is read in `orderedColumns` beside `writingId` — one rule about a write in
-   flight on a card — and announced to the dialog as `busy`. Neither is visible
+   It is read in `orderedColumns` beside `writingIds` — one rule about a write
+   in flight on a card — and announced to the dialog as `busy`. Neither is visible
    for a delete, and that is a fact about `deleteIssue` rather than about this
    line: it removes the card in the same synchronous block that sets this, so
    there is no card left to grey and no window left to tell. See `deleteTask`
@@ -4471,7 +4533,7 @@ const openDeleteTask = (id) => {
 
    `deletingId` therefore has no observable consumer left. It is kept because it
    is the flag the announced `busy` mirrors and because `orderedColumns` reads
-   it beside `writingId`, where the pair is one rule rather than two — not
+   it beside `writingIds`, where the pair is one rule rather than two — not
    because anything greys. On the refusal path the issue is put back and the
    flag cleared in the same synchronous continuation, so it is unobservable
    there too.
@@ -4500,6 +4562,7 @@ const deleteTask = async (id) => {
    may be a delta behind. */
 const onTaskAction = ({ kind, id, value }) => {
   if (kind === 'run') return runTask(id)
+  if (kind === 'lock') return toggleLock(id)
   if (kind === 'status') {
     /* The one status write that is asked about first. The status comes from the
        store rather than from the menu that sent this: the card's copy may be a
@@ -4694,8 +4757,13 @@ const healthSaid = computed(() => lastDiagnosticLine(trackerState.health.message
    order. Writing `project.columnOrder` is the whole of saving it — the settings
    store debounces it to disk and loadProjectLayout brings it back, on a restart
    and on a switch alike. */
-const orderedColumns = computed(() =>
-  orderColumns(boardColumns.value, project.columnOrder).map((column) => ({
+const orderedColumns = computed(() => {
+  /* Read once per pass rather than once per card: `parentBlocked` walks the
+     `parent` chain, and asking it against a fresh array for every one of a
+     column's cards would be quadratic in the size of a board that is already
+     rebuilt on every tracker delta. */
+  const issues = [...trackerState.issues.values()]
+  return orderColumns(boardColumns.value, project.columnOrder).map((column) => ({
     ...column,
     /* `runnable` rides in the task object, the way every other thing a card is
        drawn from does — the column v-binds the whole of it, and a second
@@ -4703,7 +4771,10 @@ const orderedColumns = computed(() =>
        `runBlockedReason` rides beside it for the same reason, and it is per
        card because the refusal is per scope now: the card's own play is greyed
        only over a live run on this very task or epic, never over the queue's
-       or a neighbour's. */
+       or a neighbour's. `parentBlocked` joins them for `smetana-44mw`: whether
+       a card's own Unblock is refused because an ancestor is still locked, so
+       the card menu and the Task & details header's copy of it
+       (`inspectedMenu` below) read the very same fact rather than two. */
     tasks: column.tasks.map((task) => {
       const runnable = runnableTask(task)
       return {
@@ -4712,12 +4783,13 @@ const orderedColumns = computed(() =>
         /* A write in flight on this very issue, which greys its whole menu —
            per id, since the menu belongs to the card rather than to the
            selection. */
-        busy: writingId.value === task.id || deletingId.value === task.id,
-        runBlockedReason: runnable ? scopeBusyReason(cardScope(task.id), runsState.runs) : ''
+        busy: writingIds.has(task.id) || deletingId.value === task.id,
+        runBlockedReason: runnable ? scopeBusyReason(cardScope(task.id), runsState.runs) : '',
+        parentBlocked: parentBlockedOf(issues, task.id)
       }
     })
   }))
-)
+})
 
 /* The card behind whatever the Task & details panel is drawing, or null. The
    panel's own menu button is built from it, which is the whole of "the same
@@ -4750,7 +4822,8 @@ const inspectedMenu = computed(() =>
         bdStatus: inspectedCard.value.bdStatus,
         runnable: inspectedCard.value.runnable,
         runBlockedReason: inspectedCard.value.runBlockedReason,
-        busy: inspectedCard.value.busy
+        busy: inspectedCard.value.busy,
+        parentBlocked: inspectedCard.value.parentBlocked
       })
     : []
 )
