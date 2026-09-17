@@ -22,7 +22,12 @@ import Tooltip from '../core/Tooltip.vue'
              spec
              docs/superpowers/specs/2026-08-01-file-tree-and-editor-design.md.
              A double click on a tab drops the temporary flag — hence
-             `promote`. */
+             `promote`.
+   reports - the sixth kind: one closeable page about the project as a whole,
+             naming no file, no repository and no session. Closable like a
+             file, but with a prose label set in sans the way `pinned` and
+             `terminal` are — the tab's own words rather than a name off the
+             disk. */
 const props = defineProps({
   kind: { type: String, default: 'file' },
   label: { type: String, required: true },
@@ -58,7 +63,7 @@ const preview = computed(() => props.kind === 'preview')
 /* Which kinds are captioned in words rather than by a name off the disk. Every
    other tab's label is a file's own name, and those are set in mono like every
    identifier in this system. */
-const PROSE = new Set(['pinned', 'terminal'])
+const PROSE = new Set(['pinned', 'terminal', 'reports'])
 
 const style = computed(() => ({
   display: 'inline-flex',
