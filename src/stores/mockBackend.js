@@ -491,9 +491,10 @@ const MOCK_UNTRACKED = 'notes/todo.txt'
    is the only test `ConversationView` will ever have, and an empty journal
    draws an empty state with every component inside the panel unchecked. So the
    journal holds one of each — both halves of the conversation, a tool call that
-   finished and one still open, a thinking block, what a turn cost — and ends on
-   a question nobody has answered, which is the loud card and the state
-   `session::model::state_of` folds these events down to.
+   finished and one still open, a thinking block, what a turn cost, an answered
+   `AskUserQuestion` (smetana-58j7, below) — and ends on a question nobody has
+   answered, which is the loud card and the state `session::model::state_of`
+   folds these events down to.
 
    The first two turns are the `opening` event's own two shapes
    (`.claude/rules/conversation-panel.md`, "The opening turn"): the new-task
@@ -559,8 +560,60 @@ const MOCK_CONVERSATION = [
   journalEvent(10, 'tool-use', { id: 't1', name: 'Read', detail: 'src-tauri/src/vcs/worktree.rs' }),
   journalEvent(11, 'tool-result', { id: 't1', ok: true, summary: '180 lines' }),
   journalEvent(12, 'result', { tokens_in: 12480, tokens_out: 416, cost_usd: 0.0312, ms: 4200 }),
-  journalEvent(13, 'turn-start', { by: 'person', at: recentAt(18000) }),
-  journalEvent(14, 'user-message', {
+  /* A finished `AskUserQuestion` exchange (smetana-58j7): a `permission` with
+     two questions in `input.questions`, answered, and the turn's own `result`
+     closing it — so `journalRows` draws the reply as an ordinary person's row
+     rather than leaving it to vanish with the card that asked for it. The
+     `answers` map below is written in the order the wire's own `BTreeMap`
+     would give it — sorted by question text, "Should" before "Which" — on
+     purpose: it is the reverse of `input.questions`' own order, the one case
+     this fixture can put in front of a person's own eyes rather than only in
+     front of a test. */
+  journalEvent(13, 'turn-start', { by: 'person' }),
+  journalEvent(14, 'permission', {
+    id: 'q0',
+    tool: 'AskUserQuestion',
+    // `agents::claude::tool_detail` answers the first question's own text for
+    // this tool, never the tool's own name — asserted at `claude.rs`'s
+    // `ask_user_questions_detail_is_the_first_questions_own_text`. Nothing in
+    // the front end reads `detail` for this event today, but the fixture is
+    // this project's only stand-in for what Rust actually produces.
+    detail: 'Which fix should land first?',
+    options: ['allow', 'deny'],
+    input: {
+      questions: [
+        {
+          question: 'Which fix should land first?',
+          header: 'Fix order',
+          multiSelect: false,
+          options: [
+            { label: 'Replace the separator when the folder is made', description: 'Leaves old worktrees alone' },
+            { label: 'Store the folder beside the branch', description: 'Needs a migration' }
+          ]
+        },
+        {
+          question: 'Should the existing worktrees be renamed too?',
+          header: 'Migration',
+          multiSelect: false,
+          options: [
+            { label: 'Yes, rename them now', description: '' },
+            { label: 'No, leave them as they are', description: '' }
+          ]
+        }
+      ]
+    }
+  }),
+  journalEvent(15, 'permission-answered', {
+    id: 'q0',
+    decision: 'allow',
+    answers: {
+      'Should the existing worktrees be renamed too?': 'No, leave them as they are',
+      'Which fix should land first?': 'Replace the separator when the folder is made'
+    }
+  }),
+  journalEvent(16, 'result', { tokens_in: 640, tokens_out: 18, cost_usd: 0.0009, ms: 1100 }),
+  journalEvent(17, 'turn-start', { by: 'person', at: recentAt(18000) }),
+  journalEvent(18, 'user-message', {
     text: 'Do the first one, and run the tests.',
     /* The second name is deliberately long — the chip has to ellipsize it
        rather than let the bubble grow to fit, which a short name never
@@ -571,7 +624,7 @@ const MOCK_CONVERSATION = [
     ],
     at: recentAt(17800)
   }),
-  journalEvent(15, 'reasoning', {
+  journalEvent(19, 'reasoning', {
     text: [
       'The branch name reaches three places: the folder, the tab label and the',
       'record in `.smetana/agents.json`. Only the first one has a filesystem',
@@ -579,15 +632,15 @@ const MOCK_CONVERSATION = [
     ].join('\n'),
     at: recentAt(12000)
   }),
-  journalEvent(16, 'tool-use', {
+  journalEvent(20, 'tool-use', {
     id: 't2',
     name: 'Edit',
     detail: 'src-tauri/src/vcs/worktree.rs',
     at: recentAt(9000)
   }),
-  journalEvent(17, 'tool-result', { id: 't2', ok: true, summary: '2 edits', at: recentAt(8000) }),
-  journalEvent(18, 'tool-use', { id: 't3', name: 'Grep', detail: 'fn worktree_path', at: recentAt(6000) }),
-  journalEvent(19, 'permission', {
+  journalEvent(21, 'tool-result', { id: 't2', ok: true, summary: '2 edits', at: recentAt(8000) }),
+  journalEvent(22, 'tool-use', { id: 't3', name: 'Grep', detail: 'fn worktree_path', at: recentAt(6000) }),
+  journalEvent(23, 'permission', {
     id: 'q1',
     tool: 'Bash',
     detail: 'cargo test --manifest-path src-tauri/Cargo.toml worktree',

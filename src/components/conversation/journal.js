@@ -8,6 +8,8 @@
    (`src-tauri/src/session/model.rs`), unchanged, and what comes back is a list
    of rows a template can `v-for` over. */
 
+import { isAskUserQuestion, parseQuestions } from './askUserQuestion.js'
+
 /* The wire's names, written out once for the whole front end.
 
    `session::model::Event` flattens its kind's fields in beside a kebab-case
@@ -23,9 +25,72 @@
    **An event kind this does not know produces no row.** The chain is closed and
    has no fallback, which is `EventKind`'s own rule one layer up — a missing row
    costs a person nothing the harness's own logs do not still hold, while a wall
-   of raw protocol costs them the panel. The two permission kinds are drawn from
-   the session's open question, at the foot of the panel where it is answered,
-   rather than twice.
+   of raw protocol costs them the panel. `permission` itself is drawn from the
+   session's open question, at the foot of the panel where it is answered,
+   rather than twice, and produces no row of its own here — that is still true
+   of every tool. `permission-answered` used to be the same, for both halves of
+   the pair alike, and that is no longer true of one tool.
+
+   **`AskUserQuestion`'s answer is the one `permission-answered` that becomes a
+   row, and it becomes an ordinary `kind: 'user'` one — the person's own words,
+   read exactly as a typed message would be.** Every other tool's Allow/Deny —
+   `Write`, `Edit`, `Bash`, the rest — stays wordless: a driven session asks
+   permission on nearly every turn, and a row for each would turn the ledger
+   into a permission log nobody reads. `AskUserQuestion` is different in kind
+   rather than in degree: the reply *is* words, chosen or typed by a person, and
+   the agent goes on as though it had been said to — so leaving it undrawn is
+   the actual defect this pair of branches exists to fix (smetana-58j7), not a
+   consistent application of the rule above.
+
+   The fold keeps a `permissions` map beside `calls`, the same shape for the
+   same reason: a `permission` event is remembered by its own `id`, carrying
+   the tool name and the raw `input` its questions live in, and
+   `permission-answered` looks itself up by the same id when it lands.
+
+   **A non-empty `answers` is not proof of the tool on its own, and the wire
+   does not hold that invariant for this fold to lean on.** `session_answer`
+   (`src-tauri/src/session/commands.rs`) takes `answers: Option<BTreeMap<String,
+   String>>` straight from the front end, and `Request::Answer`
+   (`src-tauri/src/session/service.rs`) writes it into `PermissionAnswered`
+   unchanged — there is no check anywhere on that road that the id it is
+   answering named `AskUserQuestion`. What keeps `answers` non-empty for that
+   tool alone today is the road a press down `AskUserQuestion.vue` takes —
+   through `ConversationView.vue`, `conversation.js`, `commands.rs` and
+   `service.rs` — never sending one for any other tool, a convention that
+   road happens to keep rather than a rule this fold may trust blind. So the
+   condition checks the tool itself, through the looked-up `permission` and
+   `isAskUserQuestion`, whenever there is one left to check:
+   `hasAnswers && (!permission || isAskUserQuestion(permission.tool))`. Only
+   when the `permission` has been trimmed out of this journal ahead of its own
+   answer does a non-empty `answers` draw a row on trust alone — which the
+   design requires rather than merely allows: a trimmed `permission` must not
+   silently swallow the one row a person's own answer is, and there is nothing
+   else left here to check it against. Ordering multiple questions the way
+   they were actually asked, rather than the way `answers`' own `BTreeMap`
+   sorts them, is the other thing the looked-up `permission` is for
+   (`parseQuestions(permission.input)`, in the order `input.questions` gives).
+
+   A decline (`decision: 'deny'`, `answers: null`) draws the fixed sentence
+   below, but only once the looked-up `permission` says the tool actually was
+   `AskUserQuestion` — since an ordinary Deny is `decision: 'deny'` with no
+   `answers` too, and a `permission` trimmed out from under either one leaves
+   the two indistinguishable on purpose: nothing here invents which tool was
+   declined.
+
+   **A second structured tool is a single name added to the gate
+   `session::service::question` applies — the rule file's own words — and
+   this fold does not follow it there for free.** `isAskUserQuestion` in
+   `askUserQuestion.js` is a closed comparison against one tool name, and
+   every check above reads through it rather than through a tool's own
+   `input`; a second tool widened on the Rust side and left unwidened here
+   would have its own answers arrive with a non-empty `answers` map and a
+   `permission` that fails `isAskUserQuestion`, which this fold reads as the
+   trimmed case's *opposite* — a tool it must not trust — and silently draws
+   no row at all. That is smetana-58j7's own defect again, under a different
+   tool's name, with every gate here green and nothing to say so.
+   `askUserQuestion.js` is the one place to widen: whatever predicate replaces
+   or joins `isAskUserQuestion` there is what both branches above read, so
+   this file follows without a second edit.
 
    A tool call and its result are **one row**, folded by the id they share:
    `tool-result` carries no name and no detail of its own, so a row of its own
@@ -249,9 +314,67 @@ const CHILD_GONE = ['failed', 'exited']
    replaces. */
 const TURN_ENDED = 'The session ended while this turn was still open.'
 
+/* Decline to answer's own fixed sentence — UI copy, English, sentence case,
+   like everything else in the panel. Without a row here the question simply
+   vanishes and the agent's next words about the refusal have nothing above
+   them to point at. */
+const DECLINED_TEXT = 'Declined to answer.'
+
+/* `permission-answered`'s own `answers`, turned into the one string a row
+   draws — the boundary between the wire's map and the panel's markdown, kept
+   here rather than inlined in the loop below because it is a whole rule with
+   two edges of its own.
+
+   Ordered by `input.questions` where a `permission` is still in this journal
+   to give that order — never by `answers`' own keys, which travel as a
+   `BTreeMap` and so arrive sorted by question text, not by the order the
+   agent actually asked them (the Design section this pair of branches came
+   from is explicit about the two disagreeing). A question `answers` names
+   that `parseQuestions` never turned up is appended at the end rather than
+   dropped, and where there is no `permission` at all — trimmed out of the
+   journal ahead of its own answer — the map's own key order is all there is,
+   which is `Object.keys` on however the wire built the object.
+
+   A single answer is the text as the person gave it, with no question
+   repeated above it — read as an ordinary sentence, because for one question
+   it is one. More than one is a markdown list, one item per question, bold
+   question then a colon then the answer — the shape `Markdown.vue` already
+   draws for any other list in the panel.
+
+   `input` is a tool's own raw JSON, read defensively rather than trusted —
+   this file's own family header says so, and `parseQuestions` degrades a
+   malformed field rather than throwing. Two entries of `input.questions`
+   naming the same question text is one shape that defensiveness has to cover:
+   `used` guards the first loop as well as the second, because without it a
+   repeated question text would look itself up in `answers` twice and push
+   the same pair twice, drawing a two-line list for what was, on the wire,
+   one answer — `buildAnswers` already collapses two such questions to one
+   key, so the row would show more items than the card ever had. */
+function answerText(permission, answers) {
+  const entries = []
+  const used = new Set()
+  if (permission) {
+    for (const question of parseQuestions(permission.input)) {
+      if (!used.has(question.question) && Object.prototype.hasOwnProperty.call(answers, question.question)) {
+        entries.push([question.question, answers[question.question]])
+        used.add(question.question)
+      }
+    }
+  }
+  for (const key of Object.keys(answers)) {
+    if (!used.has(key)) entries.push([key, answers[key]])
+  }
+  return entries.length === 1 ? entries[0][1] : entries.map(([q, a]) => `- **${q}**: ${a}`).join('\n')
+}
+
 export function journalRows(events = [], state) {
   const rows = []
   const calls = new Map()
+  /* `permission` events by id, so `permission-answered` can look its own
+     tool and questions back up — the same shape `calls` keeps for a tool call
+     and its result, and for the same reason: the two events share nothing but
+     the id. */
+  const permissions = new Map()
   /* The turn open right now, if any — never more than one, since a person
      cannot send a second message while the composer's one button reads Stop.
      Cleared the moment `result` or `error` closes it, and read once more after
@@ -329,6 +452,33 @@ export function journalRows(events = [], state) {
     } else if (event.kind === 'tool-result') {
       const row = calls.get(event.id)
       if (row) row.result = { ok: event.ok, summary: event.summary }
+    } else if (event.kind === 'permission') {
+      // No row of its own — `held.question` at the foot of the panel already
+      // draws the open question, and this file's own header says why drawing
+      // it a second time here was rejected. Remembered by id purely so its
+      // own answer, below, can look the tool and the questions back up.
+      permissions.set(event.id, event)
+    } else if (event.kind === 'permission-answered') {
+      const permission = permissions.get(event.id)
+      const answers = event.answers
+      const hasAnswers = answers != null && Object.keys(answers).length > 0
+      if (hasAnswers && (!permission || isAskUserQuestion(permission.tool))) {
+        // Checked against the tool itself, not trusted from `answers` alone —
+        // `session_answer` takes `answers` straight from the front end with
+        // no tool check on the Rust side, so nothing on the wire actually
+        // stops some other tool's reply from carrying one. Only a trimmed
+        // `permission` — nothing left here to check the tool against — falls
+        // back to trusting a non-empty `answers` outright, which the design
+        // requires: it must not silently swallow the one row a person's
+        // answer is. See this file's own header.
+        rows.push({ key: event.seq, kind: 'user', text: answerText(permission, answers), attachments: [] })
+      } else if (permission && isAskUserQuestion(permission.tool) && event.decision === 'deny') {
+        // A decline needs the looked-up `permission` to tell it apart from an
+        // ordinary Deny on any other tool — both are `decision: 'deny'` with
+        // no `answers` — so a trimmed `permission` leaves this silent rather
+        // than guessing which tool was refused.
+        rows.push({ key: event.seq, kind: 'user', text: DECLINED_TEXT, attachments: [] })
+      }
     } else if (event.kind === 'result') {
       // A defensive close, not the ordinary road: this wire's protocol closes
       // a text block with its own `text` before a turn's `result` can follow,
