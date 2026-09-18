@@ -6465,8 +6465,19 @@ const showReport = (report) => {
     return false
   }
   openFile(path, { permanent: true })
+  lastReport.value = path
   return true
 }
+
+/* The row the Reports tab marks: the last document `showReport` opened, for
+   as long as that tab is still open. Derived rather than stored, so closing
+   the tab clears the mark without a second piece of state to keep in step
+   with `openTabs`. Not persisted: which report was last opened is a fact
+   about this window, not a preference. */
+const lastReport = ref(null)
+const selectedReport = computed(() =>
+  lastReport.value && project.openTabs.includes(lastReport.value) ? lastReport.value : null
+)
 
 /* Endings this window has already dealt with, by token, in memory and nowhere
    else — the same reasoning `deliveredRuns` carries one file over, and the same
@@ -7209,6 +7220,7 @@ const toastStackStyle = {
             :loading="reportsState.loading"
             :per-page="settings.reports.perPage"
             :order="settings.reports.order"
+            :selected="selectedReport"
             @update:per-page="settings.reports.perPage = $event"
             @update:order="settings.reports.order = $event"
             @open="showReport"
