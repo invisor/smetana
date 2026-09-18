@@ -88,6 +88,12 @@ pub struct BatchLine {
     pub seconds: u64,
     pub tasks: Vec<BatchTask>,
     pub notes: Option<String>,
+    /// The lead's own plain-language account of the batch, asked for in
+    /// `agents::prompt` as the batch file's `summary` — two or three sentences
+    /// for somebody who does not read code, with no identifiers in it. It is
+    /// escaped and never `prose()`d, because it was asked to hold none: there
+    /// is nothing here for that rule to mark as a backtick span.
+    pub summary: Option<String>,
     pub reported: bool,
     pub outcome: BatchOutcome,
     pub left_behind: Vec<Leftover>,
@@ -120,6 +126,7 @@ pub struct LockRelease {
 pub struct ParsedBatch {
     pub tasks: Vec<BatchTask>,
     pub notes: Option<String>,
+    pub summary: Option<String>,
     pub reported_ok: bool,
 }
 
@@ -129,6 +136,10 @@ struct BatchFile {
     tasks: Vec<BatchTask>,
     #[serde(default)]
     notes: Option<String>,
+    /// Two or three plain sentences for the Reports tab's row, asked for in
+    /// `agents::prompt`. Optional, like `notes`: an older account has none.
+    #[serde(default)]
+    summary: Option<String>,
 }
 
 /// Everything the document is made of. `tasks` is `Option` for the reason
@@ -161,8 +172,13 @@ pub struct RunReport<'a> {
 /// itself.
 pub fn parse_batch(text: &str) -> ParsedBatch {
     match serde_json::from_str::<BatchFile>(text) {
-        Ok(file) => ParsedBatch { tasks: file.tasks, notes: file.notes, reported_ok: true },
-        Err(_) => ParsedBatch { tasks: vec![], notes: None, reported_ok: false },
+        Ok(file) => ParsedBatch {
+            tasks: file.tasks,
+            notes: file.notes,
+            summary: file.summary,
+            reported_ok: true,
+        },
+        Err(_) => ParsedBatch { tasks: vec![], notes: None, summary: None, reported_ok: false },
     }
 }
 
@@ -304,6 +320,24 @@ pub fn render(report: &RunReport) -> String {
     cell(&mut out, "batches", &report.batches.len().to_string(), "");
     cell(&mut out, "total", &human(report.seconds), "");
     out.push_str("</div>");
+
+    // The lead's own plain-language account of the run, one paragraph per
+    // batch that gave one, in batch order. It stands before `closed` because
+    // it is the sentence the Reports tab draws for this document, and it
+    // comes from the batches rather than the board, so an unread board does
+    // not silence it. No section over nothing: `reports::parse_summary` falls
+    // back to the closed titles, and drawing an empty heading here would only
+    // give it an empty string to read.
+    let summaries: Vec<&str> = report.batches.iter().filter_map(|b| b.summary.as_deref()).collect();
+    if !summaries.is_empty() {
+        out.push_str("<div class=\"sec\"><span>summary</span></div><div class=\"summary\">");
+        for text in summaries {
+            out.push_str("<p>");
+            out.push_str(&escape(text));
+            out.push_str("</p>");
+        }
+        out.push_str("</div>");
+    }
 
     match report.tasks {
         // Not a zero, and not a silence either: the reason the lists are
@@ -693,6 +727,8 @@ padding-bottom:6px;margin:0 0 -8px;font-family:ui-monospace,\"SF Mono\",Menlo,\
 Consolas,\"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;\
 text-transform:uppercase;font-weight:400;color:var(--text-secondary)}\
 .sec-n{color:var(--text-muted);letter-spacing:0}\
+.summary{display:flex;flex-direction:column;gap:8px}\
+.summary p{margin:0;font-size:14px;line-height:1.5;color:var(--text-primary)}\
 .list{display:flex;flex-direction:column;gap:8px}\
 .card{background:var(--surface-raised);border:1px solid var(--border-subtle);border-radius:4px;\
 box-shadow:var(--shadow-raised);padding:16px;display:flex;flex-direction:column;gap:8px}\
@@ -784,6 +820,7 @@ mod tests {
             seconds: 600,
             tasks: vec![],
             notes: None,
+            summary: None,
             reported: true,
             // The ordinary ending, so a test about anything else is not also a
             // test about a crash.
@@ -1267,6 +1304,7 @@ mod tests {
             seconds,
             tasks: ids.iter().map(|id| BatchTask { id: (*id).into(), did: None }).collect(),
             notes: None,
+            summary: None,
             reported: true,
             outcome: BatchOutcome::Exited,
             left_behind: vec![],
@@ -1300,6 +1338,61 @@ mod tests {
         assert!(parsed.reported_ok);
         assert!(parsed.tasks[0].did.is_none());
         assert!(parsed.notes.is_none());
+    }
+
+    #[test]
+    fn a_batch_file_with_a_summary_parses_it_and_one_without_reads_none() {
+        let with = parse_batch(r#"{"tasks":[],"summary":"Two sentences."}"#);
+        assert_eq!(with.summary.as_deref(), Some("Two sentences."));
+        let without = parse_batch(r#"{"tasks":[]}"#);
+        assert_eq!(without.summary, None);
+        assert!(without.reported_ok);
+    }
+
+    #[test]
+    fn the_summary_section_stands_before_closed_and_carries_one_paragraph_per_batch() {
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
+        let mut first = batch(1);
+        first.summary = Some("Fixed the login form & tidied the tests.".into());
+        let mut second = batch(2);
+        second.summary = Some("Added the export button.".into());
+        let batches = [first, second];
+        let html = render(&report(3600, Some(&tasks), &batches));
+
+        let sec = html
+            .find("<div class=\"sec\"><span>summary</span></div><div class=\"summary\">")
+            .expect("the summary section");
+        let closed = html.find("<div class=\"sec\"><span>closed</span>").expect("the closed section");
+        assert!(sec < closed, "summary comes before closed: {html}");
+        assert!(
+            html.contains("<p>Fixed the login form &amp; tidied the tests.</p><p>Added the export button.</p>"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn a_batch_without_a_summary_is_skipped_and_no_summary_at_all_draws_no_section() {
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
+        let mut with = batch(1);
+        with.summary = Some("One thing.".into());
+        let batches = [with, batch(2)];
+        let html = render(&report(3600, Some(&tasks), &batches));
+        assert!(html.contains("<div class=\"summary\"><p>One thing.</p></div>"), "{html}");
+
+        let none = [batch(1), batch(2)];
+        let html = render(&report(3600, Some(&tasks), &none));
+        assert!(!html.contains("<span>summary</span>"), "no section over nothing: {html}");
+    }
+
+    #[test]
+    fn the_summary_is_drawn_even_when_the_board_could_not_be_read() {
+        // The summary comes from the batches, not from the board.
+        let mut b = batch(1);
+        b.summary = Some("Did a thing.".into());
+        let batches = [b];
+        let html = render(&report(3600, None, &batches));
+        assert!(html.contains("<span>summary</span>"), "{html}");
+        assert!(html.contains("class=\"notice\""), "{html}");
     }
 
     #[test]

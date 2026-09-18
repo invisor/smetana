@@ -1434,13 +1434,16 @@ async fn finish(
 fn read_batch(dir: &Path, n: u32, seconds: u64, outcome: BatchOutcome) -> BatchLine {
     let parsed = match std::fs::read_to_string(dir.join(format!("batch-{n}.json"))) {
         Ok(text) => report::parse_batch(&text),
-        Err(_) => report::ParsedBatch { tasks: vec![], notes: None, reported_ok: false },
+        Err(_) => {
+            report::ParsedBatch { tasks: vec![], notes: None, summary: None, reported_ok: false }
+        }
     };
     BatchLine {
         n,
         seconds,
         tasks: parsed.tasks,
         notes: parsed.notes,
+        summary: parsed.summary,
         reported: parsed.reported_ok,
         outcome,
         left_behind: vec![],
