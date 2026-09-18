@@ -328,7 +328,17 @@ pub fn render(report: &RunReport) -> String {
     // not silence it. No section over nothing: `reports::parse_summary` falls
     // back to the closed titles, and drawing an empty heading here would only
     // give it an empty string to read.
-    let summaries: Vec<&str> = report.batches.iter().filter_map(|b| b.summary.as_deref()).collect();
+    //
+    // Filtered on content rather than on `Option`: the prompt asks for the
+    // key by name, so `"summary": ""` is a shape a lead can plausibly write,
+    // and `Some("")` must not count as "gave one" — an empty paragraph is
+    // exactly the blank cell this whole feature exists to keep off the row.
+    let summaries: Vec<&str> = report
+        .batches
+        .iter()
+        .filter_map(|b| b.summary.as_deref())
+        .filter(|s| !s.trim().is_empty())
+        .collect();
     if !summaries.is_empty() {
         out.push_str("<div class=\"sec\"><span>summary</span></div><div class=\"summary\">");
         for text in summaries {
@@ -1382,6 +1392,28 @@ mod tests {
         let none = [batch(1), batch(2)];
         let html = render(&report(3600, Some(&tasks), &none));
         assert!(!html.contains("<span>summary</span>"), "no section over nothing: {html}");
+    }
+
+    #[test]
+    fn an_empty_summary_counts_as_none_given_rather_than_an_empty_paragraph() {
+        // The prompt asks for the key by name, so a lead writing `"summary": ""`
+        // is a plausible batch file, and it must not draw a blank cell — the
+        // exact fault this whole feature exists to keep off the row.
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
+        let mut blank = batch(1);
+        blank.summary = Some("".into());
+        let mut whitespace = batch(2);
+        whitespace.summary = Some("   ".into());
+        let html = render(&report(3600, Some(&tasks), &[blank, whitespace]));
+        assert!(!html.contains("<span>summary</span>"), "no section over nothing: {html}");
+
+        // A real summary beside a blank one draws only the real one.
+        let mut blank = batch(1);
+        blank.summary = Some("".into());
+        let mut real = batch(2);
+        real.summary = Some("Did a real thing.".into());
+        let html = render(&report(3600, Some(&tasks), &[blank, real]));
+        assert!(html.contains("<div class=\"summary\"><p>Did a real thing.</p></div>"), "{html}");
     }
 
     #[test]
