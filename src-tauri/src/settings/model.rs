@@ -547,7 +547,7 @@ impl KanbanSettings {
 #[serde(default, rename_all = "camelCase")]
 pub struct ReportsSettings {
     pub per_page: u32,
-    /// `newest` or `oldest`.
+    /// `newest`, `oldest` or `longest`.
     pub order: String,
 }
 
