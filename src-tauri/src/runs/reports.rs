@@ -183,14 +183,23 @@ fn cell_duration(html: &str) -> Option<String> {
 
 /// The `summary` section's paragraphs, joined by a blank line so a tooltip
 /// keeps them apart while a row's single line collapses the whitespace.
+///
+/// An empty paragraph is dropped rather than kept: `render` no longer writes
+/// one (`"summary": ""` is filtered on the way in), but a document edited by
+/// hand can still hold `<p></p>`, and counting it as content would leave the
+/// row a blank cell instead of falling through to `closed_titles` below.
 fn parse_summary(html: &str) -> Option<String> {
     let body = between(
         html,
         "<div class=\"sec\"><span>summary</span></div><div class=\"summary\">",
         "</div>",
     )?;
-    let paragraphs: Vec<String> =
-        body.split("</p>").filter_map(|p| p.strip_prefix("<p>")).map(unescape).collect();
+    let paragraphs: Vec<String> = body
+        .split("</p>")
+        .filter_map(|p| p.strip_prefix("<p>"))
+        .map(unescape)
+        .filter(|p| !p.trim().is_empty())
+        .collect();
     (!paragraphs.is_empty()).then(|| paragraphs.join("\n\n"))
 }
 
@@ -213,19 +222,33 @@ fn closed_titles(html: &str) -> Option<String> {
 
 /// The inverse of `report::human`: `"1h 12m"`, `"1h"`, `"45m"`, `"30s"`.
 /// Anything else — a shape `human` never wrote — is `None`.
+///
+/// Peeled with `strip_suffix` rather than sliced by a byte offset: a part
+/// whose last *character* is multi-byte (a Cyrillic `"5м"`, a bare `"—"`)
+/// has no byte boundary one position from its end, and slicing there panicked
+/// this parser rather than answering `None` for a shape it does not
+/// recognise — `parse_head` runs over every document under
+/// `.smetana/reports/`, so one hand-placed file took the whole
+/// `run_reports` command down with it. An empty string answers `None` too,
+/// deliberately, and not `Some(0)`: `sortReports`'s own comment is explicit
+/// that an unknown length is never a claim of zero, and reading a blank
+/// `total` cell as the shortest run on the page would be exactly that claim.
+/// The multiplication is checked as well, so a number too large to be a
+/// real duration answers `None` instead of wrapping.
 fn parse_seconds(text: &str) -> Option<u64> {
-    let mut total = 0u64;
+    let mut total: u64 = 0;
+    let mut any = false;
     for part in text.split_whitespace() {
-        let (digits, unit) = part.split_at(part.len().checked_sub(1)?);
+        any = true;
+        let (digits, seconds_per_unit) = part
+            .strip_suffix('h')
+            .map(|d| (d, 3600u64))
+            .or_else(|| part.strip_suffix('m').map(|d| (d, 60u64)))
+            .or_else(|| part.strip_suffix('s').map(|d| (d, 1u64)))?;
         let n: u64 = digits.parse().ok()?;
-        total += match unit {
-            "h" => n * 3600,
-            "m" => n * 60,
-            "s" => n,
-            _ => return None,
-        };
+        total = total.checked_add(n.checked_mul(seconds_per_unit)?)?;
     }
-    Some(total)
+    any.then_some(total)
 }
 
 /// A document's header, read back into the shape a row wants. Every one of
@@ -453,6 +476,25 @@ mod tests {
     }
 
     #[test]
+    fn a_hand_edited_empty_paragraph_falls_through_to_the_closed_titles() {
+        // `render` never writes an empty `<p></p>` any more, but a document
+        // edited by hand still can, and it must read as "no summary" rather
+        // than as a blank line — which is exactly what lets the fallback fire.
+        let tasks = Tasks {
+            closed: vec![TaskLine { id: "a-1".into(), title: "Fix the thing".into() }],
+            parked: vec![],
+        };
+        let batches = [batch(1)];
+        let html = render(&report(Some(&tasks), &batches));
+        let doctored = html.replacen(
+            "<div class=\"sec\"><span>closed</span>",
+            "<div class=\"sec\"><span>summary</span></div><div class=\"summary\"><p></p></div><div class=\"sec\"><span>closed</span>",
+            1,
+        );
+        assert_eq!(parse_head(&doctored).summary.as_deref(), Some("Fix the thing"));
+    }
+
+    #[test]
     fn the_total_reads_back_into_the_seconds_human_was_given() {
         for seconds in [0u64, 30, 60, 45 * 60, 3600, 8040, 7 * 3600 + 40 * 60] {
             let batches = [batch(1)];
@@ -472,6 +514,34 @@ mod tests {
         assert_eq!(parse_seconds("1h"), Some(3600));
         assert_eq!(parse_seconds("12m"), Some(720));
         assert_eq!(parse_seconds("7s"), Some(7));
+    }
+
+    #[test]
+    fn a_part_whose_last_character_is_multi_byte_answers_none_rather_than_panicking() {
+        // `split_at` on a byte offset one short of the end panicked here for
+        // any part whose last *character* takes more than one byte, and
+        // `parse_head` runs over every document under `.smetana/reports/`,
+        // so one hand-placed file used to take the whole `run_reports`
+        // command down with it.
+        assert_eq!(parse_seconds("5м"), None);
+        assert_eq!(parse_seconds("—"), None);
+    }
+
+    #[test]
+    fn an_empty_total_is_none_and_never_the_shortest_run_on_the_page() {
+        // `sortReports`'s own comment is explicit that an unknown length is
+        // never read as a claim of zero; `Some(0)` here would make an
+        // unrecognised `total` sort as the shortest run rather than as an
+        // unknown one.
+        assert_eq!(parse_seconds(""), None);
+        assert_eq!(parse_seconds("   "), None);
+    }
+
+    #[test]
+    fn a_number_too_large_to_be_a_real_duration_is_none_rather_than_wrapping() {
+        assert_eq!(parse_seconds("20000000000000000h"), None);
+        assert_eq!(parse_seconds("18446744073709551615s"), Some(u64::MAX));
+        assert_eq!(parse_seconds("18446744073709551616s"), None);
     }
 
     #[test]
