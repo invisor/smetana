@@ -343,7 +343,11 @@ pub fn render(report: &RunReport) -> String {
         out.push_str("<div class=\"sec\"><span>summary</span></div><div class=\"summary\">");
         for text in summaries {
             out.push_str("<p>");
-            out.push_str(&escape(text));
+            // Trimmed on the way out, not only on the way to the emptiness
+            // test above: the row draws this under `white-space: nowrap`, so
+            // a lead's stray leading or trailing space would otherwise sit
+            // inside the sentence somebody reads.
+            out.push_str(&escape(text.trim()));
             out.push_str("</p>");
         }
         out.push_str("</div>");
@@ -1414,6 +1418,18 @@ mod tests {
         real.summary = Some("Did a real thing.".into());
         let html = render(&report(3600, Some(&tasks), &[blank, real]));
         assert!(html.contains("<div class=\"summary\"><p>Did a real thing.</p></div>"), "{html}");
+    }
+
+    #[test]
+    fn a_summary_is_trimmed_on_the_way_out_and_not_only_on_the_way_to_the_emptiness_test() {
+        // Filtering on `s.trim().is_empty()` while writing `text` untouched
+        // would leave a lead's stray leading or trailing space sitting in a
+        // sentence the row draws under `white-space: nowrap`.
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
+        let mut padded = batch(1);
+        padded.summary = Some("  Real  ".into());
+        let html = render(&report(3600, Some(&tasks), &[padded]));
+        assert!(html.contains("<div class=\"summary\"><p>Real</p></div>"), "{html}");
     }
 
     #[test]
