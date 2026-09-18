@@ -587,6 +587,24 @@ reconstructed afterwards from `log show`, a transcript under `~/.claude/projects
 stays and stays about the *account* — the agent really did write nothing — it simply stops being the
 whole entry.
 
+**The batch file's fifth field is `summary`, and it is the one the Reports tab draws a row from**
+(smetana-hb96). `did` and `notes` are written for somebody reading the document itself, identifiers
+and all; `summary` is written for the person scanning the *list* of every report the project has, and
+is asked for in `agents::prompt` as two or three plain sentences with no paths, no symbols, no
+commands and no shas in it — the opposite discipline from `did`. `render` draws every batch's summary
+that gave one, in batch order, as `<div class="sec"><span>summary</span></div><div class="summary">`
+right after the strip's four numbers and before `closed` — before the board even, so an unread board
+does not silence a sentence that came from the batches rather than from it. A batch without one is
+skipped, and a document where no batch gave one draws no section at all: there is nothing here for
+`reports::parse_summary` to read, and that reader has its own fallback, so the section is not drawn
+just to hold an empty string for it. `reports::parse_head` reads that section back as one text,
+paragraphs joined by a blank line, and for a document with none — every report written before this
+field existed — falls back to the closed cards' own `<h3>` titles joined by `; `, since that is the
+sentence a person would have read off the board anyway. Neither reader touches `parked`: a parked
+title is a question still open, not an account of what got done. `Head.seconds` rides beside it, the
+inverse of `report::human` read off `total` to the minute, and it exists for the same tab: a third
+sort order, `longest`, wanted a number `report.rs` had only ever written as a string.
+
 The vocabulary is deliberately not a new one: `service::outcome_of` reads out `Batch` and `Exit`,
 which the loop is already holding, so a clean exit, a code, a signal with no code, a session somebody
 removed, work handed back and a batch the run ended at an unanswered question are six words the app

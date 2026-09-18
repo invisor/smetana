@@ -911,7 +911,11 @@ function mockSessions(project) {
    has to draw: an ordinary task report, a batch report with something parked,
    a night's autopilot report with several batches, one whose board could not
    be read (every count a dash, never a zero), and a scope long enough to
-   exercise the row's own truncation.
+   exercise the row's own truncation. One row carries `summary: null` — an
+   older document with no such section — so the column's own dash has a case
+   to draw; every `seconds` matches its own `total` to the minute, including
+   the unread-board row, since a batch's timing does not depend on the board
+   either.
 
    Built per call and stamped as offsets from now, for the reason
    `mockSessions` above gives: a fixture with dates baked in reads wrong a year
@@ -933,6 +937,8 @@ function mockReports(project) {
       parked: 0,
       batches: 1,
       total: '12m',
+      seconds: 720,
+      summary: 'Closed the login bug and added a regression test for it. Nothing else needed touching.',
       ...over
     }
   }
@@ -943,7 +949,9 @@ function mockReports(project) {
       scope: 'the ready column',
       closed: 3,
       parked: 1,
-      total: '48m'
+      total: '48m',
+      seconds: 2880,
+      summary: null
     }),
     row(3 * DAY_MS, {
       title: 'Run report',
@@ -951,18 +959,24 @@ function mockReports(project) {
       closed: 11,
       parked: 2,
       batches: 5,
-      total: '2h 14m'
+      total: '2h 14m',
+      seconds: 8040,
+      summary:
+        'Closed eleven tasks across the queue overnight and parked two that needed a design decision. Five batches ran back to back with nothing crashing.'
     }),
     /* The board could not be read: every count this parser draws for a task
        is a dash, never a zero — `reports.rs`'s own rule for `None`. The
-       batches count survives, since it does not depend on the board at all. */
+       batches count survives, since it does not depend on the board at all,
+       and neither does its summary. */
     row(6 * DAY_MS, {
       title: 'Task report',
       scope: 'smetana-1wgi',
       closed: null,
       parked: null,
       batches: 1,
-      total: '4m'
+      total: '4m',
+      seconds: 240,
+      summary: "Went through the batch's own work even though the board could not be read at the time."
     }),
     row(21 * DAY_MS, {
       title: 'Batch report',
@@ -970,7 +984,9 @@ function mockReports(project) {
       closed: 6,
       parked: 0,
       batches: 2,
-      total: '1h 3m'
+      total: '1h 3m',
+      seconds: 3780,
+      summary: 'Touched the backend, the admin panel and the design-system port in one long batch. Nothing was parked.'
     })
   ]
 }

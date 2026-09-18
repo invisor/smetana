@@ -55,6 +55,7 @@ import {
   GitGraph,
   GitMerge,
   HardDrive,
+  Hash,
   ImageOff,
   Inbox,
   Info,
@@ -308,6 +309,10 @@ export const iconNodes = {
      tab's own empty state. A scroll rather than a page: this is a stack of
      documents a run has already written, not a single file. */
   'scroll-text': ScrollText,
+  /* The Reports tab's Scope column, on a row scoped to one task: paired with
+     the id in mono beside it, the way `layers` above pairs with "the queue"
+     in sans for a queue-scoped row. */
+  hash: Hash,
   /* The storage source's glyph: the attachment store's own weight. */
   'hard-drive': HardDrive,
   settings: Settings,

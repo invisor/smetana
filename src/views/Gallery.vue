@@ -19,6 +19,7 @@ import {
 import { useCopyFeedback } from '../components/core/copyFeedback.js'
 import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
 import { orderTabs } from '../components/shell/tabOrder.js'
+import { maxSeconds } from '../components/run/reportsPage.js'
 import {
   AboutSettings,
   AgentList,
@@ -525,6 +526,8 @@ padding-bottom:6px;margin:0 0 -8px;
 font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:400;color:var(--text-secondary)}
 .sec-n{color:var(--text-muted);letter-spacing:0}
+.summary{display:flex;flex-direction:column;gap:8px}
+.summary p{margin:0;font-size:14px;line-height:1.5;color:var(--text-primary)}
 .list{display:flex;flex-direction:column;gap:8px}
 .card{background:var(--surface-raised);border:1px solid var(--border-subtle);border-radius:4px;
 box-shadow:var(--shadow-raised);padding:16px;display:flex;flex-direction:column;gap:8px}
@@ -568,6 +571,10 @@ font-size:18px;font-weight:500;color:var(--text-primary)}
 <div class="cell"><span class="cell-label">parked</span><span class="cell-n cell-loud">1</span></div>
 <div class="cell"><span class="cell-label">batches</span><span class="cell-n">2</span></div>
 <div class="cell"><span class="cell-label">total</span><span class="cell-n">2h 14m</span></div>
+</div>
+<div class="sec"><span>summary</span></div><div class="summary">
+<p>Closed the two login bugs and moved the export button into the toolbar.</p>
+<p>Nothing was parked in this batch.</p>
 </div>
 <div class="sec"><span>closed</span><span class="sec-n">2</span></div>
 <div class="list">
@@ -615,7 +622,11 @@ the frame lost its sandbox. If you are reading this report, the script did not r
 /* The Reports tab's fixture: three rows, field for field with `run_reports`'s
    `ReportEntry`. The third carries `closed`/`parked: null` on purpose — the
    one row that has to draw a dash rather than a zero, `runs::reports::Head`'s
-   own rule for a board this parser could not read. */
+   own rule for a board this parser could not read. The second carries
+   `summary: null` — an older document with no such section, drawn from the
+   closed titles' fallback rather than a dash — and the third carries
+   `seconds: null` — a `total` this parser could not read back — so the
+   duration bar's own absence has a row of its own to check. */
 const REPORT_ROWS = [
   {
     path: '/p/.smetana/reports/2026-09-17-143205.html',
@@ -627,19 +638,23 @@ const REPORT_ROWS = [
     closed: 1,
     parked: 0,
     batches: 1,
-    total: '12m'
+    total: '12m',
+    seconds: 720,
+    summary: 'Closed the login bug and added a regression test for it. Nothing else needed touching.'
   },
   {
     path: '/p/.smetana/reports/2026-09-16-091500.html',
     file: '2026-09-16-091500.html',
     stamp: '2026-09-16T09:15:00',
     title: 'Batch report',
-    scope: 'the ready column',
+    scope: 'the queue',
     finished: '2026-09-16 09:15',
     closed: 3,
     parked: 1,
     batches: 1,
-    total: '48m'
+    total: '48m',
+    seconds: 2880,
+    summary: null
   },
   {
     path: '/p/.smetana/reports/2026-09-15-020000.html',
@@ -651,7 +666,9 @@ const REPORT_ROWS = [
     closed: null,
     parked: null,
     batches: 1,
-    total: '4m'
+    total: '4m',
+    seconds: null,
+    summary: 'Looked into the flaky upload test and left a note on what to try next.'
   }
 ]
 
@@ -6268,6 +6285,7 @@ const menuTargetStyle = {
           :rows="REPORT_ROWS"
           :per-page="reportsPerPage"
           :order="reportsOrder"
+          :selected="REPORT_ROWS[1].path"
           @update:per-page="reportsPerPage = $event"
           @update:order="reportsOrder = $event"
           @open="() => {}"
@@ -6300,7 +6318,7 @@ const menuTargetStyle = {
            a zero — `runs::reports::Head`'s own rule, and `ReportRow.vue`'s
            `cellText` is the whole of what keeps it. -->
       <div :style="{ border: 'var(--border-w) solid var(--border)' }">
-        <ReportRow :row="REPORT_ROWS[2]" @open="() => {}" />
+        <ReportRow :row="REPORT_ROWS[2]" :max-seconds="maxSeconds(REPORT_ROWS)" @open="() => {}" />
       </div>
     </section>
 
