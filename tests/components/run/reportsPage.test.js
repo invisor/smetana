@@ -12,6 +12,7 @@ import {
   reportScopeText,
   sortReports
 } from '../../../src/components/run/reportsPage.js'
+import { scopeLabel } from '../../../src/components/run/runScopes.js'
 
 const row = (stamp, file) => ({ stamp, file })
 
@@ -203,5 +204,21 @@ describe('reportScopeText', () => {
       isQueue: false,
       text: 'backend, admin and the design-system port all at once'
     })
+  })
+
+  it('is runScopes.js’s scopeLabel’s exact inverse, so nothing but this test notices if the two drift', () => {
+    // The two live in different modules and each has its own suite pinning
+    // its own side against a literal string — rename `epic` on either side
+    // and both would stay green while the Scope column silently went back
+    // to drawing the whole wire string. This is what would go loud instead.
+    const queue = { kind: 'queue' }
+    const task = { kind: 'task', id: 'smetana-1wgi' }
+    const epic = { kind: 'epic', id: 'smetana-8fzc' }
+    for (const scope of [queue, task, epic]) {
+      const wire = scopeLabel(scope)
+      const back = reportScopeText(wire)
+      expect(back.isQueue).toBe(scope.kind === 'queue')
+      expect(back.text).toBe(scope.kind === 'queue' ? wire : scope.id)
+    }
   })
 })
