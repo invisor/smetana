@@ -206,6 +206,15 @@ fn parse_summary(html: &str) -> Option<String> {
 /// Every `<h3>` between the `closed` section header and the next section
 /// header (or the end of the document), which is exactly the closed cards'
 /// titles: `section` writes one `<h3>` per card and nothing else does.
+///
+/// A blank title is dropped rather than joined in, the same shape
+/// `parse_summary`'s own guard takes: `TaskLine.title` is `issue.title`
+/// straight off bd (`runs::summary`), unchecked on the way through, so an
+/// issue titled by nothing but whitespace is not a shape this reader gets to
+/// assume away. Without the filter one blank `<h3></h3>` reads back as
+/// `Some("")` — the exact blank-cell fault `parse_summary`'s guard exists to
+/// keep off the row, walking back in through this fallback — and a blank
+/// beside a real title joins into `"; Real"` with a stray leading `; `.
 fn closed_titles(html: &str) -> Option<String> {
     let after = html.find("<div class=\"sec\"><span>closed</span>").map(|at| &html[at..])?;
     let end = after[1..].find("<div class=\"sec\">").map(|at| at + 1).unwrap_or(after.len());
@@ -213,7 +222,10 @@ fn closed_titles(html: &str) -> Option<String> {
     let mut titles = Vec::new();
     let mut rest = block;
     while let Some(text) = between(rest, "<h3>", "</h3>") {
-        titles.push(unescape(text));
+        let title = unescape(text);
+        if !title.trim().is_empty() {
+            titles.push(title);
+        }
         let at = rest.find("</h3>").unwrap_or(rest.len());
         rest = &rest[at + "</h3>".len()..];
     }
@@ -463,6 +475,46 @@ mod tests {
             parse_head(&html).summary.as_deref(),
             Some("Fix the login <form>; Add the export button"),
             "titles come from closed only, never parked"
+        );
+    }
+
+    #[test]
+    fn a_blank_closed_title_is_dropped_rather_than_joined_in() {
+        // `TaskLine.title` is `issue.title` straight off bd, unchecked on the
+        // way through, so a title that is empty or only whitespace is not a
+        // shape this fallback gets to assume away — the same threat
+        // `parse_summary`'s own guard is written against.
+        let tasks = Tasks {
+            closed: vec![
+                TaskLine { id: "a-1".into(), title: "".into() },
+                TaskLine { id: "a-2".into(), title: "Real".into() },
+            ],
+            parked: vec![],
+        };
+        let batches = [batch(1)];
+        let html = render(&report(Some(&tasks), &batches));
+        assert_eq!(
+            parse_head(&html).summary.as_deref(),
+            Some("Real"),
+            "a blank title must not survive as a leading \"; \": {html}"
+        );
+    }
+
+    #[test]
+    fn every_closed_title_blank_reads_as_no_summary_at_all() {
+        let tasks = Tasks {
+            closed: vec![
+                TaskLine { id: "a-1".into(), title: "".into() },
+                TaskLine { id: "a-2".into(), title: "   ".into() },
+            ],
+            parked: vec![],
+        };
+        let batches = [batch(1)];
+        let html = render(&report(Some(&tasks), &batches));
+        assert_eq!(
+            parse_head(&html).summary,
+            None,
+            "the dash case, never Some(\"\") or Some(\"; \")"
         );
     }
 

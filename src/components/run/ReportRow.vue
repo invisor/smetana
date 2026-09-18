@@ -143,7 +143,16 @@ const barFillStyle = (pct) => ({ width: `${pct}%`, height: '100%', background: '
 const cellText = (value) => (value === null || value === undefined ? '—' : String(value))
 
 const when = computed(() => formatStamp(props.row.stamp))
-const summary = computed(() => props.row.summary ?? null)
+/* `??` alone catches `null`/`undefined` and nothing else, and an empty or
+   whitespace-only string is a real answer `reports::parse_head` can still
+   give — a hand-edited document's blank `<h3></h3>` reads back as `""`
+   rather than `None`. `cellText` above is where the counts already make
+   this decision rather than trusting every Rust reader to get it right
+   first; the summary cell makes it here for the same reason. */
+const summary = computed(() => {
+  const value = props.row.summary
+  return typeof value === 'string' && value.trim() !== '' ? value : null
+})
 const scope = computed(() => reportScopeText(props.row.scope))
 const bar = computed(() => barPercent(props.row.seconds, props.maxSeconds))
 </script>
