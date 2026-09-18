@@ -3,7 +3,7 @@
 A desktop app for supervising autonomous AI coding agents: a kanban board of real tasks, and runs
 that hand those tasks to agent sessions and carry them through while you watch.
 
-![The board, a project's files on the left and the selected task on the right](assets/screenshot-board.png)
+![The board, a project's agent sessions on the left and the selected task on the right](assets/screenshot-board.png)
 
 ## What it is
 
