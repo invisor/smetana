@@ -527,7 +527,7 @@ font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:400;color:var(--text-secondary)}
 .sec-n{color:var(--text-muted);letter-spacing:0}
 .summary{display:flex;flex-direction:column;gap:8px}
-.summary p{margin:0;font-size:14px;line-height:1.5;color:var(--text-primary)}
+.summary p{margin:0;font-size:13px;line-height:1.5;color:var(--text-primary)}
 .list{display:flex;flex-direction:column;gap:8px}
 .card{background:var(--surface-raised);border:1px solid var(--border-subtle);border-radius:4px;
 box-shadow:var(--shadow-raised);padding:16px;display:flex;flex-direction:column;gap:8px}
