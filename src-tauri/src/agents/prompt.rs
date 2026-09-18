@@ -1948,11 +1948,21 @@ mod tests {
     fn the_batch_file_asks_for_a_plain_language_summary() {
         // The Reports tab draws this sentence on the row, for somebody who does
         // not read code, so it is asked for as prose with no identifiers in it
-        // — the opposite of what `did` asks for.
-        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
-            let text = run_prompt(run_settings(RunMode::Auto, RunScope::Queue), delivery);
-            assert!(text.contains("\"summary\""), "{delivery:?}: {text}");
-            assert!(text.contains("no paths"), "{delivery:?}: {text}");
+        // — the opposite of what `did` asks for. The paragraph is unconditional
+        // on mode, so all three are walked rather than only the shipped
+        // default — Solo is pinned to a task, the only scope it validates
+        // against, and the other two keep the queue.
+        for mode in [RunMode::Auto, RunMode::Supervised, RunMode::Solo] {
+            let scope = if matches!(mode, RunMode::Solo) {
+                RunScope::Task { id: "a-1".into() }
+            } else {
+                RunScope::Queue
+            };
+            for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+                let text = run_prompt(run_settings(mode, scope.clone()), delivery);
+                assert!(text.contains("\"summary\""), "{mode:?}/{delivery:?}: {text}");
+                assert!(text.contains("no paths"), "{mode:?}/{delivery:?}: {text}");
+            }
         }
     }
 

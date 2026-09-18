@@ -15,6 +15,8 @@ const entry = (file, over = {}) => ({
   parked: 0,
   batches: 1,
   total: '12m',
+  seconds: 720,
+  summary: 'Closed the login bug and added a regression test for it. Nothing else needed touching.',
   ...over
 })
 
