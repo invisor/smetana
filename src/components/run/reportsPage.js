@@ -14,7 +14,7 @@
    a subset of what Rust accepts, or a value Rust refuses reverts to the
    default on the next save with nothing on screen to say so. */
 export const PAGE_SIZES = [20, 50, 100]
-export const ORDERS = ['newest', 'oldest']
+export const ORDERS = ['newest', 'oldest', 'longest']
 
 /* The shipped values, mirroring Rust's `ReportsSettings::default()`. */
 export const REPORTS_DEFAULTS = { perPage: 20, order: 'newest' }
@@ -25,23 +25,39 @@ export const REPORTS_DEFAULTS = { perPage: 20, order: 'newest' }
 export const PAGE_SIZE_CHOICES = PAGE_SIZES.map((size) => ({ value: size, label: `${size} per page` }))
 export const ORDER_CHOICES = [
   { value: 'newest', label: 'Newest first' },
-  { value: 'oldest', label: 'Oldest first' }
+  { value: 'oldest', label: 'Oldest first' },
+  { value: 'longest', label: 'Longest first' }
 ]
 
-/* By `stamp`, and then by `file` for two reports of the same second — the
-   tiebreak `claim_report`'s own `-<n>` suffix exists to be told apart by.
-   The tiebreak stays ascending regardless of `order`: `order` is a person's
-   answer to "which end do I read from", and reversing the tiebreak along with
-   it would make a second report of one second sort *before* the first only
-   half the time, for no reason anybody chose. Anything but `'oldest'` reads
-   as newest-first, the same total-default `formatStamp` and `pageOf` below
-   give an unrecognised value. */
+/* Newest first, then the `file` tiebreak, ascending whatever was asked —
+   the tiebreak `claim_report`'s own `-<n>` suffix exists to be told apart by,
+   and it stays ascending regardless of `order`: `order` is a person's answer
+   to "which end do I read from", and reversing the tiebreak along with it
+   would make a second report of one second sort *before* the first only half
+   the time, for no reason anybody chose. Shared by `longest` for rows of one
+   length. */
+function byStamp(a, b, oldest) {
+  if (a.stamp !== b.stamp) return a.stamp < b.stamp === oldest ? -1 : 1
+  return a.file < b.file ? -1 : a.file > b.file ? 1 : 0
+}
+
+/* `longest`: by `seconds`, descending, with an unknown length (`null`, the
+   row's word for "the document did not say") after every known one — a dash
+   sorted as zero would put an unread run among the shortest, which is a claim
+   about it nobody made. Equal lengths fall back to newest first. Anything but
+   `'oldest'` or `'longest'` reads as newest-first, the same total-default
+   `formatStamp` and `pageOf` below give an unrecognised value. */
 export function sortReports(rows, order) {
+  if (order === 'longest') {
+    return [...rows].sort((a, b) => {
+      const as = a.seconds ?? -1
+      const bs = b.seconds ?? -1
+      if (as !== bs) return bs - as
+      return byStamp(a, b, false)
+    })
+  }
   const oldest = order === 'oldest'
-  return [...rows].sort((a, b) => {
-    if (a.stamp !== b.stamp) return a.stamp < b.stamp === oldest ? -1 : 1
-    return a.file < b.file ? -1 : a.file > b.file ? 1 : 0
-  })
+  return [...rows].sort((a, b) => byStamp(a, b, oldest))
 }
 
 /* One page of the sorted list. `page` is clamped into `1..=pages`, and `pages`
@@ -59,33 +75,68 @@ export function pageOf(rows, { order, perPage, page }) {
   return { rows: sorted.slice(start, start + perPage), page: clamped, pages, total }
 }
 
-/* The same `Intl` shape `TaskInspector.vue` reads bd's own dates with — day,
-   short month, year, hour and minute in `en-GB`'s order — so a stamp reads the
-   same way wherever a date appears in this app. `stamp` here is local time
-   with no offset (`"YYYY-MM-DDTHH:MM:SS"`, `reports.rs`'s own shape), which
+/* Day and short month, no year — the year is noise on every row of a list
+   read newest first — and the time apart from it, so the row can colour the
+   two differently. Same `en-GB` shape `TaskInspector.vue` reads bd's own
+   dates with, split rather than joined. `stamp` here is local time with no
+   offset (`"YYYY-MM-DDTHH:MM:SS"`, `reports.rs`'s own shape), which
    `Date.parse` reads as local for exactly that reason — there is no timezone
-   to get wrong between the two. Anything that will not parse is shown as it
-   arrived, the same refusal `formatDate` in `TaskInspector.vue` makes. */
-const STAMP_FORMAT = new Intl.DateTimeFormat('en-GB', {
-  day: '2-digit',
-  month: 'short',
-  year: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit'
-})
+   to get wrong between the two. */
+const DATE_FORMAT = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short' })
+const TIME_FORMAT = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' })
 
+/* `{ date, time }` rather than one string: the row draws the two in different
+   colours. An unparseable stamp keeps its own text as `date` and answers no
+   `time` at all, the same refusal `formatDate` in `TaskInspector.vue` makes;
+   a missing stamp answers both halves empty rather than throwing. */
 export function formatStamp(stamp) {
-  if (!stamp) return stamp
+  if (!stamp) return { date: '', time: '' }
   const parsed = Date.parse(stamp)
-  return Number.isNaN(parsed) ? stamp : STAMP_FORMAT.format(parsed)
+  if (Number.isNaN(parsed)) return { date: stamp, time: '' }
+  return { date: DATE_FORMAT.format(parsed), time: TIME_FORMAT.format(parsed) }
+}
+
+/* The duration bar is data ink scaled to the page: the longest run on screen
+   is always full width. At least 1 so a page of unknowns divides by nothing. */
+export function maxSeconds(rows) {
+  return rows.reduce((max, row) => Math.max(max, row.seconds ?? 0), 1)
+}
+
+/* A fill width in percent, never under 2 so a short run still shows, and
+   `null` for an unknown length — no bar, the same silence as the dash. */
+export function barPercent(seconds, max) {
+  if (seconds === null || seconds === undefined) return null
+  return Math.max(2, Math.round((seconds / max) * 100))
+}
+
+/* The inverse of `runScopes.js`'s `scopeLabel`: that turns a `{ kind, id }`
+   object into the exact words `RunScope::describe()` writes on the wire
+   (`the queue`, `task <id>`, `epic <id>`); a row has only those words —
+   `reports::Head.scope` is the string, never the object — and has to read
+   them back into what it draws. That reading belongs here and not in
+   `ReportRow.vue`: comparing against the literal `'the queue'` inside a
+   `.vue` file would be a contract with Rust's own vocabulary held in the one
+   kind of file no test in this repository can reach.
+
+   `null` answers `null` — the row's own dash. The queue's own words travel
+   through unabbreviated. `task <id>` and `epic <id>` answer the bare id: the
+   row already says which of the two a scope is by its glyph, so drawing the
+   word as well would say it twice for no reason anybody asked for. Anything
+   else — a shape this parser does not recognise — is drawn exactly as it
+   arrived, since an unrecognised scope is an ordinary outcome and not a
+   fault to disguise. */
+export function reportScopeText(scope) {
+  if (!scope) return null
+  if (scope === 'the queue') return { isQueue: true, text: scope }
+  const match = /^(?:task|epic) (.+)$/.exec(scope)
+  return { isQueue: false, text: match ? match[1] : scope }
 }
 
 /* The grid the list's header and every row share, so the two can never drift
-   apart into two different rulers. Seven columns — stamp, title, scope, then
-   the four counts — and every unit is `fr`/`auto`/`minmax`, never a pixel:
-   the row is a computed style object like everything else in this system, and
-   a literal width here would be exactly the hardcoded value that rule
-   forbids. The four counts share one `auto` each rather than a fixed width,
-   since a mono digit column is only ever as wide as `total`'s longest
-   duration. */
-export const COLUMNS = 'auto minmax(0, 2fr) minmax(0, 1fr) auto auto auto auto'
+   apart into two different rulers. Seven columns — When, Summary (the
+   flexible one, the sentence a row is for), Scope (a quarter of what is left,
+   ellipsised), then the four counts — and every unit is `fr`/`auto`/`minmax`,
+   never a pixel: the row is a computed style object like everything else in
+   this system, and a literal width here would be exactly the hardcoded value
+   that rule forbids. */
+export const COLUMNS = 'auto minmax(0, 3fr) minmax(0, 1fr) auto auto auto auto'

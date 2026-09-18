@@ -245,11 +245,12 @@ what Rust accepts, or the value loses itself on the next save with nothing on sc
 
 `reports` is the other section that is **global rather than per project**, on `kanban`'s own
 argument one line up: how many rows a page of the Reports tab holds (`perPage`, one of `20`, `50`,
-`100`) and which end of the list is read first (`order`, `newest` or `oldest`) are a person's own
-habits of reading, and the tab has no per-project vocabulary to hang either on — a report belongs to
-whichever project wrote it, but how many of them somebody wants on a page at once does not. Both
-default to `20` and `newest`, which is what the tab opens on before anybody has touched either
-control; the two closed lists are written out a second time in `components/run/reportsPage.js`
+`100`) and which end of the list is read first (`order`, `newest`, `oldest` or `longest`) are a
+person's own habits of reading, and the tab has no per-project vocabulary to hang either on — a
+report belongs to whichever project wrote it, but how many of them somebody wants on a page at once
+does not. Both default to `20` and `newest`, which is what the tab opens on before anybody has
+touched either control; the two closed lists are written out a second time in
+`components/run/reportsPage.js`
 (`PAGE_SIZES`, `ORDERS`), under the same obligation `kanban`'s doubling carries — what the tab offers
 must stay a subset of what `ReportsSettings::validate` accepts, or a value refused here reverts to the
 default on the next save with nothing on screen to say so. Neither field is drawn in the settings

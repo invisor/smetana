@@ -19,6 +19,7 @@ import {
 import { useCopyFeedback } from '../components/core/copyFeedback.js'
 import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
 import { orderTabs } from '../components/shell/tabOrder.js'
+import { maxSeconds } from '../components/run/reportsPage.js'
 import {
   AboutSettings,
   AgentList,
@@ -525,6 +526,8 @@ padding-bottom:6px;margin:0 0 -8px;
 font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:400;color:var(--text-secondary)}
 .sec-n{color:var(--text-muted);letter-spacing:0}
+.summary{display:flex;flex-direction:column;gap:8px}
+.summary p{margin:0;font-size:13px;line-height:1.5;color:var(--text-primary)}
 .list{display:flex;flex-direction:column;gap:8px}
 .card{background:var(--surface-raised);border:1px solid var(--border-subtle);border-radius:4px;
 box-shadow:var(--shadow-raised);padding:16px;display:flex;flex-direction:column;gap:8px}
@@ -569,6 +572,10 @@ font-size:18px;font-weight:500;color:var(--text-primary)}
 <div class="cell"><span class="cell-label">batches</span><span class="cell-n">2</span></div>
 <div class="cell"><span class="cell-label">total</span><span class="cell-n">2h 14m</span></div>
 </div>
+<div class="sec"><span>summary</span></div><div class="summary">
+<p>Closed the two login bugs and moved the export button into the toolbar.</p>
+<p>Nothing was parked in this batch.</p>
+</div>
 <div class="sec"><span>closed</span><span class="sec-n">2</span></div>
 <div class="list">
 <div class="card"><div class="head"><span class="chip">smetana-qca</span>
@@ -612,46 +619,83 @@ the frame lost its sandbox. If you are reading this report, the script did not r
 <script>document.body.style.background='red';document.body.innerHTML='<h1>THE SANDBOX FAILED</h1>'<\/script>
 </body></html>`
 
-/* The Reports tab's fixture: three rows, field for field with `run_reports`'s
-   `ReportEntry`. The third carries `closed`/`parked: null` on purpose — the
-   one row that has to draw a dash rather than a zero, `runs::reports::Head`'s
-   own rule for a board this parser could not read. */
+/* The Reports tab's fixture: four rows, field for field with `run_reports`'s
+   `ReportEntry`. `scope` is `RunScope::describe`'s own words — `"the
+   queue"`, `"task <id>"`, `"epic <id>"` — never a bare id, since
+   `ReportRow.vue` reads exactly that shape back through `reportsPage.js`'s
+   `reportScopeText`; a fixture in any other shape draws the design correctly
+   here while the real app draws it wrong.
+
+   The third carries `closed`/`parked: null` on purpose — the one row that
+   has to draw a dash rather than a zero, `runs::reports::Head`'s own rule
+   for a board this parser could not read — and `seconds: null`, so the
+   duration bar's own absence has a row to check. The second carries
+   `summary: null`, which is the dash case and not the fallback one: the
+   fallback to the closed titles happens inside `reports::parse_head`, before
+   any of this ever reaches the wire, so a document that truly has neither a
+   summary section nor a closed title reaches the front end as `null` and
+   nothing else. The fourth is what most of this project's own reports on
+   disk actually draw — an older document with no summary section, whose
+   `summary` therefore already *is* the closed titles joined by `"; "` by
+   the time it gets here — long enough that the column's ellipsis has a real
+   case to draw, and scoped to an epic so that branch is drawn somewhere
+   too. */
 const REPORT_ROWS = [
   {
     path: '/p/.smetana/reports/2026-09-17-143205.html',
     file: '2026-09-17-143205.html',
     stamp: '2026-09-17T14:32:05',
     title: 'Task report',
-    scope: 'smetana-9je',
+    scope: 'task smetana-9je',
     finished: '2026-09-17 14:32',
     closed: 1,
     parked: 0,
     batches: 1,
-    total: '12m'
+    total: '12m',
+    seconds: 720,
+    summary: 'Closed the login bug and added a regression test for it. Nothing else needed touching.'
   },
   {
     path: '/p/.smetana/reports/2026-09-16-091500.html',
     file: '2026-09-16-091500.html',
     stamp: '2026-09-16T09:15:00',
     title: 'Batch report',
-    scope: 'the ready column',
+    scope: 'the queue',
     finished: '2026-09-16 09:15',
     closed: 3,
     parked: 1,
     batches: 1,
-    total: '48m'
+    total: '48m',
+    seconds: 2880,
+    summary: null
   },
   {
     path: '/p/.smetana/reports/2026-09-15-020000.html',
     file: '2026-09-15-020000.html',
     stamp: '2026-09-15T02:00:00',
     title: 'Task report',
-    scope: 'smetana-1wgi',
+    scope: 'task smetana-1wgi',
     finished: '2026-09-15 02:00',
     closed: null,
     parked: null,
     batches: 1,
-    total: '4m'
+    total: '4m',
+    seconds: null,
+    summary: 'Looked into the flaky upload test and left a note on what to try next.'
+  },
+  {
+    path: '/p/.smetana/reports/2026-09-14-080000.html',
+    file: '2026-09-14-080000.html',
+    stamp: '2026-09-14T08:00:00',
+    title: 'Batch report',
+    scope: 'epic smetana-8fzc',
+    finished: '2026-09-14 08:00',
+    closed: 4,
+    parked: 0,
+    batches: 1,
+    total: '22m',
+    seconds: 1320,
+    summary: 'Fix the login form; Add the export button; Tidy the settings page; Update the release notes'
   }
 ]
 
@@ -6268,6 +6312,7 @@ const menuTargetStyle = {
           :rows="REPORT_ROWS"
           :per-page="reportsPerPage"
           :order="reportsOrder"
+          :selected="REPORT_ROWS[1].path"
           @update:per-page="reportsPerPage = $event"
           @update:order="reportsOrder = $event"
           @open="() => {}"
@@ -6300,7 +6345,7 @@ const menuTargetStyle = {
            a zero — `runs::reports::Head`'s own rule, and `ReportRow.vue`'s
            `cellText` is the whole of what keeps it. -->
       <div :style="{ border: 'var(--border-w) solid var(--border)' }">
-        <ReportRow :row="REPORT_ROWS[2]" @open="() => {}" />
+        <ReportRow :row="REPORT_ROWS[2]" :max-seconds="maxSeconds(REPORT_ROWS)" @open="() => {}" />
       </div>
     </section>
 

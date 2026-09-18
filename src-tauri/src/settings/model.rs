@@ -547,7 +547,7 @@ impl KanbanSettings {
 #[serde(default, rename_all = "camelCase")]
 pub struct ReportsSettings {
     pub per_page: u32,
-    /// `newest` or `oldest`.
+    /// `newest`, `oldest` or `longest`.
     pub order: String,
 }
 
@@ -563,7 +563,7 @@ impl Default for ReportsSettings {
 /// subset of what this accepts, since a page size or an order refused here
 /// loses itself on the next save with nothing on screen to say so.
 const REPORT_PAGE_SIZES: [u32; 3] = [20, 50, 100];
-const REPORT_ORDERS: [&str; 2] = ["newest", "oldest"];
+const REPORT_ORDERS: [&str; 3] = ["newest", "oldest", "longest"];
 
 impl ReportsSettings {
     fn validate(&mut self) {
@@ -2510,6 +2510,12 @@ mod tests {
         let settings = settings_of(r#"{"version":1,"reports":{"perPage":50,"order":"soonest"}}"#);
         assert_eq!(settings.reports.order, "newest");
         assert_eq!(settings.reports.per_page, 50, "the neighbouring field must survive");
+    }
+
+    #[test]
+    fn the_reports_order_accepts_longest() {
+        let settings = settings_of(r#"{"version":1,"reports":{"perPage":50,"order":"longest"}}"#);
+        assert_eq!(settings.reports.order, "longest");
     }
 
     #[test]

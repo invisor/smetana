@@ -9,20 +9,26 @@
    whenever `rows`, `perPage` or `order` changes — a smaller page size, a
    flipped order or a freshly reread list all invalidate whatever page number
    was on screen, and holding it would show "page 4" over three pages of
-   rows. */
+   rows.
+
+   `selected` travels the other way, from `DesktopApp.vue`'s own derivation of
+   "the last report opened from this window, while its tab is still open" —
+   this component only compares it against each row's `path` and hands the
+   boolean down to `ReportRow`; the fact itself is not this list's to keep. */
 import { computed, ref, watch } from 'vue'
 import Select from '../core/Select.vue'
 import IconButton from '../core/IconButton.vue'
 import EmptyState from '../core/EmptyState.vue'
 import Skeleton from '../core/Skeleton.vue'
 import ReportRow from './ReportRow.vue'
-import { COLUMNS, ORDER_CHOICES, PAGE_SIZE_CHOICES, pageOf } from './reportsPage.js'
+import { COLUMNS, ORDER_CHOICES, PAGE_SIZE_CHOICES, maxSeconds, pageOf } from './reportsPage.js'
 
 const props = defineProps({
   rows: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
   perPage: { type: Number, required: true },
-  order: { type: String, required: true }
+  order: { type: String, required: true },
+  selected: { type: String, default: null }
 })
 
 const emit = defineEmits(['update:perPage', 'update:order', 'open'])
@@ -50,6 +56,11 @@ const paged = computed(() =>
   pageOf(props.rows, { order: props.order, perPage: props.perPage, page: page.value })
 )
 
+/* The duration bar is scaled per page, not per project: the longest run on
+   *this* screen is full width, so paging through months of history never
+   leaves every bar looking short beside one outlier from a year ago. */
+const pageMax = computed(() => maxSeconds(paged.value.rows))
+
 const prevDisabled = computed(() => paged.value.page <= 1)
 const nextDisabled = computed(() => paged.value.page >= paged.value.pages)
 
@@ -73,16 +84,27 @@ const rootStyle = {
   flexDirection: 'column',
   flex: 1,
   minWidth: 0,
-  minHeight: 0
+  minHeight: 0,
+  background: 'var(--canvas)'
 }
 const controlsStyle = {
+  flex: '0 0 auto',
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-3)',
-  padding: 'var(--panel-pad)',
-  borderBottom: 'var(--border-w) solid var(--border-subtle)'
+  minHeight: 'var(--control-h)',
+  padding: '0 var(--panel-pad)',
+  background: 'var(--surface)',
+  borderBottom: 'var(--border-w) solid var(--border)'
 }
 const selectWidthStyle = { width: `${SELECT_W}px` }
+const spacerStyle = { flex: 1 }
+const toolbarLabelStyle = {
+  font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)',
+  letterSpacing: 'var(--tracking-caps)',
+  textTransform: 'uppercase',
+  color: 'var(--text-muted)'
+}
 const bodyStyle = {
   flex: 1,
   minHeight: 0,
@@ -90,23 +112,32 @@ const bodyStyle = {
 }
 const bodyPadStyle = { padding: 'var(--panel-pad)' }
 const headerStyle = {
+  position: 'sticky',
+  top: 0,
+  zIndex: 'var(--z-sticky)',
   display: 'grid',
   gridTemplateColumns: COLUMNS,
   gap: 'var(--space-5)',
-  padding: '0 var(--space-4) var(--space-2)',
-  font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-sans)',
+  alignItems: 'center',
+  padding: 'var(--space-3) var(--space-4)',
+  background: 'var(--surface)',
+  borderBottom: 'var(--border-w) solid var(--border)',
+  font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-mono)',
   letterSpacing: 'var(--tracking-caps)',
   textTransform: 'uppercase',
   color: 'var(--text-muted)'
 }
-const headerRightStyle = { textAlign: 'right' }
+const headerRightStyle = { textAlign: 'right', paddingRight: 'var(--space-2)' }
 const footerStyle = {
+  flex: '0 0 auto',
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-3)',
-  padding: 'var(--panel-pad)',
-  borderTop: 'var(--border-w) solid var(--border-subtle)',
-  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-sans)',
+  minHeight: 'var(--control-h)',
+  padding: '0 var(--space-4) 0 var(--panel-pad)',
+  background: 'var(--surface)',
+  borderTop: 'var(--border-w) solid var(--border)',
+  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
   color: 'var(--text-secondary)'
 }
 const totalStyle = { marginLeft: 'auto', color: 'var(--text-muted)' }
@@ -129,6 +160,8 @@ const totalStyle = { marginLeft: 'auto', color: 'var(--text-muted)' }
         :options="ORDER_CHOICES"
         @update:model-value="emit('update:order', $event)"
       />
+      <span :style="spacerStyle" />
+      <span :style="toolbarLabelStyle">Reports</span>
     </div>
     <div :style="bodyStyle">
       <div v-if="showSkeleton" :style="bodyPadStyle">
@@ -137,13 +170,13 @@ const totalStyle = { marginLeft: 'auto', color: 'var(--text-muted)' }
       <EmptyState
         v-else-if="showEmpty"
         icon="scroll-text"
-        title="No run reports yet"
-        description="A run writes one when it ends."
+        title="No reports yet"
+        description="Reports appear here when a run or a task finishes."
       />
       <template v-else-if="showList">
         <div :style="headerStyle">
           <span>When</span>
-          <span>Report</span>
+          <span>Summary</span>
           <span>Scope</span>
           <span :style="headerRightStyle">Closed</span>
           <span :style="headerRightStyle">Parked</span>
@@ -154,6 +187,8 @@ const totalStyle = { marginLeft: 'auto', color: 'var(--text-muted)' }
           v-for="row in paged.rows"
           :key="row.path"
           :row="row"
+          :selected="row.path === selected"
+          :max-seconds="pageMax"
           @open="emit('open', $event)"
         />
       </template>

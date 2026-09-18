@@ -622,12 +622,12 @@ fn commits_to_git(intent: &Intent) -> bool {
 ///
 /// The same watershed the two paragraphs above hold, and here it is sharper
 /// than in either of them, because on the far side of it sits a program rather
-/// than a person's eye. `runs::report::parse_batch` reads `tasks`, `id`, `did`
-/// and `notes` through serde by literal match, so a translated key is not a
-/// document in another language — it is a batch that left no account of itself,
-/// drawn in the report as exactly that. Hence the field names first: a model
-/// that reads the sentence and stops has to have met the half that breaks the
-/// document.
+/// than a person's eye. `runs::report::parse_batch` reads `tasks`, `id`, `did`,
+/// `notes` and `summary` through serde by literal match, so a translated key
+/// is not a document in another language — it is a batch that left no account
+/// of itself, drawn in the report as exactly that. Hence the field names
+/// first: a model that reads the sentence and stops has to have met the half
+/// that breaks the document.
 ///
 /// An identifier is exempted for the reason it is one paragraph up — a path or
 /// a sha inside a `did` line is read rather than translated, and `report::prose`
@@ -647,13 +647,14 @@ fn commits_to_git(intent: &Intent) -> bool {
 fn report_language(language: &str) -> String {
     format!(
         "Write the prose of the batch file you leave when a batch is finished in {language}: the \
-         `did` line for each task and the batch's `notes`. The names of the fields are not prose \
-         and do not move — `tasks`, `id`, `did` and `notes` stay exactly those four words, \
-         because Smetana matches them letter for letter, and a renamed key is a batch that left \
-         no account of itself. An identifier inside a line — a path, a symbol, a command, a sha \
-         — is read rather than translated and travels unchanged for the same reason. The account \
-         you give back in this conversation is a separate report and keeps the language of the \
-         conversation: this setting moves the file on disk and nothing you say to me."
+         `did` line for each task, the batch's `notes` and the batch's `summary`. The names of \
+         the fields are not prose and do not move — `tasks`, `id`, `did`, `notes` and `summary` \
+         stay exactly those five words, because Smetana matches them letter for letter, and a \
+         renamed key is a batch that left no account of itself. An identifier inside a line — a \
+         path, a symbol, a command, a sha — is read rather than translated and travels unchanged \
+         for the same reason. The account you give back in this conversation is a separate \
+         report and keeps the language of the conversation: this setting moves the file on disk \
+         and nothing you say to me."
     )
 }
 
@@ -1082,7 +1083,10 @@ fn run(
          already exists. Smetana reads that file and nobody else does, so it is JSON in exactly \
          this shape: {{\"tasks\": [{{\"id\": \"<bd id>\", \"did\": \"one or two sentences on what \
          you actually did, with every path, symbol, command and sha in backticks\"}}], \
-         \"notes\": \"anything about the batch as a whole, or leave it out\"}}. Put a line in \
+         \"notes\": \"anything about the batch as a whole, or leave it out\", \
+         \"summary\": \"two or three plain sentences on what this batch got done, written for \
+         somebody who does not read code: what the work was, the way a task's title says it, with \
+         no paths, no symbols, no commands and no shas in it\"}}. Put a line in \
          it for every task you touched, the ones you parked included, saying what stopped \
          them. This is in addition to the report you hand back in this conversation and \
          replaces no part of it.",
@@ -1937,6 +1941,28 @@ mod tests {
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
             let text = run_prompt(run_settings(RunMode::Auto, RunScope::Queue), delivery);
             assert!(text.contains("backticks"), "{delivery:?}: {text}");
+        }
+    }
+
+    #[test]
+    fn the_batch_file_asks_for_a_plain_language_summary() {
+        // The Reports tab draws this sentence on the row, for somebody who does
+        // not read code, so it is asked for as prose with no identifiers in it
+        // — the opposite of what `did` asks for. The paragraph is unconditional
+        // on mode, so all three are walked rather than only the shipped
+        // default — Solo is pinned to a task, the only scope it validates
+        // against, and the other two keep the queue.
+        for mode in [RunMode::Auto, RunMode::Supervised, RunMode::Solo] {
+            let scope = if matches!(mode, RunMode::Solo) {
+                RunScope::Task { id: "a-1".into() }
+            } else {
+                RunScope::Queue
+            };
+            for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+                let text = run_prompt(run_settings(mode, scope.clone()), delivery);
+                assert!(text.contains("\"summary\""), "{mode:?}/{delivery:?}: {text}");
+                assert!(text.contains("no paths"), "{mode:?}/{delivery:?}: {text}");
+            }
         }
     }
 
@@ -3856,14 +3882,14 @@ mod tests {
         // walk over the whole text would pass with the exception missing
         // altogether.
         //
-        // `report::parse_batch` reads these four through serde by literal
+        // `report::parse_batch` reads these five through serde by literal
         // match, so a translated key is not a document in another language — it
         // is a batch drawn as having left no account of itself. And the last
         // assertion is the other half: two reports come out of a batch, and
         // somebody who set this and watched the terminal would otherwise have
         // been told nothing at all.
         let text = report_language("Russian");
-        for key in ["`tasks`", "`id`", "`did`", "`notes`"] {
+        for key in ["`tasks`", "`id`", "`did`", "`notes`", "`summary`"] {
             assert!(text.contains(key), "{key} is not named as staying put: {text}");
         }
         assert!(text.contains("in Russian"), "{text}");

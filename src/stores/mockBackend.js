@@ -907,11 +907,20 @@ function mockSessions(project) {
 }
 
 /* The Reports tab's fixture: run documents as `run_reports` reports them,
-   field for field with `reports::ReportEntry`. Five rows, each a case the tab
-   has to draw: an ordinary task report, a batch report with something parked,
-   a night's autopilot report with several batches, one whose board could not
-   be read (every count a dash, never a zero), and a scope long enough to
-   exercise the row's own truncation.
+   field for field with `reports::ReportEntry`. `scope` is `RunScope::describe`'s
+   own words — `"the queue"`, `"task <id>"`, `"epic <id>"` — never a bare id
+   and never free prose, because `ReportRow.vue` reads exactly that shape back
+   through `reportsPage.js`'s `reportScopeText`, and a fixture in any other
+   shape would draw the design correctly here while the real app drew it
+   wrong. Five rows, each a case the tab has to draw: an ordinary task report,
+   an epic's batch report with something parked, a night's autopilot report
+   over the whole queue with several batches, one task report whose board
+   could not be read (every count a dash, never a zero), and a second task
+   report standing in for the oldest row on the page. One row carries
+   `summary: null` — an older document with no such section — so the column's
+   own dash has a case to draw; every `seconds` matches its own `total` to the
+   minute, including the unread-board row, since a batch's timing does not
+   depend on the board either.
 
    Built per call and stamped as offsets from now, for the reason
    `mockSessions` above gives: a fixture with dates baked in reads wrong a year
@@ -927,12 +936,14 @@ function mockReports(project) {
       file,
       stamp,
       title: 'Task report',
-      scope: 'smetana-9je',
+      scope: 'task smetana-9je',
       finished: `${stamp.slice(0, 10)} ${stamp.slice(11, 16)}`,
       closed: 1,
       parked: 0,
       batches: 1,
       total: '12m',
+      seconds: 720,
+      summary: 'Closed the login bug and added a regression test for it. Nothing else needed touching.',
       ...over
     }
   }
@@ -940,10 +951,12 @@ function mockReports(project) {
     row(2 * HOUR_MS, {}),
     row(DAY_MS, {
       title: 'Batch report',
-      scope: 'the ready column',
+      scope: 'epic smetana-8fzc',
       closed: 3,
       parked: 1,
-      total: '48m'
+      total: '48m',
+      seconds: 2880,
+      summary: null
     }),
     row(3 * DAY_MS, {
       title: 'Run report',
@@ -951,26 +964,34 @@ function mockReports(project) {
       closed: 11,
       parked: 2,
       batches: 5,
-      total: '2h 14m'
+      total: '2h 14m',
+      seconds: 8040,
+      summary:
+        'Closed eleven tasks across the queue overnight and parked two that needed a design decision. Five batches ran back to back with nothing crashing.'
     }),
     /* The board could not be read: every count this parser draws for a task
        is a dash, never a zero — `reports.rs`'s own rule for `None`. The
-       batches count survives, since it does not depend on the board at all. */
+       batches count survives, since it does not depend on the board at all,
+       and neither does its summary. */
     row(6 * DAY_MS, {
       title: 'Task report',
-      scope: 'smetana-1wgi',
+      scope: 'task smetana-1wgi',
       closed: null,
       parked: null,
       batches: 1,
-      total: '4m'
+      total: '4m',
+      seconds: 240,
+      summary: "Went through the batch's own work even though the board could not be read at the time."
     }),
     row(21 * DAY_MS, {
       title: 'Batch report',
-      scope: 'backend, admin and the design-system port all at once',
+      scope: 'task smetana-igny',
       closed: 6,
       parked: 0,
       batches: 2,
-      total: '1h 3m'
+      total: '1h 3m',
+      seconds: 3780,
+      summary: 'Fixed the export button and the two things it broke on the way. Nothing was parked.'
     })
   ]
 }

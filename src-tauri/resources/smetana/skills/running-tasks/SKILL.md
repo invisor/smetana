@@ -710,7 +710,8 @@ So, after the report above and before you hand back, write the file the prompt n
   "tasks": [
     { "id": "smetana-t9o", "did": "one or two sentences on what you actually did, with every path, symbol, command and sha in backticks" }
   ],
-  "notes": "anything about the batch as a whole, or leave it out"
+  "notes": "anything about the batch as a whole, or leave it out",
+  "summary": "two or three plain sentences on what this batch got done, written for somebody who does not read code, with no paths, no symbols, no commands and no shas in it"
 }
 ```
 
@@ -721,6 +722,10 @@ So, after the report above and before you hand back, write the file the prompt n
 - **Every path, symbol, command and sha in backticks.** The document renders a backtick span as
   code, so an identifier written bare sits in the prose looking like a word. It marks backticks and
   nothing else, deliberately — a rule that guessed from shape would guess wrong in ordinary prose.
+- **`summary` is the opposite discipline: no paths, no symbols, no commands and no shas at all.**
+  It is the sentence the Reports tab draws on this batch's row, for somebody scanning every report
+  the project has rather than reading this one — the way a task's own title says what it is about,
+  not how it was done. Two or three plain sentences, or leave it out.
 - **Nothing is timed here.** A number you reported could not be checked against anything;
   the app times its own batches and says so only where a batch held one task.
 - **It is a record, not a gate.** If it cannot be written, carry on — a batch that leaves

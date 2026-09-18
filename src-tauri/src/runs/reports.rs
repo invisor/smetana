@@ -49,10 +49,20 @@ pub struct Head {
     pub parked: Option<u32>,
     pub batches: Option<u32>,
     /// A human duration exactly as `report::human` wrote it — `"1h 12m"`,
-    /// `"45m"`, `"30s"` — and never turned back into seconds: nothing this row
-    /// does needs to compare two of them, and the string is what a person
-    /// reads.
+    /// `"45m"`, `"30s"` — and the string is what a person reads. `seconds`
+    /// below is the one reading of it back, exact to the minute, for the
+    /// tab's length order.
     pub total: Option<String>,
+    /// The lead's plain-language account of the run — the `summary` section
+    /// `report::render` writes, paragraphs joined by a blank line — or, for a
+    /// document with no such section, the closed tasks' titles joined by
+    /// `; `. `None` when there is neither: a row must not invent a sentence.
+    pub summary: Option<String>,
+    /// `total` read back into seconds, exact to the minute — `human` drops
+    /// the seconds past a whole minute — so the tab can order by length.
+    /// `None` whenever `total` is, or whenever it is a shape `human` never
+    /// wrote.
+    pub seconds: Option<u64>,
 }
 
 /// One file's row: the head above, flattened onto the wire so the front end
@@ -171,13 +181,96 @@ fn cell_duration(html: &str) -> Option<String> {
     }
 }
 
+/// The `summary` section's paragraphs, joined by a blank line so a tooltip
+/// keeps them apart while a row's single line collapses the whitespace.
+///
+/// An empty paragraph is dropped rather than kept: `render` no longer writes
+/// one (`"summary": ""` is filtered on the way in), but a document edited by
+/// hand can still hold `<p></p>`, and counting it as content would leave the
+/// row a blank cell instead of falling through to `closed_titles` below.
+fn parse_summary(html: &str) -> Option<String> {
+    let body = between(
+        html,
+        "<div class=\"sec\"><span>summary</span></div><div class=\"summary\">",
+        "</div>",
+    )?;
+    let paragraphs: Vec<String> = body
+        .split("</p>")
+        .filter_map(|p| p.strip_prefix("<p>"))
+        .map(unescape)
+        .filter(|p| !p.trim().is_empty())
+        .collect();
+    (!paragraphs.is_empty()).then(|| paragraphs.join("\n\n"))
+}
+
+/// Every `<h3>` between the `closed` section header and the next section
+/// header (or the end of the document), which is exactly the closed cards'
+/// titles: `section` writes one `<h3>` per card and nothing else does.
+///
+/// A blank title is dropped rather than joined in, the same shape
+/// `parse_summary`'s own guard takes: `TaskLine.title` is `issue.title`
+/// straight off bd (`runs::summary`), unchecked on the way through, so an
+/// issue titled by nothing but whitespace is not a shape this reader gets to
+/// assume away. Without the filter one blank `<h3></h3>` reads back as
+/// `Some("")` — the exact blank-cell fault `parse_summary`'s guard exists to
+/// keep off the row, walking back in through this fallback — and a blank
+/// beside a real title joins into `"; Real"` with a stray leading `; `.
+fn closed_titles(html: &str) -> Option<String> {
+    let after = html.find("<div class=\"sec\"><span>closed</span>").map(|at| &html[at..])?;
+    let end = after[1..].find("<div class=\"sec\">").map(|at| at + 1).unwrap_or(after.len());
+    let block = &after[..end];
+    let mut titles = Vec::new();
+    let mut rest = block;
+    while let Some(text) = between(rest, "<h3>", "</h3>") {
+        let title = unescape(text);
+        if !title.trim().is_empty() {
+            titles.push(title);
+        }
+        let at = rest.find("</h3>").unwrap_or(rest.len());
+        rest = &rest[at + "</h3>".len()..];
+    }
+    (!titles.is_empty()).then(|| titles.join("; "))
+}
+
+/// The inverse of `report::human`: `"1h 12m"`, `"1h"`, `"45m"`, `"30s"`.
+/// Anything else — a shape `human` never wrote — is `None`.
+///
+/// Peeled with `strip_suffix` rather than sliced by a byte offset: a part
+/// whose last *character* is multi-byte (a Cyrillic `"5м"`, a bare `"—"`)
+/// has no byte boundary one position from its end, and slicing there panicked
+/// this parser rather than answering `None` for a shape it does not
+/// recognise — `parse_head` runs over every document under
+/// `.smetana/reports/`, so one hand-placed file took the whole
+/// `run_reports` command down with it. An empty string answers `None` too,
+/// deliberately, and not `Some(0)`: `sortReports`'s own comment is explicit
+/// that an unknown length is never a claim of zero, and reading a blank
+/// `total` cell as the shortest run on the page would be exactly that claim.
+/// The multiplication is checked as well, so a number too large to be a
+/// real duration answers `None` instead of wrapping.
+fn parse_seconds(text: &str) -> Option<u64> {
+    let mut total: u64 = 0;
+    let mut any = false;
+    for part in text.split_whitespace() {
+        any = true;
+        let (digits, seconds_per_unit) = part
+            .strip_suffix('h')
+            .map(|d| (d, 3600u64))
+            .or_else(|| part.strip_suffix('m').map(|d| (d, 60u64)))
+            .or_else(|| part.strip_suffix('s').map(|d| (d, 1u64)))?;
+        let n: u64 = digits.parse().ok()?;
+        total = total.checked_add(n.checked_mul(seconds_per_unit)?)?;
+    }
+    any.then_some(total)
+}
+
 /// A document's header, read back into the shape a row wants. Every one of
-/// the seven fields is found on its own, so a document missing one piece of
-/// this shape — an older render, a stray page, one field this parser has not
+/// the fields is found on its own, so a document missing one piece of this
+/// shape — an older render, a stray page, one field this parser has not
 /// caught up with — loses only that field rather than the whole row.
 pub fn parse_head(html: &str) -> Head {
     let title = parse_title(html);
     let (scope, finished) = parse_meta(html);
+    let total = cell_duration(html);
     Head {
         title,
         scope,
@@ -185,7 +278,9 @@ pub fn parse_head(html: &str) -> Head {
         closed: cell_count(html, "closed"),
         parked: cell_count(html, "parked"),
         batches: cell_count(html, "batches"),
-        total: cell_duration(html),
+        seconds: total.as_deref().and_then(parse_seconds),
+        total,
+        summary: parse_summary(html).or_else(|| closed_titles(html)),
     }
 }
 
@@ -279,6 +374,7 @@ mod tests {
             seconds: 8040,
             tasks: vec![BatchTask { id: "a-1".into(), did: None }],
             notes: None,
+            summary: None,
             reported: true,
             outcome: BatchOutcome::Exited,
             left_behind: vec![],
@@ -313,6 +409,7 @@ mod tests {
         assert_eq!(head.parked, Some(1));
         assert_eq!(head.batches, Some(1));
         assert_eq!(head.total.as_deref(), Some("2h 14m"));
+        assert_eq!(head.seconds, Some(8040));
     }
 
     #[test]
@@ -344,6 +441,159 @@ mod tests {
 
         let head = parse_head(html);
         assert_eq!(head, Head::default());
+    }
+
+    #[test]
+    fn a_rendered_summary_reads_back_as_one_text_with_paragraphs_kept_apart() {
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
+        let mut first = batch(1);
+        first.summary = Some("Fixed the form & tests.".into());
+        let mut second = batch(2);
+        second.summary = Some("Added the export.".into());
+        let batches = [first, second];
+        let html = render(&report(Some(&tasks), &batches));
+        assert_eq!(
+            parse_head(&html).summary.as_deref(),
+            Some("Fixed the form & tests.\n\nAdded the export.")
+        );
+    }
+
+    #[test]
+    fn a_document_with_no_summary_falls_back_to_the_closed_titles() {
+        // Every report written before the section existed: the row still has a
+        // sentence, and it is the titles a person would have read off the board.
+        let tasks = Tasks {
+            closed: vec![
+                TaskLine { id: "a-1".into(), title: "Fix the login <form>".into() },
+                TaskLine { id: "a-2".into(), title: "Add the export button".into() },
+            ],
+            parked: vec![line("a-3")],
+        };
+        let batches = [batch(1)];
+        let html = render(&report(Some(&tasks), &batches));
+        assert_eq!(
+            parse_head(&html).summary.as_deref(),
+            Some("Fix the login <form>; Add the export button"),
+            "titles come from closed only, never parked"
+        );
+    }
+
+    #[test]
+    fn a_blank_closed_title_is_dropped_rather_than_joined_in() {
+        // `TaskLine.title` is `issue.title` straight off bd, unchecked on the
+        // way through, so a title that is empty or only whitespace is not a
+        // shape this fallback gets to assume away — the same threat
+        // `parse_summary`'s own guard is written against.
+        let tasks = Tasks {
+            closed: vec![
+                TaskLine { id: "a-1".into(), title: "".into() },
+                TaskLine { id: "a-2".into(), title: "Real".into() },
+            ],
+            parked: vec![],
+        };
+        let batches = [batch(1)];
+        let html = render(&report(Some(&tasks), &batches));
+        assert_eq!(
+            parse_head(&html).summary.as_deref(),
+            Some("Real"),
+            "a blank title must not survive as a leading \"; \": {html}"
+        );
+    }
+
+    #[test]
+    fn every_closed_title_blank_reads_as_no_summary_at_all() {
+        let tasks = Tasks {
+            closed: vec![
+                TaskLine { id: "a-1".into(), title: "".into() },
+                TaskLine { id: "a-2".into(), title: "   ".into() },
+            ],
+            parked: vec![],
+        };
+        let batches = [batch(1)];
+        let html = render(&report(Some(&tasks), &batches));
+        assert_eq!(
+            parse_head(&html).summary,
+            None,
+            "the dash case, never Some(\"\") or Some(\"; \")"
+        );
+    }
+
+    #[test]
+    fn no_summary_and_nothing_closed_reads_none() {
+        let tasks = Tasks { closed: vec![], parked: vec![line("a-3")] };
+        let batches = [batch(1)];
+        let html = render(&report(Some(&tasks), &batches));
+        assert_eq!(parse_head(&html).summary, None);
+        assert_eq!(parse_head(&render(&report(None, &batches))).summary, None);
+    }
+
+    #[test]
+    fn a_hand_edited_empty_paragraph_falls_through_to_the_closed_titles() {
+        // `render` never writes an empty `<p></p>` any more, but a document
+        // edited by hand still can, and it must read as "no summary" rather
+        // than as a blank line — which is exactly what lets the fallback fire.
+        let tasks = Tasks {
+            closed: vec![TaskLine { id: "a-1".into(), title: "Fix the thing".into() }],
+            parked: vec![],
+        };
+        let batches = [batch(1)];
+        let html = render(&report(Some(&tasks), &batches));
+        let doctored = html.replacen(
+            "<div class=\"sec\"><span>closed</span>",
+            "<div class=\"sec\"><span>summary</span></div><div class=\"summary\"><p></p></div><div class=\"sec\"><span>closed</span>",
+            1,
+        );
+        assert_eq!(parse_head(&doctored).summary.as_deref(), Some("Fix the thing"));
+    }
+
+    #[test]
+    fn the_total_reads_back_into_the_seconds_human_was_given() {
+        for seconds in [0u64, 30, 60, 45 * 60, 3600, 8040, 7 * 3600 + 40 * 60] {
+            let batches = [batch(1)];
+            let html = render(&RunReport { seconds, ..report(None, &batches) });
+            let head = parse_head(&html);
+            // `human` drops the seconds past a whole minute, so the round trip
+            // is exact only to the minute; below a minute it is exact.
+            let expected = if seconds < 60 { seconds } else { seconds - seconds % 60 };
+            assert_eq!(head.seconds, Some(expected), "{seconds}s rendered as {:?}", head.total);
+        }
+    }
+
+    #[test]
+    fn a_total_this_parser_does_not_recognise_is_none() {
+        assert_eq!(parse_seconds("soon"), None);
+        assert_eq!(parse_seconds("2h 5m"), Some(7500));
+        assert_eq!(parse_seconds("1h"), Some(3600));
+        assert_eq!(parse_seconds("12m"), Some(720));
+        assert_eq!(parse_seconds("7s"), Some(7));
+    }
+
+    #[test]
+    fn a_part_whose_last_character_is_multi_byte_answers_none_rather_than_panicking() {
+        // `split_at` on a byte offset one short of the end panicked here for
+        // any part whose last *character* takes more than one byte, and
+        // `parse_head` runs over every document under `.smetana/reports/`,
+        // so one hand-placed file used to take the whole `run_reports`
+        // command down with it.
+        assert_eq!(parse_seconds("5м"), None);
+        assert_eq!(parse_seconds("—"), None);
+    }
+
+    #[test]
+    fn an_empty_total_is_none_and_never_the_shortest_run_on_the_page() {
+        // `sortReports`'s own comment is explicit that an unknown length is
+        // never read as a claim of zero; `Some(0)` here would make an
+        // unrecognised `total` sort as the shortest run rather than as an
+        // unknown one.
+        assert_eq!(parse_seconds(""), None);
+        assert_eq!(parse_seconds("   "), None);
+    }
+
+    #[test]
+    fn a_number_too_large_to_be_a_real_duration_is_none_rather_than_wrapping() {
+        assert_eq!(parse_seconds("20000000000000000h"), None);
+        assert_eq!(parse_seconds("18446744073709551615s"), Some(u64::MAX));
+        assert_eq!(parse_seconds("18446744073709551616s"), None);
     }
 
     #[test]
