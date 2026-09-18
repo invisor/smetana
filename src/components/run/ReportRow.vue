@@ -27,7 +27,7 @@
 import { computed } from 'vue'
 import Icon from '../core/Icon.vue'
 import { useInteractive } from '../core/interactive.js'
-import { COLUMNS, barPercent, formatStamp } from './reportsPage.js'
+import { COLUMNS, barPercent, formatStamp, reportScopeText } from './reportsPage.js'
 
 const props = defineProps({
   row: { type: Object, required: true },
@@ -144,8 +144,7 @@ const cellText = (value) => (value === null || value === undefined ? '—' : Str
 
 const when = computed(() => formatStamp(props.row.stamp))
 const summary = computed(() => props.row.summary ?? null)
-const isQueue = computed(() => props.row.scope === 'the queue')
-const scope = computed(() => props.row.scope ?? null)
+const scope = computed(() => reportScopeText(props.row.scope))
 const bar = computed(() => barPercent(props.row.seconds, props.maxSeconds))
 </script>
 
@@ -171,13 +170,13 @@ const bar = computed(() => barPercent(props.row.seconds, props.maxSeconds))
       <template v-if="scope === null">
         <span :style="dashStyle">—</span>
       </template>
-      <template v-else-if="isQueue">
+      <template v-else-if="scope.isQueue">
         <Icon name="layers" :size="12" />
-        <span :style="queueTextStyle">the queue</span>
+        <span :style="queueTextStyle">{{ scope.text }}</span>
       </template>
       <template v-else>
         <Icon name="hash" :size="12" />
-        <span :style="taskTextStyle" :title="scope">{{ scope }}</span>
+        <span :style="taskTextStyle" :title="scope.text">{{ scope.text }}</span>
       </template>
     </span>
     <span :style="countStyleFor(row.closed, 'var(--text-primary)')">{{ cellText(row.closed) }}</span>

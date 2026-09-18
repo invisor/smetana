@@ -619,21 +619,34 @@ the frame lost its sandbox. If you are reading this report, the script did not r
 <script>document.body.style.background='red';document.body.innerHTML='<h1>THE SANDBOX FAILED</h1>'<\/script>
 </body></html>`
 
-/* The Reports tab's fixture: three rows, field for field with `run_reports`'s
-   `ReportEntry`. The third carries `closed`/`parked: null` on purpose — the
-   one row that has to draw a dash rather than a zero, `runs::reports::Head`'s
-   own rule for a board this parser could not read. The second carries
-   `summary: null` — an older document with no such section, drawn from the
-   closed titles' fallback rather than a dash — and the third carries
-   `seconds: null` — a `total` this parser could not read back — so the
-   duration bar's own absence has a row of its own to check. */
+/* The Reports tab's fixture: four rows, field for field with `run_reports`'s
+   `ReportEntry`. `scope` is `RunScope::describe`'s own words — `"the
+   queue"`, `"task <id>"`, `"epic <id>"` — never a bare id, since
+   `ReportRow.vue` reads exactly that shape back through `reportsPage.js`'s
+   `reportScopeText`; a fixture in any other shape draws the design correctly
+   here while the real app draws it wrong.
+
+   The third carries `closed`/`parked: null` on purpose — the one row that
+   has to draw a dash rather than a zero, `runs::reports::Head`'s own rule
+   for a board this parser could not read — and `seconds: null`, so the
+   duration bar's own absence has a row to check. The second carries
+   `summary: null`, which is the dash case and not the fallback one: the
+   fallback to the closed titles happens inside `reports::parse_head`, before
+   any of this ever reaches the wire, so a document that truly has neither a
+   summary section nor a closed title reaches the front end as `null` and
+   nothing else. The fourth is what most of this project's own reports on
+   disk actually draw — an older document with no summary section, whose
+   `summary` therefore already *is* the closed titles joined by `"; "` by
+   the time it gets here — long enough that the column's ellipsis has a real
+   case to draw, and scoped to an epic so that branch is drawn somewhere
+   too. */
 const REPORT_ROWS = [
   {
     path: '/p/.smetana/reports/2026-09-17-143205.html',
     file: '2026-09-17-143205.html',
     stamp: '2026-09-17T14:32:05',
     title: 'Task report',
-    scope: 'smetana-9je',
+    scope: 'task smetana-9je',
     finished: '2026-09-17 14:32',
     closed: 1,
     parked: 0,
@@ -661,7 +674,7 @@ const REPORT_ROWS = [
     file: '2026-09-15-020000.html',
     stamp: '2026-09-15T02:00:00',
     title: 'Task report',
-    scope: 'smetana-1wgi',
+    scope: 'task smetana-1wgi',
     finished: '2026-09-15 02:00',
     closed: null,
     parked: null,
@@ -669,6 +682,20 @@ const REPORT_ROWS = [
     total: '4m',
     seconds: null,
     summary: 'Looked into the flaky upload test and left a note on what to try next.'
+  },
+  {
+    path: '/p/.smetana/reports/2026-09-14-080000.html',
+    file: '2026-09-14-080000.html',
+    stamp: '2026-09-14T08:00:00',
+    title: 'Batch report',
+    scope: 'epic smetana-8fzc',
+    finished: '2026-09-14 08:00',
+    closed: 4,
+    parked: 0,
+    batches: 1,
+    total: '22m',
+    seconds: 1320,
+    summary: 'Fix the login form; Add the export button; Tidy the settings page; Update the release notes'
   }
 ]
 

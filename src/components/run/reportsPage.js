@@ -109,6 +109,29 @@ export function barPercent(seconds, max) {
   return Math.max(2, Math.round((seconds / max) * 100))
 }
 
+/* The inverse of `runScopes.js`'s `scopeLabel`: that turns a `{ kind, id }`
+   object into the exact words `RunScope::describe()` writes on the wire
+   (`the queue`, `task <id>`, `epic <id>`); a row has only those words —
+   `reports::Head.scope` is the string, never the object — and has to read
+   them back into what it draws. That reading belongs here and not in
+   `ReportRow.vue`: comparing against the literal `'the queue'` inside a
+   `.vue` file would be a contract with Rust's own vocabulary held in the one
+   kind of file no test in this repository can reach.
+
+   `null` answers `null` — the row's own dash. The queue's own words travel
+   through unabbreviated. `task <id>` and `epic <id>` answer the bare id: the
+   row already says which of the two a scope is by its glyph, so drawing the
+   word as well would say it twice for no reason anybody asked for. Anything
+   else — a shape this parser does not recognise — is drawn exactly as it
+   arrived, since an unrecognised scope is an ordinary outcome and not a
+   fault to disguise. */
+export function reportScopeText(scope) {
+  if (!scope) return null
+  if (scope === 'the queue') return { isQueue: true, text: scope }
+  const match = /^(?:task|epic) (.+)$/.exec(scope)
+  return { isQueue: false, text: match ? match[1] : scope }
+}
+
 /* The grid the list's header and every row share, so the two can never drift
    apart into two different rulers. Seven columns — When, Summary (the
    flexible one, the sentence a row is for), Scope (a quarter of what is left,

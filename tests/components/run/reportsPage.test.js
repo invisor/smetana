@@ -9,6 +9,7 @@ import {
   formatStamp,
   maxSeconds,
   pageOf,
+  reportScopeText,
   sortReports
 } from '../../../src/components/run/reportsPage.js'
 
@@ -178,5 +179,29 @@ describe('COLUMNS', () => {
     // collapsing each `(...)` to one word first rather than by a bare split.
     const tracks = COLUMNS.replace(/\([^)]*\)/g, 'X').split(' ')
     expect(tracks.length).toBe(7)
+  })
+})
+
+describe('reportScopeText', () => {
+  it('answers null for the row’s own dash', () => {
+    expect(reportScopeText(null)).toBe(null)
+    expect(reportScopeText(undefined)).toBe(null)
+    expect(reportScopeText('')).toBe(null)
+  })
+
+  it('carries the queue’s own words through unabbreviated', () => {
+    expect(reportScopeText('the queue')).toEqual({ isQueue: true, text: 'the queue' })
+  })
+
+  it('answers the bare id for a task or an epic, never the word in front of it', () => {
+    expect(reportScopeText('task smetana-1wgi')).toEqual({ isQueue: false, text: 'smetana-1wgi' })
+    expect(reportScopeText('epic smetana-8fzc')).toEqual({ isQueue: false, text: 'smetana-8fzc' })
+  })
+
+  it('draws a shape it does not recognise exactly as it arrived', () => {
+    expect(reportScopeText('backend, admin and the design-system port all at once')).toEqual({
+      isQueue: false,
+      text: 'backend, admin and the design-system port all at once'
+    })
   })
 })
