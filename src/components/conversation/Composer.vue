@@ -21,7 +21,15 @@
    copy of that function. **Nothing in this component puts a path into the
    list**: they arrive as a prop and leave through `update:attachments`, which is
    what keeps this drawable in `?view=gallery` with no window and no desktop
-   behind it.
+   behind it. The paperclip button beside the field is the same rule at the
+   other end — a system file picker is exactly the kind of thing this component
+   may not open for itself, so a click raises `attach` with nothing attached to
+   it and leaves opening the dialog, and putting whatever it returns into the
+   list, to whoever draws this (`ConversationView.vue`, through `pickFiles` in
+   `stores/app.js`). It is never disabled by `busy`: a drop onto the panel is
+   already allowed while a turn is in flight, and a file attached mid-turn
+   simply travels with the next message, the same way a dropped one already
+   does.
 
    **The name and the cross are two controls now, not one (smetana-4x3w) — and
    the name is a control at all only for some attachments.** The cross always
@@ -85,7 +93,11 @@ const emit = defineEmits([
   /* The bare path, raised only for an attachment `openAttachments` names;
      whoever draws this decides whether it is a picture or a file — see the
      header above. */
-  'open-attachment'
+  'open-attachment',
+  /* The paperclip button, pressed. No argument: opening the system dialog and
+     deciding what its answer means is not this component's to do — see the
+     header above. */
+  'attach'
 ])
 
 const field = ref(null)
@@ -308,6 +320,15 @@ const fieldStyle = computed(() => ({
     </div>
 
     <div :style="row">
+      <!-- Pinned to the row's own bottom edge with Send/Stop, never disabled
+           by `busy` — see the header above. -->
+      <IconButton
+        icon="paperclip"
+        label="Attach files"
+        size="sm"
+        variant="ghost"
+        @click="emit('attach')"
+      />
       <textarea
         ref="field"
         rows="1"

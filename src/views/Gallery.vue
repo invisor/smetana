@@ -6808,22 +6808,24 @@ const menuTargetStyle = {
                chip — checkable here as the composer's own idiom, the openable
                name and the cross as two separate tab stops, and the two log
                paths as plain text beside them with a cross of their own and
-               nothing else. `open-attachment` is a no-op for the reason every
-               other event this page cannot wire for real already takes:
-               `ConversationView.vue` is what turns it into `open-image` or
-               `open-local`, and this composer is drawn on its own, with
-               neither channel behind it. -->
+               nothing else. `open-attachment` and `attach` are both no-ops for
+               the reason every other event this page cannot wire for real
+               already takes: `ConversationView.vue` is what turns the first
+               into `open-image` or `open-local` and the second into a system
+               file dialog, and this composer is drawn on its own, with none of
+               those three behind it. -->
           <div :style="{ border: 'var(--border-w) solid var(--border)', borderRadius: 'var(--radius-3)' }">
             <Composer
               v-model="composerText"
               v-model:attachments="composerAttachments"
               :open-attachments="CONVERSATION_OPEN_ATTACHMENTS"
               @open-attachment="() => {}"
+              @attach="() => {}"
             />
           </div>
           <!-- A turn in flight: one button, and it is Stop. -->
           <div :style="{ border: 'var(--border-w) solid var(--border)', borderRadius: 'var(--radius-3)' }">
-            <Composer v-model="composerBusyText" busy />
+            <Composer v-model="composerBusyText" busy @attach="() => {}" />
           </div>
         </div>
       </div>

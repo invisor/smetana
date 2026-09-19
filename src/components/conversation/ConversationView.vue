@@ -119,7 +119,7 @@ import { basename } from '../../paths.js'
    themselves, so this file asks on their behalf and hands back which of
    their own attachments are worth drawing as a control at all. */
 import { agentLabel } from '../../stores/agents.js'
-import { openExternal, openImageWindow } from '../../stores/app.js'
+import { openExternal, openImageWindow, pickFiles } from '../../stores/app.js'
 import { filesState } from '../../stores/files.js'
 import { settings } from '../../stores/settings.js'
 import {
@@ -423,6 +423,23 @@ onBeforeUnmount(() => stopDrops?.())
 const dropCaption = computed(() =>
   dropCount.value > 1 ? `Drop to attach ${dropCount.value} files` : 'Drop to attach the file'
 )
+
+/* `Composer`'s paperclip button, answered here for the same reason the drop
+   above is: opening a system dialog is not that component's to do (see its
+   own header). The paths land in `attachments` the same way a drop's do —
+   appended in the order they were picked — and an empty answer, a cancelled
+   dialog, changes nothing. The dialog failing to open is the one outcome that
+   is not silent: `pickFiles` throws rather than swallowing it, and there is no
+   `lastError` on this panel for a caller to read back, so the console is what
+   says so, prefixed the way every other refusal in this file is. */
+async function pickAttachments() {
+  try {
+    const paths = await pickFiles()
+    if (paths.length) attachments.value = [...attachments.value, ...paths]
+  } catch (err) {
+    console.error('[conversation] the file picker did not open:', err)
+  }
+}
 
 async function send() {
   const record = held.value
@@ -827,6 +844,7 @@ const refusal = computed(() => ({
         @send="send"
         @stop="stop"
         @open-attachment="openAttachment"
+        @attach="pickAttachments"
       />
     </div>
   </div>
