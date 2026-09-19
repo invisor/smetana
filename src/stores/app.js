@@ -1,7 +1,8 @@
 /* What the app knows about itself, and what it asks the desktop to do for it:
    open its own windows — the settings window, a dialog in a window of its own,
-   and one attached picture in a window of its own — and open a link somewhere
-   that is not this webview.
+   and one attached picture in a window of its own — open a link somewhere
+   that is not this webview, and offer the system's own file picker for the
+   conversation composer's paperclip button.
 
    A store rather than three lines in a component, for the reason the rest of
    `stores/` exists: these are the only files in `src/` that know Tauri is there,
@@ -12,10 +13,13 @@ import { invoke } from '@tauri-apps/api/core'
 import { emit, listen } from '@tauri-apps/api/event'
 import { getVersion } from '@tauri-apps/api/app'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { downloadDir } from '@tauri-apps/api/path'
 import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
+import { open } from '@tauri-apps/plugin-dialog'
 import { usingMockBackend } from './mockBackend.js'
 import { CHROME_NONE, chromeFromPlatform } from '../components/shell/windowChrome.js'
+import { dirname } from '../paths.js'
 
 /* Which section the settings window should be showing. Not a setting and not
    part of the three-event contract in `settings.js` — nothing about it reaches
@@ -642,4 +646,58 @@ export async function revealInFileManager(path) {
     console.error('[app] the file manager did not open:', err)
     return false
   }
+}
+
+/* ---- files for the conversation composer's paperclip button ------------- */
+/* The system file picker, for `Composer.vue`'s attach button. Here rather than
+   in `stores/attachments.js`, which is the New task window's own store: that
+   one's `pickImages` filters to pictures and copies the chosen bytes into the
+   attachment store, and a composer attachment is neither of those things —
+   `session_send` carries the bare path it was given, exactly as a dropped file
+   already does (see `Composer.vue`'s own header and
+   `.claude/rules/attachments.md`). This store is the right place for the
+   opposite reason `attachments.js` is wrong for it: a dialog is a thing the
+   desktop offers, which is what this file is for.
+
+   No `filters`: a drop onto the panel takes any file, and a picker narrowed to
+   pictures would be a stricter door onto the same list for no reason a person
+   watching the panel could see.
+
+   Where the picker opens follows `pickerDir` in `attachments.js`, whose own
+   header carries the reason a fixed `defaultPath` is wrong (macOS opens
+   Recents with none at all, and an unsandboxed app pays for every consent
+   prompt that follows). The memory is a second copy rather than a share with
+   that store's own `lastPickedDir`: the two run in different webviews — the
+   app window and the New task window — so nothing would actually be shared,
+   and ten lines here are cheaper than importing a store built for a dialog
+   this one has no business opening. */
+let lastPickedDir = null
+
+async function pickerDir() {
+  if (lastPickedDir) return lastPickedDir
+  try {
+    return await downloadDir()
+  } catch {
+    return undefined
+  }
+}
+
+/* Cancelling answers `[]`, not a rejection — `ConversationView.vue` reads that
+   as nothing to add, the same as an empty drop. A dialog that fails to open is
+   thrown rather than swallowed: unlike `attachments.js`, this store keeps no
+   `lastError` for a caller to read back, so swallowing it here would be the
+   one thing this app refuses everywhere — a failure with nothing on screen to
+   say so. */
+export async function pickFiles() {
+  const defaultPath = await pickerDir()
+  const picked = await open({ multiple: true, title: 'Attach files', defaultPath })
+  if (!picked) return []
+  const paths = Array.isArray(picked) ? picked : [picked]
+  /* Of several chosen at once, the first is what the next open starts from —
+     they are siblings, and it is the one that was clicked, the same rule
+     `pickImages` follows. `?? lastPickedDir` is for a path with no folder
+     above it, which keeps the last real answer rather than dropping back to
+     Downloads. */
+  lastPickedDir = dirname(paths[0]) ?? lastPickedDir
+  return paths
 }

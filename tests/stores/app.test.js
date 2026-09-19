@@ -30,6 +30,57 @@ async function loadWindows() {
   return { app: stores.app, compare: stores.compare, ipc, emit, listen }
 }
 
+/* `pickFiles`, the conversation composer's own picker — any file, no
+   filters, and a bare path handed straight back rather than copied anywhere.
+   The shape of these tests follows `pickImages` in `tests/stores/
+   attachments.test.js`, the picker this one is deliberately not built on top
+   of (see `stores/app.js`'s own header on the function). */
+describe("the composer's paperclip button", () => {
+  it('a cancelled dialog attaches nothing', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('plugin:dialog|open', null)
+
+    await expect(stores.app.pickFiles()).resolves.toEqual([])
+  })
+
+  it('several files chosen at once come back as they were given', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('plugin:dialog|open', ['/a/one.txt', '/a/two.png'])
+
+    await expect(stores.app.pickFiles()).resolves.toEqual(['/a/one.txt', '/a/two.png'])
+  })
+
+  it('a single path answered as a bare string becomes a list of one', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('plugin:dialog|open', '/a/one.txt')
+
+    await expect(stores.app.pickFiles()).resolves.toEqual(['/a/one.txt'])
+  })
+
+  it('offers every file, with no extension filter', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('plugin:dialog|open', null)
+
+    await stores.app.pickFiles()
+
+    const options = ipc.calls('plugin:dialog|open')[0].options
+    expect(options.multiple).toBe(true)
+    expect(options.filters).toBeUndefined()
+  })
+
+  it('the second open starts in the folder of the first file chosen', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('plugin:dialog|open', ['/a/one.txt'])
+    await stores.app.pickFiles()
+
+    ipc.on('plugin:dialog|open', null)
+    await stores.app.pickFiles()
+
+    const options = ipc.calls('plugin:dialog|open').map((call) => call.options)
+    expect(options[1].defaultPath).toBe('/a')
+  })
+})
+
 describe('a window saying it is ready to be re-aimed', () => {
   it('asks the desktop for whatever it missed while it was loading', async () => {
     const { app, ipc } = await loadWindows()
