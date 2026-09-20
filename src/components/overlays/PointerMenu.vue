@@ -32,11 +32,13 @@
    One kind of item narrows that order rather than lifting it: an item carrying
    `keepOpen` emits **without** closing. The flag is on the item and not on this
    component because a single menu holds rows of both sorts — the file tree's
-   Delete asks a second time in the row itself, redrawn in place with the panel
-   still up, while every row above it closes on the pick as before. Nothing else
-   moves: `owner` stays set, since the menu is still about that row, and the
-   handler is what decides whether this pick was the answer. The two callers
-   that came first, `ProjectRail` and `BranchList`, set the flag nowhere. */
+   own Delete, and now the branch row's, ask a second time in the row itself,
+   redrawn in place with the panel still up, while every row above either of
+   them closes on the pick as before. Nothing else moves: `owner` stays set,
+   since the menu is still about that row, and the handler is what decides
+   whether this pick was the answer. Every other caller sets the flag nowhere —
+   `fileMenu.js` and `branchMenu.js` are the whole of the producing side, and a
+   caller is only ever as armed as the items it is handed. */
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import ContextMenu from './ContextMenu.vue'
 

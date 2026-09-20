@@ -369,13 +369,17 @@ const emit = defineEmits([
   'merge',
   'rebase',
   'new-branch',
-  /* The name of the branch a person asked to rename. Like the delete below it
-     the window that asks is the caller's to open, and what comes back from git
-     lands in `writeError` under this table's own title. */
+  /* The name of the branch a person asked to rename. The window that asks —
+     unlike the delete below it, which no longer has one on the ordinary path
+     — is the caller's to open every time, and what comes back from git lands
+     in `writeError` under this table's own title. */
   'rename',
-  /* The name of the branch a person asked to delete. The window that asks about
-     it is the caller's to open, and what comes back from git lands in
-     `writeError` under this table's own title like every other write. */
+  /* The name of the branch a person asked to delete. The ordinary delete is
+     asked and answered in the row itself now, with no window in front of it;
+     the row asks in place, and the force window is the caller's to open, only
+     once git has already refused a plain delete as unmerged. What comes back
+     from git lands in `writeError` under this table's own title either way,
+     like every other write. */
   'delete',
   'pull',
   'push',
@@ -406,7 +410,7 @@ const emit = defineEmits([
      commit has no such path. It **is** in `WRITE_REFUSED` below, because what
      comes back from git lands in `writeError` under a title of its own like
      every other write — and the window that asked draws the same words, exactly
-     as `delete` above does. */
+     as the delete's own force window above does. */
   'discard',
   'toggle',
   'toggle-folder',

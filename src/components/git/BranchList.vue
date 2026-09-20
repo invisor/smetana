@@ -466,7 +466,8 @@ const navKey = (row) => (props.tab === 'origin' ? originKeyOf(row) : keyOf(row))
    items are built from it and because the row under an open panel has to keep
    its highlight — the panel is teleported to the body, so the pointer moving
    into it leaves the row, and a menu naming nothing on screen is a menu about
-   nothing. Everything else about it is `PointerMenu`'s.
+   nothing. Everything else about it, besides Delete's own arming below, is
+   `PointerMenu`'s.
  *
  * Wide enough for "Rebase the current branch onto this", measured in the
  * gallery rather than reasoned about: 203px of `--text-sm` sans, and 70px of
@@ -480,6 +481,12 @@ const navKey = (row) => (props.tab === 'origin' ? originKeyOf(row) : keyOf(row))
  * of that one row. */
 const menu = ref(null)
 const menuFor = ref(null)
+/* Whether Delete on the open panel has been picked once already —
+   `FileTree.vue`'s own flag of the same name, beside the row the menu is open
+   on for the identical reason, and cleared by the panel's `close` beside
+   `menuFor` below so a menu closed and reopened on the same row starts
+   unarmed. */
+const confirmingDelete = ref(false)
 /* Which rule builds the open menu's items is the tab rather than a flag set
    when it opened: exactly one side is on screen, so the row under the pointer
    was certainly on that side. One `PointerMenu` for both and not two — only one
@@ -512,7 +519,8 @@ const items = computed(() => {
            what the item's label is about is whether this name is marked, which
            is a fact about `settings.json` and not about how the list happens to
            be drawn. */
-        favorite: (props.favorites ?? []).includes(menuFor.value)
+        favorite: (props.favorites ?? []).includes(menuFor.value),
+        confirmingDelete: confirmingDelete.value
       })
 })
 
@@ -527,7 +535,17 @@ const openMenu = (row, event) => {
    same words today, and a rule file free to add another verb must not be able
    to make this component emit something nobody declared. Two of them have
    arrived exactly that way since, which is this comment having been right
-   twice. */
+   twice.
+
+   Delete is the one pick that may arrive twice. The first one arms it and
+   emits nothing at all — `item.keepOpen` is what leaves the panel up to be read
+   a second time, the same flag `FileTree.vue`'s pick reads — and only the pick
+   that arrives with the row already armed emits `delete`. Which pick this is
+   comes off the **item** and not off `confirmingDelete`, for `FileTree.vue`'s
+   own reason: the armed row's own pick closes the panel, closing emits `close`,
+   and `onMenuClose` below has already put the flag back to `false` by the time
+   this handler runs — reading the ref here would say "not armed" on every pick,
+   and the row would arm itself forever over a panel that had just gone. */
 const pick = (item, name) => {
   if (item.kind === 'checkout') emit('checkout', name)
   else if (item.kind === 'compare') emit('compare', name)
@@ -538,8 +556,20 @@ const pick = (item, name) => {
   else if (item.kind === 'rebase') emit('rebase', name)
   else if (item.kind === 'new-branch') emit('new-branch', name)
   else if (item.kind === 'rename') emit('rename', name)
-  else if (item.kind === 'delete') emit('delete', name)
-  else if (item.kind === 'checkout-remote') emit('checkout-remote', name)
+  else if (item.kind === 'delete') {
+    if (item.keepOpen) confirmingDelete.value = true
+    else emit('delete', name)
+  } else if (item.kind === 'checkout-remote') emit('checkout-remote', name)
+}
+
+/* However the panel left — Esc, a click outside, a scroll, a pick on another
+   row, or the armed row's own second pick. `menuFor` and `confirmingDelete` are
+   both about the panel and go with it, the armed Delete above all: this is the
+   whole of the promise that anything but a second pick on the armed row deletes
+   nothing. */
+const onMenuClose = () => {
+  menuFor.value = null
+  confirmingDelete.value = false
 }
 
 /* Whether a filter is on at all, which is one question answered once: three
@@ -1064,17 +1094,23 @@ const OPERATIONS = {
   checkout: 'Switching to this branch',
   merge: 'Merging this branch in',
   rebase: 'Rebasing onto this branch',
+  /* The one that leaves from a window rather than from this panel at all: the
+     dialog closes itself before the write goes out, so it is in this table
+     for that reason — the row is the only place left on screen to say which
+     branch git is working on once the window that asked has already gone. */
   create: 'Cutting a new branch from this',
-  /* The one that leaves from a window rather than from this panel at all, and
-     it is in this table for `create`'s reason: the dialog closes or stands on
-     its second question, and either way the row it was about is still on
+  /* The one whose write can start from two places now. The ordinary path is
+     the row's own second click, with no window open at all; only once that
+     has come back refused as unmerged does a window stand on the harder
+     question, `Delete anyway`. Either way the row it was about is still on
      screen, still spinning, until the refresh takes it away. A row dimmed with
      nothing on it saying which branch git is working on is the state this table
      exists to prevent. */
   delete: 'Deleting this branch',
-  /* The other one that leaves from a window, and it is keyed on the name the
-     branch had when git was asked: the row under the spinner is the old name
-     until the refresh brings the list back under the new one. */
+  /* The other one that leaves from a window, alongside `create` above, and it
+     is keyed on the name the branch had when git was asked: the row under the
+     spinner is the old name until the refresh brings the list back under the
+     new one. */
   rename: 'Renaming this branch',
   /* The two that leave from the tab row rather than from a row of the list. They
      are about the current branch and `busy` carries its name, so the spinner
@@ -1632,6 +1668,6 @@ const noMatchCopy = computed(() => {
         </Button>
       </div>
     </div>
-    <PointerMenu ref="menu" :items="items" :width="MENU_W" @select="pick" @close="menuFor = null" />
+    <PointerMenu ref="menu" :items="items" :width="MENU_W" @select="pick" @close="onMenuClose" />
   </div>
 </template>

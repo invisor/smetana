@@ -159,14 +159,16 @@ const DIALOG_PROPS = {
     actions: { allowed: true, reason: null },
     busy: false
   },
-  /* Deleting one, in the state it opens in — the question, before git has been
-     asked anything. The other two states are reached by an answer from a
-     backend a browser does not have, so they are looked at in `?view=gallery`
-     instead, where all three stand side by side. */
+  /* This window never opens on its own in the app — only `deleteBranchFromRow`'s
+     catch opens it, once a plain delete has already been refused as unmerged —
+     so a browser reaches it only through `?view=dialog&kind=delete-branch`
+     directly, and this is the state it draws there: the sentence about losing
+     commits, with `Delete anyway` live. The other of the two states, the
+     refusal, is reached by an answer from a backend a browser does not have, so
+     it is looked at in `?view=gallery` instead, beside this one. */
   'delete-branch': {
     title: 'Delete release/7?',
     branch: 'release/7',
-    notMerged: false,
     refusal: '',
     busy: false
   },

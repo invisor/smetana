@@ -424,7 +424,11 @@ which narrows the close-before-emit order that file's header explains rather tha
 flag is on the item and not on the component because one menu holds rows of both sorts, and it is
 also what the handler branches on — closing clears the caller's armed flag before the pick is
 emitted, so the item is the only copy of "which pick is this" that cannot be stale by the time it
-is read.
+is read. The branch list's own Delete now shares this pattern too
+(`components/git/branchMenu.js`, `BranchList.vue`) — the same `keepOpen`, the same second click in
+place — with the harder question, `git branch -D`, held behind a window of its own rather than in
+the row; see `.claude/rules/vcs-panel.md`'s "Deleting a branch" for why the two still part company
+there.
 
 Four more decisions in it are worth knowing before changing any of them. The menu
 never moves the selection: a right click is a question about a row, not a visit

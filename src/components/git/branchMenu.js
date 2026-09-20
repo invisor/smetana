@@ -124,7 +124,12 @@ export function branchMenuItems({
   current = false,
   allowed = true,
   busy = false,
-  favorite = false
+  favorite = false,
+  /* Whether Delete on this row has been picked once already. `fileMenu.js`'s
+     own row asks the same question about a file, and this is the second case
+     of that pattern rather than a copy of it — see the note beside the delete
+     item below for what the two share and what stays this row's own. */
+  confirmingDelete = false
 } = {}) {
   const held = frozen({ allowed, busy })
   /* The three verbs about moving between branches. Every one of them is a no-op
@@ -237,14 +242,34 @@ export function branchMenuItems({
        refused on the current branch where `New branch from this` above it is
        not. That is a claim about these two rows and no more — the header above
        says why the menu as a whole no longer has an unbroken run of greyed rows
-       to protect. Refused here in the menu and refused again in Rust: the window
-       that asks the question is a window of its own, and HEAD can move while it
-       stands. */
+       to protect. Refused here in the menu and refused again in Rust: an armed
+       row stands between its two clicks with nothing re-announcing it over
+       IPC, and the window that asks the harder question stands with no scrim
+       either, so HEAD can move under either one while it does.
+
+       **Delete asks a second time in the row itself, exactly as `fileMenu.js`'s
+       own Delete does**: the first pick redraws it as "Click again to confirm"
+       and leaves the panel open (`keepOpen`, read by `PointerMenu.pick`), and
+       the second one carries — a plain `git branch -d`. Which label this row
+       gets is `confirmingDelete`, held by `BranchList.vue` beside the row the
+       menu is open on and cleared by the panel's `close` — the one event that
+       arrives however the menu leaves, so Esc, a click outside, a scroll or
+       another row leaves it unarmed the next time it opens. `tone: 'danger'` is
+       on the row in both states, since the second press is still the same act
+       as the first and the red is what says so before either label is read.
+
+       What this row's second click does **not** reach is `git branch -D`: a
+       branch git refuses because it holds commits of its own opens the
+       `delete-branch` window instead, already asking the harder question —
+       that window's own header carries why the force is behind a window and
+       the ordinary delete is not. */
     {
       kind: 'delete',
-      label: 'Delete this branch',
+      label: confirmingDelete ? 'Click again to confirm' : 'Delete this branch',
       icon: 'trash-2',
-      disabled: moving
+      tone: 'danger',
+      disabled: moving,
+      keepOpen: !confirmingDelete
     }
   ]
 }

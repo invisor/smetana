@@ -2726,9 +2726,16 @@ const refusedBranchMenu = ref(null)
 const BRANCH_MENU = branchMenuItems()
 const REFUSED_BRANCH_MENU = branchMenuItems({ allowed: false })
 /* The same menu over a row that is already marked, which is the only item here
-   whose label changes: `Remove from favourites` is the longer of its two
-   wordings and is what the 280px width has to hold. */
+   whose label changes on that argument alone: `Remove from favourites` is the
+   longer of its two wordings and is what the 280px width has to hold. */
 const MARKED_BRANCH_MENU = branchMenuItems({ favorite: true })
+/* Delete armed by a first pick, the same fixture shape `ARMED_FILE_MENU` draws
+   for the file tree's own row: `Click again to confirm` is the other label
+   that width has to hold, in the same red tone as the row it replaces. It
+   cannot be reached in the gallery the way it is reached in the app — that
+   takes a right click, a first pick, and a panel that stays up — so it is
+   drawn straight into a `ContextMenu` below, beside the unarmed rows. */
+const ARMED_BRANCH_MENU = branchMenuItems({ confirmingDelete: true })
 /* A change row's own menu, drawn straight into a `ContextMenu` for the reason
    the branch menu's copy is: the panel itself is behind a right-click, which is
    a gesture an automated pass cannot reliably raise and a person has to
@@ -2778,10 +2785,11 @@ const fileMenuBoxStyle = {
   border: 'var(--border-w) solid var(--border)',
   borderRadius: 'var(--radius-3)'
 }
-/* The armed Delete, which is the one row in the app that asks a second time in
-   place. It cannot be reached in the gallery the way it is reached in the app —
-   that takes a secondary click, a first pick, and a panel that stays up — so
-   the rows are drawn straight into a `ContextMenu`, which is what `PointerMenu`
+/* The armed Delete, one of the two rows in the app that ask a second time in
+   place — the branch list's own is `ARMED_BRANCH_MENU`, further down. It
+   cannot be reached in the gallery the way it is reached in the app — that
+   takes a secondary click, a first pick, and a panel that stays up — so the
+   rows are drawn straight into a `ContextMenu`, which is what `PointerMenu`
    puts inside itself anyway. The unarmed list is beside it, because what has to
    be read here is the difference between the two: one row's words, in the same
    place, in the same tone. */
@@ -3421,8 +3429,9 @@ const menuTargetStyle = {
       <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <RenameBranchModal :open="true" from="release/7" :branches="BRANCHES" :actions="RUN_GOING" @close="() => {}" @rename="() => {}" />
       </div>
-      <!-- Deleting one, which is the only confirm in this app that asks twice.
-           The question first: what a branch is and is not, and one Delete.
+      <!-- Deleting one, which now opens only once a plain delete in the branch
+           row's own menu has already been refused as unmerged: the sentence
+           names what is about to be lost and the button says `Delete anyway`.
 
            The name is long and slashed on purpose — it is the subject of the
            heading and of the line in the body, and a short one would show
@@ -3435,22 +3444,7 @@ const menuTargetStyle = {
           @confirm="() => {}"
         />
       </div>
-      <!-- The second state, which is the same window after git declined the
-           plain delete: the sentence names what is about to be lost and the
-           button says `Delete anyway`. What to check is that the two frames are
-           the same size and the same shape — this is one window changing what
-           it says, not a second dialog — and that the red button is the only
-           thing in either of them drawing attention. -->
-      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
-        <DeleteBranchModal
-          :open="true"
-          branch="feature/smetana-8ok-git-panel-branches"
-          not-merged
-          @close="() => {}"
-          @confirm="() => {}"
-        />
-      </div>
-      <!-- And the third: a refusal forcing would repeat, in git's own words, in
+      <!-- And the second: a refusal forcing would repeat, in git's own words, in
            the same mono block under the same failed-red title `GitPanel` draws
            one in. There is no delete button at all here, which is the whole
            point of the state — the only way out is Cancel. -->
@@ -7103,6 +7097,12 @@ const menuTargetStyle = {
                text depends on something: `Remove from favourites` is the longer
                of the two labels and is what the width has to hold. -->
           <ContextMenu :items="MARKED_BRANCH_MENU" :width="280" />
+          <!-- Delete armed by a first pick: the row reads `Click again to
+               confirm` in the same red as `Delete this branch`, and nothing
+               else on the menu moves. What to check here is the same thing
+               `ARMED_FILE_MENU` above checks for the file tree's own row — the
+               longer label fits `:width="280"` without an ellipsis. -->
+          <ContextMenu :items="ARMED_BRANCH_MENU" :width="280" />
         </div>
         <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
           <Toast tone="warning" title="claude-1 needs you" description="bd-a1b2 · worktree name collision · 4m" />

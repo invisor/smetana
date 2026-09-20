@@ -17,12 +17,13 @@
    rows in the middle a week after somebody learned it is a menu whose muscle
    memory was worth nothing.
 
-   Delete is the one row in this app that asks a second time in place. The first
-   pick redraws it as "Click again to confirm" and leaves the panel open — that
-   is the `keepOpen` flag, which `PointerMenu.pick` reads — and the second one
-   deletes. Which of the two labels a caller gets is `confirmingDelete`, held by
-   `FileTree.vue` beside the path the menu is open on and cleared by the panel's
-   `close`, the one event that arrives however the menu leaves. */
+   Delete asks a second time in place, the way `components/git/branchMenu.js`'s
+   own Delete now does too. The first pick redraws it as "Click again to
+   confirm" and leaves the panel open — that is the `keepOpen` flag, which
+   `PointerMenu.pick` reads — and the second one deletes. Which of the two
+   labels a caller gets is `confirmingDelete`, held by `FileTree.vue` beside the
+   path the menu is open on and cleared by the panel's `close`, the one event
+   that arrives however the menu leaves. */
 
 /* What the platform calls the thing that shows a file in its folder. A pure
    function of the user agent rather than `@tauri-apps/plugin-os`, which would be
