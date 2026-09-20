@@ -267,8 +267,8 @@ fn show_event(label: &str) -> String {
 /// the call sites so that the shape is written once on this side and a test can
 /// hold it against those watchers — nothing else pairs the two, and a field
 /// renamed on either side costs the feature and fails nothing.
-fn settings_show(tab: &str) -> Value {
-    json!({ "tab": tab })
+fn settings_show(tab: Option<&str>) -> Value {
+    json!({ "tab": tab, "refreshCodexModels": true })
 }
 
 fn compare_show(repo: &str, branch: &str) -> Value {
@@ -458,9 +458,7 @@ pub fn settings_window_open(app: AppHandle, tab: Option<String>) -> Result<(), S
         // Minimized counts as open, and focusing a minimized window leaves a
         // person pressing the gear with nothing on screen to show for it.
         let _ = window.unminimize();
-        if let Some(name) = tab.as_deref() {
-            show_now_or_on_ready(&app, SETTINGS_LABEL, settings_show(name));
-        }
+        show_now_or_on_ready(&app, SETTINGS_LABEL, settings_show(tab.as_deref()));
         return window.set_focus().map_err(|err| err.to_string());
     }
 
@@ -2296,7 +2294,7 @@ mod tests {
     /// field renamed on one side costs the feature and fails nothing.
     #[test]
     fn each_window_is_told_in_the_words_its_watcher_reads() {
-        assert_eq!(settings_show("storage"), json!({ "tab": "storage" }));
+        assert_eq!(settings_show(Some("storage")), json!({ "tab": "storage", "refreshCodexModels": true }));
         assert_eq!(
             compare_show("/tmp/r", "feature"),
             json!({ "repo": "/tmp/r", "branch": "feature" })

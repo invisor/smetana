@@ -1934,6 +1934,9 @@ fn known_model(agent: &str, model: &mut String) {
     if model.is_empty() {
         return;
     }
+    if agent == "codex" {
+        return;
+    }
     let known = crate::agents::resolve(agent)
         .is_some_and(|profile| profile.models().iter().any(|(id, _)| id == model));
     if !known {
@@ -3671,6 +3674,18 @@ mod tests {
         settings.validate();
         assert_eq!(settings.agent_roles.code.agent, "claude", "the harness is legal and stays");
         assert_eq!(settings.agent_roles.code.model, "", "only the model is forgotten");
+    }
+
+    #[test]
+    fn a_newer_codex_model_survives_the_static_fallback_validation() {
+        let mut settings = Settings::default();
+        settings.agent = "codex".into();
+        settings.model = "gpt-6-astra".into();
+        settings.agent_roles.code.agent = "codex".into();
+        settings.agent_roles.code.model = "gpt-6-astra".into();
+        settings.validate();
+        assert_eq!(settings.model, "gpt-6-astra");
+        assert_eq!(settings.agent_roles.code.model, "gpt-6-astra");
     }
 
     #[test]

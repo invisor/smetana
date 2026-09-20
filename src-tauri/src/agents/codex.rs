@@ -14,9 +14,12 @@
 //! CLI can break it; when it does it breaks softly, leaving layer A in place.
 
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
 use std::time::SystemTime;
 
 use portable_pty::CommandBuilder;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use super::library::read_skill;
 use super::{
@@ -69,6 +72,74 @@ const MODELS: &[(&str, &str)] = &[
     ("gpt-5.5", "GPT-5.5"),
     ("gpt-5.2", "GPT-5.2"),
 ];
+
+const MODEL_LIST_TIMEOUT: Duration = Duration::from_secs(10);
+
+pub async fn listed_models() -> Result<Vec<(String, String)>, String> {
+    tokio::time::timeout(MODEL_LIST_TIMEOUT, listed_models_inner()).await.map_err(|_| "Codex model list timed out".to_string())?
+}
+
+async fn listed_models_inner() -> Result<Vec<(String, String)>, String> {
+    let mut command = tokio::process::Command::new("codex");
+    command.args(["app-server", "--stdio"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    let mut child = command.spawn().map_err(|err| format!("Could not start Codex: {err}"))?;
+    let result = async {
+        let mut stdin = child.stdin.take().ok_or_else(|| "Codex stdin was unavailable".to_string())?;
+        let stdout = child.stdout.take().ok_or_else(|| "Codex stdout was unavailable".to_string())?;
+        let mut lines = BufReader::new(stdout).lines();
+        let init = serde_json::json!({ "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "Smetana", "version": "0.1.0" } } });
+        stdin.write_all(init.to_string().as_bytes()).await.map_err(|err| err.to_string())?;
+        stdin.write_all(b"\n{\"method\":\"initialized\",\"params\":{}}\n").await.map_err(|err| err.to_string())?;
+        stdin.flush().await.map_err(|err| err.to_string())?;
+        next_response(&mut lines, 0).await?;
+        let mut cursor: Option<String> = None;
+        let mut models = Vec::new();
+        for request_id in 1_u64.. {
+            let request = serde_json::json!({ "id": request_id, "method": "model/list", "params": cursor.as_ref().map_or_else(serde_json::Map::new, |cursor| serde_json::Map::from_iter([(String::from("cursor"), serde_json::Value::String(cursor.clone()))])) });
+            stdin.write_all(request.to_string().as_bytes()).await.map_err(|err| err.to_string())?;
+            stdin.write_all(b"\n").await.map_err(|err| err.to_string())?;
+            stdin.flush().await.map_err(|err| err.to_string())?;
+            let (page, next) = model_list_page(&next_response(&mut lines, request_id).await?)?;
+            models.extend(page);
+            if next.as_deref().map_or(true, str::is_empty) { break; }
+            cursor = next;
+        }
+        (!models.is_empty()).then_some(models).ok_or_else(|| "Codex returned no visible models".to_string())
+    }.await;
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+    result
+}
+
+async fn next_response(lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>, id: u64) -> Result<String, String> {
+    while let Some(line) = lines.next_line().await.map_err(|err| err.to_string())? {
+        if serde_json::from_str::<serde_json::Value>(&line).ok().and_then(|value| value.get("id").and_then(serde_json::Value::as_u64)) == Some(id) { return Ok(line); }
+    }
+    Err("Codex closed the model list stream".into())
+}
+
+fn model_list_page(line: &str) -> Result<(Vec<(String, String)>, Option<String>), String> {
+    let value: serde_json::Value = serde_json::from_str(line).map_err(|_| "Codex returned an invalid model list".to_string())?;
+    if value.get("error").is_some() { return Err("Codex refused the model list request".into()); }
+    let result = value.get("result").ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+    let entries = result.get("data").and_then(serde_json::Value::as_array).ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+    let models = entries.iter().filter_map(|entry| {
+        if entry.get("hidden").and_then(serde_json::Value::as_bool).unwrap_or(true) { return None; }
+        Some((entry.get("model")?.as_str()?.to_owned(), entry.get("displayName")?.as_str()?.to_owned()))
+    }).collect();
+    Ok((models, result.get("nextCursor").and_then(serde_json::Value::as_str).map(str::to_owned)))
+}
+
+#[cfg(test)]
+mod model_list_tests {
+    use super::model_list_page;
+    #[test]
+    fn keeps_visible_models_in_response_order_and_uses_model_not_id() {
+        let (models, next) = model_list_page(r#"{"result":{"data":[{"id":"wrong","model":"gpt-6-astra","displayName":"GPT-6-Astra","hidden":false},{"model":"hidden","displayName":"Hidden","hidden":true}],"nextCursor":"page-two"}}"#).unwrap();
+        assert_eq!(models, vec![("gpt-6-astra".into(), "GPT-6-Astra".into())]);
+        assert_eq!(next.as_deref(), Some("page-two"));
+    }
+}
 
 pub struct Codex;
 

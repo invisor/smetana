@@ -21,6 +21,8 @@ import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
 export const agents = ref([])
+export const codexModelsError = ref(null)
+let codexRequest = 0
 
 export async function initAgents() {
   try {
@@ -28,6 +30,26 @@ export async function initAgents() {
     agents.value = Array.isArray(rows) ? rows : []
   } catch {
     agents.value = []
+  }
+}
+
+/* The harness catalogue is fixed by this build; Codex's visible models are not.
+   Only the newest opening may update the picker, so a slower earlier process
+   cannot put an old menu back after a later one has succeeded. */
+export async function refreshCodexModels() {
+  const mine = ++codexRequest
+  try {
+    const models = await invoke('codex_models')
+    if (mine !== codexRequest) return false
+    if (!Array.isArray(models) || models.length === 0) throw new Error('Codex returned no visible models')
+    const row = agents.value.find((agent) => agent.id === 'codex')
+    if (row) row.models = models
+    codexModelsError.value = null
+    return true
+  } catch (err) {
+    if (mine !== codexRequest) return false
+    codexModelsError.value = err?.message || 'Could not refresh Codex models'
+    return false
   }
 }
 

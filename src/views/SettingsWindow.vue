@@ -31,6 +31,7 @@ import AboutSettings from '../components/settings/AboutSettings.vue'
    and `runs/commands.rs` answers it the same way for a caller that names
    nobody. */
 import { runLeadAgent } from '../components/settings/agentRoles.js'
+import { refreshCodexModels } from '../stores/agents.js'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
 import { paintRoot, usePrefersDark } from './useAppearance.js'
 import {
@@ -290,9 +291,10 @@ onMounted(async () => {
     /* The app window pressing "open the settings on Storage" while this window
        is already open. A name this build does not know is ignored rather than
        drawn: the person keeps the tab they were reading. */
-    stopSections = await watchSettingsSection((name) => {
+    stopSections = await watchSettingsSection((name, shouldRefreshCodexModels) => {
       const asked = known(name)
       if (asked) tab.value = asked
+      if (shouldRefreshCodexModels) refreshCodexModels()
     })
   } catch (err) {
     console.warn('[settings-window] no app window to hear from:', err)
@@ -326,6 +328,7 @@ onMounted(async () => {
   }
   version.value = await appVersion()
   stopUpdates = await initUpdates()
+  refreshCodexModels()
 })
 
 onUnmounted(() => {

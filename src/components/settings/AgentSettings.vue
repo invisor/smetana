@@ -101,13 +101,13 @@ import { thresholdOptions } from './subscription.js'
    Codex used to be drawn `disabled`, with `Not supported yet` beside it. That
    limit is gone: the profile answers resume, fork, batch and one-shot, and finds
    out the id of a session it started. */
-import { agentLabel, agents } from '../../stores/agents.js'
+import { agentLabel, agents, codexModelsError } from '../../stores/agents.js'
 /* What a row of the Models group shows and what a choice in one changes. Out of
    this file because a `.vue` file is unreachable by any test here, and one case
    in it is silently wrong when it is wrong at all: a model chosen in a row that
    has chosen no harness has to write the harness in beside it, or validation
    empties the pair on the next read. */
-import { chooseModel, chooseProvider, modelOptions, pairOf, providerOptions, ROLE_ROWS } from './agentRoles.js'
+import { chooseModel, chooseProvider, modelOptions, pairOf, providerOptions, ROLE_ROWS, unavailableModelOption } from './agentRoles.js'
 
 const props = defineProps({
   agent: { type: String, default: 'claude' },
@@ -274,7 +274,7 @@ const modelRows = computed(() =>
       ...row,
       pair,
       providers: providerOptions(row.role, agents.value),
-      models: modelOptions(row.role, agents.value, pair.agent, pair.inherited)
+      models: unavailableModelOption(modelOptions(row.role, agents.value, pair.agent, pair.inherited), pair.model)
     }
   })
 )
@@ -421,6 +421,9 @@ const errorStyle = {
          once — which is why "Same as default" appears in both fields of an
          untouched row rather than in one. -->
     <SettingsGroup label="Agents and models">
+      <p v-if="codexModelsError" style="margin: 0 0 var(--space-3); color: var(--text-muted)">
+        Could not refresh Codex models: {{ codexModelsError }}
+      </p>
       <SettingsRow
         v-for="row in modelRows"
         :key="row.label"
