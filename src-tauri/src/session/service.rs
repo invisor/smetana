@@ -229,6 +229,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
         let mut asked_open = permission.is_some();
 
         let mut sessions: HashMap<SessionId, Live> = HashMap::new();
+        let mut starting: HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>> = HashMap::new();
         let mut next_id: SessionId = 1;
 
         loop {
@@ -245,6 +246,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         &app,
                         &mut sessions,
                         &mut next_id,
+                        &mut starting,
                         permission.as_ref(),
                         &chunks_tx,
                         request,
@@ -256,7 +258,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                     // breaking is a stopped worker, whereas continuing is a
                     // branch that is instantly ready forever.
                     let Some(chunk) = chunk else { break };
-                    absorb(&app, &mut sessions, permission.as_ref(), chunk);
+                    absorb(&app, &mut sessions, &mut starting, permission.as_ref(), chunk);
                 }
                 asked = asked_rx.recv(), if asked_open => {
                     let Some(asked) = asked else {
@@ -334,11 +336,12 @@ fn spawnable(builder: &CommandBuilder) -> Option<tokio::process::Command> {
 /// no error anywhere to explain it.
 fn driver_for(
     profile: &'static dyn Profile,
+    intent: &Intent,
     ticket: Option<super::permission::PermissionTicket>,
 ) -> Option<Box<dyn Driver>> {
     match profile.id() {
         "claude" => Some(Box::new(ClaudeDriver::new(ticket))),
-        "codex" => Some(Box::new(CodexDriver::new(ticket))),
+        "codex" if matches!(intent, Intent::Bare | Intent::NewTask { .. }) => Some(Box::new(CodexDriver::new(ticket))),
         _ => None,
     }
 }
@@ -397,9 +400,9 @@ fn spawn_session(
     // the error — that arm forgets the id on every failure, which is the one
     // place a session that never existed is swept up.
     let ticket = permission.map(|server| server.register(id));
-    let Some(driver) = driver_for(profile, ticket) else {
+    let Some(driver) = driver_for(profile, &intent, ticket) else {
         return Err(SessionError::Spawn(format!(
-            "a driven session needs Claude Code, and this project runs {}",
+            "this action is not supported in the conversation panel for {}",
             profile.label()
         )));
     };
@@ -549,10 +552,14 @@ fn spawn_session(
             let at = chrono::Utc::now().to_rfc3339();
             live.journal.append(EventKind::TurnStart { by: super::model::Actor::Person }, at.clone());
             live.journal.append(
-                EventKind::Opening { text: opening_text, attachments: opening_attachments },
+                EventKind::Opening { text: opening_text, attachments: opening_attachments.clone() },
                 at,
             );
-            let bytes = talking.driver.send(Input::Message { text, attachments: Vec::new() });
+            // Claude's opening prose already names its images, while Codex's
+            // app-server additionally receives each path as a localImage.
+            // Passing them through here keeps that delivery decision in the
+            // driver rather than making a second opening path in the worker.
+            let bytes = talking.driver.send(Input::Message { text, attachments: opening_attachments.clone() });
             if talking.stdin.send(bytes).is_err() {
                 log::warn!("[session {id}] the child stopped reading before its brief was written");
             }
@@ -683,6 +690,7 @@ fn handle(
     app: &AppHandle,
     sessions: &mut HashMap<SessionId, Live>,
     next_id: &mut SessionId,
+    starting: &mut HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>>,
     permission: Option<&PermissionServer>,
     chunks: &mpsc::UnboundedSender<Chunk>,
     request: Request,
@@ -698,10 +706,17 @@ fn handle(
             let id = *next_id;
             *next_id += 1;
             let started = spawn_session(app, id, &project, intent, permission, chunks);
-            let _ = tx.send(match started {
+            match started {
                 Ok(live) => {
                     sessions.insert(id, live);
-                    Ok(id)
+                    /* Codex's app-server has not created its thread yet. Keep
+                       the caller's draft and dialog alive until its correlated
+                       protocol reply confirms a usable conversation. */
+                    if sessions.get(&id).is_some_and(|live| live.talking.as_ref().is_some_and(|talking| talking.driver.awaits_startup())) {
+                        starting.insert(id, tx);
+                        return;
+                    }
+                    let _ = tx.send(Ok(id));
                 }
                 Err(error) => {
                     // The ticket, if one was minted, belongs to a session that
@@ -711,9 +726,9 @@ fn handle(
                     if let Some(server) = permission {
                         server.forget(id);
                     }
-                    Err(error)
+                    let _ = tx.send(Err(error));
                 }
-            });
+            }
         }
         Request::Attach(id, tx) => {
             let _ = tx.send(match sessions.get(&id) {
@@ -893,6 +908,7 @@ fn handle(
 fn absorb(
     app: &AppHandle,
     sessions: &mut HashMap<SessionId, Live>,
+    starting: &mut HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>>,
     permission: Option<&PermissionServer>,
     chunk: Chunk,
 ) {
@@ -902,12 +918,27 @@ fn absorb(
             let Some(talking) = live.talking.as_mut() else { return };
             let kinds = talking.driver.feed(&bytes);
             let outgoing = talking.driver.outgoing();
+            let startup = talking.driver.startup();
             append(app, id, live, kinds);
             for bytes in outgoing {
                 if !say(live, bytes) { lost(app, id, live); break; }
             }
+            if let Some(result) = startup {
+                if let Some(tx) = starting.remove(&id) {
+                    match result {
+                        Ok(()) => { let _ = tx.send(Ok(id)); }
+                        Err(text) => {
+                            if let Some(child) = live.child.as_mut() { let _ = child.start_kill(); }
+                            let _ = tx.send(Err(SessionError::Spawn(text)));
+                        }
+                    }
+                }
+            }
         }
         Chunk::Eof(id) => {
+            if let Some(tx) = starting.remove(&id) {
+                let _ = tx.send(Err(SessionError::Spawn("Codex app-server ended before it created a thread".into())));
+            }
             let Some(live) = sessions.get_mut(&id) else { return };
             live.child_alive = false;
             // Nothing can ask this session anything any more, and the token it

@@ -61,6 +61,12 @@ pub trait Driver: Send {
     /// need this; JSON-RPC bootstraps its thread after each prior reply.
     fn outgoing(&mut self) -> Vec<Vec<u8>> { Vec::new() }
 
+    /// A protocol that creates its conversation asynchronously confirms that
+    /// startup only after its thread exists. `None` keeps the ordinary
+    /// line-oriented harness synchronous.
+    fn startup(&mut self) -> Option<Result<(), String>> { None }
+    fn awaits_startup(&self) -> bool { false }
+
     /// A person's message, as bytes for the child's stdin.
     fn send(&mut self, input: Input) -> Vec<u8>;
 

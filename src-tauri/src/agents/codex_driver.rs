@@ -13,11 +13,12 @@ pub struct CodexDriver {
     thread: Option<String>,
     opening: Option<Input>,
     queued: Vec<Vec<u8>>,
+    startup: Option<Result<(), String>>,
 }
 
 impl CodexDriver {
     pub fn new(_permission: Option<crate::session::permission::PermissionTicket>) -> Self {
-        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new() }
+        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None }
     }
 
     fn request(&mut self, method: &str, params: Value) -> Vec<u8> {
@@ -60,7 +61,9 @@ impl Driver for CodexDriver {
         for line in self.lines.feed(bytes) {
             let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
             if let Some(error) = message.get("error") {
-                events.push(EventKind::Error { text: error.get("message").and_then(Value::as_str).unwrap_or("Codex app-server protocol error").to_owned() });
+                let text = error.get("message").and_then(Value::as_str).unwrap_or("Codex app-server protocol error").to_owned();
+                if self.thread.is_none() { self.startup = Some(Err(text.clone())); }
+                events.push(EventKind::Error { text });
                 continue;
             }
             if message.get("id").and_then(Value::as_u64) == Some(1) {
@@ -71,6 +74,7 @@ impl Driver for CodexDriver {
             }
             if let Some(id) = message.pointer("/result/thread/id").and_then(Value::as_str) {
                 self.thread = Some(id.to_owned());
+                self.startup = Some(Ok(()));
                 if let Some(opening) = self.opening.take() {
                     let turn = self.turn(opening);
                     self.queued.push(turn);
@@ -96,6 +100,9 @@ impl Driver for CodexDriver {
     }
 
     fn outgoing(&mut self) -> Vec<Vec<u8>> { std::mem::take(&mut self.queued) }
+
+    fn startup(&mut self) -> Option<Result<(), String>> { self.startup.take() }
+    fn awaits_startup(&self) -> bool { true }
 
     fn send(&mut self, input: Input) -> Vec<u8> {
         if self.thread.is_some() { return self.turn(input); }
