@@ -295,6 +295,7 @@ const pairStyle = {
    holds, and `Dropdown` ellipsises a label that does not fit rather than
    growing its field. */
 const halfStyle = { flex: '1 1 0', minWidth: 0 }
+const modelErrorStyle = { margin: '0 0 var(--space-3)', color: 'var(--text-muted)' }
 
 /* What the block below is headed, and it names **whoever answered the probe**
    rather than whoever is showing in the picker above. The two can differ:
@@ -421,8 +422,8 @@ const errorStyle = {
          once — which is why "Same as default" appears in both fields of an
          untouched row rather than in one. -->
     <SettingsGroup label="Agents and models">
-      <p v-if="codexModelsError" style="margin: 0 0 var(--space-3); color: var(--text-muted)">
-        Could not refresh Codex models: {{ codexModelsError }}
+      <p v-if="codexModelsError" :style="modelErrorStyle">
+        Codex models could not be refreshed: {{ codexModelsError }}
       </p>
       <SettingsRow
         v-for="row in modelRows"

@@ -1934,6 +1934,9 @@ fn known_model(agent: &str, model: &mut String) {
     if model.is_empty() {
         return;
     }
+    // Codex's app-server catalogue advances independently of this build; the
+    // static profile list is only a picker fallback, never grounds to delete a
+    // saved slug.
     if agent == "codex" {
         return;
     }

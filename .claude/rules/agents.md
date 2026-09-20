@@ -434,6 +434,10 @@ to see it. When nothing at all is installed the session fails with `NoAgent`.
 
 ## Which agent, and on which model
 
+Codex is the one dynamic exception to the static harness catalogue: `MODELS` is only the fallback
+until the installed `codex app-server --stdio` returns a complete paginated `model/list` response on
+each Settings opening. Invalid, empty, timed-out or failed reads leave the last good list in place.
+
 `Profile` answers two questions about models, and the split is the one `usage_command`/`parse_usage`
 already makes: what a harness offers, and how it is told which one to use.
 

@@ -28,7 +28,9 @@ use super::{
 use crate::runs::model::RunMode;
 use crate::terminal::model::{Question, QuestionOption};
 
-/// The models this harness offers, the id first and the name a person reads
+/// The fallback models this harness offers, the id first and the name a person reads.
+/// `model/list` from the installed app-server replaces this only after a
+/// complete successful read; it is never read from Codex's private cache.
 /// second.
 ///
 /// Read off the installed CLI at 0.146.0 on 2026-09-06 rather than recalled.
@@ -76,22 +78,21 @@ const MODELS: &[(&str, &str)] = &[
 const MODEL_LIST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub async fn listed_models() -> Result<Vec<(String, String)>, String> {
-    tokio::time::timeout(MODEL_LIST_TIMEOUT, listed_models_inner()).await.map_err(|_| "Codex model list timed out".to_string())?
-}
-
-async fn listed_models_inner() -> Result<Vec<(String, String)>, String> {
     let mut command = tokio::process::Command::new("codex");
-    command.args(["app-server", "--stdio"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    command.args(["app-server", "--stdio"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    if let Some(path) = crate::shell_env::path() { command.env("PATH", path); }
     let mut child = command.spawn().map_err(|err| format!("Could not start Codex: {err}"))?;
-    let result = async {
+    let result = tokio::time::timeout(MODEL_LIST_TIMEOUT, async {
         let mut stdin = child.stdin.take().ok_or_else(|| "Codex stdin was unavailable".to_string())?;
         let stdout = child.stdout.take().ok_or_else(|| "Codex stdout was unavailable".to_string())?;
         let mut lines = BufReader::new(stdout).lines();
         let init = serde_json::json!({ "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "Smetana", "version": "0.1.0" } } });
         stdin.write_all(init.to_string().as_bytes()).await.map_err(|err| err.to_string())?;
-        stdin.write_all(b"\n{\"method\":\"initialized\",\"params\":{}}\n").await.map_err(|err| err.to_string())?;
+        stdin.write_all(b"\n").await.map_err(|err| err.to_string())?;
         stdin.flush().await.map_err(|err| err.to_string())?;
         next_response(&mut lines, 0).await?;
+        stdin.write_all(b"{\"method\":\"initialized\",\"params\":{}}\n").await.map_err(|err| err.to_string())?;
+        stdin.flush().await.map_err(|err| err.to_string())?;
         let mut cursor: Option<String> = None;
         let mut models = Vec::new();
         for request_id in 1_u64.. {
@@ -105,7 +106,7 @@ async fn listed_models_inner() -> Result<Vec<(String, String)>, String> {
             cursor = next;
         }
         (!models.is_empty()).then_some(models).ok_or_else(|| "Codex returned no visible models".to_string())
-    }.await;
+    }).await.map_err(|_| "Codex model list timed out".to_string()).and_then(|result| result);
     let _ = child.start_kill();
     let _ = child.wait().await;
     result
@@ -123,11 +124,23 @@ fn model_list_page(line: &str) -> Result<(Vec<(String, String)>, Option<String>)
     if value.get("error").is_some() { return Err("Codex refused the model list request".into()); }
     let result = value.get("result").ok_or_else(|| "Codex returned an invalid model list".to_string())?;
     let entries = result.get("data").and_then(serde_json::Value::as_array).ok_or_else(|| "Codex returned an invalid model list".to_string())?;
-    let models = entries.iter().filter_map(|entry| {
-        if entry.get("hidden").and_then(serde_json::Value::as_bool).unwrap_or(true) { return None; }
-        Some((entry.get("model")?.as_str()?.to_owned(), entry.get("displayName")?.as_str()?.to_owned()))
-    }).collect();
-    Ok((models, result.get("nextCursor").and_then(serde_json::Value::as_str).map(str::to_owned)))
+    let mut models = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let hidden = entry.get("hidden").and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+        if hidden { continue; }
+        let model = entry.get("model").and_then(serde_json::Value::as_str)
+            .filter(|model| !model.is_empty()).ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+        let label = entry.get("displayName").and_then(serde_json::Value::as_str)
+            .filter(|label| !label.is_empty()).ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+        models.push((model.to_owned(), label.to_owned()));
+    }
+    let next = match result.get("nextCursor") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(cursor)) if !cursor.is_empty() => Some(cursor.to_owned()),
+        _ => return Err("Codex returned an invalid model list".into()),
+    };
+    Ok((models, next))
 }
 
 #[cfg(test)]
@@ -138,6 +151,12 @@ mod model_list_tests {
         let (models, next) = model_list_page(r#"{"result":{"data":[{"id":"wrong","model":"gpt-6-astra","displayName":"GPT-6-Astra","hidden":false},{"model":"hidden","displayName":"Hidden","hidden":true}],"nextCursor":"page-two"}}"#).unwrap();
         assert_eq!(models, vec![("gpt-6-astra".into(), "GPT-6-Astra".into())]);
         assert_eq!(next.as_deref(), Some("page-two"));
+    }
+
+    #[test]
+    fn refuses_malformed_visible_items_and_cursors() {
+        assert!(model_list_page(r#"{"result":{"data":[{"hidden":false,"model":"gpt-6-astra"}]}}"#).is_err());
+        assert!(model_list_page(r#"{"result":{"data":[],"nextCursor":7}}"#).is_err());
     }
 }
 

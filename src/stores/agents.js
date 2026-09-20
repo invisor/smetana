@@ -48,7 +48,7 @@ export async function refreshCodexModels() {
     return true
   } catch (err) {
     if (mine !== codexRequest) return false
-    codexModelsError.value = err?.message || 'Could not refresh Codex models'
+    codexModelsError.value = typeof err === 'string' ? err : err?.message || 'The Codex model list could not be read'
     return false
   }
 }

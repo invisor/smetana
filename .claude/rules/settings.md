@@ -152,7 +152,11 @@ damage, deliberately: an unknown harness empties **both** halves of that role an
 root `agent`; a model the chosen harness does not offer loses that one field and leaves the harness,
 which is still a harness this build ships; and a role with an empty `agent` and a non-empty `model`
 loses the model, because that is the half-pair the paragraph above refuses. The root `model` is
-checked against the root `agent` the same way. A test walks every model of every profile through
+checked against the root `agent` the same way, except Codex: its visible catalogue is refreshed from
+the installed CLI's `model/list` app-server method when Settings opens. The shipped Codex table is
+only a fallback until a complete successful refresh, so validation preserves any non-empty Codex slug
+and the picker marks one absent from a later successful catalogue unavailable rather than erasing it.
+A test walks every model of every profile through
 `validate` and fails if one a profile offers is thrown away.
 
 `agentRoles` is the one field the settings window sends as an **object** rather than as a flat
