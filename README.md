@@ -120,6 +120,14 @@ with nobody in it.
 epic — and over several projects at the same time. Exactly one thing is refused, a second run over
 the *same* scope, where two leads would be fighting over the same tasks.
 
+Two switches ride along with all of this. **Check each task for real before closing it** sends the
+agent to bring the project up and exercise the work rather than trusting its own tests. **File what
+it finds along the way** lets it write down the bugs it trips over — into Deferred, never into Ready.
+
+<p align="center">
+  <img src="assets/screenshot-run.png" alt="The run dialog: target branch, mode, how many at once, priority floor" width="420">
+</p>
+
 However a run ends, it writes a report — a self-contained HTML document under `.smetana/reports/`
 saying what closed, what was parked, how long the whole thing took, and which mode did it.
 
@@ -133,3 +141,53 @@ saying what closed, what was parked, how long the whole thing took, and which mo
   it is not a model client of its own, and it holds no keys. Both are supported, but nearly all of
   the testing so far has been on Claude Code.
 - **git.**
+
+## Install
+
+Download the `.dmg` from [Releases](https://github.com/invisor/smetana/releases) and drag Smetana to
+Applications. It is signed with an Apple Developer ID and notarized, so it opens on a double-click:
+nothing to dismiss, nothing to grant first.
+
+## Getting started
+
+1. **Add a project.** Press `+` on the project rail down the left and pick the folder. A folder
+   inside a tracked repository resolves to that repository's root, and if there is no bd tracker in
+   it yet the app offers to run `bd init` for you.
+2. **The board comes up** from `.beads/` in that repository, and follows it from then on — whoever
+   changes it: this window, an agent, or you in a terminal.
+3. **Set the project up for runs.** The project tile's menu has **Set up**, which starts an agent
+   session that asks about the project and writes `.smetana/project.toml`: which repositories the
+   project is made of, what branch work goes onto, the commands that bring it up, and the gates a
+   task has to pass before it may merge. `.smetana/` is added to `.gitignore` for you, so none of it
+   is committed.
+4. **File a task** with `+` at the top of a column. Write what you want in your own words; the agent
+   asks about the rest.
+5. **Press play** — on a card, on an epic, or on the queue — and pick the mode, the target branch and
+   how many tasks may go at once.
+
+## Getting involved
+
+The app is early, and it is being built in the open because that is the only way the rough edges get
+found. **Something broken? [Open an issue](https://github.com/invisor/smetana/issues)** — say what
+you were trying to do when it went wrong. **An idea, a wish, a question about how this is meant to
+be used? [Start a discussion](https://github.com/invisor/smetana/discussions).** The road map is
+short on purpose, and what people actually ask for moves up it.
+
+**Help with the code is welcome as well.** Four things would help more than anything else right now:
+
+- **Checking the Windows and Linux builds.** The release workflow has a row waiting for each
+  platform; nobody has run the app on either yet.
+- **A night on Codex.** Both harnesses are supported, and almost all the testing so far has been on
+  Claude Code.
+- **Agent profiles for other harnesses.** Everything the app asks an agent for is written once and
+  translated per harness, so a third one is a profile rather than a rewrite.
+- **Anything that broke for you**, with the run report from `.smetana/reports/` attached if a run was
+  involved — it says what the app thought was happening.
+
+Before changing anything under `src/`, read [`CLAUDE.md`](CLAUDE.md): the front end is a port of a
+design system with rules that are not negotiable per component. [`AGENTS.md`](AGENTS.md) is the same
+thing for agents working in this repository.
+
+## License
+
+[MIT](LICENSE).
