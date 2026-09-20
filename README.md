@@ -10,6 +10,12 @@
 </p>
 
 <p align="center">
+  <b>English</b> ·
+  <a href="README.ru.md">Русский</a> ·
+  <a href="README.zh.md">中文</a>
+</p>
+
+<p align="center">
   <b>Autonomous coding. File the tasks, start the run, go for coffee.</b><br>
   Describe what you want and an agent files it as tasks, asks you whatever it could not settle for
   itself, and sets the blockers and dependencies between them. You press play once; the run works
