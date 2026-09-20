@@ -140,9 +140,10 @@ describe('the three refusals', () => {
   })
 
   it('closes on every pick, since no row here asks a second time in the panel', () => {
-    // `keepOpen` is the file tree's Delete alone. The discard asks twice as
-    // well, but in a window of its own rather than in a menu that stays up, so
-    // the panel closes on the pick like every other row here.
+    // `keepOpen` belongs to the file tree's Delete and the branch row's, and
+    // neither is this menu's. The discard here asks twice as well, but in a
+    // window of its own rather than in a menu that stays up, so the panel
+    // closes on the pick like every other row here.
     expect(modified().some((item) => item.keepOpen)).toBe(false)
   })
 

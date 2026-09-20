@@ -4,38 +4,39 @@ import Modal from '../overlays/Modal.vue'
 import Button from '../core/Button.vue'
 import { failureTextStyle, failureTitleStyle } from './failureStyle.js'
 
-/* Deleting a branch, asked about first. Reached from a branch row's own menu,
-   which is the only place it is offered.
+/* Deleting a branch's second question, and only the second one now: an
+   ordinary delete is asked and answered in the branch row's own menu
+   (`components/git/branchMenu.js`, `BranchList.vue`) exactly as the file
+   tree's own Delete already asked one there, and this window opens only once
+   that plain `git branch -d` has already been refused because the branch holds
+   commits of its own.
 
    `DeleteTaskModal.vue` is the shape this follows — the same `Modal`, the same
-   two buttons, the consequence stated rather than apologised for — and the one
-   thing it does that no other confirm in this app does is **ask twice**. That
-   is not a habit; it is the only way to offer `git branch -D` honestly.
+   two buttons, the consequence stated rather than apologised for. It does not
+   ask twice any more; the row's own confirm is what bought this window down to
+   the one question left, `Delete anyway`, which is `git branch -D`. A `force`
+   checkbox offered up front was the version thrown away, and stays thrown
+   away — it puts the dangerous option in front of somebody who does not yet
+   know they need it, and most of the time they never will, which is exactly
+   why the row's own plain delete is what they meet first and this window only
+   what a plain delete could not do.
 
-   ## Three states in one window
+   ## Two states in one window
 
-   A press of Delete runs `git branch -d`, and git answers in one of three ways.
+   A press of `Delete anyway` runs `git branch -D`, and git answers in one of
+   two ways here — the outcome where a plain delete would have taken it never
+   reaches this window at all, since the row's own confirm already carries it.
 
-   It **takes it**, and the window closes: everything on the branch was already
-   in the branch the repository is on, so nothing was lost and there is nothing
-   left to say.
-
-   It **refuses because the branch holds commits of its own**, and this window
-   stays where it is and asks the harder question. The sentence changes to name
-   what is about to be lost and the button becomes `Delete anyway`, which is
-   `git branch -D`. That second press is a different act from the first and the
-   label says so — a `force` checkbox offered up front was the version thrown
-   away, because it puts the dangerous option in front of somebody who does not
-   yet know they need it, and most of the time they never will.
+   It **takes it**, and the window closes.
 
    It **refuses for some other reason** — the branch is checked out in another
-   worktree is the one that matters — and forcing would fail in exactly the same
-   way. So git's own words are drawn, in the same mono block the Git panel draws
-   a refusal in, and the only way out is Cancel: a `Delete anyway` there would be
-   a button whose whole answer is the message already on screen.
+   worktree is the one that matters — and forcing again would fail in exactly
+   the same way. So git's own words are drawn, in the same mono block the Git
+   panel draws a refusal in, and the only way out is Cancel: a second
+   `Delete anyway` there would be a button whose whole answer is the message
+   already on screen.
 
-   Which of the three it is, is decided in Rust by asking git a second question
-   rather than by reading its first answer (`vcs_delete_branch`), and arrives
+   Which of the two it is, is decided in Rust (`vcs_delete_branch`) and arrives
    here already decided. This file draws it and works nothing out. */
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -43,10 +44,6 @@ const props = defineProps({
      sentence here. Held by the caller as a name rather than as a row: the panel
      can refresh under an open window, and a name is what git is given. */
   branch: { type: String, default: '' },
-  /* git declined the plain delete because this branch holds commits the current
-     one does not. The second state, and the only one that offers a way
-     forward. */
-  notMerged: { type: Boolean, default: false },
   /* git's own words for a refusal `-D` will not fix. Drawn as it stands, and
      its presence is what takes the delete button off the footer altogether. */
   refusal: { type: String, default: '' },
@@ -63,20 +60,15 @@ defineEmits(['close', 'confirm'])
 const title = computed(() => `Delete ${props.branch}?`)
 
 /* One sentence per state, and the description slot is the one place a person
-   reads what a press will do. The first says what deleting a branch is and is
-   not — the commits are not the branch, and a branch already merged is a label
-   on history that stays exactly where it is. The second is the only sentence in
-   this app that says work will be lost. */
-const ASKING =
-  'Git deletes the branch reference. The commits it points at stay in the repository as long as another branch or tag holds them.'
+   reads what a press will do. `LOSING` is the only sentence in this app that
+   says work will be lost, and it is the ordinary description here now — the
+   window would not be open at all if the branch's commits were not the reason
+   git already refused a plain delete. */
 const LOSING =
   'This branch holds commits that are not in the branch this repository is on. Deleting it leaves nothing pointing at them, and there is no undo.'
 const REFUSED = 'Git would not delete this branch, and forcing it would fail the same way.'
 
-const description = computed(() => {
-  if (props.refusal) return REFUSED
-  return props.notMerged ? LOSING : ASKING
-})
+const description = computed(() => (props.refusal ? REFUSED : LOSING))
 
 /* The branch's own name in the body, the way `DeleteTaskModal` puts the issue's
    title there: the heading is what a person checks they meant, and a name at
@@ -98,12 +90,9 @@ const refusalStyle = {
   marginTop: 'var(--space-4)'
 }
 
-/* The label carries the second press's whole meaning. "Delete anyway" is the
-   only affordance saying that this one is not the one that was just refused. */
-const confirmLabel = computed(() => {
-  if (props.busy) return 'Deleting…'
-  return props.notMerged ? 'Delete anyway' : 'Delete'
-})
+/* The label carries this press's whole meaning: "Delete anyway" is the only
+   affordance saying that this is not the plain delete the row already tried. */
+const confirmLabel = computed(() => (props.busy ? 'Deleting…' : 'Delete anyway'))
 </script>
 
 <template>
@@ -125,13 +114,13 @@ const confirmLabel = computed(() => {
     <template #footer>
       <Button variant="ghost" :disabled="busy" @click="$emit('close')">Cancel</Button>
       <!-- `force` rides on the emit rather than being worked out by the app
-           window, so the button a person pressed and the flag git is run with
-           cannot come apart. -->
+           window, and it is always `true` now: the one question left in this
+           window is the one that only `git branch -D` can answer. -->
       <Button
         v-if="!refusal"
         variant="danger"
         :disabled="busy"
-        @click="$emit('confirm', { force: notMerged })"
+        @click="$emit('confirm', { force: true })"
       >
         {{ confirmLabel }}
       </Button>
