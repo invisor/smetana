@@ -189,4 +189,33 @@ mod tests {
         assert!(turn.contains("localImage"));
         assert!(turn.contains("/tmp/a, b.png"));
     }
+
+    #[test]
+    fn interleaved_string_request_ids_answer_each_original_request() {
+        let mut driver = CodexDriver::new(None);
+        let events = driver.feed(concat!(
+            r#"{"jsonrpc":"2.0","id":"command-7","method":"item/commandExecution/requestApproval","params":{"command":"git status"}}"#, "\n",
+            r#"{"jsonrpc":"2.0","id":8,"method":"item/fileChange/requestApproval","params":{"reason":"write file"}}"#, "\n",
+            r#"{"jsonrpc":"2.0","id":"input","method":"item/tool/requestUserInput","params":{"questions":[{"id":"choice"}]}}"#, "\n"
+        ).as_bytes());
+        assert_eq!(events.len(), 3);
+        let command = String::from_utf8(driver.answer("\"command-7\"", Decision::Allow, None).unwrap()).unwrap();
+        let file = String::from_utf8(driver.answer("8", Decision::Deny, None).unwrap()).unwrap();
+        let input = String::from_utf8(driver.answer("\"input\"", Decision::Allow, Some([(String::from("choice"), String::from("yes"))].into())).unwrap()).unwrap();
+        assert!(command.contains("\"id\":\"command-7\""));
+        assert!(file.contains("\"id\":8"));
+        assert!(input.contains("\"answers\""));
+    }
+
+    #[test]
+    fn turn_completion_clears_interrupt_for_the_next_turn() {
+        let mut driver = CodexDriver::new(None);
+        driver.thread = Some("thread".into());
+        driver.active_turn = Some("turn-one".into());
+        assert!(String::from_utf8(driver.interrupt().unwrap()).unwrap().contains("turn-one"));
+        driver.feed(br#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"durationMs":4}}}
+"#);
+        assert!(driver.interrupt().is_none());
+        assert!(String::from_utf8(driver.send(Input::Message { text: "again".into(), attachments: vec![] })).unwrap().contains("turn/start"));
+    }
 }
