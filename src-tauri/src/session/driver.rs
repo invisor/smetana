@@ -16,6 +16,7 @@
 
 use portable_pty::CommandBuilder;
 
+use std::collections::BTreeMap;
 use super::model::{Decision, EventKind};
 use crate::agents::Launch;
 
@@ -73,7 +74,7 @@ pub trait Driver: Send {
     /// A person's answer to a question. Some harnesses answer over stdin, some
     /// over a channel of their own; `None` means this one needs no bytes here
     /// and the worker should look to the driver's own side channel.
-    fn answer(&mut self, id: &str, decision: Decision) -> Option<Vec<u8>>;
+    fn answer(&mut self, id: &str, decision: Decision, answers: Option<BTreeMap<String, String>>) -> Option<Vec<u8>>;
 
     /// Stop the turn in flight. `None` means this harness has no way to be
     /// asked, and the worker's only recourse is killing the child.

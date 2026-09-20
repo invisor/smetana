@@ -14,11 +14,14 @@ pub struct CodexDriver {
     opening: Option<Input>,
     queued: Vec<Vec<u8>>,
     startup: Option<Result<(), String>>,
+    launch: std::sync::Mutex<(String, Option<String>)>,
+    active_turn: Option<String>,
+    tickets: std::collections::BTreeMap<String, (Value, String)>,
 }
 
 impl CodexDriver {
     pub fn new(_permission: Option<crate::session::permission::PermissionTicket>) -> Self {
-        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None }
+        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None)), active_turn: None, tickets: std::collections::BTreeMap::new() }
     }
 
     fn request(&mut self, method: &str, params: Value) -> Vec<u8> {
@@ -44,7 +47,10 @@ impl CodexDriver {
 }
 
 impl Driver for CodexDriver {
-    fn start(&self, _launch: &Launch) -> CommandBuilder {
+    fn start(&self, launch: &Launch) -> CommandBuilder {
+        if let Ok(mut state) = self.launch.lock() {
+            *state = (launch.cwd.to_string_lossy().into_owned(), launch.model.clone());
+        }
         let mut command = CommandBuilder::new("codex");
         command.arg("app-server");
         command
@@ -68,7 +74,8 @@ impl Driver for CodexDriver {
             }
             if message.get("id").and_then(Value::as_u64) == Some(1) {
                 let initialized = Self::notification("initialized", json!({}));
-                let thread = self.request("thread/start", json!({}));
+                let (cwd, model) = self.launch.lock().map(|state| state.clone()).unwrap_or_default();
+                let thread = self.request("thread/start", json!({"cwd":cwd, "model":model}));
                 self.queued.extend([initialized, thread]);
                 continue;
             }
@@ -81,7 +88,23 @@ impl Driver for CodexDriver {
                 }
                 continue;
             }
+            if let Some(id) = message.pointer("/result/turn/id").and_then(Value::as_str) {
+                self.active_turn = Some(id.to_owned());
+                continue;
+            }
             match message.get("method").and_then(Value::as_str) {
+                Some(method @ ("item/commandExecution/requestApproval" | "item/fileChange/requestApproval" | "item/tool/requestUserInput")) => {
+                    let Some(id) = message.get("id").cloned() else { continue };
+                    let key = id.to_string();
+                    let params = message.get("params").cloned().unwrap_or(Value::Null);
+                    let (tool, detail, input) = match method {
+                        "item/commandExecution/requestApproval" => ("command".to_owned(), params.pointer("/command").and_then(Value::as_str).unwrap_or("Command").to_owned(), Value::Null),
+                        "item/fileChange/requestApproval" => ("file-change".to_owned(), params.get("reason").and_then(Value::as_str).unwrap_or("File change").to_owned(), Value::Null),
+                        _ => ("AskUserQuestion".to_owned(), "Input requested".to_owned(), json!({"questions": params.get("questions").cloned().unwrap_or(Value::Array(vec![]))})),
+                    };
+                    self.tickets.insert(key.clone(), (id, method.to_owned()));
+                    events.push(EventKind::Permission { id: key, tool, detail, options: vec![Decision::Allow, Decision::Deny], input });
+                }
                 Some("item/agentMessage/delta") => {
                     if let Some(text) = message.pointer("/params/delta").and_then(Value::as_str) { events.push(EventKind::TextDelta { text: text.to_owned() }); }
                 }
@@ -92,7 +115,7 @@ impl Driver for CodexDriver {
                         None => {}
                     }
                 },
-                Some("turn/completed") => events.push(EventKind::Result { tokens_in: 0, tokens_out: 0, cost_usd: None, ms: 0 }),
+                Some("turn/completed") => { self.active_turn = None; events.push(EventKind::Result { tokens_in: 0, tokens_out: 0, cost_usd: None, ms: 0 }); },
                 _ => {}
             }
         }
@@ -110,11 +133,21 @@ impl Driver for CodexDriver {
         self.request("initialize", json!({"clientInfo":{"name":"smetana","version":"1"}, "capabilities":{}}))
     }
 
-    fn answer(&mut self, _id: &str, _decision: Decision) -> Option<Vec<u8>> { None }
+    fn answer(&mut self, id: &str, decision: Decision, answers: Option<std::collections::BTreeMap<String, String>>) -> Option<Vec<u8>> {
+        let (request_id, method) = self.tickets.remove(id)?;
+        let response = match method.as_str() {
+            "item/tool/requestUserInput" => json!({"answers": answers.unwrap_or_default().into_iter().map(|(key, value)| (key, json!({"answers":[value]}))).collect::<serde_json::Map<_, _>>() }),
+            _ => json!({"decision": if matches!(decision, Decision::Deny) { "decline" } else { "accept" }}),
+        };
+        let mut bytes = serde_json::to_vec(&json!({"jsonrpc":"2.0", "id":request_id, "result":response})).ok()?;
+        bytes.push(b'\n');
+        Some(bytes)
+    }
 
     fn interrupt(&mut self) -> Option<Vec<u8>> {
         let thread_id = self.thread.clone()?;
-        Some(self.request("turn/interrupt", json!({"threadId":thread_id})))
+        let turn_id = self.active_turn.clone()?;
+        Some(self.request("turn/interrupt", json!({"threadId":thread_id, "turnId":turn_id})))
     }
 }
 

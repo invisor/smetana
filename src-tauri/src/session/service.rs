@@ -837,15 +837,16 @@ fn handle(
             // through the permission listener like every other tool, never
             // over stdin.
             let bytes = match live.talking.as_mut() {
-                Some(talking) => talking.driver.answer(&question, decision),
+                Some(talking) => talking.driver.answer(&question, decision, answers.clone()),
                 None => None,
             };
+            let driver_delivered = bytes.is_some();
             if let Some(bytes) = bytes {
                 if !say(live, bytes) {
                     lost(app, id, live);
                 }
             }
-            let delivered = permission.is_some_and(|server| server.answer(&question, decision, answers));
+            let delivered = driver_delivered || permission.is_some_and(|server| server.answer(&question, decision, answers));
             let _ = tx.send(if delivered {
                 Ok(())
             } else {
