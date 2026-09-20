@@ -138,12 +138,16 @@ Four narrownesses, and each is a way of being wrong that costs the work rather t
 **Only `ready_to_merge`** — an `open` or `in_progress` task may have a branch with the same slug, half
 merged or cut for another attempt. **Only a task no live run is holding**
 (`runs::recovery::live_actors` over `.smetana/runs.json`, the rule and its tests in
-`runs::registry::live_actors`) — ancestry cannot tell a merged branch from a branch with no commits
-of its own, since a branch cut from the target's tip is already an ancestor of it, and the workflow
-this app drives makes that an ordinary state rather than an anomaly: the worker leaves approved work
-uncommitted, sets `ready_to_merge`, and the lead commits at the merge phase. The predicate is not
-fixable, because the fast-forward the sweep exists for has the same shape; the sweep is for a person
-who merged past the app, and a task a run holds is closed by that run. It cost a night on
+`runs::registry::live_actors`) — ancestry alone cannot tell a merged branch from a branch with no
+commits of its own, since a branch cut from the target's tip is already an ancestor of it, and the
+workflow this app drives makes that an ordinary state rather than an anomaly: the worker leaves
+approved work uncommitted, sets `ready_to_merge`, and the lead commits at the merge phase.
+`vcs::merged::worktree_has_uncommitted_work` (smetana-k799) now narrows the predicate itself —
+uncommitted files in the task's own worktree withhold the closure whatever the refs say, which is the
+same window this filter exists for — and `live_actors` stays in front of it regardless, first, because
+it costs no git process at all: a task a run holds is answered from `.smetana/runs.json` alone, where
+asking git would only be a chance to be told the tip is already an ancestor. This sweep is for a
+person who merged past the app, and a task a run holds is closed by that run. It cost a night on
 holiday-curb (smetana-cksn): a task closed 26 seconds before its branch's only commit, and fifteen
 files left on a branch with nothing on the board to say they were there. A record whose writer this
 platform cannot ask about counts as live, the same asymmetry the rest of the sweep is built on. What
