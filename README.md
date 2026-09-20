@@ -22,49 +22,110 @@
 
 ## What it is
 
-The bottleneck stopped being whether an agent can write the code. It is keeping track of several at
-once — whose branch is whose, which one is stuck waiting for an answer, what actually got finished
-overnight, and which of it is safe to merge. That is the job this app is for.
+Smetana is an ADE — an agentic development environment. Not an editor with a chat bolted onto it: a
+place where you say what the product should do and agents do the work. Two things ship inside the
+app. The [bd](https://github.com/gastownhall/beads) kanban tracker, which keeps tasks in your own
+repository rather than on somebody's server. And the
+[Superpowers](https://github.com/obra/superpowers) skill library, which is where an agent gets its
+method — how to interrogate a task, plan it, review a change, merge it.
 
-So it is not another editor. It opens a project, shows the issue tracker that already lives in that
-repository as a board, and starts agent sessions against it: one task, one batch of them, or a whole
-night of batches one after another. Each session is a real terminal you can watch and type into, and
-the app notices by itself when one of them is waiting on a person — including in a tab nobody is
-looking at, and in a project you are not currently in.
+### How a piece of work goes
 
-Everything it knows lives in the repository or beside it, in files you can read: tasks in `.beads/`,
-run state and reports in `.smetana/`. There is no server, no account and no database.
+1. **You describe it in your own words.** A paragraph, a screenshot; no ticket discipline required.
+2. **The agent asks.** It works through everything ambiguous with you, until nothing load-bearing is
+   left for it to guess.
+3. **The agent files the task** — one issue, or several with the dependencies drawn between them —
+   and puts it in Ready.
+4. **You start a run**, naming the git branch the result is to land on.
+5. **The run takes a batch off Ready** and carries the tasks in parallel where they allow it, each in
+   its own worktree, so no two tread on the same checkout.
+6. **It merges what passed** into that branch, conflicts and all.
+7. **It picks up the next batch**, and the next, until Ready is empty.
+8. **You bring the project up and look at what came out.**
+
+The app tries to keep a person out of the loop wherever that is honest. Filing a task, editing one,
+resolving a merge conflict, deciding a branch is fit to merge — that is the agent's own work, and you
+are asked only where the thing cannot be settled without you: a question written into the task's
+notes, or a run that stops and says which task it stopped on. Everything it knows sits in files you
+can open — tasks in `.beads/`, run state and reports in `.smetana/`. No server, no account, no
+database.
+
+## The Kanban board
+
+A column is a task status, and which of them exist is bd's business rather than this app's. The ones
+the work is built around:
+
+- **Ready** — ready to start: the questions are answered, the implementation plan is written where
+  one was needed, and nothing unfinished is holding it up. A run takes its batch from here.
+- **Running** — being worked on right now: an agent has claimed it and is on it.
+- **Blocked** — two kinds of card land here. One is waiting on another task — something it depends on
+  is not finished — and moves to Ready by itself the moment that one closes. The other carries a lock
+  badge: a person locked it by hand, and only that same person, unlocking it, moves it back.
+- **Parked** — work throws up things nobody could have foreseen while the task was being written, and
+  some of them need a person. An agent that meets one mid-run parks the task: the question goes into
+  the task's notes, and **Answer questions** starts an agent that puts it to you and returns the task
+  to Ready. The run itself keeps going — that batch ends, and the next one is taken from Ready
+  without anything that depended on the parked task. Only the same question coming back a second time
+  ends the run.
+- **Ready to merge** — done and reviewed, waiting to land on the target branch. It closes when it
+  lands.
+- **Human check** — done and merged, waiting for somebody to look at it by hand. A run leaves one
+  behind when it could not check the work itself: you look, then close it or send it back to Ready.
+- **Done** — finished and closed.
+- **Deferred** — put off on purpose, with nothing holding it up. Findings that turn up while another
+  task is being worked on land here: an agent that trips over a bug files it into Deferred rather than
+  into Ready, and that is deliberate — a run that picked up its own findings would never reach the end
+  of the queue. Only a person moves one back to Ready.
+- **Pinned** — never taken into work. A backlog, in other words: tasks to be done some day, but not
+  now.
+- **Hooked** — an agent has taken a whole group of related tasks at once. It says whose work it is,
+  not how far it has got, and a run leaves these alone.
+
+A project can add columns of its own. Any status bd carries becomes one, with a colour and a
+two-letter code the app picks for it.
 
 ## Features
 
-- **A kanban board on [bd](https://github.com/gastownhall/beads), inside the project's own
-  repository.** Tasks live in `.beads/` and travel with the code. bd owns which columns exist; their
-  order is a setting, per project, because one repository's custom status means nothing in another's.
-- **Tasks are filed from the app**, and a screenshot can be attached to one by dropping it, pasting
-  it, or picking a file.
-- **A task's whole history stays on the task**: its notes, the questions a run could not settle for
-  itself — written into the notes as `parked:` lines — and the answers a person gives, written back
-  into the same issue rather than into a chat nobody keeps.
-- **Runs in three modes.** Solo is one task. Crew is one batch. Autopilot is a night of batches, one
-  after another, until the queue in scope is empty or something needs a person.
-- **Several runs at once.** In one project over different scopes — a run over the queue beside a run
-  over one epic — and in several projects at the same time. The only thing refused is a second run
-  over the *same* scope, where two leads would be racing for the same tasks.
-- **Parallel sessions inside a batch.** The run's lead agent hands tasks to several agent sessions at
-  once (up to eight, three by default), and each task gets its own git worktree in every repository
-  it touches, so two of them cannot tread on each other's checkout.
-- **Two harnesses: Claude Code and Codex.** Everything the app asks an agent for is written once and
-  translated per harness, so a third one is a profile rather than a rewrite. The conversation panel —
-  a session read as messages rather than as a screen — is Claude Code's alone today; a Codex session
-  is a terminal like every other.
-- **Terminal tabs on real PTYs**, one per session, with the app reading the screen well enough to
-  tell that a session is waiting for a human — and saying so where you will see it: the agent's row
-  in the Agents list, the project's tile in the rail, the counter in the scope bar, and a sound,
-  rather than leaving you to go and check every tab.
-- **The project's file tree, and a CodeMirror editor** with tabs, for looking at what came out.
-- **A Git panel**: the working tree's status, merge, rebase and conflict resolution.
+### Tasks
+
+- **Tasks live in `.beads/`, inside the project's own repository**, and travel with the code — no
+  server, no second copy of them anywhere. The order of the columns is a setting, per project,
+  because one repository's custom status means nothing in another's.
+- **Tasks are filed from the app**, and a screenshot goes onto one by dropping it, pasting it, or
+  picking a file.
+- **A task keeps its whole history**: its notes, the questions a run could not settle for itself —
+  written in as `parked:` lines — and the answers you give, written back into the issue rather than
+  into a chat nobody keeps.
+
+### Runs
+
+- **Three modes.** Solo is one task. Crew is one batch. Autopilot is a night of batches, one after
+  another, until the queue in scope is empty or something needs a person.
+- **Several runs at once.** Different scopes in one project — the queue beside a single epic — and
+  several projects at the same time. The one thing refused is a second run over the *same* scope,
+  where two leads would race for the same tasks.
+- **Parallel sessions inside a batch.** The run's lead agent hands tasks to several sessions at once
+  (up to eight, three by default), and each task gets its own git worktree in every repository it
+  touches, so two of them cannot tread on each other's checkout.
 - **A report for every run**: a self-contained HTML document under `.smetana/reports/`, saying what
   closed, what was parked and how long the whole thing took.
+
+### Sessions
+
+- **Two harnesses: Claude Code and Codex.** Everything the app asks an agent for is written once and
+  translated per harness, so a third one is a profile rather than a rewrite.
+- **Terminal tabs on real PTYs**, one per session, that you can read along in and type into at any
+  moment.
+- **The app sees when a session is waiting for you**, and says so where you will notice: the agent's
+  row in the Agents list, the project's tile in the rail, the counter in the scope bar, and a sound —
+  rather than leaving you to check every tab.
+- **A conversation panel** that reads a session as messages instead of as a screen. Claude Code
+  today; a Codex session is a terminal like every other.
+
+### The window around them
+
+- **The project's file tree, and a CodeMirror editor** with tabs, for looking at what came out.
+- **A Git panel**: the working tree's status, merge, rebase and conflict resolution.
 - **Notifications**: a bell with what the app has to say right now, a sound when a run ends, and the
   report itself put in front of you when it does.
 - **Dark and light themes, comfortable and compact density, an app-wide font scale**, and the app
