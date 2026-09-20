@@ -17,11 +17,12 @@ pub struct CodexDriver {
     launch: std::sync::Mutex<(String, Option<String>)>,
     active_turn: Option<String>,
     tickets: std::collections::BTreeMap<String, (Value, String)>,
+    items: std::collections::BTreeMap<String, String>,
 }
 
 impl CodexDriver {
     pub fn new(_permission: Option<crate::session::permission::PermissionTicket>) -> Self {
-        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None)), active_turn: None, tickets: std::collections::BTreeMap::new() }
+        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None)), active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new() }
     }
 
     fn request(&mut self, method: &str, params: Value) -> Vec<u8> {
@@ -93,6 +94,14 @@ impl Driver for CodexDriver {
                 continue;
             }
             match message.get("method").and_then(Value::as_str) {
+                Some("item/started") => if let Some(item) = message.pointer("/params/item") {
+                    let id = item.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
+                    let kind = item.get("type").and_then(Value::as_str).unwrap_or("tool").to_owned();
+                    if !id.is_empty() { self.items.insert(id.clone(), kind.clone()); }
+                    if kind != "agentMessage" && kind != "reasoning" {
+                        events.push(EventKind::ToolUse { id, name: kind, detail: item.get("command").and_then(Value::as_str).unwrap_or("").to_owned() });
+                    }
+                },
                 Some(method @ ("item/commandExecution/requestApproval" | "item/fileChange/requestApproval" | "item/tool/requestUserInput")) => {
                     let Some(id) = message.get("id").cloned() else { continue };
                     let key = id.to_string();
@@ -111,11 +120,21 @@ impl Driver for CodexDriver {
                 Some("item/completed") => if let Some(item) = message.get("params").and_then(|p| p.get("item")) {
                     match item.get("type").and_then(Value::as_str) {
                         Some("agentMessage") => if let Some(text) = item.get("text").and_then(Value::as_str) { events.push(EventKind::Text { text: text.to_owned() }); },
-                        Some(kind) => events.push(EventKind::ToolUse { id: item.get("id").and_then(Value::as_str).unwrap_or(kind).to_owned(), name: kind.to_owned(), detail: String::new() }),
+                        Some("reasoning") => if let Some(text) = item.get("text").and_then(Value::as_str) { events.push(EventKind::Reasoning { text: text.to_owned() }); },
+                        Some(kind) => {
+                            let id = item.get("id").and_then(Value::as_str).unwrap_or(kind).to_owned();
+                            self.items.remove(&id);
+                            events.push(EventKind::ToolResult { id, ok: item.get("status").and_then(Value::as_str) != Some("failed"), summary: item.get("output").and_then(Value::as_str).unwrap_or("").lines().next().unwrap_or("").to_owned() });
+                        },
                         None => {}
                     }
                 },
-                Some("turn/completed") => { self.active_turn = None; events.push(EventKind::Result { tokens_in: 0, tokens_out: 0, cost_usd: None, ms: 0 }); },
+                Some("turn/completed") => {
+                    self.active_turn = None;
+                    if let Some(error) = message.pointer("/params/turn/error/message").and_then(Value::as_str) { events.push(EventKind::Error { text: error.to_owned() }); }
+                    events.push(EventKind::Result { tokens_in: 0, tokens_out: 0, cost_usd: None, ms: message.pointer("/params/turn/durationMs").and_then(Value::as_u64).unwrap_or(0) });
+                },
+                Some("error") => if let Some(text) = message.pointer("/params/error/message").and_then(Value::as_str) { events.push(EventKind::Error { text: text.to_owned() }); },
                 _ => {}
             }
         }
