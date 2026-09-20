@@ -157,6 +157,8 @@ mod model_list_tests {
     fn refuses_malformed_visible_items_and_cursors() {
         assert!(model_list_page(r#"{"result":{"data":[{"hidden":false,"model":"gpt-6-astra"}]}}"#).is_err());
         assert!(model_list_page(r#"{"result":{"data":[],"nextCursor":7}}"#).is_err());
+        assert!(model_list_page(r#"{"error":{"message":"refused"}}"#).is_err());
+        assert!(model_list_page("not json").is_err());
     }
 }
 
