@@ -7,6 +7,7 @@ import {
 const verbs = (items) => items.filter((it) => !it.type)
 const caption = (items) => items.find((it) => it.type === 'label')?.label ?? null
 const disabledKinds = (items) => verbs(items).filter((it) => it.disabled).map((it) => it.kind)
+const find = (items, kind) => items.find((it) => it.kind === kind)
 
 describe('branchMenuItems', () => {
   it('offers what a branch row can do, in the order the row learnt it', () => {
@@ -299,6 +300,51 @@ describe('branchMenuItems', () => {
     expect(disabledKinds(branchMenuItems({ allowed: false }))).toContain('rename')
     expect(disabledKinds(branchMenuItems({ busy: true }))).toContain('rename')
   })
+
+  /* The row's own second question, `fileMenu.js`'s pattern carried over: the
+     first pick arms the row and the second one carries. */
+  describe('confirming the delete', () => {
+    it('reads Delete this branch, red, and leaves the panel open for a second pick', () => {
+      const item = find(branchMenuItems(), 'delete')
+      expect(item).toMatchObject({
+        kind: 'delete',
+        label: 'Delete this branch',
+        icon: 'trash-2',
+        tone: 'danger',
+        keepOpen: true
+      })
+    })
+
+    it('reads Click again to confirm, in the same red, and closes the panel on this pick', () => {
+      const item = find(branchMenuItems({ confirmingDelete: true }), 'delete')
+      expect(item).toMatchObject({ label: 'Click again to confirm', keepOpen: false })
+      expect(item.tone).toBe('danger')
+    })
+
+    it('arms nothing else on the menu, whatever Delete is doing', () => {
+      const without = (items) => items.filter((it) => it.kind !== 'delete')
+      const idle = branchMenuItems()
+      const armed = branchMenuItems({ confirmingDelete: true })
+      expect(without(armed)).toEqual(without(idle))
+    })
+
+    /* Disabled is the same rule read twice — armed or not, a row still refused
+       for being the current branch, a run going or git working stays refused,
+       and a row live in one state stays live in the other. */
+    it('keeps the same refusal in both states', () => {
+      for (const at of [
+        {},
+        { current: true },
+        { allowed: false },
+        { busy: true },
+        { current: true, allowed: false, busy: true }
+      ]) {
+        const idle = find(branchMenuItems(at), 'delete').disabled
+        const armed = find(branchMenuItems({ ...at, confirmingDelete: true }), 'delete').disabled
+        expect(armed).toBe(idle)
+      }
+    })
+  })
 })
 
 describe('originBranchMenuItems', () => {
@@ -398,6 +444,19 @@ describe('originBranchMenuItems', () => {
   /* What is deliberately absent, in both shapes: every verb about a local
      branch lives on the Local tab, and the comparison is the review window's
      job. A row here has two items whatever it is. */
+  /* The Origin tab has no delete of its own in any shape, so a stray option
+     this function does not even declare must not conjure one up either — the
+     row's own confirm-in-place lives on the Local tab alone. */
+  it('offers no delete row, whatever is asked for', () => {
+    for (const row of [
+      originBranchMenuItems(),
+      originBranchMenuItems({ hasLocal: true }),
+      originBranchMenuItems({ confirmingDelete: true })
+    ]) {
+      expect(row.some((it) => it.kind === 'delete')).toBe(false)
+    }
+  })
+
   it('offers no merge, rebase, rename, delete, new branch, favourite or compare', () => {
     for (const row of [originBranchMenuItems(), originBranchMenuItems({ hasLocal: true })]) {
       expect(verbs(row)).toHaveLength(2)

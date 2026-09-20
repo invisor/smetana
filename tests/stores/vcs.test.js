@@ -760,7 +760,7 @@ describe('the git panel store', () => {
   })
 
   /* The second press is a different command, and the flag rides in from the
-     window that asked rather than being worked out here. */
+     caller rather than being worked out here. */
   it('a forced delete carries the flag git is run with', async () => {
     const { stores, ipc } = await loadStores()
     deleting(ipc)
@@ -773,11 +773,12 @@ describe('the git panel store', () => {
     ])
   })
 
-  /* **The one write in this store that hands its refusal back out.** The window
-     that asked the question is what decides whether to offer a second button,
-     and it cannot decide that from a field on a panel. The refusal still lands
-     in `writeError` on its way past, because what happened is a fact about this
-     repository whether or not that window is still standing. */
+  /* **The one write in this store that hands its refusal back out.** The
+     branch row's own catch (`deleteBranchFromRow` in `DesktopApp.vue`) is what
+     decides whether to open the harder-question window at all, and it cannot
+     decide that from a field on a panel. The refusal still lands in
+     `writeError` on its way past, because what happened is a fact about this
+     repository whether or not a window ever opens over it. */
   it('a refused delete is thrown to the caller and drawn in the panel as well', async () => {
     const { stores, ipc } = await loadStores()
     deleting(ipc, {
@@ -800,7 +801,8 @@ describe('the git panel store', () => {
   })
 
   /* Git already working is not a refusal and must not be thrown as one: the
-     window would offer a second button about a call nobody made. */
+     row's own catch would read it as an answer about a call nobody made and
+     decide from it whether to open the harder-question window. */
   it('a delete that never left the store answers false rather than throwing', async () => {
     const { stores, ipc } = await loadStores()
     deleting(ipc)

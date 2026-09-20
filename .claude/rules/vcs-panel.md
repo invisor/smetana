@@ -1265,28 +1265,36 @@ two are the pair that decides whether a branch exists at all, and they are refus
 group holding both would grey half of itself; and a destructive row in a menu opened by a roughly
 aimed pointer is worth a separator on its own account.
 
-**The current branch is refused in Rust as well, and that is not belt and braces.** The window that
-asks the question is an OS window with no scrim, so HEAD can move while it stands — an agent in the
-same tree, a checkout in a terminal — and the press that arrives afterwards would be about a branch
-that has since become the one the repository is on. `VcsError::CurrentBranch` is its own variant
-rather than git's own refusal, which is in perfectly good words, because the front end has a second
-question to ask about this command and telling the answers apart by reading git's prose is the thing
-the next paragraph exists to avoid. The guard reads `git::head`, which is file reads and no process,
-so it costs nothing in front of the delete.
+**The current branch is refused in Rust as well, and that is not belt and braces.** Two things stand
+open between a click and the write it asks for, and HEAD can move under either one. The ordinary case
+is the armed row itself: nothing refreshes `vcsState.branches` between the pick that arms it and the
+pick that confirms it — that takes a window focus or the refresh button, neither of which the person
+is doing while they aim a second click — so an agent in the same tree, or a checkout in a terminal, can
+move HEAD in that gap, and the row would carry it out anyway if Rust took the menu's `disabled` for an
+answer. The `delete-branch` window is the second case, reached on the one refusal that opens it, and it
+stands for the identical reason: it is an OS window with no scrim, so HEAD can move while it stands
+open too. Either way the press that arrives would be about a branch that has since become the one the
+repository is on. `VcsError::CurrentBranch` is its own variant rather than git's own refusal, which is
+in perfectly good words, because the front end has a second question to ask about this command and
+telling the answers apart by reading git's prose is the thing the next paragraph exists to avoid. The
+guard reads `git::head`, which is file reads and no process, so it costs nothing in front of the
+delete.
 
 **Why the reason is asked for rather than read.** Without `force` this is `git branch -d`, which
 declines at one exit code for several different reasons — the branch is not merged, it is checked out
 in another worktree, there is no such branch. Only the first has a way forward, and the way forward
-loses commits, so the window has to know which it was before it offers `Delete anyway`. git says which
-in **prose**, and nothing in `run.rs` fixes the locale, so a substring search would pass on the
-machine it was written on and quietly stop working on somebody else's — the rule this module keeps
-everywhere else (`--porcelain=v2` over `git status`, an unmerged record over a merge's message). So
-the answer comes from a second question with an exit code for an answer: `git merge-base --is-ancestor
-<branch> HEAD` through `run::git_maybe` with 1 as "no". Only a definite "no" becomes
-`VcsError::NotMerged`; everything else, the probe itself failing included, is handed back as git
-refused it. The extra process runs on the refusal path alone. **That split is what decides whether the
-force button is drawn at all**, which is the whole point: `-D` does not help a branch held by another
-worktree, and offering it there is offering a button whose answer is the message already on screen.
+loses commits, so `deleteBranchFromRow`'s catch — the ordinary path's own, in `DesktopApp.vue` — has to
+know which it was before it opens the window at all. git says which in **prose**, and nothing in
+`run.rs` fixes the locale, so a substring search would pass on the machine it was written on and
+quietly stop working on somebody else's — the rule this module keeps everywhere else
+(`--porcelain=v2` over `git status`, an unmerged record over a merge's message). So the answer comes
+from a second question with an exit code for an answer: `git merge-base --is-ancestor <branch> HEAD`
+through `run::git_maybe` with 1 as "no". Only a definite "no" becomes `VcsError::NotMerged`; everything
+else, the probe itself failing included, is handed back as git refused it. The extra process runs on
+the refusal path alone. **That split is what decides whether that catch opens the window at all**,
+which is the whole point: `-D` does not help a branch held by another worktree, and opening a window
+offering it there would be opening a window whose only answer is the message the panel's own block
+already carries.
 
 One case is knowingly imprecise and is cheaper left so: a branch that is both unmerged **and** held by
 another worktree answers "not merged" and is offered `Delete anyway`, which git then declines in the
@@ -1298,26 +1306,39 @@ for its reason one scope wider: a non-zero exit that is not by itself an answer.
 
 **In the store, `deleteBranch` is the one write that hands its refusal back out.** Everything else in
 `stores/vcs.js` puts git's words in `writeError` and returns; this one does that *as well* and then
-throws, because the decision about a second button belongs to the window that asked the first
-question and cannot be made by a panel that draws one block of prose and no buttons. It is read back
-off `writeError` and keyed on the `op` rather than plumbed out of `write`, since that function also
+throws, because the decision about a second question belongs to the caller — the branch row's own
+confirm, and after the window exists, its `Delete anyway` — and cannot be made by a panel that draws
+one block of prose and no buttons. It is read back off `writeError` and keyed on the `op` rather than
+plumbed out of `write`, since that function also
 answers `false` for a call it never made — git already busy, the project or the repository moved —
 and neither of those is a refusal anybody should be shown a second button about. A successful delete
 strikes the name from `favoriteBranches` on the way out: a pinned name with nothing behind it costs
 nothing while it sits in the file, but it would come back the day somebody cut a branch of that name
 again, pinned by a decision about a different branch.
 
-**The window is `delete-branch`, and it is the one confirm in this app that asks twice.**
+**The row asks twice and the window asks once more, and only on the one refusal a plain delete
+cannot answer.** The branch row's own Delete is `components/git/branchMenu.js`'s and
+`BranchList.vue`'s now — the file tree's own pattern, armed by a first pick and confirmed by a second
+in the row itself, with no window in front of the ordinary case at all: the second pick is a plain
+`git branch -d` straight through `stores/vcs.js`. The window is `delete-branch`, and it opens only
+from that write's own `catch`, and only when git refused because the branch holds commits of its
+own — every other refusal lands in the panel's block below and opens nothing.
+
 `DeleteBranchModal.vue` follows `DeleteTaskModal.vue` — the same `Modal`, the same two buttons, the
-consequence stated rather than apologised for — and draws three states out of the props it is
-announced: the question, the same window with the sentence about losing commits and `Delete anyway`,
-and a refusal `-D` would repeat, where git's own words stand in the mono block under the failed-red
-title `GitPanel` uses (`failureTitleStyle` / `failureTextStyle`, borrowed rather than reinvented) and
-the only way out is Cancel. Rejected: a `force` checkbox in the first state, which puts the dangerous
-option in front of somebody who does not yet know they need it and usually never will; and deleting
-straight from the menu with no window, which would be the only act in this panel that loses work
-without asking. The panel's own refusal block draws the same failure under `Git did not delete the
-branch`, since `writeError` is set whatever the window does with it.
+consequence stated rather than apologised for — and draws two states out of the props it is
+announced now rather than three: the sentence about losing commits with `Delete anyway`, which is
+`git branch -D`, and a refusal `-D` would repeat, where git's own words stand in the mono block under
+the failed-red title `GitPanel` uses (`failureTitleStyle` / `failureTextStyle`, borrowed rather than
+reinvented) and the only way out is Cancel. Rejected: taking the force delete out entirely and
+leaving the row's second click as the only act — simpler, but a regression in exactly the case this
+app produces, since an abandoned run's branch is unmerged by nature and would become undeletable from
+inside the app; three steps in the menu instead, where the panel stays open after the refusal with a
+row offering to force it — that puts `git branch -D` under a roughly aimed pointer, holds the menu
+open across an asynchronous git call, and leaves git's own words with nowhere to land but the panel's
+block; and a `force` checkbox in the window, which puts the dangerous option in front of somebody who
+does not yet know they need it and usually never will and asks the same question twice over. The
+panel's own refusal block draws the same failure under `Git did not delete the branch`, since
+`writeError` is set whatever either half of this does with it.
 
 Its ground is the project, the repository and the branch — `new-branch`'s exactly, and for the same
 two reasons: every write in `stores/vcs.js` resolves its repository from `vcsState.selected` at the
@@ -1327,13 +1348,14 @@ from is gone": one clause now serves two windows, and the delete window's branch
 deleted rather than one it was cut from.
 
 **And it is the one dialog in `DesktopApp.vue` that does not close before its write.** Every other one
-closes first, because nothing it hears back changes what the window would have said; here git's
-refusal *is* the second question, so the window has to still be there to ask it. What that costs is
-the ground, and `reground` is what pays it: pressing Delete lets go of the branch — `null`, which
-`stalenessOf` already documents as "this window does not stand on one" — so the refresh that follows a
-successful delete does not have the ground watcher pull the window out from under the person with a
-notice about a branch they just deleted themselves. The branch goes back on if git refuses, since the
-window is then standing over one that still exists and that somebody else can still delete.
+closes first, because nothing it hears back changes what the window would have said; here a refusal
+from git is drawn — not asked — in the window itself, so the window has to still be there to draw it.
+What that costs is the ground, and `reground` is what pays it: pressing `Delete anyway` lets go of the
+branch — `null`, which `stalenessOf` already documents as "this window does not stand on one" — so the
+refresh that follows a successful delete does not have the ground watcher pull the window out from
+under the person with a notice about a branch they just deleted themselves. The branch goes back on if
+git refuses, since the window is then standing over one that still exists and that somebody else can
+still delete.
 
 ## Committing, and the message somebody does not have to write
 

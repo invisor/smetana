@@ -1245,26 +1245,68 @@ const renameBranchTo = (ask) => {
   renameBranch(ask ?? {})
 }
 
+/* The row's own Delete, armed and confirmed in the row itself now
+   (`components/git/branchMenu.js`, `BranchList.vue`), exactly the pattern the
+   file tree's own Delete already kept — so the ordinary path is a plain write
+   with no window in front of it at all: `git branch -d`, through the very
+   `write()` every other row's verb goes through, landing in the panel's own
+   block under "Git did not delete the branch" like any other refusal.
+
+   `vcsState.busy` is checked here rather than left to `write()`'s own guard
+   alone, the identical guard `removeBranch` below keeps for its own press: a
+   second click on an armed row while the first is still out is not a
+   hypothetical, and `write()` declining silently would leave this function
+   asking a question about a branch the first call may already be deleting. */
+async function deleteBranchFromRow(branch) {
+  if (!branch || vcsState.busy) return
+  try {
+    await deleteBranch(branch, { force: false })
+    /* A success refreshed the branch list on its own, and a decline `write()`
+       made without throwing — the project or the repository having moved — has
+       nothing for this row to say either: nobody but this press asked. */
+  } catch (refused) {
+    /* The one refusal with a way forward: the branch holds commits of its own,
+       and the way forward is `git branch -D`, which this row does not ask for
+       on its own account. `openDeleteBranch` below is that second question,
+       already standing on the branch this call just found refused. Anything
+       else — a branch held by another worktree above all — is already in
+       `writeError`, and the panel draws it; there is nothing more to do here.
+
+       This catch is reached only after `write()`'s own `finally` has already
+       cleared `vcsState.busy` — the store clears it before `deleteBranch`
+       throws, well before this arrives — so `openDeleteBranch` opens the window
+       with nothing in flight to hold its `Delete anyway` dead on arrival: by
+       the time it is on screen there is nothing in flight to refuse a press of
+       it either, which is what leaves `removeBranch` below's own
+       `if (vcsState.busy) return` guard with a real job — the *next* press,
+       not this one. `vcs.test.js`'s "a refused delete is thrown to the caller
+       and drawn in the panel as well" pins the half that makes it true — a
+       refused delete leaves `busy` null. */
+    if (refused?.kind === 'notMerged') openDeleteBranch(branch)
+  }
+}
+
 /* Which branch the delete-branch window is asking about, and null for closed —
    the branch is the state for `newBranchFrom`'s reason, since what the window
    is about is entirely the row somebody right-clicked.
 
-   Beside it the two fields that make this the one confirm in the app that asks
-   twice: whether git has already declined the plain delete because the branch
-   holds commits of its own, and git's own words for a refusal forcing would not
-   fix. Both are cleared when the window is opened and when it is forgotten, so
-   a second delete never opens on the last one's answer. */
+   Beside it git's own words for a refusal forcing would repeat: the window
+   opens only once the row's own plain delete has already been refused as
+   unmerged, so it asks the harder question alone and never the first one —
+   `DeleteBranchModal.vue`'s own header carries why. Cleared when the window is
+   opened and when it is forgotten, so a later delete never opens on the last
+   one's refusal. */
 const deletingBranch = ref(null)
-const deleteBranchNotMerged = ref(false)
 const deleteBranchRefusal = ref('')
 
-/* Deleting a branch, in a window of its own rather than a modal over the board.
-   The same ground as cutting one and for the same two reasons `openNewBranch`
-   records: `deleteBranch` resolves the repository from `vcsState.selected` when
-   the button is pressed, and this window is about a branch that exists. */
+/* The harder question, in a window of its own rather than a modal over the
+   board — opened only from `deleteBranchFromRow`'s catch above, once git has
+   already declined the plain delete because the branch is not merged. The same
+   ground as cutting one and for the same two reasons `openNewBranch` records:
+   `deleteBranch` resolves the repository from `vcsState.selected` when the
+   button is pressed, and this window is about a branch that exists. */
 function openDeleteBranch(branch) {
   deletingBranch.value = branch
-  deleteBranchNotMerged.value = false
   deleteBranchRefusal.value = ''
   serveDialog('delete-branch', {
     ground: { project: activePath.value, repo: vcsState.selected, branch },
@@ -1273,33 +1315,37 @@ function openDeleteBranch(branch) {
          comment beside its `title`. */
       title: `Delete ${deletingBranch.value}?`,
       branch: deletingBranch.value ?? '',
-      notMerged: deleteBranchNotMerged.value,
       refusal: deleteBranchRefusal.value,
       busy: vcsState.busy?.op === 'delete'
     }),
     forget: () => {
       deletingBranch.value = null
-      deleteBranchNotMerged.value = false
       deleteBranchRefusal.value = ''
     },
-    onResult: (name, payload) => {
+    onResult: (name) => {
       if (name === 'close') closeDialog('delete-branch')
-      if (name === 'confirm') removeBranch(Boolean(payload?.force))
+      if (name === 'confirm') removeBranch()
     }
   })
 }
 
-/* The one write behind a dialog in this view that does **not** close the window
-   first, and the exception is the whole feature: git's refusal is the second
-   question, so the window that asked the first one has to still be there to ask
-   it. `cutBranch` and `deleteTask` close first because nothing they hear back
-   changes what the window would say.
+/* One of two writes behind a dialog in this view that do **not** close the
+   window first — `discardIt` below is the other — and the exception is the
+   whole feature: the row already asked the first question, and a refusal of
+   this one — the window's own, `Delete anyway` — is drawn in the window
+   itself rather than asked further, so the window has to still be there to
+   draw it. `cutBranch` and `deleteTask` close first because nothing they hear
+   back changes what the window would say.
 
    What that costs is the ground, and `reground` above is what pays it: the
    branch is let go of before git is asked, so the successful case closes this
    window from here — quietly — instead of having it pulled out from under the
-   person with a notice about a branch they just deleted. */
-async function removeBranch(force) {
+   person with a notice about a branch they just deleted.
+
+   Called with no argument now that the window asks only the one question:
+   every press of its own Delete button is `force: true`, `git branch -D`, the
+   `DeleteBranchModal`'s only remaining act. */
+async function removeBranch() {
   const branch = deletingBranch.value
   if (!branch) return
   /* A second press while the first is still out, and it is not a hypothetical:
@@ -1310,19 +1356,12 @@ async function removeBranch(force) {
      the first call is still in flight. The refresh that follows the first would
      then find the window standing over a branch that has gone, and close it
      with the very notice `reground` exists to prevent. The guard is the same
-     one `write()` keeps, one layer earlier, so nothing here runs twice.
-
-     It does **not** stand in the way of the second question, and that rests on
-     an ordering worth naming: `write()` clears `busy` in its `finally`, before
-     `deleteBranch` throws and long before the `catch` below sets `notMerged`, so
-     by the time `Delete anyway` is on screen there is nothing in flight to
-     refuse it. `vcs.test.js` pins that half — a refused delete leaves `busy`
-     null. */
+     one `write()` keeps, one layer earlier, so nothing here runs twice. */
   if (vcsState.busy) return
   const standing = { project: activePath.value, repo: vcsState.selected, branch }
   reground('delete-branch', { ...standing, branch: null })
   try {
-    const gone = await deleteBranch(branch, { force })
+    const gone = await deleteBranch(branch, { force: true })
     /* `false` with nothing thrown is git already busy, or the project or the
        repository having moved while the call was out — in every one of which
        the window is either about to be closed by the ground watcher or was
@@ -1331,12 +1370,11 @@ async function removeBranch(force) {
     else reground('delete-branch', standing)
   } catch (refused) {
     reground('delete-branch', standing)
-    if (refused?.kind === 'notMerged') deleteBranchNotMerged.value = true
-    /* Anything else — a branch held by another worktree above all — is a
-       refusal `-D` would repeat, so what the window draws is git's own words
-       and one way out. The panel behind it draws the same refusal under its own
-       title, since `writeError` is set whatever this window does with it. */
-    else deleteBranchRefusal.value = refused?.message ?? ''
+    /* A branch held by another worktree above all — a refusal a second `-D`
+       would only repeat, so what the window draws is git's own words and one
+       way out. The panel behind it draws the same refusal under its own title,
+       since `writeError` is set whatever this window does with it. */
+    deleteBranchRefusal.value = refused?.message ?? ''
   }
 }
 
@@ -1408,12 +1446,14 @@ function openDiscardChange(change) {
   })
 }
 
-/* The write behind that window, and the second one in this view that does not
-   close first — `removeBranch` above is the other, and the reason is the same
-   half of one: the window has to still be there for git's refusal to land in.
-   What is different is what happens next. A refused delete asks a second
-   question; a refused discard asks nothing, so the block is the end of this
-   window and Cancel is the whole way out.
+/* The write behind that window, and the other of the two writes in this view
+   that do not close first — `removeBranch` above is the one, and the reason
+   is the same half of one: the window has to still be there for git's
+   refusal to land in. Both windows' own refusals land the same way now — the
+   block, and Cancel as the whole way out — so what is different is what came
+   before rather than what happens next: a branch that turns out unmerged is a
+   confirm in two places, the row's own first and then `removeBranch`'s,
+   where a discard is asked once, here alone.
 
    The ground is not let go of the way `removeBranch` lets go of its branch:
    this window stands on the project and the repository, and a successful
@@ -7059,7 +7099,7 @@ const toastStackStyle = {
                 @copy-name="copyBranchName"
                 @new-branch="openNewBranch"
                 @rename="openRenameBranch"
-                @delete="openDeleteBranch"
+                @delete="deleteBranchFromRow"
                 @message="setMessage"
                 @commit="commit"
                 @suggest="suggestMessage"
