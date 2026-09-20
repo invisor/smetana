@@ -1,7 +1,22 @@
-# Smetana
+<h1 align="center">
+  <img src="assets/icon.png" alt="" height="64" align="absmiddle">&nbsp;Smetana
+</h1>
 
-A desktop app for supervising autonomous AI coding agents: a kanban board of real tasks, and runs
-that hand those tasks to agent sessions and carry them through while you watch.
+<p align="center">
+  <a href="https://github.com/invisor/smetana/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/invisor/smetana"></a>
+  <img alt="macOS on Apple silicon" src="https://img.shields.io/badge/macOS-Apple%20silicon-111?logo=apple&logoColor=white">
+  <a href="https://claude.com/claude-code"><img alt="Works with Claude Code" src="https://img.shields.io/badge/agent-Claude%20Code-d97757"></a>
+  <a href="https://github.com/openai/codex"><img alt="Works with Codex" src="https://img.shields.io/badge/agent-Codex-10a37f"></a>
+</p>
+
+<p align="center">
+  <b>Autonomous coding. File the tasks, start the run, go for coffee.</b><br>
+  Describe what you want and an agent files it as tasks, asks you whatever it could not settle for
+  itself, and sets the blockers and dependencies between them. You press play once; the run works
+  through the queue on its own. What is left for you is reading the result.
+</p>
+
+<h3 align="center"><a href="https://github.com/invisor/smetana/releases/latest">Download Smetana</a></h3>
 
 ![The board, a project's agent sessions on the left and the selected task on the right](assets/screenshot-board.png)
 
@@ -38,8 +53,10 @@ run state and reports in `.smetana/`. There is no server, no account and no data
 - **Parallel sessions inside a batch.** The run's lead agent hands tasks to several agent sessions at
   once (up to eight, three by default), and each task gets its own git worktree in every repository
   it touches, so two of them cannot tread on each other's checkout.
-- **One harness today: Claude Code.** Everything the app asks an agent for is written once and
-  translated per harness, so a second one is a profile rather than a rewrite.
+- **Two harnesses: Claude Code and Codex.** Everything the app asks an agent for is written once and
+  translated per harness, so a third one is a profile rather than a rewrite. The conversation panel —
+  a session read as messages rather than as a screen — is Claude Code's alone today; a Codex session
+  is a terminal like every other.
 - **Terminal tabs on real PTYs**, one per session, with the app reading the screen well enough to
   tell that a session is waiting for a human — and saying so where you will see it: the agent's row
   in the Agents list, the project's tile in the rail, the counter in the scope bar, and a sound,
@@ -56,8 +73,9 @@ run state and reports in `.smetana/`. There is no server, no account and no data
 ## Requirements
 
 - macOS on Apple silicon (arm64). There is no Intel, Windows or Linux build.
-- [Claude Code](https://claude.com/claude-code), installed and signed in — the app drives it, it is
-  not a model client of its own.
+- [Claude Code](https://claude.com/claude-code) or [Codex](https://github.com/openai/codex),
+  installed and signed in — the app drives a harness you already have, it is not a model client of
+  its own.
 - git.
 
 bd ships inside the bundle (`bundle.externalBin`), so there is nothing to install for it, and an
@@ -118,10 +136,10 @@ This is an early version, and honest about it:
 
 - **macOS on Apple silicon only.** Windows and Linux builds are wanted and neither has been checked
   by eye yet; there is no Intel build.
-- The app drives Claude Code and nothing else, and what a run can finish unattended is whatever
-  Claude Code can finish unattended.
-- **[Codex](https://github.com/openai/codex) is not supported yet.** It is visible in the Agents
-  settings and cannot be selected there, and no run has been checked on it. Support is planned.
+- The app drives a harness rather than a model, so what a run can finish unattended is whatever
+  Claude Code or Codex can finish unattended.
+- **Runs have been driven far harder on Claude Code than on Codex**, and the conversation panel is
+  Claude Code's only — on Codex a session is watched as a terminal.
 
 ## Development
 
