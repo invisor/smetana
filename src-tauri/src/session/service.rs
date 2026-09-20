@@ -50,6 +50,7 @@ use super::model::{
 };
 use super::permission::{Asked, PermissionServer};
 use crate::agents::claude_driver::ClaudeDriver;
+use crate::agents::codex_driver::CodexDriver;
 use crate::agents::{self, Intent, Launch, Profile};
 
 /// How much of a child's stdout is taken in one read. A turn's output arrives
@@ -327,7 +328,7 @@ fn spawnable(builder: &CommandBuilder) -> Option<tokio::process::Command> {
 
 /// The codec for a harness, or `None` for one this app cannot drive.
 ///
-/// Only Claude Code has one. A profile without a codec is refused rather than
+/// Only the explicitly supported interactive harnesses have one. A profile without a codec is refused rather than
 /// spawned: the child would run, say everything it had to say in a protocol
 /// nothing here can read, and the conversation on screen would stay empty with
 /// no error anywhere to explain it.
@@ -337,6 +338,7 @@ fn driver_for(
 ) -> Option<Box<dyn Driver>> {
     match profile.id() {
         "claude" => Some(Box::new(ClaudeDriver::new(ticket))),
+        "codex" => Some(Box::new(CodexDriver::new(ticket))),
         _ => None,
     }
 }
@@ -899,7 +901,11 @@ fn absorb(
             let Some(live) = sessions.get_mut(&id) else { return };
             let Some(talking) = live.talking.as_mut() else { return };
             let kinds = talking.driver.feed(&bytes);
+            let outgoing = talking.driver.outgoing();
             append(app, id, live, kinds);
+            for bytes in outgoing {
+                if !say(live, bytes) { lost(app, id, live); break; }
+            }
         }
         Chunk::Eof(id) => {
             let Some(live) = sessions.get_mut(&id) else { return };

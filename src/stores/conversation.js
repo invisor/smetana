@@ -533,7 +533,7 @@ function listenToState() {
    Read at the moment it is asked and never cached, which is the whole of
    "changes what starts, not what runs": a panel already on screen goes on being
    a panel, and the next session opens in a terminal. */
-const DRIVEN = ['claude']
+const DRIVEN = ['claude', 'codex']
 
 export const canDrive = (agent) => settings.conversationPanel && DRIVEN.includes(agent)
 

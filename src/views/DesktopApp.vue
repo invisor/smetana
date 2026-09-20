@@ -747,7 +747,10 @@ async function startAgent(path, intent) {
   let refused = null
 
   if (path === activePath.value) project.sideTab = 'agents'
-  if (canDrive(settings.agent)) {
+  /* Codex's first app-server slice covers the two creation flows only. Its
+     other manual actions retain the established PTY route until their prompts
+     and response cards have a dedicated mapping. */
+  if (canDrive(settings.agent) && (settings.agent !== 'codex' || ['bare', 'newTask'].includes(intent.kind))) {
     /* The tab comes forward on the press; the aim follows the id, so a spawn
        that answers leaves the panel on the new conversation and one that does
        not leaves nothing pointing at a session that was never made. */

@@ -57,6 +57,10 @@ pub trait Driver: Send {
     /// answer and an ordinary one.
     fn feed(&mut self, bytes: &[u8]) -> Vec<EventKind>;
 
+    /// Requests produced while decoding a response. Most line protocols never
+    /// need this; JSON-RPC bootstraps its thread after each prior reply.
+    fn outgoing(&mut self) -> Vec<Vec<u8>> { Vec::new() }
+
     /// A person's message, as bytes for the child's stdin.
     fn send(&mut self, input: Input) -> Vec<u8>;
 
