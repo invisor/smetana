@@ -16,6 +16,67 @@
 //! fast-forward alike, because all three end with the branch's tip reachable
 //! from the target's.
 //!
+//! **Ancestry alone is not enough, and the gap is not a corner case.** A
+//! branch cut from the target and never committed to has a tip identical to
+//! the point it was cut from — a commit is always an ancestor of itself — so
+//! `is_ancestor` answers yes for it exactly as it does for a fast-forward.
+//! smetana-ypwh closed this way: fourteen files sat uncommitted in the task's
+//! worktree, its branch had never moved off `main`'s tip, and the sweep read
+//! "tip equals target tip" as "merged" and closed a task whose work had not
+//! even been committed, let alone landed anywhere. Comparing the two tips
+//! directly (`tip != target`) would catch that case and break the one this
+//! module exists for: a fast-forward leaves the branch's tip equal to the
+//! target's tip too, by definition, and that equality is not optional evidence
+//! there — it is the whole of what fast-forward means. So the two cases —
+//! fast-forward and never-committed — are indistinguishable from the refs
+//! alone, and any fix has to look past them.
+//!
+//! **What breaks the tie is the task's worktree.** So before a tip equal to
+//! (or descended from) the target's is read as `Merged`, `standing` asks
+//! `git worktree list --porcelain` for a worktree checked out to that branch
+//! and, if one exists, `git status --porcelain` inside it. Anything
+//! uncommitted there downgrades the answer to `Behind` — the branch may well
+//! be an ancestor of the target, but the worktree says the task is not done,
+//! and that is worth more than the ref. The check only runs once
+//! `is_ancestor` has already said yes, so a task with no branch, or one that
+//! is plainly behind, still costs nothing beyond the ref read `git.rs` already
+//! does.
+//!
+//! **The trade this buys is not free, and it is not the one it looks like.**
+//! It is tempting to read "fast-forwarded branches have clean worktrees" into
+//! the predicate above, and that reading is backwards for this project's own
+//! merge mechanism. The merging step removes a task's worktree **without
+//! `--force`** and treats a dirty or locked one refusing removal as a line in
+//! its report rather than a stop — `git.removeWorktrees` turned off leaves
+//! every worktree in place regardless — so a worktree that lingers here is
+//! usually exactly the one that could not be removed *because* it was dirty.
+//! The clean ones are the ones that already went. So this predicate does
+//! permanently withhold the closure from a task somebody merged by hand whose
+//! worktree was left behind dirty — an editor with an unsaved buffer, a stray
+//! build artefact, a file the merge itself never touched. That is accepted
+//! for the reason the module opens with: the two ways of being wrong are not
+//! symmetric, and a task withheld this way is not lost, only stuck in
+//! `ready_to_merge` where a person can still close it by hand; a task closed
+//! on a guess is not recoverable at all.
+//!
+//! **The main checkout is a worktree too, as far as `git worktree list` is
+//! concerned**, and nothing here treats it differently. If a task's branch
+//! happens to be checked out in the main checkout rather than a linked one —
+//! an agent working directly on it, or a person who checked it out themselves
+//! — the status read lands there, and *that checkout's* dirt, whatever it is
+//! about, withholds the closure exactly as a linked worktree's would. That is
+//! correct under this predicate, not a gap in it: the tree the branch is
+//! sitting in has uncommitted changes either way, and this module has no way
+//! to know that they belong to some other piece of work.
+//!
+//! Rejected: requiring `git rev-list <target>..<branch>` to be non-empty —
+//! "the branch has a commit the target lacks" is a test for "not yet merged
+//! by rebase or squash", and an honestly fast-forwarded branch fails it on
+//! purpose, which is exactly the case that must keep closing. Reading the
+//! branch's reflog for the commit it was cut from was rejected too: a reflog
+//! expires, and a fresh clone — which is what a project's repository often is
+//! by the time this sweep runs — has none to read.
+//!
 //! Local refs only. Nothing here asks a remote anything: a fetch would put a
 //! network call on a timer, and a branch merged only on somebody's server is
 //! not merged on this machine, which is the one this app can see.
@@ -43,6 +104,76 @@ pub fn is_ancestor(repo: &Path, of: &str, into: &str) -> Result<bool, VcsError> 
         .map(|out| out.is_some())
 }
 
+/// Whether `branch` has a worktree of its own here and, if it does, that
+/// worktree has anything uncommitted in it.
+///
+/// `git worktree list --porcelain` is one call shared by every worktree of a
+/// repository, so asking it of `repo` — whichever checkout `standing` was
+/// handed — sees a linked worktree cut for the task even though the task's own
+/// edits never touch this one. Entries are separated by blank lines and each
+/// names its path first (`worktree <path>`) and its branch after
+/// (`branch refs/heads/<name>`), so the path most recently seen when the
+/// wanted branch line turns up is the one asked for a status.
+///
+/// A branch with no worktree at all — the ordinary state of one merged days
+/// ago, whose worktree somebody has since removed — is **not** treated as
+/// dirty: there is nowhere left for uncommitted work to be sitting, so the
+/// absence itself is not evidence of anything and must not block the closure
+/// fast-forward exists to make happen. **A worktree record whose directory is
+/// gone is the same case, not the error case.** git does not drop a worktree
+/// record when the directory under it disappears — `rm -rf` on a gitignored,
+/// routinely-cleaned folder, a move, an unmounted volume — it keeps printing
+/// the `branch` line with `prunable gitdir file points to non-existent
+/// location` beside it, for as long as nobody runs `git worktree prune` by
+/// hand — no code in this application ever runs it; the only occurrences in
+/// the tree are steps inside shipped skill documents, taken by an agent for
+/// another purpose and never on a timer. Spawning `git status` there would
+/// not read a status at all: `Command::current_dir` fails before git even
+/// starts, and treating that failure as "unmeasurable" would withhold the
+/// closure forever over a directory that cannot hold uncommitted work because
+/// it does not exist — the same permanent loss this predicate exists to stop,
+/// arrived at from the other side. So the path is checked with `is_dir`
+/// first, off the same stat this app already trusts elsewhere, and a path
+/// that is not a directory reads exactly as no worktree does: not dirty.
+///
+/// An error reading the list, or reading the status of a worktree whose
+/// directory does exist, is the genuine unmeasurable case: git could not be
+/// asked, so there is no evidence either way, and per the module header's
+/// stated asymmetry it is read as "yes, treat it as unfinished" rather than
+/// "no" — a closure skipped for one more sweep costs a minute, a closure
+/// granted on a guess can lose work for good. It is also logged, the way
+/// `standing`'s own `Err` arm already is: a closure withheld for a reason
+/// nobody can see is a defect nobody can find, and silence here is exactly
+/// what let a `VcsError::NoGit` — "git is not installed" — stand in for "the
+/// worktree's own directory is gone" with nothing to say so.
+fn worktree_has_uncommitted_work(repo: &Path, branch: &str) -> bool {
+    let Ok(list) = run::git_read(repo, &["worktree", "list", "--porcelain"]) else {
+        return true;
+    };
+    let wanted = format!("branch refs/heads/{branch}");
+    let mut path: Option<&str> = None;
+    for line in list.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            path = Some(p);
+        } else if line == wanted {
+            let Some(path) = path else { return true };
+            if !Path::new(path).is_dir() {
+                return false;
+            }
+            return match run::git_read(Path::new(path), &["status", "--porcelain"]) {
+                Ok(status) => !status.trim().is_empty(),
+                Err(err) => {
+                    log::debug!(
+                        "could not read the status of {branch}'s worktree at {path}: {err}"
+                    );
+                    true
+                }
+            };
+        }
+    }
+    false
+}
+
 /// What one repository has to say about one task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Standing {
@@ -50,9 +181,11 @@ pub enum Standing {
     /// a project's repositories are not all touched by every task, and one that
     /// was not touched must not hold a closure up.
     Absent,
-    /// The branch is here and its tip is an ancestor of the target's.
+    /// The branch is here, its tip is an ancestor of the target's, and its
+    /// worktree — if it has one — has nothing uncommitted in it.
     Merged { branch: String, tip: String },
-    /// The branch is here and its tip is not in the target — or the question
+    /// The branch is here and its tip is not in the target, or the tip is in
+    /// the target but its worktree still has uncommitted work, or the question
     /// could not be put to git at all, which is the same answer on purpose. A
     /// repository that cannot be read is not evidence that work was merged, and
     /// the two ways of being wrong here are not equal: a task closed early
@@ -116,11 +249,18 @@ pub fn merged_in_all(standings: &[Standing]) -> Option<(&str, &str)> {
 /// bare name: a tag and a branch may share one, and the target here is a *local*
 /// branch by decision, so naming it exactly is what keeps a remote-tracking ref
 /// of the same name out of the answer.
+///
+/// Ancestry alone only gets to a candidate, not an answer: once it says yes,
+/// `worktree_has_uncommitted_work` gets one more look before the task is
+/// called `Merged`, for the reason the module header gives. It runs nowhere
+/// else, so a branch that is plainly behind, or absent, still costs exactly
+/// the one `merge-base` call it cost before this existed.
 pub fn standing(repo: &Path, id: &str, target: &str) -> Standing {
     let Some((branch, tip)) = crate::git::task_work(repo, id) else {
         return Standing::Absent;
     };
     match is_ancestor(repo, &format!("refs/heads/{branch}"), &format!("refs/heads/{target}")) {
+        Ok(true) if worktree_has_uncommitted_work(repo, &branch) => Standing::Behind,
         Ok(true) => Standing::Merged { branch, tip },
         Ok(false) => Standing::Behind,
         // Ordinary rather than alarming, and that is why it is not a warning:
@@ -258,6 +398,121 @@ mod tests {
         run::git_write(repo, &["add", "."]).expect("stage");
         run::git_write(repo, &["commit", "-m", "work"]).expect("commit");
         run::git_write(repo, &["checkout", "-q", "develop"]).expect("go back");
+    }
+
+    /// A worktree checked out to a task's branch and nowhere near it: cutting
+    /// a fresh branch from the target and never committing anything to it
+    /// leaves the tip identical to the point it was cut from, and this is the
+    /// case smetana-ypwh closed by mistake. `is_ancestor` alone cannot tell it
+    /// apart from a fast-forward — both answer "the tip is an ancestor of the
+    /// target" — so only the worktree's own dirtiness does.
+    #[test]
+    fn a_branch_at_the_targets_tip_with_a_dirty_worktree_is_not_closed() {
+        let root = scratch("dirty-worktree");
+        let repo = repository(&root, ".");
+        let worktree = root.join("task-worktree");
+        run::git_write(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                worktree.to_str().expect("a UTF-8 worktree path"),
+                "-b",
+                "feature/smetana-a769-work",
+                "develop",
+            ],
+        )
+        .expect("add the linked worktree");
+        fs::write(worktree.join("uncommitted.txt"), "not committed\n")
+            .expect("write an uncommitted file");
+
+        assert_eq!(standing(&repo, "smetana-a769", "develop"), Standing::Behind);
+        assert!(merged_tasks(&root, "develop", &["smetana-a769".to_string()]).is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The same branch at the same tip, but with nothing outstanding in its
+    /// worktree: this is the fast-forward case seen from the worktree's side
+    /// rather than the ref's, and the fix must not have broken it.
+    #[test]
+    fn a_branch_at_the_targets_tip_with_a_clean_worktree_still_closes() {
+        let root = scratch("clean-worktree");
+        let repo = repository(&root, ".");
+        let worktree = root.join("task-worktree");
+        run::git_write(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                worktree.to_str().expect("a UTF-8 worktree path"),
+                "-b",
+                "feature/smetana-a769-work",
+                "develop",
+            ],
+        )
+        .expect("add the linked worktree");
+
+        let head = run::git_read(&repo, &["rev-parse", "HEAD"]).expect("read the tip");
+        assert_eq!(
+            standing(&repo, "smetana-a769", "develop"),
+            Standing::Merged {
+                branch: "feature/smetana-a769-work".into(),
+                tip: head.trim().chars().take(7).collect(),
+            }
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The stale-record case: somebody removed the worktree's directory by
+    /// hand instead of running `git worktree remove`, so git keeps the
+    /// `branch` record — this is `prunable gitdir file points to
+    /// non-existent location`, reproduced against a real repository rather
+    /// than assumed. Without the directory check this reads as unmeasurable
+    /// and answers `Behind` forever, since no code in this application ever
+    /// runs `git worktree prune` — the only occurrences in the tree are steps
+    /// inside shipped skill documents, taken by an agent for another purpose
+    /// and never on a timer; with the check, it reads exactly as no worktree
+    /// does.
+    #[test]
+    fn a_worktree_record_whose_directory_is_gone_does_not_withhold_the_closure() {
+        let root = scratch("removed-worktree-dir");
+        let repo = repository(&root, ".");
+        let worktree = root.join("task-worktree");
+        run::git_write(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                worktree.to_str().expect("a UTF-8 worktree path"),
+                "-b",
+                "feature/smetana-a769-work",
+                "develop",
+            ],
+        )
+        .expect("add the linked worktree");
+        // `rm -rf` on the directory, not `git worktree remove`: the record in
+        // `.git/worktrees/` is left standing, exactly as it is after a
+        // gitignored worktree folder is cleaned up by hand.
+        fs::remove_dir_all(&worktree).expect("remove the worktree directory by hand");
+        let list = run::git_read(&repo, &["worktree", "list", "--porcelain"])
+            .expect("read the worktree list");
+        assert!(
+            list.contains("branch refs/heads/feature/smetana-a769-work"),
+            "the record must survive the directory going: {list}"
+        );
+
+        let head = run::git_read(&repo, &["rev-parse", "HEAD"]).expect("read the tip");
+        assert_eq!(
+            standing(&repo, "smetana-a769", "develop"),
+            Standing::Merged {
+                branch: "feature/smetana-a769-work".into(),
+                tip: head.trim().chars().take(7).collect(),
+            }
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// The case the whole feature came from: a fast-forward merge leaves no

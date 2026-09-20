@@ -357,20 +357,24 @@ async fn full_sync(
 /// a false one costs the work.
 ///
 /// **And no task a live run is holding** (`runs::recovery::live_actors`, whose
-/// rule and tests are `runs::registry::live_actors`). Ancestry cannot tell a
-/// merged branch from a branch with no commits of its own: a branch cut from
-/// the target's tip is an ancestor of it trivially, before anybody has written
-/// a line. The predicate is not fixable — the fast-forward this sweep was
-/// written for has that very shape, tip equal to tip — so what is narrowed is
-/// whose task it is. In this project's own way of working a worker leaves
-/// approved work uncommitted, sets `ready_to_merge`, and the lead commits it at
-/// the merge phase, which makes "`ready_to_merge` on a branch with nothing on
-/// it" an ordinary state lasting minutes rather than an anomaly. This sweep
-/// exists for a person who merged a branch past the app; a task a run holds is
-/// closed by that run as the last step of merging it, so the two never needed
-/// to overlap. The night it cost is smetana-cksn: a task closed 26 seconds
-/// before its branch's only commit, and fifteen files left on a branch with
-/// nothing on the board to say they were ever there.
+/// rule and tests are `runs::registry::live_actors`). Ancestry alone cannot
+/// tell a merged branch from a branch with no commits of its own: a branch cut
+/// from the target's tip is an ancestor of it trivially, before anybody has
+/// written a line — which is exactly the shape a worker's approved,
+/// uncommitted `ready_to_merge` work has while it waits for the lead to commit
+/// it at the merge phase, an ordinary state lasting minutes rather than an
+/// anomaly. `vcs::merged::worktree_has_uncommitted_work` (smetana-k799) now
+/// narrows the predicate itself: uncommitted files in the task's own worktree
+/// withhold the closure whatever the refs say, which is the same window this
+/// filter exists for. `live_actors` stays in front of it regardless, and stays
+/// first, because it costs no git process at all — a task a run holds is
+/// answered from `.smetana/runs.json` alone, where asking git would only be a
+/// chance to be told the tip is already an ancestor. This sweep exists for a
+/// person who merged a branch past the app; a task a run holds is closed by
+/// that run as the last step of merging it, so the two never needed to
+/// overlap. The night it cost is smetana-cksn: a task closed 26 seconds before
+/// its branch's only commit, and fifteen files left on a branch with nothing
+/// on the board to say they were ever there.
 ///
 /// **The whole of the git side is `vcs::merged`**, which is where the ancestry
 /// question and the multi-repository rule live and where their tests are.
