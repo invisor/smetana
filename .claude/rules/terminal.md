@@ -58,8 +58,8 @@ events (`src-tauri/src/session/`, `src/stores/conversation.js`, `src/components/
 smetana-osut every intent a person talks to takes that same road under Claude Code — filing a task,
 editing one, answering a parked one's questions, fixing closed work, a conflict, a setup, a tracker
 repair, a branch review — and only `Intent::Run` stays here for a stated reason: nobody is in a run's
-conversation. Every harness that is not Claude Code keeps this road exactly as it is, since only Claude
-Code has a driver. Which of the two a press takes is `canDrive` in the conversation store, asked once
+conversation. Codex uses the driven road only for New Agent and New Task while the panel is enabled;
+its other manual actions and every unsupported harness keep this road. Which of the two a press takes is `canDrive` in the conversation store, asked once
 by `startAgent` in `DesktopApp.vue` for every one of those starts, over `settings.agent` and
 `settings.conversationPanel` — the switch on the Agents tab that sends every harness down this road
 again (`.claude/rules/settings.md`). A driven session *does* have a row in the Agents view
