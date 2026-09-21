@@ -566,7 +566,7 @@ The conversation panel draws the identical shape over itself, token for token, d
 | file | what it does |
 |---|---|
 | `model.rs` | `Session`, `SessionState`, `Question`, `TerminalError` — the vocabulary, and the pure rules for entering and leaving each state (`Session::apply`, `finish`) |
-| `transcript.rs` | a batch's machine-format output cut into lines and handed to the profile's own rendering, before anything downstream sees a byte of it |
+| `transcript.rs` | a batch's machine-format output cut into lines and handed to the profile's own rendering, before anything downstream sees a byte of it; stamps each rendered line with a local `YYYY-MM-DD HH:MM:SS `, taken when the line is rendered rather than by either translator |
 | `ring.rs` | the raw-byte scrollback ring, trimmed on overflow to a line boundary |
 | `screen.rs` | a `vt100` grid built from the same bytes — the text a person would actually see |
 | `detect.rs` | layer A: bell and silence, a pure function of the screen, the bell flag and the timings |
