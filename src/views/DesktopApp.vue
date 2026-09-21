@@ -747,10 +747,10 @@ async function startAgent(path, intent) {
   let refused = null
 
   if (path === activePath.value) project.sideTab = 'agents'
-  /* Codex's first app-server slice covers the two creation flows only. Its
-     other manual actions retain the established PTY route until their prompts
-     and response cards have a dedicated mapping. */
-  if (canDrive(settings.agent) && (settings.agent !== 'codex' || ['bare', 'newTask'].includes(intent.kind))) {
+  /* This is only an inexpensive panel-enabled front door. Rust resolves the
+     actual role and binary, then permits Codex's Bare/NewTask app-server slice
+     or refuses so this function takes the existing PTY fallback. */
+  if (canDrive(settings.agent)) {
     /* The tab comes forward on the press; the aim follows the id, so a spawn
        that answers leaves the panel on the new conversation and one that does
        not leaves nothing pointing at a session that was never made. */
