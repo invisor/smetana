@@ -68,6 +68,17 @@ pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
     let mut cmd = launch.profile.command(launch);
     cmd.cwd(&launch.cwd);
     apply_environment(&mut cmd);
+    // This app's own pid, its start stamp, and this session's id, so that
+    // whatever the agent starts can be found again by `runs::procs::marked`
+    // and `strays` long after its own process group has stopped meaning
+    // anything — see the module note there for why a group is not enough.
+    // Only an agent session gets it: `build_shell_command` below is a
+    // person's own shell, and a background job it leaves running with `&` is
+    // meant to survive the window closing, exactly as it would in any other
+    // terminal.
+    if let Some(mark) = crate::runs::procs::mark(id) {
+        cmd.env(crate::runs::procs::MARK_KEY, mark);
+    }
     // The environment half of running without a person. The argument half is
     // applied by the profile itself, because it has to go in front of the
     // positional prompt and `CommandBuilder` only appends; the environment has
@@ -752,6 +763,23 @@ mod tests {
         }
     }
 
+    /// The mark every agent session's environment carries, read through
+    /// `iter_extra_env_as_str` and never `get_env` for the reason the locale
+    /// test spells out — `get_env` answers out of the snapshot of this
+    /// process's own environment, where `SMETANA_SESSION` could not already
+    /// be set, but the habit is worth keeping uniform across this file.
+    #[test]
+    fn every_agent_session_carries_the_apps_own_mark() {
+        for id in agents::IDS {
+            let cmd = build_command(11, &launch(id));
+            let found = cmd
+                .iter_extra_env_as_str()
+                .find(|(key, _)| *key == crate::runs::procs::MARK_KEY)
+                .map(|(_, value)| value.to_owned());
+            assert_eq!(found, crate::runs::procs::mark(11), "{id}");
+        }
+    }
+
     #[test]
     fn the_rest_of_the_environment_is_left_alone() {
         // One directory in front, and nothing else about PATH rewritten: an
@@ -806,13 +834,17 @@ mod tests {
     /// agent branch adds beyond the shared piece is about an agent or about a
     /// run, and a shell has neither — a `BEADS_ACTOR` leaking into one would
     /// put a person's own bd commands into a run's audit trail under a session
-    /// id that means nothing to them.
+    /// id that means nothing to them, and `SMETANA_SESSION` leaking into one
+    /// would have `runs::procs::strays` hang up a background job a person left
+    /// running on purpose, exactly the terminal they would get from their own
+    /// terminal application.
     #[test]
     fn a_shell_is_told_nothing_about_agents_or_runs() {
         let cmd = build_shell_command("/bin/zsh", Path::new("/tmp/project"));
         let keys: Vec<_> = cmd.iter_extra_env_as_str().map(|(key, _)| key).collect();
         assert_eq!(keys.len(), 3, "{keys:?} — the shared piece is TERM, a locale and PATH");
         assert!(!keys.contains(&"BEADS_ACTOR"), "{keys:?}");
+        assert!(!keys.contains(&crate::runs::procs::MARK_KEY), "{keys:?}");
     }
 
     #[test]

@@ -18,6 +18,7 @@ use super::pty::{Chunk, Pty};
 use super::ring::Ring;
 use super::screen::Screen;
 use crate::agents::{self, Intent};
+use crate::runs::{procs, registry};
 
 /// How much raw output every session remembers — this is what xterm.js
 /// repaints itself from when it attaches.
@@ -240,6 +241,17 @@ pub fn start(app: AppHandle) -> TerminalHandle {
     // quietly deleted by a feature that has nothing to do with it.
     let requests = tx.downgrade();
 
+    // What a dead instance of this very app left running: sessions end at
+    // `RunEvent::Exit` by hanging up every process *group* they hold, and
+    // that reaches everything an agent started except what asked for a group
+    // of its own — `setsid`, `nohup`, a shell's `&` — which is reparented
+    // under pid 1 the moment its own leader goes, with no group left that
+    // still names the session. `SMETANA_SESSION` is how those are found
+    // instead — see the module note on `runs::procs`. A task of its own,
+    // never awaited here, so a stray left over from last night never delays
+    // the first session this launch starts.
+    tauri::async_runtime::spawn(sweep_strays());
+
     tauri::async_runtime::spawn(async move {
         let mut sessions: HashMap<SessionId, Live> = HashMap::new();
         let mut captures: Vec<Capture> = Vec::new();
@@ -325,10 +337,21 @@ async fn kill_all(sessions: &mut HashMap<SessionId, Live>) {
             signalled |= live.pty.hangup();
         }
     }
+    // Every marked descendant of every session this worker still holds — the
+    // ones a group signal cannot reach any more, found by the mark alone.
+    // Gathered for every session rather than only the ones just hung up: a
+    // session already `Exited` can still have left something running, and
+    // this is the one moment the app can still go looking for it.
+    let marked: Vec<i32> =
+        sessions.keys().copied().filter_map(procs::mark).flat_map(|mark| procs::marked(&mark)).collect();
+
     // Nothing was asked to leave — on a platform with no such signal, or
     // because everything here is already gone — so there is nothing to wait
     // for, and waiting would only make closing the window slower.
-    if signalled {
+    let pty_wait = async {
+        if !signalled {
+            return;
+        }
         let deadline = Instant::now() + KILL_GRACE;
         while Instant::now() < deadline {
             // `exit_code` is the same non-blocking `try_wait` the rest of the
@@ -338,12 +361,67 @@ async fn kill_all(sessions: &mut HashMap<SessionId, Live>) {
             }
             tokio::time::sleep(KILL_POLL).await;
         }
-    }
+    };
+    // Signalled beside the groups and waited out inside the very same call —
+    // `reap_marked` runs its own hangup, grace and kill entirely on its own,
+    // so joining it here rather than spawning it is what keeps the app's own
+    // exit from finishing before its wait does.
+    tokio::join!(pty_wait, reap_marked(marked, "app exit"));
+
     for live in sessions.values_mut() {
         if live.pty.exit_code().is_none() {
             live.pty.kill();
         }
     }
+}
+
+/// Hang up every one of these pids, wait `KILL_GRACE` for them to leave, then
+/// send what remains `SIGKILL` — the same two-stage shape `kill_all` gives a
+/// session's own process group and `recovery::hang_up` gives a dead run's,
+/// aimed here at pids found by their `SMETANA_SESSION` mark rather than at a
+/// group nothing can reach any more. `why` is for the log line only; the four
+/// call sites differ in when they run and nothing else.
+async fn reap_marked(pids: Vec<i32>, why: &str) {
+    let mut signalled: Vec<registry::Proc> = Vec::new();
+    for pid in pids {
+        let Some(proc) = procs::snapshot(pid) else { continue };
+        if procs::hangup_pid(pid) {
+            log::info!("[terminal] hung up pid {pid} ({why})");
+            signalled.push(proc);
+        }
+    }
+    if signalled.is_empty() {
+        return;
+    }
+    let deadline = Instant::now() + KILL_GRACE;
+    while Instant::now() < deadline {
+        signalled.retain(still_alive);
+        if signalled.is_empty() {
+            return;
+        }
+        tokio::time::sleep(KILL_POLL).await;
+    }
+    for proc in signalled {
+        if still_alive(&proc) && procs::kill_pid(proc.pid) {
+            log::warn!("[terminal] killed pid {} ({why}), which did not leave on its own", proc.pid);
+        }
+    }
+}
+
+/// Whether the pid a `Proc` was snapshotted from is still the very process
+/// that was snapshotted — the same question `registry::sweep` asks of a run's
+/// process groups, asked here of one pid instead.
+fn still_alive(proc: &registry::Proc) -> bool {
+    registry::liveness(proc, procs::look(proc.pid)) == registry::Liveness::Alive
+}
+
+/// What a dead instance of this very app left running, found by the mark
+/// alone — see the module note on `runs::procs` for why a process group
+/// cannot find these, and `pub fn start` above for why this runs as a task of
+/// its own rather than in front of the worker's first request.
+async fn sweep_strays() {
+    let pids: Vec<i32> = procs::strays().into_iter().map(|(pid, _mark)| pid).collect();
+    reap_marked(pids, "previous app; its own process is gone").await;
 }
 
 /// The exit path. Called from `RunEvent::Exit` — the event loop is already
@@ -499,7 +577,27 @@ fn absorb(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk
             // records in place for the next launch.
             forget_session(live);
             emit_state(app, &live.session);
+            // Whatever this session left running under a group its own exit
+            // could never reach — `setsid yes &`, the case this exists for.
+            // A task of its own: the worker has other sessions to keep
+            // serving, and a grace period is not something to make them wait
+            // through.
+            reap_session_descendants(id, "session exited");
         }
+    }
+}
+
+/// Every process carrying this session's own mark, hung up on a task of its
+/// own — see `reap_marked` for the two-stage shape and `runs::procs` for what
+/// a group signal cannot reach. Shared by the two points that end one session
+/// at a time; `kill_all` gathers every session's marked descendants itself
+/// instead, since it is already waiting for the groups and there is nothing
+/// left to keep the worker's loop free for.
+fn reap_session_descendants(id: SessionId, why: &'static str) {
+    let Some(mark) = procs::mark(id) else { return };
+    let pids = procs::marked(&mark);
+    if !pids.is_empty() {
+        tauri::async_runtime::spawn(reap_marked(pids, why));
     }
 }
 
@@ -1110,6 +1208,10 @@ fn handle(
                 // row by the time this arrives, and filtering an absent id is
                 // a no-op, which is what makes one event serve both callers.
                 let _ = app.emit("terminal:removed", serde_json::json!({ "id": id }));
+                // The same sweep a self-exit gets, for the row a person took
+                // away instead: `live.pty.kill()` above reaches the session's
+                // own process group and nothing outside it.
+                reap_session_descendants(id, "session removed");
             }
             if *active == Some(id) {
                 *active = None;

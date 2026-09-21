@@ -765,12 +765,35 @@ does: `SIGHUP` to the session's process group — which reaches whatever the
 agent itself started, as `SIGKILL` to the direct child would not — then a short wait, then a kill for
 what is left. The two seconds `shutdown` itself waits are the ceiling on a *wedged worker*, the same
 one `settings.js` puts on its close-time flush: the window always closes, and a worker that never
-answers costs the cleanup, not the app. Anything that outruns that, or that the app never got a
-chance to signal, is an orphan; for the sessions a *run* started, the next launch finds them again
-through the registry in `.claude/rules/runs.md`, the one place a session's pid is written down.
-**None of that changed**, and nothing here brings a process back: a daemon or a tmux-shaped PTY
-holder is the only shape where one really survives, and the PTY master fd dies with the app process,
-so a surviving agent would be one this app can neither read nor write.
+answers costs the cleanup, not the app.
+
+**A group signal alone left one thing behind, and smetana-kkz2 is why.** `setsid`, `nohup` and a
+shell's own `&` all take what they start out of the session's process group on purpose, so a
+background `yes` left running inside a session outlived that session's own exit, its removal and even
+the app's, with nothing left in any group to say it had ever belonged to this app at all — a machine
+was found still running twenty of them, at pgid 1, hours after the run that started them had closed.
+`build_command` in `pty.rs` now puts `SMETANA_SESSION` (this app's own pid, its start stamp, and the
+session's id) on every agent session's own environment, never on a person's own shell — an environment
+variable is inherited by every descendant whatever group it asked for, and survives the reparent under
+pid 1 that takes the group away. `runs::procs` reads it back: `marked` finds every process carrying one
+exact value, and `strays` narrows that to the ones whose own app half — the pid and stamp the mark
+opens with — no longer names a live Smetana, which is what lets a sweep act without ever having to
+trust a bare pid. Four moments in `terminal::service` ask it, each hanging up by pid rather than by
+group and waiting out the same grace `shutdown` already gives a group, then killing what is left: an
+agent's session ending on its own (`absorb`'s `Chunk::Gone`), a person removing its row
+(`Request::Remove`), the app's own exit (`kill_all`, signalled and waited on beside the groups), and
+the app's own start (`sweep_strays`, a task of its own so a stray left over from last night never
+delays the first session this launch starts) — which is what finally reaches a `yes` left behind by a
+`kill -9`, since nothing at the other three moments ever got the chance to run at all. Only a process
+this reads as `Unknown` — a platform `runs::procs` cannot answer for, Windows among them — is left
+exactly as before: an unreadable answer is never a reason to hang something up, the same rule
+`registry::sweep` already keeps for a run's own process groups.
+
+Anything that outruns all four of those is a true orphan; for the sessions a *run* started, the next
+launch finds them again through the registry in `.claude/rules/runs.md`, the one place a session's pid
+is written down. **None of that changed**, and nothing here brings a process back: a daemon or a
+tmux-shaped PTY holder is the only shape where one really survives, and the PTY master fd dies with the
+app process, so a surviving agent would be one this app can neither read nor write.
 
 What survives is a **record**, in `.smetana/agents.json` in the project folder beside `runs.json` and
 outside the repository — `terminal::restore`, read by `terminal_restorable` and taken away by
