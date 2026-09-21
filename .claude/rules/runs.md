@@ -126,6 +126,17 @@ Which Codex CLI version this needs, and what an older one does instead, is a fac
 rather than about a run's own policy, so it is held once, in `.claude/rules/agents.md`, and not
 repeated here.
 
+**`VITEST_MAX_WORKERS` reads the identical field, for the identical reason, one layer further out.**
+`terminal::pty::build_command` sets it in every agent session's environment — a person's own session
+and every harness alike, not only Codex's — to `max(1, (available_parallelism − 1) / N)`, with `N`
+the same `settings.max_parallel_tasks` after `spawn_batch`'s own reduction for `Intent::Run`, and `1`
+for Solo and for every session that is not a run at all. A machine's fans spinning up under two
+projects' runs at once traced back to `vitest`'s own default of nearly every core per `npm test`
+invocation, so the fix sits beside this one rather than in either project's `vitest.config.js`: a
+batch working on several tasks at once divides the machine the same way this file's own concurrency
+line already does, and a person's own manually opened session, carrying no batch at all, keeps
+vitest's ordinary default.
+
 **Stopping is cooperative, and that is a decision with a cost attached.** `request_stop` sets a flag
 and the loop reads it between batches; the batch in flight is allowed to finish, because a run
 interrupted between a merge and a close is exactly the state the recovery phase exists to clean up. A
