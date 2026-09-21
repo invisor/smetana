@@ -941,6 +941,10 @@ const galleryUsage = [
   {
     state: 'read',
     agent: 'codex',
+    // The app-server source names its own windows outright — see
+    // `runs::usage::AgentUsage::Read` — which is what lets this fixture draw
+    // one slot rather than a dash for the week it never sent.
+    enumeratesWindows: true,
     usage: { sessionPct: 10, sessionLabel: '5 hours', sessionReset: 'Aug 7 at 8pm (Europe/Moscow)', weekPct: null, weekLabel: null, weekReset: null },
     band: 'normal'
   },
@@ -2379,6 +2383,10 @@ const galleryConversationPanel = ref(true)
 const galleryAgentUsage = {
   state: 'read',
   agent: 'codex',
+  // `usageLines` drops a null half on its own regardless of this field, so
+  // nothing changes on screen here — it is carried so the fixture matches
+  // the shape Rust actually sends for this source.
+  enumeratesWindows: true,
   usage: {
     sessionPct: 10,
     sessionLabel: '5 hours',
