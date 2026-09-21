@@ -742,7 +742,15 @@ mod tests {
     /// `seen` is there or not, for any input this test could construct
     /// short of instrumenting the read itself. Naming a project twice in the
     /// call below is therefore left out rather than kept as a line that
-    /// looked like it was proving something it could not.
+    /// looked like it was proving something it could not. `seen` is not
+    /// dead weight for it, though: `lib.rs` builds the `known_projects` this
+    /// function is actually called with by chaining `settings.open_projects`
+    /// with the initial project, and the initial project is normally
+    /// already in `open_projects` too, so a duplicate path is the ordinary
+    /// shape of that call in production — `seen` is what keeps this
+    /// function from reading and re-parsing that project's file twice on
+    /// every launch, a saving this test's black-box return value was never
+    /// going to be able to show either way.
     ///
     /// macOS only: `Record.coalition` is written nowhere else, and the
     /// non-macOS half of `dead_writer_coalitions` is the fixed `Vec::new()`

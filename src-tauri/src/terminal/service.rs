@@ -575,11 +575,15 @@ async fn sweep_strays() {
 #[cfg(target_os = "macos")]
 async fn sweep_coalitions(coalitions: Vec<u64>) {
     // Named for the identical reason `mac_app_exit_candidates` names its own
-    // answer: an empty sweep here can mean no project has ever held a run,
-    // that every dead writer's own coalition read was `Unknown` at the
-    // moment it tried to write one, or that this launch's own read failed —
-    // three different facts an installed build gives nobody but this line
-    // any way to tell apart.
+    // answer, though this one line cannot tell every case apart on its own:
+    // "no dead writer's coalition id on disk" covers both no project having
+    // ever held a run and every one of them having written under an
+    // `Unknown` coalition, since both leave nothing here to distinguish.
+    // What still recovers the difference is that `note_run`'s own write and
+    // this sweep's own read draw on the identical cached
+    // `own_dedicated_coalition` for one launch, so a previous launch's own
+    // "coalition: unknown" line at point 3 (`mac_app_exit_candidates`)
+    // settles which case that launch's project files are actually in.
     if coalitions.is_empty() {
         log::info!(
             "[terminal] start-up coalition sweep: no dead writer's coalition id on disk, nothing to sweep"

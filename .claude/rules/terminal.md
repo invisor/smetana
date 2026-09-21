@@ -812,11 +812,20 @@ transitively parented under that session's own PTY child into two sets kept on t
 (`runs::procs::Descendants`). A descendant that escapes by reparenting under pid 1 leaves the first set's
 reach the instant its own leader exits; it is still found by the second, because a group led by one of a
 session's own descendants can only ever belong to that session or to a session one of its own descendants
-started — no third party could ever join it — which is evidence with no private API behind it at all. Two
-seconds was measured against the incident itself: the `yes` processes lived for the whole of a
-multi-minute `vitest` run under their own bash subshell before that subshell exited, so a poll an order
-of magnitude faster leaves real headroom. What it does **not** catch is a `bash -c 'yes &'` whose own
-parent exits *inside* the two-second gap, entirely between two polls — that one is left to point 3.
+started — no third party could ever join it — which is evidence with no private API behind it at all,
+**once the leader itself has actually been shown to be this session's own** rather than trusted on the
+bare pgid alone: a group is only ever recorded with `leader.pid == root`, or a leader already in the
+first set, and a group whose leader could never be shown to be ours that way is refused outright, so a
+stranger sharing a recycled pid is never swept along with it. The `leader.pid == root` half of that check
+is sound only because the poller itself no longer absorbs against an exited session's own pid: it is
+gated on `live.session.state != Exited` in `terminal::service::poll_mac_descendants`, so root's own pid
+cannot yet have been handed to somebody else while its session is still not `Exited`, since nothing has
+reaped that child to give the kernel the pid back — two guards from two different rounds of hardening,
+each holding the other up. Two seconds was measured against the incident itself: the `yes` processes
+lived for the whole of a multi-minute `vitest` run under their own bash subshell before that subshell
+exited, so a poll an order of magnitude faster leaves real headroom. What it does **not** catch is a
+`bash -c 'yes &'` whose own parent exits *inside* the two-second gap, entirely between two polls — that
+one is left to point 3.
 
 *Points 3 and 4* — a whole app instance's own leavings, dead or alive — read the macOS resource
 *coalition* every process the app starts shares: `proc_pidinfo(pid, 20, …)`, a private call into a

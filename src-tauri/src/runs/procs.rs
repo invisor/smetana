@@ -1636,13 +1636,26 @@ mod tests {
         );
     }
 
-    /// The other side of the same filter: a leader two levels under root,
-    /// walked in the identical poll that discovers it, must still be
-    /// recorded — the two-pass shape of `absorb` (every walked entry folded
-    /// into `seen` before any leader is looked up) exists so this does not
-    /// depend on which order the walk happens to return entries in. A
-    /// sibling that joins the group later, and is never itself walked from
-    /// root at all, is then found purely through it.
+    /// The `seen` branch of `absorb`'s own ownership filter, pinned
+    /// directly: a leader two levels under root (pid 200, its own pgid —
+    /// it called `setsid` itself) is neither `root` nor found any other way
+    /// but through `self.seen`, populated by the first pass over the whole
+    /// walk before any leader is looked up. Narrow the filter to
+    /// `leader.pid == root` alone and this goes red. A sibling that joins
+    /// the group later, and is never itself walked from root at all, is
+    /// then found purely through the recorded leader.
+    ///
+    /// **What this does not pin, despite its own name**: `descendants_by_ppid`
+    /// is a DFS that yields a parent before its children, and in this
+    /// fixture every walked entry is its own group's leader (`pid == pgid`
+    /// for both 199 and 200), so a single-pass `absorb` — insert into
+    /// `seen`, then immediately check that very entry's own leadership —
+    /// would answer this fixture identically; revert the two-pass
+    /// restructuring and this test stays green. A test that actually needed
+    /// two passes would have to build the shape they exist for: a member
+    /// whose group *leader is a sibling rather than an ancestor*, walked
+    /// after that member in the snapshot's own order — a job-control
+    /// pipeline this fixture does not construct.
     #[cfg(target_os = "macos")]
     #[test]
     fn absorb_records_a_deeper_leader_walked_in_the_same_poll() {
