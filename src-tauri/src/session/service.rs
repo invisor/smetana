@@ -559,7 +559,7 @@ fn spawn_session(
             // app-server additionally receives each path as a localImage.
             // Passing them through here keeps that delivery decision in the
             // driver rather than making a second opening path in the worker.
-            let bytes = talking.driver.send(Input::Message { text, attachments: opening_attachments.clone() });
+            let bytes = talking.driver.opening_input(Input::Message { text, attachments: opening_attachments.clone() });
             if talking.stdin.send(bytes).is_err() {
                 log::warn!("[session {id}] the child stopped reading before its brief was written");
             }

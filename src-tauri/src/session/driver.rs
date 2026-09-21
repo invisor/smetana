@@ -71,6 +71,11 @@ pub trait Driver: Send {
     /// A person's message, as bytes for the child's stdin.
     fn send(&mut self, input: Input) -> Vec<u8>;
 
+    /// The worker's opening turn. Drivers whose composed prompt already names
+    /// attachments can drop their transport list here; app-server Codex keeps
+    /// it to emit one localImage per path.
+    fn opening_input(&mut self, input: Input) -> Vec<u8> { self.send(input) }
+
     /// A person's answer to a question. Some harnesses answer over stdin, some
     /// over a channel of their own; `None` means this one needs no bytes here
     /// and the worker should look to the driver's own side channel.

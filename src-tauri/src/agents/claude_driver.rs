@@ -594,6 +594,11 @@ impl Driver for ClaudeDriver {
         bytes
     }
 
+    fn opening_input(&mut self, input: Input) -> Vec<u8> {
+        let Input::Message { text, .. } = input;
+        self.send(Input::Message { text, attachments: Vec::new() })
+    }
+
     fn answer(&mut self, _id: &str, _decision: Decision, _answers: Option<std::collections::BTreeMap<String, String>>) -> Option<Vec<u8>> {
         // This harness answers through the permission listener, not over stdin,
         // so there are no bytes for the worker to write here.
