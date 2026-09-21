@@ -18,16 +18,18 @@ pub struct CodexDriver {
     active_turn: Option<String>,
     tickets: std::collections::BTreeMap<String, (Value, String)>,
     items: std::collections::BTreeMap<String, String>,
+    pending: std::collections::BTreeMap<u64, String>,
 }
 
 impl CodexDriver {
     pub fn new(_permission: Option<crate::session::permission::PermissionTicket>) -> Self {
-        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None)), active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new() }
+        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None)), active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), pending: std::collections::BTreeMap::new() }
     }
 
     fn request(&mut self, method: &str, params: Value) -> Vec<u8> {
         let id = self.next_id;
         self.next_id += 1;
+        self.pending.insert(id, method.to_owned());
         let mut bytes = serde_json::to_vec(&json!({"jsonrpc":"2.0", "id":id, "method":method, "params":params})).unwrap_or_default();
         bytes.push(b'\n');
         bytes
@@ -67,31 +69,36 @@ impl Driver for CodexDriver {
         let mut events = Vec::new();
         for line in self.lines.feed(bytes) {
             let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
+            let response = message.get("id").and_then(Value::as_u64).and_then(|id| self.pending.remove(&id));
             if let Some(error) = message.get("error") {
                 let text = error.get("message").and_then(Value::as_str).unwrap_or("Codex app-server protocol error").to_owned();
                 if self.thread.is_none() { self.startup = Some(Err(text.clone())); }
                 events.push(EventKind::Error { text });
                 continue;
             }
-            if message.get("id").and_then(Value::as_u64) == Some(1) {
+            if response.as_deref() == Some("initialize") {
                 let initialized = Self::notification("initialized", json!({}));
                 let (cwd, model) = self.launch.lock().map(|state| state.clone()).unwrap_or_default();
                 let thread = self.request("thread/start", json!({"cwd":cwd, "model":model}));
                 self.queued.extend([initialized, thread]);
                 continue;
             }
-            if let Some(id) = message.pointer("/result/thread/id").and_then(Value::as_str) {
-                self.thread = Some(id.to_owned());
-                self.startup = Some(Ok(()));
-                if let Some(opening) = self.opening.take() {
-                    let turn = self.turn(opening);
-                    self.queued.push(turn);
+            if response.as_deref() == Some("thread/start") {
+                if let Some(id) = message.pointer("/result/thread/id").and_then(Value::as_str) {
+                    self.thread = Some(id.to_owned());
+                    self.startup = Some(Ok(()));
+                    if let Some(opening) = self.opening.take() {
+                        let turn = self.turn(opening);
+                        self.queued.push(turn);
+                    }
+                    continue;
                 }
-                continue;
             }
-            if let Some(id) = message.pointer("/result/turn/id").and_then(Value::as_str) {
-                self.active_turn = Some(id.to_owned());
-                continue;
+            if response.as_deref() == Some("turn/start") {
+                if let Some(id) = message.pointer("/result/turn/id").and_then(Value::as_str) {
+                    self.active_turn = Some(id.to_owned());
+                    continue;
+                }
             }
             match message.get("method").and_then(Value::as_str) {
                 Some("item/started") => if let Some(item) = message.pointer("/params/item") {
@@ -184,7 +191,9 @@ mod tests {
         let ready = driver.outgoing();
         assert_eq!(ready.len(), 2);
         assert!(String::from_utf8_lossy(&ready[1]).contains("thread/start"));
-        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"thread\":{\"id\":\"t\"}}}\n");
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"thread\":{\"id\":\"wrong\"}}}\n");
+        assert!(driver.outgoing().is_empty());
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"thread\":{\"id\":\"t\"}}}\n");
         let turn = String::from_utf8(driver.outgoing().pop().unwrap()).unwrap();
         assert!(turn.contains("localImage"));
         assert!(turn.contains("/tmp/a, b.png"));
