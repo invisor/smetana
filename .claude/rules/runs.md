@@ -107,6 +107,22 @@ delegating it, so a sentence about the model its subagents run on would be this 
 its own instructions about workers that are never going to exist. Both other modes delegate and both
 get it. `agents/prompt.rs`'s tests pin all three cases.
 
+**Codex's own concurrency is a different case from the model line above, and it does reach a
+command line — the lead's own rather than a subagent's.** The model line is a request with nothing
+of ours to enforce it, because a subagent is spawned inside the lead's own harness and there is no
+process of ours to hand a flag to. Codex's native multi-agent is not that: it is a feature of the
+*lead's own* process, so `agents/codex.rs`'s `command` turns it on for that one invocation in Auto
+and Supervised — `--enable multi_agent`, `-c agents.enabled=true` and
+`-c agents.max_concurrent_threads_per_session=<N>` — with `<N>` read off the identical
+`settings.max_parallel_tasks` the prompt's own "work on at most N tasks" line above is built from,
+after the same subscription-limit reduction `spawn_batch` already applied. One field read twice
+rather than a second count of the same number. `-c` overrides Codex's own `~/.codex/config.toml` for
+that invocation alone and writes nothing to it, so a higher or a lower number sitting in that file
+loses either way. Solo carries none of it, for the reason it carries no worker-model line. Claude
+Code has no equivalent switch — whatever spawns its own subagents is not reached by a flag on this
+app's command line either — so this is Codex's alone, and it changes nothing about Phase 2: a task
+still merges one at a time, strictly, under the one merge lock, whatever harness reviewed it.
+
 **Stopping is cooperative, and that is a decision with a cost attached.** `request_stop` sets a flag
 and the loop reads it between batches; the batch in flight is allowed to finish, because a run
 interrupted between a merge and a close is exactly the state the recovery phase exists to clean up. A

@@ -152,6 +152,24 @@ pane of raw JSON costs them the pane. Codex's translator also strips every contr
 reason Claude Code's records — `serde_json` decodes an escaped escape or bell into a live byte, and a
 pane specified as plain text must not take colour, cursor movement and a bell out of a transcript.
 
+**Codex's own native multi-agent rides the same command line, invocation-local and only for a
+batch's lead.** `Intent::Run` in `Auto` and `Supervised` gets three overrides on top of
+`exec --json`: `--enable multi_agent`, `-c agents.enabled=true` and
+`-c agents.max_concurrent_threads_per_session=<N>`. `-c key=value` is Codex's own syntax for
+overriding a config value for one invocation, so this reaches no file of the person's —
+`~/.codex/config.toml` is read no differently than before and a higher or a lower number sitting in
+it loses either way, the same boundary `SkillDelivery::Inline` already draws around a person's own
+Codex setup. `<N>` is `settings.max_parallel_tasks` off the same `Launch` `prompt::build` reads a few
+lines later for its own "work on at most N tasks" sentence (`.claude/rules/runs.md`) — one field read
+twice rather than two computations of the same number, which is what keeps the CLI's own cap and the
+prompt's cap from ever naming two different limits. `Solo` gets none of it, for `worker_model`'s own
+reason: nothing is delegated, so a concurrency cap would be a promise about workers that are never
+going to exist. Every other intent this profile builds a command line for — a bare session, a new
+task, a resume, a branch review, a one-shot — stays exactly the single conversation it always was.
+Native multi-agent adds events of its own to the same stream; `transcript_line`'s own catch-all above
+— an event type it has never heard of draws nothing — already covers them without a line written for
+them by name, the same as any other vocabulary word a CLI upgrade adds before this app is taught it.
+
 `oneshot_args` is the only one with no session behind it at all: how this harness is
 asked **one question** and nothing more. Claude Code answers it with the same `-p` `batch_args`
 opens with, and the two are still different questions — that one is "carry this batch out and exit"
