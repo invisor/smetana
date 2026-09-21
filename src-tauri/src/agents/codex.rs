@@ -216,6 +216,18 @@ impl Profile for Codex {
                 cmd.arg(arg);
             }
         }
+        // Every attended launch gets an explicit workspace sandbox, rather
+        // than inheriting the person's global Codex setting. `Auto` already
+        // has the intentionally broader bypass above, so the two must never
+        // be combined.
+        let is_auto_run = matches!(
+            &launch.intent,
+            Intent::Run { settings, .. } if settings.mode == RunMode::Auto
+        );
+        if !is_auto_run {
+            cmd.arg("--sandbox");
+            cmd.arg("workspace-write");
+        }
         // Which model, where somebody has chosen one. Before the prompt for the
         // reason the autonomy arguments above it are — the prompt is positional
         // — and read back through `self.model_args` rather than written out
@@ -302,8 +314,9 @@ impl Profile for Codex {
     /// passed it would get a deprecation warning today and an unknown argument
     /// tomorrow.
     ///
-    /// Nothing in `Supervised` or `Solo`, the same as Claude Code — a person is
-    /// there, and taking their prompts away is taking away what those modes are.
+    /// `Supervised` and `Solo` keep their ordinary approval policy. Their
+    /// explicit `workspace-write` sandbox is applied by `command`, alongside
+    /// every other non-Auto launch.
     fn autonomy(&self, mode: RunMode) -> Autonomy {
         Autonomy {
             args: match mode {
@@ -1402,23 +1415,28 @@ mod tests {
     }
 
     #[test]
-    fn nothing_but_the_binary_and_the_prompt() {
+    fn a_new_task_has_the_binary_workspace_sandbox_and_prompt() {
         // Codex has no per-session flag for a skill library — verified against
-        // 0.146.0 — so anything else on this command line would be a mistake.
+        // 0.146.0. The sandbox is separate: it fixes the workspace access
+        // policy without adding a skill registry.
         let args = argv(&launch(new_task(Stage::Off)));
-        assert_eq!(args.len(), 2);
+        assert_eq!(args.len(), 4);
         assert_eq!(args[0], "codex");
+        assert_eq!(args[1], "--sandbox");
+        assert_eq!(args[2], "workspace-write");
     }
 
     #[test]
     fn a_bare_session_is_the_binary_and_the_language_sentence() {
         // It was the binary alone until the conversation language reached every
         // intent. Still nothing about the work — a bare session has none — and
-        // still no flags, since Codex has no per-session skill mechanism.
+        // its only flags name the workspace sandbox, not a skill mechanism.
         let args = argv(&launch(Intent::Bare));
-        assert_eq!(args.len(), 2);
+        assert_eq!(args.len(), 4);
         assert_eq!(args[0], "codex");
-        assert!(args[1].contains("Talk to me in English"), "{args:?}");
+        assert_eq!(args[1], "--sandbox");
+        assert_eq!(args[2], "workspace-write");
+        assert!(args[3].contains("Talk to me in English"), "{args:?}");
     }
 
     #[test]
@@ -1516,6 +1534,8 @@ mod tests {
             args,
             vec![
                 "codex",
+                "--sandbox",
+                "workspace-write",
                 "-i",
                 "/data/a.png",
                 "-i",
@@ -1571,6 +1591,8 @@ mod tests {
             args,
             vec![
                 "codex".to_owned(),
+                "--sandbox".to_owned(),
+                "workspace-write".to_owned(),
                 "-i".to_owned(),
                 "/data/first image.png".to_owned(),
                 "-i".to_owned(),
@@ -2121,16 +2143,12 @@ mod tests {
     }
 
     #[test]
-    fn an_unattended_batch_gets_the_current_flag_and_never_the_removed_one() {
+    fn an_auto_batch_gets_only_the_current_bypass_flag_and_never_the_removed_one() {
         use crate::runs::model::RunMode;
         let args = argv(&launch(run(RunMode::Auto)));
         assert!(args.iter().any(|a| a == "--dangerously-bypass-approvals-and-sandbox"), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--sandbox"), "{args:?}");
         assert!(!args.iter().any(|a| a == "--full-auto"), "Codex removed it");
-
-        for mode in [RunMode::Supervised, RunMode::Solo] {
-            let args = argv(&launch(run(mode)));
-            assert!(args.len() == 2, "{mode:?}: just the binary and the prompt, {args:?}");
-        }
     }
 
     #[test]
@@ -2162,6 +2180,40 @@ mod tests {
         for intent in [Intent::Bare, Intent::Setup, new_task(Stage::Off)] {
             let args = argv(&launch(intent));
             assert!(!args.iter().any(|a| a == "exec"), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn every_non_auto_launch_explicitly_sandboxes_its_current_workspace() {
+        let launches = [
+            ("ordinary session", launch(Intent::Bare)),
+            ("task creation", launch(new_task(Stage::Off))),
+            ("project setup", launch(Intent::Setup)),
+            (
+                "resumed session",
+                launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", false)),
+            ),
+            (
+                "forked session",
+                launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", true)),
+            ),
+            ("supervised run", launch(run(crate::runs::model::RunMode::Supervised))),
+            ("solo run", launch(run(crate::runs::model::RunMode::Solo))),
+        ];
+
+        for (kind, launch) in launches {
+            let args = argv(&launch);
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair == ["--sandbox", "workspace-write"]),
+                "{kind}: {args:?}"
+            );
+            assert!(
+                !args
+                    .iter()
+                    .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox"),
+                "{kind}: {args:?}"
+            );
         }
     }
 
@@ -2215,7 +2267,7 @@ mod tests {
     }
 
     #[test]
-    fn a_resumed_session_is_the_subcommand_and_the_id_and_nothing_else() {
+    fn a_resumed_session_has_its_subcommand_id_and_workspace_sandbox_without_a_prompt() {
         // The half `resume_args` alone does not buy. Without it the spawn is a
         // bare `codex` in the recorded worktree — and with no prompt either,
         // since `prompt::build` refuses `ResumeSession` one — which is a fresh
@@ -2229,6 +2281,8 @@ mod tests {
                 "codex".to_owned(),
                 "resume".to_owned(),
                 "01a0765f-f205-74d0-8dc9-61006c68767f".to_owned(),
+                "--sandbox".to_owned(),
+                "workspace-write".to_owned(),
             ],
             "no prompt: a resumed conversation already has somebody's words in it"
         );
@@ -2246,6 +2300,8 @@ mod tests {
                 "codex".to_owned(),
                 "fork".to_owned(),
                 "01a0765f-f205-74d0-8dc9-61006c68767f".to_owned(),
+                "--sandbox".to_owned(),
+                "workspace-write".to_owned(),
             ]
         );
         assert!(!args.iter().any(|arg| arg == "resume"), "{args:?}");
