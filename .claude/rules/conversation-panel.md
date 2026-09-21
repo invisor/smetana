@@ -202,12 +202,17 @@ nested block is actually last; a table, a definition list, a rule, or a run of i
 last block draws no caret, recorded as a narrow gap in that file's own header rather than solved.
 
 **Claude Code and Codex both reach this journal.** `driver_for` selects `ClaudeDriver` for Claude and
-`CodexDriver` for Codex's creation-only `Bare`/`NewTask` slice. Codex uses app-server JSON-RPC:
-`item/agentMessage/delta` streams a row, its completed item supplies the authoritative final `Text`,
-and reasoning, command/file output, approvals and token usage arrive through their own app-server
-notifications. A Stop before Codex's `turn/start` response is retained and sent once that response
-supplies the turn id, so the same thread remains usable afterwards. Codex's other manual intents and
-unsupported profiles still take the PTY fallback in `.claude/rules/terminal.md`. Claude Code's half
+`CodexDriver` for every intent a person talks to under Codex, the same as Claude Code — only a harness
+with no codec at all still takes the PTY fallback in `.claude/rules/terminal.md`. Codex uses app-server
+JSON-RPC: `item/agentMessage/delta` streams a row, its completed item supplies the authoritative final
+`Text`, and reasoning, command/file output, approvals and token usage arrive through their own
+app-server notifications. A Stop before Codex's `turn/start` response is retained and sent once that
+response supplies the turn id, so the same thread remains usable afterwards. Resuming a Codex thread
+takes `thread/resume` in place of `thread/start`, a fork takes `thread/fork` with a new id and leaves
+the original untouched, and either way `thread/read` with `includeTurns: true` supplies the history —
+translated through the same event vocabulary `item/completed` already reads, never replayed as the
+turns they once were, since a translated `TurnStart` would pin `state_of` at `running` for good.
+Claude Code's half
 of the wire is `--include-partial-messages` (`agents/claude_driver.rs`'s own header carries the CLI
 flag and the shape it was verified against). A resumed Claude session never replays a stray delta,
 on two guarantees rather than one:

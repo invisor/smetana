@@ -518,8 +518,8 @@ function listenToState() {
 /* Which harnesses this app can drive, and the whole of the list.
 
    A driven session is one whose protocol the worker parses itself, and only
-   Claude Code and Codex creation have drivers. Codex is intentionally limited
-   to Bare and NewTask; other manual Codex intents keep their established PTY.
+   Claude Code and Codex have drivers — each for every intent a person talks
+   to, since `Intent::Run` is the one intent neither harness drives at all.
    Rust repeats that gate after resolving a role override or executable
    substitution, which this inexpensive front-door check cannot see.
 
@@ -559,7 +559,6 @@ function listenToState() {
    Read at the moment it is asked and never cached, which is the whole of
    "changes what starts, not what runs": a panel already on screen goes on being
    a panel, and the next session opens in a terminal. */
-/* Codex's narrower intent gate lives beside driver_for after profile picking. */
 const DRIVEN = ['claude', 'codex']
 
 export const canDrive = (agent) => settings.conversationPanel && DRIVEN.includes(agent)

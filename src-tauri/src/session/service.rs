@@ -336,14 +336,25 @@ fn spawnable(builder: &CommandBuilder) -> Option<tokio::process::Command> {
 /// spawned: the child would run, say everything it had to say in a protocol
 /// nothing here can read, and the conversation on screen would stay empty with
 /// no error anywhere to explain it.
+///
+/// Both harnesses drive every intent this road ever sees — `_intent` is
+/// unread — because `drivable` above already refuses `Intent::Run` before
+/// this is ever called, the one intent no harness drives, and this function
+/// answers a question about the *harness* rather than about the intent.
+/// Codex used to be narrower, driving only `Bare` and `NewTask` while its
+/// other manual intents kept the PTY fallback in `.claude/rules/terminal.md`;
+/// that gate was here, on this arm, until every intent a person talks to
+/// gained a Codex codec of its own (`CodexDriver`'s own `reopen`, for the one
+/// intent — `ResumeSession` — that has nothing of a person's own to open on
+/// but still has history worth showing before anybody types a word).
 fn driver_for(
     profile: &'static dyn Profile,
-    intent: &Intent,
+    _intent: &Intent,
     ticket: Option<super::permission::PermissionTicket>,
 ) -> Option<Box<dyn Driver>> {
     match profile.id() {
         "claude" => Some(Box::new(ClaudeDriver::new(ticket))),
-        "codex" if matches!(intent, Intent::Bare | Intent::NewTask { .. }) => Some(Box::new(CodexDriver::new(ticket))),
+        "codex" => Some(Box::new(CodexDriver::new(ticket))),
         _ => None,
     }
 }
@@ -570,6 +581,19 @@ fn spawn_session(
                 log::warn!("[session {id}] the child stopped reading before its brief was written");
             }
             live.state = state_of(live.journal.events(), true);
+        } else if let Some(bytes) = talking.driver.reopen(&launch) {
+            // `ResumeSession` has nothing of a person's own to open on —
+            // `opening` above answers `None` for it on every driver — but a
+            // resumed or forked conversation still owes its harness a first
+            // word right away: the history it is reopening is worth showing
+            // the moment the panel attaches, not only once somebody types.
+            // Nothing is journalled here: the history itself arrives
+            // asynchronously, translated by the driver once its own protocol
+            // answers, and reaches the journal through the ordinary
+            // `absorb`/`append` path a chunk off the child always takes.
+            if talking.stdin.send(bytes).is_err() {
+                log::warn!("[session {id}] the child stopped reading before it could reopen its conversation");
+            }
         }
     }
     Ok(live)
@@ -1129,5 +1153,75 @@ mod tests {
             batch: 2,
             remove_worktrees: true,
         }));
+    }
+
+    /// The regression matrix smetana-gb7f.2 asks for: every manual intent
+    /// this task added to Codex's own driven road — `EditTask`,
+    /// `ResolveTask`, `FixTask`, `ResolveConflict`, `RepairTracker`,
+    /// `Setup`, `Bootstrap`, `ReviewBranch`, and `ResumeSession` both plain
+    /// and forked — beside the two `driver_for` already served before this
+    /// task, `Bare` and `NewTask`. Codex used to answer `None` here for
+    /// every intent but the first two; the whole point of this table is
+    /// that it no longer does for any of them.
+    #[test]
+    fn codex_now_drives_every_manual_intent_claude_code_already_did() {
+        let codex: &'static dyn crate::agents::Profile = &crate::agents::codex::Codex;
+        let intents = [
+            Intent::Bare,
+            Intent::NewTask {
+                brainstorm: crate::agents::Stage::Off,
+                spec: crate::agents::Stage::Off,
+                plan: crate::agents::Stage::Off,
+                draft: crate::agents::TaskDraft {
+                    text: "Rename the worktree when the branch changes".into(),
+                    issue_type: None,
+                    priority: None,
+                    parent: None,
+                    images: Vec::new(),
+                },
+            },
+            Intent::EditTask { id: "x-1".into(), title: "T".into() },
+            Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
+            Intent::FixTask { id: "x-1".into(), title: "T".into() },
+            Intent::ResolveConflict {
+                repo: "/p".into(),
+                op: crate::vcs::model::OpKind::Merge,
+                ours: "main".into(),
+                theirs: "feature/x".into(),
+                files: vec!["src/main.rs".into()],
+            },
+            Intent::RepairTracker {
+                dir: "/p".into(),
+                bd_version: "1.1.2".into(),
+                command: "bd sync".into(),
+                stderr: "database is older than the binary".into(),
+            },
+            Intent::Setup,
+            Intent::Bootstrap,
+            Intent::ReviewBranch {
+                pairs: vec![crate::agents::ReviewPair { repo: "/p".into(), base: "main".into(), head: "feature/x".into() }],
+                report: ".smetana/reviews/2026-09-21-feature-x".into(),
+                fetch_failed: Vec::new(),
+            },
+            Intent::ResumeSession {
+                id: "9f1c0a2e-0000-4000-8000-000000000000".into(),
+                cwd: "/p".into(),
+                title: None,
+                fork: false,
+            },
+            Intent::ResumeSession {
+                id: "9f1c0a2e-0000-4000-8000-000000000000".into(),
+                cwd: "/p".into(),
+                title: None,
+                fork: true,
+            },
+        ];
+        for intent in &intents {
+            assert!(drivable(intent), "{intent:?} is not Run and must stay drivable");
+            assert!(
+                driver_for(codex, intent, None).is_some(),
+                "codex refused a codec for {intent:?}, which this task widened it to serve",
+            );
+        }
     }
 }

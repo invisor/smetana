@@ -646,10 +646,10 @@ onMounted(initUpdates)
    in the conversation store is where both live, and this file asks it rather
    than reading either.
 
-   **Claude Code takes the driven road while the conversation panel is
-   switched on, and Codex takes it for Bare and NewTask**: the worker parses
-   each protocol and the Agent tab draws a conversation. Codex's other intents
-   and unsupported harnesses keep `createSession` as the PTY fallback. With
+   **Claude Code and Codex both take the driven road while the conversation
+   panel is switched on**: the worker parses each protocol and the Agent tab
+   draws a conversation, for every intent a person talks to. Only an
+   unsupported harness keeps `createSession` as the PTY fallback. With
    `settings.conversationPanel`
    off, `canDrive` answers `false` for every harness and every press lands on
    the `createSession` road below, which is the whole of what that switch does;
@@ -762,8 +762,9 @@ async function startAgent(path, intent) {
 
   if (path === activePath.value) project.sideTab = 'agents'
   /* This is only an inexpensive panel-enabled front door. Rust resolves the
-     actual role and binary, then permits Codex's Bare/NewTask app-server slice
-     or refuses so this function takes the existing PTY fallback. */
+     actual role and binary, then permits the app-server slice for whichever
+     harness actually has a codec (`driver_for`) or refuses so this function
+     takes the existing PTY fallback. */
   if (canDrive(settings.agent)) {
     /* The tab comes forward on the press; the aim follows the id, so a spawn
        that answers leaves the panel on the new conversation and one that does

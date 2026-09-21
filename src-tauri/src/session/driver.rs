@@ -71,6 +71,17 @@ pub trait Driver: Send {
     /// A person's message, as bytes for the child's stdin.
     fn send(&mut self, input: Input) -> Vec<u8>;
 
+    /// Bytes for the child's stdin, written immediately at spawn for a
+    /// session with nothing of a person's own to open on but still owing its
+    /// harness a first word — a resumed or forked conversation, whose history
+    /// is worth showing before anybody has typed anything new. `None` for the
+    /// ordinary case, where the session waits for `opening` or for a person's
+    /// own first message: a harness with no protocol reason to speak first
+    /// simply never overrides this.
+    fn reopen(&mut self, _launch: &Launch) -> Option<Vec<u8>> {
+        None
+    }
+
     /// The worker's opening turn. Drivers whose composed prompt already names
     /// attachments can drop their transport list here; app-server Codex keeps
     /// it to emit one localImage per path.
