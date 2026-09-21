@@ -149,8 +149,14 @@ impl Driver for CodexDriver {
                 Some("turn/completed") => {
                     self.active_turn = None;
                     self.turn_start_pending = false;
-                    if let Some(error) = message.pointer("/params/turn/error/message").and_then(Value::as_str) { events.push(EventKind::Error { text: error.to_owned() }); }
-                    events.push(EventKind::Result { tokens_in: 0, tokens_out: 0, cost_usd: None, ms: message.pointer("/params/turn/durationMs").and_then(Value::as_u64).unwrap_or(0) });
+                    let failed = message.pointer("/params/turn/status").and_then(Value::as_str) == Some("failed");
+                    if let Some(error) = message.pointer("/params/turn/error/message").and_then(Value::as_str) {
+                        events.push(EventKind::Error { text: error.to_owned() });
+                    } else if failed {
+                        events.push(EventKind::Error { text: "Codex turn failed".into() });
+                    } else if !failed {
+                        events.push(EventKind::Result { tokens_in: 0, tokens_out: 0, cost_usd: None, ms: message.pointer("/params/turn/durationMs").and_then(Value::as_u64).unwrap_or(0) });
+                    }
                 },
                 Some("error") => if let Some(text) = message.pointer("/params/error/message").and_then(Value::as_str) { events.push(EventKind::Error { text: text.to_owned() }); },
                 _ => {}
