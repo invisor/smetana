@@ -87,7 +87,7 @@ async function ready() {
         resume: true,
         fork: true,
         clear: false,
-        usage: false,
+        usage: true,
         batch: true,
         oneshot: true
       }

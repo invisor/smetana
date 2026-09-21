@@ -86,13 +86,14 @@ When every open question has an answer, and not before:
    summary for somebody scanning the notes — the real content is in the
    description, and the note points at the decision rather than repeating it.
 
-4. **Then, and only then, unpark it.**
+4. **Then, and only then, return it to the queue and release the run.**
 
    ```sh
-   bd update <id> --status open
+   bd update <id> --status open --assignee ""
    ```
 
-The status is the last write. A session interrupted between the note and the
+This is one atomic command: do not split the status and assignee updates. The
+status is the last write. A session interrupted between the note and the
 description leaves a parked task with a stray note, which costs somebody a
 minute of reading; one that unparks first and is then interrupted puts the task
 back in the queue with the answer written nowhere, and the next agent to take it

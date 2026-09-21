@@ -672,8 +672,10 @@ mod tests {
         let usage = Usage {
             session_pct: Some(12),
             session_reset: None,
+            session_label: None,
             week_pct: Some(40),
             week_reset: None,
+            week_label: None,
         };
         assert_eq!(
             gate(Some(&usage), &Decision::Normal),
@@ -685,7 +687,14 @@ mod tests {
     #[test]
     fn a_pause_carries_the_percentage_it_was_taken_on() {
         let usage =
-            Usage { session_pct: None, session_reset: None, week_pct: Some(96), week_reset: None };
+            Usage {
+                session_pct: None,
+                session_reset: None,
+                session_label: None,
+                week_pct: Some(96),
+                week_reset: None,
+                week_label: None,
+            };
         let line = gate(Some(&usage), &Decision::Pause { pct: 96, resets: None });
         assert!(line.contains("session=unread"), "a line the harness did not print: {line}");
         assert!(line.contains("week=96%"), "{line}");

@@ -121,6 +121,23 @@ describe('the sentence under the rows', () => {
     expect(usageNote(unsupported)).not.toBe(usageNote(unreadable))
   })
 
+  it('gives a safe, actionable reason when the Codex app-server cannot read', () => {
+    expect(usageNote({ state: 'unreadable', agent: 'codex', reason: 'notSignedIn' })).toMatch(/not signed in/)
+    expect(usageNote({ state: 'unreadable', agent: 'codex', reason: 'unsupportedAccount' })).toMatch(/does not provide/)
+    expect(usageNote({ state: 'unreadable', agent: 'codex', reason: 'timedOut' })).toMatch(/too long/)
+    expect(usageNote({ state: 'unreadable', agent: 'claude', reason: 'timedOut' })).not.toMatch(/Codex took too long/)
+  })
+
+  it('uses source-provided Codex window durations instead of fixed session labels', () => {
+    expect(usageLines(read({
+      agent: 'codex',
+      usage: { sessionLabel: '5 hours', weekLabel: '7 days' }
+    }))).toEqual([
+      { name: '5 hours', value: '10% used · resets Aug 7 at 8pm (Europe/Moscow)' },
+      { name: '7 days', value: '20% used · resets Aug 11 at 5:59pm (Europe/Moscow)' }
+    ])
+  })
+
   it('names the empty machine rather than blaming an agent that is not there', () => {
     expect(usageNote(nothingInstalled)).toBe(
       'No agent is installed on this machine, so there is nothing to ask.'

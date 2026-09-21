@@ -17,12 +17,14 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use portable_pty::CommandBuilder;
+use serde_json::Value;
 
 use super::library::read_skill;
 use super::{
     cascade, prompt, Autonomy, ImageDelivery, Intent, Launch, Profile, SkillDelivery, Stage,
 };
 use crate::runs::model::RunMode;
+use crate::runs::usage::Usage;
 use crate::terminal::model::{Question, QuestionOption};
 
 /// The models this harness offers, the id first and the name a person reads
@@ -154,6 +156,14 @@ impl Profile for Codex {
         "codex"
     }
 
+    fn usage_source(&self) -> Option<super::UsageSource> {
+        Some(super::UsageSource::AppServer)
+    }
+
+    fn parse_usage_response(&self, response: &Value) -> Option<Usage> {
+        rate_limits(response)
+    }
+
     fn delivery(&self) -> SkillDelivery {
         SkillDelivery::Inline
     }
@@ -243,6 +253,18 @@ impl Profile for Codex {
                 cmd.arg(arg);
             }
         }
+        // Every attended launch gets an explicit workspace sandbox, rather
+        // than inheriting the person's global Codex setting. `Auto` already
+        // has the intentionally broader bypass above, so the two must never
+        // be combined.
+        let is_auto_run = matches!(
+            &launch.intent,
+            Intent::Run { settings, .. } if settings.mode == RunMode::Auto
+        );
+        if !is_auto_run {
+            cmd.arg("--sandbox");
+            cmd.arg("workspace-write");
+        }
         // Which model, where somebody has chosen one. Before the prompt for the
         // reason the autonomy arguments above it are — the prompt is positional
         // — and read back through `self.model_args` rather than written out
@@ -269,15 +291,28 @@ impl Profile for Codex {
         // and what rides there is what has to end up in the issue description.
         // Read back through `self.images()` rather than written out again, so
         // the flag and the profile's answer about it cannot drift apart.
-        if let (Intent::NewTask { draft, .. }, ImageDelivery::Flag(flag)) =
-            (&launch.intent, self.images())
+        let images_need_prompt_separator =
+            if let (Intent::NewTask { draft, .. }, ImageDelivery::Flag(flag)) =
+                (&launch.intent, self.images())
         {
             for image in &draft.images {
                 cmd.arg(flag);
                 cmd.arg(image);
             }
-        }
+            !draft.images.is_empty()
+        } else {
+            false
+        };
         if let Some(built) = self.prompt_text(launch) {
+            // `-i, --image <FILE>...` accepts more than one value. The
+            // separator is how this CLI distinguishes the final, positional
+            // prompt from another image path; without it, commas in a prompt
+            // can be treated as image separators. It is needed only for a new
+            // task that actually supplied images, so every other invocation
+            // keeps its existing argv.
+            if images_need_prompt_separator {
+                cmd.arg("--");
+            }
             cmd.arg(built);
         }
         cmd
@@ -299,8 +334,9 @@ impl Profile for Codex {
     /// passed it would get a deprecation warning today and an unknown argument
     /// tomorrow.
     ///
-    /// Nothing in `Supervised` or `Solo`, the same as Claude Code — a person is
-    /// there, and taking their prompts away is taking away what those modes are.
+    /// `Supervised` and `Solo` keep their ordinary approval policy. Their
+    /// explicit `workspace-write` sandbox is applied by `command`, alongside
+    /// every other non-Auto launch.
     fn autonomy(&self, mode: RunMode) -> Autonomy {
         Autonomy {
             args: match mode {
@@ -350,12 +386,14 @@ impl Profile for Codex {
         Some(transcript_line)
     }
 
-    /// `codex exec --json`, the same non-interactive form a batch uses and a
-    /// different question: a batch is "carry this out and exit", this is
-    /// "answer this and exit". `--json` is here for the answer's sake rather
-    /// than the stream's — see `oneshot_answer`.
+    /// `codex exec --json --skip-git-repo-check`, the same non-interactive form
+    /// a batch uses and a different question: a batch is "carry this out and
+    /// exit", this is "answer this and exit". `--json` is here for the
+    /// answer's sake rather than the stream's — see `oneshot_answer`. The
+    /// one-shot runs from the app's isolated probe directory, not a repository,
+    /// so it alone skips Codex's repository check.
     fn oneshot_args(&self) -> Option<&'static [&'static str]> {
-        Some(&["exec", "--json"])
+        Some(&["exec", "--json", "--skip-git-repo-check"])
     }
 
     /// The last `agent_message` in the stream, which is Codex's own answer.
@@ -414,6 +452,77 @@ impl Profile for Codex {
         let root = super::codex_sessions::sessions_root()?;
         super::codex_sessions::newest_session_id(&root, cwd, started_after, before)
     }
+}
+
+/// Normalize Codex's account-wide subscription bucket from its app-server
+/// response. The server can additionally report model-specific buckets; those
+/// deliberately do not reach Smetana because a run has one ChatGPT allowance,
+/// not an allowance selected by the model it happened to launch with.
+///
+/// Newer servers return a map keyed by limit id. Older ones return only the
+/// historical `rateLimits` snapshot, which is safe only when it identifies
+/// itself as the Codex bucket (or predates `limitId` altogether).
+pub fn rate_limits(response: &Value) -> Option<Usage> {
+    let snapshot = response
+        .get("rateLimitsByLimitId")
+        .and_then(Value::as_object)
+        .and_then(|buckets| buckets.get("codex"))
+        .or_else(|| response.get("rateLimits").filter(|snapshot| compatible_rate_limits(snapshot)))?;
+
+    let primary = rate_limit_window(snapshot, "primary", "Primary");
+    let secondary = rate_limit_window(snapshot, "secondary", "Secondary");
+    (primary.is_some() || secondary.is_some()).then(|| Usage {
+        session_pct: primary.as_ref().map(|window| window.pct),
+        session_reset: primary.as_ref().and_then(|window| window.resets.clone()),
+        session_label: primary.as_ref().map(|window| window.label.clone()),
+        week_pct: secondary.as_ref().map(|window| window.pct),
+        week_reset: secondary.as_ref().and_then(|window| window.resets.clone()),
+        week_label: secondary.as_ref().map(|window| window.label.clone()),
+    })
+}
+
+fn compatible_rate_limits(snapshot: &Value) -> bool {
+    match snapshot.get("limitId") {
+        None | Some(Value::Null) => true,
+        Some(id) => id.as_str() == Some("codex"),
+    }
+}
+
+struct RateLimitWindow {
+    pct: u8,
+    resets: Option<String>,
+    label: String,
+}
+
+fn rate_limit_window(snapshot: &Value, field: &str, fallback: &str) -> Option<RateLimitWindow> {
+    let window = snapshot.get(field)?.as_object()?;
+    let pct = window.get("usedPercent")?.as_u64().filter(|pct| *pct <= 100)? as u8;
+    let minutes = window.get("windowDurationMins").and_then(Value::as_i64).filter(|mins| *mins > 0);
+    let resets = window.get("resetsAt").and_then(Value::as_i64).filter(|seconds| *seconds >= 0).and_then(reset_at);
+    Some(RateLimitWindow { pct, resets, label: duration_label(minutes, fallback) })
+}
+
+/// Codex names a window by its length, not by a fixed "session" or "week"
+/// vocabulary. Keep that fact with the decoder so the two UI surfaces and the
+/// run gate receive exactly the same two normalized halves.
+fn duration_label(minutes: Option<i64>, fallback: &str) -> String {
+    let Some(minutes) = minutes else { return fallback.to_owned() };
+    if minutes % (24 * 60) == 0 {
+        return plural(minutes / (24 * 60), "day");
+    }
+    if minutes % 60 == 0 {
+        return plural(minutes / 60, "hour");
+    }
+    plural(minutes, "minute")
+}
+
+fn plural(amount: i64, unit: &str) -> String {
+    if amount == 1 { format!("1 {unit}") } else { format!("{amount} {unit}s") }
+}
+
+fn reset_at(seconds: i64) -> Option<String> {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0)
+        .map(|time| time.with_timezone(&chrono::Local).format("%b %-d at %-I:%M%P (%Z)").to_string())
 }
 
 /// The glyph Codex draws against the option the cursor is on: U+203A, a single
@@ -969,6 +1078,56 @@ mod tests {
         }
     }
 
+    #[test]
+    fn rate_limits_reads_only_the_account_wide_codex_bucket() {
+        let response = serde_json::json!({
+            "rateLimitsByLimitId": {
+                "gpt-5.6-sol": { "primary": { "usedPercent": 100, "windowDurationMins": 60 } },
+                "codex": {
+                    "primary": { "usedPercent": 41, "windowDurationMins": 300, "resetsAt": 0 },
+                    "secondary": { "usedPercent": 79, "windowDurationMins": 10080, "resetsAt": 60 }
+                }
+            }
+        });
+        let usage = rate_limits(&response).expect("the Codex bucket is a reading");
+        assert_eq!(usage.session_pct, Some(41));
+        assert_eq!(usage.session_label.as_deref(), Some("5 hours"));
+        assert!(usage.session_reset.is_some());
+        assert_eq!(usage.week_pct, Some(79));
+        assert_eq!(usage.week_label.as_deref(), Some("7 days"));
+        assert!(usage.week_reset.is_some());
+    }
+
+    #[test]
+    fn rate_limits_accepts_the_compatible_legacy_bucket_and_one_window() {
+        let response = serde_json::json!({
+            "rateLimits": { "primary": { "usedPercent": 0, "windowDurationMins": 60 } }
+        });
+        let usage = rate_limits(&response).expect("a missing limit id is the old Codex shape");
+        assert_eq!(usage.session_pct, Some(0));
+        assert_eq!(usage.session_label.as_deref(), Some("1 hour"));
+        assert_eq!(usage.week_pct, None);
+        assert_eq!(usage.week_label, None);
+    }
+
+    #[test]
+    fn rate_limits_refuses_other_buckets_and_invalid_values() {
+        let model_bucket = serde_json::json!({
+            "rateLimits": {
+                "limitId": "gpt-5.6-sol",
+                "primary": { "usedPercent": 99, "windowDurationMins": 60 }
+            }
+        });
+        assert_eq!(rate_limits(&model_bucket), None);
+
+        let invalid = serde_json::json!({
+            "rateLimitsByLimitId": {
+                "codex": { "primary": { "usedPercent": 101, "windowDurationMins": 60 } }
+            }
+        });
+        assert_eq!(rate_limits(&invalid), None);
+    }
+
     /// A line from the middle of each shipped `SKILL.md`, far enough in to be
     /// the body rather than the front matter: finding it in the prompt is the
     /// only proof that the file was read and pasted, not merely named.
@@ -1148,9 +1307,12 @@ mod tests {
     }
 
     #[test]
-    fn a_one_shot_question_is_asked_of_the_non_interactive_form() {
+    fn a_one_shot_question_uses_json_and_skips_the_probe_directory_git_check() {
         use crate::agents::Profile;
-        assert_eq!(Codex.oneshot_args(), Some(&["exec", "--json"][..]));
+        assert_eq!(
+            Codex.oneshot_args(),
+            Some(&["exec", "--json", "--skip-git-repo-check"][..])
+        );
     }
 
     #[test]
@@ -1273,12 +1435,15 @@ mod tests {
     }
 
     #[test]
-    fn nothing_but_the_binary_and_the_prompt() {
+    fn a_new_task_has_the_binary_workspace_sandbox_and_prompt() {
         // Codex has no per-session flag for a skill library — verified against
-        // 0.146.0 — so anything else on this command line would be a mistake.
+        // 0.146.0. The sandbox is separate: it fixes the workspace access
+        // policy without adding a skill registry.
         let args = argv(&launch(new_task(Stage::Off)));
-        assert_eq!(args.len(), 2);
+        assert_eq!(args.len(), 4);
         assert_eq!(args[0], "codex");
+        assert_eq!(args[1], "--sandbox");
+        assert_eq!(args[2], "workspace-write");
     }
 
     #[test]
@@ -1303,11 +1468,13 @@ mod tests {
     fn a_bare_session_is_the_binary_and_the_language_sentence() {
         // It was the binary alone until the conversation language reached every
         // intent. Still nothing about the work — a bare session has none — and
-        // still no flags, since Codex has no per-session skill mechanism.
+        // its only flags name the workspace sandbox, not a skill mechanism.
         let args = argv(&launch(Intent::Bare));
-        assert_eq!(args.len(), 2);
+        assert_eq!(args.len(), 4);
         assert_eq!(args[0], "codex");
-        assert!(args[1].contains("Talk to me in English"), "{args:?}");
+        assert_eq!(args[1], "--sandbox");
+        assert_eq!(args[2], "workspace-write");
+        assert!(args[3].contains("Talk to me in English"), "{args:?}");
     }
 
     #[test]
@@ -1403,9 +1570,77 @@ mod tests {
 
         assert_eq!(
             args,
-            vec!["codex", "-i", "/data/a.png", "-i", "/data/b.png", args.last().unwrap()],
+            vec![
+                "codex",
+                "--sandbox",
+                "workspace-write",
+                "-i",
+                "/data/a.png",
+                "-i",
+                "/data/b.png",
+                "--",
+                args.last().unwrap(),
+            ],
             "the prompt is positional and everything else goes in front of it: {args:?}"
         );
+    }
+
+    #[test]
+    fn image_flags_are_separated_from_one_literal_composed_prompt() {
+        let user_text = "Keep commas, intact, across lines.\nUse `literal` text.";
+        let intent = Intent::NewTask {
+            brainstorm: Stage::Off,
+            spec: Stage::Off,
+            plan: Stage::Off,
+            draft: TaskDraft {
+                text: user_text.to_owned(),
+                issue_type: Some("bug".into()),
+                priority: Some(2),
+                images: vec![
+                    "/data/first image.png".into(),
+                    "/data/second image.png".into(),
+                ],
+                parent: None,
+            },
+        };
+        let launched = launch(intent.clone());
+        let args = argv(&launched);
+        let filing = read_skill(&launched.skills.smetana, "filing-a-task");
+        let expected = prompt::build(
+            &intent,
+            Codex.delivery(),
+            Codex.images(),
+            &launched.skills,
+            launched.facts.as_deref(),
+            prompt::SkillText {
+                filing: filing.as_deref(),
+                resolving: None,
+                brainstorming: None,
+                plans: None,
+                reviewing_branch: None,
+            },
+            &launched.languages,
+            &launched.agent_prompt,
+            launched.worker_model.as_deref(),
+        )
+        .expect("a new task has a prompt");
+
+        assert_eq!(
+            args,
+            vec![
+                "codex".to_owned(),
+                "--sandbox".to_owned(),
+                "workspace-write".to_owned(),
+                "-i".to_owned(),
+                "/data/first image.png".to_owned(),
+                "-i".to_owned(),
+                "/data/second image.png".to_owned(),
+                "--".to_owned(),
+                expected.clone(),
+            ]
+        );
+        assert_eq!(args.last(), Some(&expected));
+        assert!(expected.contains(user_text));
     }
 
     #[test]
@@ -1420,6 +1655,7 @@ mod tests {
     fn a_task_with_no_images_gets_no_image_flag() {
         let args = argv(&launch(new_task(Stage::Off)));
         assert!(!args.iter().any(|a| a == "-i"), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--"), "{args:?}");
     }
 
     // The four fixtures below are whole 120x30 screens captured off a real
@@ -1945,16 +2181,12 @@ mod tests {
     }
 
     #[test]
-    fn an_unattended_batch_gets_the_current_flag_and_never_the_removed_one() {
+    fn an_auto_batch_gets_only_the_current_bypass_flag_and_never_the_removed_one() {
         use crate::runs::model::RunMode;
         let args = argv(&launch(run(RunMode::Auto)));
         assert!(args.iter().any(|a| a == "--dangerously-bypass-approvals-and-sandbox"), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--sandbox"), "{args:?}");
         assert!(!args.iter().any(|a| a == "--full-auto"), "Codex removed it");
-
-        for mode in [RunMode::Supervised, RunMode::Solo] {
-            let args = argv(&launch(run(mode)));
-            assert!(args.len() == 2, "{mode:?}: just the binary and the prompt, {args:?}");
-        }
     }
 
     #[test]
@@ -1986,6 +2218,40 @@ mod tests {
         for intent in [Intent::Bare, Intent::Setup, new_task(Stage::Off)] {
             let args = argv(&launch(intent));
             assert!(!args.iter().any(|a| a == "exec"), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn every_non_auto_launch_explicitly_sandboxes_its_current_workspace() {
+        let launches = [
+            ("ordinary session", launch(Intent::Bare)),
+            ("task creation", launch(new_task(Stage::Off))),
+            ("project setup", launch(Intent::Setup)),
+            (
+                "resumed session",
+                launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", false)),
+            ),
+            (
+                "forked session",
+                launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", true)),
+            ),
+            ("supervised run", launch(run(crate::runs::model::RunMode::Supervised))),
+            ("solo run", launch(run(crate::runs::model::RunMode::Solo))),
+        ];
+
+        for (kind, launch) in launches {
+            let args = argv(&launch);
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair == ["--sandbox", "workspace-write"]),
+                "{kind}: {args:?}"
+            );
+            assert!(
+                !args
+                    .iter()
+                    .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox"),
+                "{kind}: {args:?}"
+            );
         }
     }
 
@@ -2039,7 +2305,7 @@ mod tests {
     }
 
     #[test]
-    fn a_resumed_session_is_the_subcommand_and_the_id_and_nothing_else() {
+    fn a_resumed_session_has_its_subcommand_id_and_workspace_sandbox_without_a_prompt() {
         // The half `resume_args` alone does not buy. Without it the spawn is a
         // bare `codex` in the recorded worktree — and with no prompt either,
         // since `prompt::build` refuses `ResumeSession` one — which is a fresh
@@ -2053,6 +2319,8 @@ mod tests {
                 "codex".to_owned(),
                 "resume".to_owned(),
                 "01a0765f-f205-74d0-8dc9-61006c68767f".to_owned(),
+                "--sandbox".to_owned(),
+                "workspace-write".to_owned(),
             ],
             "no prompt: a resumed conversation already has somebody's words in it"
         );
@@ -2070,6 +2338,8 @@ mod tests {
                 "codex".to_owned(),
                 "fork".to_owned(),
                 "01a0765f-f205-74d0-8dc9-61006c68767f".to_owned(),
+                "--sandbox".to_owned(),
+                "workspace-write".to_owned(),
             ]
         );
         assert!(!args.iter().any(|arg| arg == "resume"), "{args:?}");
