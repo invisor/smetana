@@ -17,12 +17,14 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use portable_pty::CommandBuilder;
+use serde_json::Value;
 
 use super::library::read_skill;
 use super::{
     cascade, prompt, Autonomy, ImageDelivery, Intent, Launch, Profile, SkillDelivery, Stage,
 };
 use crate::runs::model::RunMode;
+use crate::runs::usage::Usage;
 use crate::terminal::model::{Question, QuestionOption};
 
 /// The models this harness offers, the id first and the name a person reads
@@ -83,6 +85,14 @@ impl Profile for Codex {
 
     fn binary(&self) -> &'static str {
         "codex"
+    }
+
+    fn usage_source(&self) -> Option<super::UsageSource> {
+        Some(super::UsageSource::AppServer)
+    }
+
+    fn parse_usage_response(&self, response: &Value) -> Option<Usage> {
+        rate_limits(response)
     }
 
     fn delivery(&self) -> SkillDelivery {
@@ -407,6 +417,77 @@ impl Profile for Codex {
         let root = super::codex_sessions::sessions_root()?;
         super::codex_sessions::newest_session_id(&root, cwd, started_after, before)
     }
+}
+
+/// Normalize Codex's account-wide subscription bucket from its app-server
+/// response. The server can additionally report model-specific buckets; those
+/// deliberately do not reach Smetana because a run has one ChatGPT allowance,
+/// not an allowance selected by the model it happened to launch with.
+///
+/// Newer servers return a map keyed by limit id. Older ones return only the
+/// historical `rateLimits` snapshot, which is safe only when it identifies
+/// itself as the Codex bucket (or predates `limitId` altogether).
+pub fn rate_limits(response: &Value) -> Option<Usage> {
+    let snapshot = response
+        .get("rateLimitsByLimitId")
+        .and_then(Value::as_object)
+        .and_then(|buckets| buckets.get("codex"))
+        .or_else(|| response.get("rateLimits").filter(|snapshot| compatible_rate_limits(snapshot)))?;
+
+    let primary = rate_limit_window(snapshot, "primary", "Primary");
+    let secondary = rate_limit_window(snapshot, "secondary", "Secondary");
+    (primary.is_some() || secondary.is_some()).then(|| Usage {
+        session_pct: primary.as_ref().map(|window| window.pct),
+        session_reset: primary.as_ref().and_then(|window| window.resets.clone()),
+        session_label: primary.as_ref().map(|window| window.label.clone()),
+        week_pct: secondary.as_ref().map(|window| window.pct),
+        week_reset: secondary.as_ref().and_then(|window| window.resets.clone()),
+        week_label: secondary.as_ref().map(|window| window.label.clone()),
+    })
+}
+
+fn compatible_rate_limits(snapshot: &Value) -> bool {
+    match snapshot.get("limitId") {
+        None | Some(Value::Null) => true,
+        Some(id) => id.as_str() == Some("codex"),
+    }
+}
+
+struct RateLimitWindow {
+    pct: u8,
+    resets: Option<String>,
+    label: String,
+}
+
+fn rate_limit_window(snapshot: &Value, field: &str, fallback: &str) -> Option<RateLimitWindow> {
+    let window = snapshot.get(field)?.as_object()?;
+    let pct = window.get("usedPercent")?.as_u64().filter(|pct| *pct <= 100)? as u8;
+    let minutes = window.get("windowDurationMins").and_then(Value::as_i64).filter(|mins| *mins > 0);
+    let resets = window.get("resetsAt").and_then(Value::as_i64).filter(|seconds| *seconds >= 0).and_then(reset_at);
+    Some(RateLimitWindow { pct, resets, label: duration_label(minutes, fallback) })
+}
+
+/// Codex names a window by its length, not by a fixed "session" or "week"
+/// vocabulary. Keep that fact with the decoder so the two UI surfaces and the
+/// run gate receive exactly the same two normalized halves.
+fn duration_label(minutes: Option<i64>, fallback: &str) -> String {
+    let Some(minutes) = minutes else { return fallback.to_owned() };
+    if minutes % (24 * 60) == 0 {
+        return plural(minutes / (24 * 60), "day");
+    }
+    if minutes % 60 == 0 {
+        return plural(minutes / 60, "hour");
+    }
+    plural(minutes, "minute")
+}
+
+fn plural(amount: i64, unit: &str) -> String {
+    if amount == 1 { format!("1 {unit}") } else { format!("{amount} {unit}s") }
+}
+
+fn reset_at(seconds: i64) -> Option<String> {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0)
+        .map(|time| time.with_timezone(&chrono::Local).format("%b %-d at %-I:%M%P (%Z)").to_string())
 }
 
 /// The glyph Codex draws against the option the cursor is on: U+203A, a single
@@ -960,6 +1041,56 @@ mod tests {
             model: None,
             worker_model: None,
         }
+    }
+
+    #[test]
+    fn rate_limits_reads_only_the_account_wide_codex_bucket() {
+        let response = serde_json::json!({
+            "rateLimitsByLimitId": {
+                "gpt-5.6-sol": { "primary": { "usedPercent": 100, "windowDurationMins": 60 } },
+                "codex": {
+                    "primary": { "usedPercent": 41, "windowDurationMins": 300, "resetsAt": 0 },
+                    "secondary": { "usedPercent": 79, "windowDurationMins": 10080, "resetsAt": 60 }
+                }
+            }
+        });
+        let usage = rate_limits(&response).expect("the Codex bucket is a reading");
+        assert_eq!(usage.session_pct, Some(41));
+        assert_eq!(usage.session_label.as_deref(), Some("5 hours"));
+        assert!(usage.session_reset.is_some());
+        assert_eq!(usage.week_pct, Some(79));
+        assert_eq!(usage.week_label.as_deref(), Some("7 days"));
+        assert!(usage.week_reset.is_some());
+    }
+
+    #[test]
+    fn rate_limits_accepts_the_compatible_legacy_bucket_and_one_window() {
+        let response = serde_json::json!({
+            "rateLimits": { "primary": { "usedPercent": 0, "windowDurationMins": 60 } }
+        });
+        let usage = rate_limits(&response).expect("a missing limit id is the old Codex shape");
+        assert_eq!(usage.session_pct, Some(0));
+        assert_eq!(usage.session_label.as_deref(), Some("1 hour"));
+        assert_eq!(usage.week_pct, None);
+        assert_eq!(usage.week_label, None);
+    }
+
+    #[test]
+    fn rate_limits_refuses_other_buckets_and_invalid_values() {
+        let model_bucket = serde_json::json!({
+            "rateLimits": {
+                "limitId": "gpt-5.6-sol",
+                "primary": { "usedPercent": 99, "windowDurationMins": 60 }
+            }
+        });
+        assert_eq!(rate_limits(&model_bucket), None);
+
+        let invalid = serde_json::json!({
+            "rateLimitsByLimitId": {
+                "codex": { "primary": { "usedPercent": 101, "windowDurationMins": 60 } }
+            }
+        });
+        assert_eq!(rate_limits(&invalid), None);
     }
 
     /// A line from the middle of each shipped `SKILL.md`, far enough in to be

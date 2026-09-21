@@ -357,13 +357,16 @@ rather than starting a fresh agent in that worktree. It does **not** reach the S
 `src-tauri/src/sessions/` reads `~/.claude/projects` and parses Claude Code's transcript format;
 Codex writes a different format in a different place, so with Codex configured that tab lists nothing
 and its cards' Resume and Fork rows are not the road this capability is reached by. A second source
-for that tab is its own subsystem and deliberately not part of this. So is reading Codex's allowance:
-it writes `rate_limits` — a `primary` five-hour window and a `secondary` weekly one, each with
-`used_percent` and `resets_at`, which is exactly the pair `runs::usage::Usage` carries — into that
-same rollout file, but that would be a **second kind of source on `Profile`** (a file rather than a
-command) and a separate decision about how stale a reading may be. `usage_command` and `parse_usage`
-therefore stay `None` for Codex, and the Subscription block says the allowance could not be read
-rather than inventing zeroes (smetana-7rp).
+for that tab is its own subsystem and deliberately not part of this. Codex's allowance is separate
+from that transcript source too, but it is now supported: `UsageSource::AppServer` starts local
+`codex app-server --stdio` in the app-owned probe directory, completes the read-only JSON-RPC
+handshake, and reads `account/rateLimits/read`. It first checks structured `account/read`, so a
+missing login and a non-ChatGPT account have safe, actionable states without parsing error prose.
+Only `rateLimitsByLimitId["codex"]` reaches `runs::usage::Usage`; the compatible legacy
+`rateLimits` shape is accepted only for `limitId: codex` or no id, and model buckets never affect
+the footer or the run gate. The direct app-server child is always killed and reaped; a reader whose
+pipe a descendant holds is deliberately not joined on failure, because a sixty-second probe may
+not become an unbounded wait. Claude Code keeps `usage_command` and `parse_usage` unchanged.
 
 ## One catalogue, instead of four lists
 
