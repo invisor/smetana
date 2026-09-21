@@ -342,18 +342,34 @@ fn tool_result_outcome(kind: &str, item: &Value) -> (bool, String) {
             // nullable and carries no stated relationship to `status` in the
             // schema, so a completed call that also happens to carry an
             // `error` (a warning inside a success, say) must not draw a
-            // cross the protocol never asked for. `error.message`, where it
-            // exists, is still the best one-line account of what happened
-            // and is preferred over `result`'s own text for the summary —
-            // a note about the call, not the verdict on it, which `status`
-            // alone remains. `result.content` is an MCP `CallToolResult`
-            // list of opaque items; its first entry's own `text` is read
-            // where one exists and where there is no note to prefer.
-            let ok = item.get("status").and_then(Value::as_str) != Some("failed");
-            let summary = item
-                .pointer("/error/message")
-                .and_then(Value::as_str)
-                .or_else(|| item.pointer("/result/content/0/text").and_then(Value::as_str))
+            // cross the protocol never asked for. The summary prefers
+            // `error.message` only while `status` actually says `failed`:
+            // a failed call's error is the whole account of what went
+            // wrong and is shown ahead of whatever `result` might still
+            // hold, while a completed call's own `result` is what it
+            // returned and is shown ahead of an `error` riding along
+            // beside it as a note — reading `error` first unconditionally
+            // hid a tool's own answer behind a warning it also happened to
+            // carry. `result.content` is an MCP `CallToolResult` list of
+            // opaque items; its first entry's own `text` is read where one
+            // exists, and a completed call with a note but no result text
+            // still falls to that note rather than to nothing.
+            //
+            // **One MCP failure cannot be caught here, and it is not new to
+            // this arm.** `McpToolCallResult` in this schema carries only
+            // `content`, `structuredContent` and `_meta` — no `isError` —
+            // so the ordinary MCP failure mode, a tool itself reporting
+            // trouble, arrives as `status: "completed"` with the failure
+            // text sitting inside `result.content[0].text` exactly like a
+            // success would, and draws a tick. That signal is not on the
+            // wire at this boundary, so there is nothing in this item for
+            // any arm to read it off; it is the app-server's own shape,
+            // not a gap in this one.
+            let status = item.get("status").and_then(Value::as_str);
+            let ok = status != Some("failed");
+            let error_message = item.pointer("/error/message").and_then(Value::as_str);
+            let result_text = item.pointer("/result/content/0/text").and_then(Value::as_str);
+            let summary = if status == Some("failed") { error_message.or(result_text) } else { result_text.or(error_message) }
                 .unwrap_or("")
                 .lines()
                 .next()
@@ -667,6 +683,21 @@ mod tests {
         assert_eq!(
             completed_with_a_note,
             vec![EventKind::ToolResult { id: "mcp3".into(), ok: true, summary: "partial index, results may be stale".into() }]
+        );
+
+        // A successful call that carries **both** — a result and a note —
+        // shows what it found, not the warning: reading `error` first
+        // unconditionally is the trap this case exists to close, since it
+        // hides the more useful of two strings the row has in hand.
+        let completed_with_a_result_and_a_note = driver.feed(&item_completed(json!({
+            "id": "mcp4", "type": "mcpToolCall", "status": "completed",
+            "server": "docs", "tool": "search_docs", "arguments": {"q": "vue"},
+            "result": {"content": [{"type": "text", "text": "3 matches found"}]},
+            "error": {"message": "partial index, results may be stale"}
+        })));
+        assert_eq!(
+            completed_with_a_result_and_a_note,
+            vec![EventKind::ToolResult { id: "mcp4".into(), ok: true, summary: "3 matches found".into() }]
         );
     }
 
