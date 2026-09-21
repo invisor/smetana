@@ -274,6 +274,11 @@ text:
 - the repository's `gates` from the config, as the commands they must get green
   themselves before reporting done;
 - anything in `[merge].hazards` that bears on what they are about to change;
+- that nothing they start may outlive their report: every background process, watcher,
+  dev server or watch-mode test runner they launched is dead before they say they are
+  done, and no artificial load on the person's machine either — no `yes`, no `stress`,
+  no spinning loop, no re-running the whole suite under load to catch a flake; a flaky
+  test is reported to you, not chased;
 - where questions go: to you, and only to you.
 
 Tell them to root every command at the worktree — `cd <worktree> || exit 1`, never a
