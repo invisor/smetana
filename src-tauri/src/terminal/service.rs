@@ -263,6 +263,17 @@ struct Capture {
 /// Point 4 is Linux's and macOS's alone: Windows costs it nothing at all —
 /// see the module note on `runs::procs`.
 pub fn start(app: AppHandle, known_projects: Vec<PathBuf>) -> TerminalHandle {
+    // Fixes `procs::own_dedicated_coalition`'s answer for the whole of this
+    // launch, before either of its two callers (`mac_app_exit_candidates`
+    // below, `recovery::note_run` whenever a run first starts) can possibly
+    // run — see that function's own header for why the comparison it makes
+    // has to happen while whatever launched this app, if anything did, is
+    // still certain to be alive, and why asking fresh at each caller's own
+    // moment answered the same launch two different ways. A no-op on every
+    // platform but macOS.
+    #[cfg(target_os = "macos")]
+    crate::runs::procs::force_own_dedicated_coalition();
+
     let (tx, mut rx) = mpsc::channel::<Request>(32);
     let (chunks_tx, mut chunks_rx) = mpsc::unbounded_channel::<Chunk>();
     // A way back into this worker for the one answer that arrives after the
@@ -463,7 +474,10 @@ async fn kill_all(sessions: &mut HashMap<SessionId, Live>) {
 /// exclusion this wide, because everything here is ending together.
 #[cfg(target_os = "macos")]
 fn mac_app_exit_candidates(sessions: &HashMap<SessionId, Live>) -> Vec<i32> {
-    let Some(snapshot) = procs::snapshot_all() else { return Vec::new() };
+    let Some(snapshot) = procs::snapshot_all() else {
+        log::info!("[terminal] app exit sweep: snapshot_all unreadable, nothing swept");
+        return Vec::new();
+    };
     let exclude: Vec<i32> = std::iter::once(std::process::id() as i32)
         .chain(sessions.values().filter_map(|live| live.pty.pid().map(|pid| pid as i32)))
         .collect();
@@ -471,12 +485,30 @@ fn mac_app_exit_candidates(sessions: &HashMap<SessionId, Live>) -> Vec<i32> {
     // `own_dedicated_coalition`, not `own_coalition` bare: in a dev build the
     // two answer the identical id, and sweeping that would be sweeping the
     // launching terminal's whole coalition — see that function's own header.
-    if let procs::Coalition::Known(id) = procs::own_dedicated_coalition() {
+    // Read once into a local so the log line below can name what it
+    // answered without asking `getppid` a second time — harmless either way
+    // since the answer is cached, but there is only one fact to state.
+    let coalition = procs::own_dedicated_coalition();
+    if let procs::Coalition::Known(id) = coalition {
         pids.extend(procs::coalition_candidates(&snapshot, id, &exclude));
     }
     for live in sessions.values() {
         pids.extend(live.descendants.candidates(&snapshot, &exclude));
     }
+    // Named so a coalition channel that has gone silently `Unknown` — the
+    // one half of this sweep nothing but a person watching a real installed
+    // build could ever catch being wrongly refused, since an empty sweep
+    // and a channel that answered nothing look identical otherwise — shows
+    // up in the log rather than in a candidate list indistinguishable from
+    // "there was nothing to find".
+    log::info!(
+        "[terminal] app exit sweep: coalition {}, {} candidate(s) found",
+        match coalition {
+            procs::Coalition::Known(id) => format!("answered ({id})"),
+            procs::Coalition::Unknown => "unknown, per-session snapshot only".to_string(),
+        },
+        pids.len()
+    );
     pids.into_iter().collect()
 }
 
@@ -542,14 +574,31 @@ async fn sweep_strays() {
 /// this is a task of its own.
 #[cfg(target_os = "macos")]
 async fn sweep_coalitions(coalitions: Vec<u64>) {
+    // Named for the identical reason `mac_app_exit_candidates` names its own
+    // answer: an empty sweep here can mean no project has ever held a run,
+    // that every dead writer's own coalition read was `Unknown` at the
+    // moment it tried to write one, or that this launch's own read failed —
+    // three different facts an installed build gives nobody but this line
+    // any way to tell apart.
     if coalitions.is_empty() {
+        log::info!(
+            "[terminal] start-up coalition sweep: no dead writer's coalition id on disk, nothing to sweep"
+        );
         return;
     }
-    let Some(snapshot) = procs::snapshot_all() else { return };
+    let Some(snapshot) = procs::snapshot_all() else {
+        log::info!("[terminal] start-up coalition sweep: snapshot_all unreadable, nothing swept");
+        return;
+    };
     let mut pids: std::collections::HashSet<i32> = std::collections::HashSet::new();
-    for id in coalitions {
-        pids.extend(procs::coalition_candidates(&snapshot, id, &[]));
+    for id in &coalitions {
+        pids.extend(procs::coalition_candidates(&snapshot, *id, &[]));
     }
+    log::info!(
+        "[terminal] start-up coalition sweep: {} dead writer coalition(s) on disk, {} candidate(s) found",
+        coalitions.len(),
+        pids.len()
+    );
     reap_marked(pids.into_iter().collect(), "previous app; its own process is gone").await;
 }
 

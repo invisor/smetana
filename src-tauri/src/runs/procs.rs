@@ -678,13 +678,12 @@ pub struct Descendants {
     seen: std::collections::HashSet<(i32, u64)>,
     /// pgid → the `(pid, started)` of whichever snapshot entry once had
     /// `pid == pgid` at the moment this session first folded that group in
-    /// — the group's own leader, as far as this poller ever saw one.
-    /// `None` when no poll ever caught the leader itself in the table at
-    /// all (it had already reparented away, or exited, before the first
-    /// poll to see this group) — read the same permissive way a leader that
-    /// has since exited is, by `group_leader_plausible`, rather than
-    /// dropping the group's own membership for want of a fact nothing here
-    /// could ever have supplied.
+    /// — the group's own leader, as far as this poller ever saw one, and
+    /// only when `absorb` could show that entry was itself provably ours.
+    /// `None` covers every case it could not — nothing at that pid at all,
+    /// or a stranger sitting at it — and `group_leader_plausible` refuses
+    /// every such group outright; see `absorb` and that function's own doc
+    /// for why the permissive reading this used to have was withdrawn.
     groups: std::collections::HashMap<i32, Option<(i32, u64)>>,
 }
 
@@ -700,12 +699,36 @@ impl Descendants {
     /// group had does not change over its life, and a later poll simply
     /// missing it (having already reparented or exited) must not erase what
     /// an earlier one caught.
+    ///
+    /// **The candidate leader is only ever recorded when it is one of
+    /// ours.** A bare `pid == pgid` search over the whole snapshot can find
+    /// a stranger — a pid this session never walked, that merely happens to
+    /// answer for that pgid right now, because the pid the real leader once
+    /// held was already recycled by the time of the very first poll that
+    /// saw the group. Recording that stranger as the leader would then pass
+    /// it *and anything sharing its pgid* for as long as the stranger
+    /// lives, exactly the reused-pid risk this whole guard exists to
+    /// refuse. `root` is trusted directly — it is the session's own PTY
+    /// child, handed in by the one caller that already knows it is alive —
+    /// and everything else must already be in `self.seen`, which is filled
+    /// in a first pass over the whole walk before any leader is looked up,
+    /// so a leader that is walked in this very poll is never missed for
+    /// want of iteration order.
     pub fn absorb(&mut self, snapshot: &[KernProc], root: i32) {
-        for entry in descendants_by_ppid(snapshot, root) {
+        let walked = descendants_by_ppid(snapshot, root);
+        for entry in &walked {
             self.seen.insert((entry.pid, entry.started));
-            self.groups.entry(entry.pgid).or_insert_with(|| {
-                snapshot.iter().find(|p| p.pid == entry.pgid).map(|leader| (leader.pid, leader.started))
-            });
+        }
+        for entry in &walked {
+            if self.groups.contains_key(&entry.pgid) {
+                continue;
+            }
+            let leader = snapshot
+                .iter()
+                .find(|p| p.pid == entry.pgid)
+                .filter(|leader| leader.pid == root || self.seen.contains(&(leader.pid, leader.started)))
+                .map(|leader| (leader.pid, leader.started));
+            self.groups.insert(entry.pgid, leader);
         }
     }
 
@@ -746,10 +769,20 @@ impl Descendants {
 /// group is trusted only while nothing in the table contradicts the one
 /// process this session ever saw lead it.
 ///
-/// `None` — no poll ever caught a leader for this group — passes: there is
-/// no recorded identity to contradict, and refusing every such group would
-/// undo the exact case `groups` exists for, a `setsid` leader whose own
-/// exit was the first thing any poll ever learned about the group at all.
+/// `None` refuses. Absorbing no longer produces it for the case the
+/// permissive reading was written to protect — a `setsid` leader whose own
+/// exit was the first thing any poll ever learned about the group — because
+/// that shape cannot occur: such a leader's children reparent under pid 1
+/// the instant it exits and leave `descendants_by_ppid`'s reach entirely,
+/// so the group could never have been folded in to begin with. What `None`
+/// means now is `absorb` finding a *stranger* at that pgid — a pid this
+/// session never walked, standing in for a leader already gone by the time
+/// of the very first poll that saw the group — and refusing to record it,
+/// exactly a job-control pipeline a non-interactive `bash` never creates.
+/// Trusting the group on the strength of a fact this file could never
+/// establish would buy back the reused-pid risk the pairing exists to
+/// close.
+///
 /// `Some` passes only if the fresh table's own entry for that pid — if
 /// there is one — carries the identical start stamp: gone entirely is the
 /// ordinary shape of a process group outliving its leader on Unix, and is
@@ -759,7 +792,7 @@ impl Descendants {
 /// reused-pid case this whole file exists to refuse a signal to.
 #[cfg(target_os = "macos")]
 fn group_leader_plausible(leader: Option<(i32, u64)>, snapshot: &[KernProc]) -> bool {
-    let Some((pid, started)) = leader else { return true };
+    let Some((pid, started)) = leader else { return false };
     match snapshot.iter().find(|p| p.pid == pid) {
         Some(found) => found.started == started,
         None => true,
@@ -866,25 +899,66 @@ pub fn own_coalition() -> Coalition {
 /// The test: if this process's own coalition is identical to its
 /// **parent's** (`getppid`), nothing distinguished launching this app from
 /// an ordinary fork — a coalition of its own is what launchd gives an
-/// application and a shell never does. `mac_app_exit_candidates` (point 3)
-/// and `recovery::note_run` (point 4) call this rather than `own_coalition`
-/// directly, and both fall back to whatever a session's own accumulated
-/// snapshot already covers when it answers `Unknown` — see the module
-/// header. `own_coalition` itself is unchanged and still answers the bare
-/// fact for any other reader, such as its own test beside it, that wants to
-/// know rather than to act on it.
+/// application and a shell never does.
+///
+/// **What that question is actually about is a fact fixed at launch, and
+/// `getppid` answers a question about right now — those are not the same
+/// question, and asking it fresh at the wrong moment answers it wrong.**
+/// When the process that launched this app exits — the ordinary shape of a
+/// launching terminal tab closing, or of `npm run tauri dev` itself being
+/// stopped — `getppid` starts answering 1 (this process is reparented to
+/// launchd, on Unix, exactly like anything else that loses its parent), and
+/// launchd's own coalition was measured as 1 too, which differs from a
+/// dev-launched app's inherited coalition: the guard would then read
+/// "dedicated" and points 3 and 4 would resume sweeping a coalition that is
+/// still the launching terminal's, shared with every tab — in precisely the
+/// reparent state the four sweep points exist to catch. Worse, the two
+/// callers used to ask fresh at different moments of one launch —
+/// `recovery::own_coalition` on the first `note_run`, `mac_app_exit_candidates`
+/// at the application's own exit — so one launch could answer the question
+/// two different ways, a run writing a coalition id its own exit sweep then
+/// declined to use, or the reverse.
+///
+/// So the comparison is made exactly once, cached in a `OnceLock`, and
+/// **forced early** by `terminal::service::start` — while whatever launched
+/// this app, if anything did, is certain still to be running, since the
+/// app has only just started. Every other caller reads the cached answer
+/// from then on, however this app's own parent goes on to change. `force`
+/// below is `start`'s own entry point for that; ordinary callers use this
+/// function and never think about the caching at all.
+///
+/// `mac_app_exit_candidates` (point 3) and `recovery::note_run` (point 4)
+/// call this rather than `own_coalition` directly, and both fall back to
+/// whatever a session's own accumulated snapshot already covers when it
+/// answers `Unknown` — see the module header. `own_coalition` itself is
+/// unchanged and still answers the bare, un-cached fact for any other
+/// reader, such as its own test beside it, that wants to know rather than
+/// to act on it.
 #[cfg(target_os = "macos")]
 pub fn own_dedicated_coalition() -> Coalition {
-    let mine = own_coalition();
-    // An unreadable parent coalition is `Unknown` exactly as a single
-    // `proc_pidinfo` call already treats one: this file can never show the
-    // process is not sharing a coalition, so it is read the same
-    // permissive-to-the-stranger way as if it plainly were.
-    let theirs = coalition(unsafe { libc::getppid() });
-    match (mine, theirs) {
-        (Coalition::Known(a), Coalition::Known(b)) if a != b => Coalition::Known(a),
-        _ => Coalition::Unknown,
-    }
+    static DEDICATED: std::sync::OnceLock<Coalition> = std::sync::OnceLock::new();
+    *DEDICATED.get_or_init(|| {
+        let mine = own_coalition();
+        // An unreadable parent coalition is `Unknown` exactly as a single
+        // `proc_pidinfo` call already treats one: this file can never show
+        // the process is not sharing a coalition, so it is read the same
+        // permissive-to-the-stranger way as if it plainly were.
+        let theirs = coalition(unsafe { libc::getppid() });
+        match (mine, theirs) {
+            (Coalition::Known(a), Coalition::Known(b)) if a != b => Coalition::Known(a),
+            _ => Coalition::Unknown,
+        }
+    })
+}
+
+/// Computes and caches `own_dedicated_coalition`'s answer, if nothing has
+/// already — called once, at `terminal::service::start`, before any session
+/// exists to race it and long before either of that function's own callers
+/// can run. Calling it again after the first is free: `OnceLock` answers
+/// its cached value and never re-asks `getppid`.
+#[cfg(target_os = "macos")]
+pub fn force_own_dedicated_coalition() {
+    let _ = own_dedicated_coalition();
 }
 
 /// The path of the executable behind a pid, through `proc_pidpath` — the same
@@ -1475,25 +1549,35 @@ mod tests {
         assert_eq!(descendants.candidates(&same, &[]), vec![500], "the same process, still trusted");
     }
 
-    /// The other two shapes `group_leader_plausible` has to tell apart from
-    /// a reused pid, and get right in the opposite direction: a leader that
-    /// has simply exited — the ordinary way a process group outlives its own
-    /// leader on Unix — and a leader no poll ever caught in a snapshot at
-    /// all, because it had already reparented away or exited before the
-    /// first poll ever saw the group. Both are trusted, because neither
-    /// contradicts what this session actually recorded.
+    /// `a_group_is_still_trusted_when_its_leader_cannot_be_checked_at_all`
+    /// pinned the permissive reading of `None` that review withdrew: a group
+    /// no poll ever caught a leader for used to be trusted on nothing at
+    /// all, which left a frozen `None` group free to sit in an exited
+    /// session's map for hours — since absorbing stops at exit — until point
+    /// 3 matched it against a fresh table over exactly the interval a pgid
+    /// is most likely to have been recycled in. This is that test's
+    /// replacement, pinning the rule as it now stands rather than the one
+    /// review found: an exited leader is still trusted (unchanged — the
+    /// ordinary shape of a process group outliving its leader on Unix), and
+    /// a leader that was never established as ours is refused outright.
+    /// Reverting `group_leader_plausible`'s `None` arm from `false` back to
+    /// `true` makes the second assertion fail: `candidates` would find pid
+    /// 501 through the untrusted group again.
     #[cfg(target_os = "macos")]
     #[test]
-    fn a_group_is_still_trusted_when_its_leader_cannot_be_checked_at_all() {
+    fn a_group_whose_leader_exited_is_trusted_but_one_never_established_is_refused() {
         let mut exited_leader = Descendants::default();
         exited_leader.groups.insert(500, Some((500, 100)));
         let orphaned = vec![KernProc { pid: 501, ppid: 1, pgid: 500, started: 150 }];
         assert_eq!(exited_leader.candidates(&orphaned, &[]), vec![501]);
 
-        let mut never_caught = Descendants::default();
-        never_caught.groups.insert(500, None);
+        let mut never_established = Descendants::default();
+        never_established.groups.insert(500, None);
         let snapshot = vec![KernProc { pid: 501, ppid: 1, pgid: 500, started: 150 }];
-        assert_eq!(never_caught.candidates(&snapshot, &[]), vec![501]);
+        assert!(
+            never_established.candidates(&snapshot, &[]).is_empty(),
+            "a group with no established leader must not be trusted on the bare pgid alone"
+        );
     }
 
     /// The write side of the same guard: `absorb` records a group's leader
@@ -1524,6 +1608,56 @@ mod tests {
             descendants.candidates(&fresh, &[]).is_empty(),
             "the reused pid at 999 must never pass as the leader recorded at 5"
         );
+    }
+
+    /// `absorb`'s own ownership filter, exercised directly rather than
+    /// through a hand-built fixture: a walked descendant (pid 101, a child
+    /// of root) shares a pgid with a process (pid 50) this session never
+    /// walked and that is not root either — a job-control pipeline whose own
+    /// leader is long gone and whose pid a stranger now holds, in the very
+    /// same poll that first sees the group. The old, unguarded lookup would
+    /// have recorded that stranger as the group's leader; this one must
+    /// leave the group untrusted, so nothing sharing pgid 50 is ever found
+    /// through it — only pid 101 itself, found directly through `seen`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn absorb_never_records_a_stranger_as_a_groups_leader() {
+        let mut descendants = Descendants::default();
+        let snapshot = vec![
+            KernProc { pid: 101, ppid: 100, pgid: 50, started: 6 },
+            KernProc { pid: 50, ppid: 1, pgid: 50, started: 1 },
+        ];
+        descendants.absorb(&snapshot, 100);
+
+        assert_eq!(
+            descendants.candidates(&snapshot, &[]),
+            vec![101],
+            "pid 101 through seen; pid 50 never through an untrusted group"
+        );
+    }
+
+    /// The other side of the same filter: a leader two levels under root,
+    /// walked in the identical poll that discovers it, must still be
+    /// recorded — the two-pass shape of `absorb` (every walked entry folded
+    /// into `seen` before any leader is looked up) exists so this does not
+    /// depend on which order the walk happens to return entries in. A
+    /// sibling that joins the group later, and is never itself walked from
+    /// root at all, is then found purely through it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn absorb_records_a_deeper_leader_walked_in_the_same_poll() {
+        let mut descendants = Descendants::default();
+        let snapshot = vec![
+            KernProc { pid: 199, ppid: 100, pgid: 199, started: 8 },
+            KernProc { pid: 200, ppid: 199, pgid: 200, started: 9 },
+        ];
+        descendants.absorb(&snapshot, 100);
+
+        // A later sibling in pid 200's group, never walked from root at all
+        // — the chain above it has already reparented away by the time it
+        // spawns — found only because pid 200 was recorded as its leader.
+        let fresh = vec![KernProc { pid: 201, ppid: 1, pgid: 200, started: 20 }];
+        assert_eq!(descendants.candidates(&fresh, &[]), vec![201]);
     }
 
     #[cfg(target_os = "macos")]

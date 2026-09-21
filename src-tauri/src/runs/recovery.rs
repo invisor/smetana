@@ -734,9 +734,15 @@ mod tests {
     /// a second project's dead writer naming the identical id — proving both
     /// halves of the contract: a live writer's coalition is withheld, and a
     /// duplicate id across two files is answered once rather than twice.
-    /// `dead_writer_coalitions`'s own `seen` guard against reprocessing one
-    /// project twice is exercised by naming the first project a second time
-    /// in the very same call.
+    ///
+    /// **What this does not, and cannot, pin**: `dead_writer_coalitions`'s
+    /// own `seen` list only ever stops a project's file being *read* a
+    /// second time — `ids` already refuses a duplicate id by its own content
+    /// (`!ids.contains(&id)`), so the returned list is identical whether
+    /// `seen` is there or not, for any input this test could construct
+    /// short of instrumenting the read itself. Naming a project twice in the
+    /// call below is therefore left out rather than kept as a line that
+    /// looked like it was proving something it could not.
     ///
     /// macOS only: `Record.coalition` is written nowhere else, and the
     /// non-macOS half of `dead_writer_coalitions` is the fixed `Vec::new()`
@@ -800,7 +806,7 @@ mod tests {
             },
         );
 
-        let found = dead_writer_coalitions(&[root_a.clone(), root_b.clone(), root_a.clone()]);
+        let found = dead_writer_coalitions(&[root_a.clone(), root_b.clone()]);
         assert_eq!(found, vec![222], "the live writer's 111 is withheld and 222 appears once");
 
         let _ = std::fs::remove_dir_all(&root_a);
