@@ -524,20 +524,26 @@ function listenToState() {
    substitution, which this inexpensive front-door check cannot see.
 
    **This is a cheap front door and cannot be the only gate, because it cannot
-   see `PATH`.** It is asked of `settings.agent`, and the first half of that
-   chain is exact: `Intent::Bare` takes `agents::Role::Default`, which
-   `settings::model::Settings::role_pair` answers with the root pair — the same
-   two fields the front end holds, with no per-project override reaching it. The
-   half it cannot see is downstream of all of that. `agents::pick` substitutes
-   **the first installed profile** when the configured one is not on the machine,
-   silently and by design, and `pick_with_model` is what `spawn_session` calls.
-   `settings.agent` ships as `claude` and `Settings::validate` forces anything
-   unknown back to it, so a machine with only Codex on it answers `true` here and
-   is refused by the driver a round trip later. What answers that is the caller:
-   `startAgent` in `views/DesktopApp.vue` falls through to `createSession` when a
-   driven start comes back with nothing, and `createSession` resolves whatever
-   `pick` would have. Nothing here should grow a second guess at `PATH` instead —
-   the front end does not have one.
+   see `PATH`.** The caller asks it of `effectiveAgents.value.agent`
+   (`components/settings/agentRoles.js`'s `effectiveAgentTable`,
+   `.claude/rules/settings.md`) rather than the bare root field, and the first
+   half of that chain is exact: `Intent::Bare` takes `agents::Role::Default`,
+   which `settings::model::Settings::role_pair` answers project-aware now —
+   the active project's own `agents` block where it names a harness, the root
+   pair otherwise — and `effectiveAgentTable` is the front end's mirror of the
+   identical choice, so a project carrying its own table moves this front door
+   with it rather than leaving it to answer about the root's harness alone.
+   The half it cannot see is downstream of all of that. `agents::pick`
+   substitutes **the first installed profile** when the configured one is not
+   on the machine, silently and by design, and `pick_with_model` is what
+   `spawn_session` calls. The resolved agent ships as `claude` where nothing
+   overrides it and `Settings::validate` forces anything unknown back to it,
+   so a machine with only Codex on it answers `true` here and is refused by
+   the driver a round trip later. What answers that is the caller: `startAgent`
+   in `views/DesktopApp.vue` falls through to `createSession` when a driven
+   start comes back with nothing, and `createSession` resolves whatever `pick`
+   would have. Nothing here should grow a second guess at `PATH` instead — the
+   front end does not have one.
 
    A list here rather than a capability on the harness row, because there is no
    flag for this: `agents::Capabilities` carries `resume`, `fork`, `clear`,

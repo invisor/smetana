@@ -24,6 +24,7 @@ import {
   AboutSettings,
   AgentList,
   AgentMessage,
+  AgentRoleRows,
   AgentSettings,
   AppShell,
   AskUserQuestion,
@@ -3367,8 +3368,16 @@ const menuTargetStyle = {
            without starting anything. Deliberately not on its defaults: a form
            showing 2, 3 and 5 with no branch proves nothing about the fields,
            and the branch here is one `branchOptions` had to keep because the
-           list no longer holds it. -->
-      <div :style="{ position: 'relative', height: '760px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           list no longer holds it.
+
+           640, measured against a running build in all four theme × density
+           combinations: this cell holds 575 px comfortable and 501 px
+           compact, the one after it 607 and 529. 640 is a margin over the
+           tallest of the four rather than a fresh guess — `overflow: hidden`
+           stays here, since the switch is off by default and this cell never
+           draws the five rows that made the height genuinely hard to bound
+           before it was measured. -->
+      <div :style="{ position: 'relative', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal
           :open="true"
           :defaults="{
@@ -3384,8 +3393,9 @@ const menuTargetStyle = {
       </div>
       <!-- And the shape a refusal takes: the command's own message under the
            fields, which is what "the file will not parse" looks like when the
-           file changed under an open window. -->
-      <div :style="{ position: 'relative', height: '760px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           file changed under an open window. Same 640, measured at 607 px
+           comfortable and 529 px compact. -->
+      <div :style="{ position: 'relative', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal
           :open="true"
           :defaults="{
@@ -3404,12 +3414,47 @@ const menuTargetStyle = {
            one whose file will not parse: no fields, no Save, one sentence in
            their place — which is the whole reason the menu item that opens this
            is no longer greyed in either state. The ghost button reads Close
-           rather than Cancel here, since there is nothing on screen to undo. -->
-      <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           rather than Cancel here, since there is nothing on screen to undo.
+           340, measured at 309 px comfortable and 275 px compact — the same
+           margin the pair above carries, for the switch row alone. -->
+      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal :open="true" config-state="missing" @close="() => {}" />
       </div>
-      <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal :open="true" config-state="broken" @close="() => {}" />
+      </div>
+      <!-- The Agents group's own populated state: a project that already keeps
+           its own table, Codex named on the Default row — the shape a new
+           agent started in this project would pick up, and the shape the
+           usage footer would read Codex's allowance from. Drawn together with
+           `config-state="missing"` on purpose: the group is live and may be
+           saved whatever state `project.toml` is in, so this cell checks that
+           by eye rather than by claim.
+
+           This is the switched-on state, with all five rows drawn under it.
+           1010, measured against a running build in all four combinations:
+           973 px comfortable, 881 px compact — about 37 px of margin over the
+           taller of the two, rather than a guess. `overflow` stays at its
+           default (visible) rather than `hidden`, confirmed the right call at
+           this height too: a future row added to the group spills visibly
+           past the border instead of being concealed by it. -->
+      <div :style="{ position: 'relative', height: '1010px', border: 'var(--border-w) solid var(--border)' }">
+        <ProjectSettingsModal
+          :open="true"
+          config-state="missing"
+          :agents="{
+            agent: 'codex',
+            model: 'gpt-5.6-sol',
+            agentRoles: {
+              tasks: { agent: '', model: '' },
+              code: { agent: '', model: '' },
+              runLead: { agent: '', model: '' },
+              reviewBranch: { agent: '', model: '' }
+            }
+          }"
+          @close="() => {}"
+          @save="() => {}"
+        />
       </div>
       <!-- Cutting a branch, from a row in the branch list. Live, because the
            line under the field is the half worth looking at: type a space or
@@ -6965,6 +7010,20 @@ const menuTargetStyle = {
         </div>
         <div :style="{ width: '560px' }">
           <AgentSettings busy />
+        </div>
+        <!-- The five rows on their own, the shape the Project settings
+             dialog's own Agents group draws them in — no caption, no
+             surrounding group, since those belong to whichever screen wraps
+             this component and differ between the two callers. Same fixtures
+             as the tab above, so a change to one cannot look right while the
+             other silently stopped matching it. -->
+        <div :style="{ width: '560px' }">
+          <AgentRoleRows
+            :agent="galleryAgent"
+            :model="galleryAgentModel"
+            :agent-roles="galleryAgentRoles"
+            @update:agent-role="galleryChooseRole($event)"
+          />
         </div>
         <div :style="{ width: '380px' }">
           <KanbanSettings

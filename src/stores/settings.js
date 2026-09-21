@@ -7,7 +7,7 @@
    in bd, and the store catches up with it through deltas. Here the truth is in
    this object — only this interface changes the settings, and Rust is
    responsible for the schema and the disk. */
-import { nextTick, reactive, watch } from 'vue'
+import { computed, nextTick, reactive, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { emit, listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -49,6 +49,12 @@ import { REPORTS_DEFAULTS } from '../components/run/reportsPage.js'
    so what the tab offers stays a subset of what Rust accepts. */
 import { NOTIFICATION_DEFAULTS, isSound } from '../sounds.js'
 import { isThreshold, reconcile } from '../components/settings/subscription.js'
+/* Pure, no Vue and no DOM: which table a session actually reaches — the active
+   project's own block where it names a harness, the root's three fields
+   otherwise. Imported so this store's `effectiveAgents` and every reader that
+   used to go straight to the root fields answer the same question the same
+   way. */
+import { effectiveAgentTable } from '../components/settings/agentRoles.js'
 
 /* The defaults mirror the ones in Rust. With no back end (a browser) or after
    a failed read, the app still has to open looking a known way. */
@@ -376,7 +382,17 @@ const defaults = () => ({
        the previous one's number across — which would silence a warning for a
        folder nobody has ever been warned about. */
     storageWarnedMib: null,
-    usedAt: null
+    usedAt: null,
+    /* A project's own whole copy of the root's three agent fields, or `null`
+       for "the root table, entirely" — every file on disk today. `merge` in
+       Rust writes this key on every save whether or not anybody has written a
+       block into it, so it is listed here for `runSettings`'s own reason: a
+       key missing from this object is a key `applySection`'s
+       `Object.assign(target, defaults, stored)` cannot clear, and a block
+       belonging to the previous project would go on describing the next one.
+       `.claude/rules/settings.md` carries the whole of what a present block
+       means and how it is resolved; this file only stores it. */
+    agents: null
   }
 })
 
@@ -385,6 +401,16 @@ const defaults = () => ({
 export { defaults }
 
 export const settings = reactive(defaults())
+
+/* The table a session actually reaches right now: the active project's own
+   block where it has named a harness, the root's three fields otherwise. Every
+   reader that used to go straight to `settings.agent` / `settings.model` /
+   `settings.agentRoles` for a *session's* harness — as opposed to editing the
+   root table itself, which the settings window still does — reads this
+   instead, so a project carrying its own `agents` block is actually honoured
+   rather than only stored. `effectiveAgentTable` is the pure half of this,
+   in `components/settings/agentRoles.js` beside the rest of that rule. */
+export const effectiveAgents = computed(() => effectiveAgentTable(settings))
 
 /* A write costs a trip to the disk, and a panel changes dozens of times during
    one drag. We accumulate and write once, when the stream settles. */

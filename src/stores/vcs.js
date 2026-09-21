@@ -1164,7 +1164,7 @@ export async function suggestMessage() {
   vcsState.suggesting = true
   vcsState.suggestError = null
   try {
-    const message = await invoke('vcs_suggest_message', { repo: selected })
+    const message = await invoke('vcs_suggest_message', { repo: selected, project })
     if (vcsState.project !== project || vcsState.selected !== selected) return
     vcsState.messages[selected] = message
   } catch (err) {

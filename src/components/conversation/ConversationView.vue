@@ -121,7 +121,7 @@ import { basename } from '../../paths.js'
 import { agentLabel } from '../../stores/agents.js'
 import { openExternal, openImageWindow, pickFiles } from '../../stores/app.js'
 import { filesState } from '../../stores/files.js'
-import { settings } from '../../stores/settings.js'
+import { effectiveAgents, settings } from '../../stores/settings.js'
 import {
   answerQuestion,
   attach,
@@ -262,7 +262,12 @@ const ourRefusal = computed(() =>
    answers with the journal, the sequence number and the state, and nothing
    else — so it is read from the front end's own settings, where the same three
    values decided what was spawned: `Intent::Bare` takes the `Default` role,
-   which is the root pair (`settings::role_model` over `agents::role_of`).
+   which is `Settings::role_pair`'s own project-aware reading of it — the
+   active project's own `agents` block where it names a harness, the root pair
+   otherwise (`.claude/rules/settings.md`). `effectiveAgents` is the front
+   end's mirror of that same resolution, so this label and the harness that
+   actually spawned the session cannot disagree over a project carrying its
+   own table.
 
    There is deliberately **no glyph for the agent's brand**. `core/icons.js` is
    lucide and holds no Claude or Codex mark, and vendoring one would be a third
@@ -271,9 +276,9 @@ const ourRefusal = computed(() =>
    added.
 
    An empty model is the harness choosing for itself, which is what an unset
-   `model` in settings means, so nothing is drawn rather than an empty gap. */
-const label = computed(() => agentLabel(settings.agent))
-const model = computed(() => settings.model)
+   `model` means, so nothing is drawn rather than an empty gap. */
+const label = computed(() => agentLabel(effectiveAgents.value.agent))
+const model = computed(() => effectiveAgents.value.model)
 const folder = computed(() => (settings.activeProject ? basename(settings.activeProject) : ''))
 
 /* The activity strip's own `waiting` sentence — the same label the bar

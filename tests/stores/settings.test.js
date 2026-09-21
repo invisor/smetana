@@ -463,6 +463,66 @@ describe('a project\'s layout', () => {
     expect(settings.settings.project).toBe(held)
     expect(held.sideTab).toBe('agents')
   })
+
+  /* `agents` is `ProjectState`'s own field, new with smetana-1l1r, and it is
+     listed in `defaults().project` for the reason every field in that object
+     is: a key missing there is a key `applySection`'s
+     `Object.assign(target, defaults, stored)` cannot clear, so a block
+     belonging to the project somebody just left would go on describing the
+     one they switched to. */
+  it("defaults to null, and a project's block does not follow into one with none", async () => {
+    ipc.on('settings_load', {})
+    ipc.on('settings_save', null)
+    await settings.loadSettings()
+    expect(settings.settings.project.agents).toBe(null)
+
+    ipc.on('settings_load', {
+      project: { agents: { agent: 'codex', model: '', agentRoles: {} } }
+    })
+    await settings.loadProjectLayout('/with-codex')
+    expect(settings.settings.project.agents).toEqual({
+      agent: 'codex',
+      model: '',
+      agentRoles: {}
+    })
+
+    ipc.on('settings_load', { project: {} })
+    await settings.loadProjectLayout('/without')
+    expect(settings.settings.project.agents).toBe(null)
+  })
+
+  /* `effectiveAgents` is what every reader of a session's harness now asks
+     instead of the root fields directly, and it has to follow the same
+     switch: a project without a block reads the root table, and one clearing
+     its block on a later project must go back to reading it too. */
+  it("`effectiveAgents` follows the active project's own block", async () => {
+    ipc.on('settings_load', { agent: 'claude', model: 'opus' })
+    ipc.on('settings_save', null)
+    await settings.loadSettings()
+    expect(settings.effectiveAgents.value).toEqual({
+      agent: 'claude',
+      model: 'opus',
+      agentRoles: settings.settings.agentRoles
+    })
+
+    ipc.on('settings_load', {
+      project: { agents: { agent: 'codex', model: 'gpt-5.6-sol', agentRoles: {} } }
+    })
+    await settings.loadProjectLayout('/with-codex')
+    expect(settings.effectiveAgents.value).toEqual({
+      agent: 'codex',
+      model: 'gpt-5.6-sol',
+      agentRoles: {}
+    })
+
+    ipc.on('settings_load', { project: {} })
+    await settings.loadProjectLayout('/without')
+    expect(settings.effectiveAgents.value).toEqual({
+      agent: 'claude',
+      model: 'opus',
+      agentRoles: settings.settings.agentRoles
+    })
+  })
 })
 
 describe('writes', () => {
