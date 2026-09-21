@@ -3,15 +3,98 @@
 //! recovery knows about the operating system — `registry.rs` decides and this
 //! answers.
 //!
-//! Three questions are asked here and no others. *What is under this pid right
-//! now* (`look`), which is what makes a record's own evidence checkable,
-//! *write down what is under this pid* (`snapshot`), which is how that evidence
-//! is produced in the first place, and *write down what is under this pid, now
-//! that it is itself* (`spawned`), which is the same question asked about a
-//! process this app has only just started and which is therefore not yet
-//! certain to be the process it was started as. All three answer with the same
-//! stamp so that they are comparable by construction rather than by a rule kept
-//! in step by hand.
+//! Three questions were asked here at first, and a fourth joined them in
+//! smetana-kkz2. *What is under this pid right now* (`look`), which is what
+//! makes a record's own evidence checkable, *write down what is under this
+//! pid* (`snapshot`), which is how that evidence is produced in the first
+//! place, and *write down what is under this pid, now that it is itself*
+//! (`spawned`), which is the same question asked about a process this app has
+//! only just started and which is therefore not yet certain to be the process
+//! it was started as. All three answer with the same stamp so that they are
+//! comparable by construction rather than by a rule kept in step by hand.
+//!
+//! The fourth question is smetana-kkz2's: **what has a session left behind
+//! that a signal to its process group can no longer reach**, and **what has a
+//! whole app instance left behind, dead or alive**. `killpg` reaches
+//! whatever a session's own process group holds, which is every ordinary
+//! child; it stops reaching anything the moment something inside a session
+//! asks for a group of its own — `setsid`, `nohup`, a shell's own `&` job
+//! control — because such a child's leader answers to nobody's `killpg` but
+//! its own, and once that leader exits the child is reparented under pid 1
+//! with no group left that names the session at all. The measurement behind
+//! this task: Claude Code's own Bash tool runs every command in a session of
+//! its own (`getsid` of the tool's shell equals its own pid), so anything a
+//! command backgrounds and leaves running is outside the agent's session from
+//! the moment it starts, and a plain group signal was never going to reach
+//! it.
+//!
+//! **There is no one channel for this across three operating systems, so
+//! there are three.** `terminal/service.rs` sweeps at four moments —
+//! a session ending on its own, a session being removed, the app's own exit,
+//! and the app's own start, recovering what a dead previous instance left —
+//! without needing to know which of the three answers underneath it; what
+//! differs is only the shape of evidence each platform can produce here.
+//!
+//! **Linux** carries a mark in every agent session's own environment,
+//! `SMETANA_SESSION` (`mark`/`parse_mark`/`marked`/`strays`, kept from the
+//! first attempt at this task): a variable is inherited by every descendant
+//! regardless of its process group and survives a reparent under pid 1 that a
+//! `pid_t` alone cannot. Read through `/proc/<pid>/environ`, readable for a
+//! process this user owns regardless of Yama's `ptrace_scope` (which gates
+//! `PTRACE_ATTACH`, not a plain read of that file).
+//!
+//! **macOS has no such channel**, and this module's first attempt over this
+//! task assumed otherwise. `sysctl(KERN_PROCARGS2)` and `ps -wwE` both hand
+//! back a process's environment only to the process asking about *itself* —
+//! measured twice, by two different sessions, on macOS 26.5.2 (25F84): this
+//! app's own pid answered its full environment, a same-user child spawned a
+//! moment earlier answered nothing at all. So macOS answers the same two
+//! questions two different ways instead. **What a live session has left
+//! behind** (points 1 and 2 in `terminal/service.rs`) is a snapshot the
+//! session's own poller keeps of every descendant it has ever seen under its
+//! PTY child, walked by parent pid from one `KERN_PROC_ALL` sysctl every two
+//! seconds, plus the process group of each one — a descendant that escapes
+//! the parent-pid tree by reparenting under pid 1 is still found by the group
+//! it once led, because a group headed by one of a session's own descendants
+//! can only belong to that session or to a session one of its own
+//! descendants started, which is evidence with no private API behind it
+//! (`Descendants`, `descendants_by_ppid`). **What a whole app instance has
+//! left behind** (points 3 and 4) is the resource *coalition* every process
+//! the app starts shares — `proc_pidinfo(pid, 20, …)`, a private call into a
+//! 40-byte struct nowhere in the public SDK declares, the same pair `ps`
+//! itself stands on. Measured for this task, on the same machine and the same
+//! build: the app, every agent it starts and a background `sleep` reparented
+//! under pid 1 all carry the identical resource coalition id; the app's own
+//! WebKit/AppKit XPC helpers share it too and are excluded by path
+//! (`is_xpc_service`); and — the measurement this task's own first step was —
+//! **the id survives the death of the coalition's own leader on an orphaned
+//! descendant**, confirmed against a genuine `launchd`-owned job (not merely
+//! a member of this shell's own inherited coalition) whose leader was
+//! `kill -9`ed while a `setsid`-detached child of it, already reparented
+//! under pid 1, kept answering the identical coalition id for several seconds
+//! afterwards. See `.claude/rules/terminal.md` for the exact commands and
+//! output this rests on.
+//!
+//! **Windows carries neither a mark nor a coalition**, and needs neither: a
+//! *Job Object*, created for every agent session right after it spawns and
+//! assigned its child, with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` set, is the
+//! platform's own answer to exactly this question — every process a job's
+//! members go on to start joins the job automatically, and the *last* open
+//! handle to it closing (an explicit `terminate`, or this app's own process
+//! dying and the kernel closing every handle it held) kills everything the
+//! job has ever held. `SessionJob` is `terminal/pty.rs`'s own handle, one per
+//! agent session and never for a person's own shell; points 1–3 call
+//! `terminate` on it directly and point 4 costs nothing, since a dead
+//! previous instance's own handle closing is what already did the killing,
+//! before the next instance is even running.
+//!
+//! `Unknown` — read as "not provably ours", never as "gone" — is the answer
+//! every one of these three backends gives when it cannot say: a platform
+//! this file has no reader for, a `proc_pidinfo` call answering a size this
+//! file does not recognise, a process that has already gone between two
+//! reads. Nothing here ever signals a pid it cannot show is ours; the worst
+//! outcome of a channel closing under a future OS update is today's
+//! behaviour, never a signal to a stranger.
 //!
 //! The stamp is a process's start time, and it is read per platform because
 //! there is no portable way to ask: macOS answers a `proc_bsdinfo` through
@@ -19,10 +102,12 @@
 //! which is turned into ticks since the epoch so that a reboot cannot make two
 //! different processes carry the same stamp. A platform not on that list
 //! answers `Unknown` to everything, and `registry.rs` reads `Unknown` as a
-//! reason to touch nothing at all. That is why no crate was added for this:
-//! `libc` is already here for the two `killpg` calls the app makes, the two
-//! readers are twenty lines apiece, and a dependency in this tree costs a
-//! `Cargo.lock` that two branches then have to merge.
+//! reason to touch nothing at all. `libc` already exports every call the
+//! Linux and the common halves need; the macOS descendant snapshot and the
+//! coalition read are private APIs with no binding anywhere, hand-declared
+//! here with the byte offsets they were measured against — see the doc
+//! comments on `KernProc` and `ProcPidCoalitionInfo` for exactly what was
+//! checked and against which SDK.
 
 use crate::runs::registry::{Proc, Seen};
 
@@ -159,6 +244,119 @@ fn signal_group(_pid: i32, _signal: i32) -> bool {
     false
 }
 
+/// The environment key `terminal/pty.rs` puts on every agent session's own
+/// environment on every Unix platform alike — never on a person's own shell,
+/// see `build_shell_command` there — harmless to set even where nothing reads
+/// it back (macOS's own backend does not), and the only name `marked`/`strays`
+/// below ever look for.
+pub const MARK_KEY: &str = "SMETANA_SESSION";
+
+/// The mark for one session: this app's own pid, the stamp that survives its
+/// reuse, and the session's id, joined the same way a `Proc` and an actor
+/// name already sit beside each other in `registry.rs`. `None` on a platform
+/// `own` cannot answer for — a mark nothing could ever prove dead is not one
+/// worth writing at all.
+pub fn mark(session: u64) -> Option<String> {
+    let me = own()?;
+    Some(format!("{}:{}:{session}", me.pid, me.started))
+}
+
+/// The three numbers a mark was built from, or `None` for anything that is
+/// not exactly that shape — an environment variable of the same name from
+/// outside this app, say, which must never be read as evidence about one of
+/// ours. Only `is_stray` (Linux) reads this back at runtime — macOS writes
+/// the mark for the reason the module header gives but answers points 1
+/// through 4 a different way — so a non-Linux build sees no caller of its
+/// own; `#[allow(dead_code)]` there rather than gating the function itself,
+/// since it stays exercised directly by this file's own tests on every
+/// platform.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn parse_mark(value: &str) -> Option<(i32, u64, u64)> {
+    let mut parts = value.split(':');
+    let pid = parts.next()?.parse().ok()?;
+    let started = parts.next()?.parse().ok()?;
+    let session = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((pid, started, session))
+}
+
+/// Every process on this machine carrying this exact mark, and never this
+/// very process — a worker asking about its own mark is not a question this
+/// file answers by including the one process that could never be a stray.
+///
+/// Linux only: see the module header for why macOS answers points 1 and 2 a
+/// different way, and why the mark is still written there regardless.
+#[cfg(target_os = "linux")]
+pub fn marked(value: &str) -> Vec<i32> {
+    let me = std::process::id() as i32;
+    all_pids()
+        .into_iter()
+        .filter(|&pid| pid != me)
+        .filter(|&pid| environment_mark(pid).as_deref() == Some(value))
+        .collect()
+}
+
+/// Every marked process whose own app half no longer names a live Smetana
+/// carrying the very stamp it was written under — the shape a killed app
+/// leaves behind, and the question `terminal::service`'s start-up sweep asks
+/// before touching anything.
+///
+/// A mark whose app cannot be read at all (`Seen::Unknown`) answers "no"
+/// here, the same rule `registry::sweep` keeps for the group it signals: an
+/// unreadable answer is never a reason to hang something up.
+///
+/// Linux only, for the reason `marked` above carries.
+#[cfg(target_os = "linux")]
+pub fn strays() -> Vec<(i32, String)> {
+    let me = std::process::id() as i32;
+    all_pids()
+        .into_iter()
+        .filter(|&pid| pid != me)
+        .filter_map(|pid| environment_mark(pid).map(|value| (pid, value)))
+        .filter(|(_, value)| is_stray(value))
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn is_stray(value: &str) -> bool {
+    let Some((app_pid, app_started, _)) = parse_mark(value) else { return false };
+    match look(app_pid) {
+        Seen::Running { started } => started != app_started,
+        Seen::Gone => true,
+        Seen::Unknown => false,
+    }
+}
+
+/// The soft signal, to one pid rather than to a group — `hangup_group`'s own
+/// pair, for a descendant a group can no longer reach. The same two refusals
+/// as `signal_group`: nothing at or below 1, and never this app's own pid,
+/// whatever a stray environment variable happened to claim.
+pub fn hangup_pid(pid: i32) -> bool {
+    signal_pid(pid, HANGUP)
+}
+
+/// What is left after the grace period. Same guard, same reasoning.
+pub fn kill_pid(pid: i32) -> bool {
+    signal_pid(pid, KILL)
+}
+
+#[cfg(unix)]
+fn signal_pid(pid: i32, signal: libc::c_int) -> bool {
+    if pid <= 1 || pid == std::process::id() as i32 {
+        return false;
+    }
+    unsafe { libc::kill(pid as libc::pid_t, signal) == 0 }
+}
+
+/// Windows has no signal to send here either, for the same reason
+/// `signal_group` names.
+#[cfg(not(unix))]
+fn signal_pid(_pid: i32, _signal: i32) -> bool {
+    false
+}
+
 enum Reachable {
     Yes,
     No,
@@ -258,6 +456,693 @@ fn boot_time() -> Option<u64> {
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn info(_pid: i32) -> Option<(u64, String)> {
     None
+}
+
+/// Every numeric entry of `/proc` — `marked`'s and `strays`' own candidate
+/// list, walked fresh on every call rather than cached: this runs a few times
+/// a minute at most, on a session ending or the app starting, and a cache
+/// would be one more thing to invalidate correctly.
+#[cfg(target_os = "linux")]
+fn all_pids() -> Vec<i32> {
+    let Ok(entries) = std::fs::read_dir("/proc") else { return Vec::new() };
+    entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok())
+        .collect()
+}
+
+/// This pid's `SMETANA_SESSION`, out of `/proc/<pid>/environ` — NUL-separated
+/// `KEY=VALUE` entries, readable for any process this user owns and refused
+/// by the kernel for anything it does not, which answers `None` exactly as a
+/// process that has already gone does.
+#[cfg(target_os = "linux")]
+fn environment_mark(pid: i32) -> Option<String> {
+    let bytes = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    let prefix = format!("{MARK_KEY}=");
+    bytes
+        .split(|&b| b == 0)
+        .filter(|entry| !entry.is_empty())
+        .find_map(|entry| String::from_utf8_lossy(entry).strip_prefix(&prefix).map(str::to_owned))
+}
+
+/* =======================================================================
+ * macOS: a session's own accumulated descendants (points 1-2), and the
+ * app-wide resource coalition (points 3-4). See the module header for the
+ * measurements both of these rest on.
+ * ======================================================================= */
+
+/// One row of the machine's whole process table: pid, parent, process group
+/// and start stamp together, from one `KERN_PROC_ALL` sysctl rather than a
+/// `proc_pidinfo` call per candidate — the shape `snapshot_all` is built to
+/// fill in one pass.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KernProc {
+    pub pid: i32,
+    pub ppid: i32,
+    pub pgid: i32,
+    /// Microseconds since the epoch, the same unit `info` above answers —
+    /// comparable against a `Proc.started` with no conversion.
+    pub started: u64,
+}
+
+/// `struct kinfo_proc`'s byte layout, read out of the buffer `KERN_PROC_ALL`
+/// hands back rather than declared as a `#[repr(C)]` type. Unlike the
+/// coalition struct below, `kinfo_proc` genuinely is in the public SDK
+/// (`<sys/sysctl.h>`) — but it nests `extern_proc` and `eproc`, both built
+/// from kernel-only pointer types (`struct proc *`, `struct vmspace`, a
+/// `sigset_t`, …) that `libc` does not bind on this platform, so a faithful
+/// `#[repr(C)]` copy would have to declare every one of them correctly just
+/// to get the four fields this file actually wants at the right offsets.
+///
+/// Those four offsets were measured directly against this SDK's own header
+/// rather than assumed — `clang`, `offsetof`, the MacOSX SDK shipped with
+/// this machine's command line tools, cross-checked against `sysctl(CTL_KERN,
+/// KERN_PROC, KERN_PROC_PID, getpid())` returning this very process's own
+/// pid, ppid and start time correctly:
+///
+///   `sizeof(struct kinfo_proc)` = 648, `sizeof(struct extern_proc)` = 296
+///   `extern_proc.p_un.p_starttime` (a `struct timeval`) at offset 0
+///   `extern_proc.p_pid` at offset 40
+///   `struct eproc` (`kp_eproc`) begins at offset 296
+///   `eproc.e_ppid` at offset 264 within it (560 absolute)
+///   `eproc.e_pgid` at offset 268 within it (564 absolute)
+///
+/// Every field up to and including these four is POD of a size identical on
+/// both of this app's macOS targets (8-byte pointers, 4-byte `int`, 8-byte
+/// `long`, both LP64), so the offsets hold on x86_64 as well as the arm64
+/// they were measured on — only the one architecture was checked directly.
+/// A struct whose *shape* changed under a future SDK is exactly the cost
+/// `KINFO_PROC_SIZE` below is checked against: a returned size that no
+/// longer matches drops that entry rather than reading the wrong bytes as
+/// somebody's pid.
+#[cfg(target_os = "macos")]
+const KINFO_PROC_SIZE: usize = 648;
+#[cfg(target_os = "macos")]
+const KP_START_SEC: usize = 0;
+#[cfg(target_os = "macos")]
+const KP_START_USEC: usize = 8;
+#[cfg(target_os = "macos")]
+const KP_PID: usize = 40;
+#[cfg(target_os = "macos")]
+const KP_EPROC: usize = 296;
+#[cfg(target_os = "macos")]
+const KP_PPID: usize = KP_EPROC + 264;
+#[cfg(target_os = "macos")]
+const KP_PGID: usize = KP_EPROC + 268;
+
+#[cfg(target_os = "macos")]
+fn i32_at(bytes: &[u8], offset: usize) -> i32 {
+    i32::from_ne_bytes(bytes[offset..offset + 4].try_into().expect("4 bytes"))
+}
+
+#[cfg(target_os = "macos")]
+fn i64_at(bytes: &[u8], offset: usize) -> i64 {
+    i64::from_ne_bytes(bytes[offset..offset + 8].try_into().expect("8 bytes"))
+}
+
+/// One `kinfo_proc`-sized chunk, or `None` for a short one — a size that does
+/// not match `KINFO_PROC_SIZE` is never partially read.
+#[cfg(target_os = "macos")]
+fn kern_proc_from(bytes: &[u8]) -> Option<KernProc> {
+    if bytes.len() < KINFO_PROC_SIZE {
+        return None;
+    }
+    let sec = i64_at(bytes, KP_START_SEC);
+    let usec = i32_at(bytes, KP_START_USEC);
+    if sec < 0 {
+        // A slot the kernel left unfilled at the tail of an oversized read —
+        // see the headroom comment in `snapshot_all`.
+        return None;
+    }
+    let started = (sec as u64).saturating_mul(1_000_000).saturating_add(usec.max(0) as u64);
+    Some(KernProc {
+        pid: i32_at(bytes, KP_PID),
+        ppid: i32_at(bytes, KP_PPID),
+        pgid: i32_at(bytes, KP_PGID),
+        started,
+    })
+}
+
+/// One `sysctl(CTL_KERN, KERN_PROC, KERN_PROC_ALL)` call, turned into every
+/// process on the machine with its parent, its group and its start stamp —
+/// the one call `terminal/service.rs`'s two-second poller makes per tick, and
+/// the fresh table points 1, 2 and 3 ask their candidates against. `None` on
+/// a read this platform refused, which is `Unknown`'s shape here: a poll
+/// that cannot see the table skips its tick rather than acting on a partial
+/// one.
+#[cfg(target_os = "macos")]
+pub fn snapshot_all() -> Option<Vec<KernProc>> {
+    let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_ALL];
+    let mut size: libc::size_t = 0;
+    let sized = unsafe {
+        libc::sysctl(mib.as_mut_ptr(), 3, std::ptr::null_mut(), &mut size, std::ptr::null_mut(), 0)
+    };
+    if sized != 0 || size == 0 {
+        return None;
+    }
+    // Headroom for a process starting between the sizing call and the read:
+    // an undersized buffer here costs the newest arrivals, not a failure,
+    // and the margin is generous because the struct itself is hundreds of
+    // bytes — a few hundred more processes cost only a few hundred KiB.
+    let mut buf = vec![0u8; size + size / 8 + KINFO_PROC_SIZE * 32];
+    let mut out_size = buf.len() as libc::size_t;
+    let read = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buf.as_mut_ptr().cast::<libc::c_void>(),
+            &mut out_size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if read != 0 {
+        return None;
+    }
+    buf.truncate(out_size);
+    Some(buf.chunks_exact(KINFO_PROC_SIZE).filter_map(kern_proc_from).collect())
+}
+
+/// Every entry transitively parented under `root`, walked by `ppid` — the
+/// tree a session's own PTY child heads, at the moment of one snapshot and
+/// before whatever it has spawned had any chance to ask for a session of its
+/// own. Pure over data already in hand, so a fixture can drive it with no
+/// process table at all.
+#[cfg(target_os = "macos")]
+pub fn descendants_by_ppid(snapshot: &[KernProc], root: i32) -> Vec<KernProc> {
+    let mut frontier = vec![root];
+    let mut found = Vec::new();
+    while let Some(parent) = frontier.pop() {
+        for entry in snapshot.iter().filter(|p| p.ppid == parent) {
+            found.push(*entry);
+            frontier.push(entry.pid);
+        }
+    }
+    found
+}
+
+/// What one agent session's own poller has accumulated: every descendant pid
+/// (paired with its own start stamp, so a reused pid is never mistaken for
+/// the process that once held it) the tree under its PTY child has ever
+/// held, and every process group any of them has ever led — each paired
+/// with the identity of whichever process this session's own poller once
+/// found leading it, so that a *pgid* being reused cannot be mistaken for
+/// the group it once was either. See `group_leader_plausible` below for why
+/// that pairing is not optional: the spec's own invariant for this whole
+/// mechanism is that a reused pid must never draw a signal meant for
+/// somebody else, and a bare pgid, matched against a fresh table with
+/// nothing else to say which process ever led it, is exactly that risk —
+/// macOS wraps the pid space at 99999 and a long session's own bash tool
+/// mints a fresh `setsid` group per command, so a session running for hours
+/// accumulates hundreds of soon-dead group ids for exactly this reason to
+/// bite.
+///
+/// Points 1 and 2 read this rather than a fresh `descendants_by_ppid` walk,
+/// because the very shape this exists for — `setsid`, `nohup`, a shell's own
+/// `&` — takes a process *out* of the tree that walk can still find it in the
+/// instant its own leader reparents under pid 1: by the time a session is
+/// ending, the parent-pid link a fresh walk depends on may already be gone,
+/// which is exactly the case a snapshot with no memory of its own would miss
+/// (see the design's own "Rejected" section, the entry on tracking
+/// parentage by parent-child links alone with no snapshot). Group
+/// membership survives that reparenting because a group led
+/// by one of a session's own descendants can only ever belong to that
+/// session or to a session one of its own descendants went on to start — no
+/// third party could ever join it — so it stands as evidence on its own, with
+/// no private API behind it at all, *once* it is checked against the leader
+/// this session actually saw rather than the bare number alone.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Default, Debug)]
+pub struct Descendants {
+    seen: std::collections::HashSet<(i32, u64)>,
+    /// pgid → the `(pid, started)` of whichever snapshot entry once had
+    /// `pid == pgid` at the moment this session first folded that group in
+    /// — the group's own leader, as far as this poller ever saw one, and
+    /// only when `absorb` could show that entry was itself provably ours.
+    /// `None` covers every case it could not — nothing at that pid at all,
+    /// or a stranger sitting at it — and `group_leader_plausible` refuses
+    /// every such group outright; see `absorb` and that function's own doc
+    /// for why the permissive reading this used to have was withdrawn.
+    groups: std::collections::HashMap<i32, Option<(i32, u64)>>,
+}
+
+#[cfg(target_os = "macos")]
+impl Descendants {
+    /// One poll tick: walk `root`'s tree in this fresh snapshot and fold it
+    /// into what has been seen so far. Nothing already held is ever removed
+    /// — a descendant that reparented under pid 1 between two polls has
+    /// already left `descendants_by_ppid`'s reach, and forgetting it here
+    /// would undo the one thing this type exists to remember about it. A
+    /// group's leader is recorded once, the first time this session ever
+    /// sees that pgid, and never overwritten afterwards — the leader a
+    /// group had does not change over its life, and a later poll simply
+    /// missing it (having already reparented or exited) must not erase what
+    /// an earlier one caught.
+    ///
+    /// **The candidate leader is only ever recorded when it is one of
+    /// ours.** A bare `pid == pgid` search over the whole snapshot can find
+    /// a stranger — a pid this session never walked, that merely happens to
+    /// answer for that pgid right now, because the pid the real leader once
+    /// held was already recycled by the time of the very first poll that
+    /// saw the group. Recording that stranger as the leader would then pass
+    /// it *and anything sharing its pgid* for as long as the stranger
+    /// lives, exactly the reused-pid risk this whole guard exists to
+    /// refuse. `root` is trusted directly — it is the session's own PTY
+    /// child, handed in by the one caller that already knows it is alive —
+    /// and everything else must already be in `self.seen`, which is filled
+    /// in a first pass over the whole walk before any leader is looked up,
+    /// so a leader that is walked in this very poll is never missed for
+    /// want of iteration order.
+    pub fn absorb(&mut self, snapshot: &[KernProc], root: i32) {
+        let walked = descendants_by_ppid(snapshot, root);
+        for entry in &walked {
+            self.seen.insert((entry.pid, entry.started));
+        }
+        for entry in &walked {
+            if self.groups.contains_key(&entry.pgid) {
+                continue;
+            }
+            let leader = snapshot
+                .iter()
+                .find(|p| p.pid == entry.pgid)
+                .filter(|leader| leader.pid == root || self.seen.contains(&(leader.pid, leader.started)))
+                .map(|leader| (leader.pid, leader.started));
+            self.groups.insert(entry.pgid, leader);
+        }
+    }
+
+    /// The pids to reap right now: a fresh snapshot's entries whose (pid,
+    /// stamp) this session has itself seen, or whose group this session has
+    /// itself seen led by one of its own descendants **and** whose recorded
+    /// leader is still plausible against this same fresh table — minus
+    /// whatever `exclude` names, which is this app's own pid and the pid of
+    /// every session still alive (`terminal/service.rs`'s own exclusion
+    /// list). Pure over the fresh snapshot and the two sets accumulated so
+    /// far, so the whole rule is testable with no process table beyond one
+    /// fixture.
+    pub fn candidates(&self, snapshot: &[KernProc], exclude: &[i32]) -> Vec<i32> {
+        snapshot
+            .iter()
+            .filter(|p| !exclude.contains(&p.pid))
+            .filter(|p| {
+                self.seen.contains(&(p.pid, p.started))
+                    || self
+                        .groups
+                        .get(&p.pgid)
+                        .is_some_and(|leader| group_leader_plausible(*leader, snapshot))
+            })
+            .map(|p| p.pid)
+            .collect()
+    }
+
+    /// Whether this session's own poller has ever seen anything at all —
+    /// `terminal/service.rs`'s guard for whether it is worth asking `procs`
+    /// for a fresh snapshot on a session that never spawned a thing.
+    pub fn is_empty(&self) -> bool {
+        self.seen.is_empty() && self.groups.is_empty()
+    }
+}
+
+/// Whether a group's recorded leader still stands up against a fresh
+/// snapshot, which is `candidates`' own guard against a reused pgid: a
+/// group is trusted only while nothing in the table contradicts the one
+/// process this session ever saw lead it.
+///
+/// `None` refuses. Absorbing no longer produces it for the case the
+/// permissive reading was written to protect — a `setsid` leader whose own
+/// exit was the first thing any poll ever learned about the group — because
+/// that shape cannot occur: such a leader's children reparent under pid 1
+/// the instant it exits and leave `descendants_by_ppid`'s reach entirely,
+/// so the group could never have been folded in to begin with. What `None`
+/// means now is `absorb` finding a *stranger* at that pgid — a pid this
+/// session never walked, standing in for a leader already gone by the time
+/// of the very first poll that saw the group — and refusing to record it,
+/// exactly a job-control pipeline a non-interactive `bash` never creates.
+/// Trusting the group on the strength of a fact this file could never
+/// establish would buy back the reused-pid risk the pairing exists to
+/// close.
+///
+/// `Some` passes only if the fresh table's own entry for that pid — if
+/// there is one — carries the identical start stamp: gone entirely is the
+/// ordinary shape of a process group outliving its leader on Unix, and is
+/// trusted for the same reason `registry::group_is_dead`'s own reasoning
+/// trusts it elsewhere in this tree; present under a *different* stamp is
+/// the pid having been handed to somebody else, and that is exactly the
+/// reused-pid case this whole file exists to refuse a signal to.
+#[cfg(target_os = "macos")]
+fn group_leader_plausible(leader: Option<(i32, u64)>, snapshot: &[KernProc]) -> bool {
+    let Some((pid, started)) = leader else { return false };
+    match snapshot.iter().find(|p| p.pid == pid) {
+        Some(found) => found.started == started,
+        None => true,
+    }
+}
+
+/// macOS's private `proc_pidinfo` flavour for a process's resource
+/// coalition — 20, undocumented anywhere in the public SDK.
+#[cfg(target_os = "macos")]
+const PROC_PIDCOALITIONINFO: libc::c_int = 20;
+
+/// The 40-byte struct that flavour hands back, declared by hand because
+/// nowhere in the public SDK does: three coalition ids (index 0 is the
+/// resource/jetsam coalition this file cares about; the app, every agent it
+/// starts and anything reparented under pid 1 after leaving one of them all
+/// carry the identical value there — see the module header), a requested
+/// role that was measured as 0 for every member on this machine and cannot
+/// tell one apart from another, and three reserved words. **This struct is
+/// private and unstable by nature — any answer whose size does not match it
+/// exactly is read by `interpret_coalition` as `Unknown`, and that is what
+/// makes an SDK that changes its shape degrade this file's whole macOS
+/// coalition sweep to doing nothing, rather than reading a stranger's bytes
+/// as a resource id.**
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct ProcPidCoalitionInfo {
+    coalition_id: [u64; 3],
+    requested_role: u32,
+    reserved1: u32,
+    reserved2: u32,
+    reserved3: u32,
+}
+
+/// What this file could establish about a pid's coalition.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Coalition {
+    Known(u64),
+    /// The call failed, the pid is gone, or the kernel answered a size this
+    /// file does not recognise. Never read as evidence of anything, the same
+    /// rule every other `Unknown` in this module keeps.
+    Unknown,
+}
+
+/// The pure half of `coalition`: given how many bytes actually came back
+/// against how many were expected, and the resource id that was in the
+/// buffer regardless, what does this file conclude? Split out so the
+/// "unexpected size" case — the one this struct's whole safety rests on —
+/// can be driven by a test with no `proc_pidinfo` call at all.
+#[cfg(target_os = "macos")]
+fn interpret_coalition(read: libc::c_int, expected: usize, resource_id: u64) -> Coalition {
+    if read == expected as libc::c_int {
+        Coalition::Known(resource_id)
+    } else {
+        Coalition::Unknown
+    }
+}
+
+/// This pid's resource coalition, or `Unknown` if it cannot be read — gone,
+/// belonging to another user, or a kernel that answered the wrong size.
+#[cfg(target_os = "macos")]
+pub fn coalition(pid: i32) -> Coalition {
+    let mut info =
+        ProcPidCoalitionInfo { coalition_id: [0; 3], requested_role: 0, reserved1: 0, reserved2: 0, reserved3: 0 };
+    let size = std::mem::size_of::<ProcPidCoalitionInfo>() as libc::c_int;
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            PROC_PIDCOALITIONINFO,
+            0,
+            (&mut info as *mut ProcPidCoalitionInfo).cast::<libc::c_void>(),
+            size,
+        )
+    };
+    interpret_coalition(read, size as usize, info.coalition_id[0])
+}
+
+/// This app's own resource coalition — every agent it starts, and anything
+/// they leave behind, shares it.
+#[cfg(target_os = "macos")]
+pub fn own_coalition() -> Coalition {
+    coalition(std::process::id() as i32)
+}
+
+/// The one further check points 3 and 4 need beyond `own_coalition`,
+/// layered on top of it rather than folded into it: whether this app's own
+/// coalition is actually its own, and not merely inherited from whatever
+/// launched it.
+///
+/// A process spawned by fork/exec from a shell inherits that shell's
+/// coalition unchanged; only launchd — an installed, double-clicked or
+/// `open`-launched build — puts an application in a coalition of its own.
+/// `npm run tauri dev` therefore gives this application whatever coalition
+/// the launching terminal emulator already had, shared with every other
+/// tab and everything ever started from any of them, and sweeping that
+/// coalition at points 3 and 4 would hang up and kill a person's own
+/// `nohup`ed job or a backgrounded server the moment its own parent shell
+/// happened to exit — with no agent session of this app's own involved at
+/// all. Dev is how this project is run and checked every day, and it is
+/// the very machine the incident behind this whole task was found on; an
+/// installed build is unaffected, which is exactly what would keep the gap
+/// from ever being noticed.
+///
+/// The test: if this process's own coalition is identical to its
+/// **parent's** (`getppid`), nothing distinguished launching this app from
+/// an ordinary fork — a coalition of its own is what launchd gives an
+/// application and a shell never does.
+///
+/// **What that question is actually about is a fact fixed at launch, and
+/// `getppid` answers a question about right now — those are not the same
+/// question, and asking it fresh at the wrong moment answers it wrong.**
+/// When the process that launched this app exits — the ordinary shape of a
+/// launching terminal tab closing, or of `npm run tauri dev` itself being
+/// stopped — `getppid` starts answering 1 (this process is reparented to
+/// launchd, on Unix, exactly like anything else that loses its parent), and
+/// launchd's own coalition was measured as 1 too, which differs from a
+/// dev-launched app's inherited coalition: the guard would then read
+/// "dedicated" and points 3 and 4 would resume sweeping a coalition that is
+/// still the launching terminal's, shared with every tab — in precisely the
+/// reparent state the four sweep points exist to catch. Worse, the two
+/// callers used to ask fresh at different moments of one launch —
+/// `recovery::own_coalition` on the first `note_run`, `mac_app_exit_candidates`
+/// at the application's own exit — so one launch could answer the question
+/// two different ways, a run writing a coalition id its own exit sweep then
+/// declined to use, or the reverse.
+///
+/// So the comparison is made exactly once, cached in a `OnceLock`, and
+/// **forced early** by `terminal::service::start` — while whatever launched
+/// this app, if anything did, is certain still to be running, since the
+/// app has only just started. Every other caller reads the cached answer
+/// from then on, however this app's own parent goes on to change. `force`
+/// below is `start`'s own entry point for that; ordinary callers use this
+/// function and never think about the caching at all.
+///
+/// `mac_app_exit_candidates` (point 3) and `recovery::note_run` (point 4)
+/// call this rather than `own_coalition` directly, and both fall back to
+/// whatever a session's own accumulated snapshot already covers when it
+/// answers `Unknown` — see the module header. `own_coalition` itself is
+/// unchanged and still answers the bare, un-cached fact for any other
+/// reader, such as its own test beside it, that wants to know rather than
+/// to act on it.
+#[cfg(target_os = "macos")]
+pub fn own_dedicated_coalition() -> Coalition {
+    static DEDICATED: std::sync::OnceLock<Coalition> = std::sync::OnceLock::new();
+    *DEDICATED.get_or_init(|| {
+        let mine = own_coalition();
+        // An unreadable parent coalition is `Unknown` exactly as a single
+        // `proc_pidinfo` call already treats one: this file can never show
+        // the process is not sharing a coalition, so it is read the same
+        // permissive-to-the-stranger way as if it plainly were.
+        let theirs = coalition(unsafe { libc::getppid() });
+        match (mine, theirs) {
+            (Coalition::Known(a), Coalition::Known(b)) if a != b => Coalition::Known(a),
+            _ => Coalition::Unknown,
+        }
+    })
+}
+
+/// Computes and caches `own_dedicated_coalition`'s answer, if nothing has
+/// already — called once, at `terminal::service::start`, before any session
+/// exists to race it and long before either of that function's own callers
+/// can run. Calling it again after the first is free: `OnceLock` answers
+/// its cached value and never re-asks `getppid`.
+#[cfg(target_os = "macos")]
+pub fn force_own_dedicated_coalition() {
+    let _ = own_dedicated_coalition();
+}
+
+/// The path of the executable behind a pid, through `proc_pidpath` — the same
+/// call `ps` itself is built on, public and unprivileged for a process this
+/// user owns.
+#[cfg(target_os = "macos")]
+pub fn exe_path(pid: i32) -> Option<String> {
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let read =
+        unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast::<libc::c_void>(), buf.len() as u32) };
+    if read <= 0 {
+        return None;
+    }
+    buf.truncate(read as usize);
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// This app's own XPC helpers — WebKit's GPU/Networking/WebContent
+/// processes, the open/save panel service, QuickLook, and so on — share its
+/// coalition and end up with `ppid == 1` once their own launching service
+/// exits, which is indistinguishable from an orphan by coalition and parent
+/// alone. Measured for this task: every one of them runs out of a bundle
+/// under `.../XPCServices/…` (this app's own plugins) or its own `*.xpc/`
+/// bundle (the system frameworks'), so a path check is what tells them apart
+/// — without it, this app's own coalition sweep would kill its own webview.
+#[cfg(target_os = "macos")]
+pub fn is_xpc_service(path: &str) -> bool {
+    path.contains("/XPCServices/") || path.contains(".xpc/")
+}
+
+/// Candidates for the macOS coalition sweep (points 3 and 4): every process
+/// on the machine sharing `coalition`, reparented under pid 1 — `ppid == 1`
+/// is what proves nobody but init stands over it any more, and coalition
+/// membership is what proves it is this app's own leaving and not some
+/// stranger's — excluding this app's own pid, every XPC helper, and anything
+/// `exclude` names (a still-live session's own pid, at point 3; nothing, at
+/// point 4, where a dead instance's own sessions are gone by definition).
+///
+/// **The XPC exclusion is a positive match, on purpose, and not a refusal
+/// only when `is_xpc_service` says so.** `exe_path` itself can answer
+/// `None` — `proc_pidpath` refused, or the pid went between two reads — and
+/// that is `Unknown` exactly as `coalition`'s own read is: a path this file
+/// could not establish is never a licence to keep the candidate, since the
+/// one thing standing between this sweep and the application's own WebKit
+/// and AppKit helpers is this very check. So a candidate is kept only when
+/// its path was actually read *and* is not one of theirs; an unreadable
+/// path drops it, the same direction `Coalition::Unknown` already drops a
+/// pid whose coalition could not be read.
+#[cfg(target_os = "macos")]
+pub fn coalition_candidates(snapshot: &[KernProc], coalition: u64, exclude: &[i32]) -> Vec<i32> {
+    let me = std::process::id() as i32;
+    snapshot
+        .iter()
+        .filter(|p| p.ppid == 1 && p.pid != me && !exclude.contains(&p.pid))
+        .filter(|p| matches!(self::coalition(p.pid), Coalition::Known(id) if id == coalition))
+        .filter(|p| exe_path(p.pid).is_some_and(|path| !is_xpc_service(&path)))
+        .map(|p| p.pid)
+        .collect()
+}
+
+/* =======================================================================
+ * Windows: a Job Object per agent session, in place of a mark or a
+ * coalition. See the module header for why this backend needs neither.
+ * ======================================================================= */
+
+/// The job assigned to one agent session's own child, with
+/// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` set — `terminal/pty.rs`'s own answer
+/// to points 1 through 3, and to point 4 for free.
+///
+/// `HANDLE` is `Send` in every way this app uses it: the Win32 API is
+/// documented as safe to call on any thread with a handle that was itself
+/// obtained validly, and this one crosses from the worker's own tokio task
+/// (where the session was spawned) to nowhere else at all — it lives inside
+/// the one `Live` entry that owns the session, exactly where the process
+/// handle `portable-pty` gives back already lives.
+#[cfg(windows)]
+pub struct SessionJob(windows::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+unsafe impl Send for SessionJob {}
+
+#[cfg(windows)]
+impl SessionJob {
+    /// A new, unnamed job with `KILL_ON_JOB_CLOSE` set. `None` on any step
+    /// failing, which is `Unknown`'s Windows shape: a session that could not
+    /// be given a job is left exactly as this feature would leave it if it
+    /// did not exist, rather than half-wired to a job nothing will ever be
+    /// assigned to.
+    pub fn new() -> Option<Self> {
+        use windows::Win32::System::JobObjects::{
+            JobObjectExtendedLimitInformation, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+        use windows::Win32::System::JobObjects::CreateJobObjectW;
+        use windows::core::PCWSTR;
+
+        let handle = unsafe { CreateJobObjectW(None, PCWSTR::null()) }.ok()?;
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let set = unsafe {
+            SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast::<core::ffi::c_void>(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if set.is_err() {
+            unsafe { let _ = windows::Win32::Foundation::CloseHandle(handle); }
+            return None;
+        }
+        Some(Self(handle))
+    }
+
+    /// Puts this session's own child into the job. The window between
+    /// `spawn_command` returning and this call landing is milliseconds, and
+    /// a grandchild the child spawns inside that window is not yet a member
+    /// of anything — see `.claude/rules/terminal.md` for the size of that
+    /// window measured against the harnesses this app actually starts, and
+    /// why it is accepted rather than closed by serialising every session's
+    /// start behind it.
+    pub fn assign(&self, pid: u32) -> bool {
+        use windows::Win32::System::JobObjects::AssignProcessToJobObject;
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+
+        let Ok(process) = (unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid) })
+        else {
+            return false;
+        };
+        let assigned = unsafe { AssignProcessToJobObject(self.0, process) }.is_ok();
+        unsafe { let _ = windows::Win32::Foundation::CloseHandle(process); }
+        assigned
+    }
+
+    /// Points 1 through 3: everything this job has ever held, gone at once.
+    /// Windows has no SIGHUP and no grace period to wait out — see the
+    /// module header — so this is the whole of the signal, on the spot.
+    pub fn terminate(&self) -> bool {
+        use windows::Win32::System::JobObjects::TerminateJobObject;
+        unsafe { TerminateJobObject(self.0, 1) }.is_ok()
+    }
+
+    /// Test-only: reads the limit flags back off the job object itself,
+    /// through `QueryInformationJobObject` — the read half of what `new`
+    /// above writes with `SetInformationJobObject` — so a test can check the
+    /// flag actually landed on the kernel object rather than trusting the
+    /// write call's own `Ok`. `pub(crate)` rather than private because the
+    /// one reader is `terminal::pty`'s own test module and not this one;
+    /// `#[cfg(test)]` because nothing this app ships ever needs to ask a job
+    /// what it already knows it asked for.
+    #[cfg(test)]
+    pub(crate) fn limit_flags(&self) -> Option<windows::Win32::System::JobObjects::JOB_OBJECT_LIMIT> {
+        use windows::Win32::System::JobObjects::{
+            JobObjectExtendedLimitInformation, QueryInformationJobObject,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        };
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        let size = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+        let read = unsafe {
+            QueryInformationJobObject(
+                Some(self.0),
+                JobObjectExtendedLimitInformation,
+                (&mut info as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast::<core::ffi::c_void>(),
+                size,
+                None,
+            )
+        };
+        read.is_ok().then_some(info.BasicLimitInformation.LimitFlags)
+    }
+}
+
+/// Point 4 costs this app nothing to write: `KILL_ON_JOB_CLOSE` means the
+/// *kernel itself* kills a job the moment its last open handle closes, and a
+/// process dying — however it dies — closes every handle it held. So a dead
+/// previous instance's own jobs are already gone by the time the next
+/// instance is running, and there is nothing here for a start-up sweep to
+/// find.
+#[cfg(windows)]
+impl Drop for SessionJob {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -395,5 +1280,447 @@ mod tests {
             assert!(!hangup_group(pid));
             assert!(!kill_group(pid));
         }
+    }
+
+    /* ---- the SMETANA_SESSION mark, added in smetana-kkz2 ------------------ */
+
+    #[test]
+    fn a_mark_parses_back_into_the_three_numbers_it_was_built_from() {
+        assert_eq!(parse_mark("123:456:7"), Some((123, 456, 7)));
+        assert_eq!(parse_mark(""), None, "not three parts at all");
+        assert_eq!(parse_mark("123:456"), None, "too few parts");
+        assert_eq!(parse_mark("123:456:7:8"), None, "too many parts");
+        assert_eq!(parse_mark("x:456:7"), None, "the first part is not a number");
+        assert_eq!(parse_mark("123:456:x"), None, "the last part is not a number");
+    }
+
+    #[test]
+    fn a_mark_round_trips_through_the_app_that_wrote_it() {
+        let Some(mine) = own() else {
+            eprintln!("this platform cannot read a process start time; nothing to check");
+            return;
+        };
+        let value = mark(42).expect("a platform that can answer `own` can build a mark");
+        assert_eq!(parse_mark(&value), Some((mine.pid, mine.started, 42)));
+    }
+
+    #[test]
+    fn nothing_signals_a_pid_this_app_may_not_reap() {
+        // The same four the tracker's design carries: nothing at or below 1,
+        // and never this very process, whatever a stray environment variable
+        // elsewhere on the machine happened to claim.
+        let me = std::process::id() as i32;
+        for pid in [-1, 0, 1, me] {
+            assert!(!hangup_pid(pid), "{pid}");
+            assert!(!kill_pid(pid), "{pid}");
+        }
+    }
+
+    /// A child in a process group of its own — the shape `setsid`, `nohup`
+    /// and a shell's `&` all leave, and exactly the one `killpg` can no
+    /// longer reach once its own leader has gone. This is the smallest such
+    /// shape a test may safely make: a plain `/bin/sleep`, in nobody's group
+    /// but its own, carrying the one mark this test wrote.
+    #[cfg(target_os = "linux")]
+    fn marked_child(mark: &str) -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+        std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .env(MARK_KEY, mark)
+            .process_group(0)
+            .spawn()
+            .expect("a marked child to find")
+    }
+
+    /// Polls a condition rather than sleeping a fixed amount: the mark is set
+    /// at exec, and reading it back out through the kernel is not promised to
+    /// be instant the moment `spawn` returns.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn wait_for(mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !condition() {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        true
+    }
+
+    /// Every test here signals only a child it started itself: this reads the
+    /// process table but never acts on what it finds, which is the guard
+    /// `hangup_pid`/`kill_pid` and their tests keep separately.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_marked_child_in_its_own_group_is_found_by_its_mark_and_lost_with_it() {
+        let value = mark(999_001).expect("this platform can build a mark");
+        let mut child = marked_child(&value);
+        let pid = child.id() as i32;
+
+        assert!(wait_for(|| marked(&value) == vec![pid]));
+        assert!(!marked(&value).contains(&(std::process::id() as i32)), "never this test's own pid");
+
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(wait_for(|| marked(&value).is_empty()), "the child is still found once it is gone");
+    }
+
+    /// The other half of the same mark: whether its app half is provably
+    /// dead is `strays`' own question, and it has to answer "no" for an app
+    /// that is plainly still running before it can be trusted to answer "yes"
+    /// for one that is not.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_marked_child_is_a_stray_only_once_its_app_half_is_provably_dead() {
+        // This test process is the app half here, and it is running — so a
+        // child marked under it must never be read as a stray.
+        let live = mark(999_002).expect("this platform can build a mark");
+        let mut alive = marked_child(&live);
+        assert!(wait_for(|| marked(&live).contains(&(alive.id() as i32))));
+        assert!(
+            !strays().iter().any(|(_, value)| value == &live),
+            "the app this mark names is still running"
+        );
+        let _ = alive.kill();
+        let _ = alive.wait();
+
+        // No kernel hands out `i32::MAX`, so this app half is provably gone
+        // from the moment the child starts — the shape a killed app's own
+        // session leaves behind.
+        let dead = format!("{}:{}:{}", i32::MAX, 1, 999_003);
+        let mut orphan = marked_child(&dead);
+        let pid = orphan.id() as i32;
+        assert!(
+            wait_for(|| strays().iter().any(|(found, value)| *found == pid && value == &dead)),
+            "a mark whose app half is provably gone must be found as a stray"
+        );
+
+        let _ = orphan.kill();
+        let _ = orphan.wait();
+    }
+
+    /* ---- macOS: the descendant snapshot and the coalition, added in
+     * smetana-kkz2's second attempt ---------------------------------------- */
+
+    /// `setsid()` then `exec /bin/sleep`, the shape Claude Code's own Bash
+    /// tool leaves behind and exactly the shape `Descendants::candidates`
+    /// exists to find by process group once the parent-pid link to it is
+    /// gone. A tiny helper binary rather than a `setsid` *command*: macOS
+    /// carries no such command at all (see `.claude/rules/terminal.md`'s
+    /// reproduction steps), only the syscall.
+    #[cfg(target_os = "macos")]
+    fn escaping_child() -> std::process::Command {
+        // Built once per test process into a temp file, since there is no
+        // `setsid` binary on this platform to shell out to and Rust has no
+        // portable way to ask a spawned child to call the syscall on its own
+        // behalf before it execs.
+        static BIN: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        let bin = BIN.get_or_init(|| {
+            let src = r#"
+                #include <unistd.h>
+                int main(void) {
+                    if (setsid() == -1) { return 1; }
+                    execl("/bin/sleep", "sleep", "30", (char*)0);
+                    return 1;
+                }
+            "#;
+            let dir = std::env::temp_dir().join(format!("smetana-kkz2-escaper-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("a scratch directory");
+            let c = dir.join("escaper.c");
+            let bin = dir.join("escaper");
+            std::fs::write(&c, src).expect("write the helper's source");
+            let status = std::process::Command::new("cc")
+                .arg("-O0")
+                .arg("-o")
+                .arg(&bin)
+                .arg(&c)
+                .status()
+                .expect("a C compiler to build the helper with");
+            assert!(status.success(), "the escaping-child helper must build");
+            bin
+        });
+        std::process::Command::new(bin)
+    }
+
+    /// The half of the acceptance criterion this live process can actually
+    /// exercise: a child spawned in its own process group is visible in a
+    /// fresh snapshot by its `ppid`, and once it is gone neither `seen` nor
+    /// `groups` finds it any more. It does **not** exercise the pgid branch
+    /// — this escaper is this very test's own direct child throughout, so
+    /// `seen` alone already matches it on every fresh snapshot, and nothing
+    /// here ever severs the `ppid` chain the way an intermediate shell
+    /// exiting would. That branch, and the leader-identity guard beside it,
+    /// are pinned by the pure fixture tests just below instead, over
+    /// `candidates` directly: deterministic, and reachable with no process
+    /// tree of their own to keep alive.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_macos_descendant_is_found_by_ppid_and_lost_once_it_is_gone() {
+        let mut shell = escaping_child();
+        let mut child = shell.spawn().expect("a process to track");
+        let shell_pid = child.id() as i32;
+
+        // The escaper's own pid, not the shell's: it `exec`s in place, so
+        // this pid answers for the running `sleep` throughout.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut descendants = Descendants::default();
+        loop {
+            let snapshot = snapshot_all().expect("this test's own platform can snapshot");
+            let found = descendants_by_ppid(&snapshot, std::process::id() as i32);
+            // The escaper reparents itself under nobody — it *is* the direct
+            // child here, found by walking from this test process.
+            if found.iter().any(|p| p.pid == shell_pid) {
+                descendants.absorb(&snapshot, std::process::id() as i32);
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "the child never appeared in a snapshot");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!descendants.is_empty(), "the poll folded the child in");
+
+        let fresh = snapshot_all().expect("a fresh snapshot");
+        let candidates = descendants.candidates(&fresh, &[std::process::id() as i32]);
+        assert!(candidates.contains(&shell_pid), "still found while it lives: {candidates:?}");
+
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(wait_for(|| look(shell_pid) == Seen::Gone), "the child is reaped");
+        let fresh = snapshot_all().expect("a fresh snapshot");
+        assert!(
+            !descendants.candidates(&fresh, &[]).contains(&shell_pid),
+            "gone from the fresh table, gone from the candidates"
+        );
+
+        // The scratch directory `escaping_child` built its helper binary
+        // into — same formula, since the `OnceLock` inside that function
+        // keeps no path a caller can ask for. Removed rather than left for
+        // the OS's own temp cleanup: this suite runs `cc` again on every
+        // invocation, and a directory a day never emptied is exactly the
+        // kind of leftover this whole task exists to stop leaving.
+        let scratch = std::env::temp_dir().join(format!("smetana-kkz2-escaper-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// `candidates`' own three ways to match, driven by a hand-built
+    /// snapshot rather than a live process tree — deterministic, and the one
+    /// place the pgid branch is actually exercised: a pid `seen` directly, a
+    /// pid whose group this session once saw led by a process that is still
+    /// standing in the fresh table (the group's own leader, plus a sibling
+    /// that joined it later and was never itself walked by `ppid` at all —
+    /// exactly the shape a member that joins an already-escaped group after
+    /// its own intermediate shell has gone leaves), and a pid matching
+    /// neither. `exclude` removes one that would otherwise match.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn candidates_matches_by_seen_pid_or_by_a_group_whose_leader_still_checks_out() {
+        let mut descendants = Descendants::default();
+        descendants.seen.insert((42, 7));
+        descendants.groups.insert(500, Some((500, 100)));
+
+        let snapshot = vec![
+            KernProc { pid: 42, ppid: 1, pgid: 42, started: 7 },
+            KernProc { pid: 500, ppid: 1, pgid: 500, started: 100 },
+            KernProc { pid: 501, ppid: 500, pgid: 500, started: 150 },
+            KernProc { pid: 999, ppid: 1, pgid: 999, started: 1 },
+        ];
+
+        assert_eq!(descendants.candidates(&snapshot, &[]), vec![42, 500, 501]);
+        assert_eq!(descendants.candidates(&snapshot, &[500]), vec![42, 501], "exclude removes a match");
+    }
+
+    /// HIGH 2's own guard, read straight rather than through `absorb`: a
+    /// group whose recorded leader answers under a *different* start stamp
+    /// in the fresh table is a reused pid, not the process this session ever
+    /// led anything from, and must not draw a signal meant for whatever used
+    /// to stand there — the bare pgid this replaced would have matched
+    /// regardless. The identical pid under the identical stamp is still
+    /// trusted.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_group_whose_recorded_leader_has_been_replaced_by_a_reused_pid_is_refused() {
+        let mut descendants = Descendants::default();
+        descendants.groups.insert(500, Some((500, 100)));
+
+        let reused = vec![KernProc { pid: 500, ppid: 1, pgid: 500, started: 999 }];
+        assert!(descendants.candidates(&reused, &[]).is_empty(), "500 is somebody else now");
+
+        let same = vec![KernProc { pid: 500, ppid: 1, pgid: 500, started: 100 }];
+        assert_eq!(descendants.candidates(&same, &[]), vec![500], "the same process, still trusted");
+    }
+
+    /// `a_group_is_still_trusted_when_its_leader_cannot_be_checked_at_all`
+    /// pinned the permissive reading of `None` that review withdrew: a group
+    /// no poll ever caught a leader for used to be trusted on nothing at
+    /// all, which left a frozen `None` group free to sit in an exited
+    /// session's map for hours — since absorbing stops at exit — until point
+    /// 3 matched it against a fresh table over exactly the interval a pgid
+    /// is most likely to have been recycled in. This is that test's
+    /// replacement, pinning the rule as it now stands rather than the one
+    /// review found: an exited leader is still trusted (unchanged — the
+    /// ordinary shape of a process group outliving its leader on Unix), and
+    /// a leader that was never established as ours is refused outright.
+    /// Reverting `group_leader_plausible`'s `None` arm from `false` back to
+    /// `true` makes the second assertion fail: `candidates` would find pid
+    /// 501 through the untrusted group again.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_group_whose_leader_exited_is_trusted_but_one_never_established_is_refused() {
+        let mut exited_leader = Descendants::default();
+        exited_leader.groups.insert(500, Some((500, 100)));
+        let orphaned = vec![KernProc { pid: 501, ppid: 1, pgid: 500, started: 150 }];
+        assert_eq!(exited_leader.candidates(&orphaned, &[]), vec![501]);
+
+        let mut never_established = Descendants::default();
+        never_established.groups.insert(500, None);
+        let snapshot = vec![KernProc { pid: 501, ppid: 1, pgid: 500, started: 150 }];
+        assert!(
+            never_established.candidates(&snapshot, &[]).is_empty(),
+            "a group with no established leader must not be trusted on the bare pgid alone"
+        );
+    }
+
+    /// The write side of the same guard: `absorb` records a group's leader
+    /// only the first time it ever sees that pgid, and a later poll whose
+    /// own snapshot shows a *different* process now answering for that pid
+    /// must not overwrite what was already recorded — the leader a group had
+    /// does not change over its life, and overwriting it with a reused pid's
+    /// stamp would quietly reopen HIGH 2 from the write side instead of the
+    /// read side.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn absorb_records_a_groups_leader_once_and_never_overwrites_it() {
+        let mut descendants = Descendants::default();
+        let first = vec![
+            KernProc { pid: 10, ppid: 1, pgid: 10, started: 5 },
+            KernProc { pid: 11, ppid: 10, pgid: 10, started: 6 },
+        ];
+        descendants.absorb(&first, 10);
+
+        // A later poll where pid 10 has already been reaped and reused —
+        // `absorb` must not take this as the group's leader instead.
+        let second =
+            vec![KernProc { pid: 10, ppid: 1, pgid: 10, started: 999 }, first[1]];
+        descendants.absorb(&second, 10);
+
+        let fresh = vec![KernProc { pid: 10, ppid: 1, pgid: 10, started: 999 }];
+        assert!(
+            descendants.candidates(&fresh, &[]).is_empty(),
+            "the reused pid at 999 must never pass as the leader recorded at 5"
+        );
+    }
+
+    /// `absorb`'s own ownership filter, exercised directly rather than
+    /// through a hand-built fixture: a walked descendant (pid 101, a child
+    /// of root) shares a pgid with a process (pid 50) this session never
+    /// walked and that is not root either — a job-control pipeline whose own
+    /// leader is long gone and whose pid a stranger now holds, in the very
+    /// same poll that first sees the group. The old, unguarded lookup would
+    /// have recorded that stranger as the group's leader; this one must
+    /// leave the group untrusted, so nothing sharing pgid 50 is ever found
+    /// through it — only pid 101 itself, found directly through `seen`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn absorb_never_records_a_stranger_as_a_groups_leader() {
+        let mut descendants = Descendants::default();
+        let snapshot = vec![
+            KernProc { pid: 101, ppid: 100, pgid: 50, started: 6 },
+            KernProc { pid: 50, ppid: 1, pgid: 50, started: 1 },
+        ];
+        descendants.absorb(&snapshot, 100);
+
+        assert_eq!(
+            descendants.candidates(&snapshot, &[]),
+            vec![101],
+            "pid 101 through seen; pid 50 never through an untrusted group"
+        );
+    }
+
+    /// The `seen` branch of `absorb`'s own ownership filter, pinned
+    /// directly: a leader two levels under root (pid 200, its own pgid —
+    /// it called `setsid` itself) is neither `root` nor found any other way
+    /// but through `self.seen`, populated by the first pass over the whole
+    /// walk before any leader is looked up. Narrow the filter to
+    /// `leader.pid == root` alone and this goes red. A sibling that joins
+    /// the group later, and is never itself walked from root at all, is
+    /// then found purely through the recorded leader.
+    ///
+    /// **What this does not pin, despite its own name**: `descendants_by_ppid`
+    /// is a DFS that yields a parent before its children, and in this
+    /// fixture every walked entry is its own group's leader (`pid == pgid`
+    /// for both 199 and 200), so a single-pass `absorb` — insert into
+    /// `seen`, then immediately check that very entry's own leadership —
+    /// would answer this fixture identically; revert the two-pass
+    /// restructuring and this test stays green. A test that actually needed
+    /// two passes would have to build the shape they exist for: a member
+    /// whose group *leader is a sibling rather than an ancestor*, walked
+    /// after that member in the snapshot's own order — a job-control
+    /// pipeline this fixture does not construct.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn absorb_records_a_deeper_leader_walked_in_the_same_poll() {
+        let mut descendants = Descendants::default();
+        let snapshot = vec![
+            KernProc { pid: 199, ppid: 100, pgid: 199, started: 8 },
+            KernProc { pid: 200, ppid: 199, pgid: 200, started: 9 },
+        ];
+        descendants.absorb(&snapshot, 100);
+
+        // A later sibling in pid 200's group, never walked from root at all
+        // — the chain above it has already reparented away by the time it
+        // spawns — found only because pid 200 was recorded as its leader.
+        let fresh = vec![KernProc { pid: 201, ppid: 1, pgid: 200, started: 20 }];
+        assert_eq!(descendants.candidates(&fresh, &[]), vec![201]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_unexpected_coalition_read_size_answers_unknown() {
+        assert_eq!(interpret_coalition(40, 40, 99), Coalition::Known(99));
+        assert_eq!(interpret_coalition(-1, 40, 99), Coalition::Unknown, "the call itself failed");
+        assert_eq!(interpret_coalition(0, 40, 99), Coalition::Unknown, "nothing was read");
+        assert_eq!(
+            interpret_coalition(24, 40, 99),
+            Coalition::Unknown,
+            "a short read — an SDK whose struct shrank under this file"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn this_process_can_read_its_own_coalition() {
+        // The measurement the design rests on, checked live rather than only
+        // in the rule file: this process answers a coalition id at all, and
+        // asking twice answers the same one.
+        let Coalition::Known(id) = own_coalition() else {
+            panic!("this platform answered proc_pidinfo(20) for its own pid; Unknown means the struct \
+                    no longer matches and the whole macOS coalition sweep is inert");
+        };
+        assert_eq!(own_coalition(), Coalition::Known(id), "stable across two reads");
+    }
+
+    /// The live proof of the dev-build caveat itself, and the reason it is
+    /// checkable at all from inside a test: `cargo test` is exactly the
+    /// shape `own_dedicated_coalition` is written against. This binary's
+    /// own coalition is inherited from `cargo`'s, itself inherited from
+    /// whatever shell started `cargo`, so nothing here was ever put in a
+    /// coalition of its own — the one shape this answers `Known` for is a
+    /// `launchd`-started build, and there is no way to produce that shape
+    /// from inside a test binary.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn own_dedicated_coalition_is_unknown_under_a_shell_launched_test_binary() {
+        assert_eq!(own_dedicated_coalition(), Coalition::Unknown);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_bundled_xpc_helpers_path_is_excluded_and_an_ordinary_binarys_is_not() {
+        assert!(is_xpc_service("/Applications/Smetana.app/Contents/XPCServices/Foo.xpc/Contents/MacOS/Foo"));
+        assert!(is_xpc_service(
+            "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent"
+        ));
+        assert!(!is_xpc_service("/bin/sleep"));
+        assert!(!is_xpc_service("/usr/local/bin/claude"));
     }
 }

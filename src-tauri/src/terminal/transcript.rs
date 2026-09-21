@@ -10,6 +10,18 @@
 //! It sits in `service::absorb`, before the ring, the screen and the pending
 //! queue, which is what keeps the subsystem's one invariant: a single stream,
 //! three emulations of the same bytes, agreeing by construction.
+//!
+//! Every rendered line is prefixed here with a local `YYYY-MM-DD HH:MM:SS `
+//! stamp, taken when the line is rendered rather than by either translator —
+//! neither harness's own event carries a timestamp, and the moment a line
+//! reaches this function is the one thing both stream formats have in common,
+//! good to the delay of a PTY read. It matches `runs::journal::stamp`'s format
+//! byte for byte, so a line on the panel and a line in the run's own journal
+//! are found by the same time string. The clock is a field rather than a call
+//! to `chrono::Local::now()` inside `feed`, so the byte-for-byte tests below
+//! can hold it fixed.
+
+use chrono::{DateTime, Local};
 
 /// The ceiling on a line that has not ended yet. A tool result carrying a large
 /// file is one enormous line, and this runs for the length of a night.
@@ -17,6 +29,10 @@ pub const MAX_LINE: usize = 1 << 20;
 
 pub struct Transcript {
     render: fn(&str) -> Vec<String>,
+    /// Where "now" comes from for the stamp on each rendered line.
+    /// `Local::now` in production; a fixed closure in the tests below, so a
+    /// byte-for-byte comparison does not race the wall clock.
+    clock: fn() -> DateTime<Local>,
     /// Bytes rather than a `String`, so that a multi-byte character split
     /// across two PTY reads is decoded once, whole, when its line ends —
     /// decoding each chunk as it arrives would put a replacement character in
@@ -27,9 +43,21 @@ pub struct Transcript {
     dropped: bool,
 }
 
+/// `runs::journal::stamp`'s own format, with the trailing space the spec
+/// wants between the stamp and the line it precedes.
+fn stamp(now: DateTime<Local>) -> String {
+    format!("{} ", now.format("%Y-%m-%d %H:%M:%S"))
+}
+
 impl Transcript {
     pub fn new(render: fn(&str) -> Vec<String>) -> Self {
-        Self { render, buf: Vec::new(), dropped: false }
+        Self::with_clock(render, Local::now)
+    }
+
+    /// `new` with the clock made substitutable — the seam the tests below use
+    /// to hold "now" fixed while still comparing real output bytes.
+    fn with_clock(render: fn(&str) -> Vec<String>, clock: fn() -> DateTime<Local>) -> Self {
+        Self { render, clock, buf: Vec::new(), dropped: false }
     }
 
     /// The bytes a person should see, for the bytes the child wrote.
@@ -44,6 +72,7 @@ impl Transcript {
             }
             let line = String::from_utf8_lossy(&line);
             for rendered in (self.render)(line.trim_end()) {
+                out.push_str(&stamp((self.clock)()));
                 out.push_str(&rendered);
                 out.push_str("\r\n");
             }
@@ -51,6 +80,7 @@ impl Transcript {
         if self.buf.len() > MAX_LINE {
             self.buf.clear();
             self.dropped = true;
+            out.push_str(&stamp((self.clock)()));
             out.push_str("-- a line too long to show was dropped\r\n");
         }
         out.into_bytes()
@@ -60,15 +90,35 @@ impl Transcript {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     /// A rendering rule with nothing of any harness in it: the line's own text,
-    /// unless it is the word "skip".
+    /// unless it is the word "skip" (nothing rendered) or "many" (two lines out
+    /// of one, the multi-line-response case the stamp rule has to cover too).
     fn echo(line: &str) -> Vec<String> {
-        if line == "skip" { Vec::new() } else { vec![line.to_string()] }
+        match line {
+            "skip" => Vec::new(),
+            "many" => vec!["first".to_string(), "second".to_string()],
+            _ => vec![line.to_string()],
+        }
     }
 
     fn text(bytes: Vec<u8>) -> String {
         String::from_utf8(bytes).unwrap()
+    }
+
+    /// A clock fixed at one instant, for tests that compare bytes exactly —
+    /// `runs::journal`'s own tests hold `Local::now` fixed the same way.
+    fn frozen() -> DateTime<Local> {
+        Local.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap()
+    }
+
+    /// The stamp `frozen()` renders, `runs::journal::stamp`'s own format plus
+    /// the trailing space between it and the line that follows.
+    const STAMP: &str = "2026-01-02 03:04:05 ";
+
+    fn frozen_transcript(render: fn(&str) -> Vec<String>) -> Transcript {
+        Transcript::with_clock(render, frozen)
     }
 
     #[test]
@@ -76,49 +126,81 @@ mod tests {
         // These bytes never passed through a tty's output processing, so a bare
         // newline would leave xterm.js stepping the text diagonally down the
         // pane.
-        let mut t = Transcript::new(echo);
-        assert_eq!(text(t.feed(b"one\ntwo\n")), "one\r\ntwo\r\n");
+        let mut t = frozen_transcript(echo);
+        assert_eq!(
+            text(t.feed(b"one\ntwo\n")),
+            format!("{STAMP}one\r\n{STAMP}two\r\n")
+        );
     }
 
     #[test]
     fn a_line_split_across_chunks_is_rendered_once_and_only_when_it_ends() {
         // A PTY read boundary falls wherever it falls, and a stream-json event
         // is one line: half an event is not renderable and must not be dropped
-        // either.
-        let mut t = Transcript::new(echo);
+        // either. The stamp is the moment the whole line finished, not the
+        // moment the first fragment of it arrived.
+        let mut t = frozen_transcript(echo);
         assert_eq!(text(t.feed(b"he")), "");
         assert_eq!(text(t.feed(b"llo")), "");
-        assert_eq!(text(t.feed(b" there\n")), "hello there\r\n");
+        assert_eq!(text(t.feed(b" there\n")), format!("{STAMP}hello there\r\n"));
     }
 
     #[test]
     fn a_multibyte_character_split_across_chunks_survives() {
         // Decoding per chunk would turn the two halves of a multi-byte
         // character into two replacement characters; decoding per line cannot.
-        let mut t = Transcript::new(echo);
+        let mut t = frozen_transcript(echo);
         let word = "———".as_bytes();
         assert_eq!(text(t.feed(&word[..5])), "");
         assert_eq!(text(t.feed(&word[5..])), "");
-        assert_eq!(text(t.feed(b"\n")), "———\r\n");
+        assert_eq!(text(t.feed(b"\n")), format!("{STAMP}———\r\n"));
     }
 
     #[test]
     fn a_line_worth_nothing_produces_nothing_at_all() {
-        let mut t = Transcript::new(echo);
-        assert_eq!(text(t.feed(b"skip\nkept\n")), "kept\r\n");
+        // No lines out of the translator means no stamp either — a stamp with
+        // nothing after it would be an empty line nobody asked for.
+        let mut t = frozen_transcript(echo);
+        assert_eq!(text(t.feed(b"skip\nkept\n")), format!("{STAMP}kept\r\n"));
+    }
+
+    #[test]
+    fn a_multi_line_response_stamps_every_line_it_produced() {
+        // One event can translate to several screen lines (a tool call and its
+        // result, say); each gets its own stamp rather than the event getting
+        // one for all of them.
+        let mut t = frozen_transcript(echo);
+        assert_eq!(
+            text(t.feed(b"many\n")),
+            format!("{STAMP}first\r\n{STAMP}second\r\n")
+        );
     }
 
     #[test]
     fn a_line_that_never_ends_is_dropped_rather_than_kept_for_ever() {
         // A tool result carrying a large file is one enormous line. Growing the
         // buffer without bound over a night's run is the failure this ceiling
-        // exists for; what it costs is one event, said out loud.
-        let mut t = Transcript::new(echo);
+        // exists for; what it costs is one event, said out loud — stamped like
+        // any other, since it is one too.
+        let mut t = frozen_transcript(echo);
         let flood = vec![b'x'; MAX_LINE + 1];
         let out = text(t.feed(&flood));
+        assert!(out.starts_with(STAMP), "{out}");
         assert!(out.contains("too long"), "{out}");
         // And it resyncs: the remains of the dropped line are not rendered, and
-        // the next whole line is.
-        assert_eq!(text(t.feed(b"xxx\nnext\n")), "next\r\n");
+        // the next whole line is, stamped in its turn.
+        assert_eq!(text(t.feed(b"xxx\nnext\n")), format!("{STAMP}next\r\n"));
+    }
+
+    #[test]
+    fn the_default_clock_is_the_real_one() {
+        // `Transcript::new` is the production constructor and takes
+        // `Local::now`; nothing here freezes it, so the only thing worth
+        // checking is that the stamp it produces looks like one — the exact
+        // instant is, by construction, whenever the test ran.
+        let mut t = Transcript::new(echo);
+        let out = text(t.feed(b"hi\n"));
+        assert_eq!(out.len(), STAMP.len() + "hi\r\n".len(), "{out}");
+        assert!(out.ends_with("hi\r\n"), "{out}");
     }
 }

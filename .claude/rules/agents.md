@@ -158,6 +158,9 @@ into a third: an event the translator has never heard of, and a line that is not
 pane of raw JSON costs them the pane. Codex's translator also strips every control character, for the
 reason Claude Code's records — `serde_json` decodes an escaped escape or bell into a live byte, and a
 pane specified as plain text must not take colour, cursor movement and a bell out of a transcript.
+The stamp a panel line carries is not their business either — neither translator returns a time or
+knows one, and `terminal::transcript::Transcript::feed` prefixes each line they hand back after the
+fact, which is what keeps a clock out of two modules that already share no code.
 
 **Codex's own native multi-agent rides the same command line, invocation-local and only for a
 batch's lead.** `Intent::Run` in `Auto` and `Supervised` gets three overrides on top of

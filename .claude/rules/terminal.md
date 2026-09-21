@@ -566,7 +566,7 @@ The conversation panel draws the identical shape over itself, token for token, d
 | file | what it does |
 |---|---|
 | `model.rs` | `Session`, `SessionState`, `Question`, `TerminalError` — the vocabulary, and the pure rules for entering and leaving each state (`Session::apply`, `finish`) |
-| `transcript.rs` | a batch's machine-format output cut into lines and handed to the profile's own rendering, before anything downstream sees a byte of it |
+| `transcript.rs` | a batch's machine-format output cut into lines and handed to the profile's own rendering, before anything downstream sees a byte of it; stamps each rendered line with a local `YYYY-MM-DD HH:MM:SS `, taken when the line is rendered rather than by either translator |
 | `ring.rs` | the raw-byte scrollback ring, trimmed on overflow to a line boundary |
 | `screen.rs` | a `vt100` grid built from the same bytes — the text a person would actually see |
 | `detect.rs` | layer A: bell and silence, a pure function of the screen, the bell flag and the timings |
@@ -765,12 +765,155 @@ does: `SIGHUP` to the session's process group — which reaches whatever the
 agent itself started, as `SIGKILL` to the direct child would not — then a short wait, then a kill for
 what is left. The two seconds `shutdown` itself waits are the ceiling on a *wedged worker*, the same
 one `settings.js` puts on its close-time flush: the window always closes, and a worker that never
-answers costs the cleanup, not the app. Anything that outruns that, or that the app never got a
-chance to signal, is an orphan; for the sessions a *run* started, the next launch finds them again
-through the registry in `.claude/rules/runs.md`, the one place a session's pid is written down.
-**None of that changed**, and nothing here brings a process back: a daemon or a tmux-shaped PTY
-holder is the only shape where one really survives, and the PTY master fd dies with the app process,
-so a surviving agent would be one this app can neither read nor write.
+answers costs the cleanup, not the app.
+
+**A group signal alone left one thing behind, and smetana-kkz2 is why.** `setsid`, `nohup` and a
+shell's own `&` all take what they start out of the session's process group on purpose, so a
+background `yes` left running inside a session outlived that session's own exit, its removal and even
+the app's, with nothing left in any group to say it had ever belonged to this app at all — a machine
+was found still running twenty of them, at ppid 1, hours after the run that started them had closed.
+`lsof` traced them to a worker's own `yes > /dev/null &` batches, run to check for test flakiness under
+load and never killed; the measurement that mattered more was *how* they escaped: Claude Code's own
+Bash tool runs every command it is given in a session of its own — `getsid` of the tool's shell equals
+its own pid, where `claude`'s is 1 — so anything a command backgrounds and leaves running is outside the
+agent's own session from the instant the tool starts it, and a plain process-group signal was never
+going to reach it, on any platform.
+
+**There is no one channel for this across three operating systems, and `runs::procs` is three backends
+behind one interface rather than one mechanism with exceptions.** `terminal::service` sweeps at four
+moments without needing to know which backend answers underneath it: an agent's session ending on its
+own (`absorb`'s `Chunk::Gone`), a person removing its row (`Request::Remove`), the app's own exit
+(`kill_all`, beside the process-group hangups, inside the same `KILL_GRACE`), and the app's own start
+(recovering what a dead previous instance left, before the first session this launch starts has any
+chance to be delayed by it).
+
+**Linux** carries a mark, `SMETANA_SESSION` — this app's own pid, its start stamp, and the session's id
+— in every agent session's own environment, never a person's own shell's: `build_command` in `pty.rs`
+sets it, and a variable is inherited by every descendant whatever process group it asked for and
+survives a reparent under pid 1 that takes the group away. `runs::procs::marked` finds every process
+carrying one exact value through `/proc/<pid>/environ`, readable for a process this user owns regardless
+of Yama's `ptrace_scope` (which gates `PTRACE_ATTACH`, not an ordinary read of that file), and `strays`
+narrows that to the ones whose own app half no longer names a live Smetana — which is what lets the
+start-up sweep act without ever having to trust a bare pid.
+
+**macOS has no such channel, and this task's first attempt over it assumed otherwise.**
+`sysctl(KERN_PROCARGS2)` and `ps -wwE` were measured twice — by two different sessions of this same
+task, a month apart, both on macOS 26.5.2 (25F84) — and both hand back a process's environment only to
+the process asking about *itself*: this app's own pid answered its full environment every time, and a
+same-user child spawned a moment earlier answered nothing at all. So macOS answers the session question
+and the app question two different ways instead, both in `runs::procs`, and both measured rather than
+assumed — see that module's own header for the exact numbers.
+
+*Points 1 and 2* — what one live session has left behind — are a snapshot its own poller keeps: while at
+least one agent session is alive, `terminal::service` takes one `sysctl(KERN_PROC_ALL)` call every two
+seconds (`MAC_DESCENDANT_POLL`; no agent session live costs not one such call) and folds every pid
+transitively parented under that session's own PTY child into two sets kept on the session itself — every
+`(pid, start stamp)` it has ever seen, and every process group any of them has ever led
+(`runs::procs::Descendants`). A descendant that escapes by reparenting under pid 1 leaves the first set's
+reach the instant its own leader exits; it is still found by the second, because a group led by one of a
+session's own descendants can only ever belong to that session or to a session one of its own descendants
+started — no third party could ever join it — which is evidence with no private API behind it at all,
+**once the leader itself has actually been shown to be this session's own** rather than trusted on the
+bare pgid alone: a group is only ever recorded with `leader.pid == root`, or a leader already in the
+first set, and a group whose leader could never be shown to be ours that way is refused outright, so a
+stranger sharing a recycled pid is never swept along with it. The `leader.pid == root` half of that check
+is sound only because the poller itself no longer absorbs against an exited session's own pid: it is
+gated on `live.session.state != Exited` in `terminal::service::poll_mac_descendants`, so root's own pid
+cannot yet have been handed to somebody else while its session is still not `Exited`, since nothing has
+reaped that child to give the kernel the pid back — two guards from two different rounds of hardening,
+each holding the other up. Two seconds was measured against the incident itself: the `yes` processes
+lived for the whole of a multi-minute `vitest` run under their own bash subshell before that subshell
+exited, so a poll an order of magnitude faster leaves real headroom. What it does **not** catch is a
+`bash -c 'yes &'` whose own parent exits *inside* the two-second gap, entirely between two polls — that
+one is left to point 3.
+
+*Points 3 and 4* — a whole app instance's own leavings, dead or alive — read the macOS resource
+*coalition* every process the app starts shares: `proc_pidinfo(pid, 20, …)`, a private call into a
+40-byte struct nowhere in the public SDK declares (`runs::procs::ProcPidCoalitionInfo`, hand-declared
+with a comment that any other response size answers `Unknown` for the whole of this sweep rather than
+misread the bytes). Measured for this task: the app, every agent it starts and a background `sleep`
+reparented under pid 1 all carry the identical resource coalition id; this app's own XPC helpers — the
+WebKit GPU/Networking/WebContent processes, the open/save panel service, QuickLook, and so on — share it
+too and would be wrongly swept without the exclusion `is_xpc_service` gives them (a bundled `*.xpc/`
+path, matched twice for this app's own plugins under `.../XPCServices/…` and the system frameworks' own
+bundles); and helpers of a *second*, still-live session — an MCP proxy, a Playwright-driven Chrome, a
+`npm run dev` — share the coalition too, which is exactly why point 3's own candidates exclude every
+pid a live session still names. **The measurement this task's own first step existed to make**: does the
+coalition id survive the death of the coalition's own leader on an orphaned descendant? Tested against a
+genuine `launchd`-owned job — not merely a member of a shell's own inherited coalition, which a first,
+flawed version of this same test used and which conflated two different mechanisms (see below) — whose
+leader was `kill -9`ed while a `setsid`-detached child of it, already reparented under pid 1, went on
+answering the identical coalition id for several seconds afterwards. **It does survive**, so point 4 is
+not inert on macOS and the acceptance criterion about `kill -9` and the restart log line stands. The
+coalition id a launch wrote is kept in `runs.json`, beside its `writer` (`Record.coalition`,
+`recovery::note_run`), and read back by `recovery::dead_writer_coalitions` at the next launch for every
+writer that file can prove dead — which is a real narrowing worth stating rather than discovering later:
+a coalition id only reaches disk through a *run* starting, so an agent session begun by hand
+("+ New agent", never inside a run) leaves nothing on disk for a restarted app to find its own stray by
+on point 4 alone; points 1 through 3 already reaped it while the app was alive, and point 4 is only the
+net a `kill -9` falls through, exactly as wide as this project's own run history reaches.
+
+**The flawed first version of that measurement is worth naming, because it looks like the same test and
+answers a different question.** `launchctl submit`-managed jobs, whose escaped child stayed in the same
+process *group* as its leader (no `setsid`), had that whole group killed within 200ms of the leader's
+`kill -9` — but that is `launchd`'s own `AbandonProcessGroup` default doing an ordinary process-group
+kill, unrelated to coalitions and unavailable to an ordinary `open`-launched `.app`, which is exactly why
+the real `yes` processes from the incident this task started from survived for hours. Only once the
+escapee called `setsid()` — the shape Claude Code's Bash tool actually leaves — did the test stop
+measuring group cleanup and start measuring the coalition; that is the version described above.
+
+**One sentence of the design is a known price rather than a gap**: at point 3, a `nohup … &` left running
+in a person's own shell tab is also in this app's own coalition and also reparented under pid 1 the
+moment that tab's shell exits, so it is swept — and killed — on the app's own exit, same as an agent
+session's stray. On Linux and on Windows the mark and the Job Object are both scoped per *session*,
+and this is not so there; on macOS it is, because the coalition cannot tell a person's own background job
+from an agent's. Accepted rather than closed: the alternative is tracking a session's own coalition
+membership as narrowly as its group, which the private API gives no way to ask for.
+
+**A second, wider caveat sits beside that one, and it is the reason points 3 and 4 read
+`procs::own_dedicated_coalition` rather than `own_coalition` bare.** A process spawned by fork/exec
+from a shell inherits that shell's coalition unchanged; only `launchd` — an installed, double-clicked
+or `open`-launched build — puts an application in a coalition of its own. `npm run tauri dev`
+therefore gives this application whatever coalition the launching terminal emulator already had,
+shared with every other tab and everything ever started from any of them, and sweeping that coalition
+at points 3 and 4 would hang up and kill a person's own `nohup`ed job or a backgrounded server the
+moment its own parent shell happened to exit — with no agent session of this app's own involved at
+all. Dev is how this project is run and checked every day, and it is the very machine the incident
+behind this whole task was found on; an installed build is unaffected, which is exactly what would
+keep the gap from ever being noticed. `own_dedicated_coalition` closes it the same way `Unknown`
+closes every other gap in this module: if this process's own coalition is identical to its parent's
+(`getppid`), nothing distinguished launching this app from an ordinary fork, so points 3 and 4 answer
+`Unknown` and fall back to whatever a session's own accumulated snapshot already covers, rather than
+sweeping a coalition that is not this app's alone to sweep. It costs nothing on a `launchd`-started
+build, where the two coalitions are never equal to begin with.
+
+**Windows carries neither a mark nor a coalition, and needs neither.** A *Job Object*
+(`runs::procs::SessionJob`) is created and assigned to every agent session's own child right after
+`spawn_command` returns, with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` set — never for a person's own shell.
+Every process a job's own members go on to start joins the job automatically (unless one explicitly
+requests breakaway, which nothing here does), so points 1 through 3 are one call, `TerminateJobObject`,
+with no SIGHUP and no grace period to wait out — Windows has neither. Point 4 costs nothing to write at
+all: `KILL_ON_JOB_CLOSE` means the kernel itself kills a job the moment its *last* open handle closes,
+and a process dying — however it dies — closes every handle it held, so a dead previous instance's own
+jobs are already gone by the time the next instance is even running. The one accepted cost is the window
+between `spawn_command` returning and `AssignProcessToJobObject` landing — milliseconds, and a
+grandchild spawned by the session's own child inside that window is not yet a job member; claude and
+codex both take hundreds of milliseconds to spawn their own first child, which is why this is accepted
+rather than closed by serialising every session's start behind the assignment. Nested jobs have been
+supported since Windows 8, so the app itself running inside a job of its own (an installer's, say) is not
+a problem. This backend is checked by `cfg(windows)` tests and a CI build; no live Windows machine took
+part in writing it.
+
+Only a process a backend reads as `Unknown` — a platform `runs::procs` cannot answer for at all, or, on
+macOS, a `proc_pidinfo` call whose response size stopped matching the hand-declared struct — is left
+exactly as before: an unreadable answer is never a reason to hang something up, the same rule
+`registry::sweep` already keeps for a run's own process groups.
+
+Anything that outruns all four of those is a true orphan; for the sessions a *run* started, the next
+launch finds them again through the registry in `.claude/rules/runs.md`, the one place a session's pid
+is written down. **None of that changed**, and nothing here brings a process back: a daemon or a
+tmux-shaped PTY holder is the only shape where one really survives, and the PTY master fd dies with the
+app process, so a surviving agent would be one this app can neither read nor write.
 
 What survives is a **record**, in `.smetana/agents.json` in the project folder beside `runs.json` and
 outside the repository — `terminal::restore`, read by `terminal_restorable` and taken away by
