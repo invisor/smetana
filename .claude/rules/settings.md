@@ -155,8 +155,9 @@ loses the model, because that is the half-pair the paragraph above refuses. The 
 checked against the root `agent` the same way, except Codex: its visible catalogue is refreshed from
 the installed CLI's `model/list` app-server method when Settings opens. The shipped Codex table is
 only a fallback until a complete successful refresh, so validation preserves any non-empty Codex slug
-and the picker marks one absent from a later successful catalogue unavailable rather than erasing it.
-A test walks every model of every profile through
+up to `MAX_ID_LEN` — a saved slug this long is a damaged file rather than a model, since it is written
+straight into argv on every launch — and the picker marks one absent from a later successful catalogue
+unavailable rather than erasing it. A test walks every model of every profile through
 `validate` and fails if one a profile offers is thrown away.
 
 `agentRoles` is the one field the settings window sends as an **object** rather than as a flat

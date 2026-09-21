@@ -1167,7 +1167,8 @@ pub struct Settings {
     /// The set of legal values is the chosen harness's own `Profile::models`
     /// static fallback, except Codex: its separately refreshed `codex_models`
     /// catalogue can advance beyond this build, so unknown saved Codex slugs
-    /// are preserved and shown unavailable until explicitly replaced.
+    /// are preserved and shown unavailable until explicitly replaced, bounded
+    /// only by `MAX_ID_LEN` — the one check an unknown slug still has to pass.
     /// Other harnesses validate against `Profile::models`, exactly as `agent`
     /// above defers to `agents::IDS`.
     pub model: String,
@@ -1940,8 +1941,16 @@ fn known_model(agent: &str, model: &mut String) {
     }
     // Codex's app-server catalogue advances independently of this build; the
     // static profile list is only a picker fallback, never grounds to delete a
-    // saved slug.
+    // saved slug. It is the one exemption from the check below and not from
+    // every bound: an unknown slug survives, but a slug longer than any real
+    // one this CLI has ever offered is a damaged file rather than a model,
+    // and it is written straight into argv as `["-m", m]` on every launch.
+    // `MAX_ID_LEN` is the same ceiling `column_order` and the rest of this
+    // file's identifier lists already use.
     if agent == "codex" {
+        if model.len() > MAX_ID_LEN {
+            model.clear();
+        }
         return;
     }
     let known = crate::agents::resolve(agent)
@@ -3693,6 +3702,30 @@ mod tests {
         settings.validate();
         assert_eq!(settings.model, "gpt-6-astra");
         assert_eq!(settings.agent_roles.code.model, "gpt-6-astra");
+    }
+
+    #[test]
+    fn an_overlong_codex_slug_is_dropped_but_an_ordinary_unknown_one_survives() {
+        // Preserving a slug `Profile::models` has never heard of is the whole
+        // point of the Codex exception above; what it must not preserve is a
+        // damaged file. A slug longer than any real one this CLI has ever
+        // offered — well past MAX_ID_LEN — is written straight into argv on
+        // every launch, so it is capped like every other identifier list in
+        // this file rather than exempted from every bound.
+        let mut settings = Settings::default();
+        settings.agent = "codex".into();
+        settings.model = "x".repeat(MAX_ID_LEN + 1);
+        settings.agent_roles.code.agent = "codex".into();
+        settings.agent_roles.code.model = "x".repeat(MAX_ID_LEN + 1);
+        settings.validate();
+        assert_eq!(settings.model, "");
+        assert_eq!(settings.agent_roles.code.model, "");
+
+        let mut settings = Settings::default();
+        settings.agent = "codex".into();
+        settings.model = "gpt-6-astra".into();
+        settings.validate();
+        assert_eq!(settings.model, "gpt-6-astra", "an ordinary unknown slug at or under the cap still survives");
     }
 
     #[test]

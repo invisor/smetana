@@ -385,8 +385,9 @@ clear in `agent/agentMenu.js` — and a fifth of labels in `shell/usageFooter.js
 good reason, which the catalogue keeps: **the answer has to be in hand while a row is being drawn**,
 and a row greyed a round trip later is a row somebody has already pressed. Each was also a knowing
 second copy of a fact Rust owns, free to drift in both directions in silence, and a third harness
-meant five edits in two languages. Nothing in the catalogue changes while the app runs — the set of
-shipped harnesses is fixed at build time — so one read at startup satisfies both.
+meant five edits in two languages. The set of shipped harnesses and what each can do is fixed at
+build time, so one read at startup satisfies both. Codex's `models` field is the one entry in a row
+that goes on changing after that read — "Which agent, and on which model" below is where that lives.
 
 The pure modules stay pure, which is what keeps them reachable by a test at all: `resumeAvailability`
 takes `capable`, `agentMenuItems` takes `clearable` and `usageAgentLabel` takes a `nameFor`, each

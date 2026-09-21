@@ -19,7 +19,7 @@ use std::time::Duration;
 use std::time::SystemTime;
 
 use portable_pty::CommandBuilder;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 use super::library::read_skill;
 use super::{
@@ -89,36 +89,55 @@ async fn listed_models_with(binary: &str, path: Option<&str>, timeout: Duration)
     if let Some(path) = path { command.env("PATH", path); }
     let mut child = command.spawn().map_err(|err| format!("Could not start Codex: {err}"))?;
     let result = tokio::time::timeout(timeout, async {
-        let mut stdin = child.stdin.take().ok_or_else(|| "Codex stdin was unavailable".to_string())?;
+        let stdin = child.stdin.take().ok_or_else(|| "Codex stdin was unavailable".to_string())?;
         let stdout = child.stdout.take().ok_or_else(|| "Codex stdout was unavailable".to_string())?;
-        let mut lines = BufReader::new(stdout).lines();
-        let init = serde_json::json!({ "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "Smetana", "version": "0.1.0" } } });
-        stdin.write_all(init.to_string().as_bytes()).await.map_err(|err| err.to_string())?;
-        stdin.write_all(b"\n").await.map_err(|err| err.to_string())?;
-        stdin.flush().await.map_err(|err| err.to_string())?;
-        next_response(&mut lines, 0).await?;
-        stdin.write_all(b"{\"method\":\"initialized\",\"params\":{}}\n").await.map_err(|err| err.to_string())?;
-        stdin.flush().await.map_err(|err| err.to_string())?;
-        let mut cursor: Option<String> = None;
-        let mut models = Vec::new();
-        for request_id in 1_u64.. {
-            let request = serde_json::json!({ "id": request_id, "method": "model/list", "params": cursor.as_ref().map_or_else(serde_json::Map::new, |cursor| serde_json::Map::from_iter([(String::from("cursor"), serde_json::Value::String(cursor.clone()))])) });
-            stdin.write_all(request.to_string().as_bytes()).await.map_err(|err| err.to_string())?;
-            stdin.write_all(b"\n").await.map_err(|err| err.to_string())?;
-            stdin.flush().await.map_err(|err| err.to_string())?;
-            let (page, next) = model_list_page(&next_response(&mut lines, request_id).await?)?;
-            models.extend(page);
-            if next.as_deref().map_or(true, str::is_empty) { break; }
-            cursor = next;
-        }
-        (!models.is_empty()).then_some(models).ok_or_else(|| "Codex returned no visible models".to_string())
+        request_models(stdin, stdout).await
     }).await.map_err(|_| "Codex model list timed out".to_string()).and_then(|result| result);
     let _ = child.start_kill();
     let _ = child.wait().await;
     result
 }
 
-async fn next_response(lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>, id: u64) -> Result<String, String> {
+/// The app-server protocol itself, over whatever carries it: `initialize`,
+/// its response, `initialized`, then `model/list` paged through until a null
+/// cursor. Generic over the transport rather than tied to a child process's
+/// pipes, which is what lets `model_list_tests` drive it over an in-process
+/// `tokio::io::duplex()` pair with no spawn and no wall clock anywhere in the
+/// assertion. `listed_models_with` above is the only caller handing it a real
+/// child's stdin and stdout, and it alone owns the timeout and the kill —
+/// this function knows nothing of either.
+async fn request_models<W, R>(mut stdin: W, stdout: R) -> Result<Vec<(String, String)>, String>
+where
+    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+{
+    let mut lines = BufReader::new(stdout).lines();
+    let init = serde_json::json!({ "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "Smetana", "version": "0.1.0" } } });
+    stdin.write_all(init.to_string().as_bytes()).await.map_err(|err| err.to_string())?;
+    stdin.write_all(b"\n").await.map_err(|err| err.to_string())?;
+    stdin.flush().await.map_err(|err| err.to_string())?;
+    next_response(&mut lines, 0).await?;
+    stdin.write_all(b"{\"method\":\"initialized\",\"params\":{}}\n").await.map_err(|err| err.to_string())?;
+    stdin.flush().await.map_err(|err| err.to_string())?;
+    let mut cursor: Option<String> = None;
+    let mut models = Vec::new();
+    for request_id in 1_u64.. {
+        let request = serde_json::json!({ "id": request_id, "method": "model/list", "params": cursor.as_ref().map_or_else(serde_json::Map::new, |cursor| serde_json::Map::from_iter([(String::from("cursor"), serde_json::Value::String(cursor.clone()))])) });
+        stdin.write_all(request.to_string().as_bytes()).await.map_err(|err| err.to_string())?;
+        stdin.write_all(b"\n").await.map_err(|err| err.to_string())?;
+        stdin.flush().await.map_err(|err| err.to_string())?;
+        let (page, next) = model_list_page(&next_response(&mut lines, request_id).await?)?;
+        models.extend(page);
+        if next.as_deref().map_or(true, str::is_empty) { break; }
+        cursor = next;
+    }
+    (!models.is_empty()).then_some(models).ok_or_else(|| "Codex returned no visible models".to_string())
+}
+
+async fn next_response<R>(lines: &mut tokio::io::Lines<BufReader<R>>, id: u64) -> Result<String, String>
+where
+    R: AsyncRead + Unpin,
+{
     while let Some(line) = lines.next_line().await.map_err(|err| err.to_string())? {
         if serde_json::from_str::<serde_json::Value>(&line).ok().and_then(|value| value.get("id").and_then(serde_json::Value::as_u64)) == Some(id) { return Ok(line); }
     }
@@ -150,8 +169,9 @@ fn model_list_page(line: &str) -> Result<(Vec<(String, String)>, Option<String>)
 
 #[cfg(test)]
 mod model_list_tests {
-    use super::{listed_models_with, model_list_page};
+    use super::{listed_models_with, model_list_page, request_models};
     use std::{fs, os::unix::fs::PermissionsExt, time::{Duration, SystemTime}};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     fn fake(body: &str) -> String {
         let path = std::env::temp_dir().join(format!("smetana-codex-{}", SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
@@ -174,21 +194,95 @@ mod model_list_tests {
         assert!(model_list_page("not json").is_err());
     }
 
+    /* The protocol test, entirely in process. `tokio::io::duplex` stands in
+       for a child's stdin/stdout pair, with the fake side driven by this
+       same test task rather than by a spawned `/bin/sh` — which is what
+       removes both races the spawned stand used to carry: a one-second
+       budget shared with a sibling test's own process spawn, and a script
+       that closed its stdout the moment its last `echo` returned, racing the
+       reader for the final line. Neither failure mode has anything left to
+       attack here — the fake half stays open for exactly as long as this
+       task keeps it, and the outer timeout below is a safety net against a
+       genuine protocol bug hanging the test, not a budget the assertion
+       depends on. */
     #[tokio::test]
-    async fn fake_app_server_aggregates_paginated_model_list_requests() {
-        let binary = fake("read a; echo '{\"id\":0,\"result\":{}}'; read b; read c; echo '{\"id\":1,\"result\":{\"data\":[{\"hidden\":false,\"model\":\"gpt-6-astra\",\"displayName\":\"GPT-6-Astra\"}],\"nextCursor\":\"next\"}}'; read d; echo '{\"id\":2,\"result\":{\"data\":[{\"hidden\":false,\"model\":\"gpt-5.6-sol\",\"displayName\":\"GPT-5.6-Sol\"}],\"nextCursor\":null}}'");
-        assert_eq!(listed_models_with(&binary, None, Duration::from_secs(1)).await.unwrap(), vec![("gpt-6-astra".into(), "GPT-6-Astra".into()), ("gpt-5.6-sol".into(), "GPT-5.6-Sol".into())]);
-        let _ = fs::remove_file(binary);
+    async fn duplex_transport_aggregates_paginated_model_list_requests() {
+        let (client, server) = tokio::io::duplex(4096);
+        let (client_read, client_write) = tokio::io::split(client);
+        let (server_read, server_write) = tokio::io::split(server);
+
+        let fake_server = tokio::spawn(async move {
+            let mut lines = BufReader::new(server_read).lines();
+            let mut writer = server_write;
+            lines.next_line().await.unwrap().unwrap(); // initialize, id 0
+            writer.write_all(b"{\"id\":0,\"result\":{}}\n").await.unwrap();
+            writer.flush().await.unwrap();
+            lines.next_line().await.unwrap().unwrap(); // initialized notification
+            lines.next_line().await.unwrap().unwrap(); // model/list, id 1, no cursor
+            writer
+                .write_all(b"{\"id\":1,\"result\":{\"data\":[{\"hidden\":false,\"model\":\"gpt-6-astra\",\"displayName\":\"GPT-6-Astra\"}],\"nextCursor\":\"next\"}}\n")
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+            lines.next_line().await.unwrap().unwrap(); // model/list, id 2, cursor "next"
+            writer
+                .write_all(b"{\"id\":2,\"result\":{\"data\":[{\"hidden\":false,\"model\":\"gpt-5.6-sol\",\"displayName\":\"GPT-5.6-Sol\"}],\"nextCursor\":null}}\n")
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(5), request_models(client_write, client_read))
+            .await
+            .expect("the in-process protocol exchange should never hang")
+            .unwrap();
+        assert_eq!(
+            result,
+            vec![("gpt-6-astra".into(), "GPT-6-Astra".into()), ("gpt-5.6-sol".into(), "GPT-5.6-Sol".into())]
+        );
+        fake_server.await.unwrap();
     }
 
     #[tokio::test]
     async fn fake_app_server_timeout_is_killed_and_reaped() {
-        let binary = fake("read a; echo '{\"id\":0,\"result\":{}}'; read b; sleep 30");
-        assert_eq!(listed_models_with(&binary, None, Duration::from_millis(50)).await.unwrap_err(), "Codex model list timed out");
-        // `wait` above reaps the direct child. A second invocation proves the
-        // fake executable is no longer held by an unreaped process.
-        assert_eq!(listed_models_with(&binary, None, Duration::from_millis(50)).await.unwrap_err(), "Codex model list timed out");
+        let pidfile = std::env::temp_dir().join(format!("smetana-codex-pid-{}", SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
+        let binary = fake(&format!("echo $$ > {}; read a; echo '{{\"id\":0,\"result\":{{}}}}'; read b; sleep 30", pidfile.display()));
+        // A budget in seconds and not the fake pagination test's old one —
+        // measured against this stand's own worst case: `fork`/`exec`ing a
+        // one-line `/bin/sh` script took up to 800ms end to end under this
+        // sandbox, so a tight budget would fire `start_kill` before the
+        // script had run its first statement, and the pid below would never
+        // be written whether or not the kill itself behaved.
+        assert_eq!(listed_models_with(&binary, None, Duration::from_secs(3)).await.unwrap_err(), "Codex model list timed out");
+
+        // The fake records its own pid before it ever blocks — since it runs
+        // directly off its shebang rather than under a wrapping shell, that
+        // pid names the exact process `start_kill` was asked to end. `wait`
+        // in `listed_models_with` reaps it; a killed-but-unreaped process is
+        // a zombie and still answers `kill(pid, 0)` with success, so only a
+        // process actually reaped answers ESRCH. That is what running the
+        // fake a second time, the previous shape of this test, never pinned:
+        // a second shell spawn succeeds or fails on its own merits whether
+        // or not the first child had been waited on.
+        let mut pid = None;
+        for _ in 0..100 {
+            if let Ok(text) = fs::read_to_string(&pidfile) {
+                if let Ok(parsed) = text.trim().parse::<libc::pid_t>() {
+                    pid = Some(parsed);
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let pid = pid.expect("the fake should have recorded its own pid before this assertion runs");
+        // errno is read immediately after the call it describes, before
+        // anything else can overwrite it.
+        let kill_result = unsafe { libc::kill(pid, 0) };
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        assert_eq!((kill_result, errno), (-1, Some(libc::ESRCH)), "pid {pid} should be gone: killed and reaped, not a lingering zombie");
+
         let _ = fs::remove_file(binary);
+        let _ = fs::remove_file(pidfile);
     }
 }
 

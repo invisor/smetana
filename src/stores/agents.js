@@ -3,18 +3,24 @@
    is Rust's — `agents::IDS` and the `Profile` methods behind
    `agents::catalogue` — and this store is how it reaches a row being drawn.
 
-   Read **once at startup** and never again for harness capabilities. Codex
-   models are the deliberate exception: this static `agents_catalog` row is a
-   pre-success fallback, while `codex_models` is refreshed whenever Settings
-   opens; failures retain last-good and unknown saved slugs remain unavailable
-   choices until explicitly replaced. That is the property four
+   Read **once at startup** and never again. That is the property four
    hand-written lists in this tree were keeping — one of agent labels in
    `settings/AgentSettings.vue`, two of ids that resume and fork in
    `agent/sessionMenu.js`, one of ids that clear in `agent/agentMenu.js`. Each
    existed because the answer has to be known while a menu row is drawn, and a
-   row greyed a round trip later is a row somebody has already pressed. Nothing
-   here changes while the app runs — the set of shipped harnesses is fixed at
-   build time — so one read is the whole of it.
+   row greyed a round trip later is a row somebody has already pressed. The set
+   of shipped harnesses and what each can do is fixed at build time, so one
+   read of `agents_catalog` is the whole of that.
+
+   Codex's `models` field is the one thing on a row this store goes on to
+   change while the app runs, and it is a deliberate exception rather than a
+   hole in the paragraph above: `agents_catalog`'s own list for that row is a
+   pre-success fallback, and `refreshCodexModels` — called whenever Settings
+   opens — mutates `row.models` in place on the very row the startup read
+   built, through a separate `codex_models` command. A failed refresh keeps
+   the last good list rather than emptying it, and a saved slug the freshest
+   catalogue has never heard of stays selectable, marked unavailable, until
+   somebody replaces it on purpose.
 
    A read that fails leaves the list empty, and an empty list greys every row
    that depends on a capability. That is the safe direction: Rust refuses an
