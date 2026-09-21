@@ -485,6 +485,15 @@ pub struct Pty {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn std::io::Write + Send>,
     child: Box<dyn Child + Send + Sync>,
+    /// Windows only: the Job Object this session's own child (and, through
+    /// it, everything it has ever started) belongs to — `runs::procs`'s own
+    /// answer to points 1 through 3 on a platform with neither a mark nor a
+    /// coalition. `None` for a person's own shell (never assigned one at
+    /// all) and for an agent session the job could not be created or
+    /// assigned for, which is `Unknown`'s shape here: `terminate_job` below
+    /// simply has nothing to terminate.
+    #[cfg(windows)]
+    job: Option<crate::runs::procs::SessionJob>,
 }
 
 impl Pty {
@@ -496,12 +505,16 @@ impl Pty {
         rows: u16,
         out: mpsc::UnboundedSender<Chunk>,
     ) -> Result<Self, TerminalError> {
-        Self::start(id, build_command(id, launch), launch.profile.binary(), cols, rows, out)
+        Self::start(id, build_command(id, launch), launch.profile.binary(), cols, rows, out, true)
     }
 
     /// A session running the person's own shell, with no agent behind it. The
     /// PTY, the reader thread and everything after the spawn are the same —
     /// what a session runs is not this file's business past `build_command`.
+    /// `agent: false` below is the whole of why it never gets a Job Object
+    /// either: a background job left with `&` in a person's own shell is
+    /// meant to survive the window closing, exactly as it would in any other
+    /// terminal — see `runs::procs`'s module note.
     pub fn spawn_shell(
         id: SessionId,
         cwd: &Path,
@@ -510,11 +523,12 @@ impl Pty {
         out: mpsc::UnboundedSender<Chunk>,
     ) -> Result<Self, TerminalError> {
         let program = crate::shell_env::shell();
-        Self::start(id, build_shell_command(&program, cwd), &program, cols, rows, out)
+        Self::start(id, build_shell_command(&program, cwd), &program, cols, rows, out, false)
     }
 
     /// The spawn itself. `what` names the program only so a failure can say what
-    /// it was that did not start.
+    /// it was that did not start. `agent` decides whether a Windows session
+    /// gets a Job Object at all — see `spawn_shell` above.
     fn start(
         id: SessionId,
         command: CommandBuilder,
@@ -522,6 +536,7 @@ impl Pty {
         cols: u16,
         rows: u16,
         out: mpsc::UnboundedSender<Chunk>,
+        agent: bool,
     ) -> Result<Self, TerminalError> {
         // Before anything is opened or forked: a program that cannot be
         // executed is refused here, because the `Ok` `spawn_command` answers a
@@ -555,6 +570,25 @@ impl Pty {
         // seeing end-of-stream.
         drop(pair.slave);
 
+        // Windows: the Job Object, created and assigned right here — after
+        // the spawn, because there is nothing to assign it to before, and
+        // as close to it as this function can get, because the window this
+        // leaves open (a grandchild spawned before `assign` lands is not yet
+        // a member of anything) is milliseconds and not this file's to close
+        // further. `runs::procs`'s module note carries the reasoning and
+        // `.claude/rules/terminal.md` the size of the window measured
+        // against the harnesses this app actually starts.
+        #[cfg(windows)]
+        let job = agent
+            .then(|| child.process_id())
+            .flatten()
+            .and_then(|pid| {
+                let job = crate::runs::procs::SessionJob::new()?;
+                job.assign(pid).then_some(job)
+            });
+        #[cfg(not(windows))]
+        let _ = agent;
+
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
@@ -573,7 +607,7 @@ impl Pty {
             let _ = out.send(Chunk::Gone(id));
         });
 
-        Ok(Self { master: pair.master, writer, child })
+        Ok(Self { master: pair.master, writer, child, #[cfg(windows)] job })
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
@@ -640,6 +674,26 @@ impl Pty {
 
     pub fn kill(&mut self) {
         let _ = self.child.kill();
+    }
+
+    /// Windows's own points 1 through 3: everything this session's Job
+    /// Object has ever held, gone at once — see `runs::procs::SessionJob`.
+    /// `false` on every other platform and for a session that never got a
+    /// job (a shell, or an agent the job could not be created or assigned
+    /// for), which is what lets `terminal/service.rs` call this
+    /// unconditionally at every point that needs it rather than asking the
+    /// platform first.
+    #[cfg(windows)]
+    pub fn terminate_job(&self) -> bool {
+        match &self.job {
+            Some(job) => job.terminate(),
+            None => false,
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn terminate_job(&self) -> bool {
+        false
     }
 }
 
@@ -1036,7 +1090,7 @@ mod tests {
         let dir = scratch("start-missing");
         let program = dir.join("an-agent-that-was-never-installed").display().to_string();
         let (chunks, _rx) = mpsc::unbounded_channel();
-        match Pty::start(1, build_shell_command(&program, &dir), &program, 120, 30, chunks) {
+        match Pty::start(1, build_shell_command(&program, &dir), &program, 120, 30, chunks, false) {
             Err(TerminalError::Spawn(why)) => assert!(why.contains(&program), "{why}"),
             Err(other) => panic!("{other}"),
             Ok(_) => panic!("a program that is not on disk answered with a session"),
@@ -1064,7 +1118,7 @@ mod tests {
         executable(&script, "#!/nonexistent/interpreter\nexit 0\n");
         let program = script.display().to_string();
         let (chunks, _rx) = mpsc::unbounded_channel();
-        match Pty::start(1, build_shell_command(&program, &dir), &program, 120, 30, chunks) {
+        match Pty::start(1, build_shell_command(&program, &dir), &program, 120, 30, chunks, false) {
             Err(TerminalError::Spawn(why)) => {
                 assert!(why.contains("/nonexistent/interpreter"), "{why}")
             }

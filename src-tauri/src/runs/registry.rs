@@ -104,6 +104,19 @@ pub struct Record {
     pub started_at: String,
     /// The app process that wrote this record.
     pub writer: Proc,
+    /// This writer's own macOS resource coalition — smetana-kkz2, `None`
+    /// everywhere but macOS. Every process the app starts, and anything they
+    /// leave behind under pid 1, shares it, which is what lets a *later*
+    /// launch's start-up sweep find what a `kill -9`ed one left running: the
+    /// coalition id survives the death of the process that founded it (see
+    /// `.claude/rules/terminal.md` for the measurement this rests on), so it
+    /// is written here, beside the writer whose liveness already decides
+    /// whether the rest of this record may be acted on, rather than kept in
+    /// a file of its own. `#[serde(default)]` so a file written before this
+    /// field existed still parses — a missing coalition id is an ordinary
+    /// "nothing to sweep on this writer", never a reason to refuse the file.
+    #[serde(default)]
+    pub coalition: Option<u64>,
     pub batches: Vec<Batch>,
 }
 
@@ -523,6 +536,7 @@ mod tests {
             target_branch: "develop".into(),
             started_at: ago(0),
             writer,
+            coalition: None,
             batches: groups
                 .iter()
                 .enumerate()
@@ -741,6 +755,7 @@ mod tests {
             target_branch: "develop".into(),
             started_at: ago(0),
             writer,
+            coalition: None,
             batches: actors
                 .iter()
                 .map(|actor| Batch { actor: (*actor).to_string(), group: None })

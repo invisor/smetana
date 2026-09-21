@@ -63,6 +63,23 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 const KILL_GRACE: Duration = Duration::from_millis(1200);
 const KILL_POLL: Duration = Duration::from_millis(50);
 
+/// macOS only: how often the descendant poller takes one `KERN_PROC_ALL`
+/// snapshot and folds it into every live agent session's own
+/// `runs::procs::Descendants` — smetana-kkz2's points 1 and 2. Two seconds,
+/// because that is what the incident this task was filed over actually
+/// needed: the `yes` processes it left behind lived for the whole of a
+/// multi-minute `vitest` run under their bash tool's own subshell before that
+/// subshell exited, so a poll well under a minute was always going to catch
+/// them — two seconds leaves headroom the width of an order of magnitude
+/// without asking `sysctl` for the whole process table any faster than a
+/// person would ever notice the difference. What this interval does *not*
+/// catch is a `bash -c 'yes &'` whose own parent exits between two polls,
+/// entirely inside the gap: that one escapes points 1 and 2 by construction
+/// and is left to point 3, the coalition sweep on the app's own exit, which
+/// has no such gap because it reads a fresh snapshot rather than a folded
+/// one.
+const MAC_DESCENDANT_POLL: Duration = Duration::from_secs(2);
+
 /// How long to keep asking a harness what it called the session, and how often.
 /// Ten tries half a second apart: the rollout file appears within a second on
 /// the machine this was measured on, and five seconds sits well inside the time
@@ -186,6 +203,15 @@ struct Live {
     /// tick.
     pending: Vec<u8>,
     seq: u64,
+    /// macOS only: what the two-second poller below has accumulated about
+    /// this session's own descendants — see `runs::procs::Descendants` for
+    /// what it remembers and why. Present on every session, including a
+    /// shell's, but only ever fed by the poller for an agent session
+    /// (`profile.is_some()`); a shell's stays empty for its whole life,
+    /// which is `candidates` answering nothing rather than a second flag to
+    /// keep in step with `profile`.
+    #[cfg(target_os = "macos")]
+    descendants: crate::runs::procs::Descendants,
 }
 
 /// Somebody waiting for a session to end — in practice the run worker, which
@@ -229,7 +255,14 @@ struct Capture {
     tx: oneshot::Sender<Result<Vec<String>, TerminalError>>,
 }
 
-pub fn start(app: AppHandle) -> TerminalHandle {
+/// `known_projects` is point 4's own evidence: every project this launch
+/// knows about, the same list `runs::service::start` sweeps its own registry
+/// against, and for the identical reason — `lib.rs` has already loaded
+/// `settings.json` to decide which project to open, and reading it a second
+/// time here would be a second place that could disagree with the first.
+/// Point 4 is Linux's and macOS's alone: Windows costs it nothing at all —
+/// see the module note on `runs::procs`.
+pub fn start(app: AppHandle, known_projects: Vec<PathBuf>) -> TerminalHandle {
     let (tx, mut rx) = mpsc::channel::<Request>(32);
     let (chunks_tx, mut chunks_rx) = mpsc::unbounded_channel::<Chunk>();
     // A way back into this worker for the one answer that arrives after the
@@ -246,11 +279,32 @@ pub fn start(app: AppHandle) -> TerminalHandle {
     // that reaches everything an agent started except what asked for a group
     // of its own — `setsid`, `nohup`, a shell's `&` — which is reparented
     // under pid 1 the moment its own leader goes, with no group left that
-    // still names the session. `SMETANA_SESSION` is how those are found
-    // instead — see the module note on `runs::procs`. A task of its own,
-    // never awaited here, so a stray left over from last night never delays
-    // the first session this launch starts.
+    // still names the session. Point 4 — see the module note on
+    // `runs::procs` for the three backends. A task of its own, never awaited
+    // here, so a stray left over from last night never delays the first
+    // session this launch starts.
+    #[cfg(target_os = "linux")]
     tauri::async_runtime::spawn(sweep_strays());
+    #[cfg(target_os = "macos")]
+    {
+        // The coalition ids of every dead writer this launch's projects still
+        // name in their own `runs.json` — see `runs::recovery::note_run` for
+        // where the id was written and `dead_writer_coalitions` for why this
+        // is the *only* evidence point 4 has on macOS: a manually started
+        // agent session that never joined a run leaves nothing on disk for a
+        // restarted app to read its coalition id back out of, which is the
+        // scope this backend actually has rather than the one Linux's
+        // system-wide mark gives it. Read synchronously, before the sweep
+        // task starts, and off the worker's own task rather than this one's
+        // caller: a project's `runs.json` is small and this runs once, at
+        // start, well before the first session exists to race it.
+        let coalitions = crate::runs::recovery::dead_writer_coalitions(&known_projects);
+        tauri::async_runtime::spawn(sweep_coalitions(coalitions));
+    }
+    // Linux reads its own answer off the live process table and Windows
+    // needs nothing here at all, so neither one touches the argument.
+    #[cfg(not(target_os = "macos"))]
+    let _ = &known_projects;
 
     tauri::async_runtime::spawn(async move {
         let mut sessions: HashMap<SessionId, Live> = HashMap::new();
@@ -261,6 +315,16 @@ pub fn start(app: AppHandle) -> TerminalHandle {
         let mut tick = tokio::time::interval(FLUSH);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut ticks: u32 = 0;
+        // Built on every platform — `tokio::select!` takes a fixed set of
+        // arms, and gating one with `#[cfg]` is not a shape the macro
+        // accepts — but `poll_mac_descendants` below is macOS's alone and a
+        // no-op everywhere else, so the tick this costs elsewhere is the
+        // interval firing into an empty function. See `MAC_DESCENDANT_POLL`
+        // for the reasoning behind the two seconds, and that function for
+        // the resource-usage guarantee "the poller is not running" is
+        // actually about on the one platform it does anything on.
+        let mut mac_poll = tokio::time::interval(MAC_DESCENDANT_POLL);
+        mac_poll.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         loop {
             tokio::select! {
@@ -303,6 +367,9 @@ pub fn start(app: AppHandle) -> TerminalHandle {
                     close_captures(&mut captures, &sessions);
                     close_exit_waiters(&mut exit_waiters, &sessions);
                 }
+                _ = mac_poll.tick() => {
+                    poll_mac_descendants(&mut sessions);
+                }
             }
         }
 
@@ -336,14 +403,25 @@ async fn kill_all(sessions: &mut HashMap<SessionId, Live>) {
         if live.pty.exit_code().is_none() {
             signalled |= live.pty.hangup();
         }
+        // Windows point 3: this session's own Job Object, gone at once. A
+        // no-op everywhere else and for a session that never got one — see
+        // `runs::procs`'s module note for the three backends.
+        live.pty.terminate_job();
     }
-    // Every marked descendant of every session this worker still holds — the
-    // ones a group signal cannot reach any more, found by the mark alone.
-    // Gathered for every session rather than only the ones just hung up: a
+    // Point 3's own candidates, whatever a group signal alone cannot reach —
+    // gathered for every session rather than only the ones just hung up: a
     // session already `Exited` can still have left something running, and
-    // this is the one moment the app can still go looking for it.
-    let marked: Vec<i32> =
+    // this is the one moment the app can still go looking for it. Linux
+    // reads its own mark; macOS reads its coalition plus the residue of
+    // every session's own accumulated snapshot (`mac_app_exit_candidates`);
+    // Windows already handled its own leavings above and leaves this empty.
+    #[cfg(target_os = "linux")]
+    let candidates: Vec<i32> =
         sessions.keys().copied().filter_map(procs::mark).flat_map(|mark| procs::marked(&mark)).collect();
+    #[cfg(target_os = "macos")]
+    let candidates: Vec<i32> = mac_app_exit_candidates(sessions);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let candidates: Vec<i32> = Vec::new();
 
     // Nothing was asked to leave — on a platform with no such signal, or
     // because everything here is already gone — so there is nothing to wait
@@ -366,7 +444,7 @@ async fn kill_all(sessions: &mut HashMap<SessionId, Live>) {
     // `reap_marked` runs its own hangup, grace and kill entirely on its own,
     // so joining it here rather than spawning it is what keeps the app's own
     // exit from finishing before its wait does.
-    tokio::join!(pty_wait, reap_marked(marked, "app exit"));
+    tokio::join!(pty_wait, reap_marked(candidates, "app exit"));
 
     for live in sessions.values_mut() {
         if live.pty.exit_code().is_none() {
@@ -375,12 +453,38 @@ async fn kill_all(sessions: &mut HashMap<SessionId, Live>) {
     }
 }
 
+/// macOS point 3's own candidates: every process sharing this app's own
+/// coalition and reparented under pid 1, plus whatever every live session's
+/// own accumulated `Descendants` still finds in one fresh snapshot — the
+/// coalition read alone is not asked to carry the whole of this by itself,
+/// since it answers `Unknown` under exactly the same conditions any other
+/// `proc_pidinfo` call here might. Own pid and the pid of every session this
+/// worker still holds are excluded; nothing else at point 3 needs an
+/// exclusion this wide, because everything here is ending together.
+#[cfg(target_os = "macos")]
+fn mac_app_exit_candidates(sessions: &HashMap<SessionId, Live>) -> Vec<i32> {
+    let Some(snapshot) = procs::snapshot_all() else { return Vec::new() };
+    let exclude: Vec<i32> = std::iter::once(std::process::id() as i32)
+        .chain(sessions.values().filter_map(|live| live.pty.pid().map(|pid| pid as i32)))
+        .collect();
+    let mut pids: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    if let procs::Coalition::Known(id) = procs::own_coalition() {
+        pids.extend(procs::coalition_candidates(&snapshot, id, &exclude));
+    }
+    for live in sessions.values() {
+        pids.extend(live.descendants.candidates(&snapshot, &exclude));
+    }
+    pids.into_iter().collect()
+}
+
 /// Hang up every one of these pids, wait `KILL_GRACE` for them to leave, then
 /// send what remains `SIGKILL` — the same two-stage shape `kill_all` gives a
 /// session's own process group and `recovery::hang_up` gives a dead run's,
-/// aimed here at pids found by their `SMETANA_SESSION` mark rather than at a
-/// group nothing can reach any more. `why` is for the log line only; the four
-/// call sites differ in when they run and nothing else.
+/// aimed here at pids found by whichever backend answered rather than at a
+/// group nothing can reach any more — Linux's mark, macOS's snapshot or
+/// coalition, both producing an ordinary `Vec<i32>` this function does not
+/// need to tell apart. `why` is for the log line only; the four call sites
+/// differ in when they run and nothing else.
 async fn reap_marked(pids: Vec<i32>, why: &str) {
     let mut signalled: Vec<registry::Proc> = Vec::new();
     for pid in pids {
@@ -416,12 +520,34 @@ fn still_alive(proc: &registry::Proc) -> bool {
 }
 
 /// What a dead instance of this very app left running, found by the mark
-/// alone — see the module note on `runs::procs` for why a process group
-/// cannot find these, and `pub fn start` above for why this runs as a task of
-/// its own rather than in front of the worker's first request.
+/// alone — Linux only, see the module note on `runs::procs` for why a
+/// process group cannot find these, and `pub fn start` above for why this
+/// runs as a task of its own rather than in front of the worker's first
+/// request.
+#[cfg(target_os = "linux")]
 async fn sweep_strays() {
     let pids: Vec<i32> = procs::strays().into_iter().map(|(pid, _mark)| pid).collect();
     reap_marked(pids, "previous app; its own process is gone").await;
+}
+
+/// macOS's own point 4: whatever is left, reparented under pid 1, in the
+/// coalition of an app instance `recovery::dead_writer_coalitions` could
+/// prove dead — the only evidence this launch has about a launch it never
+/// saw running, since there is no snapshot to have polled and no mark to
+/// have read. See that function's own header for the scope this actually
+/// reaches (a project a run has touched), and `pub fn start` above for why
+/// this is a task of its own.
+#[cfg(target_os = "macos")]
+async fn sweep_coalitions(coalitions: Vec<u64>) {
+    if coalitions.is_empty() {
+        return;
+    }
+    let Some(snapshot) = procs::snapshot_all() else { return };
+    let mut pids: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    for id in coalitions {
+        pids.extend(procs::coalition_candidates(&snapshot, id, &[]));
+    }
+    reap_marked(pids.into_iter().collect(), "previous app; its own process is gone").await;
 }
 
 /// The exit path. Called from `RunEvent::Exit` — the event loop is already
@@ -569,6 +695,16 @@ fn absorb(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk
             live.session.finish(code);
             // The process is gone: there is nobody left to call for.
             live.bell_pending = false;
+            // Windows point 1: this session's own Job Object, gone at once —
+            // a no-op everywhere else, see `runs::procs`'s module note.
+            live.pty.terminate_job();
+            // macOS point 1's own evidence, taken before `live` goes out of
+            // scope below: a clone rather than a borrow, because the second
+            // call site for this same sweep (`Request::Remove`) has already
+            // taken its `Live` out of `sessions` by the time it needs this,
+            // and one shape shared by both is simpler than two.
+            #[cfg(target_os = "macos")]
+            let mac_descendants = live.descendants.clone();
             // And nothing left to offer back: the conversation ended on its own,
             // so the row it would draw after the next restart would be an offer
             // to reopen a finished agent. **This is not the path the app's own
@@ -581,18 +717,25 @@ fn absorb(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk
             // could never reach — `setsid yes &`, the case this exists for.
             // A task of its own: the worker has other sessions to keep
             // serving, and a grace period is not something to make them wait
-            // through.
+            // through. Linux only; macOS's own equivalent follows once
+            // `live`'s borrow of `sessions` has ended.
             reap_session_descendants(id, "session exited");
+            #[cfg(target_os = "macos")]
+            reap_mac_descendants(mac_descendants, sessions, "session exited");
         }
     }
 }
 
 /// Every process carrying this session's own mark, hung up on a task of its
 /// own — see `reap_marked` for the two-stage shape and `runs::procs` for what
-/// a group signal cannot reach. Shared by the two points that end one session
-/// at a time; `kill_all` gathers every session's marked descendants itself
+/// a group signal cannot reach. Linux only — macOS's own equivalent is
+/// `reap_mac_descendants` below, called separately because it needs this
+/// session's accumulated `Descendants` and the rest of `sessions` rather
+/// than the session id alone. Shared by the two points that end one session
+/// at a time; `kill_all` gathers every session's own leavings itself
 /// instead, since it is already waiting for the groups and there is nothing
 /// left to keep the worker's loop free for.
+#[cfg(target_os = "linux")]
 fn reap_session_descendants(id: SessionId, why: &'static str) {
     let Some(mark) = procs::mark(id) else { return };
     let pids = procs::marked(&mark);
@@ -600,6 +743,71 @@ fn reap_session_descendants(id: SessionId, why: &'static str) {
         tauri::async_runtime::spawn(reap_marked(pids, why));
     }
 }
+
+#[cfg(not(target_os = "linux"))]
+fn reap_session_descendants(_id: SessionId, _why: &'static str) {}
+
+/// macOS's own points 1 and 2: whatever `descendants` — a clone of the
+/// ending session's own accumulated state, taken by the caller before its
+/// `Live` left scope — still finds in one snapshot taken *right now*, not
+/// the poller's last one. A fresh table matters here specifically: the very
+/// shape this exists for (`setsid`) can reparent a descendant under pid 1 in
+/// the instant between the last poll and this session actually ending, and
+/// only a snapshot taken after that instant can still find it by `ppid`
+/// rather than needing the pgid fallback a moment early. `sessions` is
+/// whatever remains in the worker's map — this session's own entry is
+/// already gone from it by the time either call site reaches here — and is
+/// read only for the pid of every session still alive, which `candidates`
+/// must never signal.
+#[cfg(target_os = "macos")]
+fn reap_mac_descendants(
+    descendants: procs::Descendants,
+    sessions: &HashMap<SessionId, Live>,
+    why: &'static str,
+) {
+    if descendants.is_empty() {
+        return;
+    }
+    let Some(snapshot) = procs::snapshot_all() else { return };
+    let exclude: Vec<i32> = std::iter::once(std::process::id() as i32)
+        .chain(sessions.values().filter_map(|live| live.pty.pid().map(|pid| pid as i32)))
+        .collect();
+    let pids = descendants.candidates(&snapshot, &exclude);
+    if !pids.is_empty() {
+        tauri::async_runtime::spawn(reap_marked(pids, why));
+    }
+}
+
+/// `MAC_DESCENDANT_POLL`'s own tick: one `KERN_PROC_ALL` snapshot, folded
+/// into every *agent* session's own `Descendants` — never a shell's, for the
+/// identical reason `build_command` never gives a shell the Linux mark (see
+/// `runs::procs`'s module note): a shell's own background jobs are meant to
+/// survive the window closing, and a poller that tracked them would end up
+/// reaping one on the shell's own exit.
+///
+/// **No agent session live means no `sysctl` call at all**, which is the
+/// resource-usage half of "the poller is not running" this task's acceptance
+/// criteria ask for; the interval itself still ticks every
+/// `MAC_DESCENDANT_POLL` regardless — see the comment where it is built —
+/// and on every platform but macOS this function is the whole of what that
+/// tick costs.
+#[cfg(target_os = "macos")]
+fn poll_mac_descendants(sessions: &mut HashMap<SessionId, Live>) {
+    if !sessions.values().any(|live| live.profile.is_some() && live.pty.pid().is_some()) {
+        return;
+    }
+    let Some(snapshot) = procs::snapshot_all() else { return };
+    for live in sessions.values_mut() {
+        if live.profile.is_none() {
+            continue;
+        }
+        let Some(root) = live.pty.pid() else { continue };
+        live.descendants.absorb(&snapshot, root as i32);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn poll_mac_descendants(_sessions: &mut HashMap<SessionId, Live>) {}
 
 /// The active session's accumulated output — as one event. Background
 /// sessions do not leak to the front end: their screen is for the app, not
@@ -1034,6 +1242,8 @@ fn handle(
                         last_output: Instant::now(),
                         pending: Vec::new(),
                         seq: 0,
+                        #[cfg(target_os = "macos")]
+                        descendants: crate::runs::procs::Descendants::default(),
                     };
                     // After the spawn and not before it: a record for a session
                     // that never started would be a row offering a conversation
@@ -1179,6 +1389,8 @@ fn handle(
                         last_output: Instant::now(),
                         pending: Vec::new(),
                         seq: 0,
+                        #[cfg(target_os = "macos")]
+                        descendants: crate::runs::procs::Descendants::default(),
                     };
                     sessions.insert(id, live);
                     emit_state(app, &session);
@@ -1193,6 +1405,9 @@ fn handle(
         Request::Remove(id, tx) => {
             if let Some(mut live) = sessions.remove(&id) {
                 live.pty.kill();
+                // Windows point 2: this session's own Job Object, gone at
+                // once — a no-op everywhere else.
+                live.pty.terminate_job();
                 // A person took the row away, so the offer goes with it. The
                 // front end has its own verb for a row with *no* session behind
                 // it — `terminal_forget` — and this is the same act one session
@@ -1210,8 +1425,12 @@ fn handle(
                 let _ = app.emit("terminal:removed", serde_json::json!({ "id": id }));
                 // The same sweep a self-exit gets, for the row a person took
                 // away instead: `live.pty.kill()` above reaches the session's
-                // own process group and nothing outside it.
+                // own process group and nothing outside it. `sessions` no
+                // longer holds this session's own entry, so it is free to
+                // borrow here for macOS's own exclusion list.
                 reap_session_descendants(id, "session removed");
+                #[cfg(target_os = "macos")]
+                reap_mac_descendants(live.descendants.clone(), sessions, "session removed");
             }
             if *active == Some(id) {
                 *active = None;
