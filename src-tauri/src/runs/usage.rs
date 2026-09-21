@@ -459,41 +459,20 @@ fn read_app_server(profile: &'static dyn Profile, cwd: &Path) -> Result<Usage, U
     let mut child = app_server_command(profile, cwd)
         .spawn()
         .map_err(|_| Unavailable::InvalidResponse)?;
-    let mut reader = None;
     let result = (|| {
         let mut stdin = child.stdin.take().ok_or(Unavailable::InvalidResponse)?;
         let stdout = child.stdout.take().ok_or(Unavailable::InvalidResponse)?;
-        let (sent, received) = mpsc::sync_channel(1);
-        reader = Some(std::thread::spawn(move || read_app_server_response(stdout, sent)));
-
-        for request in [
-            serde_json::json!({
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "clientInfo": { "name": "smetana", "title": "Smetana", "version": env!("CARGO_PKG_VERSION") },
-                    "capabilities": {}
-                }
-            }),
-            serde_json::json!({ "method": "initialized", "params": {} }),
-            serde_json::json!({ "id": 2, "method": "account/rateLimits/read", "params": null }),
-        ] {
-            serde_json::to_writer(&mut stdin, &request).map_err(|_| Unavailable::InvalidResponse)?;
-            stdin.write_all(b"\n").map_err(|_| Unavailable::InvalidResponse)?;
-        }
-        stdin.flush().map_err(|_| Unavailable::InvalidResponse)?;
-        let response = match received.recv_timeout(PROBE_TIMEOUT) {
-            Ok(response) => response?,
-            Err(mpsc::RecvTimeoutError::Timeout) => return Err(Unavailable::TimedOut),
-            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(Unavailable::InvalidResponse),
-        };
-        profile.parse_usage_response(&response).ok_or(Unavailable::InvalidResponse)
+        let (sent, received) = mpsc::channel();
+        // Deliberately detached. A process Codex started can retain stdout after
+        // its direct parent is killed; joining this reader on a timeout would
+        // turn the probe's ceiling into an unbounded wait. The direct app-server
+        // is still killed and reaped below on every path.
+        std::thread::spawn(move || read_app_server_responses(stdout, sent));
+        app_server_session(&mut stdin, &received, Instant::now() + PROBE_TIMEOUT)
+            .and_then(|response| profile.parse_usage_response(&response).ok_or(Unavailable::InvalidResponse))
     })();
     let _ = child.kill();
     let _ = child.wait();
-    if let Some(reader) = reader {
-        let _ = reader.join();
-    }
     result
 }
 
@@ -511,45 +490,139 @@ fn app_server_command(profile: &'static dyn Profile, cwd: &Path) -> Command {
     command
 }
 
-fn read_app_server_response(
+/// Complete the read-only app-server handshake in protocol order. The one
+/// deadline belongs to the whole exchange: initialization, account identity,
+/// and rate limits collectively have sixty seconds, not sixty each.
+fn app_server_session(
+    stdin: &mut impl Write,
+    received: &mpsc::Receiver<(i64, Result<serde_json::Value, Unavailable>)>,
+    deadline: Instant,
+) -> Result<serde_json::Value, Unavailable> {
+    write_rpc(stdin, 1, "initialize", serde_json::json!({
+        "clientInfo": { "name": "smetana", "title": "Smetana", "version": env!("CARGO_PKG_VERSION") },
+        "capabilities": {}
+    }))?;
+    wait_for_rpc(received, deadline, 1)?;
+
+    write_notification(stdin, "initialized", serde_json::json!({}))?;
+    write_rpc(stdin, 2, "account/read", serde_json::json!({}))?;
+    let account = wait_for_rpc(received, deadline, 2)?;
+    subscription_account(&account)?;
+
+    write_rpc(stdin, 3, "account/rateLimits/read", serde_json::Value::Null)?;
+    wait_for_rpc(received, deadline, 3)
+}
+
+fn write_rpc(
+    stdin: &mut impl Write,
+    id: i64,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<(), Unavailable> {
+    serde_json::to_writer(&mut *stdin, &serde_json::json!({ "id": id, "method": method, "params": params }))
+        .map_err(|_| Unavailable::InvalidResponse)?;
+    stdin.write_all(b"\n").and_then(|_| stdin.flush()).map_err(|_| Unavailable::InvalidResponse)
+}
+
+fn write_notification(
+    stdin: &mut impl Write,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<(), Unavailable> {
+    serde_json::to_writer(&mut *stdin, &serde_json::json!({ "method": method, "params": params }))
+        .map_err(|_| Unavailable::InvalidResponse)?;
+    stdin.write_all(b"\n").and_then(|_| stdin.flush()).map_err(|_| Unavailable::InvalidResponse)
+}
+
+fn wait_for_rpc(
+    received: &mpsc::Receiver<(i64, Result<serde_json::Value, Unavailable>)>,
+    deadline: Instant,
+    wanted: i64,
+) -> Result<serde_json::Value, Unavailable> {
+    loop {
+        let remaining = deadline.checked_duration_since(Instant::now()).ok_or(Unavailable::TimedOut)?;
+        match received.recv_timeout(remaining) {
+            Ok((id, answer)) if id == wanted => return answer,
+            Ok(_) => continue,
+            Err(mpsc::RecvTimeoutError::Timeout) => return Err(Unavailable::TimedOut),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(Unavailable::InvalidResponse),
+        }
+    }
+}
+
+/// `account/read` is the stable, structured answer for what kind of login the
+/// app-server is using. It is intentionally checked before rate limits: text in
+/// an RPC error is not an account contract and must not become a UI diagnosis.
+fn subscription_account(account: &serde_json::Value) -> Result<(), Unavailable> {
+    match account.get("account") {
+        Some(serde_json::Value::Null) => Err(Unavailable::NotSignedIn),
+        Some(account) if account.get("type").and_then(serde_json::Value::as_str) == Some("chatgpt") => Ok(()),
+        Some(account) if account.get("type").and_then(serde_json::Value::as_str).is_some() => {
+            Err(Unavailable::UnsupportedAccount)
+        }
+        _ => Err(Unavailable::InvalidResponse),
+    }
+}
+
+fn read_app_server_responses(
     stdout: std::process::ChildStdout,
-    sent: mpsc::SyncSender<Result<serde_json::Value, Unavailable>>,
+    sent: mpsc::Sender<(i64, Result<serde_json::Value, Unavailable>)>,
 ) {
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
         let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
-        if message.get("id").and_then(serde_json::Value::as_i64) != Some(2) {
-            continue;
-        }
+        let Some(id) = message.get("id").and_then(serde_json::Value::as_i64) else { continue };
         let answer = if let Some(error) = message.get("error") {
-            Err(app_server_error(error))
+            let _ = error;
+            Err(Unavailable::InvalidResponse)
         } else {
             message.get("result").cloned().ok_or(Unavailable::InvalidResponse)
         };
-        let _ = sent.send(answer);
-        return;
-    }
-    let _ = sent.send(Err(Unavailable::InvalidResponse));
-}
-
-fn app_server_error(error: &serde_json::Value) -> Unavailable {
-    let message = error
-        .get("message")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if message.contains("sign in") || message.contains("login") || message.contains("auth") {
-        Unavailable::NotSignedIn
-    } else if message.contains("subscription") || message.contains("plan") || message.contains("account type") {
-        Unavailable::UnsupportedAccount
-    } else {
-        Unavailable::InvalidResponse
+        if sent.send((id, answer)).is_err() {
+            return;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct SharedWire(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedWire {
+        fn methods(&self) -> Vec<String> {
+            String::from_utf8(self.0.lock().unwrap().clone())
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()["method"].as_str().unwrap().to_owned())
+                .collect()
+        }
+
+        fn wait_for_methods(&self, expected: &[&str]) {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while Instant::now() < deadline {
+                if self.methods().iter().map(String::as_str).eq(expected.iter().copied()) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(self.methods(), expected, "app-server request order");
+        }
+    }
+
+    impl Write for SharedWire {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     /// Built rather than run: the probe's cwd is never the process's
     /// inherited one, and this is checked without spawning a harness at all.
@@ -572,13 +645,51 @@ mod tests {
     }
 
     #[test]
-    fn app_server_errors_are_reduced_to_safe_unavailability_reasons() {
-        assert_eq!(app_server_error(&serde_json::json!({ "message": "Please sign in" })), Unavailable::NotSignedIn);
+    fn app_server_waits_for_initialize_before_sending_the_follow_up_requests() {
+        let (sent, received) = mpsc::channel();
+        let wire = SharedWire(Arc::new(Mutex::new(Vec::new())));
+        let worker_wire = wire.clone();
+        let session = std::thread::spawn(move || {
+            let mut writer = worker_wire;
+            app_server_session(&mut writer, &received, Instant::now() + Duration::from_secs(1))
+        });
+
+        wire.wait_for_methods(&["initialize"]);
+        sent.send((1, Ok(serde_json::json!({})))).unwrap();
+        wire.wait_for_methods(&["initialize", "initialized", "account/read"]);
+        sent.send((2, Ok(serde_json::json!({ "account": { "type": "chatgpt" }, "requiresOpenaiAuth": true })))).unwrap();
+        wire.wait_for_methods(&["initialize", "initialized", "account/read", "account/rateLimits/read"]);
+        sent.send((3, Ok(serde_json::json!({ "rateLimits": {} })))).unwrap();
         assert_eq!(
-            app_server_error(&serde_json::json!({ "message": "This subscription is unsupported" })),
-            Unavailable::UnsupportedAccount
+            session.join().unwrap(),
+            Ok(serde_json::json!({ "rateLimits": {} }))
         );
-        assert_eq!(app_server_error(&serde_json::json!({ "message": "internal detail" })), Unavailable::InvalidResponse);
+    }
+
+    #[test]
+    fn an_initialize_error_stops_the_protocol_before_any_follow_up_request() {
+        let (sent, received) = mpsc::channel();
+        sent.send((1, Err(Unavailable::InvalidResponse))).unwrap();
+        let mut wire = Vec::new();
+
+        assert_eq!(
+            app_server_session(&mut wire, &received, Instant::now() + Duration::from_secs(1)),
+            Err(Unavailable::InvalidResponse)
+        );
+        let messages = String::from_utf8(wire).unwrap();
+        assert_eq!(messages.lines().count(), 1);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(messages.trim()).unwrap()["method"], "initialize");
+    }
+
+    #[test]
+    fn account_read_is_the_structured_source_for_safe_login_and_account_reasons() {
+        assert_eq!(subscription_account(&serde_json::json!({ "account": null })), Err(Unavailable::NotSignedIn));
+        assert_eq!(
+            subscription_account(&serde_json::json!({ "account": { "type": "apiKey" } })),
+            Err(Unavailable::UnsupportedAccount)
+        );
+        assert_eq!(subscription_account(&serde_json::json!({ "account": { "type": "chatgpt" } })), Ok(()));
+        assert_eq!(subscription_account(&serde_json::json!({ "unexpected": true })), Err(Unavailable::InvalidResponse));
     }
 
     fn usage(session: u8, week: u8) -> Usage {

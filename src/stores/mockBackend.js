@@ -1365,10 +1365,24 @@ export function installMockBackend() {
        `claude.rs`'s own fixture output, so the reset strings are shaped exactly
        as the parser hands them over — the harness's words, timezone and all.
 
-       `claude` and not whatever the settings fixture says, deliberately: the
-       real command answers with the agent that was actually reachable, and the
-       browser has no `PATH` to look at. */
+       The requested agent is kept here because a browser has no `PATH` and
+       therefore cannot model the real command's legitimate substitution. */
     if (command === 'agent_usage') {
+      if (payload?.agent === 'codex') {
+        return {
+          state: 'read',
+          agent: 'codex',
+          usage: {
+            sessionPct: 10,
+            sessionLabel: '5 hours',
+            sessionReset: 'Aug 7 at 8pm (Europe/Moscow)',
+            weekPct: null,
+            weekLabel: null,
+            weekReset: null
+          },
+          band: 'normal'
+        }
+      }
       return {
         state: 'read',
         agent: 'claude',

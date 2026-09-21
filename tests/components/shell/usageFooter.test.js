@@ -67,6 +67,15 @@ describe('usageSegments', () => {
     ])
   })
 
+  it('draws only the window Codex actually returned, without inventing a weekly dash', () => {
+    expect(usageSegments({
+      state: 'read',
+      agent: 'codex',
+      band: 'normal',
+      usage: { sessionPct: 0, sessionLabel: '5 hours', sessionReset: null, weekPct: null, weekLabel: null, weekReset: null }
+    })).toEqual([{ name: '5 hours', value: '0%' }])
+  })
+
   /* Either line the harness prints can go missing — one of them reworded, a
      build that prints the other alone — and the half that was read still has to
      be shown. Refusing the pair over it would throw away a reading that is

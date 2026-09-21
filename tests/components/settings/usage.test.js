@@ -125,6 +125,7 @@ describe('the sentence under the rows', () => {
     expect(usageNote({ state: 'unreadable', agent: 'codex', reason: 'notSignedIn' })).toMatch(/not signed in/)
     expect(usageNote({ state: 'unreadable', agent: 'codex', reason: 'unsupportedAccount' })).toMatch(/does not provide/)
     expect(usageNote({ state: 'unreadable', agent: 'codex', reason: 'timedOut' })).toMatch(/too long/)
+    expect(usageNote({ state: 'unreadable', agent: 'claude', reason: 'timedOut' })).not.toMatch(/Codex took too long/)
   })
 
   it('uses source-provided Codex window durations instead of fixed session labels', () => {

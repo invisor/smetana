@@ -62,17 +62,17 @@ export function usageLines(answer) {
   if (answer?.state !== READ) return []
   return [
     {
-      name: windowName(answer.usage?.sessionLabel, 'Session'),
+      name: usageWindowName(answer.usage?.sessionLabel, 'Session'),
       value: limitLine(answer.usage?.sessionPct, answer.usage?.sessionReset)
     },
     {
-      name: windowName(answer.usage?.weekLabel, 'This week'),
+      name: usageWindowName(answer.usage?.weekLabel, 'This week'),
       value: limitLine(answer.usage?.weekPct, answer.usage?.weekReset)
     }
   ].filter((row) => row.value)
 }
 
-function windowName(label, fallback) {
+export function usageWindowName(label, fallback) {
   const text = typeof label === 'string' ? label.trim() : ''
   return text || fallback
 }
@@ -127,7 +127,7 @@ export function usageNote(answer, busy = false, error = null) {
       ? 'This agent does not report what is left of its subscription, so there is nothing to read here.'
       : 'No agent is installed on this machine, so there is nothing to ask.'
   }
-  if (answer.state === 'unreadable') return unavailableNote(answer.reason)
+  if (answer.state === 'unreadable') return unavailableNote(answer)
   if (usageLines(answer).length) {
     /* A band this build has never heard of says nothing about a run rather
        than guessing which of the three it meant — the block still shows the
@@ -142,17 +142,18 @@ export function usageNote(answer, busy = false, error = null) {
      — Rust does not send one, and a build that did would be one this cannot
      draw — or a state this build has never heard of. Both take the sentence
      that promises nothing about the allowance. */
-  return unavailableNote(answer.reason)
+  return unavailableNote(answer)
 }
 
-function unavailableNote(reason) {
+function unavailableNote(answer) {
+  const reason = answer?.reason
   if (reason === 'notSignedIn') {
     return 'Codex is not signed in with a ChatGPT subscription, so its allowance is unavailable.'
   }
   if (reason === 'unsupportedAccount') {
     return 'This Codex account does not provide a subscription allowance, so there is nothing to show here.'
   }
-  if (reason === 'timedOut') {
+  if (reason === 'timedOut' && agentOf(answer) === 'codex') {
     return 'Codex took too long to read its subscription allowance. Try again shortly.'
   }
   return 'The allowance could not be read. The agent may not be installed on this machine, or not signed in.'
