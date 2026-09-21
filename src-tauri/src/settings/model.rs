@@ -1168,7 +1168,8 @@ pub struct Settings {
     /// static fallback, except Codex: its separately refreshed `codex_models`
     /// catalogue can advance beyond this build, so unknown saved Codex slugs
     /// are preserved and shown unavailable until explicitly replaced.
-    /// is not repeated here, exactly as `agent` above defers to `agents::IDS`.
+    /// Other harnesses validate against `Profile::models`, exactly as `agent`
+    /// above defers to `agents::IDS`.
     pub model: String,
     /// Which harness and which model handle each kind of agent call. At the root
     /// beside `agent` and for the reason written there: which model files a

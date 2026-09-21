@@ -614,8 +614,10 @@ the eighth the `--row-h` height became a starting point and fifteen rows shared 
 each instead of scrolling at 28. `flexShrink: 0` is the fix, and a list that genuinely scrolls then
 needed `reveal`, the cursor's row brought into view on opening and on walking off either end.
 
-Agents names no agent and no model of its own: both lists come from `stores/agents.js`, which is
-`agents_catalog` read once at startup, so an id added in Rust is offered here for free
+Agents names no agent and no model of its own: capabilities and the static pre-success fallback come
+from `agents_catalog` read once at startup. Codex is separately refreshed through `codex_models` on
+every Settings open; failure retains last-good and an unknown saved slug stays unavailable until a
+deliberate replacement.
 (`.claude/rules/agents.md`). The language pickers under them are the one doubling left on this tab,
 against `agents::LANGUAGES` and accepted for the usual reason — Rust validates the ids, so drift
 costs a stale label rather than a lost setting. Every row shares one control column, wider than the

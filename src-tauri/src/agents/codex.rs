@@ -80,11 +80,15 @@ const MODELS: &[(&str, &str)] = &[
 const MODEL_LIST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub async fn listed_models() -> Result<Vec<(String, String)>, String> {
-    let mut command = tokio::process::Command::new("codex");
+    listed_models_with("codex", crate::shell_env::path(), MODEL_LIST_TIMEOUT).await
+}
+
+async fn listed_models_with(binary: &str, path: Option<&str>, timeout: Duration) -> Result<Vec<(String, String)>, String> {
+    let mut command = tokio::process::Command::new(binary);
     command.args(["app-server", "--stdio"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
-    if let Some(path) = crate::shell_env::path() { command.env("PATH", path); }
+    if let Some(path) = path { command.env("PATH", path); }
     let mut child = command.spawn().map_err(|err| format!("Could not start Codex: {err}"))?;
-    let result = tokio::time::timeout(MODEL_LIST_TIMEOUT, async {
+    let result = tokio::time::timeout(timeout, async {
         let mut stdin = child.stdin.take().ok_or_else(|| "Codex stdin was unavailable".to_string())?;
         let stdout = child.stdout.take().ok_or_else(|| "Codex stdout was unavailable".to_string())?;
         let mut lines = BufReader::new(stdout).lines();
@@ -146,7 +150,15 @@ fn model_list_page(line: &str) -> Result<(Vec<(String, String)>, Option<String>)
 
 #[cfg(test)]
 mod model_list_tests {
-    use super::model_list_page;
+    use super::{listed_models_with, model_list_page};
+    use std::{fs, os::unix::fs::PermissionsExt, time::{Duration, SystemTime}};
+
+    fn fake(body: &str) -> String {
+        let path = std::env::temp_dir().join(format!("smetana-codex-{}", SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::write(&path, format!("#!/bin/sh\n{}", body)).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_string_lossy().into_owned()
+    }
     #[test]
     fn keeps_visible_models_in_response_order_and_uses_model_not_id() {
         let (models, next) = model_list_page(r#"{"result":{"data":[{"id":"wrong","model":"gpt-6-astra","displayName":"GPT-6-Astra","hidden":false},{"model":"hidden","displayName":"Hidden","hidden":true}],"nextCursor":"page-two"}}"#).unwrap();
@@ -160,6 +172,23 @@ mod model_list_tests {
         assert!(model_list_page(r#"{"result":{"data":[],"nextCursor":7}}"#).is_err());
         assert!(model_list_page(r#"{"error":{"message":"refused"}}"#).is_err());
         assert!(model_list_page("not json").is_err());
+    }
+
+    #[tokio::test]
+    async fn fake_app_server_aggregates_paginated_model_list_requests() {
+        let binary = fake("read a; echo '{\"id\":0,\"result\":{}}'; read b; read c; echo '{\"id\":1,\"result\":{\"data\":[{\"hidden\":false,\"model\":\"gpt-6-astra\",\"displayName\":\"GPT-6-Astra\"}],\"nextCursor\":\"next\"}}'; read d; echo '{\"id\":2,\"result\":{\"data\":[{\"hidden\":false,\"model\":\"gpt-5.6-sol\",\"displayName\":\"GPT-5.6-Sol\"}],\"nextCursor\":null}}'");
+        assert_eq!(listed_models_with(&binary, None, Duration::from_secs(1)).await.unwrap(), vec![("gpt-6-astra".into(), "GPT-6-Astra".into()), ("gpt-5.6-sol".into(), "GPT-5.6-Sol".into())]);
+        let _ = fs::remove_file(binary);
+    }
+
+    #[tokio::test]
+    async fn fake_app_server_timeout_is_killed_and_reaped() {
+        let binary = fake("read a; echo '{\"id\":0,\"result\":{}}'; read b; sleep 30");
+        assert_eq!(listed_models_with(&binary, None, Duration::from_millis(50)).await.unwrap_err(), "Codex model list timed out");
+        // `wait` above reaps the direct child. A second invocation proves the
+        // fake executable is no longer held by an unreaped process.
+        assert_eq!(listed_models_with(&binary, None, Duration::from_millis(50)).await.unwrap_err(), "Codex model list timed out");
+        let _ = fs::remove_file(binary);
     }
 }
 
