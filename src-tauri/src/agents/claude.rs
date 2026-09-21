@@ -10,7 +10,7 @@
 
 use portable_pty::CommandBuilder;
 
-use super::{prompt, Autonomy, Intent, Launch, Profile, SkillDelivery};
+use super::{prompt, Autonomy, Intent, Launch, McpConfigFormat, Profile, SkillDelivery};
 use crate::runs::model::RunMode;
 use crate::runs::usage::Usage;
 use crate::terminal::model::{Question, QuestionOption};
@@ -351,6 +351,15 @@ impl Profile for Claude {
     /// `Profile::clear_command` records.
     fn clear_command(&self) -> Option<&'static str> {
         Some("/clear")
+    }
+
+    /// `~/.claude.json`, keeping servers in two places: the root `mcpServers`
+    /// map, which every project sees, and a per-project override under
+    /// `projects.<absolute path>.mcpServers`. `runs::browser` reads both —
+    /// see `McpConfigFormat::JsonWithProjectOverride` for why the second one
+    /// counts as much as the first.
+    fn mcp_config(&self) -> Option<(&'static str, McpConfigFormat)> {
+        Some((".claude.json", McpConfigFormat::JsonWithProjectOverride))
     }
 
     fn parse_usage(&self, output: &str) -> Option<Usage> {

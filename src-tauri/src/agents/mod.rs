@@ -58,6 +58,20 @@ pub enum ImageDelivery {
     InPrompt,
 }
 
+/// The shape a harness writes its own MCP server configuration in, answered
+/// by `Profile::mcp_config` beside the path. Two are known, and the split is
+/// by shape rather than by harness — a third harness with either shape needs
+/// no third variant.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum McpConfigFormat {
+    /// A JSON file with `{ "mcpServers": { ... } }` at the root, plus a
+    /// per-project override nested under `projects.<absolute project
+    /// path>.mcpServers` that counts exactly as much as the root map.
+    JsonWithProjectOverride,
+    /// A TOML file with the same idea under `[mcp_servers.<name>]` tables.
+    Toml,
+}
+
 /// One position of one stage of the work a filing session does before the
 /// task exists: talking it through, writing down the design that discussion
 /// produced, writing the implementation plan. All three switches in the
@@ -867,6 +881,26 @@ pub trait Profile: Sync {
     /// file and the Sessions tab goes on listing it, which is what makes the
     /// menu row ask for no confirmation.
     fn clear_command(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Where this harness keeps a person's own MCP server configuration, as a
+    /// path relative to the home directory, and the shape it is written in —
+    /// or `None` where this harness has no configuration of its own to read.
+    ///
+    /// The default is `None`, a working answer rather than a gap, in the same
+    /// shape `model_args`'s and `batch_args`' are: a harness with no user-level
+    /// MCP configuration is simply never read, rather than pointed at a path
+    /// that leads nowhere.
+    ///
+    /// `runs::browser::detect` is the one caller, and it owns everything about
+    /// *reading* the file this answers: what counts as a Playwright entry
+    /// (`entry_is_playwright`) is one shared rule, and moving it into every
+    /// profile that answers this method would be a second copy of that rule
+    /// for each. This method says only where the file is and which of the two
+    /// known shapes it holds — never `None` about the shape and `Some` about
+    /// the path, since the pair is one answer.
+    fn mcp_config(&self) -> Option<(&'static str, McpConfigFormat)> {
         None
     }
 
@@ -1845,6 +1879,11 @@ mod tests {
         // clearing line for is asked for none, and the menu row that would
         // send one is greyed rather than sending a guess.
         assert!(Plain.clear_command().is_none());
+        // And one field over from that: a harness with no user-level MCP
+        // configuration of its own is never read at all, rather than pointed
+        // at a path that leads nowhere — `runs::browser::detect` reads this
+        // as "no", the same "no" every unobservable source there answers.
+        assert!(Plain.mcp_config().is_none());
     }
 
     #[test]

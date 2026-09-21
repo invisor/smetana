@@ -416,9 +416,10 @@ going is the whole answer, and the line is spoken for.
 *project* wants and nothing about the machine the run rides on, so a run with the live check on
 started happily where there was nothing to drive a browser with and found out inside the check, as
 INFRA (smetana-29s). Either tool is enough — Playwright, which is two facts and not one (an MCP entry
-in `~/.claude.json`, the project's `.mcp.json` or `~/.codex/config.toml`, **and** the browsers
-actually downloaded under `ms-playwright`), or the Claude in Chrome extension, found by its id in a
-Chrome profile. Every path and id in it is fragile by nature, and that is accepted rather than
+in whatever file each shipped harness's own profile names (`Profile::mcp_config`) or the project's
+own `.mcp.json`, **and** the browsers actually downloaded under `ms-playwright`), or the Claude in
+Chrome extension, found by its id in a Chrome profile. Every path and id in it is fragile by nature,
+and that is accepted rather than
 hidden: an extension writes itself into no agent's configuration, so the unpacked directory is the
 only evidence there is. Hence the rule the whole file is built on — **anything unobservable reads as
 "no", loudly**: the toggle goes off and the tooltip names what was not found, rather than staying

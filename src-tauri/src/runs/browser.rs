@@ -26,7 +26,9 @@
 //! Shaped after `agents/library.rs`: pure functions over file *contents* and
 //! directory *listings* carry the tests, and one `detect` does the disk reads
 //! and calls them. No worker, for the reason `files/` and `git.rs` have none —
-//! four file reads and two directory listings guard no state.
+//! one file read per shipped harness's own MCP configuration (`agents::IDS` is
+//! the count, so it is never written here), plus the project's own `.mcp.json`
+//! and two directory listings, guard no state.
 //!
 //! **One honest gap, and it is the expensive direction of error.**
 //! `PLAYWRIGHT_BROWSERS_PATH` is read from *this process's* environment, and a
@@ -55,6 +57,8 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+
+use crate::agents::{self, McpConfigFormat, Profile};
 
 /// The Claude in Chrome extension's id. Established on 2026-08-09 by reading
 /// the manifest under this id in the `Default` profile of a machine that has it
@@ -178,10 +182,11 @@ const CAVEAT: &str = "\nThese were read from the app's own environment and may b
 ///
 /// Either the name or what it runs is enough, and that asymmetry is deliberate.
 /// The name is conventional — `"playwright"` is what the official instructions
-/// tell people to type, and it is what this machine's `~/.claude.json` carries —
-/// but it is a person's free choice and somebody's is called `browser`. What it
-/// runs is the load-bearing fact (`npx -y @playwright/mcp@latest`, or an `url`
-/// for the hosted form), but it can equally be a wrapper script whose path says
+/// tell people to type, and it is what a harness's own configuration commonly
+/// carries — but it is a person's free choice and somebody's is called
+/// `browser`. What it runs is the load-bearing fact (`npx -y
+/// @playwright/mcp@latest`, or an `url` for the hosted form), but it can
+/// equally be a wrapper script whose path says
 /// nothing. Requiring both would call a real install absent; accepting either
 /// only mistakes something else for Playwright, and the two costs are not the
 /// same size. A false "present" leaves the toggle live and the run finds out
@@ -216,15 +221,17 @@ fn json_map_has_playwright(map: Option<&serde_json::Value>) -> bool {
         })
 }
 
-/// `~/.claude.json`, which keeps servers in two places: the root map, which
-/// every project sees, and a per-project override under
-/// `projects["<absolute path>"].mcpServers`. Both count — a project that
-/// configured Playwright for itself alone can drive a browser just as well as
-/// one relying on the root map, and reading only the root would call it absent.
+/// A harness's own configuration file, in the JSON shape
+/// `McpConfigFormat::JsonWithProjectOverride` names: servers live in two
+/// places, the root `mcpServers` map, which every project sees, and a
+/// per-project override under `projects["<absolute path>"].mcpServers`. Both
+/// count — a project that configured Playwright for itself alone can drive a
+/// browser just as well as one relying on the root map, and reading only the
+/// root would call it absent.
 ///
 /// Anything unparseable answers "no", the way `library.rs` does and for the same
 /// reason spelled out at the top of this file.
-pub fn claude_json_has_playwright(text: &str, project: &str) -> bool {
+fn json_root_and_project_has_playwright(text: &str, project: &str) -> bool {
     let Ok(root) = serde_json::from_str::<serde_json::Value>(text) else {
         return false;
     };
@@ -235,7 +242,10 @@ pub fn claude_json_has_playwright(text: &str, project: &str) -> bool {
 
 /// A project's own `.mcp.json`, the standard `{ "mcpServers": { … } }` shape.
 /// Most projects have none, and that is an ordinary outcome rather than a
-/// failure — the answer is simply "no" and the other two sources still speak.
+/// failure — the answer is simply "no" and the other sources still speak. This
+/// file belongs to the project rather than to any one harness, so there is no
+/// profile to ask about it and it is read on its own rather than through
+/// `Profile::mcp_config`.
 pub fn mcp_json_has_playwright(text: &str) -> bool {
     let Ok(root) = serde_json::from_str::<serde_json::Value>(text) else {
         return false;
@@ -243,9 +253,10 @@ pub fn mcp_json_has_playwright(text: &str) -> bool {
     json_map_has_playwright(root.get("mcpServers"))
 }
 
-/// `~/.codex/config.toml`, where the same servers live under
-/// `[mcp_servers.<name>]` — Codex's spelling of the same idea.
-pub fn codex_config_has_playwright(text: &str) -> bool {
+/// A harness's own configuration file, in the TOML shape `McpConfigFormat::Toml`
+/// names: servers live under `[mcp_servers.<name>]` tables — the same idea as
+/// the JSON shape above, spelled TOML's way.
+fn toml_servers_has_playwright(text: &str) -> bool {
     let Ok(root) = toml::from_str::<toml::Value>(text) else {
         return false;
     };
@@ -264,6 +275,23 @@ pub fn codex_config_has_playwright(text: &str) -> bool {
         }
         entry_is_playwright(name, &words)
     })
+}
+
+/// Any harness's own MCP configuration, read according to what its
+/// `Profile::mcp_config` answers — the path relative to home, and which of
+/// the two known shapes it is written in. A profile answering `None` is read
+/// as absent, the same "no" every unreadable source here answers; this is
+/// the whole of what keeps a third harness from costing this file an edit —
+/// it is asked rather than named.
+fn profile_mcp_has_playwright(profile: &dyn Profile, home: &Path, project: &str) -> bool {
+    let Some((path, format)) = profile.mcp_config() else {
+        return false;
+    };
+    let text = read(home.join(path));
+    match format {
+        McpConfigFormat::JsonWithProjectOverride => json_root_and_project_has_playwright(&text, project),
+        McpConfigFormat::Toml => toml_servers_has_playwright(&text),
+    }
 }
 
 /// Has anything drivable actually been downloaded into the Playwright cache?
@@ -368,28 +396,30 @@ fn read(path: PathBuf) -> String {
 
 /// The disk reads, and the only impure thing here.
 ///
-/// All three MCP sources are consulted whatever agent is configured, and that is
-/// a simplification worth knowing about: a machine with Playwright set up for
-/// Claude Code and a run that will go out under Codex reads as available. It
-/// errs toward the live toggle, which is the direction `entry_is_playwright`
-/// already chose and for the same reason — the cost is a check that fails the
-/// way it did before this module, against a feature removed with a tooltip that
-/// is wrong.
+/// Every shipped harness's own MCP configuration is consulted, whichever one is
+/// configured, and that is a simplification worth knowing about: a machine
+/// with Playwright set up for one harness and a run that will go out under
+/// another reads as available. It errs toward the live toggle, which is the
+/// direction `entry_is_playwright` already chose and for the same reason — the
+/// cost is a check that fails the way it did before this module, against a
+/// feature removed with a tooltip that is wrong.
 pub fn detect(project: &Path, busy_project: Option<String>) -> BrowserTools {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from);
 
     let Some(home) = home else {
-        // No home directory means none of the four paths below can even be
-        // named. Loudly "no", by the rule at the top of this file.
+        // No home directory means none of the paths below can even be named.
+        // Loudly "no", by the rule at the top of this file.
         return BrowserTools { busy_project, ..BrowserTools::default() };
     };
 
     let project_key = project.to_string_lossy();
-    let playwright_mcp = claude_json_has_playwright(&read(home.join(".claude.json")), &project_key)
-        || mcp_json_has_playwright(&read(project.join(".mcp.json")))
-        || codex_config_has_playwright(&read(home.join(".codex/config.toml")));
+    let playwright_mcp = agents::IDS
+        .iter()
+        .filter_map(|id| agents::resolve(id))
+        .any(|profile| profile_mcp_has_playwright(profile, &home, &project_key))
+        || mcp_json_has_playwright(&read(project.join(".mcp.json")));
 
     let configured = std::env::var_os("PLAYWRIGHT_BROWSERS_PATH");
     let playwright_browsers = playwright_cache_dir(&home, configured.as_deref())
@@ -407,10 +437,10 @@ pub fn detect(project: &Path, busy_project: Option<String>) -> BrowserTools {
 mod tests {
     use super::*;
 
-    /// The real entry off this machine's `~/.claude.json`, copied verbatim
+    /// A real entry off a harness's own JSON configuration, copied verbatim
     /// rather than minimised: what has to be pinned is the shape a person's file
     /// actually has, and a hand-tidied one would only agree with itself.
-    const CLAUDE_JSON: &str = r#"{
+    const JSON_WITH_PROJECT_OVERRIDE: &str = r#"{
         "mcpServers": {
             "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" },
             "playwright": {
@@ -427,13 +457,16 @@ mod tests {
 
     #[test]
     fn the_root_server_map_is_read() {
-        assert!(claude_json_has_playwright(CLAUDE_JSON, "/Users/someone/project"));
+        assert!(json_root_and_project_has_playwright(
+            JSON_WITH_PROJECT_OVERRIDE,
+            "/Users/someone/project"
+        ));
     }
 
     #[test]
     fn a_configuration_without_it_is_not_a_playwright_machine() {
         let json = r#"{"mcpServers":{"puppeteer":{"command":"npx","args":["-y","puppeteer-mcp"]}}}"#;
-        assert!(!claude_json_has_playwright(json, "/p"));
+        assert!(!json_root_and_project_has_playwright(json, "/p"));
     }
 
     #[test]
@@ -448,8 +481,8 @@ mod tests {
                 }
             }
         }"#;
-        assert!(claude_json_has_playwright(json, "/Users/someone/project"));
-        assert!(!claude_json_has_playwright(json, "/Users/someone/elsewhere"));
+        assert!(json_root_and_project_has_playwright(json, "/Users/someone/project"));
+        assert!(!json_root_and_project_has_playwright(json, "/Users/someone/elsewhere"));
     }
 
     #[test]
@@ -475,12 +508,12 @@ mod tests {
         assert!(!mcp_json_has_playwright("not json at all"));
         assert!(!mcp_json_has_playwright("{}"));
         assert!(!mcp_json_has_playwright(r#"{"mcpServers":[]}"#));
-        assert!(!claude_json_has_playwright("", "/p"));
-        assert!(!codex_config_has_playwright("not toml ["));
+        assert!(!json_root_and_project_has_playwright("", "/p"));
+        assert!(!toml_servers_has_playwright("not toml ["));
     }
 
     #[test]
-    fn codex_keeps_the_same_servers_under_its_own_spelling() {
+    fn the_toml_shape_keeps_the_same_servers_under_its_own_spelling() {
         let config = r#"
 model = "gpt-5"
 
@@ -491,14 +524,14 @@ args = ["-y", "@playwright/mcp@latest"]
 [mcp_servers.node_repl]
 command = "node"
 "#;
-        assert!(codex_config_has_playwright(config));
+        assert!(toml_servers_has_playwright(config));
     }
 
     #[test]
-    fn a_codex_config_with_other_servers_only_is_not_a_playwright_machine() {
+    fn a_toml_config_with_other_servers_only_is_not_a_playwright_machine() {
         let config = "[mcp_servers.node_repl]\ncommand = \"node\"\n";
-        assert!(!codex_config_has_playwright(config));
-        assert!(!codex_config_has_playwright("model = \"gpt-5\"\n"));
+        assert!(!toml_servers_has_playwright(config));
+        assert!(!toml_servers_has_playwright("model = \"gpt-5\"\n"));
     }
 
     #[test]
@@ -649,5 +682,52 @@ command = "node"
         let tools = detect(&root, Some("/Users/someone/other".into()));
         assert_eq!(tools.busy_project.as_deref(), Some("/Users/someone/other"));
         std::fs::remove_dir_all(&root).expect("clean up");
+    }
+
+    /// Every shipped harness that answers `Profile::mcp_config` at all is read
+    /// at its own path and shape, asked for rather than named here — the
+    /// generic dispatcher is what stands in for the two functions this file
+    /// used to call by the harness's own name. The fixture path itself comes
+    /// from the profile's own answer rather than a literal, so this test keeps
+    /// working whichever path each harness names.
+    ///
+    /// A harness answering `None` is **skipped rather than failed** —
+    /// asserting `Some` here would assert the opposite of the trait's own
+    /// design, where `None` is a harness with no such configuration reading as
+    /// inert rather than broken, and the first harness shaped that way would
+    /// turn a correct default into a red `cargo test`. Both known shapes are
+    /// pinned instead, by requiring each to have been exercised at least once
+    /// across whichever harnesses do answer.
+    #[test]
+    fn every_shipped_harness_is_read_by_its_own_answer_to_mcp_config() {
+        let home = tempfile::tempdir().expect("a temporary directory");
+        let mut json_with_override_seen = false;
+        let mut toml_seen = false;
+
+        for id in agents::IDS {
+            let profile = agents::resolve(id).expect("every id in IDS resolves to a profile");
+            let Some((path, format)) = profile.mcp_config() else { continue };
+            let fixture = home.path().join(path);
+            std::fs::create_dir_all(fixture.parent().expect("a config file has a parent"))
+                .expect("create the fixture's parent directory");
+            let text = match format {
+                McpConfigFormat::JsonWithProjectOverride => {
+                    json_with_override_seen = true;
+                    JSON_WITH_PROJECT_OVERRIDE.to_owned()
+                }
+                McpConfigFormat::Toml => {
+                    toml_seen = true;
+                    "[mcp_servers.playwright]\ncommand = \"npx\"\n".to_owned()
+                }
+            };
+            std::fs::write(&fixture, text).expect("write the fixture");
+            assert!(
+                profile_mcp_has_playwright(profile, home.path(), "/Users/someone/project"),
+                "{id} was not read at its own answer to mcp_config"
+            );
+        }
+
+        assert!(json_with_override_seen, "no shipped harness exercised the JSON shape");
+        assert!(toml_seen, "no shipped harness exercised the TOML shape");
     }
 }
