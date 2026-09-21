@@ -388,8 +388,9 @@ clear in `agent/agentMenu.js` — and a fifth of labels in `shell/usageFooter.js
 good reason, which the catalogue keeps: **the answer has to be in hand while a row is being drawn**,
 and a row greyed a round trip later is a row somebody has already pressed. Each was also a knowing
 second copy of a fact Rust owns, free to drift in both directions in silence, and a third harness
-meant five edits in two languages. Nothing in the catalogue changes while the app runs — the set of
-shipped harnesses is fixed at build time — so one read at startup satisfies both.
+meant five edits in two languages. The set of shipped harnesses and what each can do is fixed at
+build time, so one read at startup satisfies both. Codex's `models` field is the one entry in a row
+that goes on changing after that read — "Which agent, and on which model" below is where that lives.
 
 The pure modules stay pure, which is what keeps them reachable by a test at all: `resumeAvailability`
 takes `capable`, `agentMenuItems` takes `clearable` and `usageAgentLabel` takes a `nameFor`, each
@@ -436,6 +437,10 @@ started; nothing on screen reads it, so the substitution is silent and the termi
 to see it. When nothing at all is installed the session fails with `NoAgent`.
 
 ## Which agent, and on which model
+
+Codex is the one dynamic exception to the static harness catalogue: `MODELS` is only the fallback
+until the installed `codex app-server --stdio` returns a complete paginated `model/list` response on
+each Settings opening. Invalid, empty, timed-out or failed reads leave the last good list in place.
 
 `Profile` answers two questions about models, and the split is the one `usage_command`/`parse_usage`
 already makes: what a harness offers, and how it is told which one to use.

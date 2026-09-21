@@ -8,9 +8,19 @@
    `settings/AgentSettings.vue`, two of ids that resume and fork in
    `agent/sessionMenu.js`, one of ids that clear in `agent/agentMenu.js`. Each
    existed because the answer has to be known while a menu row is drawn, and a
-   row greyed a round trip later is a row somebody has already pressed. Nothing
-   here changes while the app runs — the set of shipped harnesses is fixed at
-   build time — so one read is the whole of it.
+   row greyed a round trip later is a row somebody has already pressed. The set
+   of shipped harnesses and what each can do is fixed at build time, so one
+   read of `agents_catalog` is the whole of that.
+
+   Codex's `models` field is the one thing on a row this store goes on to
+   change while the app runs, and it is a deliberate exception rather than a
+   hole in the paragraph above: `agents_catalog`'s own list for that row is a
+   pre-success fallback, and `refreshCodexModels` — called whenever Settings
+   opens — mutates `row.models` in place on the very row the startup read
+   built, through a separate `codex_models` command. A failed refresh keeps
+   the last good list rather than emptying it, and a saved slug the freshest
+   catalogue has never heard of stays in the field, marked unavailable, until
+   somebody replaces it on purpose.
 
    A read that fails leaves the list empty, and an empty list greys every row
    that depends on a capability. That is the safe direction: Rust refuses an
@@ -21,6 +31,8 @@ import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
 export const agents = ref([])
+export const codexModelsError = ref(null)
+let codexRequest = 0
 
 export async function initAgents() {
   try {
@@ -28,6 +40,28 @@ export async function initAgents() {
     agents.value = Array.isArray(rows) ? rows : []
   } catch {
     agents.value = []
+  }
+}
+
+/* The harness catalogue is fixed by this build; Codex's visible models are not.
+   Only the newest opening may update the picker, so a slower earlier process
+   cannot put an old menu back after a later one has succeeded. */
+export async function refreshCodexModels() {
+  const mine = ++codexRequest
+  try {
+    const models = await invoke('codex_models')
+    if (mine !== codexRequest) return false
+    if (!Array.isArray(models) || models.length === 0 || models.some((model) => typeof model?.id !== 'string' || !model.id || typeof model?.label !== 'string' || !model.label)) {
+      throw new Error('Codex returned an invalid model list')
+    }
+    const row = agents.value.find((agent) => agent.id === 'codex')
+    if (row) row.models = models
+    codexModelsError.value = null
+    return true
+  } catch (err) {
+    if (mine !== codexRequest) return false
+    codexModelsError.value = typeof err === 'string' ? err : err?.message || 'The Codex model list could not be read'
+    return false
   }
 }
 

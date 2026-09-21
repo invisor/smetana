@@ -65,7 +65,11 @@ export async function openSettingsWindow(tab = null) {
    `TABS` list decides whether the name means anything — this store carries the
    message and never the vocabulary. */
 export async function watchSettingsSection(onShow) {
-  return listen(SETTINGS_SHOW, (event) => onShow(event.payload?.tab ?? null))
+  return listen(SETTINGS_SHOW, (event) => {
+    const tab = event.payload?.tab ?? null
+    if (event.payload?.refreshCodexModels) onShow(tab, true)
+    else onShow(tab)
+  })
 }
 
 /* Which columns the active project's board has, so the Kanban tab can offer

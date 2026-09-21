@@ -56,6 +56,54 @@ async function loadCatalogue(answer = CATALOGUE) {
 }
 
 describe('the agent catalogue', () => {
+  it('keeps the last good Codex list for invalid results and string refusals', async () => {
+    const { agents, ipc } = await loadCatalogue()
+    const before = agents.agents.value.find((row) => row.id === 'codex').models
+    ipc.on('codex_models', [{}])
+    await agents.refreshCodexModels()
+    expect(agents.agents.value.find((row) => row.id === 'codex').models).toEqual(before)
+    expect(agents.codexModelsError.value).toBe('Codex returned an invalid model list')
+    ipc.fail('codex_models', 'Codex model list timed out')
+    await agents.refreshCodexModels()
+    expect(agents.codexModelsError.value).toBe('Codex model list timed out')
+  })
+
+  it('replaces only a complete ordered Codex result', async () => {
+    const { agents, ipc } = await loadCatalogue()
+    ipc.on('codex_models', [
+      { id: 'gpt-6-astra', label: 'GPT-6-Astra' },
+      { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' }
+    ])
+    await agents.refreshCodexModels()
+    expect(agents.agents.value.find((row) => row.id === 'codex').models.map((model) => model.id)).toEqual(['gpt-6-astra', 'gpt-5.6-sol'])
+    expect(agents.codexModelsError.value).toBeNull()
+  })
+
+  /* Two openings of Settings in quick succession are two calls to this
+     function, and the guard is the sequence number `refreshCodexModels`
+     closes over — not the order the two `codex_models` calls happen to
+     answer in. Both requests are put in flight before either settles, the
+     newer one is answered first, and only then does the older one's answer
+     arrive: it must lose, because a slower first request landing after a
+     faster second one is exactly the shape a stale response takes. */
+  it('an older parallel response does not restore the previous list over a newer one', async () => {
+    const { agents, ipc } = await loadCatalogue()
+    const resolvers = []
+    ipc.on('codex_models', () => new Promise((resolve) => resolvers.push(resolve)))
+
+    const older = agents.refreshCodexModels()
+    const newer = agents.refreshCodexModels()
+
+    resolvers[1]([{ id: 'gpt-6-astra', label: 'GPT-6-Astra' }])
+    expect(await newer).toBe(true)
+    expect(agents.agents.value.find((row) => row.id === 'codex').models).toEqual([{ id: 'gpt-6-astra', label: 'GPT-6-Astra' }])
+
+    resolvers[0]([{ id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' }])
+    expect(await older).toBe(false)
+    expect(agents.agents.value.find((row) => row.id === 'codex').models).toEqual([{ id: 'gpt-6-astra', label: 'GPT-6-Astra' }])
+    expect(agents.codexModelsError.value).toBeNull()
+  })
+
   it('holds one row per harness once it has been read', async () => {
     const { agents } = await loadCatalogue()
 

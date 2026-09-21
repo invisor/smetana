@@ -327,6 +327,7 @@ pub fn run() {
       runs::commands::target_branches,
       runs::commands::agent_usage,
       agents::commands::agents_catalog,
+      agents::commands::codex_models,
       sessions::commands::sessions_list,
       sessions::commands::sessions_open_log,
       sessions::commands::sessions_open_cwd,

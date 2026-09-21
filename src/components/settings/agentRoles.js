@@ -144,6 +144,14 @@ export function modelOptions(role, agents, agent, inherited) {
   return [nothing, ...models.map((model) => ({ value: model.id, label: model.label }))]
 }
 
+/* A saved Codex slug can outlive a successful catalogue refresh. Keep it in
+   the control, marked unavailable, until the person intentionally chooses a
+   replacement; validation on the Rust side preserves it for the same reason. */
+export function unavailableModelOption(options, model) {
+  if (!model || options.some((option) => option.value === model)) return options
+  return [...options, { value: model, label: `${model} (Unavailable)`, disabled: true }]
+}
+
 /* The edit a harness dropdown makes, as the fields it changes.
 
    Choosing a harness clears the model beside it, always: the model that was
