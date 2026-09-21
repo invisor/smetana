@@ -24,7 +24,8 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 
 use super::library::read_skill;
 use super::{
-    cascade, prompt, Autonomy, ImageDelivery, Intent, Launch, Profile, SkillDelivery, Stage,
+    cascade, prompt, Autonomy, ImageDelivery, Intent, Launch, McpConfigFormat, Profile,
+    SkillDelivery, Stage,
 };
 use crate::runs::model::RunMode;
 use crate::runs::usage::Usage;
@@ -730,6 +731,13 @@ impl Profile for Codex {
     ) -> Option<String> {
         let root = super::codex_sessions::sessions_root()?;
         super::codex_sessions::newest_session_id(&root, cwd, started_after, before)
+    }
+
+    /// `~/.codex/config.toml`, where the same servers live under
+    /// `[mcp_servers.<name>]` — Codex's own spelling of the idea Claude Code
+    /// writes as `mcpServers`.
+    fn mcp_config(&self) -> Option<(&'static str, McpConfigFormat)> {
+        Some((".codex/config.toml", McpConfigFormat::Toml))
     }
 }
 
