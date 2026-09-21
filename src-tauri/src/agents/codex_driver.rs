@@ -19,11 +19,13 @@ pub struct CodexDriver {
     tickets: std::collections::BTreeMap<String, (Value, String)>,
     items: std::collections::BTreeMap<String, String>,
     pending: std::collections::BTreeMap<u64, String>,
+    interrupt_pending: bool,
+    turn_start_pending: bool,
 }
 
 impl CodexDriver {
     pub fn new(_permission: Option<crate::session::permission::PermissionTicket>) -> Self {
-        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None)), active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), pending: std::collections::BTreeMap::new() }
+        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None)), active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false }
     }
 
     fn request(&mut self, method: &str, params: Value) -> Vec<u8> {
@@ -45,6 +47,7 @@ impl CodexDriver {
         let Input::Message { text, attachments } = input;
         let mut content = vec![json!({"type":"text", "text":text})];
         content.extend(attachments.into_iter().map(|path| json!({"type":"localImage", "path":path})));
+        self.turn_start_pending = true;
         self.request("turn/start", json!({"threadId":self.thread, "input":content}))
     }
 }
@@ -97,6 +100,13 @@ impl Driver for CodexDriver {
             if response.as_deref() == Some("turn/start") {
                 if let Some(id) = message.pointer("/result/turn/id").and_then(Value::as_str) {
                     self.active_turn = Some(id.to_owned());
+                    self.turn_start_pending = false;
+                    if self.interrupt_pending {
+                        self.interrupt_pending = false;
+                        let thread_id = self.thread.clone().unwrap_or_default();
+                        let interrupt = self.request("turn/interrupt", json!({"threadId":thread_id, "turnId":id}));
+                        self.queued.push(interrupt);
+                    }
                     continue;
                 }
             }
@@ -138,6 +148,7 @@ impl Driver for CodexDriver {
                 },
                 Some("turn/completed") => {
                     self.active_turn = None;
+                    self.turn_start_pending = false;
                     if let Some(error) = message.pointer("/params/turn/error/message").and_then(Value::as_str) { events.push(EventKind::Error { text: error.to_owned() }); }
                     events.push(EventKind::Result { tokens_in: 0, tokens_out: 0, cost_usd: None, ms: message.pointer("/params/turn/durationMs").and_then(Value::as_u64).unwrap_or(0) });
                 },
@@ -172,7 +183,11 @@ impl Driver for CodexDriver {
 
     fn interrupt(&mut self) -> Option<Vec<u8>> {
         let thread_id = self.thread.clone()?;
-        let turn_id = self.active_turn.clone()?;
+        let Some(turn_id) = self.active_turn.clone() else {
+            if !self.turn_start_pending { return None; }
+            self.interrupt_pending = true;
+            return Some(Vec::new());
+        };
         Some(self.request("turn/interrupt", json!({"threadId":thread_id, "turnId":turn_id})))
     }
 }
