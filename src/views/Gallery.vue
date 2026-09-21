@@ -938,7 +938,12 @@ const galleryUsage = [
     usage: { sessionPct: 92, sessionReset: 'Aug 7 at 8pm (Europe/Moscow)', weekPct: null, weekReset: null },
     band: 'pause'
   },
-  { state: 'unsupported', agent: 'codex' },
+  {
+    state: 'read',
+    agent: 'codex',
+    usage: { sessionPct: 10, sessionLabel: '5 hours', sessionReset: 'Aug 7 at 8pm (Europe/Moscow)', weekPct: null, weekLabel: null, weekReset: null },
+    band: 'normal'
+  },
   {
     state: 'read',
     agent: 'claude',
@@ -2373,14 +2378,16 @@ const galleryConversationPanel = ref(true)
    `agents::pick` makes, and there is nothing in a browser to make it happen. */
 const galleryAgentUsage = {
   state: 'read',
-  agent: 'claude',
+  agent: 'codex',
   usage: {
     sessionPct: 10,
+    sessionLabel: '5 hours',
     sessionReset: 'Aug 7 at 8pm (Europe/Moscow)',
-    weekPct: 78,
-    weekReset: 'Aug 11 at 5:59pm (Europe/Moscow)'
+    weekPct: null,
+    weekLabel: null,
+    weekReset: null
   },
-  band: 'reduced'
+  band: 'normal'
 }
 /* The other shapes the block takes, and none of them is reachable any other
    way: the mock answers a reading, so `?view=settings&tab=agents` cannot show
@@ -2389,7 +2396,7 @@ const galleryAgentUsage = {
    Refresh at all, so the heading loses the counterweight `space-between` gives
    it — and it is also the one where the heading names an agent the picker
    above it does not. */
-const galleryAgentUsageUnsupported = { state: 'unsupported', agent: 'codex' }
+const galleryAgentUsageUnsupported = { state: 'unsupported', agent: 'aider' }
 const galleryAgentUsageUnreadable = { state: 'unreadable', agent: 'claude' }
 /* Half a reading: one of the two lines the harness prints was reworded, so
    Rust sends the week across as `null` rather than as a zero it never read

@@ -653,9 +653,11 @@ window, and both re-probe when — and only when — that derived harness moves,
 dropdowns rather than one. It was a placeholder with dashes and is now the reading itself: the tab
 asks `agent_usage`, which is `runs/usage.rs`'s probe — the same one the run gate makes before every batch
 — put from the other end of the app. Four things about it are decisions rather than mechanics. The
-answer has **three distinguishable states** and not an `Option`: an agent with no `usage_command`
-(Codex) reads differently from one that was asked and could not answer, since those are different
-sentences for a person and different things to do about them. The **band comes from Rust**, through
+answer has **three distinguishable states** and not an `Option`: an agent with no usage source reads
+differently from one that was asked and could not answer, since those are different sentences for a
+person and different things to do about them. Codex has an app-server source; structured account
+state distinguishes no ChatGPT login and an unsupported account from an invalid response, while an
+unknown reading never pauses a run. The **band comes from Rust**, through
 the existing `usage::decide`, so `REDUCED_THRESHOLD` and `PAUSE_THRESHOLD` keep one copy — a second
 copy in JS would drift from the first silently. And the answer **names the agent that actually
 replied**, because `agents::pick` substitutes the first installed profile for a configured one that
@@ -664,7 +666,9 @@ with nobody to name, the heading is the bare word rather than the selection. The
 **a percentage may be absent**, since either of the two lines `/usage` prints can be reworded away,
 and the half that was not read travels as `null` rather than as the zero it used to become — the
 block draws exactly the rows whose percentage arrived, one of them if that is all there was, and a
-real `0%` is still a row (smetana-7rp). Plan and Status are gone rather than kept as dashes —
+real `0%` is still a row (smetana-7rp). Codex's structured `primary` and `secondary` labels come
+from `windowDurationMins`; its footer draws only returned windows, while Claude's prose reading
+keeps the existing two fixed slots and their dashes. Plan and Status are gone rather than kept as dashes —
 `/usage` reports two percentages and two reset times and nothing about a tariff, so those rows could
 only ever have stayed empty. It is read on **opening the tab**, the way the Storage numbers and the
 login item are, and the argument is stronger here: the probe is somebody else's CLI under a

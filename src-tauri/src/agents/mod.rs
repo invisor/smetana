@@ -672,6 +672,26 @@ pub trait Profile: Sync {
         None
     }
 
+    /// The transport which carries this harness's subscription allowance.
+    ///
+    /// `usage_command` deliberately remains the Claude Code-specific path:
+    /// it is a command that prints prose and `parse_usage` is its parser.
+    /// Codex obtains a structured account snapshot from its app-server instead,
+    /// so giving the two sources one command-shaped hook would make either
+    /// caller invent the other harness's protocol. `runs::usage` owns the
+    /// common timeout, child cleanup, and normalized `Usage` which follow.
+    fn usage_source(&self) -> Option<UsageSource> {
+        self.usage_command().map(|_| UsageSource::Command)
+    }
+
+    /// Read a structured allowance response, for sources which have one.
+    /// The default is intentionally empty: `parse_usage` remains the parser
+    /// for `UsageSource::Command`, and a profile which declares another source
+    /// has to explicitly say how its response becomes the common reading.
+    fn parse_usage_response(&self, _response: &serde_json::Value) -> Option<crate::runs::usage::Usage> {
+        None
+    }
+
     /// How this harness is asked one question with nobody watching, as the
     /// arguments that go in front of the prompt. `agents::oneshot` is the
     /// caller, and the commit-message button in the Git panel is what wants it.
@@ -971,6 +991,15 @@ pub fn is_batch(intent: &Intent) -> bool {
 /// something else.
 pub const IDS: [&str; 2] = ["claude", "codex"];
 
+/// A subscription source a profile has explicitly implemented. This is apart
+/// from `usage_command`: one source is a CLI's human-readable command and the
+/// other is Codex's JSON-RPC app-server protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageSource {
+    Command,
+    AppServer,
+}
+
 /// What one harness can do, as the front end needs to know it while a row is
 /// being drawn.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1030,7 +1059,7 @@ pub fn catalogue() -> Vec<AgentRow> {
                 resume: profile.resume_args("probe").is_some(),
                 fork: profile.fork_args("probe").is_some(),
                 clear: profile.clear_command().is_some(),
-                usage: profile.usage_command().is_some(),
+                usage: profile.usage_source().is_some(),
                 batch: !profile.batch_args().is_empty(),
                 oneshot: profile.oneshot_args().is_some(),
             },
@@ -2034,7 +2063,7 @@ mod tests {
         assert_eq!(codex.label, "Codex");
         assert!(codex.capabilities.resume && codex.capabilities.fork);
         assert!(codex.capabilities.batch && codex.capabilities.oneshot);
-        assert!(!codex.capabilities.usage, "this CLI has no command that prints an allowance");
+        assert!(codex.capabilities.usage, "Codex reads its allowance through the app-server");
     }
 
     #[test]
@@ -2065,7 +2094,7 @@ mod tests {
             );
             assert_eq!(
                 row.capabilities.usage,
-                profile.usage_command().is_some(),
+                profile.usage_source().is_some(),
                 "{}: usage",
                 row.id
             );

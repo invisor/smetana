@@ -43,11 +43,13 @@
 //!
 //! Pure apart from `read`, which is the one function here that spawns anything.
 
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use crate::agents::Profile;
+use crate::agents::{Profile, UsageSource};
 
 /// At or above this, take no work at all and wait for the reset. The source's
 /// number, and it is not 100 for a reason: the reading is approximate — it
@@ -131,8 +133,14 @@ pub struct Usage {
     /// parse of the same prose — one whose failure would be a run that woke at
     /// the wrong hour rather than one that showed a line it could not use.
     pub session_reset: Option<String>,
+    /// The source's name for the first window. Claude Code's prose parser
+    /// leaves this absent, preserving its established "Session" wording;
+    /// Codex derives it from `windowDurationMins` (for example, "5 hours").
+    pub session_label: Option<String>,
     pub week_pct: Option<u8>,
     pub week_reset: Option<String>,
+    /// The source's name for the second window; see `session_label`.
+    pub week_label: Option<String>,
 }
 
 impl Usage {
@@ -311,11 +319,24 @@ pub enum AgentUsage {
     /// its own, or no agent is installed at all — and that second case is the
     /// one with no agent to name, which is what the `Option` is for.
     Unsupported { agent: Option<String> },
-    /// The probe was made and nothing could be read out of it: not signed in,
-    /// not installed, or a CLI that has reworded its own output.
-    Unreadable { agent: String },
+    /// The probe was made but did not produce a trustworthy allowance. The
+    /// reason is deliberately a closed, safe vocabulary rather than an app
+    /// server error string, which could contain account or network detail.
+    Unreadable { agent: String, reason: Unavailable },
     /// A reading, with the band it falls in.
     Read { agent: String, usage: Usage, band: Band },
+}
+
+/// Why a probe could not yield a normalized reading. These values deliberately
+/// name a next step without exposing app-server output, authentication data,
+/// or an implementation-specific protocol error to the interface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Unavailable {
+    NotSignedIn,
+    UnsupportedAccount,
+    TimedOut,
+    InvalidResponse,
 }
 
 /// The one mapping from "who would answer, and what did they say" to what the
@@ -323,7 +344,7 @@ pub enum AgentUsage {
 /// command's own body is the two blocking calls that produce these arguments.
 pub fn report(
     profile: Option<&'static dyn Profile>,
-    reading: Option<Usage>,
+    reading: Result<Usage, Unavailable>,
     limits: Limits,
 ) -> AgentUsage {
     let Some(profile) = profile else { return AgentUsage::Unsupported { agent: None } };
@@ -331,10 +352,13 @@ pub fn report(
     // Asked before the reading is looked at, because a profile that cannot be
     // asked and one that was asked and said nothing both arrive here as `None`
     // — `read` answers that for every way of failing, this one included.
-    if profile.usage_command().is_none() {
+    if profile.usage_source().is_none() {
         return AgentUsage::Unsupported { agent: Some(agent) };
     }
-    let Some(usage) = reading else { return AgentUsage::Unreadable { agent } };
+    let usage = match reading {
+        Ok(usage) => usage,
+        Err(reason) => return AgentUsage::Unreadable { agent, reason },
+    };
     let band = Band::of(&decide(Some(&usage), limits));
     AgentUsage::Read { agent, usage, band }
 }
@@ -388,30 +412,219 @@ fn command(profile: &'static dyn Profile, args: &'static [&'static str], cwd: &P
 /// in beside `profile` rather than being read off the disk in here, which is
 /// what keeps this file free of Tauri.
 pub fn read(profile: &'static dyn Profile, cwd: &Path) -> Option<Usage> {
-    let args = profile.usage_command()?;
-    let mut child = command(profile, args, cwd).spawn().ok()?;
+    read_detail(profile, cwd).ok()
+}
+
+/// Read one current subscription snapshot with a named failure for the two UI
+/// surfaces. `read` above deliberately discards that name for the run gate:
+/// unknown allowance must remain permissive, while a person deserves to know
+/// whether to sign in, wait, or update Codex.
+pub fn read_detail(profile: &'static dyn Profile, cwd: &Path) -> Result<Usage, Unavailable> {
+    match profile.usage_source().ok_or(Unavailable::InvalidResponse)? {
+        UsageSource::Command => read_command(profile, cwd),
+        UsageSource::AppServer => read_app_server(profile, cwd),
+    }
+}
+
+fn read_command(profile: &'static dyn Profile, cwd: &Path) -> Result<Usage, Unavailable> {
+    let args = profile.usage_command().ok_or(Unavailable::InvalidResponse)?;
+    let mut child = command(profile, args, cwd).spawn().map_err(|_| Unavailable::InvalidResponse)?;
     let deadline = Instant::now() + PROBE_TIMEOUT;
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => break,
             // A non-zero probe says nothing about the allowance — it says the
             // probe failed — so it is the same answer as no probe at all.
-            Ok(Some(_)) => return None,
+            Ok(Some(_)) => return Err(Unavailable::InvalidResponse),
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
-                return None;
+                let _ = child.wait();
+                return Err(Unavailable::TimedOut);
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(200)),
-            Err(_) => return None,
+            Err(_) => return Err(Unavailable::InvalidResponse),
         }
     }
-    let output = child.wait_with_output().ok()?;
-    profile.parse_usage(&String::from_utf8_lossy(&output.stdout))
+    let output = child.wait_with_output().map_err(|_| Unavailable::InvalidResponse)?;
+    profile.parse_usage(&String::from_utf8_lossy(&output.stdout)).ok_or(Unavailable::InvalidResponse)
+}
+
+/// The Codex app-server is a line-delimited JSON-RPC process which continues
+/// serving after the response we need. Read its one response on a helper
+/// thread, bound the wait here, then always kill and reap the child. Keeping
+/// the child alive would leave an app-server behind every ten-minute poll;
+/// closing stdin instead is not enough because it makes a server free to exit
+/// before it sends the pending result.
+fn read_app_server(profile: &'static dyn Profile, cwd: &Path) -> Result<Usage, Unavailable> {
+    let mut child = app_server_command(profile, cwd)
+        .spawn()
+        .map_err(|_| Unavailable::InvalidResponse)?;
+    let result = (|| {
+        let mut stdin = child.stdin.take().ok_or(Unavailable::InvalidResponse)?;
+        let stdout = child.stdout.take().ok_or(Unavailable::InvalidResponse)?;
+        let (sent, received) = mpsc::channel();
+        // Deliberately detached. A process Codex started can retain stdout after
+        // its direct parent is killed; joining this reader on a timeout would
+        // turn the probe's ceiling into an unbounded wait. The direct app-server
+        // is still killed and reaped below on every path.
+        std::thread::spawn(move || read_app_server_responses(stdout, sent));
+        app_server_session(&mut stdin, &received, Instant::now() + PROBE_TIMEOUT)
+            .and_then(|response| profile.parse_usage_response(&response).ok_or(Unavailable::InvalidResponse))
+    })();
+    let _ = child.kill();
+    let _ = child.wait();
+    result
+}
+
+fn app_server_command(profile: &'static dyn Profile, cwd: &Path) -> Command {
+    let mut command = Command::new(profile.binary());
+    command
+        .args(["app-server", "--stdio"])
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if let Some(path) = crate::shell_env::path() {
+        command.env("PATH", path);
+    }
+    command
+}
+
+/// Complete the read-only app-server handshake in protocol order. The one
+/// deadline belongs to the whole exchange: initialization, account identity,
+/// and rate limits collectively have sixty seconds, not sixty each.
+fn app_server_session(
+    stdin: &mut impl Write,
+    received: &mpsc::Receiver<(i64, Result<serde_json::Value, Unavailable>)>,
+    deadline: Instant,
+) -> Result<serde_json::Value, Unavailable> {
+    write_rpc(stdin, 1, "initialize", serde_json::json!({
+        "clientInfo": { "name": "smetana", "title": "Smetana", "version": env!("CARGO_PKG_VERSION") },
+        "capabilities": {}
+    }))?;
+    wait_for_rpc(received, deadline, 1)?;
+
+    write_notification(stdin, "initialized", serde_json::json!({}))?;
+    write_rpc(stdin, 2, "account/read", serde_json::json!({}))?;
+    let account = wait_for_rpc(received, deadline, 2)?;
+    subscription_account(&account)?;
+
+    write_rpc(stdin, 3, "account/rateLimits/read", serde_json::Value::Null)?;
+    wait_for_rpc(received, deadline, 3)
+}
+
+fn write_rpc(
+    stdin: &mut impl Write,
+    id: i64,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<(), Unavailable> {
+    serde_json::to_writer(&mut *stdin, &serde_json::json!({ "id": id, "method": method, "params": params }))
+        .map_err(|_| Unavailable::InvalidResponse)?;
+    stdin.write_all(b"\n").and_then(|_| stdin.flush()).map_err(|_| Unavailable::InvalidResponse)
+}
+
+fn write_notification(
+    stdin: &mut impl Write,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<(), Unavailable> {
+    serde_json::to_writer(&mut *stdin, &serde_json::json!({ "method": method, "params": params }))
+        .map_err(|_| Unavailable::InvalidResponse)?;
+    stdin.write_all(b"\n").and_then(|_| stdin.flush()).map_err(|_| Unavailable::InvalidResponse)
+}
+
+fn wait_for_rpc(
+    received: &mpsc::Receiver<(i64, Result<serde_json::Value, Unavailable>)>,
+    deadline: Instant,
+    wanted: i64,
+) -> Result<serde_json::Value, Unavailable> {
+    loop {
+        let remaining = deadline.checked_duration_since(Instant::now()).ok_or(Unavailable::TimedOut)?;
+        match received.recv_timeout(remaining) {
+            Ok((id, answer)) if id == wanted => return answer,
+            Ok(_) => continue,
+            Err(mpsc::RecvTimeoutError::Timeout) => return Err(Unavailable::TimedOut),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(Unavailable::InvalidResponse),
+        }
+    }
+}
+
+/// `account/read` is the stable, structured answer for what kind of login the
+/// app-server is using. It is intentionally checked before rate limits: text in
+/// an RPC error is not an account contract and must not become a UI diagnosis.
+fn subscription_account(account: &serde_json::Value) -> Result<(), Unavailable> {
+    match account.get("account") {
+        Some(serde_json::Value::Null) => Err(Unavailable::NotSignedIn),
+        Some(account) if account.get("type").and_then(serde_json::Value::as_str) == Some("chatgpt") => Ok(()),
+        Some(account) if account.get("type").and_then(serde_json::Value::as_str).is_some() => {
+            Err(Unavailable::UnsupportedAccount)
+        }
+        _ => Err(Unavailable::InvalidResponse),
+    }
+}
+
+fn read_app_server_responses(
+    stdout: std::process::ChildStdout,
+    sent: mpsc::Sender<(i64, Result<serde_json::Value, Unavailable>)>,
+) {
+    for line in BufReader::new(stdout).lines() {
+        let Ok(line) = line else { break };
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        let Some(id) = message.get("id").and_then(serde_json::Value::as_i64) else { continue };
+        let answer = if let Some(error) = message.get("error") {
+            let _ = error;
+            Err(Unavailable::InvalidResponse)
+        } else {
+            message.get("result").cloned().ok_or(Unavailable::InvalidResponse)
+        };
+        if sent.send((id, answer)).is_err() {
+            return;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct SharedWire(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedWire {
+        fn methods(&self) -> Vec<String> {
+            // `to_writer` may call `write` more than once. The other thread
+            // can therefore only observe frames it knows are complete, not a
+            // valid prefix which happens to end in the middle of a string.
+            self.0.lock().unwrap().split_inclusive(|byte| *byte == b'\n')
+                .filter(|frame| frame.last() == Some(&b'\n'))
+                .map(|frame| serde_json::from_slice::<serde_json::Value>(frame).unwrap()["method"].as_str().unwrap().to_owned())
+                .collect()
+        }
+
+        fn wait_for_methods(&self, expected: &[&str]) {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while Instant::now() < deadline {
+                if self.methods().iter().map(String::as_str).eq(expected.iter().copied()) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(self.methods(), expected, "app-server request order");
+        }
+    }
+
+    impl Write for SharedWire {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     /// Built rather than run: the probe's cwd is never the process's
     /// inherited one, and this is checked without spawning a harness at all.
@@ -422,12 +635,104 @@ mod tests {
         assert_eq!(cmd.get_current_dir(), Some(dir));
     }
 
+    #[test]
+    fn the_codex_probe_is_the_app_server_in_the_cwd_it_is_given() {
+        let dir = Path::new("/tmp/smetana-usage-probe-test");
+        let cmd = app_server_command(&crate::agents::codex::Codex, dir);
+        assert_eq!(cmd.get_current_dir(), Some(dir));
+        assert_eq!(
+            cmd.get_args().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>(),
+            ["app-server", "--stdio"]
+        );
+    }
+
+    #[test]
+    fn app_server_waits_for_initialize_before_sending_the_follow_up_requests() {
+        // The writer is intentionally observed while the session thread is
+        // running; repeating it catches framing races that a one-off run can
+        // easily miss.
+        for _ in 0..200 {
+            let (sent, received) = mpsc::channel();
+            let wire = SharedWire(Arc::new(Mutex::new(Vec::new())));
+            let worker_wire = wire.clone();
+            let session = std::thread::spawn(move || {
+                let mut writer = worker_wire;
+                app_server_session(&mut writer, &received, Instant::now() + Duration::from_secs(1))
+            });
+
+            wire.wait_for_methods(&["initialize"]);
+            sent.send((1, Ok(serde_json::json!({})))).unwrap();
+            wire.wait_for_methods(&["initialize", "initialized", "account/read"]);
+            sent.send((2, Ok(serde_json::json!({ "account": { "type": "chatgpt" }, "requiresOpenaiAuth": true })))).unwrap();
+            wire.wait_for_methods(&["initialize", "initialized", "account/read", "account/rateLimits/read"]);
+            sent.send((3, Ok(serde_json::json!({ "rateLimits": {} })))).unwrap();
+            assert_eq!(
+                session.join().unwrap(),
+                Ok(serde_json::json!({ "rateLimits": {} }))
+            );
+        }
+    }
+
+    #[test]
+    fn an_initialize_error_stops_the_protocol_before_any_follow_up_request() {
+        let (sent, received) = mpsc::channel();
+        sent.send((1, Err(Unavailable::InvalidResponse))).unwrap();
+        let mut wire = Vec::new();
+
+        assert_eq!(
+            app_server_session(&mut wire, &received, Instant::now() + Duration::from_secs(1)),
+            Err(Unavailable::InvalidResponse)
+        );
+        let messages = String::from_utf8(wire).unwrap();
+        assert_eq!(messages.lines().count(), 1);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(messages.trim()).unwrap()["method"], "initialize");
+    }
+
+    #[test]
+    fn account_read_is_the_structured_source_for_safe_login_and_account_reasons() {
+        assert_eq!(subscription_account(&serde_json::json!({ "account": null })), Err(Unavailable::NotSignedIn));
+        assert_eq!(
+            subscription_account(&serde_json::json!({ "account": { "type": "apiKey" } })),
+            Err(Unavailable::UnsupportedAccount)
+        );
+        assert_eq!(
+            subscription_account(&serde_json::json!({ "account": { "type": "amazonBedrock" } })),
+            Err(Unavailable::UnsupportedAccount)
+        );
+        assert_eq!(subscription_account(&serde_json::json!({ "account": { "type": "chatgpt" } })), Ok(()));
+        assert_eq!(subscription_account(&serde_json::json!({ "unexpected": true })), Err(Unavailable::InvalidResponse));
+    }
+
+    #[test]
+    fn an_unrelated_response_id_is_not_accepted_as_the_requested_answer() {
+        let (sent, received) = mpsc::channel();
+        sent.send((99, Ok(serde_json::json!({ "wrong": true })))).unwrap();
+        sent.send((1, Ok(serde_json::json!({ "right": true })))).unwrap();
+        assert_eq!(
+            wait_for_rpc(&received, Instant::now() + Duration::from_secs(1), 1),
+            Ok(serde_json::json!({ "right": true }))
+        );
+    }
+
+    #[test]
+    fn an_expired_shared_deadline_does_not_start_a_new_timeout_for_the_handshake() {
+        let (_sent, received) = mpsc::channel();
+        let mut wire = Vec::new();
+        assert_eq!(
+            app_server_session(&mut wire, &received, Instant::now()),
+            Err(Unavailable::TimedOut)
+        );
+        assert_eq!(std::str::from_utf8(&wire).unwrap().lines().count(), 1);
+    }
+
     fn usage(session: u8, week: u8) -> Usage {
         Usage {
             session_pct: Some(session),
             session_reset: Some("Aug 7 at 8pm".into()),
+            session_label: None,
             week_pct: Some(week),
             week_reset: Some("Aug 11 at 5:59pm".into()),
+            week_label: None,
         }
     }
 
@@ -519,37 +824,45 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_with_no_way_to_be_asked_is_unsupported_rather_than_a_failed_read() {
-        // Codex overrides neither half of the pair, so the question cannot be
-        // put to it at all. Reading that as a failed probe would send somebody
-        // to check a login that has nothing to do with it.
+    fn an_app_server_probe_that_fails_is_unreadable_rather_than_unsupported() {
+        // Codex has a source, so a failed app-server read must prompt a safe
+        // recovery action rather than claiming the subscription is unsupported.
         assert_eq!(
-            report(Some(&crate::agents::codex::Codex), None, Limits::default()),
-            AgentUsage::Unsupported { agent: Some("codex".into()) }
+            report(
+                Some(&crate::agents::codex::Codex),
+                Err(Unavailable::InvalidResponse),
+                Limits::default()
+            ),
+            AgentUsage::Unreadable { agent: "codex".into(), reason: Unavailable::InvalidResponse }
         );
     }
 
     #[test]
     fn a_machine_with_no_agent_at_all_has_nobody_to_name() {
-        assert_eq!(report(None, None, Limits::default()), AgentUsage::Unsupported { agent: None });
+        assert_eq!(
+            report(None, Err(Unavailable::InvalidResponse), Limits::default()),
+            AgentUsage::Unsupported { agent: None }
+        );
     }
 
     #[test]
     fn a_probe_that_gave_nothing_back_is_unreadable_and_never_a_reading_of_zero() {
-        // The state this whole type exists for: the same `None` a profile with
-        // no command produces, from a profile that has one. A `Usage::default`
-        // here would put "0% used" on the screen of somebody who is simply not
-        // signed in.
+        // A `Usage::default` here would put "0% used" on the screen of somebody
+        // who is simply not signed in.
         assert_eq!(
-            report(Some(&crate::agents::claude::Claude), None, Limits::default()),
-            AgentUsage::Unreadable { agent: "claude".into() }
+            report(
+                Some(&crate::agents::claude::Claude),
+                Err(Unavailable::InvalidResponse),
+                Limits::default()
+            ),
+            AgentUsage::Unreadable { agent: "claude".into(), reason: Unavailable::InvalidResponse }
         );
     }
 
     #[test]
     fn a_reading_carries_the_agent_that_answered_and_the_band_it_falls_in() {
         let AgentUsage::Read { agent, usage: read, band } =
-            report(Some(&crate::agents::claude::Claude), Some(usage(10, 80)), Limits::default())
+            report(Some(&crate::agents::claude::Claude), Ok(usage(10, 80)), Limits::default())
         else {
             panic!("a reading from a profile that can be asked");
         };
@@ -566,7 +879,7 @@ mod tests {
         // still green.
         let json = serde_json::to_value(report(
             Some(&crate::agents::claude::Claude),
-            Some(usage(10, 20)),
+            Ok(usage(10, 20)),
             Limits::default(),
         ))
         .expect("the answer serializes");
@@ -575,8 +888,10 @@ mod tests {
         assert_eq!(json["band"], "normal");
         assert_eq!(json["usage"]["sessionPct"], 10);
         assert_eq!(json["usage"]["sessionReset"], "Aug 7 at 8pm");
+        assert!(json["usage"]["sessionLabel"].is_null());
         assert_eq!(json["usage"]["weekPct"], 20);
         assert_eq!(json["usage"]["weekReset"], "Aug 11 at 5:59pm");
+        assert!(json["usage"]["weekLabel"].is_null());
 
         // A half that was not read travels as an explicit `null` under the key
         // it would have had, rather than by the key going missing: the front
@@ -584,7 +899,7 @@ mod tests {
         // are not the same promise and only one of them is testable from here.
         let json = serde_json::to_value(report(
             Some(&crate::agents::claude::Claude),
-            Some(session_only(10)),
+            Ok(session_only(10)),
             Limits::default(),
         ))
         .expect("the answer serializes");
@@ -592,9 +907,13 @@ mod tests {
         assert!(json["usage"]["weekPct"].is_null(), "an unread half is null and never a zero");
         assert!(json["usage"].as_object().expect("a reading is an object").contains_key("weekPct"));
 
-        let json = serde_json::to_value(report(Some(&crate::agents::codex::Codex), None, Limits::default()))
+        let json = serde_json::to_value(report(
+            Some(&crate::agents::codex::Codex),
+            Err(Unavailable::InvalidResponse),
+            Limits::default()
+        ))
             .expect("the answer serializes");
-        assert_eq!(json["state"], "unsupported");
+        assert_eq!(json["state"], "unreadable");
         assert_eq!(json["agent"], "codex");
     }
 
@@ -670,8 +989,10 @@ mod tests {
         let reading = Usage {
             session_pct: Some(96),
             session_reset: Some("Sep 1 at 6pm (Europe/Moscow)".into()),
+            session_label: None,
             week_pct: Some(20),
             week_reset: Some("Sep 4 at 9am (Europe/Moscow)".into()),
+            week_label: None,
         };
         assert_eq!(
             gate(Some(&reading), limits, true),
@@ -692,7 +1013,7 @@ mod tests {
         // 80% with the pause threshold moved down to 80: the window must say a
         // run would stop here, not that it would merely take fewer tasks.
         let limits = Limits { pause_at: 80, reduced_at: 50 };
-        let answer = report(Some(&crate::agents::claude::Claude), Some(usage(80, 0)), limits);
+        let answer = report(Some(&crate::agents::claude::Claude), Ok(usage(80, 0)), limits);
         assert!(matches!(answer, AgentUsage::Read { band: Band::Pause, .. }));
     }
 

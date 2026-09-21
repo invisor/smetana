@@ -27,7 +27,7 @@
    to read. Rewriting those four sentences here would be a second copy of the
    product's vocabulary, free to drift from the first while both are on screen
    in the same session, one window apart. */
-import { agentOf, usageNote } from '../settings/usage.js'
+import { agentOf, usageNote, usageWindowName } from '../settings/usage.js'
 
 /* `runs::usage::AgentUsage`'s reading, as the tag serde writes. The other two
    states are not named here: everything that is not a reading takes the same
@@ -85,10 +85,16 @@ function percent(pct) {
    state this build has never heard of, nothing asked yet — is two dashes. */
 export function usageSegments(answer) {
   const usage = answer?.state === READ ? answer.usage : null
-  return [
-    { name: 'Session', value: percent(usage?.sessionPct) },
-    { name: 'Week', value: percent(usage?.weekPct) }
+  const windows = [
+    { name: usageWindowName(usage?.sessionLabel, 'Session'), value: percent(usage?.sessionPct) },
+    { name: usageWindowName(usage?.weekLabel, 'Week'), value: percent(usage?.weekPct) }
   ]
+  // Codex's structured source explicitly tells us which windows exist. A
+  // one-window response must not imply a missing weekly allowance; the older
+  // Claude text source keeps its stable two-slot footer layout and dashes.
+  return answer?.state === READ && answer.agent === 'codex'
+    ? windows.filter((_, index) => Number.isFinite(index === 0 ? usage?.sessionPct : usage?.weekPct))
+    : windows
 }
 
 /* `Session resets Aug 7 at 8pm (Europe/Moscow)` — the harness's own words for
@@ -131,8 +137,8 @@ function resetLine(name, resets) {
 export function usageTooltip(answer, busy = false, error = null) {
   const usage = answer?.state === READ ? answer.usage : null
   return [
-    resetLine('Session', usage?.sessionReset),
-    resetLine('Week', usage?.weekReset),
+    resetLine(usageWindowName(usage?.sessionLabel, 'Session'), usage?.sessionReset),
+    resetLine(usageWindowName(usage?.weekLabel, 'Week'), usage?.weekReset),
     usageNote(answer, busy, error),
     error ? `The allowance could not be read: ${error}` : null
   ]
