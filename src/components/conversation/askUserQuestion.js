@@ -11,7 +11,7 @@
    read defensively rather than trusted.
 
    What travels back is `answers`, keyed by the question's own text — a
-   person's typed words when there are any, the selected options joined by a
+   person's typed words only when `isOther` permits them, the selected options joined by a
    comma otherwise. `toggle`, `selectedLabels`, `buildAnswers` and
    `isComplete` are the rules `AskUserQuestion.vue` calls before it will let
    a press through; what stays in the component is plainer — which question

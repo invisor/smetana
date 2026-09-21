@@ -113,6 +113,9 @@ pub enum EventKind {
     /// with no answers, exactly like refusing any other tool.
     PermissionAnswered { id: String, decision: Decision, answers: Option<BTreeMap<String, String>> },
     Result { tokens_in: u64, tokens_out: u64, cost_usd: Option<f64>, ms: u64 },
+    /// A terminal turn failure. Kept distinct from `Error`: protocol errors
+    /// can be retryable notifications while this one closes `Running`.
+    TurnFailed { text: String },
     Error { text: String },
 }
 
@@ -216,6 +219,7 @@ pub fn state_of(events: &[Event], child_alive: bool) -> SessionState {
         match &event.kind {
             EventKind::TurnStart { .. } => open_turn = true,
             EventKind::Result { .. } => open_turn = false,
+            EventKind::TurnFailed { .. } => open_turn = false,
             EventKind::Permission { id, .. } => pending.push(id),
             // By id rather than by count: an answer that arrives out of order
             // must settle its own question and leave the others standing.
@@ -344,6 +348,15 @@ mod tests {
             ev(3, EventKind::Result { tokens_in: 10, tokens_out: 20, cost_usd: None, ms: 400 }),
         ];
         assert_eq!(state_of(&events, true), SessionState::Ready);
+    }
+
+    #[test]
+    fn a_terminal_turn_failure_closes_running_but_an_error_does_not() {
+        let open = vec![ev(1, EventKind::TurnStart { by: Actor::Agent })];
+        let retryable = vec![open[0].clone(), ev(2, EventKind::Error { text: "retrying".into() })];
+        let failed = vec![open[0].clone(), ev(2, EventKind::TurnFailed { text: "failed".into() })];
+        assert_eq!(state_of(&retryable, true), SessionState::Running);
+        assert_eq!(state_of(&failed, true), SessionState::Ready);
     }
 
     #[test]

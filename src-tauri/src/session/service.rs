@@ -824,11 +824,14 @@ fn handle(
             // It also settles a question the harness has already abandoned —
             // the row stops being `needs-you` even though nothing was waiting
             // to hear the answer.
+            // Secrets still go to the harness, but a long-lived journal must
+            // never retain their plaintext. Non-secret answers stay readable.
+            let journal_answers = redact_secret_answers(live.journal.events(), &question, answers.clone());
             append(
                 app,
                 id,
                 live,
-                vec![EventKind::PermissionAnswered { id: question.clone(), decision, answers: answers.clone() }],
+                vec![EventKind::PermissionAnswered { id: question.clone(), decision, answers: journal_answers }],
             );
             // Some harnesses take a decision over stdin instead of a channel of
             // their own; Claude Code answers `None` here and is served by the
@@ -992,6 +995,23 @@ fn absorb(
             if failed_startup { sessions.remove(&id); }
         }
     }
+}
+
+/// Copy answers for the journal without retaining an `isSecret` answer. The
+/// driver still receives the original map immediately afterwards.
+fn redact_secret_answers(events: &[Event], id: &str, answers: Option<BTreeMap<String, String>>) -> Option<BTreeMap<String, String>> {
+    let mut answers = answers?;
+    let secret = events.iter().rev().find_map(|event| match &event.kind {
+        EventKind::Permission { id: event_id, input, .. } if event_id == id => Some(input),
+        _ => None,
+    });
+    let Some(questions) = secret.and_then(|input| input.get("questions")).and_then(serde_json::Value::as_array) else { return Some(answers) };
+    for question in questions {
+        if question.get("isSecret").and_then(serde_json::Value::as_bool) == Some(true) {
+            if let Some(key) = question.get("id").or_else(|| question.get("question")).and_then(serde_json::Value::as_str) { answers.remove(key); }
+        }
+    }
+    if answers.is_empty() { None } else { Some(answers) }
 }
 
 /// A question from the permission listener. It becomes a `Permission` event and

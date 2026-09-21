@@ -18,6 +18,7 @@ pub struct CodexDriver {
     active_turn: Option<String>,
     tickets: std::collections::BTreeMap<String, (Value, String)>,
     items: std::collections::BTreeMap<String, String>,
+    reasoning: std::collections::BTreeMap<String, Vec<String>>,
     /// The latest per-turn app-server token breakdown, reported on completion.
     usage: (u64, u64),
     pending: std::collections::BTreeMap<u64, String>,
@@ -27,7 +28,7 @@ pub struct CodexDriver {
 
 impl CodexDriver {
     pub fn new(_permission: Option<crate::session::permission::PermissionTicket>) -> Self {
-        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None)), active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false }
+        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None)), active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false }
     }
 
     fn request(&mut self, method: &str, params: Value) -> Vec<u8> {
@@ -50,6 +51,7 @@ impl CodexDriver {
         let mut content = vec![json!({"type":"text", "text":text})];
         content.extend(attachments.into_iter().map(|path| json!({"type":"localImage", "path":path})));
         self.turn_start_pending = true;
+        self.usage = (0, 0);
         self.request("turn/start", json!({"threadId":self.thread, "input":content}))
     }
 }
@@ -74,10 +76,14 @@ impl Driver for CodexDriver {
         let mut events = Vec::new();
         for line in self.lines.feed(bytes) {
             let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
-            let response = message.get("id").and_then(Value::as_u64).and_then(|id| self.pending.remove(&id));
-            if let Some(error) = message.get("error") {
+            // A server request can use a numeric id that collides with ours.
+            // It is a request because it has `method`, never a response.
+            let response = if message.get("method").is_none() && (message.get("result").is_some() || message.get("error").is_some()) {
+                message.get("id").and_then(Value::as_u64).and_then(|id| self.pending.remove(&id))
+            } else { None };
+            if let (Some(method), Some(error)) = (response.as_deref(), message.get("error")) {
                 let text = error.get("message").and_then(Value::as_str).unwrap_or("Codex app-server protocol error").to_owned();
-                if self.thread.is_none() { self.startup = Some(Err(text.clone())); }
+                if matches!(method, "initialize" | "thread/start") { self.startup = Some(Err(text.clone())); }
                 events.push(EventKind::Error { text });
                 continue;
             }
@@ -145,7 +151,7 @@ impl Driver for CodexDriver {
                     if let Some(text) = message.pointer("/params/delta").and_then(Value::as_str) { events.push(EventKind::TextDelta { text: text.to_owned() }); }
                 }
                 Some("item/reasoning/textDelta") | Some("item/reasoning/summaryTextDelta") => {
-                    if let Some(text) = message.pointer("/params/delta").and_then(Value::as_str).filter(|text| !text.is_empty()) { events.push(EventKind::Reasoning { text: text.to_owned() }); }
+                    if let (Some(id), Some(text)) = (message.pointer("/params/itemId").and_then(Value::as_str), message.pointer("/params/delta").and_then(Value::as_str).filter(|text| !text.is_empty())) { self.reasoning.entry(id.to_owned()).or_default().push(text.to_owned()); }
                 }
                 Some("item/commandExecution/outputDelta") | Some("item/fileChange/outputDelta") | Some("item/fileChange/patchUpdated") => {
                     let id = message.pointer("/params/itemId").and_then(Value::as_str).unwrap_or("");
@@ -156,7 +162,9 @@ impl Driver for CodexDriver {
                     match item.get("type").and_then(Value::as_str) {
                         Some("agentMessage") => if let Some(text) = item.get("text").and_then(Value::as_str) { events.push(EventKind::Text { text: text.to_owned() }); },
                         Some("reasoning") => {
-                            let text = item.get("summary").and_then(Value::as_array).into_iter().flatten().chain(item.get("content").and_then(Value::as_array).into_iter().flatten()).filter_map(Value::as_str).filter(|text| !text.is_empty()).collect::<Vec<_>>().join("\n");
+                            let id = item.get("id").and_then(Value::as_str).unwrap_or("");
+                            let text = item.get("summary").and_then(Value::as_array).into_iter().flatten().chain(item.get("content").and_then(Value::as_array).into_iter().flatten()).filter_map(Value::as_str).filter(|text| !text.is_empty()).map(str::to_owned).collect::<Vec<_>>();
+                            let text = if text.is_empty() { self.reasoning.remove(id).unwrap_or_default().join("\n") } else { self.reasoning.remove(id); text.join("\n") };
                             if !text.is_empty() { events.push(EventKind::Reasoning { text }); }
                         },
                         Some(kind @ ("commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" | "webSearch")) => {
@@ -170,16 +178,16 @@ impl Driver for CodexDriver {
                     }
                 },
                 Some("thread/tokenUsage/updated") => if let Some(usage) = message.pointer("/params/tokenUsage/last") {
-                    self.usage = (usage.get("inputTokens").and_then(Value::as_u64).unwrap_or(0), usage.get("outputTokens").and_then(Value::as_u64).unwrap_or(0) + usage.get("reasoningOutputTokens").and_then(Value::as_u64).unwrap_or(0));
+                    self.usage = (usage.get("inputTokens").and_then(Value::as_u64).unwrap_or(0), usage.get("outputTokens").and_then(Value::as_u64).unwrap_or(0));
                 },
                 Some("turn/completed") => {
                     self.active_turn = None;
                     self.turn_start_pending = false;
                     let failed = message.pointer("/params/turn/status").and_then(Value::as_str) == Some("failed");
                     if let Some(error) = message.pointer("/params/turn/error/message").and_then(Value::as_str) {
-                        events.push(EventKind::Error { text: error.to_owned() });
+                        events.push(EventKind::TurnFailed { text: error.to_owned() });
                     } else if failed {
-                        events.push(EventKind::Error { text: "Codex turn failed".into() });
+                        events.push(EventKind::TurnFailed { text: "Codex turn failed".into() });
                     } else if !failed {
                         events.push(EventKind::Result { tokens_in: self.usage.0, tokens_out: self.usage.1, cost_usd: None, ms: message.pointer("/params/turn/durationMs").and_then(Value::as_u64).unwrap_or(0) });
                     }
@@ -286,6 +294,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"item/started","params":{"item":{"id":"cmd","type":"commandExecution","command":"git status"}}}"#, "\n",
             r#"{"jsonrpc":"2.0","method":"item/commandExecution/outputDelta","params":{"itemId":"cmd","delta":"On branch main\n"}}"#, "\n",
             r#"{"jsonrpc":"2.0","method":"item/reasoning/summaryTextDelta","params":{"itemId":"r","delta":"Checking"}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"r","type":"reasoning","summary":["Checking"]}}}"#, "\n",
             r#"{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"cmd","type":"commandExecution","status":"completed","aggregatedOutput":"On branch main"}}}"#, "\n",
             r#"{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"m","type":"agentMessage","text":"Done."}}}"#, "\n",
             r#"{"jsonrpc":"2.0","method":"thread/tokenUsage/updated","params":{"tokenUsage":{"last":{"inputTokens":12,"outputTokens":7,"reasoningOutputTokens":3}}}}"#, "\n",
@@ -297,7 +306,7 @@ mod tests {
             EventKind::Reasoning { text: "Checking".into() },
             EventKind::ToolResult { id: "cmd".into(), ok: true, summary: "On branch main".into() },
             EventKind::Text { text: "Done.".into() },
-            EventKind::Result { tokens_in: 12, tokens_out: 10, cost_usd: None, ms: 9 },
+            EventKind::Result { tokens_in: 12, tokens_out: 7, cost_usd: None, ms: 9 },
         ]);
     }
 
@@ -305,6 +314,23 @@ mod tests {
     fn failed_turn_reports_its_error_without_a_result() {
         let mut driver = CodexDriver::new(None);
         assert_eq!(driver.feed(br#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"status":"failed","error":{"message":"rate limited"}}}}
-"#), vec![EventKind::Error { text: "rate limited".into() }]);
+"#), vec![EventKind::TurnFailed { text: "rate limited".into() }]);
+    }
+
+    #[test]
+    fn server_request_and_wrong_error_id_do_not_consume_startup_reply() {
+        let mut driver = CodexDriver::new(None);
+        driver.send(Input::Message { text: "task".into(), attachments: vec![] });
+        // Same numeric id as initialize, but this is a server request.
+        assert!(driver.feed(br#"{"jsonrpc":"2.0","id":1,"method":"item/tool/requestUserInput","params":{"questions":[]}}
+"#).iter().any(|event| matches!(event, EventKind::Permission { .. })));
+        assert!(driver.startup().is_none());
+        // An unknown response error is not a startup failure either.
+        assert!(driver.feed(br#"{"jsonrpc":"2.0","id":99,"error":{"message":"wrong"}}
+"#).is_empty());
+        assert!(driver.startup().is_none());
+        assert!(driver.feed(br#"{"jsonrpc":"2.0","id":1,"result":{}}
+"#).is_empty());
+        assert_eq!(driver.outgoing().len(), 2);
     }
 }
