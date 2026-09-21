@@ -19,7 +19,7 @@
    opens — mutates `row.models` in place on the very row the startup read
    built, through a separate `codex_models` command. A failed refresh keeps
    the last good list rather than emptying it, and a saved slug the freshest
-   catalogue has never heard of stays selectable, marked unavailable, until
+   catalogue has never heard of stays in the field, marked unavailable, until
    somebody replaces it on purpose.
 
    A read that fails leaves the list empty, and an empty list greys every row

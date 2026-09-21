@@ -253,7 +253,21 @@ mod model_list_tests {
         // sandbox, so a tight budget would fire `start_kill` before the
         // script had run its first statement, and the pid below would never
         // be written whether or not the kill itself behaved.
+        let started = std::time::Instant::now();
         assert_eq!(listed_models_with(&binary, None, Duration::from_secs(3)).await.unwrap_err(), "Codex model list timed out");
+        // The fake sleeps 30s and answers nothing on its own; the only way
+        // this call returns inside that window is `start_kill` actually
+        // ending the child rather than `wait` merely outliving it. Without
+        // this the ESRCH check below cannot tell "we killed it" from "we sat
+        // in `wait()` until the fake's own sleep ended on its own" — both
+        // reach the same reaped, gone pid, and only the wall clock tells
+        // them apart. 10s leaves 3x clearance under the fake's 30s sleep and
+        // over this call's own 3s budget.
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the call must end the child rather than outlive it: the fake sleeps 30s, this returned after {:?}",
+            started.elapsed()
+        );
 
         // The fake records its own pid before it ever blocks — since it runs
         // directly off its shebang rather than under a wrapping shell, that
