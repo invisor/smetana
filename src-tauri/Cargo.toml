@@ -351,12 +351,22 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 # the tree is not on. The features are modules of that one crate rather than
 # crates of their own, so they cost compile time on a Windows build and no
 # `[[package]]` entry anywhere.
+#
+# `Win32_System_JobObjects` and `Win32_System_Threading` are smetana-kkz2's:
+# `runs::procs::SessionJob` is a Job Object with `KILL_ON_JOB_CLOSE`, one per
+# agent session, the platform's own answer to a descendant a signal to its
+# process group can no longer reach — see that module's header. `Win32_Security`
+# is `CreateJobObjectW`'s own `cfg(feature = "Win32_Security")` gate (it takes
+# an optional `SECURITY_ATTRIBUTES`), not anything this app reads for itself.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.61", features = [
   "Win32_Foundation",
+  "Win32_Security",
   "Win32_System_DataExchange",
+  "Win32_System_JobObjects",
   "Win32_System_Memory",
   "Win32_System_Ole",
+  "Win32_System_Threading",
   "Win32_UI_Shell",
 ] }
 

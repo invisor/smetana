@@ -219,8 +219,12 @@ pub fn run() {
 
       // The terminal worker knows no project of its own: a session carries
       // the directory it was created in, and the front end asks for the list
-      // by that directory.
-      let terminal = terminal::service::start(app.handle().clone());
+      // by that directory. `known` is passed for its own start-up sweep too
+      // (smetana-kkz2, point 4 — macOS reads each project's own run registry
+      // for a dead instance's coalition id) — the identical list
+      // `runs::service::start` below sweeps its registries against, computed
+      // once above rather than read a second time here.
+      let terminal = terminal::service::start(app.handle().clone(), known.clone());
       app.manage(terminal.clone());
 
       // The session worker: the driven half of the same idea, one tokio task

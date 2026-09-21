@@ -111,6 +111,32 @@ pub fn live_actors(root: &Path) -> HashSet<String> {
     }
 }
 
+/// This app's own macOS resource coalition, read once — `terminal::service`'s
+/// own point-4 sweep is the only reader, through `dead_writer_coalitions`
+/// below, and it wants the identical value every record in this launch's
+/// files was written with rather than a fresh read that could answer
+/// differently for no reason a person could ever see.
+///
+/// `procs::own_dedicated_coalition`, not `procs::own_coalition` bare: a run
+/// started from `npm run tauri dev` shares its coalition with the launching
+/// terminal, and a dead writer's coalition id read off that shared value
+/// would have the next start's point-4 sweep hang up and kill a person's own
+/// background job, not only this app's own leavings — see that function's
+/// own header for the reasoning and the caveat in `.claude/rules/terminal.md`.
+#[cfg(target_os = "macos")]
+fn own_coalition() -> Option<u64> {
+    static COALITION: OnceLock<Option<u64>> = OnceLock::new();
+    *COALITION.get_or_init(|| match crate::runs::procs::own_dedicated_coalition() {
+        crate::runs::procs::Coalition::Known(id) => Some(id),
+        crate::runs::procs::Coalition::Unknown => None,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn own_coalition() -> Option<u64> {
+    None
+}
+
 /// Remember a run for as long as it lives. Called when the run starts.
 pub fn note_run(root: &Path, token: u64, target_branch: &str) {
     let Some(writer) = writer() else { return };
@@ -120,12 +146,67 @@ pub fn note_run(root: &Path, token: u64, target_branch: &str) {
         target_branch: target_branch.to_owned(),
         started_at: Utc::now().to_rfc3339(),
         writer: writer.clone(),
+        // smetana-kkz2, point 4: this launch's own coalition id, so that a
+        // later launch's start-up sweep can find what this one left behind
+        // under pid 1 if it never gets to `forget_run` — see
+        // `dead_writer_coalitions` and the module note on `runs::procs`.
+        coalition: own_coalition(),
         batches: Vec::new(),
     };
     update(root, |held| {
         registry::note_run(held, record);
         true
     });
+}
+
+/// Point 4's own evidence, macOS only: every distinct coalition id named by
+/// a record whose writer this file can *prove* dead, across every project
+/// this launch knows about — `terminal::service::start`'s whole answer to
+/// "what did a dead previous instance leave running", since a Job Object has
+/// nothing to persist for Windows and Linux's mark needs nothing from disk
+/// at all.
+///
+/// **Read-only, and deliberately not routed through `read`/`update` above**:
+/// this runs before the run worker's own sweep has necessarily started (the
+/// two are independent tasks with no ordering between them), so it must
+/// never behave like a write — no `.bak` taken, no temp file, nothing
+/// replaced — and a damaged or unreadable file simply contributes nothing,
+/// exactly as `live_actors` already treats one. A project the app has never
+/// run in costs one `read_to_string` that answers `NotFound`.
+///
+/// **Scoped to what a run actually wrote, and that is a real narrowing worth
+/// stating rather than discovering later**: a coalition id only reaches disk
+/// through `note_run`, so an agent session started by hand — "+ New agent",
+/// never inside a run — leaves nothing here for a restarted app to find its
+/// stray by. What macOS's own points 1 through 3 already reaped while the
+/// app was alive is unaffected; this is only the net a `kill -9` falls
+/// through, and only as wide as this project's own run history reaches.
+#[cfg(target_os = "macos")]
+pub fn dead_writer_coalitions(projects: &[PathBuf]) -> Vec<u64> {
+    let mut seen: Vec<&Path> = Vec::new();
+    let mut ids: Vec<u64> = Vec::new();
+    for project in projects {
+        if seen.contains(&project.as_path()) {
+            continue;
+        }
+        seen.push(project.as_path());
+        let Ok(text) = std::fs::read_to_string(path(project)) else { continue };
+        let Some(registry) = registry::parse(&text) else { continue };
+        for record in &registry.runs {
+            let Some(id) = record.coalition else { continue };
+            if registry::liveness(&record.writer, procs::look(record.writer.pid)) == Liveness::Dead
+                && !ids.contains(&id)
+            {
+                ids.push(id);
+            }
+        }
+    }
+    ids
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn dead_writer_coalitions(_projects: &[PathBuf]) -> Vec<u64> {
+    Vec::new()
 }
 
 /// Remember the batch a run has just started: the actor it claims under and the
@@ -542,6 +623,7 @@ mod tests {
                     target_branch: "main".into(),
                     started_at: Utc::now().to_rfc3339(),
                     writer: Proc { pid: i32::MAX, started: 1, command: "smetana".into() },
+                    coalition: None,
                     batches: vec![Batch { actor: "smetana-run-1".into(), group: Some(group) }],
                 }],
             },
@@ -638,5 +720,104 @@ mod tests {
         recover(&[root.clone()]).await;
         assert!(!root.join(".smetana").exists(), "nothing is created by looking");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `dead_writer_coalitions` is the only half of point 4 a machine can
+    /// check at all — the coalition sweep itself is macOS's own private API,
+    /// but which ids this file hands back is pure file-plus-liveness logic,
+    /// exactly like every other reader in this module.
+    ///
+    /// Two projects, three records: this test process itself as a live
+    /// writer (never returned, whatever its own coalition id says — the
+    /// point 4 sweep is for a *dead* instance's leavings), a provably dead
+    /// writer (`i32::MAX`, no kernel hands that out) naming a coalition, and
+    /// a second project's dead writer naming the identical id — proving both
+    /// halves of the contract: a live writer's coalition is withheld, and a
+    /// duplicate id across two files is answered once rather than twice.
+    ///
+    /// **What this does not, and cannot, pin**: `dead_writer_coalitions`'s
+    /// own `seen` list only ever stops a project's file being *read* a
+    /// second time — `ids` already refuses a duplicate id by its own content
+    /// (`!ids.contains(&id)`), so the returned list is identical whether
+    /// `seen` is there or not, for any input this test could construct
+    /// short of instrumenting the read itself. Naming a project twice in the
+    /// call below is therefore left out rather than kept as a line that
+    /// looked like it was proving something it could not. `seen` is not
+    /// dead weight for it, though: `lib.rs` builds the `known_projects` this
+    /// function is actually called with by chaining `settings.open_projects`
+    /// with the initial project, and the initial project is normally
+    /// already in `open_projects` too, so a duplicate path is the ordinary
+    /// shape of that call in production — `seen` is what keeps this
+    /// function from reading and re-parsing that project's file twice on
+    /// every launch, a saving this test's black-box return value was never
+    /// going to be able to show either way.
+    ///
+    /// macOS only: `Record.coalition` is written nowhere else, and the
+    /// non-macOS half of `dead_writer_coalitions` is the fixed `Vec::new()`
+    /// the module header already explains — there is no file-parsing logic
+    /// on those platforms for this test to be about.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dead_writer_coalitions_names_only_the_dead_and_never_a_duplicate() {
+        let Some(alive) = procs::own() else {
+            eprintln!("this platform cannot read a process start time; nothing to check");
+            return;
+        };
+        let dead = Proc { pid: i32::MAX, started: 1, command: "smetana".into() };
+
+        let root_a = temp_root();
+        write(
+            &root_a,
+            &Registry {
+                version: registry::VERSION,
+                runs: vec![
+                    Record {
+                        token: 1,
+                        project: root_a.to_string_lossy().into_owned(),
+                        target_branch: "main".into(),
+                        started_at: Utc::now().to_rfc3339(),
+                        writer: alive.clone(),
+                        coalition: Some(111),
+                        batches: Vec::new(),
+                    },
+                    Record {
+                        token: 2,
+                        project: root_a.to_string_lossy().into_owned(),
+                        target_branch: "main".into(),
+                        started_at: Utc::now().to_rfc3339(),
+                        writer: dead.clone(),
+                        coalition: Some(222),
+                        batches: Vec::new(),
+                    },
+                ],
+            },
+        );
+
+        let root_b = temp_root();
+        write(
+            &root_b,
+            &Registry {
+                version: registry::VERSION,
+                runs: vec![Record {
+                    token: 1,
+                    project: root_b.to_string_lossy().into_owned(),
+                    target_branch: "main".into(),
+                    started_at: Utc::now().to_rfc3339(),
+                    writer: dead,
+                    // The same id as root_a's dead writer -- a machine
+                    // genuinely can restart into the same coalition id
+                    // space being reused, and either way this is the
+                    // duplicate-across-files case the guard exists for.
+                    coalition: Some(222),
+                    batches: Vec::new(),
+                }],
+            },
+        );
+
+        let found = dead_writer_coalitions(&[root_a.clone(), root_b.clone()]);
+        assert_eq!(found, vec![222], "the live writer's 111 is withheld and 222 appears once");
+
+        let _ = std::fs::remove_dir_all(&root_a);
+        let _ = std::fs::remove_dir_all(&root_b);
     }
 }
