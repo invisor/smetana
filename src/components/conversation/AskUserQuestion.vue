@@ -319,7 +319,7 @@ const root = { padding: 0, gap: 0 }
           </li>
         </ul>
 
-        <label v-if="state === 'pending' && question.isOther" data-own>
+        <label v-if="state === 'pending' && question.isOther !== false" data-own>
           <span>Or, in your own words</span>
           <input :type="question.isSecret ? 'password' : 'text'" v-model="custom[qi]" placeholder="Type an answer">
         </label>

@@ -169,6 +169,8 @@ struct Talking {
 }
 
 struct Live {
+    /// Startup failed after spawning: retain only until stdout EOF reaps it.
+    discard_on_eof: bool,
     /// `None` once the child's stdout has ended. Nothing is left to decode and
     /// nothing can be written, so holding either half would only keep a token
     /// file in `/tmp` and a task parked on a dead process's stdin for the life
@@ -523,6 +525,7 @@ fn spawn_session(
         journal.append(kind, at);
     }
     let mut live = Live {
+        discard_on_eof: false,
         // `Starting` for a session with nothing behind it, which is what
         // `state_of` calls an empty journal; a resumed one opens on a
         // conversation and so opens `Ready`. Asked of the journal rather than
@@ -929,6 +932,7 @@ fn absorb(
                     match result {
                         Ok(()) => { let _ = tx.send(Ok(id)); }
                         Err(text) => {
+                            live.discard_on_eof = true;
                             if let Some(child) = live.child.as_mut() { let _ = child.start_kill(); }
                             let _ = tx.send(Err(SessionError::Spawn(text)));
                         }
@@ -992,7 +996,7 @@ fn absorb(
             // A failed pre-creation startup was never a conversation. Its
             // child has been handed to the reaper above; remove the temporary
             // entry so attach cannot paint a failed empty transcript.
-            if failed_startup { sessions.remove(&id); }
+            if failed_startup || live.discard_on_eof { sessions.remove(&id); }
         }
     }
 }

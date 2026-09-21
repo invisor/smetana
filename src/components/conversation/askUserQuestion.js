@@ -111,7 +111,7 @@ export function buildAnswers(questions, selectedByIndex, customByIndex) {
   const answers = {}
   questions.forEach((q, i) => {
     const text = formatAnswer(selectedByIndex[i], customByIndex[i])
-    if (text) answers[q.id || q.question] = text
+    if (text) answers[q.id ?? q.question] = text
   })
   return answers
 }

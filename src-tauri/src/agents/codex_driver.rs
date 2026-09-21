@@ -84,7 +84,11 @@ impl Driver for CodexDriver {
             if let (Some(method), Some(error)) = (response.as_deref(), message.get("error")) {
                 let text = error.get("message").and_then(Value::as_str).unwrap_or("Codex app-server protocol error").to_owned();
                 if matches!(method, "initialize" | "thread/start") { self.startup = Some(Err(text.clone())); }
-                events.push(EventKind::Error { text });
+                if method == "turn/start" {
+                    self.turn_start_pending = false;
+                    self.interrupt_pending = false;
+                    events.push(EventKind::TurnFailed { text });
+                } else { events.push(EventKind::Error { text }); }
                 continue;
             }
             if response.as_deref() == Some("initialize") {
