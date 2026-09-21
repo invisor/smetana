@@ -26,7 +26,9 @@
 //! Shaped after `agents/library.rs`: pure functions over file *contents* and
 //! directory *listings* carry the tests, and one `detect` does the disk reads
 //! and calls them. No worker, for the reason `files/` and `git.rs` have none —
-//! four file reads and two directory listings guard no state.
+//! one file read per shipped harness's own MCP configuration (`agents::IDS` is
+//! the count, so it is never written here), plus the project's own `.mcp.json`
+//! and two directory listings, guard no state.
 //!
 //! **One honest gap, and it is the expensive direction of error.**
 //! `PLAYWRIGHT_BROWSERS_PATH` is read from *this process's* environment, and a
@@ -682,41 +684,50 @@ command = "node"
         std::fs::remove_dir_all(&root).expect("clean up");
     }
 
-    /// Every shipped harness reaches its own file by its own path and shape,
-    /// asked for through `Profile::mcp_config` rather than named here — the
+    /// Every shipped harness that answers `Profile::mcp_config` at all is read
+    /// at its own path and shape, asked for rather than named here — the
     /// generic dispatcher is what stands in for the two functions this file
     /// used to call by the harness's own name. The fixture path itself comes
-    /// from the profile's own answer rather than a literal, so this test
-    /// keeps working whichever path each harness names.
+    /// from the profile's own answer rather than a literal, so this test keeps
+    /// working whichever path each harness names.
+    ///
+    /// A harness answering `None` is **skipped rather than failed** —
+    /// asserting `Some` here would assert the opposite of the trait's own
+    /// design, where `None` is a harness with no such configuration reading as
+    /// inert rather than broken, and the first harness shaped that way would
+    /// turn a correct default into a red `cargo test`. Both known shapes are
+    /// pinned instead, by requiring each to have been exercised at least once
+    /// across whichever harnesses do answer.
     #[test]
     fn every_shipped_harness_is_read_by_its_own_answer_to_mcp_config() {
-        let home = std::env::temp_dir().join(format!(
-            "smetana-browser-mcp-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock is after the Unix epoch")
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&home).expect("create the fixture home");
+        let home = tempfile::tempdir().expect("a temporary directory");
+        let mut json_with_override_seen = false;
+        let mut toml_seen = false;
 
         for id in agents::IDS {
             let profile = agents::resolve(id).expect("every id in IDS resolves to a profile");
-            let (path, format) = profile.mcp_config().expect("every shipped harness reads one");
-            let fixture = home.join(path);
+            let Some((path, format)) = profile.mcp_config() else { continue };
+            let fixture = home.path().join(path);
             std::fs::create_dir_all(fixture.parent().expect("a config file has a parent"))
                 .expect("create the fixture's parent directory");
             let text = match format {
-                McpConfigFormat::JsonWithProjectOverride => JSON_WITH_PROJECT_OVERRIDE.to_owned(),
-                McpConfigFormat::Toml => "[mcp_servers.playwright]\ncommand = \"npx\"\n".to_owned(),
+                McpConfigFormat::JsonWithProjectOverride => {
+                    json_with_override_seen = true;
+                    JSON_WITH_PROJECT_OVERRIDE.to_owned()
+                }
+                McpConfigFormat::Toml => {
+                    toml_seen = true;
+                    "[mcp_servers.playwright]\ncommand = \"npx\"\n".to_owned()
+                }
             };
             std::fs::write(&fixture, text).expect("write the fixture");
             assert!(
-                profile_mcp_has_playwright(profile, &home, "/Users/someone/project"),
+                profile_mcp_has_playwright(profile, home.path(), "/Users/someone/project"),
                 "{id} was not read at its own answer to mcp_config"
             );
         }
 
-        std::fs::remove_dir_all(&home).expect("clean up");
+        assert!(json_with_override_seen, "no shipped harness exercised the JSON shape");
+        assert!(toml_seen, "no shipped harness exercised the TOML shape");
     }
 }

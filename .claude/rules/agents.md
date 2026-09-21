@@ -91,7 +91,7 @@ is the only thing holding the two ends together.
 
 | file | what it does |
 |---|---|
-| `mod.rs` | `Profile`, `Intent`, `Stage`, `SkillDelivery`, `ImageDelivery`, `TaskDraft`, `Autonomy`, `Launch` — the vocabulary, the registry, `cascade` and `IDS` |
+| `mod.rs` | `Profile`, `Intent`, `Stage`, `SkillDelivery`, `ImageDelivery`, `McpConfigFormat`, `TaskDraft`, `Autonomy`, `Launch` — the vocabulary, the registry, `cascade` and `IDS` |
 | `library.rs` | where the bundled skills are, whether the person already has their own superpowers, and reading a `SKILL.md` for inlining |
 | `prompt.rs` | an intent becomes the text the agent opens on — pure; the skill text, where one is needed, is read by the caller and passed in |
 | `claude.rs` | Claude Code: `--plugin-dir`, and layer B, its permission dialog read off the screen |
@@ -129,6 +129,11 @@ no reason to hold anything up. `autonomy` is the extra arguments and environment
 nobody watching; the default is nothing, so a harness with no such switch stops at its first
 permission prompt and turns `needs-you` — exactly what `Supervised` already is, which is the app
 saying a harness cannot be autonomous by behaving like it rather than pretending otherwise.
+`mcp_config` says where this harness keeps a person's own MCP server configuration — a path relative
+to home, and which of two known shapes it is written in — and the default is `None`: a harness with
+no such file of its own is simply never read rather than pointed at a path that leads nowhere. Its
+one caller is `runs::browser::detect`, outside this module entirely (`.claude/rules/runs.md`), which
+is what a third harness costs instead of an edit to that file: one answer here.
 `batch_args` and `transcript` are the last pair and hang off one predicate, `agents::is_batch`: an
 interactive session finishes its work and sits at its prompt, so a loop waiting on the process would
 never come round at all, and the non-interactive form that fixes that is also the one printing a
