@@ -251,10 +251,18 @@ function sentence(error) {
   const known = ERRORS[error?.kind]
   if (typeof known === 'function') return known(error.message)
   /* Anything else: a plain `Error` from the transport, or a refusal this store
-     has no words for. Its own message beats a generic line, since a refusal
-     nobody has written copy for is exactly where the raw text is worth having. */
-  const message = error?.message
-  return typeof message === 'string' && message ? message : String(error)
+     has no words for — `notDriven` among them now, since it carries no entry
+     above. `message` beats a generic line, since a refusal nobody has written
+     copy for is exactly where the raw text is worth having; `kind` is next,
+     since a bare `SessionError` variant name is still more of an answer than
+     nothing; `error` itself is last, only for the shape neither of the first
+     two can read anything out of. `??` and not a `typeof … === 'string'`
+     guard, because `String(error)` on a plain object with no usable field is
+     `[object Object]`, and that is what reaching this branch at all is meant
+     to stop — every producer today writes a non-empty `message`, so `??`'s
+     own blind spot, an empty string surviving instead of falling through,
+     is not live, but it is worth naming rather than silently trusting. */
+  return String(error?.message ?? error?.kind ?? error)
 }
 
 /* `session` is the conversation the refusal belongs to, and `null` when it

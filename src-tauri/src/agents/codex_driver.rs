@@ -324,45 +324,57 @@ fn tool_result_outcome(kind: &str, item: &Value) -> (bool, String) {
             // `PatchApplyStatus`: inProgress | completed | failed | declined.
             // No `aggregatedOutput` and no `output` — the only account of what
             // happened is `changes[]`, each a `{diff, kind, path}` with no
-            // summary field of its own either.
+            // summary field of its own either. The count is used whatever the
+            // number of files — one, several or, on a completed item with an
+            // empty list, none — so the row says the same *sort* of thing
+            // regardless: a single file used to draw the diff's own first
+            // line, a hunk header sitting right beside the path this row's
+            // own `detail` already names, and an empty list drew nothing at
+            // all, which read as a blank rather than as an answer of zero.
             let ok = !matches!(item.get("status").and_then(Value::as_str), Some("failed" | "declined"));
-            let changes = item.get("changes").and_then(Value::as_array).map(|v| v.as_slice()).unwrap_or(&[]);
-            let summary = match changes {
-                [] => String::new(),
-                [one] => one.get("diff").and_then(Value::as_str).unwrap_or("").lines().next().unwrap_or("").to_owned(),
-                many => format!("{} files changed", many.len()),
-            };
+            let n = item.get("changes").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+            let summary = format!("{n} file{} changed", if n == 1 { "" } else { "s" });
             (ok, summary)
         }
         "mcpToolCall" => {
-            // `McpToolCallStatus` has no `declined` at all, and — unlike the
-            // two above — a failure is not read off `status` in the first
-            // place: `error.message` is this item's own account of what went
-            // wrong, and reading `status` alone (this driver's original bug)
-            // silently dropped it. `result.content` is an MCP `CallToolResult`
+            // `McpToolCallStatus` has no `declined` at all, and `status` is
+            // the whole of `ok` — not `error`, which is independently
+            // nullable and carries no stated relationship to `status` in the
+            // schema, so a completed call that also happens to carry an
+            // `error` (a warning inside a success, say) must not draw a
+            // cross the protocol never asked for. `error.message`, where it
+            // exists, is still the best one-line account of what happened
+            // and is preferred over `result`'s own text for the summary —
+            // a note about the call, not the verdict on it, which `status`
+            // alone remains. `result.content` is an MCP `CallToolResult`
             // list of opaque items; its first entry's own `text` is read
-            // where one exists, which is the ordinary shape a text-returning
-            // tool answers with.
-            match item.pointer("/error/message").and_then(Value::as_str) {
-                Some(message) => (false, message.lines().next().unwrap_or("").to_owned()),
-                None => {
-                    let ok = item.get("status").and_then(Value::as_str) != Some("failed");
-                    let summary = item.pointer("/result/content/0/text").and_then(Value::as_str).unwrap_or("").to_owned();
-                    (ok, summary)
-                }
-            }
+            // where one exists and where there is no note to prefer.
+            let ok = item.get("status").and_then(Value::as_str) != Some("failed");
+            let summary = item
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .or_else(|| item.pointer("/result/content/0/text").and_then(Value::as_str))
+                .unwrap_or("")
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_owned();
+            (ok, summary)
         }
         "dynamicToolCall" => {
-            // `success` is this item's own verdict on itself; `status`
-            // (inProgress | completed | failed, again no `declined`) is the
-            // fallback for the rare reply that leaves `success` `null`.
+            // `success` and `status` (inProgress | completed | failed, again
+            // no `declined`) carry no documented relationship either, so
+            // either one calling this a failure is enough: `success` is
+            // this item's own verdict on itself and answers first, `status`
+            // is asked whenever `success` has not already said no — which
+            // includes the `null` a reply may leave it at, and also catches
+            // a `status: "failed"` a stray `success: true` disagrees with.
             // `contentItems[]` is the closed `DynamicToolCallOutputContentItem`
             // union — `inputText`/`inputImage`/`inputAudio` — so only the
             // first is read and only its `text` where the variant has one.
-            let ok = item
-                .get("success")
-                .and_then(Value::as_bool)
-                .unwrap_or_else(|| item.get("status").and_then(Value::as_str) != Some("failed"));
+            let success = item.get("success").and_then(Value::as_bool);
+            let status = item.get("status").and_then(Value::as_str);
+            let ok = success != Some(false) && status != Some("failed");
             let summary = item.pointer("/contentItems/0/text").and_then(Value::as_str).unwrap_or("").to_owned();
             (ok, summary)
         }
@@ -507,6 +519,10 @@ mod tests {
         line(json!({"jsonrpc": "2.0", "method": "item/completed", "params": {"item": item}}))
     }
 
+    fn item_started(item: Value) -> Vec<u8> {
+        line(json!({"jsonrpc": "2.0", "method": "item/started", "params": {"item": item}}))
+    }
+
     // The five tests below are the acceptance-criterion-2 half of the
     // regression matrix, and every fixture in them is checked against the
     // real protocol rather than built by hand: `codex app-server
@@ -516,8 +532,18 @@ mod tests {
     // key on four kinds that carry no such field and drove their failure leg
     // with a `"declined"` status two of them cannot report and one of them
     // has no `status` to report anything on at all, which is exactly why it
-    // passed against the bug smetana-gb7f.4's review found. A fixture that
-    // cannot occur is worse than no fixture.
+    // passed against the bug smetana-gb7f.4's review found.
+    //
+    // Each test opens with the kind's own `item/started` and checks the
+    // `ToolUse` detail it draws — `changes[0].path`, `tool`, `tool`, `query`
+    // — before moving to `item/completed`: the rewrite that closed the bug
+    // above fed only the second half, which left the detail extraction for
+    // four of the five kinds pinned by no test at all. A fixture that cannot
+    // occur is still worse than no fixture, so every field below — down to
+    // `changes[].kind` being `{"type": "update"}` rather than the bare
+    // string an earlier draft of this matrix wrote, `PatchChangeKind` being
+    // an object union and not a string in the schema — is one the real
+    // protocol can actually send.
 
     #[test]
     fn a_command_execution_completes_with_its_aggregated_output_and_its_status() {
@@ -526,6 +552,12 @@ mod tests {
         // | declined). This is the one kind this driver always read
         // correctly; kept in the matrix so the five stay one list.
         let mut driver = CodexDriver::new(None);
+        let started = driver.feed(&item_started(json!({
+            "id": "cmd", "type": "commandExecution", "status": "inProgress",
+            "command": "git status", "commandActions": [], "cwd": "/p"
+        })));
+        assert_eq!(started, vec![EventKind::ToolUse { id: "cmd".into(), name: "commandExecution".into(), detail: "git status".into() }]);
+
         let ok = driver.feed(&item_completed(json!({
             "id": "cmd", "type": "commandExecution", "status": "completed",
             "command": "git status", "commandActions": [], "cwd": "/p",
@@ -546,28 +578,48 @@ mod tests {
         // `FileChangeThreadItem`: `changes: [{diff, kind, path}]`,
         // `status: PatchApplyStatus` (inProgress | completed | failed |
         // declined) — no `aggregatedOutput`, no `output`, nothing to read a
-        // summary off but the changes themselves.
+        // summary off but the changes themselves. `kind` is
+        // `PatchChangeKind`, an object union (`{"type":"add"|"delete"|
+        // "update", …}`), never a bare string.
         let mut driver = CodexDriver::new(None);
+        let started = driver.feed(&item_started(json!({
+            "id": "fc", "type": "fileChange", "status": "inProgress",
+            "changes": [{"path": "src/main.rs", "kind": {"type": "update"}, "diff": "@@ -1 +1 @@\n-old\n+new"}]
+        })));
+        assert_eq!(started, vec![EventKind::ToolUse { id: "fc".into(), name: "fileChange".into(), detail: "src/main.rs".into() }]);
+
+        // The count is used whatever the number of files — one, several, or
+        // none on a completed item with an empty list — so the row says the
+        // same *sort* of thing regardless: a single file used to draw the
+        // diff's own first line, a hunk header sitting right beside the path
+        // this row's own `detail` already names, and an empty list drew
+        // nothing at all, which read as a blank rather than as an answer of
+        // zero.
         let one_file = driver.feed(&item_completed(json!({
             "id": "fc", "type": "fileChange", "status": "completed",
-            "changes": [{"path": "src/main.rs", "kind": "update", "diff": "@@ -1 +1 @@\n-old\n+new"}]
+            "changes": [{"path": "src/main.rs", "kind": {"type": "update"}, "diff": "@@ -1 +1 @@\n-old\n+new"}]
         })));
-        assert_eq!(one_file, vec![EventKind::ToolResult { id: "fc".into(), ok: true, summary: "@@ -1 +1 @@".into() }]);
+        assert_eq!(one_file, vec![EventKind::ToolResult { id: "fc".into(), ok: true, summary: "1 file changed".into() }]);
 
         let several_files = driver.feed(&item_completed(json!({
             "id": "fc2", "type": "fileChange", "status": "completed",
             "changes": [
-                {"path": "a.rs", "kind": "update", "diff": "@@"},
-                {"path": "b.rs", "kind": "add", "diff": "@@"}
+                {"path": "a.rs", "kind": {"type": "update"}, "diff": "@@"},
+                {"path": "b.rs", "kind": {"type": "add"}, "diff": "@@"}
             ]
         })));
         assert_eq!(several_files, vec![EventKind::ToolResult { id: "fc2".into(), ok: true, summary: "2 files changed".into() }]);
 
         let declined = driver.feed(&item_completed(json!({
             "id": "fc3", "type": "fileChange", "status": "declined",
-            "changes": [{"path": "c.rs", "kind": "update", "diff": "@@"}]
+            "changes": [{"path": "c.rs", "kind": {"type": "update"}, "diff": "@@"}]
         })));
-        assert_eq!(declined, vec![EventKind::ToolResult { id: "fc3".into(), ok: false, summary: "@@".into() }]);
+        assert_eq!(declined, vec![EventKind::ToolResult { id: "fc3".into(), ok: false, summary: "1 file changed".into() }]);
+
+        let empty = driver.feed(&item_completed(json!({
+            "id": "fc4", "type": "fileChange", "status": "completed", "changes": []
+        })));
+        assert_eq!(empty, vec![EventKind::ToolResult { id: "fc4".into(), ok: true, summary: "0 files changed".into() }]);
     }
 
     #[test]
@@ -579,6 +631,12 @@ mod tests {
         // the whole account of a failure and was discarded by the original
         // bug, which read `status` alone.
         let mut driver = CodexDriver::new(None);
+        let started = driver.feed(&item_started(json!({
+            "id": "mcp", "type": "mcpToolCall", "status": "inProgress",
+            "server": "docs", "tool": "search_docs", "arguments": {"q": "vue"}
+        })));
+        assert_eq!(started, vec![EventKind::ToolUse { id: "mcp".into(), name: "mcpToolCall".into(), detail: "search_docs".into() }]);
+
         let ok = driver.feed(&item_completed(json!({
             "id": "mcp", "type": "mcpToolCall", "status": "completed",
             "server": "docs", "tool": "search_docs", "arguments": {"q": "vue"},
@@ -595,6 +653,21 @@ mod tests {
             failed,
             vec![EventKind::ToolResult { id: "mcp2".into(), ok: false, summary: "the docs server is not responding".into() }]
         );
+
+        // `status` alone is the verdict — the schema states no relationship
+        // between it and `error`, which is independently nullable, so a
+        // completed call that also happens to carry one (a warning inside a
+        // success, say) must still draw a tick, with the error kept only as
+        // the summary's own note rather than read as a reason to fail it.
+        let completed_with_a_note = driver.feed(&item_completed(json!({
+            "id": "mcp3", "type": "mcpToolCall", "status": "completed",
+            "server": "docs", "tool": "search_docs", "arguments": {"q": "vue"},
+            "error": {"message": "partial index, results may be stale"}
+        })));
+        assert_eq!(
+            completed_with_a_note,
+            vec![EventKind::ToolResult { id: "mcp3".into(), ok: true, summary: "partial index, results may be stale".into() }]
+        );
     }
 
     #[test]
@@ -602,9 +675,15 @@ mod tests {
         // `DynamicToolCallThreadItem`: `success: bool | null`,
         // `status: DynamicToolCallStatus` (inProgress | completed | failed —
         // again no `declined`), `contentItems: [InputText | InputImage |
-        // InputAudio] | null`. `success` is this item's own verdict and is
-        // read ahead of `status`, which is the fallback for a `null`.
+        // InputAudio] | null`. Neither field is documented to agree with the
+        // other, so either one calling this a failure is enough.
         let mut driver = CodexDriver::new(None);
+        let started = driver.feed(&item_started(json!({
+            "id": "dyn", "type": "dynamicToolCall", "status": "inProgress",
+            "tool": "run_lints", "arguments": {}
+        })));
+        assert_eq!(started, vec![EventKind::ToolUse { id: "dyn".into(), name: "dynamicToolCall".into(), detail: "run_lints".into() }]);
+
         let ok = driver.feed(&item_completed(json!({
             "id": "dyn", "type": "dynamicToolCall", "status": "completed", "success": true,
             "tool": "run_lints", "arguments": {},
@@ -626,6 +705,15 @@ mod tests {
             "tool": "run_lints", "arguments": {}, "contentItems": null
         })));
         assert_eq!(unknown_success, vec![EventKind::ToolResult { id: "dyn3".into(), ok: false, summary: String::new() }]);
+
+        // And a `status: "failed"` a stray `success: true` disagrees with
+        // still draws a cross: taking `success` alone here is the trap this
+        // test exists to close.
+        let status_overrules_a_stray_success = driver.feed(&item_completed(json!({
+            "id": "dyn4", "type": "dynamicToolCall", "status": "failed", "success": true,
+            "tool": "run_lints", "arguments": {}, "contentItems": null
+        })));
+        assert_eq!(status_overrules_a_stray_success, vec![EventKind::ToolResult { id: "dyn4".into(), ok: false, summary: String::new() }]);
     }
 
     #[test]
@@ -639,6 +727,11 @@ mod tests {
         // a plain `true` on purpose, not a comparison that happens to answer
         // one.
         let mut driver = CodexDriver::new(None);
+        let started = driver.feed(&item_started(json!({
+            "id": "web", "type": "webSearch", "query": "rust async book"
+        })));
+        assert_eq!(started, vec![EventKind::ToolUse { id: "web".into(), name: "webSearch".into(), detail: "rust async book".into() }]);
+
         let with_results = driver.feed(&item_completed(json!({
             "id": "web", "type": "webSearch", "query": "rust async book",
             "results": [{"title": "Asynchronous Programming in Rust"}, {"title": "Tokio tutorial"}]
@@ -726,7 +819,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"item/commandExecution/outputDelta","params":{"itemId":"cmd","delta":"added 1 package\n"}}"#, "\n",
             r#"{"jsonrpc":"2.0","method":"item/commandExecution/outputDelta","params":{"itemId":"cmd","delta":"added 2 packages\n"}}"#, "\n",
             r#"{"jsonrpc":"2.0","method":"item/fileChange/outputDelta","params":{"itemId":"fc","delta":"diff --git a b\n"}}"#, "\n",
-            r#"{"jsonrpc":"2.0","method":"item/fileChange/patchUpdated","params":{"itemId":"fc","changes":[{"diff":"@@","kind":"update","path":"a"}],"threadId":"t","turnId":"turn"}}"#, "\n"
+            r#"{"jsonrpc":"2.0","method":"item/fileChange/patchUpdated","params":{"itemId":"fc","changes":[{"diff":"@@","kind":{"type":"update"},"path":"a"}],"threadId":"t","turnId":"turn"}}"#, "\n"
         ).as_bytes());
         assert_eq!(events, vec![EventKind::ToolUse { id: "cmd".into(), name: "commandExecution".into(), detail: "npm install".into() }]);
     }

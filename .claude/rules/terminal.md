@@ -281,9 +281,10 @@ watcher both, so a run handing over to its next batch moves the aim as well.
 Beside the field is a **count per project, raised by `showAgentTab` on every call**, and it is there for
 the callers that put an aim *back* after an await — aiming before one is ordinary, and most of the
 callers above do it. `startAgent` aims the tab and then waits about a second for whichever road
-answers, and puts the aim back at two points of its own — an early return on `badCwd`, before
-`showAgentTab` has been called on the fallback road at all, and its own `createSession` catch, after it
-has — each tested against the count it took at its own point rather than the other's. It is one
+answers, and puts the aim back at two points of its own — an early return on any refusal but
+`notDriven`, before `showAgentTab` has been called on the fallback road at all, and its own
+`createSession` catch, after it has — each tested against the count it took at its own point rather
+than the other's. It is one
 function carrying both now, for every one of the ten starts that talk to an agent, where `newAgent` and
 `resumeSession` used to each carry a copy of this for their own two callers alone. Comparing the aim
 afterwards cannot tell its own `null` from somebody else's — every road to a PTY
