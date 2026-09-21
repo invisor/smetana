@@ -213,6 +213,15 @@ pub enum SessionError {
     /// person keeps their reason, and the caller's draft is untouched, since
     /// the dialog that holds it only closes once `startAgent` says the
     /// session actually started.
+    ///
+    /// The two `Spawn`s `commands.rs::ask` produces — "the session worker is
+    /// not running" and "the session worker did not answer" — are on the
+    /// stopping side too, even though they are arguably "never attempted" in
+    /// the same sense as this variant: they mean the worker itself could not
+    /// be reached, which says nothing about whether a Codex app-server would
+    /// have driven the intent, and a PTY spawned from a worker that cannot
+    /// answer an `oneshot` channel is not a retry worth making either. Noted
+    /// here so the next reader auditing this split does not re-derive it.
     #[error("{0}")]
     NotDriven(String),
 }

@@ -304,11 +304,18 @@ Which harness takes which road is `canDrive` in `stores/conversation.js`, over `
 the `conversationPanel` switch, and it is **a front door rather than a gate**: `agents::pick` substitutes the first installed profile when the
 configured one is not on `PATH`, silently, so a machine with only Codex on it still answers `true`
 there — `settings.agent` ships as `claude` and `Settings::validate` forces anything unknown back to it.
-What catches that is `startAgent` falling through to `createSession` when a driven start comes back with
-nothing, which resolves whatever `pick` would have. A fallback is not a failure and says nothing: the
-person asked for an agent and is getting one. The refusals that are worth reporting reach the toast
-corner — `conversationState.lastError` has a `Toast` of its own in `DesktopApp.vue`, drawn only while
-the conversation panel is not, since that panel draws the same sentence as a line inside itself.
+**Not every refusal on that road falls through, and since smetana-gb7f.4 the wire says which is
+which.** `SessionError::NotDriven` is the one tag meaning the driven road never actually took the
+intent — `driver_for` answering `None`, exactly the front door being wrong about a capability, and
+the case `startAgent` in `DesktopApp.vue` falls through to `createSession` for, silently, resolving
+whatever `pick` would have. `SessionError::Spawn` and every other tag mean an attempt was actually
+made — a missing binary, a Codex app-server that never started, a protocol error mid-turn — and
+`startAgent` stops there instead: the sentence stands, and there is no second attempt down a PTY
+built from the very same profile that already failed. A fallback is not a failure and says nothing:
+the person asked for an agent and is getting one, and that reading holds only for `notDriven`. The
+refusals that are worth reporting reach the toast corner — `conversationState.lastError` has a
+`Toast` of its own in `DesktopApp.vue`, drawn only while the conversation panel is not, since that
+panel draws the same sentence as a line inside itself.
 
 Nothing about a shell reaches `settings.json`: it is not in `openTabs`, which is paths, and a tab id
 that lands in `activeTab` is rejected on the next launch by `validate` (it is neither of the two names
@@ -335,8 +342,9 @@ for the two intents this road used to accept — see either module's own header 
 could hold it alone. `drivenAgentRow` below reads both exactly as `describeWork` in `terminals.js` does.
 
 **`startAgent(path, intent)` in `DesktopApp.vue` is the one road every start a person talks to now
-takes**, PTY or driven — `canDrive` → `startConversation` → a fall-through to `createSession`, with the
-`badCwd` short circuit and the aim restored on a press that started nothing, all in the one function.
+takes**, PTY or driven — `canDrive` → `startConversation` → a fall-through to `createSession` on
+`notDriven` alone, with `badCwd` and every other refusal stopping there instead, and the aim restored
+on a press that started nothing, all in the one function.
 `newAgent`, `resumeSession`, filing a task, "Ask agent to edit"/"Answer questions"/"Fix this", a
 conflict's "Resolve with an agent", the setup dialog, the tracker repair and "Review this branch" are
 its ten callers; `grep -n "createSession(" src/views/DesktopApp.vue` finds exactly one call, inside it.
@@ -1358,9 +1366,14 @@ person reads is the `badCwd` entry in each store's `ERRORS` table — `terminals
 `conversation.js` carries a copy of it, which is a **pair to change together with nothing mechanical
 between them**. A `Spawn` would have done neither: that variant's text reaches a person unchanged, so
 a driven refusal would have arrived as `that folder cannot be a working directory: /Users/…`, lower
-case, with an absolute path in it. And the front end does not fall back to the PTY road on this one
-refusal at all — both workers ask one function about one path, so the second attempt can only refuse
-again and put a second toast on screen saying the sentence already there. This is the one intent for which a session's `cwd` and its `project` differ — the same
+case, with an absolute path in it. And the front end does not fall back to the PTY road on this
+refusal — `badCwd` is one instance of the rule rather than the one exception to it: since
+smetana-gb7f.4, `SessionError::NotDriven` is the *only* tag `startAgent` falls through on, the case
+where the driven road never actually tried anything, and `badCwd` is a refusal about an attempt that
+was made and failed, exactly like every `Spawn`. Both workers ask one function about one path, so the
+second attempt could only refuse again and put a second toast on screen saying the sentence already
+there — falling through here would have been idle even before the general rule existed to name it.
+This is the one intent for which a session's `cwd` and its `project` differ — the same
 divergence a shell opened from a folder in the tree has.
 
 A directory that has gone is the **ordinary** case, not an exotic one: a worktree is removed once its

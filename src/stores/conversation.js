@@ -208,16 +208,20 @@ export function conversationFor(id) {
    is not a function and be called with an id. */
 const ERRORS = {
   spawn: (text) => text,
-  /* `SessionError::NotDriven` — the driven road never actually tried
-     anything: no codec for this harness and intent, or `Run`, which nobody
-     is ever in the conversation of. Its text is already a sentence rather
-     than an internal one (`session::service`'s own two call sites word it
-     that way), so it needs no rewriting — the identity here exists so a
-     future kind of the same shape does not fall through `typeof known ===
-     'function'` and read as unhandled. Ordinarily nobody ever sees this
-     one: `startAgent` takes it off the screen and tries the PTY road, and
-     this is only what comes back if that road refuses too. */
-  notDriven: (text) => text,
+  /* `SessionError::NotDriven` has **no** entry here, deliberately: its text
+     is already a sentence rather than an internal one (`session::service`'s
+     own two call sites word it that way, the same standard `spawn`'s
+     identity entry exists to meet), so it is left to fall through to
+     `sentence`'s own raw-message branch below rather than repeating that
+     mapping with a second identity function nothing could tell apart from
+     the fallback it duplicates — a redundant entry here is exactly the kind
+     of "test passes with the feature deleted" trap this file's own review
+     caught once. `kind` still carries the tag regardless of whether an
+     entry exists for it (`report`, below), which is what `startAgent` in
+     `views/DesktopApp.vue` reads to decide whether the PTY road is safe to
+     try. Ordinarily nobody ever sees this sentence: `startAgent` takes it
+     off the screen and tries the PTY road, and it only reaches a person if
+     that road refuses too. */
   /* `SessionError::BadCwd` — the directory a recorded conversation was to be
      reopened in is not a folder inside the project any more. **The ordinary
      case rather than an exotic one**: a worktree is removed once its task is

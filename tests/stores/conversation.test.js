@@ -441,10 +441,17 @@ describe('the conversation store', () => {
      start or answering with a protocol error (show the reason, never fall
      back — acceptance criterion 1 of smetana-gb7f.4). The store itself does
      not choose between those two; it only has to carry the tag through
-     unharmed and word the sentence, since `startAgent` is a `.vue` file no
-     runner here can reach. */
+     unharmed, which is what this test actually pins.
+
+     `ERRORS` in `conversation.js` deliberately has **no** entry for this
+     kind — its text is already a sentence, and a second identity function
+     here would be indistinguishable from `sentence`'s own raw-message
+     fallback, which is what let an earlier version of this test go on
+     passing after the mapping it claimed to test was deleted. So the
+     assertion below is on `sentence`'s fallback branch, and the one thing
+     worth pinning is the tag itself. */
   describe('a refusal the driven road never attempted', () => {
-    it('carries the worker’s own text unchanged, and its own tag', async () => {
+    it('carries the worker’s own tag, with the sentence read off the untranslated fallback', async () => {
       const { ipc, stores } = await ready()
       ipc.fail('session_start', {
         kind: 'notDriven',
