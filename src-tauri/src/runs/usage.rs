@@ -594,10 +594,12 @@ mod tests {
 
     impl SharedWire {
         fn methods(&self) -> Vec<String> {
-            String::from_utf8(self.0.lock().unwrap().clone())
-                .unwrap()
-                .lines()
-                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()["method"].as_str().unwrap().to_owned())
+            // `to_writer` may call `write` more than once. The other thread
+            // can therefore only observe frames it knows are complete, not a
+            // valid prefix which happens to end in the middle of a string.
+            self.0.lock().unwrap().split_inclusive(|byte| *byte == b'\n')
+                .filter(|frame| frame.last() == Some(&b'\n'))
+                .map(|frame| serde_json::from_slice::<serde_json::Value>(frame).unwrap()["method"].as_str().unwrap().to_owned())
                 .collect()
         }
 
@@ -646,24 +648,29 @@ mod tests {
 
     #[test]
     fn app_server_waits_for_initialize_before_sending_the_follow_up_requests() {
-        let (sent, received) = mpsc::channel();
-        let wire = SharedWire(Arc::new(Mutex::new(Vec::new())));
-        let worker_wire = wire.clone();
-        let session = std::thread::spawn(move || {
-            let mut writer = worker_wire;
-            app_server_session(&mut writer, &received, Instant::now() + Duration::from_secs(1))
-        });
+        // The writer is intentionally observed while the session thread is
+        // running; repeating it catches framing races that a one-off run can
+        // easily miss.
+        for _ in 0..200 {
+            let (sent, received) = mpsc::channel();
+            let wire = SharedWire(Arc::new(Mutex::new(Vec::new())));
+            let worker_wire = wire.clone();
+            let session = std::thread::spawn(move || {
+                let mut writer = worker_wire;
+                app_server_session(&mut writer, &received, Instant::now() + Duration::from_secs(1))
+            });
 
-        wire.wait_for_methods(&["initialize"]);
-        sent.send((1, Ok(serde_json::json!({})))).unwrap();
-        wire.wait_for_methods(&["initialize", "initialized", "account/read"]);
-        sent.send((2, Ok(serde_json::json!({ "account": { "type": "chatgpt" }, "requiresOpenaiAuth": true })))).unwrap();
-        wire.wait_for_methods(&["initialize", "initialized", "account/read", "account/rateLimits/read"]);
-        sent.send((3, Ok(serde_json::json!({ "rateLimits": {} })))).unwrap();
-        assert_eq!(
-            session.join().unwrap(),
-            Ok(serde_json::json!({ "rateLimits": {} }))
-        );
+            wire.wait_for_methods(&["initialize"]);
+            sent.send((1, Ok(serde_json::json!({})))).unwrap();
+            wire.wait_for_methods(&["initialize", "initialized", "account/read"]);
+            sent.send((2, Ok(serde_json::json!({ "account": { "type": "chatgpt" }, "requiresOpenaiAuth": true })))).unwrap();
+            wire.wait_for_methods(&["initialize", "initialized", "account/read", "account/rateLimits/read"]);
+            sent.send((3, Ok(serde_json::json!({ "rateLimits": {} })))).unwrap();
+            assert_eq!(
+                session.join().unwrap(),
+                Ok(serde_json::json!({ "rateLimits": {} }))
+            );
+        }
     }
 
     #[test]
@@ -688,8 +695,34 @@ mod tests {
             subscription_account(&serde_json::json!({ "account": { "type": "apiKey" } })),
             Err(Unavailable::UnsupportedAccount)
         );
+        assert_eq!(
+            subscription_account(&serde_json::json!({ "account": { "type": "amazonBedrock" } })),
+            Err(Unavailable::UnsupportedAccount)
+        );
         assert_eq!(subscription_account(&serde_json::json!({ "account": { "type": "chatgpt" } })), Ok(()));
         assert_eq!(subscription_account(&serde_json::json!({ "unexpected": true })), Err(Unavailable::InvalidResponse));
+    }
+
+    #[test]
+    fn an_unrelated_response_id_is_not_accepted_as_the_requested_answer() {
+        let (sent, received) = mpsc::channel();
+        sent.send((99, Ok(serde_json::json!({ "wrong": true })))).unwrap();
+        sent.send((1, Ok(serde_json::json!({ "right": true })))).unwrap();
+        assert_eq!(
+            wait_for_rpc(&received, Instant::now() + Duration::from_secs(1), 1),
+            Ok(serde_json::json!({ "right": true }))
+        );
+    }
+
+    #[test]
+    fn an_expired_shared_deadline_does_not_start_a_new_timeout_for_the_handshake() {
+        let (_sent, received) = mpsc::channel();
+        let mut wire = Vec::new();
+        assert_eq!(
+            app_server_session(&mut wire, &received, Instant::now()),
+            Err(Unavailable::TimedOut)
+        );
+        assert_eq!(std::str::from_utf8(&wire).unwrap().lines().count(), 1);
     }
 
     fn usage(session: u8, week: u8) -> Usage {
