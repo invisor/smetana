@@ -39,9 +39,10 @@ pub enum Decision {
 /// **`TextDelta` is the streamed agent-message shape for both driven
 /// harnesses.** Claude Code supplies it from `--include-partial-messages`;
 /// Codex's app-server supplies `item/agentMessage/delta`. Their final whole
-/// messages become `Text`, which closes the same row authoritatively. Codex is
-/// deliberately a creation-only slice (`Bare` and `NewTask`): the remaining
-/// Codex intents still use the PTY fallback in `.claude/rules/terminal.md`.
+/// messages become `Text`, which closes the same row authoritatively. Codex
+/// drives every intent a person talks to now, the same as Claude Code —
+/// `Intent::Run` is the one intent neither harness drives at all
+/// (`session::service::drivable`), since nobody is in a run's conversation.
 ///
 /// **`TextDelta` must never survive a re-entry, and that is a property of the
 /// wire rather than of anything this crate filters.** Claude Code's own

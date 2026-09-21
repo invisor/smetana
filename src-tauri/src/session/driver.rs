@@ -71,6 +71,36 @@ pub trait Driver: Send {
     /// A person's message, as bytes for the child's stdin.
     fn send(&mut self, input: Input) -> Vec<u8>;
 
+    /// Bytes for the child's stdin, written immediately at spawn for a
+    /// session with nothing of a person's own to open on but still owing its
+    /// harness a first word — a resumed or forked conversation, whose history
+    /// is worth showing before anybody has typed anything new. `None` for the
+    /// ordinary case, where the session waits for `opening` or for a person's
+    /// own first message: a harness with no protocol reason to speak first
+    /// simply never overrides this.
+    fn reopen(&mut self, _launch: &Launch) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// The conversation id this harness chose for itself, the moment its own
+    /// protocol confirms one — taken once, the same shape `startup` already
+    /// has, and `None` both before anything is known and once it has already
+    /// been reported.
+    ///
+    /// A harness told its own id up front (`Launch::session_id`,
+    /// `Profile::session_id_args`) never has one to report here, so the
+    /// default is `None` for the whole of a session. This exists for the
+    /// harness that picks its own instead — Codex's app-server, whose
+    /// `thread/start`, `thread/resume` and `thread/fork` all hand one back in
+    /// their reply — and it is the driven road's counterpart to
+    /// `terminal::service`'s own `Request::SessionIdFound`: the PTY road
+    /// discovers such a harness's id by polling its rollout file after the
+    /// spawn, and this road is handed the identical string without a second
+    /// read of anybody's disk, because the protocol already said it.
+    fn discovered_id(&mut self) -> Option<String> {
+        None
+    }
+
     /// The worker's opening turn. Drivers whose composed prompt already names
     /// attachments can drop their transport list here; app-server Codex keeps
     /// it to emit one localImage per path.
