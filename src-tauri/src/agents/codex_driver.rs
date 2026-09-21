@@ -320,6 +320,199 @@ mod tests {
         assert!(turn.contains("/tmp/a, b.png"));
     }
 
+    // The regression matrix acceptance criterion 4 of smetana-gb7f.4 asks for
+    // (successful start, refused start, fragmented input, several JSON-RPC
+    // ids, text with several images, every supported result type, questions
+    // to the user), for both New agent and New task. The last two words of
+    // that pair are `Intent::Bare` and `Intent::NewTask`, and this driver
+    // reads neither — it sees only the `Input` `terminal::service::spawn_session`
+    // builds from whichever intent's `opening_words()` or `send` gave it, so
+    // the two are one road here and `agents::codex`'s own
+    // `prompt_text_answers_byte_for_byte_what_command_puts_on_the_line` and
+    // `a_bare_session_is_the_binary_and_the_language_sentence` are where the
+    // two intents' own prompts are pinned apart. What is this file's alone is
+    // the JSON-RPC codec below it, so the matrix here is written once against
+    // `Input::Message` rather than twice against two intents that would drive
+    // it identically. `fragmented_initialize_and_thread_start_keep_request_ids_separate`
+    // above already covers fragmented input and is not repeated.
+
+    #[test]
+    fn a_successful_start_settles_the_startup_promise_exactly_once() {
+        let mut driver = CodexDriver::new(None);
+        assert!(driver.startup().is_none(), "nothing to report before a reply arrives");
+        driver.send(Input::Message { text: "task".into(), attachments: vec![] });
+        assert!(driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n").is_empty());
+        assert!(driver.startup().is_none(), "initialize alone is not a usable conversation yet");
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"thread\":{\"id\":\"t\"}}}\n");
+        assert_eq!(driver.startup(), Some(Ok(())));
+        // `take`n rather than peeked: a second read must not repeat the same
+        // answer to a caller that has already acted on it.
+        assert!(driver.startup().is_none());
+    }
+
+    #[test]
+    fn a_refused_start_settles_the_startup_promise_with_the_reported_text_and_stops_there() {
+        // This is the tag `session::service::absorb` turns into
+        // `SessionError::Spawn` — an attempt that was actually made — and
+        // never into `SessionError::NotDriven`, which `startAgent` in
+        // `views/DesktopApp.vue` reserves for a road that never tried
+        // anything. A refusal here must reach a person as its own reason and
+        // must never fall back to a PTY built from the same profile.
+        let mut driver = CodexDriver::new(None);
+        driver.send(Input::Message { text: "task".into(), attachments: vec![] });
+        let events = driver.feed(
+            br#"{"jsonrpc":"2.0","id":1,"error":{"message":"not logged in to ChatGPT"}}
+"#,
+        );
+        assert_eq!(events, vec![EventKind::Error { text: "not logged in to ChatGPT".into() }]);
+        assert_eq!(driver.startup(), Some(Err("not logged in to ChatGPT".into())));
+        // Nothing left queued to send — a refused `initialize` has no
+        // `thread/start` behind it to answer.
+        assert!(driver.outgoing().is_empty());
+    }
+
+    #[test]
+    fn a_refused_thread_start_reports_the_same_way_as_a_refused_initialize() {
+        let mut driver = CodexDriver::new(None);
+        driver.send(Input::Message { text: "task".into(), attachments: vec![] });
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
+        driver.outgoing();
+        let events = driver.feed(
+            br#"{"jsonrpc":"2.0","id":2,"error":{"message":"the workspace could not be sandboxed"}}
+"#,
+        );
+        assert_eq!(events, vec![EventKind::Error { text: "the workspace could not be sandboxed".into() }]);
+        assert_eq!(driver.startup(), Some(Err("the workspace could not be sandboxed".into())));
+    }
+
+    #[test]
+    fn text_with_several_images_lists_every_one_as_its_own_local_image_entry() {
+        let mut driver = CodexDriver::new(None);
+        driver.send(Input::Message {
+            text: "look at these".into(),
+            attachments: vec!["/tmp/one.png".into(), "/tmp/two.png".into(), "/tmp/three.png".into()],
+        });
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
+        driver.outgoing();
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"thread\":{\"id\":\"t\"}}}\n");
+        let turn: Value = serde_json::from_slice(&driver.outgoing().pop().unwrap()).unwrap();
+        let content = turn.pointer("/params/input").and_then(Value::as_array).unwrap();
+        assert_eq!(content.len(), 4, "the text block plus the three images");
+        assert_eq!(content[0], json!({"type": "text", "text": "look at these"}));
+        assert_eq!(content[1], json!({"type": "localImage", "path": "/tmp/one.png"}));
+        assert_eq!(content[2], json!({"type": "localImage", "path": "/tmp/two.png"}));
+        assert_eq!(content[3], json!({"type": "localImage", "path": "/tmp/three.png"}));
+    }
+
+    /// A `item/started` item for one of the five executable kinds, built by
+    /// hand rather than through `json!`'s object literal: that macro's keys
+    /// are tokens, not expressions, so a variable holding the field name
+    /// (`"command"`, `"tool"`, `"query"`, or `changes.0.path` for a file
+    /// change) cannot be interpolated into one — it would be taken as the
+    /// literal identifier `detail_field`. `serde_json::Map` takes a `String`
+    /// key computed at runtime instead.
+    fn started_item(kind: &str, id: &str, detail_field: &str, detail_value: &str) -> Value {
+        let mut item = serde_json::Map::new();
+        item.insert("id".into(), json!(id));
+        item.insert("type".into(), json!(kind));
+        if kind == "fileChange" {
+            item.insert("changes".into(), json!([{"path": detail_value}]));
+        } else {
+            item.insert(detail_field.into(), json!(detail_value));
+        }
+        Value::Object(item)
+    }
+
+    /// An `item/completed` item for the same kind, same reason.
+    fn completed_item(kind: &str, id: &str, status: &str, output_field: &str, output_value: &str) -> Value {
+        let mut item = serde_json::Map::new();
+        item.insert("id".into(), json!(id));
+        item.insert("type".into(), json!(kind));
+        item.insert("status".into(), json!(status));
+        item.insert(output_field.into(), json!(output_value));
+        Value::Object(item)
+    }
+
+    /// One JSON-RPC line, `feed`'s own unit: `LineBuffer` only yields a line
+    /// once it has seen the `\n` after it, so a message built with
+    /// `serde_json::to_vec` alone sits in the buffer forever and `feed`
+    /// answers with nothing — the empty `Vec` this once failed with reads
+    /// exactly like a message this driver does not recognise.
+    fn line(value: Value) -> Vec<u8> {
+        let mut bytes = serde_json::to_vec(&value).unwrap();
+        bytes.push(b'\n');
+        bytes
+    }
+
+    #[test]
+    fn every_supported_result_type_completes_on_success_and_on_failure() {
+        // The four listed in acceptance criterion 2 of smetana-gb7f.4 — file
+        // operations, MCP tools, dynamic tools and web actions — plus the
+        // fifth executable item this driver already carried,
+        // `commandExecution`, all fold to the identical `ToolUse`/`ToolResult`
+        // pair `journal.js` and `ToolCall.vue` already draw for Claude Code's
+        // own tools: there is no fifth event kind for any of them to go
+        // missing through.
+        let cases: &[(&str, &str, &str, &str)] = &[
+            ("commandExecution", "command", "git status", "aggregatedOutput"),
+            ("fileChange", "path", "src/main.rs", "output"),
+            ("mcpToolCall", "tool", "search_docs", "output"),
+            ("dynamicToolCall", "tool", "run_lints", "output"),
+            ("webSearch", "query", "rust async book", "output"),
+        ];
+        for (kind, detail_field, detail_value, output_field) in cases {
+            let mut driver = CodexDriver::new(None);
+            let started = driver.feed(&line(json!({
+                "jsonrpc": "2.0",
+                "method": "item/started",
+                "params": {"item": started_item(kind, "it", detail_field, detail_value)}
+            })));
+            assert_eq!(
+                started,
+                vec![EventKind::ToolUse {
+                    id: "it".into(),
+                    name: (*kind).into(),
+                    detail: (*detail_value).into()
+                }],
+                "{kind} did not open a tool call"
+            );
+
+            let ok = driver.feed(&line(json!({
+                "jsonrpc": "2.0",
+                "method": "item/completed",
+                "params": {"item": completed_item(kind, "it", "completed", output_field, "it worked")}
+            })));
+            assert_eq!(
+                ok,
+                vec![EventKind::ToolResult { id: "it".into(), ok: true, summary: "it worked".into() }],
+                "{kind} did not report a successful result"
+            );
+
+            // A second call of the same kind, this one refused or failed, is
+            // the outcome `journal.js` draws with the cross rather than the
+            // tick — `ToolCall.vue`'s own header: the tick or the cross is
+            // drawn only with a result behind it, never as a guess, and this
+            // is the whole of what tells the two apart.
+            let started_again = driver.feed(&line(json!({
+                "jsonrpc": "2.0",
+                "method": "item/started",
+                "params": {"item": started_item(kind, "it2", detail_field, detail_value)}
+            })));
+            assert_eq!(started_again.len(), 1);
+            let status = if *kind == "commandExecution" { "failed" } else { "declined" };
+            let failed = driver.feed(&line(json!({
+                "jsonrpc": "2.0",
+                "method": "item/completed",
+                "params": {"item": completed_item(kind, "it2", status, output_field, "it did not work")}
+            })));
+            assert_eq!(
+                failed,
+                vec![EventKind::ToolResult { id: "it2".into(), ok: false, summary: "it did not work".into() }],
+                "{kind} did not report a failed result"
+            );
+        }
+    }
+
     #[test]
     fn interleaved_string_request_ids_answer_each_original_request() {
         let mut driver = CodexDriver::new(None);

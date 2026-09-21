@@ -50,11 +50,17 @@ export const conversationState = reactive({
 
      `kind` is the third and is for a caller rather than for a reader:
      `SessionError`'s own serde tag, or `null` for a refusal that never came
-     from the worker. One caller reads it — `resumeSession` in
-     `views/DesktopApp.vue`, which does not fall back to the PTY road on a
-     `badCwd`, both workers asking one function about one path — and it is here
-     rather than worked out from the text, because a sentence is what a person
-     reads and never what code decides on.
+     from the worker. One caller reads it — `startAgent` in
+     `views/DesktopApp.vue`, every road into a session including
+     `resumeSession` — and it decides there whether the driven road ever
+     actually tried anything at all. `notDriven` is the one tag that means it
+     did not, so that is the one tag `startAgent` falls through to the PTY
+     road on; every other tag, `badCwd` among them, means an attempt was made
+     and failed, and stops there with the sentence on screen — both workers
+     asking one function about one path is `badCwd`'s own instance of that
+     rule, not the whole of it any more. This is read here rather than worked
+     out from the text, because a sentence is what a person reads and never
+     what code decides on.
 
      The rest is `{ session, text }` and not `terminals.js`'s `{ title,
      description }`, because the title is the one part that does not vary: every
@@ -202,6 +208,16 @@ export function conversationFor(id) {
    is not a function and be called with an id. */
 const ERRORS = {
   spawn: (text) => text,
+  /* `SessionError::NotDriven` — the driven road never actually tried
+     anything: no codec for this harness and intent, or `Run`, which nobody
+     is ever in the conversation of. Its text is already a sentence rather
+     than an internal one (`session::service`'s own two call sites word it
+     that way), so it needs no rewriting — the identity here exists so a
+     future kind of the same shape does not fall through `typeof known ===
+     'function'` and read as unhandled. Ordinarily nobody ever sees this
+     one: `startAgent` takes it off the screen and tries the PTY road, and
+     this is only what comes back if that road refuses too. */
+  notDriven: (text) => text,
   /* `SessionError::BadCwd` — the directory a recorded conversation was to be
      reopened in is not a folder inside the project any more. **The ordinary
      case rather than an exotic one**: a worktree is removed once its task is
