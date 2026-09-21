@@ -11,7 +11,18 @@ pub struct CodexDriver {
     lines: LineBuffer,
     next_id: u64,
     thread: Option<String>,
-    opening: Option<Input>,
+    /// Turns waiting for a thread to exist — the app-server's `initialize`
+    /// handshake is asynchronous, so a message this driver is handed before
+    /// `self.thread` is set has nowhere to go yet. A queue and not a slot:
+    /// nothing in `send`'s own contract may assume it is called at most once
+    /// before the thread exists, so a second message arriving there is
+    /// remembered rather than silently replacing the first, which was the
+    /// defect a slot would reintroduce (finding 3, review pass 1 of
+    /// smetana-gb7f.2). Drained one at a time, oldest first — `flush_opening`
+    /// is the one place that does it — because two `turn/start` requests
+    /// fired at once on the same thread before either has a `turnId` back is
+    /// not a shape this protocol was asked to accept.
+    opening: std::collections::VecDeque<Input>,
     queued: Vec<Vec<u8>>,
     startup: Option<Result<(), String>>,
     /// The invocation-local state `feed` needs once `initialize` answers: the
@@ -23,10 +34,28 @@ pub struct CodexDriver {
     launch: std::sync::Mutex<(String, Option<String>, Option<(String, bool)>)>,
     /// Whether `initialize` has already been dispatched — by `reopen` at
     /// spawn, for a resume or a fork, or by the first `send` otherwise.
-    /// Without it a person typing while a resume is still connecting would
-    /// have `send` fire a second `initialize` on top of the first, with two
-    /// requests racing for the same reply.
+    /// Without it, a second call reaching `send` before the thread exists
+    /// would fire a second `initialize` racing the first for the same reply.
+    ///
+    /// **Not reachable through the front end today, and the guard is kept
+    /// anyway.** `awaits_startup` answers `true` unconditionally for this
+    /// driver, so `session_start`'s own reply — the session id everything
+    /// else needs — is withheld by `session::service` until the handshake
+    /// settles; nothing can call `session_send` without one. What this
+    /// actually protects is the driver's own contract against a caller that
+    /// does not lean on that gate — a test exercising `send` directly, or a
+    /// future change to `Request::Start`'s own wait — rather than a path a
+    /// person can reach today.
     bootstrapped: bool,
+    /// The thread id, the moment `thread/start`, `thread/resume` or
+    /// `thread/fork` hands one back — taken once by `discovered_id`, which is
+    /// what lets `session::service` write the `.smetana/agents.json` record
+    /// the spawn could not, the way `terminal::service`'s own
+    /// `Request::SessionIdFound` does for the PTY road. Set unconditionally
+    /// in that arm rather than guarded, because the arm itself only ever
+    /// runs once in a driver's life — one thread is started, resumed or
+    /// forked per session, never several.
+    discovered: Option<String>,
     active_turn: Option<String>,
     tickets: std::collections::BTreeMap<String, (Value, String)>,
     items: std::collections::BTreeMap<String, String>,
@@ -40,7 +69,19 @@ pub struct CodexDriver {
 
 impl CodexDriver {
     pub fn new(_permission: Option<crate::session::permission::PermissionTicket>) -> Self {
-        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None, None)), bootstrapped: false, active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false }
+        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: std::collections::VecDeque::new(), queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None, None)), bootstrapped: false, discovered: None, active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false }
+    }
+
+    /// The oldest queued message, if any, sent as the next turn. The one
+    /// place `opening` is drained, called once a thread exists and again
+    /// every time a turn ends, so a second message that queued up behind the
+    /// first is not dropped but sent as its own turn once the one ahead of
+    /// it is out of the way.
+    fn flush_opening(&mut self) {
+        if let Some(opening) = self.opening.pop_front() {
+            let turn = self.turn(opening);
+            self.queued.push(turn);
+        }
     }
 
     fn request(&mut self, method: &str, params: Value) -> Vec<u8> {
@@ -148,12 +189,18 @@ impl Driver for CodexDriver {
             if matches!(response.as_deref(), Some("thread/start" | "thread/resume" | "thread/fork")) {
                 if let Some(id) = message.pointer("/result/thread/id").and_then(Value::as_str) {
                     self.thread = Some(id.to_owned());
+                    // Handed to `discovered_id` regardless of which of the
+                    // three roads produced it: a fresh `thread/start` has
+                    // never had an id recorded at all, and a `thread/fork`
+                    // hands back one the caller's own `Intent::ResumeSession`
+                    // never named — `session::service` guards on whether it
+                    // already knows one, so a plain resume's redundant report
+                    // of the id it was already given is a harmless no-op
+                    // there rather than something to filter out here.
+                    self.discovered = Some(id.to_owned());
                     if response.as_deref() == Some("thread/start") {
                         self.startup = Some(Ok(()));
-                        if let Some(opening) = self.opening.take() {
-                            let turn = self.turn(opening);
-                            self.queued.push(turn);
-                        }
+                        self.flush_opening();
                     } else {
                         // A resume and a fork both reopen a conversation that
                         // already has words in it, and those words are worth
@@ -180,10 +227,7 @@ impl Driver for CodexDriver {
                     events.extend(translate_history(turns));
                 }
                 self.startup = Some(Ok(()));
-                if let Some(opening) = self.opening.take() {
-                    let turn = self.turn(opening);
-                    self.queued.push(turn);
-                }
+                self.flush_opening();
                 continue;
             }
             if response.as_deref() == Some("turn/start") {
@@ -297,6 +341,12 @@ impl Driver for CodexDriver {
                     } else if !failed {
                         events.push(EventKind::Result { tokens_in: self.usage.0, tokens_out: self.usage.1, cost_usd: None, ms: message.pointer("/params/turn/durationMs").and_then(Value::as_u64).unwrap_or(0) });
                     }
+                    // A second message queued up behind the one that just
+                    // finished — reachable only through `send`'s own defensive
+                    // branch (see `bootstrapped`'s header), never through the
+                    // ordinary front end — is sent now rather than left
+                    // waiting for a person to press anything again.
+                    self.flush_opening();
                 },
                 Some("error") => if let Some(text) = message.pointer("/params/error/message").and_then(Value::as_str) { events.push(EventKind::Error { text: text.to_owned() }); },
                 Some(method) if message.get("id").is_some() => {
@@ -332,15 +382,15 @@ impl Driver for CodexDriver {
             // Already connecting — a resume or a fork kicked `initialize` off
             // at spawn, or a person's own earlier message did. A second
             // `initialize` here would race the first for the same reply, so
-            // this one is remembered instead and becomes the opening turn
-            // once the connection is ready for it, exactly as a pending
-            // interrupt in `interrupt` below is remembered rather than sent
-            // twice.
-            self.opening = Some(input);
+            // this one is queued instead and becomes a turn of its own once
+            // the connection is ready for it — appended rather than
+            // overwriting whatever is already waiting, since two messages
+            // queued here are two turns owed, never one replacing the other.
+            self.opening.push_back(input);
             return Vec::new();
         }
         self.bootstrapped = true;
-        self.opening = Some(input);
+        self.opening.push_back(input);
         self.request("initialize", json!({"clientInfo":{"name":"smetana","version":"1"}, "capabilities":{}}))
     }
 
@@ -373,6 +423,10 @@ impl Driver for CodexDriver {
             return Some(Vec::new());
         };
         Some(self.request("turn/interrupt", json!({"threadId":thread_id, "turnId":turn_id})))
+    }
+
+    fn discovered_id(&mut self) -> Option<String> {
+        self.discovered.take()
     }
 }
 
@@ -416,6 +470,22 @@ fn tool_use_detail(kind: &str, item: &Value) -> Option<(&'static str, String)> {
 /// simply the agent's part of a conversation already finished, read back as
 /// the same shape its live half would have produced, not replayed as the
 /// turn it once was.
+///
+/// **Each turn's own `status` is deliberately never read, so a past turn
+/// that failed replays exactly like one that succeeded — a decision rather
+/// than an omission the review that added this function caught and left
+/// standing.** The live path's own `turn/completed` arm turns a failed
+/// status into `EventKind::TurnFailed`, but that event only means anything
+/// paired with the `TurnStart` that opened the turn it closes, and this
+/// function produces neither on purpose (the paragraph above). A
+/// `TurnFailed` with no `TurnStart` around it would be exactly the
+/// asymmetry this function otherwise takes care to avoid, drawn once for a
+/// turn nobody watched fail rather than for one in flight. What a failed
+/// past turn's own items still carry through untouched: each executable
+/// item's own `ToolResult { ok, .. }`, off `tool_result_outcome`'s reading
+/// of that item's own status, and any `agentMessage`/`reasoning` the turn
+/// produced before it stopped — the parts of the account that are true
+/// regardless of how the turn as a whole ended.
 fn translate_history(turns: &[Value]) -> Vec<EventKind> {
     let mut events = Vec::new();
     for turn in turns {
@@ -1284,6 +1354,40 @@ mod tests {
         let turn = String::from_utf8(driver.outgoing().pop().unwrap()).unwrap();
         assert!(turn.contains("\"method\":\"turn/start\""), "{turn}");
         assert!(turn.contains("any word from git status?"), "{turn}");
+    }
+
+    /// Finding 3, review pass 1 of smetana-gb7f.2: `opening` used to be a
+    /// slot, so a second message arriving before the thread existed
+    /// silently replaced the first — the composer's own `Ok` would have
+    /// cleared both, and only the second was ever actually sent. This is
+    /// the queue's own regression test: two messages, two turns, in order,
+    /// the second withheld until the first has actually ended.
+    #[test]
+    fn a_second_message_queued_before_the_thread_exists_becomes_its_own_turn_once_the_first_ends() {
+        let id = "9f1c0a2e-0000-4000-8000-000000000000";
+        let mut driver = CodexDriver::new(None);
+        driver.reopen(&resume_launch(id));
+        assert!(driver.send(Input::Message { text: "first".into(), attachments: vec![] }).is_empty());
+        assert!(driver.send(Input::Message { text: "second".into(), attachments: vec![] }).is_empty());
+
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
+        driver.outgoing();
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"thread\":{{\"id\":\"{id}\",\"turns\":[]}}}}}}\n").as_bytes());
+        driver.outgoing();
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{{\"thread\":{{\"id\":\"{id}\",\"turns\":[]}}}}}}\n").as_bytes());
+        let turn_one = String::from_utf8(driver.outgoing().pop().unwrap()).unwrap();
+        assert!(turn_one.contains("\"method\":\"turn/start\"") && turn_one.contains("first"), "{turn_one}");
+
+        // Nothing left to send until the first turn actually ends — the
+        // second message is still waiting rather than racing the first for
+        // the same thread.
+        assert!(driver.outgoing().is_empty());
+
+        driver.feed(br#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"status":"completed","durationMs":1}}}
+"#);
+        let turn_two = String::from_utf8(driver.outgoing().pop().unwrap()).unwrap();
+        assert!(turn_two.contains("\"method\":\"turn/start\"") && turn_two.contains("second"), "{turn_two}");
+        assert!(!turn_two.contains("first"), "{turn_two}");
     }
 
     #[test]
