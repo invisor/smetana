@@ -462,6 +462,20 @@ impl Profile for Codex {
         // `Intent::Run` was built, so there is one number rather than two
         // computations of it — `the_multi_agent_cap_on_the_line_is_the_one_the_prompt_names`
         // pins the two reads against each other rather than against a literal.
+        //
+        // Read off the installed CLI at 0.155.1 on 2026-09-21 rather than recalled,
+        // the same standard `MODELS` above holds itself to: `--enable <FEATURE>` is
+        // documented as equivalent to `-c features.<name>=true`, `codex features list`
+        // shows `multi_agent` as `stable true`, and `agents.enabled` and
+        // `agents.max_concurrent_threads_per_session` both parse, the latter with its
+        // own "must be at least 1" validator. This is the first fact in this profile
+        // that needs a Codex newer than the 0.146.0 the rest of the file was read
+        // against: `--enable` on a feature an older Codex has never heard of answers
+        // `Error: Unknown feature flag`, which is not caught here, so an Auto or
+        // Supervised run on such a CLI dies at spawn with that argv error rather than
+        // falling back to sequential work — there is no version floor anywhere in this
+        // tree to turn that into a named health state the way `EXPECTED_BD_VERSION` in
+        // `tracker::service` turns a sidecar mismatch into `bd-version-mismatch`.
         if let Intent::Run { settings, .. } = &launch.intent {
             if matches!(settings.mode, RunMode::Auto | RunMode::Supervised) {
                 if let Some(max_agents) = settings.max_parallel_tasks {
@@ -2478,6 +2492,13 @@ mod tests {
                 launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", false)),
             ),
             ("solo run", launch(run(RunMode::Solo))),
+            // `run(Solo)` itself already answers `max_parallel_tasks: None`, so on
+            // its own this case would pass on the inner `if let Some` alone and
+            // never reach the `matches!(settings.mode, Auto | Supervised)` guard
+            // above it — `RunSettings::validate` refuses Solo a number today, but
+            // the mode guard is what would still refuse it if that validation were
+            // ever relaxed, and this is what would say so.
+            ("solo run with a number anyway", launch(run_with_cap(RunMode::Solo, Some(2)))),
         ];
         for (kind, launch) in unaffected {
             let args = argv(&launch);

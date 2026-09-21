@@ -170,6 +170,14 @@ Native multi-agent adds events of its own to the same stream; `transcript_line`'
 — an event type it has never heard of draws nothing — already covers them without a line written for
 them by name, the same as any other vocabulary word a CLI upgrade adds before this app is taught it.
 
+This is the first thing in the Codex profile that needs a CLI newer than the 0.146.0 the rest of this
+file was read against — `--enable multi_agent`, `agents.enabled` and
+`agents.max_concurrent_threads_per_session` were read off 0.155.1 — and there is no version floor
+anywhere in this tree to say so. `--enable` on a feature an older Codex has never heard of answers
+`Error: Unknown feature flag`, so on such a CLI an Auto or Supervised run now dies at spawn with that
+argv error rather than falling back to the sequential work it used to do; a person meeting that
+string in a run report should read it as this and not as a harness gone missing.
+
 `oneshot_args` is the only one with no session behind it at all: how this harness is
 asked **one question** and nothing more. Claude Code answers it with the same `-p` `batch_args`
 opens with, and the two are still different questions — that one is "carry this batch out and exit"
