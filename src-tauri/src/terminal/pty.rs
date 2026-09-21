@@ -68,6 +68,17 @@ pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
     let mut cmd = launch.profile.command(launch);
     cmd.cwd(&launch.cwd);
     apply_environment(&mut cmd);
+    // This app's own pid, its start stamp, and this session's id, so that
+    // whatever the agent starts can be found again by `runs::procs::marked`
+    // and `strays` long after its own process group has stopped meaning
+    // anything — see the module note there for why a group is not enough.
+    // Only an agent session gets it: `build_shell_command` below is a
+    // person's own shell, and a background job it leaves running with `&` is
+    // meant to survive the window closing, exactly as it would in any other
+    // terminal.
+    if let Some(mark) = crate::runs::procs::mark(id) {
+        cmd.env(crate::runs::procs::MARK_KEY, mark);
+    }
     // Caps how many workers `vitest` starts inside this session, the other
     // half of the machine-load fix beside `apply_environment`'s own PATH and
     // locale lines: `vitest` reads `VITEST_MAX_WORKERS` unconditionally on
@@ -474,6 +485,15 @@ pub struct Pty {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn std::io::Write + Send>,
     child: Box<dyn Child + Send + Sync>,
+    /// Windows only: the Job Object this session's own child (and, through
+    /// it, everything it has ever started) belongs to — `runs::procs`'s own
+    /// answer to points 1 through 3 on a platform with neither a mark nor a
+    /// coalition. `None` for a person's own shell (never assigned one at
+    /// all) and for an agent session the job could not be created or
+    /// assigned for, which is `Unknown`'s shape here: `terminate_job` below
+    /// simply has nothing to terminate.
+    #[cfg(windows)]
+    job: Option<crate::runs::procs::SessionJob>,
 }
 
 impl Pty {
@@ -485,12 +505,16 @@ impl Pty {
         rows: u16,
         out: mpsc::UnboundedSender<Chunk>,
     ) -> Result<Self, TerminalError> {
-        Self::start(id, build_command(id, launch), launch.profile.binary(), cols, rows, out)
+        Self::start(id, build_command(id, launch), launch.profile.binary(), cols, rows, out, true)
     }
 
     /// A session running the person's own shell, with no agent behind it. The
     /// PTY, the reader thread and everything after the spawn are the same —
     /// what a session runs is not this file's business past `build_command`.
+    /// `agent: false` below is the whole of why it never gets a Job Object
+    /// either: a background job left with `&` in a person's own shell is
+    /// meant to survive the window closing, exactly as it would in any other
+    /// terminal — see `runs::procs`'s module note.
     pub fn spawn_shell(
         id: SessionId,
         cwd: &Path,
@@ -499,11 +523,12 @@ impl Pty {
         out: mpsc::UnboundedSender<Chunk>,
     ) -> Result<Self, TerminalError> {
         let program = crate::shell_env::shell();
-        Self::start(id, build_shell_command(&program, cwd), &program, cols, rows, out)
+        Self::start(id, build_shell_command(&program, cwd), &program, cols, rows, out, false)
     }
 
     /// The spawn itself. `what` names the program only so a failure can say what
-    /// it was that did not start.
+    /// it was that did not start. `agent` decides whether a Windows session
+    /// gets a Job Object at all — see `spawn_shell` above.
     fn start(
         id: SessionId,
         command: CommandBuilder,
@@ -511,6 +536,7 @@ impl Pty {
         cols: u16,
         rows: u16,
         out: mpsc::UnboundedSender<Chunk>,
+        agent: bool,
     ) -> Result<Self, TerminalError> {
         // Before anything is opened or forked: a program that cannot be
         // executed is refused here, because the `Ok` `spawn_command` answers a
@@ -544,6 +570,25 @@ impl Pty {
         // seeing end-of-stream.
         drop(pair.slave);
 
+        // Windows: the Job Object, created and assigned right here — after
+        // the spawn, because there is nothing to assign it to before, and
+        // as close to it as this function can get, because the window this
+        // leaves open (a grandchild spawned before `assign` lands is not yet
+        // a member of anything) is milliseconds and not this file's to close
+        // further. `runs::procs`'s module note carries the reasoning and
+        // `.claude/rules/terminal.md` the size of the window measured
+        // against the harnesses this app actually starts.
+        #[cfg(windows)]
+        let job = agent
+            .then(|| child.process_id())
+            .flatten()
+            .and_then(|pid| {
+                let job = crate::runs::procs::SessionJob::new()?;
+                job.assign(pid).then_some(job)
+            });
+        #[cfg(not(windows))]
+        let _ = agent;
+
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
@@ -562,7 +607,7 @@ impl Pty {
             let _ = out.send(Chunk::Gone(id));
         });
 
-        Ok(Self { master: pair.master, writer, child })
+        Ok(Self { master: pair.master, writer, child, #[cfg(windows)] job })
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
@@ -629,6 +674,26 @@ impl Pty {
 
     pub fn kill(&mut self) {
         let _ = self.child.kill();
+    }
+
+    /// Windows's own points 1 through 3: everything this session's Job
+    /// Object has ever held, gone at once — see `runs::procs::SessionJob`.
+    /// `false` on every other platform and for a session that never got a
+    /// job (a shell, or an agent the job could not be created or assigned
+    /// for), which is what lets `terminal/service.rs` call this
+    /// unconditionally at every point that needs it rather than asking the
+    /// platform first.
+    #[cfg(windows)]
+    pub fn terminate_job(&self) -> bool {
+        match &self.job {
+            Some(job) => job.terminate(),
+            None => false,
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn terminate_job(&self) -> bool {
+        false
     }
 }
 
@@ -812,6 +877,23 @@ mod tests {
         }
     }
 
+    /// The mark every agent session's environment carries, read through
+    /// `iter_extra_env_as_str` and never `get_env` for the reason the locale
+    /// test spells out — `get_env` answers out of the snapshot of this
+    /// process's own environment, where `SMETANA_SESSION` could not already
+    /// be set, but the habit is worth keeping uniform across this file.
+    #[test]
+    fn every_agent_session_carries_the_apps_own_mark() {
+        for id in agents::IDS {
+            let cmd = build_command(11, &launch(id));
+            let found = cmd
+                .iter_extra_env_as_str()
+                .find(|(key, _)| *key == crate::runs::procs::MARK_KEY)
+                .map(|(_, value)| value.to_owned());
+            assert_eq!(found, crate::runs::procs::mark(11), "{id}");
+        }
+    }
+
     #[test]
     fn the_rest_of_the_environment_is_left_alone() {
         // One directory in front, and nothing else about PATH rewritten: an
@@ -866,13 +948,17 @@ mod tests {
     /// agent branch adds beyond the shared piece is about an agent or about a
     /// run, and a shell has neither — a `BEADS_ACTOR` leaking into one would
     /// put a person's own bd commands into a run's audit trail under a session
-    /// id that means nothing to them.
+    /// id that means nothing to them, and `SMETANA_SESSION` leaking into one
+    /// would have `runs::procs::strays` hang up a background job a person left
+    /// running on purpose, exactly the terminal they would get from their own
+    /// terminal application.
     #[test]
     fn a_shell_is_told_nothing_about_agents_or_runs() {
         let cmd = build_shell_command("/bin/zsh", Path::new("/tmp/project"));
         let keys: Vec<_> = cmd.iter_extra_env_as_str().map(|(key, _)| key).collect();
         assert_eq!(keys.len(), 3, "{keys:?} — the shared piece is TERM, a locale and PATH");
         assert!(!keys.contains(&"BEADS_ACTOR"), "{keys:?}");
+        assert!(!keys.contains(&crate::runs::procs::MARK_KEY), "{keys:?}");
     }
 
     /// A run's lead divides the machine's default vitest worker count by
@@ -1004,7 +1090,7 @@ mod tests {
         let dir = scratch("start-missing");
         let program = dir.join("an-agent-that-was-never-installed").display().to_string();
         let (chunks, _rx) = mpsc::unbounded_channel();
-        match Pty::start(1, build_shell_command(&program, &dir), &program, 120, 30, chunks) {
+        match Pty::start(1, build_shell_command(&program, &dir), &program, 120, 30, chunks, false) {
             Err(TerminalError::Spawn(why)) => assert!(why.contains(&program), "{why}"),
             Err(other) => panic!("{other}"),
             Ok(_) => panic!("a program that is not on disk answered with a session"),
@@ -1032,7 +1118,7 @@ mod tests {
         executable(&script, "#!/nonexistent/interpreter\nexit 0\n");
         let program = script.display().to_string();
         let (chunks, _rx) = mpsc::unbounded_channel();
-        match Pty::start(1, build_shell_command(&program, &dir), &program, 120, 30, chunks) {
+        match Pty::start(1, build_shell_command(&program, &dir), &program, 120, 30, chunks, false) {
             Err(TerminalError::Spawn(why)) => {
                 assert!(why.contains("/nonexistent/interpreter"), "{why}")
             }
@@ -1122,5 +1208,70 @@ mod tests {
         let script = dir.join("agent");
         executable(&script, "#!/usr/bin/env node\nconsole.log(1)\n");
         assert_eq!(resolve_program(script.as_os_str(), None, &dir), Ok(script));
+    }
+
+    /// smetana-kkz2's Windows half, pinned the same way the mark is pinned
+    /// for Linux and macOS above: an agent session's own `Pty` carries a
+    /// `runs::procs::SessionJob` with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`
+    /// among its limit flags, and a shell built by `build_shell_command`
+    /// carries none at all — see `runs::procs`'s module note for why the
+    /// platform needs this rather than a mark or a coalition.
+    ///
+    /// **This is the one test in this file that cannot be compiled, let
+    /// alone run, on macOS or Linux — the whole of
+    /// `windows::Win32::System::JobObjects` does not exist to build against
+    /// on either platform — so it is exercised by CI's own Windows build
+    /// and never by a local run here.** No live Windows machine took part in
+    /// writing it: every call below is read back line by line against the
+    /// `windows` 0.61.3 source this tree pins (`AssignProcessToJobObject`,
+    /// `CreateJobObjectW`, `QueryInformationJobObject`,
+    /// `SetInformationJobObject`, `TerminateJobObject`,
+    /// `JOBOBJECT_EXTENDED_LIMIT_INFORMATION`, `JOB_OBJECT_LIMIT`'s own
+    /// `contains`), never against a compiler that could confirm it here —
+    /// the design accepts exactly this: a live Windows machine was never
+    /// available, so this half is checked by a `cfg(windows)` test and a CI
+    /// build rather than a live run. See `.claude/rules/terminal.md`.
+    #[cfg(windows)]
+    #[test]
+    fn an_agent_sessions_job_carries_kill_on_job_close_and_a_shells_carries_none() {
+        let dir = std::env::temp_dir().join(format!("smetana-pty-job-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let (chunks, _rx) = mpsc::unbounded_channel();
+
+        // `cmd.exe` with no arguments is an interactive shell every Windows
+        // machine has — plenty to open a PTY on and still be running by the
+        // time this test asks about the job that was built for it, since the
+        // assertion is about the job object itself and not about anything
+        // the process goes on to do. `agent: true` is passed directly to
+        // `Pty::start`, the same private entry point `spawn`/`spawn_shell`
+        // both narrow to a fixed value of, so this test can ask the one
+        // question — does the `agent` flag reach a job — without depending
+        // on `agents::resolve` or a real `Launch`.
+        let mut agent_pty = Pty::start(
+            1,
+            build_shell_command("cmd.exe", &dir),
+            "cmd.exe",
+            120,
+            30,
+            chunks.clone(),
+            true,
+        )
+        .expect("cmd.exe is on every Windows machine");
+        let job = agent_pty.job.as_ref().expect("an agent session is assigned a job");
+        let flags = job.limit_flags().expect("the job answers its own limit flags");
+        assert!(
+            flags.contains(windows::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE),
+            "{flags:?}"
+        );
+        agent_pty.kill();
+
+        let mut shell_pty =
+            Pty::start(2, build_shell_command("cmd.exe", &dir), "cmd.exe", 120, 30, chunks, false)
+                .expect("cmd.exe is on every Windows machine");
+        assert!(shell_pty.job.is_none(), "build_shell_command's own session gets no job at all");
+        shell_pty.kill();
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
