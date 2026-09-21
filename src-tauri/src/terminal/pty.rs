@@ -1209,4 +1209,69 @@ mod tests {
         executable(&script, "#!/usr/bin/env node\nconsole.log(1)\n");
         assert_eq!(resolve_program(script.as_os_str(), None, &dir), Ok(script));
     }
+
+    /// smetana-kkz2's Windows half, pinned the same way the mark is pinned
+    /// for Linux and macOS above: an agent session's own `Pty` carries a
+    /// `runs::procs::SessionJob` with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`
+    /// among its limit flags, and a shell built by `build_shell_command`
+    /// carries none at all — see `runs::procs`'s module note for why the
+    /// platform needs this rather than a mark or a coalition.
+    ///
+    /// **This is the one test in this file that cannot be compiled, let
+    /// alone run, on macOS or Linux — the whole of
+    /// `windows::Win32::System::JobObjects` does not exist to build against
+    /// on either platform — so it is exercised by CI's own Windows build
+    /// and never by a local run here.** No live Windows machine took part in
+    /// writing it: every call below is read back line by line against the
+    /// `windows` 0.61.3 source this tree pins (`AssignProcessToJobObject`,
+    /// `CreateJobObjectW`, `QueryInformationJobObject`,
+    /// `SetInformationJobObject`, `TerminateJobObject`,
+    /// `JOBOBJECT_EXTENDED_LIMIT_INFORMATION`, `JOB_OBJECT_LIMIT`'s own
+    /// `contains`), never against a compiler that could confirm it here —
+    /// the design accepts exactly this: a live Windows machine was never
+    /// available, so this half is checked by a `cfg(windows)` test and a CI
+    /// build rather than a live run. See `.claude/rules/terminal.md`.
+    #[cfg(windows)]
+    #[test]
+    fn an_agent_sessions_job_carries_kill_on_job_close_and_a_shells_carries_none() {
+        let dir = std::env::temp_dir().join(format!("smetana-pty-job-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let (chunks, _rx) = mpsc::unbounded_channel();
+
+        // `cmd.exe` with no arguments is an interactive shell every Windows
+        // machine has — plenty to open a PTY on and still be running by the
+        // time this test asks about the job that was built for it, since the
+        // assertion is about the job object itself and not about anything
+        // the process goes on to do. `agent: true` is passed directly to
+        // `Pty::start`, the same private entry point `spawn`/`spawn_shell`
+        // both narrow to a fixed value of, so this test can ask the one
+        // question — does the `agent` flag reach a job — without depending
+        // on `agents::resolve` or a real `Launch`.
+        let mut agent_pty = Pty::start(
+            1,
+            build_shell_command("cmd.exe", &dir),
+            "cmd.exe",
+            120,
+            30,
+            chunks.clone(),
+            true,
+        )
+        .expect("cmd.exe is on every Windows machine");
+        let job = agent_pty.job.as_ref().expect("an agent session is assigned a job");
+        let flags = job.limit_flags().expect("the job answers its own limit flags");
+        assert!(
+            flags.contains(windows::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE),
+            "{flags:?}"
+        );
+        agent_pty.kill();
+
+        let mut shell_pty =
+            Pty::start(2, build_shell_command("cmd.exe", &dir), "cmd.exe", 120, 30, chunks, false)
+                .expect("cmd.exe is on every Windows machine");
+        assert!(shell_pty.job.is_none(), "build_shell_command's own session gets no job at all");
+        shell_pty.kill();
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

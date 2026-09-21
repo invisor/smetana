@@ -910,6 +910,34 @@ impl SessionJob {
         use windows::Win32::System::JobObjects::TerminateJobObject;
         unsafe { TerminateJobObject(self.0, 1) }.is_ok()
     }
+
+    /// Test-only: reads the limit flags back off the job object itself,
+    /// through `QueryInformationJobObject` — the read half of what `new`
+    /// above writes with `SetInformationJobObject` — so a test can check the
+    /// flag actually landed on the kernel object rather than trusting the
+    /// write call's own `Ok`. `pub(crate)` rather than private because the
+    /// one reader is `terminal::pty`'s own test module and not this one;
+    /// `#[cfg(test)]` because nothing this app ships ever needs to ask a job
+    /// what it already knows it asked for.
+    #[cfg(test)]
+    pub(crate) fn limit_flags(&self) -> Option<windows::Win32::System::JobObjects::JOB_OBJECT_LIMIT> {
+        use windows::Win32::System::JobObjects::{
+            JobObjectExtendedLimitInformation, QueryInformationJobObject,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        };
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        let size = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+        let read = unsafe {
+            QueryInformationJobObject(
+                Some(self.0),
+                JobObjectExtendedLimitInformation,
+                (&mut info as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast::<core::ffi::c_void>(),
+                size,
+                None,
+            )
+        };
+        read.is_ok().then_some(info.BasicLimitInformation.LimitFlags)
+    }
 }
 
 /// Point 4 costs this app nothing to write: `KILL_ON_JOB_CLOSE` means the
