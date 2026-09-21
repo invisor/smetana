@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   agentOf,
@@ -121,11 +123,40 @@ describe('the sentence under the rows', () => {
     expect(usageNote(unsupported)).not.toBe(usageNote(unreadable))
   })
 
-  it('gives a safe, actionable reason when the Codex app-server cannot read', () => {
+  it('gives a safe, actionable reason when an app-server source cannot read', () => {
     expect(usageNote({ state: 'unreadable', agent: 'codex', reason: 'notSignedIn' })).toMatch(/not signed in/)
     expect(usageNote({ state: 'unreadable', agent: 'codex', reason: 'unsupportedAccount' })).toMatch(/does not provide/)
     expect(usageNote({ state: 'unreadable', agent: 'codex', reason: 'timedOut' })).toMatch(/too long/)
-    expect(usageNote({ state: 'unreadable', agent: 'claude', reason: 'timedOut' })).not.toMatch(/Codex took too long/)
+  })
+
+  /* Every one of the three sentences names the harness by the label the
+     caller hands in — the catalogue's own word, never a comparison against a
+     literal id — and `timedOut` is no longer special-cased on the id at all:
+     the reason alone is enough, and any agent that ever answers with it gets
+     the same named sentence. */
+  it('names the harness by its own label, from the caller, rather than by comparing an id', () => {
+    const nameFor = (id) => ({ claude: 'Claude Code', codex: 'Codex' })[id] ?? id
+    expect(usageNote({ state: 'unreadable', agent: 'codex', reason: 'notSignedIn' }, false, null, nameFor))
+      .toBe('Codex is not signed in with a ChatGPT subscription, so its allowance is unavailable.')
+    expect(usageNote({ state: 'unreadable', agent: 'codex', reason: 'unsupportedAccount' }, false, null, nameFor))
+      .toBe('This Codex account does not provide a subscription allowance, so there is nothing to show here.')
+    expect(usageNote({ state: 'unreadable', agent: 'codex', reason: 'timedOut' }, false, null, nameFor))
+      .toBe('Codex took too long to read its subscription allowance. Try again shortly.')
+    // A different harness answering with the very same reasons is named by
+    // its own label and never by Codex's — the sentence is a template, not a
+    // fact about which agent this build happens to ship.
+    expect(usageNote({ state: 'unreadable', agent: 'claude', reason: 'timedOut' }, false, null, nameFor))
+      .toBe('Claude Code took too long to read its subscription allowance. Try again shortly.')
+  })
+
+  /* On a machine with only Claude Code installed — no `nameFor` supplied,
+     which is what a caller with nothing better does — none of the three
+     sentences mentions Codex, because nothing in the module compares an id
+     to that literal any more. */
+  it('mentions no particular harness by name on a machine with only Claude Code', () => {
+    expect(usageNote({ state: 'unreadable', agent: 'claude', reason: 'notSignedIn' })).not.toMatch(/Codex/i)
+    expect(usageNote({ state: 'unreadable', agent: 'claude', reason: 'unsupportedAccount' })).not.toMatch(/Codex/i)
+    expect(usageNote({ state: 'unreadable', agent: 'claude', reason: 'timedOut' })).not.toMatch(/Codex/i)
   })
 
   it('uses source-provided Codex window durations instead of fixed session labels', () => {
@@ -227,5 +258,16 @@ describe('whether there is anything to press', () => {
     // Installing an agent is the fix for this one, and then there is something
     // new to ask.
     expect(offersRefresh(nothingInstalled)).toBe(true)
+  })
+})
+
+/* `unavailableNote` names a harness by the label its caller hands in, never
+   by comparing the answer's `agent` against a literal id — the mechanical
+   half of that rule, the same shape `usageFooter.js`'s own source-scan test
+   pins for its threshold constants. */
+describe('the module', () => {
+  it('names no agent by id anywhere', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/components/settings/usage.js'), 'utf8')
+    expect(source.toLowerCase()).not.toMatch(/codex/)
   })
 })

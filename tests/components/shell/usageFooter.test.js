@@ -67,13 +67,48 @@ describe('usageSegments', () => {
     ])
   })
 
-  it('draws only the window Codex actually returned, without inventing a weekly dash', () => {
+  /* The branch is the boolean Rust derives from `UsageSource`, never the
+     agent id — an id of `codex` with the field left off (or false) must not
+     filter anything, and an id that is not `codex` at all must filter when
+     the field says so. */
+  it('draws only the window a source that enumerates its windows actually returned, without inventing a weekly dash', () => {
+    expect(usageSegments({
+      state: 'read',
+      agent: 'codex',
+      band: 'normal',
+      enumeratesWindows: true,
+      usage: { sessionPct: 0, sessionLabel: '5 hours', sessionReset: null, weekPct: null, weekLabel: null, weekReset: null }
+    })).toEqual([{ name: '5 hours', value: '0%' }])
+  })
+
+  /* The compatibility direction: an answer from a build before this field
+     existed carries no `enumeratesWindows` key at all, and that has to read
+     as "no" — Claude Code's own two-slot layout with a dash for the half
+     that was not read, which is exactly what this build did before the field
+     existed. The agent id here is deliberately `codex`'s own, to pin that the
+     branch is the field and never the name. */
+  it('reads an answer with no enumeratesWindows field as not enumerating, which keeps both fixed slots', () => {
     expect(usageSegments({
       state: 'read',
       agent: 'codex',
       band: 'normal',
       usage: { sessionPct: 0, sessionLabel: '5 hours', sessionReset: null, weekPct: null, weekLabel: null, weekReset: null }
-    })).toEqual([{ name: '5 hours', value: '0%' }])
+    })).toEqual([
+      { name: '5 hours', value: '0%' },
+      { name: 'Week', value: '—' }
+    ])
+  })
+
+  /* The other side of the same rule: `enumeratesWindows: false` on a reading
+     that happens to have both halves keeps both slots, exactly as an answer
+     naming no such field at all does — the value is read, not merely its
+     presence. */
+  it('keeps both fixed slots when enumeratesWindows is explicitly false', () => {
+    expect(usageSegments({ state: 'read', agent: 'claude', band: 'reduced', enumeratesWindows: false, usage: BOTH }))
+      .toEqual([
+        { name: 'Session', value: '10%' },
+        { name: 'Week', value: '78%' }
+      ])
   })
 
   /* Either line the harness prints can go missing — one of them reworded, a
@@ -237,5 +272,13 @@ describe('the module', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/components/shell/usageFooter.js'), 'utf8')
     expect(source).not.toMatch(/\b75\b/)
     expect(source).not.toMatch(/\b90\b/)
+  })
+
+  /* `usageSegments` branches on `enumeratesWindows` and never on which agent
+     answered — this is the mechanical half of that rule, the same shape the
+     threshold check above pins. */
+  it('names no agent by id anywhere', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/components/shell/usageFooter.js'), 'utf8')
+    expect(source.toLowerCase()).not.toMatch(/codex/)
   })
 })

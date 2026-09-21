@@ -335,7 +335,7 @@ const reportDescription = computed(() =>
 )
 
 const lines = computed(() => usageLines(props.usage))
-const note = computed(() => usageNote(props.usage, props.busy, props.error))
+const note = computed(() => usageNote(props.usage, props.busy, props.error, agentLabel))
 const refreshable = computed(() => offersRefresh(props.usage))
 
 const blockStyle = {

@@ -324,7 +324,30 @@ pub enum AgentUsage {
     /// server error string, which could contain account or network detail.
     Unreadable { agent: String, reason: Unavailable },
     /// A reading, with the band it falls in.
-    Read { agent: String, usage: Usage, band: Band },
+    ///
+    /// **`enumerates_windows` is what the front end branches on instead of an
+    /// agent id.** `usageFooter.js`'s two-slot strip used to ask whether the
+    /// agent was named `"codex"` to decide whether a window with no number in
+    /// it means "not read yet" or "does not exist" — exactly the class of
+    /// hardcode `agents::catalogue` exists to remove. The true fact is not
+    /// which harness answered, it is *how* the source reports: `AppServer`
+    /// names the windows it has outright, so a missing half really is a
+    /// missing window, while `Command` parses somebody else's prose, where a
+    /// missing half is a line that was not read. So this field is derived
+    /// from `UsageSource` alone, here, once, where `agent` already is.
+    ///
+    /// An answer from a build before this field existed carries neither key
+    /// at all, and the front end's truthiness check on a missing property
+    /// reads that as `false` — which is `UsageSource::Command`'s own
+    /// behaviour, Claude Code's two fixed slots with dashes, so an old-shape
+    /// answer changes nothing.
+    ///
+    /// The container's own `rename_all` reaches variant names and not their
+    /// fields, so this variant carries its own — without it `enumerates_windows`
+    /// would ride as-is and the front end's `answer.enumeratesWindows` would
+    /// read `undefined` from a build that sends it.
+    #[serde(rename_all = "camelCase")]
+    Read { agent: String, usage: Usage, band: Band, enumerates_windows: bool },
 }
 
 /// Why a probe could not yield a normalized reading. These values deliberately
@@ -352,15 +375,18 @@ pub fn report(
     // Asked before the reading is looked at, because a profile that cannot be
     // asked and one that was asked and said nothing both arrive here as `None`
     // — `read` answers that for every way of failing, this one included.
-    if profile.usage_source().is_none() {
+    let Some(source) = profile.usage_source() else {
         return AgentUsage::Unsupported { agent: Some(agent) };
-    }
+    };
     let usage = match reading {
         Ok(usage) => usage,
         Err(reason) => return AgentUsage::Unreadable { agent, reason },
     };
     let band = Band::of(&decide(Some(&usage), limits));
-    AgentUsage::Read { agent, usage, band }
+    // See `AgentUsage::Read`'s own doc: derived from the source's shape and
+    // nowhere else, never from the agent's id.
+    let enumerates_windows = matches!(source, UsageSource::AppServer);
+    AgentUsage::Read { agent, usage, band, enumerates_windows }
 }
 
 /// How many tasks the next batch may take.
@@ -861,7 +887,7 @@ mod tests {
 
     #[test]
     fn a_reading_carries_the_agent_that_answered_and_the_band_it_falls_in() {
-        let AgentUsage::Read { agent, usage: read, band } =
+        let AgentUsage::Read { agent, usage: read, band, enumerates_windows } =
             report(Some(&crate::agents::claude::Claude), Ok(usage(10, 80)), Limits::default())
         else {
             panic!("a reading from a profile that can be asked");
@@ -869,14 +895,30 @@ mod tests {
         assert_eq!(agent, "claude");
         assert_eq!(read, usage(10, 80));
         assert_eq!(band, Band::Reduced);
+        // Claude Code's source is `UsageSource::Command`, a prose parser — a
+        // missing half of its reading is a line that was not read, not a
+        // window that does not exist.
+        assert!(!enumerates_windows);
+    }
+
+    #[test]
+    fn a_source_that_lists_its_own_windows_says_so_in_the_reading() {
+        let AgentUsage::Read { enumerates_windows, .. } =
+            report(Some(&crate::agents::codex::Codex), Ok(usage(10, 80)), Limits::default())
+        else {
+            panic!("a reading from a profile that can be asked");
+        };
+        // Codex's app-server names the windows it has outright, which is the
+        // fact `usageFooter.js`'s two-slot strip needs — never the agent id.
+        assert!(enumerates_windows);
     }
 
     #[test]
     fn the_wire_shape_is_the_one_the_settings_window_reads() {
         // The names are load-bearing and nothing else pins them: the front end
-        // reads `state`, `agent`, `band` and the four camelCase fields of the
-        // reading, and a rename here would empty the block with every gate
-        // still green.
+        // reads `state`, `agent`, `band`, `enumeratesWindows` and the four
+        // camelCase fields of the reading, and a rename here would empty the
+        // block with every gate still green.
         let json = serde_json::to_value(report(
             Some(&crate::agents::claude::Claude),
             Ok(usage(10, 20)),
@@ -886,12 +928,21 @@ mod tests {
         assert_eq!(json["state"], "read");
         assert_eq!(json["agent"], "claude");
         assert_eq!(json["band"], "normal");
+        assert_eq!(json["enumeratesWindows"], false);
         assert_eq!(json["usage"]["sessionPct"], 10);
         assert_eq!(json["usage"]["sessionReset"], "Aug 7 at 8pm");
         assert!(json["usage"]["sessionLabel"].is_null());
         assert_eq!(json["usage"]["weekPct"], 20);
         assert_eq!(json["usage"]["weekReset"], "Aug 11 at 5:59pm");
         assert!(json["usage"]["weekLabel"].is_null());
+
+        let json = serde_json::to_value(report(
+            Some(&crate::agents::codex::Codex),
+            Ok(usage(10, 20)),
+            Limits::default(),
+        ))
+        .expect("the answer serializes");
+        assert_eq!(json["enumeratesWindows"], true, "the app-server source lists its own windows");
 
         // A half that was not read travels as an explicit `null` under the key
         // it would have had, rather than by the key going missing: the front

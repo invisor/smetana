@@ -86,7 +86,7 @@ defineEmits(['refresh'])
 
 const label = computed(() => usageAgentLabel(props.usage, agentLabel))
 const segments = computed(() => usageSegments(props.usage))
-const tip = computed(() => usageTooltip(props.usage, props.busy, props.error))
+const tip = computed(() => usageTooltip(props.usage, props.busy, props.error, agentLabel))
 
 /* The counters' hints, both of them a rule rather than a string: see
    `statusCounters.js` for why they are not written out here. */

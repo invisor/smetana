@@ -80,7 +80,8 @@ export function usageWindowName(label, fallback) {
 /* Which agent the answer is about — whoever actually answered the probe, which
    need not be the one showing in the dropdown above: `agents::pick` substitutes
    the first installed profile for a configured one that is not on `PATH`, so a
-   block headed "Claude Code subscription" can be about Codex.
+   block headed "Claude Code subscription" can be about a different harness
+   entirely.
 
    `null` is a real answer twice over: nothing has been read yet, and nothing on
    this machine could be asked. Neither has an agent to name, and naming the
@@ -117,8 +118,15 @@ const BAND_NOTE = {
    `busy` comes next and beats whatever is on screen: a probe is somebody else's
    CLI with a minute's ceiling over it, and a block that sat there showing the
    previous answer would be claiming a reading that is being replaced as it is
-   read. */
-export function usageNote(answer, busy = false, error = null) {
+   read.
+
+   `nameFor` is the harness label, handed in by the caller and read off the
+   catalogue rather than looked up here — the same shape `usageAgentLabel` in
+   `usageFooter.js` takes it in, applied rather than imported: that file
+   already borrows two exports of this one, and a second import back would be
+   a cycle. It is threaded down to `unavailableNote`, the one place a
+   sentence names whoever could not be read. */
+export function usageNote(answer, busy = false, error = null, nameFor = (id) => id) {
   if (error) return ''
   if (busy) return 'Reading what is left of the allowance…'
   if (!answer) return 'The allowance has not been read yet.'
@@ -127,7 +135,7 @@ export function usageNote(answer, busy = false, error = null) {
       ? 'This agent does not report what is left of its subscription, so there is nothing to read here.'
       : 'No agent is installed on this machine, so there is nothing to ask.'
   }
-  if (answer.state === 'unreadable') return unavailableNote(answer)
+  if (answer.state === 'unreadable') return unavailableNote(answer, nameFor)
   if (usageLines(answer).length) {
     /* A band this build has never heard of says nothing about a run rather
        than guessing which of the three it meant — the block still shows the
@@ -142,19 +150,29 @@ export function usageNote(answer, busy = false, error = null) {
      — Rust does not send one, and a build that did would be one this cannot
      draw — or a state this build has never heard of. Both take the sentence
      that promises nothing about the allowance. */
-  return unavailableNote(answer)
+  return unavailableNote(answer, nameFor)
 }
 
-function unavailableNote(answer) {
+/* The three sentences below used to name a harness by comparing its id
+   against a literal — exactly the hardcode `agents::catalogue` exists to
+   remove, and the reason `timedOut` carried an extra check the other two
+   reasons did not: the reason is already enough on its own to say what
+   happened, and the label is what says whose allowance it happened to. So
+   every one of the three takes the label rather than asking whose it is,
+   and a harness the caller cannot name — a hand-edited answer, a catalogue
+   read that failed — reads as "The agent" rather than as one of ours. */
+function unavailableNote(answer, nameFor = (id) => id) {
   const reason = answer?.reason
+  const id = agentOf(answer)
+  const label = id ? (nameFor(id) ?? id) : 'The agent'
   if (reason === 'notSignedIn') {
-    return 'Codex is not signed in with a ChatGPT subscription, so its allowance is unavailable.'
+    return `${label} is not signed in with a ChatGPT subscription, so its allowance is unavailable.`
   }
   if (reason === 'unsupportedAccount') {
-    return 'This Codex account does not provide a subscription allowance, so there is nothing to show here.'
+    return `This ${label} account does not provide a subscription allowance, so there is nothing to show here.`
   }
-  if (reason === 'timedOut' && agentOf(answer) === 'codex') {
-    return 'Codex took too long to read its subscription allowance. Try again shortly.'
+  if (reason === 'timedOut') {
+    return `${label} took too long to read its subscription allowance. Try again shortly.`
   }
   return 'The allowance could not be read. The agent may not be installed on this machine, or not signed in.'
 }
