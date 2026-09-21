@@ -14,7 +14,9 @@ paths:
 
 `src-tauri/src/agents/` is what the app knows about the CLI coding agents it runs, one file per
 agent, and everything harness-specific lives in it. Claude Code and Codex are supported; which one
-runs is the `agent` field in `settings.json`.
+runs is the `agent` field in `settings.json` — or, for a project carrying its own `agents` block,
+that project's own copy of the field, taken whole in place of the root's. `.claude/rules/settings.md`
+carries the whole of that table and why it is all-or-nothing rather than per-role.
 
 The split that makes this a module rather than a `match` in the terminal worker: **what the app wants
 done is the same for every agent, and how it reaches one is not.** An `Intent` — `Bare` from the

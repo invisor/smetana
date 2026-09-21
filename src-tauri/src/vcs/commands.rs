@@ -1001,10 +1001,16 @@ fn at_head(repo: &Path, path: &str) -> Result<AtHead, VcsError> {
 /// says so through `Unsupported` rather than being hidden — the button is drawn
 /// for everybody, because whether the *configured* agent can do this is a fact
 /// the front end deliberately does not know (it never learns an agent's name).
+///
+/// **`project` is `Option<String>` deliberately** — the front end does not send
+/// it yet, so an absent argument reads the root exactly as before, and the
+/// command is ready for a project's own `agents` block once something starts
+/// passing it.
 #[tauri::command]
 pub async fn vcs_suggest_message(
     app: tauri::AppHandle,
     repo: String,
+    project: Option<String>,
 ) -> Result<String, OneshotError> {
     // `spawn_blocking`, the same rule as `off_the_runtime` above and for the
     // same reason — that wrapper cannot be the one used, because what comes
@@ -1018,7 +1024,12 @@ pub async fn vcs_suggest_message(
         // a role with: it takes the Default row, which is the root pair, and
         // `settings::default_pair` is where that is said once for both callers
         // of this shape.
-        let (agent, model) = crate::settings::default_pair(&app);
+        //
+        // Deliberately no fallback to `repo` when `project` is absent: `None`
+        // reads the root table exactly as before, and `project` staying empty
+        // until the front end starts sending it is the whole point of the
+        // argument being `Option<String>` here.
+        let (agent, model) = crate::settings::default_pair(&app, project.as_deref());
         // `pick_with_model`, which is `pick` with the pair rule on it: the
         // fallback to whatever is installed is unchanged, and the model goes
         // with it only if it was the harness that ran. See that function.

@@ -731,7 +731,7 @@ fn handle(
             // disagree about which harness and which model this kind of call
             // gets. A run's own snapshot is what `pinned` carries.
             let (agent, model) =
-                crate::settings::role_model(app, &intent, pinned.as_deref());
+                crate::settings::role_model(app, Some(&project), &intent, pinned.as_deref());
             // The login shell's PATH, not this process's: a bundled app started
             // from Finder inherits launchd's, where nothing a person installed
             // is reachable and every agent would look uninstalled.
@@ -870,7 +870,7 @@ fn handle(
                 // that is sometimes meaningful and never says which is the
                 // shape this `Launch` keeps out deliberately.
                 worker_model: leads_a_run
-                    .then(|| crate::settings::worker_model(app))
+                    .then(|| crate::settings::worker_model(app, Some(&project)))
                     .flatten(),
             };
             // Both of these are taken **before the process exists**, and the
