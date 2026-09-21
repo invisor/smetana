@@ -210,6 +210,9 @@ const PAPERWORK: &str =
 /// at the end: the status is the last write, so a session interrupted halfway
 /// leaves the task parked rather than back in the queue with the answer
 /// nowhere — the same rule `PAPERWORK` keeps for filing.
+#[cfg(test)]
+const RESOLVE_UNPARK: &str = "bd update <id> --status open --assignee \"\"";
+
 const RESOLVE: &str =
     "This task is parked: an agent working it could not settle something on its own and left \
      the questions in the issue's notes, one to a line, each starting `parked:`. Read the issue \
@@ -232,8 +235,9 @@ const RESOLVE_WRITE: &str =
      decision into the description, which is the spec whoever picks this up works from, and make \
      sure the acceptance criteria now say what done looks like — if an answer settled that, this \
      is where it goes. Then add one note per question, `resolved: <the answer, in one line>`, so \
-     no `parked:` line is left looking unanswered. Only then set the status: \
-     `bd update <id> --status open`. That write is last, so a session interrupted halfway leaves \
+     no `parked:` line is left looking unanswered. Only then return it to the queue and release \
+     the run in one atomic write: `bd update <id> --status open --assignee \"\"`. That write is \
+     last, so a session interrupted halfway leaves \
      the task parked rather than back in the queue with the answer written nowhere.";
 
 /// The one ending that is not a resolution, said out loud because the obvious
@@ -2892,12 +2896,17 @@ mod tests {
     }
 
     #[test]
-    fn resolving_writes_the_status_last_and_never_invents_an_answer() {
+    fn resolving_releases_the_run_atomically_in_prompt_and_packaged_skill() {
         // The two failures this session has: unparking a task whose answer went
-        // nowhere, and answering on the person's behalf — which is the very
-        // thing the agent that parked it refused to do.
+        // nowhere, and leaving its now-open task assigned to the run that
+        // parked it. The fallback and the shipped process must say exactly the
+        // same final command: a harness that cannot read the skill relies on
+        // the former, while the ordinary harness reads the latter.
         let text = resolving(SkillDelivery::PluginDir, nothing());
-        assert!(text.contains("bd update <id> --status open"), "{text}");
+        let skill = include_str!("../../resources/smetana/skills/resolving-questions/SKILL.md");
+        for process in [text.as_str(), skill] {
+            assert!(process.contains(RESOLVE_UNPARK), "{process}");
+        }
         assert!(text.contains("That write is last"), "{text}");
         assert!(text.contains("one at a time"), "{text}");
         assert!(text.contains("Answer none of them yourself"), "{text}");

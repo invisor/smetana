@@ -187,7 +187,7 @@ ticking `<time>` inside it carries `aria-hidden="true"` for exactly one reason: 
 reader would announce "thinking, 5s… 6s… 7s" for the length of the whole turn, drowning the one
 sentence the region exists to announce once.
 
-## Streaming, and the one harness it actually reaches
+## Streaming, and the driven harnesses it reaches
 
 `sm-prose.css` section 11's four moments and its `span[data-edge]` rule were cut ahead of the wire
 that would use them; `smetana-6we6` is what wired them. `session/model.rs`'s `EventKind` grew
@@ -201,19 +201,16 @@ child of the last block while one is true, propagated through a blockquote or a 
 nested block is actually last; a table, a definition list, a rule, or a run of images as the literal
 last block draws no caret, recorded as a narrow gap in that file's own header rather than solved.
 
-**This reaches Claude Code alone, and that is not a phase one of two.** `session::service::driver_for`
-answers `"claude" => ClaudeDriver, _ => None` and `ClaudeDriver` is the only `impl Driver` in the
-tree — a Codex session never reaches `journal.js`, `EventKind`, or anything else this file is about; it
-runs the PTY road `.claude/rules/terminal.md` describes, start to finish. The original wording of this
-paragraph asked for "text deltas on the wire from both harnesses this app drives", which rested on a
-belief about the tree rather than anything true of it — there was no second driver for a delta to
-travel down before this task and there still is not one after it, and building one is a subsystem of
-its own, not a line item a streaming task picks up in passing. Claude Code's own half of the wire is
-`--include-partial-messages` (`agents/claude_driver.rs`'s own header carries the CLI flag and the
-shape it was verified against), read only for `content_block_delta`/`text_delta` — reasoning and a
-tool call's arguments still arrive whole, from the same consolidated `assistant` event this driver
-already produced, because streaming either of those was out of this task's scope rather than out of
-reach. A resumed session never replays a stray delta either, on two guarantees rather than one:
+**Claude Code and Codex both reach this journal.** `driver_for` selects `ClaudeDriver` for Claude and
+`CodexDriver` for Codex's creation-only `Bare`/`NewTask` slice. Codex uses app-server JSON-RPC:
+`item/agentMessage/delta` streams a row, its completed item supplies the authoritative final `Text`,
+and reasoning, command/file output, approvals and token usage arrive through their own app-server
+notifications. A Stop before Codex's `turn/start` response is retained and sent once that response
+supplies the turn id, so the same thread remains usable afterwards. Codex's other manual intents and
+unsupported profiles still take the PTY fallback in `.claude/rules/terminal.md`. Claude Code's half
+of the wire is `--include-partial-messages` (`agents/claude_driver.rs`'s own header carries the CLI
+flag and the shape it was verified against). A resumed Claude session never replays a stray delta,
+on two guarantees rather than one:
 Claude Code's own persisted transcript holds only the consolidated records this driver always read,
 never a raw `stream_event` line, which was checked against the installed CLI rather than assumed —
 and `session::history::is_past` refuses the event kind a second time regardless, the deliberate

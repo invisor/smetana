@@ -11,9 +11,10 @@ import { loadStores } from '../support/stores.js'
    because Rust refuses an unsupported verb with a sentence anyway and a row
    nobody can press is cheaper than a command written into somebody's prompt. */
 
-/* The shape `agents::catalogue` serializes, with Codex's two absences in it —
-   this CLI documents no command that clears a conversation and none that prints
-   an allowance. `mockBackend.js` answers with the same rows for the browser. */
+/* The shape `agents::catalogue` serializes, with Codex's one absence in it:
+   this CLI documents no command that clears a conversation. Its allowance is
+   read through app-server. `mockBackend.js` answers with the same rows for the
+   browser. */
 const CATALOGUE = [
   {
     id: 'claude',
@@ -38,7 +39,7 @@ const CATALOGUE = [
       resume: true,
       fork: true,
       clear: false,
-      usage: false,
+      usage: true,
       batch: true,
       oneshot: true
     },
@@ -131,7 +132,7 @@ describe('the agent catalogue', () => {
     expect(agents.can('codex', 'clear')).toBe(false)
     expect(agents.can('codex', 'resume')).toBe(true)
     expect(agents.can('codex', 'fork')).toBe(true)
-    expect(agents.can('codex', 'usage')).toBe(false)
+    expect(agents.can('codex', 'usage')).toBe(true)
   })
 
   it('says no about a harness it has never heard of rather than throwing', async () => {

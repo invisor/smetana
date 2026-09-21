@@ -501,7 +501,7 @@ export function journalRows(events = [], state) {
       })
       openAt = null
       openSeq = null
-    } else if (event.kind === 'error') {
+    } else if (event.kind === 'error' || event.kind === 'turn-failed') {
       // The caret close is deliberately outside the `openAt != null` branch
       // below: `openAt` tracks the *turn*, not the stream, and the two can
       // come apart once a journal is long enough to trim a `turn-start` away

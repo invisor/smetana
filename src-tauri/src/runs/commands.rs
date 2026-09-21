@@ -227,18 +227,21 @@ pub async fn agent_usage(app: AppHandle, agent: Option<String>) -> AgentUsage {
     })
     .await
     .unwrap_or(None);
-    let Some(profile) = profile else { return usage::report(None, None, limits) };
-    // `read` answers `None` for a profile with no `usage_command` without
-    // spawning anything, so this costs nothing for Codex; `report` is what
-    // tells that `None` apart from a probe's. The probe's own working
-    // directory is resolved here and handed in — never `/`, never the
-    // project root — see `runs::usage`'s header for why.
+    let Some(profile) = profile else {
+        return usage::report(None, Err(usage::Unavailable::InvalidResponse), limits);
+    };
+    // The source may be Claude Code's established prose command or Codex's
+    // structured app-server read. `read_detail` gives the settings window a
+    // safe reason for an unavailable answer; the run gate calls `read`, which
+    // deliberately keeps treating that same condition as no reason to pause.
+    // The probe's own working directory is resolved here and handed in — never
+    // `/`, never the project root — see `runs::usage`'s header for why.
     let reading = tokio::task::spawn_blocking(move || {
-        let cwd = crate::agents::probe_dir(&app_for_probe).ok()?;
-        usage::read(profile, &cwd)
+        let cwd = crate::agents::probe_dir(&app_for_probe).map_err(|_| usage::Unavailable::InvalidResponse)?;
+        usage::read_detail(profile, &cwd)
     })
     .await
-    .unwrap_or(None);
+    .unwrap_or(Err(usage::Unavailable::InvalidResponse));
     usage::report(Some(profile), reading, limits)
 }
 
