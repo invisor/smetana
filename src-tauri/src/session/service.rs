@@ -937,7 +937,9 @@ fn absorb(
             }
         }
         Chunk::Eof(id) => {
-            if let Some(tx) = starting.remove(&id) {
+            let was_starting = starting.remove(&id);
+            let failed_startup = was_starting.is_some();
+            if let Some(tx) = was_starting {
                 let _ = tx.send(Err(SessionError::Spawn("Codex app-server ended before it created a thread".into())));
             }
             let Some(live) = sessions.get_mut(&id) else { return };
@@ -987,6 +989,10 @@ fn absorb(
             // opens a tab on to read.
             live.talking = None;
             refresh_state(app, id, live);
+            // A failed pre-creation startup was never a conversation. Its
+            // child has been handed to the reaper above; remove the temporary
+            // entry so attach cannot paint a failed empty transcript.
+            if failed_startup { sessions.remove(&id); }
         }
     }
 }
