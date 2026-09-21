@@ -74,6 +74,75 @@ const MODELS: &[(&str, &str)] = &[
 
 pub struct Codex;
 
+impl Codex {
+    /// The whole of what a session opens on, composed exactly as `command`
+    /// puts it on the command line — the seam `claude.rs`'s own `prompt_text`
+    /// cuts for the identical reason: `CodexDriver::opening` (the app-server
+    /// road) needs this text without rebuilding a `CommandBuilder` and
+    /// reading its last argument back off it, which is what it used to do.
+    /// Reading the argument back assumed the prompt is the final positional
+    /// one; that held only because nothing else had reason to land after it,
+    /// and on `codex` (this branch was cut before it) `eb62a3e` has already
+    /// put `--sandbox workspace-write` on this same line, ahead of the prompt
+    /// — still true today, but a silent assumption rather than a fact the
+    /// compiler checks, and the next flag to land here would break it with
+    /// nothing anywhere to say so: the session's opening turn would become
+    /// `workspace-write`, or an image path. Asking for the text directly
+    /// removes the assumption instead of re-verifying it.
+    pub(crate) fn prompt_text(&self, launch: &Launch) -> Option<String> {
+        let filing_a_task = matches!(launch.intent, Intent::NewTask { .. });
+        // Only the mode that actually uses the whole process pays for reading
+        // it: `Auto` is handed the path and decides for itself.
+        let discussing = matches!(
+            launch.intent,
+            Intent::NewTask { brainstorm: Stage::On, .. }
+        );
+        // The plan's own process, and only where a plan was actually asked
+        // for: the cascade decides that, never the raw switch, so an `On`
+        // sitting under a discussion nobody wanted costs nothing here either.
+        let planning = matches!(
+            &launch.intent,
+            Intent::NewTask { brainstorm, spec, plan, .. }
+                if cascade(*brainstorm, *spec, *plan).1 == Stage::On
+        );
+        let filing =
+            filing_a_task.then(|| read_skill(&launch.skills.smetana, "filing-a-task")).flatten();
+        // The whole of what a resolving session does, so it is read whenever
+        // one is being started and never otherwise.
+        let resolving = matches!(launch.intent, Intent::ResolveTask { .. })
+            .then(|| read_skill(&launch.skills.smetana, "resolving-questions"))
+            .flatten();
+        // The whole of what a branch review does, so it is read whenever one is
+        // being started and never otherwise — the same reading `resolving`
+        // above gets.
+        let reviewing_branch = matches!(launch.intent, Intent::ReviewBranch { .. })
+            .then(|| read_skill(&launch.skills.smetana, "reviewing-branch-changes"))
+            .flatten();
+        let brainstorming_text =
+            discussing.then(|| read_skill(&launch.skills.superpowers, "brainstorming")).flatten();
+        let plans_text =
+            planning.then(|| read_skill(&launch.skills.superpowers, "writing-plans")).flatten();
+        let text = prompt::SkillText {
+            filing: filing.as_deref(),
+            resolving: resolving.as_deref(),
+            brainstorming: brainstorming_text.as_deref(),
+            plans: plans_text.as_deref(),
+            reviewing_branch: reviewing_branch.as_deref(),
+        };
+        prompt::build(
+            &launch.intent,
+            self.delivery(),
+            self.images(),
+            &launch.skills,
+            launch.facts.as_deref(),
+            text,
+            &launch.languages,
+            &launch.agent_prompt,
+            launch.worker_model.as_deref(),
+        )
+    }
+}
+
 impl Profile for Codex {
     fn id(&self) -> &'static str {
         "codex"
@@ -126,38 +195,6 @@ impl Profile for Codex {
 
     fn command(&self, launch: &Launch) -> CommandBuilder {
         let mut cmd = CommandBuilder::new(self.binary());
-        let filing_a_task = matches!(launch.intent, Intent::NewTask { .. });
-        // Only the mode that actually uses the whole process pays for reading
-        // it: `Auto` is handed the path and decides for itself.
-        let discussing = matches!(
-            launch.intent,
-            Intent::NewTask { brainstorm: Stage::On, .. }
-        );
-        // The plan's own process, and only where a plan was actually asked
-        // for: the cascade decides that, never the raw switch, so an `On`
-        // sitting under a discussion nobody wanted costs nothing here either.
-        let planning = matches!(
-            &launch.intent,
-            Intent::NewTask { brainstorm, spec, plan, .. }
-                if cascade(*brainstorm, *spec, *plan).1 == Stage::On
-        );
-        let filing =
-            filing_a_task.then(|| read_skill(&launch.skills.smetana, "filing-a-task")).flatten();
-        // The whole of what a resolving session does, so it is read whenever
-        // one is being started and never otherwise.
-        let resolving = matches!(launch.intent, Intent::ResolveTask { .. })
-            .then(|| read_skill(&launch.skills.smetana, "resolving-questions"))
-            .flatten();
-        // The whole of what a branch review does, so it is read whenever one is
-        // being started and never otherwise — the same reading `resolving`
-        // above gets.
-        let reviewing_branch = matches!(launch.intent, Intent::ReviewBranch { .. })
-            .then(|| read_skill(&launch.skills.smetana, "reviewing-branch-changes"))
-            .flatten();
-        let brainstorming_text =
-            discussing.then(|| read_skill(&launch.skills.superpowers, "brainstorming")).flatten();
-        let plans_text =
-            planning.then(|| read_skill(&launch.skills.superpowers, "writing-plans")).flatten();
         // First of all, and this is what makes an unattended batch end by
         // itself: `codex exec --json`. `exec` is a **subcommand**, not a flag,
         // so its position is not a preference — it has exactly one legal place
@@ -266,24 +303,7 @@ impl Profile for Codex {
         } else {
             false
         };
-        let text = prompt::SkillText {
-            filing: filing.as_deref(),
-            resolving: resolving.as_deref(),
-            brainstorming: brainstorming_text.as_deref(),
-            plans: plans_text.as_deref(),
-            reviewing_branch: reviewing_branch.as_deref(),
-        };
-        if let Some(built) = prompt::build(
-            &launch.intent,
-            self.delivery(),
-            self.images(),
-            &launch.skills,
-            launch.facts.as_deref(),
-            text,
-            &launch.languages,
-            &launch.agent_prompt,
-            launch.worker_model.as_deref(),
-        ) {
+        if let Some(built) = self.prompt_text(launch) {
             // `-i, --image <FILE>...` accepts more than one value. The
             // separator is how this CLI distinguishes the final, positional
             // prompt from another image path; without it, commas in a prompt
@@ -1424,6 +1444,24 @@ mod tests {
         assert_eq!(args[0], "codex");
         assert_eq!(args[1], "--sandbox");
         assert_eq!(args[2], "workspace-write");
+    }
+
+    #[test]
+    fn prompt_text_answers_byte_for_byte_what_command_puts_on_the_line() {
+        // `CodexDriver::opening` asks `prompt_text` directly instead of
+        // rebuilding a `CommandBuilder` and reading its last argument back —
+        // the seam only earns its keep if the two answers cannot drift.
+        let new_task_launch = launch(new_task(Stage::Off));
+        let args = argv(&new_task_launch);
+        let last = args.last().cloned();
+        assert_eq!(Codex.prompt_text(&new_task_launch), last);
+
+        // A resumed session opens on no prompt at all — `prompt::build`
+        // refuses it one, and `prompt_text` carries that refusal through
+        // rather than answering something `command` never puts on the line.
+        let resume_launch = launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", false));
+        assert_eq!(Codex.prompt_text(&resume_launch), None);
+        assert!(!argv(&resume_launch).iter().any(|arg| arg.contains("Talk to me")));
     }
 
     #[test]

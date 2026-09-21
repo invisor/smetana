@@ -646,11 +646,11 @@ describe('the conversation store', () => {
      `newAgent` takes, so a wrong answer here is either a Claude session that
      never becomes a conversation or a Codex session that cannot start at all. */
   describe('the harnesses that can be driven', () => {
-    it('drives Claude Code and nothing else this build ships', async () => {
+    it('drives Claude Code and Codex', async () => {
       const { stores } = await ready()
 
       expect(stores.conversation.canDrive('claude')).toBe(true)
-      expect(stores.conversation.canDrive('codex')).toBe(false)
+      expect(stores.conversation.canDrive('codex')).toBe(true)
     })
 
     /* A hand-edited `settings.json`, or a harness added to Rust and not to this

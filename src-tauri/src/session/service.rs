@@ -50,6 +50,7 @@ use super::model::{
 };
 use super::permission::{Asked, PermissionServer};
 use crate::agents::claude_driver::ClaudeDriver;
+use crate::agents::codex_driver::CodexDriver;
 use crate::agents::{self, Intent, Launch, Profile};
 
 /// How much of a child's stdout is taken in one read. A turn's output arrives
@@ -122,10 +123,10 @@ pub enum Request {
     /// the journal (`EventKind::PermissionAnswered`) and the permission
     /// listener, which is what builds `updatedInput` from it.
     Answer(SessionId, String, Decision, Option<BTreeMap<String, String>>, oneshot::Sender<Result<(), SessionError>>),
-    /// End the turn in flight and nothing more. `ClaudeDriver::interrupt`
-    /// (smetana-y7mv) answers `Some` for this harness, so the child survives
-    /// it — see `claude_driver.rs`'s own header for the measurement — and a
-    /// harness with no such answer still falls to `start_kill()`.
+    /// End the turn in flight and nothing more. Claude Code keeps its child
+    /// alive after its stdin control request; Codex queues an app-server
+    /// interrupt until `turn/start` returns its turn id. A harness with no
+    /// protocol interrupt still falls to `start_kill()`.
     Stop(SessionId, oneshot::Sender<Result<(), SessionError>>),
     /// End the session outright: the cross on a driven agent row, not the
     /// composer's Stop (smetana-y7mv). Always kills the child regardless of
@@ -168,6 +169,8 @@ struct Talking {
 }
 
 struct Live {
+    /// Startup failed after spawning: retain only until stdout EOF reaps it.
+    discard_on_eof: bool,
     /// `None` once the child's stdout has ended. Nothing is left to decode and
     /// nothing can be written, so holding either half would only keep a token
     /// file in `/tmp` and a task parked on a dead process's stdin for the life
@@ -228,6 +231,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
         let mut asked_open = permission.is_some();
 
         let mut sessions: HashMap<SessionId, Live> = HashMap::new();
+        let mut starting: HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>> = HashMap::new();
         let mut next_id: SessionId = 1;
 
         loop {
@@ -244,6 +248,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         &app,
                         &mut sessions,
                         &mut next_id,
+                        &mut starting,
                         permission.as_ref(),
                         &chunks_tx,
                         request,
@@ -255,7 +260,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                     // breaking is a stopped worker, whereas continuing is a
                     // branch that is instantly ready forever.
                     let Some(chunk) = chunk else { break };
-                    absorb(&app, &mut sessions, permission.as_ref(), chunk);
+                    absorb(&app, &mut sessions, &mut starting, permission.as_ref(), chunk);
                 }
                 asked = asked_rx.recv(), if asked_open => {
                     let Some(asked) = asked else {
@@ -327,16 +332,18 @@ fn spawnable(builder: &CommandBuilder) -> Option<tokio::process::Command> {
 
 /// The codec for a harness, or `None` for one this app cannot drive.
 ///
-/// Only Claude Code has one. A profile without a codec is refused rather than
+/// Only the explicitly supported interactive harnesses have one. A profile without a codec is refused rather than
 /// spawned: the child would run, say everything it had to say in a protocol
 /// nothing here can read, and the conversation on screen would stay empty with
 /// no error anywhere to explain it.
 fn driver_for(
     profile: &'static dyn Profile,
+    intent: &Intent,
     ticket: Option<super::permission::PermissionTicket>,
 ) -> Option<Box<dyn Driver>> {
     match profile.id() {
         "claude" => Some(Box::new(ClaudeDriver::new(ticket))),
+        "codex" if matches!(intent, Intent::Bare | Intent::NewTask { .. }) => Some(Box::new(CodexDriver::new(ticket))),
         _ => None,
     }
 }
@@ -395,9 +402,9 @@ fn spawn_session(
     // the error — that arm forgets the id on every failure, which is the one
     // place a session that never existed is swept up.
     let ticket = permission.map(|server| server.register(id));
-    let Some(driver) = driver_for(profile, ticket) else {
+    let Some(driver) = driver_for(profile, &intent, ticket) else {
         return Err(SessionError::Spawn(format!(
-            "a driven session needs Claude Code, and this project runs {}",
+            "this action is not supported in the conversation panel for {}",
             profile.label()
         )));
     };
@@ -518,6 +525,7 @@ fn spawn_session(
         journal.append(kind, at);
     }
     let mut live = Live {
+        discard_on_eof: false,
         // `Starting` for a session with nothing behind it, which is what
         // `state_of` calls an empty journal; a resumed one opens on a
         // conversation and so opens `Ready`. Asked of the journal rather than
@@ -547,10 +555,14 @@ fn spawn_session(
             let at = chrono::Utc::now().to_rfc3339();
             live.journal.append(EventKind::TurnStart { by: super::model::Actor::Person }, at.clone());
             live.journal.append(
-                EventKind::Opening { text: opening_text, attachments: opening_attachments },
+                EventKind::Opening { text: opening_text, attachments: opening_attachments.clone() },
                 at,
             );
-            let bytes = talking.driver.send(Input::Message { text, attachments: Vec::new() });
+            // Claude's opening prose already names its images, while Codex's
+            // app-server additionally receives each path as a localImage.
+            // Passing them through here keeps that delivery decision in the
+            // driver rather than making a second opening path in the worker.
+            let bytes = talking.driver.opening_input(Input::Message { text, attachments: opening_attachments.clone() });
             if talking.stdin.send(bytes).is_err() {
                 log::warn!("[session {id}] the child stopped reading before its brief was written");
             }
@@ -681,6 +693,7 @@ fn handle(
     app: &AppHandle,
     sessions: &mut HashMap<SessionId, Live>,
     next_id: &mut SessionId,
+    starting: &mut HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>>,
     permission: Option<&PermissionServer>,
     chunks: &mpsc::UnboundedSender<Chunk>,
     request: Request,
@@ -696,10 +709,17 @@ fn handle(
             let id = *next_id;
             *next_id += 1;
             let started = spawn_session(app, id, &project, intent, permission, chunks);
-            let _ = tx.send(match started {
+            match started {
                 Ok(live) => {
                     sessions.insert(id, live);
-                    Ok(id)
+                    /* Codex's app-server has not created its thread yet. Keep
+                       the caller's draft and dialog alive until its correlated
+                       protocol reply confirms a usable conversation. */
+                    if sessions.get(&id).is_some_and(|live| live.talking.as_ref().is_some_and(|talking| talking.driver.awaits_startup())) {
+                        starting.insert(id, tx);
+                        return;
+                    }
+                    let _ = tx.send(Ok(id));
                 }
                 Err(error) => {
                     // The ticket, if one was minted, belongs to a session that
@@ -709,9 +729,9 @@ fn handle(
                     if let Some(server) = permission {
                         server.forget(id);
                     }
-                    Err(error)
+                    let _ = tx.send(Err(error));
                 }
-            });
+            }
         }
         Request::Attach(id, tx) => {
             let _ = tx.send(match sessions.get(&id) {
@@ -807,11 +827,14 @@ fn handle(
             // It also settles a question the harness has already abandoned —
             // the row stops being `needs-you` even though nothing was waiting
             // to hear the answer.
+            // Secrets still go to the harness, but a long-lived journal must
+            // never retain their plaintext. Non-secret answers stay readable.
+            let journal_answers = redact_secret_answers(live.journal.events(), &question, answers.clone());
             append(
                 app,
                 id,
                 live,
-                vec![EventKind::PermissionAnswered { id: question.clone(), decision, answers: answers.clone() }],
+                vec![EventKind::PermissionAnswered { id: question.clone(), decision, answers: journal_answers }],
             );
             // Some harnesses take a decision over stdin instead of a channel of
             // their own; Claude Code answers `None` here and is served by the
@@ -820,15 +843,16 @@ fn handle(
             // through the permission listener like every other tool, never
             // over stdin.
             let bytes = match live.talking.as_mut() {
-                Some(talking) => talking.driver.answer(&question, decision),
+                Some(talking) => talking.driver.answer(&question, decision, answers.clone()),
                 None => None,
             };
+            let driver_delivered = bytes.is_some();
             if let Some(bytes) = bytes {
                 if !say(live, bytes) {
                     lost(app, id, live);
                 }
             }
-            let delivered = permission.is_some_and(|server| server.answer(&question, decision, answers));
+            let delivered = driver_delivered || permission.is_some_and(|server| server.answer(&question, decision, answers));
             let _ = tx.send(if delivered {
                 Ok(())
             } else {
@@ -840,15 +864,12 @@ fn handle(
                 let _ = tx.send(Err(SessionError::NoSuchSession(id)));
                 return;
             };
-            // Ask first, kill second. Claude Code answers `Some` here now
-            // (smetana-y7mv, `ClaudeDriver::interrupt` — see its own header
-            // for the measurement): a `control_request` closes the open turn
-            // and leaves the child alive to answer the next message. A
-            // harness with no such answer — none is driven at all today, `Claude`
-            // being the only `impl Driver` this app has — still falls to
-            // `start_kill()` below, which is the loss this branch existed to
-            // record before the measurement, kept for whichever harness is
-            // driven next and answers `None`.
+            // Ask first, kill second. Claude Code sends its stdin control
+            // request immediately; Codex may return an empty write while it
+            // waits for the correlated `turn/start` response, then queues the
+            // app-server interrupt. Both keep the child available for the
+            // next turn. A harness with no protocol interrupt falls to
+            // `start_kill()` below.
             let bytes = live.talking.as_mut().and_then(|talking| talking.driver.interrupt());
             match bytes {
                 Some(bytes) => {
@@ -891,6 +912,7 @@ fn handle(
 fn absorb(
     app: &AppHandle,
     sessions: &mut HashMap<SessionId, Live>,
+    starting: &mut HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>>,
     permission: Option<&PermissionServer>,
     chunk: Chunk,
 ) {
@@ -899,9 +921,31 @@ fn absorb(
             let Some(live) = sessions.get_mut(&id) else { return };
             let Some(talking) = live.talking.as_mut() else { return };
             let kinds = talking.driver.feed(&bytes);
+            let outgoing = talking.driver.outgoing();
+            let startup = talking.driver.startup();
             append(app, id, live, kinds);
+            for bytes in outgoing {
+                if !say(live, bytes) { lost(app, id, live); break; }
+            }
+            if let Some(result) = startup {
+                if let Some(tx) = starting.remove(&id) {
+                    match result {
+                        Ok(()) => { let _ = tx.send(Ok(id)); }
+                        Err(text) => {
+                            live.discard_on_eof = true;
+                            if let Some(child) = live.child.as_mut() { let _ = child.start_kill(); }
+                            let _ = tx.send(Err(SessionError::Spawn(text)));
+                        }
+                    }
+                }
+            }
         }
         Chunk::Eof(id) => {
+            let was_starting = starting.remove(&id);
+            let failed_startup = was_starting.is_some();
+            if let Some(tx) = was_starting {
+                let _ = tx.send(Err(SessionError::Spawn("Codex app-server ended before it created a thread".into())));
+            }
             let Some(live) = sessions.get_mut(&id) else { return };
             live.child_alive = false;
             // Nothing can ask this session anything any more, and the token it
@@ -949,8 +993,29 @@ fn absorb(
             // opens a tab on to read.
             live.talking = None;
             refresh_state(app, id, live);
+            // A failed pre-creation startup was never a conversation. Its
+            // child has been handed to the reaper above; remove the temporary
+            // entry so attach cannot paint a failed empty transcript.
+            if failed_startup || live.discard_on_eof { sessions.remove(&id); }
         }
     }
+}
+
+/// Copy answers for the journal without retaining an `isSecret` answer. The
+/// driver still receives the original map immediately afterwards.
+fn redact_secret_answers(events: &[Event], id: &str, answers: Option<BTreeMap<String, String>>) -> Option<BTreeMap<String, String>> {
+    let mut answers = answers?;
+    let secret = events.iter().rev().find_map(|event| match &event.kind {
+        EventKind::Permission { id: event_id, input, .. } if event_id == id => Some(input),
+        _ => None,
+    });
+    let Some(questions) = secret.and_then(|input| input.get("questions")).and_then(serde_json::Value::as_array) else { return Some(answers) };
+    for question in questions {
+        if question.get("isSecret").and_then(serde_json::Value::as_bool) == Some(true) {
+            if let Some(key) = question.get("id").or_else(|| question.get("question")).and_then(serde_json::Value::as_str) { answers.remove(key); }
+        }
+    }
+    if answers.is_empty() { None } else { Some(answers) }
 }
 
 /// A question from the permission listener. It becomes a `Permission` event and

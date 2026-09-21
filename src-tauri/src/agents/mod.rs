@@ -13,6 +13,7 @@
 pub mod claude;
 pub mod claude_driver;
 pub mod codex;
+pub mod codex_driver;
 pub mod codex_sessions;
 pub mod commands;
 pub mod library;
