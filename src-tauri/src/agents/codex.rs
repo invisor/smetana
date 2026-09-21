@@ -232,14 +232,18 @@ impl Profile for Codex {
         // and what rides there is what has to end up in the issue description.
         // Read back through `self.images()` rather than written out again, so
         // the flag and the profile's answer about it cannot drift apart.
-        if let (Intent::NewTask { draft, .. }, ImageDelivery::Flag(flag)) =
-            (&launch.intent, self.images())
+        let images_need_prompt_separator =
+            if let (Intent::NewTask { draft, .. }, ImageDelivery::Flag(flag)) =
+                (&launch.intent, self.images())
         {
             for image in &draft.images {
                 cmd.arg(flag);
                 cmd.arg(image);
             }
-        }
+            !draft.images.is_empty()
+        } else {
+            false
+        };
         let text = prompt::SkillText {
             filing: filing.as_deref(),
             resolving: resolving.as_deref(),
@@ -258,6 +262,15 @@ impl Profile for Codex {
             &launch.agent_prompt,
             launch.worker_model.as_deref(),
         ) {
+            // `-i, --image <FILE>...` accepts more than one value. The
+            // separator is how this CLI distinguishes the final, positional
+            // prompt from another image path; without it, commas in a prompt
+            // can be treated as image separators. It is needed only for a new
+            // task that actually supplied images, so every other invocation
+            // keeps its existing argv.
+            if images_need_prompt_separator {
+                cmd.arg("--");
+            }
             cmd.arg(built);
         }
         cmd
@@ -1365,9 +1378,73 @@ mod tests {
 
         assert_eq!(
             args,
-            vec!["codex", "-i", "/data/a.png", "-i", "/data/b.png", args.last().unwrap()],
+            vec![
+                "codex",
+                "-i",
+                "/data/a.png",
+                "-i",
+                "/data/b.png",
+                "--",
+                args.last().unwrap(),
+            ],
             "the prompt is positional and everything else goes in front of it: {args:?}"
         );
+    }
+
+    #[test]
+    fn image_flags_are_separated_from_one_literal_composed_prompt() {
+        let user_text = "Keep commas, intact, across lines.\nUse `literal` text.";
+        let intent = Intent::NewTask {
+            brainstorm: Stage::Off,
+            spec: Stage::Off,
+            plan: Stage::Off,
+            draft: TaskDraft {
+                text: user_text.to_owned(),
+                issue_type: Some("bug".into()),
+                priority: Some(2),
+                images: vec![
+                    "/data/first image.png".into(),
+                    "/data/second image.png".into(),
+                ],
+                parent: None,
+            },
+        };
+        let launched = launch(intent.clone());
+        let args = argv(&launched);
+        let filing = read_skill(&launched.skills.smetana, "filing-a-task");
+        let expected = prompt::build(
+            &intent,
+            Codex.delivery(),
+            Codex.images(),
+            &launched.skills,
+            launched.facts.as_deref(),
+            prompt::SkillText {
+                filing: filing.as_deref(),
+                resolving: None,
+                brainstorming: None,
+                plans: None,
+                reviewing_branch: None,
+            },
+            &launched.languages,
+            &launched.agent_prompt,
+            launched.worker_model.as_deref(),
+        )
+        .expect("a new task has a prompt");
+
+        assert_eq!(
+            args,
+            vec![
+                "codex".to_owned(),
+                "-i".to_owned(),
+                "/data/first image.png".to_owned(),
+                "-i".to_owned(),
+                "/data/second image.png".to_owned(),
+                "--".to_owned(),
+                expected.clone(),
+            ]
+        );
+        assert_eq!(args.last(), Some(&expected));
+        assert!(expected.contains(user_text));
     }
 
     #[test]
@@ -1382,6 +1459,7 @@ mod tests {
     fn a_task_with_no_images_gets_no_image_flag() {
         let args = argv(&launch(new_task(Stage::Off)));
         assert!(!args.iter().any(|a| a == "-i"), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--"), "{args:?}");
     }
 
     // The four fixtures below are whole 120x30 screens captured off a real
