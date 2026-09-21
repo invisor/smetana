@@ -161,13 +161,19 @@ is about this machine, not about a project. The dialog that will let somebody ac
 block is a separate, later task, and this schema and its resolver merge ahead of it on purpose — but
 that does not mean the key sits untouched until then. `merge` writes `"agents": null` into the active
 project's entry on every save, with no `skip_serializing_if`, exactly like this schema's other
-still-unset per-project `Option` fields; and a block put there by hand, on whichever project is open,
-is written straight back rather than wiped or left alone. `settings_load` sends that project's
-`agents` whole, and `applySection`'s `Object.assign(target, fallback, stored)` in `stores/settings.js`
-copies `stored.project.agents` onto the front end's reactive `settings.project` even though
-`defaults()` never declares that key — Object.assign copies every key its arguments have, not only
-the ones the target already carries — so the next `settings_save` serializes whatever landed there.
-A project that is not the one open keeps whatever the file already held, since only the active
+still-unset per-project `Option` fields; and a block put there by hand is written straight back
+rather than wiped or left alone — **but only once the front end has actually read it in**.
+`settings_load` sends a project's `agents` whole, and `applySection`'s `Object.assign(target,
+fallback, stored)` in `stores/settings.js` copies `stored.project.agents` onto the front end's
+reactive `settings.project` even though `defaults()` never declares that key — Object.assign copies
+every key its arguments have, not only the ones the target already carries — so the next
+`settings_save` serializes whatever landed there. **That read happens at startup and on a project
+switch, and nowhere else**, so a block hand-written while the app is already sitting open on that
+project is not picked up: the in-memory `settings.project` still has no `agents` field, the next
+400 ms debounce writes its stale `null` over the edit, and the block is gone. Hand editing is the
+only road into this block until the follow-up front-end task lands, so the edit has to be made with
+the app closed, or followed by switching away from the project and back, for it to survive the first
+save. A project that is not the one open keeps whatever the file already held, since only the active
 project's state ever crosses the IPC boundary.
 
 **Two conventions about the empty string, and both are load-bearing.** An empty `model` means the

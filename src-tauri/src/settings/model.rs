@@ -960,11 +960,18 @@ pub struct ProjectState {
     pub agents: Option<ProjectAgents>,
 }
 
-/// `agents` read the way `section` reads a root section, one field over: any
-/// value that does not deserialize as `Option<ProjectAgents>` — a JSON type
-/// that is not an object and not `null`, or an object whose own fields refuse
-/// to read — costs this field alone, answering `None`, rather than the
+/// `agents` read the way `section` reads a root section, one field over: a
+/// scalar — a string, a number, a boolean — or an object whose own fields
+/// refuse to read costs this field alone, answering `None`, rather than the
 /// `?` in `projects()` costing the whole project entry to a `.ok()`.
+///
+/// **A JSON array is the one shape this does not catch.** `ProjectAgents`'s
+/// derived `Deserialize` accepts a sequence positionally as well as a map, the
+/// way every derived struct in this file does, so `"agents": ["codex"]` reads
+/// as `Some(ProjectAgents { agent: "codex", model: "", .. })` rather than
+/// `None` — nothing a hand-written JSON object would ever produce, and not a
+/// crash or a lost project either, but not the leniency this function
+/// promises for everything else off the object shape.
 fn lenient_agents<'de, D>(deserializer: D) -> Result<Option<ProjectAgents>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -1120,8 +1127,17 @@ pub struct AgentRole {
 ///
 /// Validated exactly as the root fields are — `one_of` against `agents::IDS`,
 /// `known_model` against the chosen harness, `agent_roles.validate()` — by the
-/// same private rules, so a hand-edited block is repaired field by field and
-/// never thrown away whole.
+/// same private rules. That is the read's second stage and it is field by
+/// field: a *value* this file does not recognise (an unknown harness, a model
+/// the chosen harness never offered, a role with an empty agent and a
+/// non-empty model) costs only the field that named it. The first stage is
+/// coarser on purpose — `ProjectState::agents`'s own `lenient_agents` costs
+/// the **whole** block, and the project falls back to the root table, for a
+/// *type* the file cannot read at all (`"agent": 5`, `"agentRoles": 5`, or a
+/// role field of the wrong type three levels down): matching the root's own
+/// per-field shape there — `Value::as_str` for `agent`, `section` for
+/// `agentRoles` — is a real narrowing and is wider than this struct's own
+/// task.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProjectAgents {
@@ -3897,6 +3913,13 @@ mod tests {
     /// inherit from it — so a test that only asked three of the five would
     /// never touch the two arms `runs::service`'s gate and the branch-review
     /// session actually read.
+    ///
+    /// A hand-kept copy of `agents::Role`'s variants, and that is a known cost
+    /// rather than an oversight: `table_pair`'s own match is exhaustive, so a
+    /// sixth role added tomorrow fails *that* to compile and cannot ship
+    /// silently — what it does not do is add itself here, so the new variant
+    /// would go untested with every test in this file still green. Whoever
+    /// adds a role should add it to this list in the same commit.
     const ALL_ROLES: [crate::agents::Role; 5] = [
         crate::agents::Role::Default,
         crate::agents::Role::Tasks,
