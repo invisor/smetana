@@ -343,12 +343,14 @@ impl Profile for Codex {
         Some(transcript_line)
     }
 
-    /// `codex exec --json`, the same non-interactive form a batch uses and a
-    /// different question: a batch is "carry this out and exit", this is
-    /// "answer this and exit". `--json` is here for the answer's sake rather
-    /// than the stream's — see `oneshot_answer`.
+    /// `codex exec --json --skip-git-repo-check`, the same non-interactive form
+    /// a batch uses and a different question: a batch is "carry this out and
+    /// exit", this is "answer this and exit". `--json` is here for the
+    /// answer's sake rather than the stream's — see `oneshot_answer`. The
+    /// one-shot runs from the app's isolated probe directory, not a repository,
+    /// so it alone skips Codex's repository check.
     fn oneshot_args(&self) -> Option<&'static [&'static str]> {
-        Some(&["exec", "--json"])
+        Some(&["exec", "--json", "--skip-git-repo-check"])
     }
 
     /// The last `agent_message` in the stream, which is Codex's own answer.
@@ -1141,9 +1143,12 @@ mod tests {
     }
 
     #[test]
-    fn a_one_shot_question_is_asked_of_the_non_interactive_form() {
+    fn a_one_shot_question_uses_json_and_skips_the_probe_directory_git_check() {
         use crate::agents::Profile;
-        assert_eq!(Codex.oneshot_args(), Some(&["exec", "--json"][..]));
+        assert_eq!(
+            Codex.oneshot_args(),
+            Some(&["exec", "--json", "--skip-git-repo-check"][..])
+        );
     }
 
     #[test]
