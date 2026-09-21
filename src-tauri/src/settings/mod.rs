@@ -2,9 +2,9 @@
 //! rules, `file.rs` is the disk, `commands.rs` is the two thin commands the
 //! front end calls.
 //!
-//! The two functions here are for the rest of the app rather than for the front
-//! end: a caller that wants one value out of the file, with no project to
-//! resolve against and nobody to report a failure to.
+//! The fourteen functions here are for the rest of the app rather than for the
+//! front end: a caller that wants one value out of the file and nobody to
+//! report a failure to.
 
 pub mod commands;
 pub mod file;

@@ -69,9 +69,12 @@ second reason of its own: an instruction meant for one repository already has a 
 harness reads by itself — `CLAUDE.md` or `AGENTS.md` — and a project half would have widened the two
 windows' contract for something nobody asked for. What the field reaches, and by which road, is
 `.claude/rules/agents.md`; this file only stores it. It stays global even now that `agent`, `model`
-and `agentRoles` can be overridden per project (see below): which harness a project wants is a fact
-about the repository, where a standing instruction is a fact about the person typing it, and a
-project's `agents` block reaches none of the three languages or this field either.
+and `agentRoles` can be overridden per project (see below), and for the same reason that override is
+per project **on this machine** rather than in the repository: a harness a project wants varies with
+whose machine is running it, since subscriptions differ per person, while a standing instruction
+varies with the person and not with the project at all — so a project half of `agentPrompt` would
+have widened the settings window's contract for nothing. A project's `agents` block reaches none of
+the three languages or this field.
 
 The ceiling is `MAX_AGENT_PROMPT`, 4000 bytes, checked in both `validate` bodies through
 `forget_if_too_long`. Over it the value is **forgotten whole rather than truncated** — the rule
@@ -155,8 +158,17 @@ starts under one. A group named "This project" on the Agents tab of the settings
 considered and refused, on the same argument the settings window section below gives for keeping
 `.smetana/project.toml`'s own run configuration out of that window entirely: that window's contract
 is about this machine, not about a project. The dialog that will let somebody actually write this
-block is a separate, later task; this schema and its resolver merge ahead of it on purpose, and until
-that front end exists nothing in this app ever writes the key.
+block is a separate, later task, and this schema and its resolver merge ahead of it on purpose — but
+that does not mean the key sits untouched until then. `merge` writes `"agents": null` into the active
+project's entry on every save, with no `skip_serializing_if`, exactly like this schema's other
+still-unset per-project `Option` fields; and a block put there by hand, on whichever project is open,
+is written straight back rather than wiped or left alone. `settings_load` sends that project's
+`agents` whole, and `applySection`'s `Object.assign(target, fallback, stored)` in `stores/settings.js`
+copies `stored.project.agents` onto the front end's reactive `settings.project` even though
+`defaults()` never declares that key — Object.assign copies every key its arguments have, not only
+the ones the target already carries — so the next `settings_save` serializes whatever landed there.
+A project that is not the one open keeps whatever the file already held, since only the active
+project's state ever crosses the IPC boundary.
 
 **Two conventions about the empty string, and both are load-bearing.** An empty `model` means the
 flag is **not passed at all** and the harness picks for itself — this app's behaviour to the letter

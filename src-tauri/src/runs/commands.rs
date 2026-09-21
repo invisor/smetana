@@ -225,6 +225,17 @@ pub async fn agent_usage(app: AppHandle, agent: Option<String>, project: Option<
         // matters is that the two answers agree. A fallback reading the root
         // would draw Claude Code's allowance, and the band under it, over a run
         // spending Codex's; `runs::service` snapshots this very row.
+        //
+        // Both of those front-end callers compute `runLeadAgent` off the
+        // **root** table alone — neither passes a project, and `project` here
+        // is `None` until one does — while `runs/service.rs`'s own gate
+        // already resolves `Role::RunLead` against the project the run is
+        // actually starting in. So for a project carrying its own `agents`
+        // block, the usage footer and the subscription block on the Agents
+        // tab draw the root harness's allowance while the run gate spends the
+        // project's. Passing `project` from both JS call sites is the
+        // follow-up front-end task's to do; until then the figure somebody
+        // watches overnight can be about the wrong subscription.
         let id = wanted(agent, || {
             crate::settings::role_pair(&app, project.as_deref(), crate::agents::Role::RunLead).0
         });

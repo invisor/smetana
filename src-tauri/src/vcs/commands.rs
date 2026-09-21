@@ -1024,6 +1024,11 @@ pub async fn vcs_suggest_message(
         // a role with: it takes the Default row, which is the root pair, and
         // `settings::default_pair` is where that is said once for both callers
         // of this shape.
+        //
+        // Deliberately no fallback to `repo` when `project` is absent: `None`
+        // reads the root table exactly as before, and `project` staying empty
+        // until the front end starts sending it is the whole point of the
+        // argument being `Option<String>` here.
         let (agent, model) = crate::settings::default_pair(&app, project.as_deref());
         // `pick_with_model`, which is `pick` with the pair rule on it: the
         // fallback to whatever is installed is unchanged, and the model goes

@@ -947,7 +947,30 @@ pub struct ProjectState {
     /// the day one is first saved. See `ProjectAgents` for the shape and
     /// `.claude/rules/settings.md` for why it is whole-table rather than
     /// per-role.
+    ///
+    /// `#[serde(deserialize_with)]` for `agent_roles`'s own reason at the
+    /// root: `projects()` deserializes each `ProjectState` whole and drops any
+    /// entry that fails, so a hand-edited shorthand like `"agents": "codex"`
+    /// would otherwise cost this project its side tab, its open tabs, its
+    /// recent tasks and everything else beside it, for a value only this
+    /// field owns. Until the front-end task that offers a form for this block
+    /// exists, a hand edit is the only way one can exist at all, which is
+    /// exactly why the leniency matters most here.
+    #[serde(deserialize_with = "lenient_agents")]
     pub agents: Option<ProjectAgents>,
+}
+
+/// `agents` read the way `section` reads a root section, one field over: any
+/// value that does not deserialize as `Option<ProjectAgents>` — a JSON type
+/// that is not an object and not `null`, or an object whose own fields refuse
+/// to read — costs this field alone, answering `None`, rather than the
+/// `?` in `projects()` costing the whole project entry to a `.ok()`.
+fn lenient_agents<'de, D>(deserializer: D) -> Result<Option<ProjectAgents>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value::<Option<ProjectAgents>>(value).ok().flatten())
 }
 
 impl Default for ProjectState {
@@ -4055,6 +4078,81 @@ mod tests {
         assert!(roles.get("runLead").is_some(), "runLead, not run_lead");
         assert!(roles.get("reviewBranch").is_some(), "reviewBranch, not review_branch");
         assert!(roles.get("tasks").is_some() && roles.get("code").is_some());
+    }
+
+    #[test]
+    fn a_project_agents_block_serializes_agent_roles_in_camel_case_too() {
+        // The same contract one level deeper: a project's own block is sent
+        // and stored under `agents.agentRoles`, not `agents.agent_roles` — a
+        // dropped `rename_all` on `ProjectAgents` would leave every role
+        // inside every project block invisible to a hand reader of the file
+        // and to any future front end that writes one, with every other test
+        // in this module (which builds `ProjectAgents` in Rust and never
+        // round-trips it through JSON) staying green regardless.
+        let mut settings = Settings::default();
+        let mut roles = AgentRoles::default();
+        roles.run_lead = AgentRole { agent: "claude".into(), model: "opus".into() };
+        let mut project = ProjectState::default();
+        project.agents =
+            Some(ProjectAgents { agent: "codex".into(), model: "gpt-5.6-luna".into(), agent_roles: roles });
+        settings.projects.insert("/p".into(), project);
+
+        let json = serde_json::to_value(&settings).expect("the settings serialize");
+        let agents = json
+            .get("projects")
+            .and_then(|projects| projects.get("/p"))
+            .and_then(|project| project.get("agents"))
+            .expect("the project's own agents block");
+        assert!(agents.get("agentRoles").is_some(), "agentRoles, not agent_roles");
+        assert!(
+            agents.get("agentRoles").unwrap().get("runLead").is_some(),
+            "runLead, not run_lead, inside a project's own block"
+        );
+    }
+
+    #[test]
+    fn a_project_agents_block_is_parsed_out_of_camel_case_json_too() {
+        // The read half of the same contract: a hand-edited (or, later, a
+        // front-end-written) file names a role inside the block as
+        // `agentRoles`/`tasks`, and this is the one test that feeds JSON in
+        // through `parse` rather than building `ProjectAgents` as a Rust
+        // value and asking `role_pair` about it, which is what every other
+        // test in this module does and which cannot see a `rename_all` this
+        // struct is missing.
+        let text = r#"{"version":1,"projects":{"/p":{"agents":{
+            "agent":"claude","model":"opus",
+            "agentRoles":{"tasks":{"agent":"codex","model":"gpt-5.6-luna"}}
+        }}}}"#;
+        let Outcome::Ok(settings) = parse(text) else { panic!("the file parses") };
+        let agents = settings.projects["/p"].agents.as_ref().expect("the block parsed");
+        assert_eq!(agents.agent, "claude");
+        assert_eq!(agents.agent_roles.tasks.agent, "codex", "agentRoles/tasks crossed in");
+        assert_eq!(agents.agent_roles.tasks.model, "gpt-5.6-luna");
+        assert_eq!(
+            settings.role_pair(Some("/p"), crate::agents::Role::Tasks),
+            ("codex".to_owned(), "gpt-5.6-luna".to_owned()),
+            "the role read off camelCase JSON resolves correctly too"
+        );
+    }
+
+    #[test]
+    fn a_hand_edited_agents_of_the_wrong_shape_costs_the_block_and_not_the_project() {
+        // `"agents":"codex"` is a plausible shorthand for somebody editing the
+        // file by hand — until the front end that offers a form for this
+        // block exists, a hand edit is the only way one can exist at all.
+        // `ProjectState::agents` carries `deserialize_with = "lenient_agents"`
+        // for exactly this: without it, `projects()`'s `serde_json::from_value
+        // ::<ProjectState>(..).ok()` drops the whole entry on a type mismatch,
+        // taking this project's side tab, its open tabs, its recent tasks and
+        // everything else beside it down with the one field that was wrong.
+        let text = r#"{"version":1,"projects":{"/p":{
+            "agents":"codex","sideTab":"git","selectedPath":"src/main.rs"
+        }}}"#;
+        let Outcome::Ok(settings) = parse(text) else { panic!("the file parses") };
+        let state = settings.projects.get("/p").expect("the project entry survives");
+        assert_eq!(state.agents, None, "the malformed field alone is forgotten");
+        assert_eq!(state.side_tab, "git", "the rest of the project's own state survives with it");
+        assert_eq!(state.selected_path.as_deref(), Some("src/main.rs"));
     }
 
     #[test]
