@@ -386,7 +386,7 @@ fn spawn_session(
     // in its own `Create` arm: this is where a driven session is built, so what
     // a person configured is what starts, rather than a harness this file
     // picked for itself.
-    let (agent, model) = crate::settings::role_model(app, &intent, None);
+    let (agent, model) = crate::settings::role_model(app, Some(project), &intent, None);
     // The login shell's `PATH`, not this process's: a bundled app started from
     // Finder inherits launchd's, where nothing a person installed is reachable
     // and every agent would look uninstalled.

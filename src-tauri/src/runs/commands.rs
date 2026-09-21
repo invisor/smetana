@@ -201,8 +201,13 @@ pub async fn browser_tools(app: AppHandle, project: String) -> BrowserTools {
 /// percentages and what a run would actually do at this reading cannot
 /// disagree. Taken before the profile is resolved only because `app` is moved
 /// into the first blocking call.
+///
+/// **`project` is `Option<String>` deliberately** — no front-end caller sends
+/// it yet, so an absent argument reads the root exactly as before, and this
+/// command is ready for a project's own `agents` block the day the settings
+/// window starts asking about one.
 #[tauri::command]
-pub async fn agent_usage(app: AppHandle, agent: Option<String>) -> AgentUsage {
+pub async fn agent_usage(app: AppHandle, agent: Option<String>, project: Option<String>) -> AgentUsage {
     let limits = crate::settings::subscription(&app);
     // Cloned rather than moved in whole: the probe below needs the handle
     // again once the first blocking call has already taken it.
@@ -221,7 +226,7 @@ pub async fn agent_usage(app: AppHandle, agent: Option<String>) -> AgentUsage {
         // would draw Claude Code's allowance, and the band under it, over a run
         // spending Codex's; `runs::service` snapshots this very row.
         let id = wanted(agent, || {
-            crate::settings::role_pair(&app, crate::agents::Role::RunLead).0
+            crate::settings::role_pair(&app, project.as_deref(), crate::agents::Role::RunLead).0
         });
         crate::agents::pick(&id, crate::shell_env::path())
     })
