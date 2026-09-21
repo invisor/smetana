@@ -433,7 +433,44 @@ on its own. **This runs before you take any new work.**
    not anywhere: `updated_at` is how every waiting lead reads a claim's age, and any
    other write resets it. **The break goes in the report**, with the actor it was taken
    from and how old the claim was, the same two facts `merging` asks for.
-4. Leave anything already at `ready_to_merge` alone — Phase 2 takes it, and Phase 2 is
+4. **Release stale open run assignments before Phase 0.** `in_progress` is not the only
+   shape a dead run leaves: resolving a parked task returns it to `open`, and an older
+   resolver could leave its `smetana-run-*` assignee behind. Read the registry from the
+   project root, using the same complete `.smetana/runs.json` from step 2, then inspect:
+
+   ```bash
+   bd list --status open --json
+   ```
+
+   Consider only an issue whose nonempty `assignee` starts `smetana-run-`. Leave the
+   current `$BEADS_ACTOR`, every human or other assignee, and every issue carrying the
+   `smetana-lock` label exactly as they are. This never changes a lock; step 3 and
+   `merging` remain its separate protocol.
+
+   A missing, unreadable, damaged, or unsupported registry authorizes **no** release.
+   The same is true unless the parsed file says `version: 1`. Once, and only once, you
+   have a complete version-1 registry, look at every record for this project whose
+   `batches[].actor` equals the assignee. Use the record's **`writer`**, never its
+   batch `group`, and use the writer liveness test from step 2:
+
+   - One matching writer that is live, or whose liveness cannot be determined, protects
+     the assignee. This includes a reused session number: a dead record for an actor does
+     not outweigh another live or uncheckable record with the same actor.
+   - All matching writers proven dead means the assignee is stale. An actor absent from
+     every record for this project is stale too, but only because the valid registry was
+     read successfully; silence from no file is never evidence.
+
+   For each stale candidate, make this one write and no other change to the issue:
+
+   ```bash
+   bd update <id> --status open --assignee ""
+   ```
+
+   It keeps the issue `open` while releasing the dead run, without touching its
+   description, notes, priority, dependencies, or any other field. Phase 0 then performs
+   its ordinary atomic claim; a refused claim still belongs to somebody else and is
+   skipped, not retried.
+5. Leave anything already at `ready_to_merge` alone — Phase 2 takes it, and Phase 2 is
    reached whether or not Phase 0 finds anything new. **A task at `ready_to_merge` beside
    a lock step 3 found held is a merge phase that died in the middle of itself**, and it
    is this batch's to finish: somebody had already taken the lock and moved that task, so
@@ -445,7 +482,7 @@ on its own. **This runs before you take any new work.**
    there was no free work on the board at all, and ended the run; the task sat merged and
    not merged, and the lock sat claimed by a process that no longer existed, until a
    person untangled both by hand (smetana-0u7).
-5. Only when nothing you may recover is left at `in_progress`, go on to Phase 0. Phase 2 then merges the
+6. Only when nothing you may recover is left at `in_progress`, go on to Phase 0. Phase 2 then merges the
    recovered orphans and this run's new survivors together, in one ordered pass. An orphan
    a killed run had already merged fast-forwards to a no-op — that is the expected signal,
    not an error.

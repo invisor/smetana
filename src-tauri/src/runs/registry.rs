@@ -336,6 +336,46 @@ pub fn live_actors(
         .collect()
 }
 
+/// May Phase R release an `open` issue which is still assigned to a run?
+///
+/// `has_smetana_lock` is part of the candidate rather than a promise made by a
+/// caller: this answer never releases the merge lock or writes to bd. Human
+/// assignees and this run's own actor are outside that scope too. A missing,
+/// damaged, or newer registry is `None` and keeps the assignment — silence
+/// becomes evidence only after a version-1 registry was read whole.
+///
+/// For a matching actor in this project, one live *or unknown* writer protects
+/// the assignment. This matters when session numbers are reused: a dead record
+/// with `smetana-run-4` cannot make a new live `smetana-run-4` stale. If every
+/// matching record is dead, or no record in this project names the actor at
+/// all, the valid registry proves the assignment is stale.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn stale_open_run_assignee(
+    registry: Option<&Registry>,
+    project: &Path,
+    assignee: &str,
+    has_smetana_lock: bool,
+    current_actor: &str,
+    table: &impl Fn(i32) -> Seen,
+) -> bool {
+    if has_smetana_lock || !assignee.starts_with("smetana-run-") || assignee == current_actor {
+        return false;
+    }
+    let Some(registry) = registry else { return false };
+    if registry.version != VERSION {
+        return false;
+    }
+
+    for record in registry.runs.iter().filter(|record| Path::new(&record.project) == project) {
+        if record.batches.iter().any(|batch| batch.actor == assignee)
+            && liveness(&record.writer, table(record.writer.pid)) != Liveness::Dead
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// Put a run in the file, replacing whatever stood under the same writer and
 /// token.
 ///
@@ -761,6 +801,77 @@ mod tests {
             vec!["smetana-run-1".to_string()],
             "and the folder it does name is that folder however it is spelled"
         );
+    }
+
+    #[test]
+    fn an_open_run_assignee_is_released_only_when_the_registry_proves_it_stale() {
+        // Phase R uses this before Phase 0 tries its ordinary atomic claim.
+        // It is deliberately stricter than an absent process: only a complete,
+        // current registry can turn absence into evidence, and even a second
+        // record reusing the same session number protects the assignment while
+        // its writer is alive or cannot be inspected.
+        let project = Path::new("/p");
+        let current = "smetana-run-current";
+        let dead = holding("/p", stamp(10, 1), &["smetana-run-dead"]);
+        let alive = holding("/p", stamp(11, 2), &["smetana-run-alive"]);
+        let unknown = holding("/p", stamp(12, 3), &["smetana-run-unknown"]);
+        let reused_dead = holding("/p", stamp(13, 4), &["smetana-run-reused"]);
+        let reused_alive = holding("/p", stamp(14, 5), &["smetana-run-reused"]);
+        let held = registry(vec![dead, alive, unknown, reused_dead, reused_alive]);
+        let processes = table(&[
+            (11, Seen::Running { started: 2 }),
+            (12, Seen::Unknown),
+            (14, Seen::Running { started: 5 }),
+        ]);
+
+        assert!(stale_open_run_assignee(
+            Some(&held), project, "smetana-run-dead", false, current, &processes
+        ));
+        assert!(!stale_open_run_assignee(
+            Some(&held), project, "smetana-run-alive", false, current, &processes
+        ));
+        assert!(!stale_open_run_assignee(
+            Some(&held), project, "smetana-run-unknown", false, current, &processes
+        ));
+        assert!(stale_open_run_assignee(
+            Some(&held), project, "smetana-run-absent", false, current, &processes
+        ));
+        assert!(!stale_open_run_assignee(
+            Some(&held), project, "smetana-run-reused", false, current, &processes
+        ));
+
+        // The candidate filter belongs here rather than relying on a caller to
+        // remember it: Phase R must never release its own claim, a person's,
+        // or the merge lock even when that lock appears stale by every other
+        // part of the rule.
+        assert!(!stale_open_run_assignee(
+            Some(&held), project, current, false, current, &processes
+        ));
+        assert!(!stale_open_run_assignee(
+            Some(&held), project, "alex", false, current, &processes
+        ));
+        assert!(!stale_open_run_assignee(
+            Some(&held), project, "smetana-run-dead", true, current, &processes
+        ));
+
+        // No valid version-1 registry, no write. `parse` supplies `None` for
+        // both damaged text and a newer shape, exactly as the disk reader does.
+        assert!(!stale_open_run_assignee(
+            parse("{not json").as_ref(),
+            project,
+            "smetana-run-absent",
+            false,
+            current,
+            &processes
+        ));
+        assert!(!stale_open_run_assignee(
+            parse(r#"{"version":2,"runs":[]}"#).as_ref(),
+            project,
+            "smetana-run-absent",
+            false,
+            current,
+            &processes,
+        ));
     }
 
     #[test]
