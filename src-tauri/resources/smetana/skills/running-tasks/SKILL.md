@@ -796,3 +796,8 @@ So, after the report above and before you hand back, write the file the prompt n
   what the program should do stops.
 - **You own the tracker and the worktrees.** Nobody you spawned runs either, and nobody
   you spawned spawns anything — that is the guard against a run that grows without bound.
+- **Nothing you started outlives your report either.** You run Phase 2's gates and
+  Phase 3's live check yourself rather than handing them to a worker, so the rule a
+  worker is given binds you too: kill every background process, watcher or dev server
+  you started, and raise no artificial load chasing a flake, before you write the
+  report — `live-checking`'s teardown already says as much for the stand.
