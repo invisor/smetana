@@ -86,9 +86,14 @@ function percent(pct) {
 export function usageSegments(answer) {
   const usage = answer?.state === READ ? answer.usage : null
   return [
-    { name: 'Session', value: percent(usage?.sessionPct) },
-    { name: 'Week', value: percent(usage?.weekPct) }
+    { name: windowName(usage?.sessionLabel, 'Session'), value: percent(usage?.sessionPct) },
+    { name: windowName(usage?.weekLabel, 'Week'), value: percent(usage?.weekPct) }
   ]
+}
+
+function windowName(label, fallback) {
+  const text = typeof label === 'string' ? label.trim() : ''
+  return text || fallback
 }
 
 /* `Session resets Aug 7 at 8pm (Europe/Moscow)` — the harness's own words for
@@ -131,8 +136,8 @@ function resetLine(name, resets) {
 export function usageTooltip(answer, busy = false, error = null) {
   const usage = answer?.state === READ ? answer.usage : null
   return [
-    resetLine('Session', usage?.sessionReset),
-    resetLine('Week', usage?.weekReset),
+    resetLine(windowName(usage?.sessionLabel, 'Session'), usage?.sessionReset),
+    resetLine(windowName(usage?.weekLabel, 'Week'), usage?.weekReset),
     usageNote(answer, busy, error),
     error ? `The allowance could not be read: ${error}` : null
   ]

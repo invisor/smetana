@@ -43,11 +43,13 @@
 //!
 //! Pure apart from `read`, which is the one function here that spawns anything.
 
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use crate::agents::Profile;
+use crate::agents::{Profile, UsageSource};
 
 /// At or above this, take no work at all and wait for the reset. The source's
 /// number, and it is not 100 for a reason: the reading is approximate — it
@@ -131,8 +133,14 @@ pub struct Usage {
     /// parse of the same prose — one whose failure would be a run that woke at
     /// the wrong hour rather than one that showed a line it could not use.
     pub session_reset: Option<String>,
+    /// The source's name for the first window. Claude Code's prose parser
+    /// leaves this absent, preserving its established "Session" wording;
+    /// Codex derives it from `windowDurationMins` (for example, "5 hours").
+    pub session_label: Option<String>,
     pub week_pct: Option<u8>,
     pub week_reset: Option<String>,
+    /// The source's name for the second window; see `session_label`.
+    pub week_label: Option<String>,
 }
 
 impl Usage {
@@ -311,11 +319,24 @@ pub enum AgentUsage {
     /// its own, or no agent is installed at all — and that second case is the
     /// one with no agent to name, which is what the `Option` is for.
     Unsupported { agent: Option<String> },
-    /// The probe was made and nothing could be read out of it: not signed in,
-    /// not installed, or a CLI that has reworded its own output.
-    Unreadable { agent: String },
+    /// The probe was made but did not produce a trustworthy allowance. The
+    /// reason is deliberately a closed, safe vocabulary rather than an app
+    /// server error string, which could contain account or network detail.
+    Unreadable { agent: String, reason: Unavailable },
     /// A reading, with the band it falls in.
     Read { agent: String, usage: Usage, band: Band },
+}
+
+/// Why a probe could not yield a normalized reading. These values deliberately
+/// name a next step without exposing app-server output, authentication data,
+/// or an implementation-specific protocol error to the interface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Unavailable {
+    NotSignedIn,
+    UnsupportedAccount,
+    TimedOut,
+    InvalidResponse,
 }
 
 /// The one mapping from "who would answer, and what did they say" to what the
@@ -323,7 +344,7 @@ pub enum AgentUsage {
 /// command's own body is the two blocking calls that produce these arguments.
 pub fn report(
     profile: Option<&'static dyn Profile>,
-    reading: Option<Usage>,
+    reading: Result<Usage, Unavailable>,
     limits: Limits,
 ) -> AgentUsage {
     let Some(profile) = profile else { return AgentUsage::Unsupported { agent: None } };
@@ -331,10 +352,13 @@ pub fn report(
     // Asked before the reading is looked at, because a profile that cannot be
     // asked and one that was asked and said nothing both arrive here as `None`
     // — `read` answers that for every way of failing, this one included.
-    if profile.usage_command().is_none() {
+    if profile.usage_source().is_none() {
         return AgentUsage::Unsupported { agent: Some(agent) };
     }
-    let Some(usage) = reading else { return AgentUsage::Unreadable { agent } };
+    let usage = match reading {
+        Ok(usage) => usage,
+        Err(reason) => return AgentUsage::Unreadable { agent, reason },
+    };
     let band = Band::of(&decide(Some(&usage), limits));
     AgentUsage::Read { agent, usage, band }
 }
@@ -388,25 +412,139 @@ fn command(profile: &'static dyn Profile, args: &'static [&'static str], cwd: &P
 /// in beside `profile` rather than being read off the disk in here, which is
 /// what keeps this file free of Tauri.
 pub fn read(profile: &'static dyn Profile, cwd: &Path) -> Option<Usage> {
-    let args = profile.usage_command()?;
-    let mut child = command(profile, args, cwd).spawn().ok()?;
+    read_detail(profile, cwd).ok()
+}
+
+/// Read one current subscription snapshot with a named failure for the two UI
+/// surfaces. `read` above deliberately discards that name for the run gate:
+/// unknown allowance must remain permissive, while a person deserves to know
+/// whether to sign in, wait, or update Codex.
+pub fn read_detail(profile: &'static dyn Profile, cwd: &Path) -> Result<Usage, Unavailable> {
+    match profile.usage_source().ok_or(Unavailable::InvalidResponse)? {
+        UsageSource::Command => read_command(profile, cwd),
+        UsageSource::AppServer => read_app_server(profile, cwd),
+    }
+}
+
+fn read_command(profile: &'static dyn Profile, cwd: &Path) -> Result<Usage, Unavailable> {
+    let args = profile.usage_command().ok_or(Unavailable::InvalidResponse)?;
+    let mut child = command(profile, args, cwd).spawn().map_err(|_| Unavailable::InvalidResponse)?;
     let deadline = Instant::now() + PROBE_TIMEOUT;
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => break,
             // A non-zero probe says nothing about the allowance — it says the
             // probe failed — so it is the same answer as no probe at all.
-            Ok(Some(_)) => return None,
+            Ok(Some(_)) => return Err(Unavailable::InvalidResponse),
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
-                return None;
+                let _ = child.wait();
+                return Err(Unavailable::TimedOut);
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(200)),
-            Err(_) => return None,
+            Err(_) => return Err(Unavailable::InvalidResponse),
         }
     }
-    let output = child.wait_with_output().ok()?;
-    profile.parse_usage(&String::from_utf8_lossy(&output.stdout))
+    let output = child.wait_with_output().map_err(|_| Unavailable::InvalidResponse)?;
+    profile.parse_usage(&String::from_utf8_lossy(&output.stdout)).ok_or(Unavailable::InvalidResponse)
+}
+
+/// The Codex app-server is a line-delimited JSON-RPC process which continues
+/// serving after the response we need. Read its one response on a helper
+/// thread, bound the wait here, then always kill and reap the child. Keeping
+/// the child alive would leave an app-server behind every ten-minute poll;
+/// closing stdin instead is not enough because it makes a server free to exit
+/// before it sends the pending result.
+fn read_app_server(profile: &'static dyn Profile, cwd: &Path) -> Result<Usage, Unavailable> {
+    let mut child = app_server_command(profile, cwd)
+        .spawn()
+        .map_err(|_| Unavailable::InvalidResponse)?;
+    let mut reader = None;
+    let result = (|| {
+        let mut stdin = child.stdin.take().ok_or(Unavailable::InvalidResponse)?;
+        let stdout = child.stdout.take().ok_or(Unavailable::InvalidResponse)?;
+        let (sent, received) = mpsc::sync_channel(1);
+        reader = Some(std::thread::spawn(move || read_app_server_response(stdout, sent)));
+
+        for request in [
+            serde_json::json!({
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "clientInfo": { "name": "smetana", "title": "Smetana", "version": env!("CARGO_PKG_VERSION") },
+                    "capabilities": {}
+                }
+            }),
+            serde_json::json!({ "method": "initialized", "params": {} }),
+            serde_json::json!({ "id": 2, "method": "account/rateLimits/read", "params": null }),
+        ] {
+            serde_json::to_writer(&mut stdin, &request).map_err(|_| Unavailable::InvalidResponse)?;
+            stdin.write_all(b"\n").map_err(|_| Unavailable::InvalidResponse)?;
+        }
+        stdin.flush().map_err(|_| Unavailable::InvalidResponse)?;
+        let response = match received.recv_timeout(PROBE_TIMEOUT) {
+            Ok(response) => response?,
+            Err(mpsc::RecvTimeoutError::Timeout) => return Err(Unavailable::TimedOut),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(Unavailable::InvalidResponse),
+        };
+        profile.parse_usage_response(&response).ok_or(Unavailable::InvalidResponse)
+    })();
+    let _ = child.kill();
+    let _ = child.wait();
+    if let Some(reader) = reader {
+        let _ = reader.join();
+    }
+    result
+}
+
+fn app_server_command(profile: &'static dyn Profile, cwd: &Path) -> Command {
+    let mut command = Command::new(profile.binary());
+    command
+        .args(["app-server", "--stdio"])
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if let Some(path) = crate::shell_env::path() {
+        command.env("PATH", path);
+    }
+    command
+}
+
+fn read_app_server_response(
+    stdout: std::process::ChildStdout,
+    sent: mpsc::SyncSender<Result<serde_json::Value, Unavailable>>,
+) {
+    for line in BufReader::new(stdout).lines() {
+        let Ok(line) = line else { break };
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        if message.get("id").and_then(serde_json::Value::as_i64) != Some(2) {
+            continue;
+        }
+        let answer = if let Some(error) = message.get("error") {
+            Err(app_server_error(error))
+        } else {
+            message.get("result").cloned().ok_or(Unavailable::InvalidResponse)
+        };
+        let _ = sent.send(answer);
+        return;
+    }
+    let _ = sent.send(Err(Unavailable::InvalidResponse));
+}
+
+fn app_server_error(error: &serde_json::Value) -> Unavailable {
+    let message = error
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if message.contains("sign in") || message.contains("login") || message.contains("auth") {
+        Unavailable::NotSignedIn
+    } else if message.contains("subscription") || message.contains("plan") || message.contains("account type") {
+        Unavailable::UnsupportedAccount
+    } else {
+        Unavailable::InvalidResponse
+    }
 }
 
 #[cfg(test)]
@@ -422,12 +560,35 @@ mod tests {
         assert_eq!(cmd.get_current_dir(), Some(dir));
     }
 
+    #[test]
+    fn the_codex_probe_is_the_app_server_in_the_cwd_it_is_given() {
+        let dir = Path::new("/tmp/smetana-usage-probe-test");
+        let cmd = app_server_command(&crate::agents::codex::Codex, dir);
+        assert_eq!(cmd.get_current_dir(), Some(dir));
+        assert_eq!(
+            cmd.get_args().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>(),
+            ["app-server", "--stdio"]
+        );
+    }
+
+    #[test]
+    fn app_server_errors_are_reduced_to_safe_unavailability_reasons() {
+        assert_eq!(app_server_error(&serde_json::json!({ "message": "Please sign in" })), Unavailable::NotSignedIn);
+        assert_eq!(
+            app_server_error(&serde_json::json!({ "message": "This subscription is unsupported" })),
+            Unavailable::UnsupportedAccount
+        );
+        assert_eq!(app_server_error(&serde_json::json!({ "message": "internal detail" })), Unavailable::InvalidResponse);
+    }
+
     fn usage(session: u8, week: u8) -> Usage {
         Usage {
             session_pct: Some(session),
             session_reset: Some("Aug 7 at 8pm".into()),
+            session_label: None,
             week_pct: Some(week),
             week_reset: Some("Aug 11 at 5:59pm".into()),
+            week_label: None,
         }
     }
 
@@ -519,37 +680,45 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_with_no_way_to_be_asked_is_unsupported_rather_than_a_failed_read() {
-        // Codex overrides neither half of the pair, so the question cannot be
-        // put to it at all. Reading that as a failed probe would send somebody
-        // to check a login that has nothing to do with it.
+    fn an_app_server_probe_that_fails_is_unreadable_rather_than_unsupported() {
+        // Codex has a source, so a failed app-server read must prompt a safe
+        // recovery action rather than claiming the subscription is unsupported.
         assert_eq!(
-            report(Some(&crate::agents::codex::Codex), None, Limits::default()),
-            AgentUsage::Unsupported { agent: Some("codex".into()) }
+            report(
+                Some(&crate::agents::codex::Codex),
+                Err(Unavailable::InvalidResponse),
+                Limits::default()
+            ),
+            AgentUsage::Unreadable { agent: "codex".into(), reason: Unavailable::InvalidResponse }
         );
     }
 
     #[test]
     fn a_machine_with_no_agent_at_all_has_nobody_to_name() {
-        assert_eq!(report(None, None, Limits::default()), AgentUsage::Unsupported { agent: None });
+        assert_eq!(
+            report(None, Err(Unavailable::InvalidResponse), Limits::default()),
+            AgentUsage::Unsupported { agent: None }
+        );
     }
 
     #[test]
     fn a_probe_that_gave_nothing_back_is_unreadable_and_never_a_reading_of_zero() {
-        // The state this whole type exists for: the same `None` a profile with
-        // no command produces, from a profile that has one. A `Usage::default`
-        // here would put "0% used" on the screen of somebody who is simply not
-        // signed in.
+        // A `Usage::default` here would put "0% used" on the screen of somebody
+        // who is simply not signed in.
         assert_eq!(
-            report(Some(&crate::agents::claude::Claude), None, Limits::default()),
-            AgentUsage::Unreadable { agent: "claude".into() }
+            report(
+                Some(&crate::agents::claude::Claude),
+                Err(Unavailable::InvalidResponse),
+                Limits::default()
+            ),
+            AgentUsage::Unreadable { agent: "claude".into(), reason: Unavailable::InvalidResponse }
         );
     }
 
     #[test]
     fn a_reading_carries_the_agent_that_answered_and_the_band_it_falls_in() {
         let AgentUsage::Read { agent, usage: read, band } =
-            report(Some(&crate::agents::claude::Claude), Some(usage(10, 80)), Limits::default())
+            report(Some(&crate::agents::claude::Claude), Ok(usage(10, 80)), Limits::default())
         else {
             panic!("a reading from a profile that can be asked");
         };
@@ -566,7 +735,7 @@ mod tests {
         // still green.
         let json = serde_json::to_value(report(
             Some(&crate::agents::claude::Claude),
-            Some(usage(10, 20)),
+            Ok(usage(10, 20)),
             Limits::default(),
         ))
         .expect("the answer serializes");
@@ -575,8 +744,10 @@ mod tests {
         assert_eq!(json["band"], "normal");
         assert_eq!(json["usage"]["sessionPct"], 10);
         assert_eq!(json["usage"]["sessionReset"], "Aug 7 at 8pm");
+        assert!(json["usage"]["sessionLabel"].is_null());
         assert_eq!(json["usage"]["weekPct"], 20);
         assert_eq!(json["usage"]["weekReset"], "Aug 11 at 5:59pm");
+        assert!(json["usage"]["weekLabel"].is_null());
 
         // A half that was not read travels as an explicit `null` under the key
         // it would have had, rather than by the key going missing: the front
@@ -584,7 +755,7 @@ mod tests {
         // are not the same promise and only one of them is testable from here.
         let json = serde_json::to_value(report(
             Some(&crate::agents::claude::Claude),
-            Some(session_only(10)),
+            Ok(session_only(10)),
             Limits::default(),
         ))
         .expect("the answer serializes");
@@ -592,9 +763,13 @@ mod tests {
         assert!(json["usage"]["weekPct"].is_null(), "an unread half is null and never a zero");
         assert!(json["usage"].as_object().expect("a reading is an object").contains_key("weekPct"));
 
-        let json = serde_json::to_value(report(Some(&crate::agents::codex::Codex), None, Limits::default()))
+        let json = serde_json::to_value(report(
+            Some(&crate::agents::codex::Codex),
+            Err(Unavailable::InvalidResponse),
+            Limits::default()
+        ))
             .expect("the answer serializes");
-        assert_eq!(json["state"], "unsupported");
+        assert_eq!(json["state"], "unreadable");
         assert_eq!(json["agent"], "codex");
     }
 
@@ -670,8 +845,10 @@ mod tests {
         let reading = Usage {
             session_pct: Some(96),
             session_reset: Some("Sep 1 at 6pm (Europe/Moscow)".into()),
+            session_label: None,
             week_pct: Some(20),
             week_reset: Some("Sep 4 at 9am (Europe/Moscow)".into()),
+            week_label: None,
         };
         assert_eq!(
             gate(Some(&reading), limits, true),
@@ -692,7 +869,7 @@ mod tests {
         // 80% with the pause threshold moved down to 80: the window must say a
         // run would stop here, not that it would merely take fewer tasks.
         let limits = Limits { pause_at: 80, reduced_at: 50 };
-        let answer = report(Some(&crate::agents::claude::Claude), Some(usage(80, 0)), limits);
+        let answer = report(Some(&crate::agents::claude::Claude), Ok(usage(80, 0)), limits);
         assert!(matches!(answer, AgentUsage::Read { band: Band::Pause, .. }));
     }
 

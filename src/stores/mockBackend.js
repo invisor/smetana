@@ -1305,7 +1305,7 @@ export function installMockBackend() {
        is the only one left: no component names an agent any more, and a browser
        has no Rust to ask. Codex's `clear` is false here because it is false
        there: `codex --help` at 0.146.0 documents no command that clears a
-       conversation, and `usage` for the same reason — it prints no allowance.
+       conversation. Its subscription usage arrives through the app-server.
 
        The models are the same copy of `Profile::models`, and they are not
        decoration either: the Models group on the Agents tab draws its ten
@@ -1339,7 +1339,7 @@ export function installMockBackend() {
             resume: true,
             fork: true,
             clear: false,
-            usage: false,
+            usage: true,
             batch: true,
             oneshot: true
           },
