@@ -468,7 +468,10 @@ fn mac_app_exit_candidates(sessions: &HashMap<SessionId, Live>) -> Vec<i32> {
         .chain(sessions.values().filter_map(|live| live.pty.pid().map(|pid| pid as i32)))
         .collect();
     let mut pids: std::collections::HashSet<i32> = std::collections::HashSet::new();
-    if let procs::Coalition::Known(id) = procs::own_coalition() {
+    // `own_dedicated_coalition`, not `own_coalition` bare: in a dev build the
+    // two answer the identical id, and sweeping that would be sweeping the
+    // launching terminal's whole coalition — see that function's own header.
+    if let procs::Coalition::Known(id) = procs::own_dedicated_coalition() {
         pids.extend(procs::coalition_candidates(&snapshot, id, &exclude));
     }
     for live in sessions.values() {
@@ -755,10 +758,13 @@ fn reap_session_descendants(_id: SessionId, _why: &'static str) {}
 /// the instant between the last poll and this session actually ending, and
 /// only a snapshot taken after that instant can still find it by `ppid`
 /// rather than needing the pgid fallback a moment early. `sessions` is
-/// whatever remains in the worker's map — this session's own entry is
-/// already gone from it by the time either call site reaches here — and is
-/// read only for the pid of every session still alive, which `candidates`
-/// must never signal.
+/// whatever remains in the worker's map, read only for the pid of every
+/// session still alive, which `candidates` must never signal — the ending
+/// session's own entry is gone from it at the `Request::Remove` call site,
+/// but still present (with `state` already `Exited`, which is exactly what
+/// keeps `poll_mac_descendants` from absorbing under it again) at `absorb`'s
+/// `Chunk::Gone`; either way `descendants` was already taken out as an owned
+/// value, so which one holds does not change what this function reads.
 #[cfg(target_os = "macos")]
 fn reap_mac_descendants(
     descendants: procs::Descendants,
@@ -793,12 +799,29 @@ fn reap_mac_descendants(
 /// tick costs.
 #[cfg(target_os = "macos")]
 fn poll_mac_descendants(sessions: &mut HashMap<SessionId, Live>) {
-    if !sessions.values().any(|live| live.profile.is_some() && live.pty.pid().is_some()) {
+    // An exited session's own pid keeps answering `Some` from `Pty::pid` —
+    // that method's own doc says so — long after `absorb`'s `Chunk::Gone`
+    // arm has read the exit code, which is what reaps the child and hands
+    // the pid back to the kernel; that arm sets `live.session.state` to
+    // `Exited` but leaves the entry in `sessions` for good (only
+    // `Request::Remove` actually takes it out). Absorbing against a reaped
+    // pid here would fold a stranger's children into `seen` and a
+    // stranger's group into `groups` the moment macOS hands that pid to
+    // somebody else, which is exactly what this whole mechanism exists to
+    // never do — so `live.session.state != Exited` is what both halves
+    // below gate on, never `pty.pid().is_some()` alone. Points 1 through 3
+    // must still be able to read what an exited session already
+    // accumulated (`reap_mac_descendants`, `mac_app_exit_candidates`); only
+    // the *absorbing* stops here, since absorbing is the one step that can
+    // fold a stranger in.
+    let live_agent =
+        |live: &Live| live.profile.is_some() && live.session.state != SessionState::Exited;
+    if !sessions.values().any(live_agent) {
         return;
     }
     let Some(snapshot) = procs::snapshot_all() else { return };
     for live in sessions.values_mut() {
-        if live.profile.is_none() {
+        if !live_agent(live) {
             continue;
         }
         let Some(root) = live.pty.pid() else { continue };

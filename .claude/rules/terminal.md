@@ -771,7 +771,7 @@ answers costs the cleanup, not the app.
 shell's own `&` all take what they start out of the session's process group on purpose, so a
 background `yes` left running inside a session outlived that session's own exit, its removal and even
 the app's, with nothing left in any group to say it had ever belonged to this app at all — a machine
-was found still running twenty of them, at pgid 1, hours after the run that started them had closed.
+was found still running twenty of them, at ppid 1, hours after the run that started them had closed.
 `lsof` traced them to a worker's own `yes > /dev/null &` batches, run to check for test flakiness under
 load and never killed; the measurement that mattered more was *how* they escaped: Claude Code's own
 Bash tool runs every command it is given in a session of its own — `getsid` of the tool's shell equals
@@ -860,6 +860,23 @@ session's stray. On Linux and on Windows the mark and the Job Object are both sc
 and this is not so there; on macOS it is, because the coalition cannot tell a person's own background job
 from an agent's. Accepted rather than closed: the alternative is tracking a session's own coalition
 membership as narrowly as its group, which the private API gives no way to ask for.
+
+**A second, wider caveat sits beside that one, and it is the reason points 3 and 4 read
+`procs::own_dedicated_coalition` rather than `own_coalition` bare.** A process spawned by fork/exec
+from a shell inherits that shell's coalition unchanged; only `launchd` — an installed, double-clicked
+or `open`-launched build — puts an application in a coalition of its own. `npm run tauri dev`
+therefore gives this application whatever coalition the launching terminal emulator already had,
+shared with every other tab and everything ever started from any of them, and sweeping that coalition
+at points 3 and 4 would hang up and kill a person's own `nohup`ed job or a backgrounded server the
+moment its own parent shell happened to exit — with no agent session of this app's own involved at
+all. Dev is how this project is run and checked every day, and it is the very machine the incident
+behind this whole task was found on; an installed build is unaffected, which is exactly what would
+keep the gap from ever being noticed. `own_dedicated_coalition` closes it the same way `Unknown`
+closes every other gap in this module: if this process's own coalition is identical to its parent's
+(`getppid`), nothing distinguished launching this app from an ordinary fork, so points 3 and 4 answer
+`Unknown` and fall back to whatever a session's own accumulated snapshot already covers, rather than
+sweeping a coalition that is not this app's alone to sweep. It costs nothing on a `launchd`-started
+build, where the two coalitions are never equal to begin with.
 
 **Windows carries neither a mark nor a coalition, and needs neither.** A *Job Object*
 (`runs::procs::SessionJob`) is created and assigned to every agent session's own child right after
