@@ -36,13 +36,12 @@ pub enum Decision {
 /// records: a missing row costs a person nothing the CLI's own logs do not
 /// still hold, while a wall of raw protocol costs them the panel.
 ///
-/// **`TextDelta` is Claude Code's only, today.** `session::service::driver_for`
-/// answers `"claude" => ClaudeDriver, _ => None`, and `ClaudeDriver` is the only
-/// `impl Driver` in this tree — a Codex session never reaches this enum at all,
-/// it runs the old PTY road (`.claude/rules/terminal.md`), so there is no
-/// second translator to extend with a delta. Codex's own `Profile::transcript`
-/// is a different mechanism entirely: it turns `exec --json` lines into plain
-/// strings for a run's log pane and has never touched `EventKind`.
+/// **`TextDelta` is the streamed agent-message shape for both driven
+/// harnesses.** Claude Code supplies it from `--include-partial-messages`;
+/// Codex's app-server supplies `item/agentMessage/delta`. Their final whole
+/// messages become `Text`, which closes the same row authoritatively. Codex is
+/// deliberately a creation-only slice (`Bare` and `NewTask`): the remaining
+/// Codex intents still use the PTY fallback in `.claude/rules/terminal.md`.
 ///
 /// **`TextDelta` must never survive a re-entry, and that is a property of the
 /// wire rather than of anything this crate filters.** Claude Code's own

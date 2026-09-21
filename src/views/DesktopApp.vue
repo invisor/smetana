@@ -647,11 +647,10 @@ onMounted(initUpdates)
    than reading either.
 
    **Claude Code takes the driven road while the conversation panel is
-   switched on**: the worker parses its protocol and the Agent tab draws a
-   conversation. Every other harness keeps `createSession` exactly as it always
-   was, because only Claude Code has a driver — sending a Codex person down this
-   road would turn a working PTY into a refusal from `Request::Start`, which is
-   the opposite of what this stage is for. With `settings.conversationPanel`
+   switched on, and Codex takes it for Bare and NewTask**: the worker parses
+   each protocol and the Agent tab draws a conversation. Codex's other intents
+   and unsupported harnesses keep `createSession` as the PTY fallback. With
+   `settings.conversationPanel`
    off, `canDrive` answers `false` for every harness and every press lands on
    the `createSession` road below, which is the whole of what that switch does;
    there is deliberately no second condition here to keep in step with it.

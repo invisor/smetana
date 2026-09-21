@@ -123,10 +123,10 @@ pub enum Request {
     /// the journal (`EventKind::PermissionAnswered`) and the permission
     /// listener, which is what builds `updatedInput` from it.
     Answer(SessionId, String, Decision, Option<BTreeMap<String, String>>, oneshot::Sender<Result<(), SessionError>>),
-    /// End the turn in flight and nothing more. `ClaudeDriver::interrupt`
-    /// (smetana-y7mv) answers `Some` for this harness, so the child survives
-    /// it — see `claude_driver.rs`'s own header for the measurement — and a
-    /// harness with no such answer still falls to `start_kill()`.
+    /// End the turn in flight and nothing more. Claude Code keeps its child
+    /// alive after its stdin control request; Codex queues an app-server
+    /// interrupt until `turn/start` returns its turn id. A harness with no
+    /// protocol interrupt still falls to `start_kill()`.
     Stop(SessionId, oneshot::Sender<Result<(), SessionError>>),
     /// End the session outright: the cross on a driven agent row, not the
     /// composer's Stop (smetana-y7mv). Always kills the child regardless of
@@ -858,15 +858,12 @@ fn handle(
                 let _ = tx.send(Err(SessionError::NoSuchSession(id)));
                 return;
             };
-            // Ask first, kill second. Claude Code answers `Some` here now
-            // (smetana-y7mv, `ClaudeDriver::interrupt` — see its own header
-            // for the measurement): a `control_request` closes the open turn
-            // and leaves the child alive to answer the next message. A
-            // harness with no such answer — none is driven at all today, `Claude`
-            // being the only `impl Driver` this app has — still falls to
-            // `start_kill()` below, which is the loss this branch existed to
-            // record before the measurement, kept for whichever harness is
-            // driven next and answers `None`.
+            // Ask first, kill second. Claude Code sends its stdin control
+            // request immediately; Codex may return an empty write while it
+            // waits for the correlated `turn/start` response, then queues the
+            // app-server interrupt. Both keep the child available for the
+            // next turn. A harness with no protocol interrupt falls to
+            // `start_kill()` below.
             let bytes = live.talking.as_mut().and_then(|talking| talking.driver.interrupt());
             match bytes {
                 Some(bytes) => {

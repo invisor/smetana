@@ -739,9 +739,9 @@ dropping the `.smetana/agents.json` record, deleting the `--mcp-config` file) is
 Splitting the request buys the worker no way to tell the three apart once a child has actually died.
 Self-exit, a `Close`-triggered kill, and — on a harness whose `interrupt` still answers `None` — a
 `Stop`-triggered kill all still arrive as the identical `Chunk::Eof`, with nothing riding along to say
-which caused it; that group is **empty today**, since `ClaudeDriver` is the only `impl Driver` this
-app has and a driven session refuses anything else outright (`driver_for`, `service.rs`), so the
-`None` branch is kept for whichever driven harness is added next rather than for one running now. The
+which caused it; that group is empty for the two driven harnesses today: Claude Code has its stdin
+control request and Codex has an app-server `turn/interrupt` once its turn id exists. The `None`
+branch remains for a future protocol driver that cannot interrupt a turn. The
 conversation is over either way it happens — so it is offered back no more than any other finished
 agent is, which is exactly the rule the terminal worker keeps at `Chunk::Gone` for a PTY child killed
 by anything at all — and that is still why the cleanup lives at `Eof` and nowhere else: a drop moved

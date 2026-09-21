@@ -18,6 +18,8 @@ pub struct CodexDriver {
     active_turn: Option<String>,
     tickets: std::collections::BTreeMap<String, (Value, String)>,
     items: std::collections::BTreeMap<String, String>,
+    /// The latest per-turn app-server token breakdown, reported on completion.
+    usage: (u64, u64),
     pending: std::collections::BTreeMap<u64, String>,
     interrupt_pending: bool,
     turn_start_pending: bool,
@@ -25,7 +27,7 @@ pub struct CodexDriver {
 
 impl CodexDriver {
     pub fn new(_permission: Option<crate::session::permission::PermissionTicket>) -> Self {
-        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None)), active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false }
+        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None)), active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false }
     }
 
     fn request(&mut self, method: &str, params: Value) -> Vec<u8> {
@@ -113,10 +115,18 @@ impl Driver for CodexDriver {
             match message.get("method").and_then(Value::as_str) {
                 Some("item/started") => if let Some(item) = message.pointer("/params/item") {
                     let id = item.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
-                    let kind = item.get("type").and_then(Value::as_str).unwrap_or("tool").to_owned();
+                    let kind = item.get("type").and_then(Value::as_str).unwrap_or("").to_owned();
                     if !id.is_empty() { self.items.insert(id.clone(), kind.clone()); }
-                    if kind != "agentMessage" && kind != "reasoning" {
-                        events.push(EventKind::ToolUse { id, name: kind, detail: item.get("command").and_then(Value::as_str).unwrap_or("").to_owned() });
+                    let (name, detail) = match kind.as_str() {
+                        "commandExecution" => ("commandExecution", item.get("command").and_then(Value::as_str).unwrap_or("Command")),
+                        "fileChange" => ("fileChange", item.pointer("/changes/0/path").and_then(Value::as_str).unwrap_or("File change")),
+                        "mcpToolCall" => ("mcpToolCall", item.get("tool").and_then(Value::as_str).unwrap_or("MCP tool")),
+                        "dynamicToolCall" => ("dynamicToolCall", item.get("tool").and_then(Value::as_str).unwrap_or("Tool")),
+                        "webSearch" => ("webSearch", item.get("query").and_then(Value::as_str).unwrap_or("Web search")),
+                        _ => continue,
+                    };
+                    if !id.is_empty() {
+                        events.push(EventKind::ToolUse { id, name: name.into(), detail: detail.into() });
                     }
                 },
                 Some(method @ ("item/commandExecution/requestApproval" | "item/fileChange/requestApproval" | "item/tool/requestUserInput")) => {
@@ -134,17 +144,33 @@ impl Driver for CodexDriver {
                 Some("item/agentMessage/delta") => {
                     if let Some(text) = message.pointer("/params/delta").and_then(Value::as_str) { events.push(EventKind::TextDelta { text: text.to_owned() }); }
                 }
+                Some("item/reasoning/textDelta") | Some("item/reasoning/summaryTextDelta") => {
+                    if let Some(text) = message.pointer("/params/delta").and_then(Value::as_str).filter(|text| !text.is_empty()) { events.push(EventKind::Reasoning { text: text.to_owned() }); }
+                }
+                Some("item/commandExecution/outputDelta") | Some("item/fileChange/outputDelta") | Some("item/fileChange/patchUpdated") => {
+                    let id = message.pointer("/params/itemId").and_then(Value::as_str).unwrap_or("");
+                    let output = message.pointer("/params/delta").or_else(|| message.pointer("/params/patch")).and_then(Value::as_str).unwrap_or("");
+                    if !id.is_empty() && !output.is_empty() { events.push(EventKind::ToolResult { id: id.to_owned(), ok: true, summary: output.lines().next().unwrap_or("").to_owned() }); }
+                }
                 Some("item/completed") => if let Some(item) = message.get("params").and_then(|p| p.get("item")) {
                     match item.get("type").and_then(Value::as_str) {
                         Some("agentMessage") => if let Some(text) = item.get("text").and_then(Value::as_str) { events.push(EventKind::Text { text: text.to_owned() }); },
-                        Some("reasoning") => if let Some(text) = item.get("text").and_then(Value::as_str) { events.push(EventKind::Reasoning { text: text.to_owned() }); },
-                        Some(kind) => {
+                        Some("reasoning") => {
+                            let text = item.get("summary").and_then(Value::as_array).into_iter().flatten().chain(item.get("content").and_then(Value::as_array).into_iter().flatten()).filter_map(Value::as_str).filter(|text| !text.is_empty()).collect::<Vec<_>>().join("\n");
+                            if !text.is_empty() { events.push(EventKind::Reasoning { text }); }
+                        },
+                        Some(kind @ ("commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" | "webSearch")) => {
                             let id = item.get("id").and_then(Value::as_str).unwrap_or(kind).to_owned();
                             self.items.remove(&id);
-                            events.push(EventKind::ToolResult { id, ok: item.get("status").and_then(Value::as_str) != Some("failed"), summary: item.get("output").and_then(Value::as_str).unwrap_or("").lines().next().unwrap_or("").to_owned() });
+                            let output = item.get("aggregatedOutput").or_else(|| item.get("output")).and_then(Value::as_str).unwrap_or("");
+                            let ok = !matches!(item.get("status").and_then(Value::as_str), Some("failed" | "declined"));
+                            events.push(EventKind::ToolResult { id, ok, summary: output.lines().next().unwrap_or("").to_owned() });
                         },
-                        None => {}
+                        _ => {}
                     }
+                },
+                Some("thread/tokenUsage/updated") => if let Some(usage) = message.pointer("/params/tokenUsage/last") {
+                    self.usage = (usage.get("inputTokens").and_then(Value::as_u64).unwrap_or(0), usage.get("outputTokens").and_then(Value::as_u64).unwrap_or(0) + usage.get("reasoningOutputTokens").and_then(Value::as_u64).unwrap_or(0));
                 },
                 Some("turn/completed") => {
                     self.active_turn = None;
@@ -155,7 +181,7 @@ impl Driver for CodexDriver {
                     } else if failed {
                         events.push(EventKind::Error { text: "Codex turn failed".into() });
                     } else if !failed {
-                        events.push(EventKind::Result { tokens_in: 0, tokens_out: 0, cost_usd: None, ms: message.pointer("/params/turn/durationMs").and_then(Value::as_u64).unwrap_or(0) });
+                        events.push(EventKind::Result { tokens_in: self.usage.0, tokens_out: self.usage.1, cost_usd: None, ms: message.pointer("/params/turn/durationMs").and_then(Value::as_u64).unwrap_or(0) });
                     }
                 },
                 Some("error") => if let Some(text) = message.pointer("/params/error/message").and_then(Value::as_str) { events.push(EventKind::Error { text: text.to_owned() }); },
@@ -247,5 +273,38 @@ mod tests {
 "#);
         assert!(driver.interrupt().is_none());
         assert!(String::from_utf8(driver.send(Input::Message { text: "again".into(), attachments: vec![] })).unwrap().contains("turn/start"));
+    }
+
+    #[test]
+    fn app_server_lifecycle_maps_executable_items_streams_and_usage() {
+        let mut driver = CodexDriver::new(None);
+        // Coalesced frames prove that userMessage, plan and unknown items do
+        // not become tool calls while app-server stream notifications do.
+        let events = driver.feed(concat!(
+            r#"{"jsonrpc":"2.0","method":"item/started","params":{"item":{"id":"u","type":"userMessage"}}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"item/started","params":{"item":{"id":"plan","type":"plan"}}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"item/started","params":{"item":{"id":"cmd","type":"commandExecution","command":"git status"}}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"item/commandExecution/outputDelta","params":{"itemId":"cmd","delta":"On branch main\n"}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"item/reasoning/summaryTextDelta","params":{"itemId":"r","delta":"Checking"}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"cmd","type":"commandExecution","status":"completed","aggregatedOutput":"On branch main"}}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"m","type":"agentMessage","text":"Done."}}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"thread/tokenUsage/updated","params":{"tokenUsage":{"last":{"inputTokens":12,"outputTokens":7,"reasoningOutputTokens":3}}}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"status":"completed","durationMs":9}}}"#, "\n"
+        ).as_bytes());
+        assert_eq!(events, vec![
+            EventKind::ToolUse { id: "cmd".into(), name: "commandExecution".into(), detail: "git status".into() },
+            EventKind::ToolResult { id: "cmd".into(), ok: true, summary: "On branch main".into() },
+            EventKind::Reasoning { text: "Checking".into() },
+            EventKind::ToolResult { id: "cmd".into(), ok: true, summary: "On branch main".into() },
+            EventKind::Text { text: "Done.".into() },
+            EventKind::Result { tokens_in: 12, tokens_out: 10, cost_usd: None, ms: 9 },
+        ]);
+    }
+
+    #[test]
+    fn failed_turn_reports_its_error_without_a_result() {
+        let mut driver = CodexDriver::new(None);
+        assert_eq!(driver.feed(br#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"status":"failed","error":{"message":"rate limited"}}}}
+"#), vec![EventKind::Error { text: "rate limited".into() }]);
     }
 }
