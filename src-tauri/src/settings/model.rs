@@ -3893,6 +3893,18 @@ mod tests {
         );
     }
 
+    /// Every role `table_pair` has an arm for — `Default` and the four that
+    /// inherit from it — so a test that only asked three of the five would
+    /// never touch the two arms `runs::service`'s gate and the branch-review
+    /// session actually read.
+    const ALL_ROLES: [crate::agents::Role; 5] = [
+        crate::agents::Role::Default,
+        crate::agents::Role::Tasks,
+        crate::agents::Role::Code,
+        crate::agents::Role::RunLead,
+        crate::agents::Role::ReviewBranch,
+    ];
+
     #[test]
     fn a_project_with_no_agents_block_reads_the_root_exactly_as_before() {
         let mut settings = Settings::default();
@@ -3901,16 +3913,14 @@ mod tests {
         settings.projects.insert("/a/project".into(), ProjectState::default());
         settings.validate();
 
-        for (project, role) in [
-            (None, crate::agents::Role::Default),
-            (Some("/a/project"), crate::agents::Role::Default),
-            (Some("/no/such/project"), crate::agents::Role::Default),
-        ] {
-            assert_eq!(
-                settings.role_pair(project, role),
-                ("claude".to_owned(), "opus".to_owned()),
-                "no block anywhere in reach, so the root answers"
-            );
+        for project in [None, Some("/a/project"), Some("/no/such/project")] {
+            for role in ALL_ROLES {
+                assert_eq!(
+                    settings.role_pair(project, role),
+                    ("claude".to_owned(), "opus".to_owned()),
+                    "no block anywhere in reach, so the root answers for {role:?}"
+                );
+            }
         }
     }
 
@@ -3928,21 +3938,21 @@ mod tests {
         settings.projects.insert("/a/project".into(), project);
         settings.validate();
 
-        assert_eq!(
-            settings.role_pair(Some("/a/project"), crate::agents::Role::Default),
-            ("codex".to_owned(), "gpt-5.6-luna".to_owned()),
-            "the project's own Default, never the root's"
-        );
-        assert_eq!(
-            settings.role_pair(Some("/a/project"), crate::agents::Role::Code),
-            ("codex".to_owned(), "gpt-5.6-luna".to_owned()),
-            "a role that names nothing inherits the project's own pair"
-        );
-        assert_eq!(
-            settings.role_pair(None, crate::agents::Role::Default),
-            ("claude".to_owned(), "opus".to_owned()),
-            "asked with no project, the root still answers"
-        );
+        // Every role of the block's own `AgentRoles` is `default()`, so every
+        // one of the five arms — including `RunLead` and `ReviewBranch` —
+        // inherits the block's own Default pair, never the root's.
+        for role in ALL_ROLES {
+            assert_eq!(
+                settings.role_pair(Some("/a/project"), role),
+                ("codex".to_owned(), "gpt-5.6-luna".to_owned()),
+                "a role that names nothing inherits the project's own pair for {role:?}"
+            );
+            assert_eq!(
+                settings.role_pair(None, role),
+                ("claude".to_owned(), "opus".to_owned()),
+                "asked with no project, the root still answers for {role:?}"
+            );
+        }
     }
 
     #[test]
