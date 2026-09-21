@@ -187,12 +187,18 @@ export function chooseModel(role, model, roles, rootAgent) {
 }
 
 /* Which of the two tables a session actually reaches: a project's own whole
-   copy of `{ agent, model, agentRoles }` where it has named a harness, the
-   root's three fields otherwise. `agent` is the discriminator and the only
-   one, matching `settings/model.rs::table_pair` on the Rust side — a missing
-   block and a block with an empty `agent` are one state, "the root table,
-   entirely", because `merge` empties a whole block whenever its own harness
-   is empty (`.claude/rules/settings.md`).
+   copy of `{ agent, model, agentRoles }` where it has one at all, the root's
+   three fields otherwise. Presence is the discriminator — `block != null` —
+   matching `Settings::role_pair` exactly: that function matches on
+   `state.agents.as_ref()`, never on the block's own `agent` field. A present
+   block is never half-empty in the first place: `ProjectAgents::validate`
+   runs `one_of(&mut self.agent, &crate::agents::IDS, "claude")`, the same
+   rewrite the root `agent` gets, so an empty or unknown harness in a stored
+   block is corrected to `"claude"` rather than emptying the block — there is
+   no "present but empty" state on the wire for this function to read past.
+   `.claude/rules/settings.md`'s "one exception to 'at the root'" is the whole
+   of what a present block means and how it is resolved; this file only reads
+   it the way Rust does.
 
    Takes the settings store's own shape — `{ project: { agents }, agent,
    model, agentRoles }` — rather than three loose arguments, because every
@@ -200,7 +206,7 @@ export function chooseModel(role, model, roles, rootAgent) {
    would be three places to keep the order straight in. */
 export function effectiveAgentTable(settings) {
   const block = settings?.project?.agents
-  if (block?.agent) {
+  if (block != null) {
     return { agent: block.agent, model: block.model, agentRoles: block.agentRoles }
   }
   return { agent: settings?.agent, model: settings?.model, agentRoles: settings?.agentRoles }

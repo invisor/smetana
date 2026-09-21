@@ -16,11 +16,14 @@
    dialog and share one Save button, which is why `canSaveProject` below takes
    both halves' state rather than either file answering for the other. */
 
-/* The four role keys, written out here rather than imported from
-   `settings/agentRoles.js`: that file's `ROLE_ROWS` is the five *rows*, with
-   the `null` default row among them, and this module wants the stored keys
-   alone — `settings/model.rs`'s own four. */
-const ROLE_NAMES = ['tasks', 'code', 'runLead', 'reviewBranch']
+/* The four stored role keys, derived from `settings/agentRoles.js`'s
+   `ROLE_ROWS` rather than written out as a sixth literal copy of a list the
+   hazards notes already track five of: that file's rows include the `null`
+   default row this module has no business naming, so the keys alone are
+   `ROLE_ROWS`'s own `role` field with the one falsy entry filtered out —
+   still one list, read rather than repeated. */
+import { ROLE_ROWS } from '../settings/agentRoles.js'
+const ROLE_NAMES = ROLE_ROWS.map((row) => row.role).filter(Boolean)
 
 /* The switch's own two words. Sentence case, said once here so the row and
    any test of it read the identical sentence. */

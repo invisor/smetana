@@ -202,10 +202,16 @@ pub async fn browser_tools(app: AppHandle, project: String) -> BrowserTools {
 /// disagree. Taken before the profile is resolved only because `app` is moved
 /// into the first blocking call.
 ///
-/// **`project` is `Option<String>` deliberately** — no front-end caller sends
-/// it yet, so an absent argument reads the root exactly as before, and this
-/// command is ready for a project's own `agents` block the day the settings
-/// window starts asking about one.
+/// **`project` is `Option<String>` deliberately** — an absent argument reads
+/// the root exactly as it always did. Since smetana-9x2y the app window's
+/// status footer names both `agent` and `project`, computed project-aware
+/// through `effectiveAgents`/`runLeadAgent` in
+/// `components/settings/agentRoles.js` — see `.claude/rules/settings.md`.
+/// The settings window's own subscription block still asks with
+/// `project: None`, deliberately and unchanged by that task: it is about the
+/// root table's run lead rather than the active project's own, on the
+/// argument that window's whole contract is already built on — this machine,
+/// not one project.
 #[tauri::command]
 pub async fn agent_usage(app: AppHandle, agent: Option<String>, project: Option<String>) -> AgentUsage {
     let limits = crate::settings::subscription(&app);
@@ -226,16 +232,21 @@ pub async fn agent_usage(app: AppHandle, agent: Option<String>, project: Option<
         // would draw Claude Code's allowance, and the band under it, over a run
         // spending Codex's; `runs::service` snapshots this very row.
         //
-        // Both of those front-end callers compute `runLeadAgent` off the
-        // **root** table alone — neither passes a project, and `project` here
-        // is `None` until one does — while `runs/service.rs`'s own gate
-        // already resolves `Role::RunLead` against the project the run is
-        // actually starting in. So for a project carrying its own `agents`
-        // block, the usage footer and the subscription block on the Agents
-        // tab draw the root harness's allowance while the run gate spends the
-        // project's. Passing `project` from both JS call sites is the
-        // follow-up front-end task's to do; until then the figure somebody
-        // watches overnight can be about the wrong subscription.
+        // The two callers no longer agree about `project`, and that is by
+        // design rather than a gap. Since smetana-9x2y the app window's status
+        // footer computes `runLeadAgent` off `effectiveAgents` — the active
+        // project's own `agents` block where it names a harness, the root's
+        // otherwise — and passes that project alongside the agent it derived
+        // from it, so the footer draws the same harness `runs/service.rs`'s
+        // own gate resolves `Role::RunLead` against for that project. The
+        // settings window's subscription block still computes `runLeadAgent`
+        // off the **root** table alone and still sends `project: None`,
+        // deliberately: that block is about the harness a colleague with no
+        // per-project override would spend, on the same argument that keeps
+        // the rest of that window about this machine rather than about one
+        // project. So for a project carrying its own `agents` block, the two
+        // blocks can now disagree on purpose — the footer follows the
+        // project on screen, the settings window's own block never does.
         let id = wanted(agent, || {
             crate::settings::role_pair(&app, project.as_deref(), crate::agents::Role::RunLead).0
         });

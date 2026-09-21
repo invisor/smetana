@@ -219,24 +219,39 @@ const errorStyle = {
 </script>
 
 <template>
+  <!-- The width is read only outside a dialog window — inside one `Modal`
+       takes the whole frame, which is already the registry's number. It is
+       here so that `?view=gallery` draws this dialog at the width it has in
+       the app, and it has to agree with `project-settings` in
+       `views/dialogRegistry.js`: 560, the settings window's own column,
+       because `AgentRoleRows` below asks for a `38ch` control column that
+       was verified at that width and not at `Modal`'s 440 default. -->
   <Modal
     :open="open"
     :closable="!busy"
     title="Project settings"
     description="What a run in this project starts from."
+    :width="560"
     @close="$emit('close')"
   >
     <div :style="body">
-      <!-- The file this edits, named where somebody can find the rest of the
-           settings this form does not offer. An identifier, so mono. -->
+      <!-- The file the four fields below are stored in, named where somebody
+           can find the rest of the settings this form does not offer, and
+           named as *theirs* rather than the dialog's — since the Agents group
+           further down is a different file, `settings.json`, the one thing
+           this dialog must not leave somebody unsure of is which switch
+           writes to which. An identifier, so mono. -->
       <div v-if="fields" :style="introStyle">
-        Stored in <span :style="pathStyle">{{ CONFIG_FILE }}</span>. Everything else in that
-        file is the setup agent's.
+        These four fields are stored in <span :style="pathStyle">{{ CONFIG_FILE }}</span>.
+        Everything else in that file is the setup agent's.
       </div>
       <!-- And what stands in their place when there is no file to fill them
            from. Every word of it is `projectDefaults.js`'s, in two halves with
            the path between them, because the path is an identifier and is set
-           in mono like every other path this app puts in front of somebody. -->
+           in mono like every other path this app puts in front of somebody.
+           Read narrowly — "nothing here to fill in", not "nothing here" — it
+           is a sentence about that one file too, and the Agents group below
+           is drawn and may be saved whatever state it names. -->
       <div v-else :style="introStyle">
         {{ notice.lead }} <span :style="pathStyle">{{ CONFIG_FILE }}</span> {{ notice.tail }}
       </div>

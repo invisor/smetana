@@ -280,16 +280,22 @@ describe('which table a session actually reaches', () => {
     })
   })
 
-  /* A block with an empty `agent` is the same "no override" state a missing
-     block is — `settings/model.rs` empties the whole thing on the way through
-     whenever its own harness is empty. */
-  it('the root, when the project has a block with no harness named', () => {
+  /* Presence is the whole of the rule, matching `Settings::role_pair` exactly
+     — that function matches on `Option::is_some()` and never reads the
+     block's own `agent` field. This input cannot actually arrive from Rust
+     — `ProjectAgents::validate`'s `one_of(&mut self.agent, &agents::IDS,
+     "claude")` rewrites an empty or unknown harness to `"claude"` before a
+     present block ever reaches the wire — but the function still has to
+     answer the same way `role_pair` would if it somehow did: the block
+     whole, not a silent fall-back to the root. */
+  it('the block whole, even with an (unreachable) empty harness on it', () => {
+    const projectRoles = { ...empty(), tasks: { agent: 'codex', model: '' } }
     const settings = {
       agent: 'claude',
       model: '',
       agentRoles: empty(),
-      project: { agents: { agent: '', model: '', agentRoles: empty() } }
+      project: { agents: { agent: '', model: '', agentRoles: projectRoles } }
     }
-    expect(effectiveAgentTable(settings)).toEqual({ agent: 'claude', model: '', agentRoles: empty() })
+    expect(effectiveAgentTable(settings)).toEqual({ agent: '', model: '', agentRoles: projectRoles })
   })
 })
