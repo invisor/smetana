@@ -55,6 +55,28 @@ async function loadCatalogue(answer = CATALOGUE) {
 }
 
 describe('the agent catalogue', () => {
+  it('keeps the last good Codex list for invalid results and string refusals', async () => {
+    const { agents, ipc } = await loadCatalogue()
+    const before = agents.agents.value.find((row) => row.id === 'codex').models
+    ipc.on('codex_models', [{}])
+    await agents.refreshCodexModels()
+    expect(agents.agents.value.find((row) => row.id === 'codex').models).toEqual(before)
+    expect(agents.codexModelsError.value).toBe('Codex returned an invalid model list')
+    ipc.fail('codex_models', 'Codex model list timed out')
+    await agents.refreshCodexModels()
+    expect(agents.codexModelsError.value).toBe('Codex model list timed out')
+  })
+
+  it('replaces only a complete ordered Codex result', async () => {
+    const { agents, ipc } = await loadCatalogue()
+    ipc.on('codex_models', [
+      { id: 'gpt-6-astra', label: 'GPT-6-Astra' },
+      { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' }
+    ])
+    await agents.refreshCodexModels()
+    expect(agents.agents.value.find((row) => row.id === 'codex').models.map((model) => model.id)).toEqual(['gpt-6-astra', 'gpt-5.6-sol'])
+    expect(agents.codexModelsError.value).toBeNull()
+  })
   it('holds one row per harness once it has been read', async () => {
     const { agents } = await loadCatalogue()
 

@@ -41,7 +41,9 @@ export async function refreshCodexModels() {
   try {
     const models = await invoke('codex_models')
     if (mine !== codexRequest) return false
-    if (!Array.isArray(models) || models.length === 0) throw new Error('Codex returned no visible models')
+    if (!Array.isArray(models) || models.length === 0 || models.some((model) => typeof model?.id !== 'string' || !model.id || typeof model?.label !== 'string' || !model.label)) {
+      throw new Error('Codex returned an invalid model list')
+    }
     const row = agents.value.find((agent) => agent.id === 'codex')
     if (row) row.models = models
     codexModelsError.value = null

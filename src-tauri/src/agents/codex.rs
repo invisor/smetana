@@ -128,15 +128,14 @@ fn model_list_page(line: &str) -> Result<(Vec<(String, String)>, Option<String>)
     for entry in entries {
         let hidden = entry.get("hidden").and_then(serde_json::Value::as_bool)
             .ok_or_else(|| "Codex returned an invalid model list".to_string())?;
-        if hidden { continue; }
         let model = entry.get("model").and_then(serde_json::Value::as_str)
             .filter(|model| !model.is_empty()).ok_or_else(|| "Codex returned an invalid model list".to_string())?;
         let label = entry.get("displayName").and_then(serde_json::Value::as_str)
             .filter(|label| !label.is_empty()).ok_or_else(|| "Codex returned an invalid model list".to_string())?;
-        models.push((model.to_owned(), label.to_owned()));
+        if !hidden { models.push((model.to_owned(), label.to_owned())); }
     }
     let next = match result.get("nextCursor") {
-        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::Null) => None,
         Some(serde_json::Value::String(cursor)) if !cursor.is_empty() => Some(cursor.to_owned()),
         _ => return Err("Codex returned an invalid model list".into()),
     };
