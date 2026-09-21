@@ -446,6 +446,55 @@ impl Profile for Codex {
                 cmd.arg(arg);
             }
         }
+        // Codex's own native multi-agent, turned on for this invocation alone —
+        // only for a batch's lead, and only in `Auto` and `Supervised`, where
+        // there are workers to spawn at all. `Solo` never delegates, so a
+        // concurrency cap would be a promise about workers that are never
+        // going to exist, the same reasoning that keeps it out of the
+        // worker-model line in the prompt (`.claude/rules/runs.md`). `-c
+        // key=value` overrides Codex's own `~/.codex/config.toml` for this
+        // process and writes nothing to it — the boundary `SkillDelivery::Inline`
+        // already draws around a person's own Codex setup — so a higher or a
+        // lower number sitting in that file loses either way. `N` is read off
+        // `settings.max_parallel_tasks`, the exact field `prompt::build` reads
+        // a few lines later for the same `Launch`: `spawn_batch` has already
+        // capped it against the subscription-limit reduction before this
+        // `Intent::Run` was built, so there is one number rather than two
+        // computations of it — `the_multi_agent_cap_on_the_line_is_the_one_the_prompt_names`
+        // pins the two reads against each other rather than against a literal.
+        //
+        // Read off the installed CLI at 0.155.1 on 2026-09-21 rather than recalled,
+        // the same standard `MODELS` above holds itself to: `--enable <FEATURE>` is
+        // documented as equivalent to `-c features.<name>=true`, `codex features list`
+        // shows `multi_agent` as `stable true`, and `agents.enabled` and
+        // `agents.max_concurrent_threads_per_session` both parse, the latter with its
+        // own "must be at least 1" validator. This is the first fact in this profile
+        // that needs a Codex newer than the 0.146.0 the rest of the file was read
+        // against, and not caught here: `codex features list --enable definitely_not_a_feature`
+        // on 0.155.1 answers `Error: Unknown feature flag`, but that is a claim about
+        // a CLI that knows `--enable` and not about one older than it — this tree has
+        // no captured `--help` at 0.146.0 to say whether that flag existed then, only
+        // the screen fixtures under `src-tauri/tests/fixtures/`, none of which answer
+        // this. So the honest floor is: an older Codex refuses these arguments and the
+        // run dies at spawn either way, with `Error: Unknown feature flag` where it
+        // knows `--enable` and refuses the feature name, and its own parser's
+        // `unexpected argument` where it does not know the flag at all. Either string
+        // in a run report means the same thing — this CLI predates `multi_agent` —
+        // and there is no version floor anywhere in this tree to turn that into a named
+        // health state the way `EXPECTED_BD_VERSION` in `tracker::service` turns a
+        // sidecar mismatch into `bd-version-mismatch`.
+        if let Intent::Run { settings, .. } = &launch.intent {
+            if matches!(settings.mode, RunMode::Auto | RunMode::Supervised) {
+                if let Some(max_agents) = settings.max_parallel_tasks {
+                    cmd.arg("--enable");
+                    cmd.arg("multi_agent");
+                    cmd.arg("-c");
+                    cmd.arg("agents.enabled=true");
+                    cmd.arg("-c");
+                    cmd.arg(format!("agents.max_concurrent_threads_per_session={max_agents}"));
+                }
+            }
+        }
         // Then the resume, if this is one, and in the same leading position for
         // the same reason: `codex resume <id>` and `codex fork <id>` are
         // subcommands too. The two cannot both fire — `is_batch` is only ever
@@ -2419,6 +2468,130 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--full-auto"), "Codex removed it");
     }
 
+    /// `run` above with a chosen cap rather than the fixed 3 — what a run's own
+    /// settings carry once `spawn_batch` has already applied `usage::cap`
+    /// against the subscription-limit reduction, which is the number this
+    /// module's overrides must repeat rather than invent a second time.
+    fn run_with_cap(
+        mode: crate::runs::model::RunMode,
+        max_parallel_tasks: Option<u8>,
+    ) -> Intent {
+        match run(mode) {
+            Intent::Run { settings, reports, batch, remove_worktrees } => Intent::Run {
+                settings: crate::runs::model::RunSettings { max_parallel_tasks, ..settings },
+                reports,
+                batch,
+                remove_worktrees,
+            },
+            _ => unreachable!("run() always answers Intent::Run"),
+        }
+    }
+
+    #[test]
+    fn only_an_auto_or_supervised_run_turns_on_codexs_native_multi_agent() {
+        use crate::runs::model::RunMode;
+        let unaffected = [
+            ("ordinary session", launch(Intent::Bare)),
+            ("task creation", launch(new_task(Stage::Off))),
+            ("project setup", launch(Intent::Setup)),
+            (
+                "resumed session",
+                launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", false)),
+            ),
+            ("solo run", launch(run(RunMode::Solo))),
+            // `run(Solo)` itself already answers `max_parallel_tasks: None`, so on
+            // its own this case would pass on the inner `if let Some` alone and
+            // never reach the `matches!(settings.mode, Auto | Supervised)` guard
+            // above it — `RunSettings::validate` refuses Solo a number today, but
+            // the mode guard is what would still refuse it if that validation were
+            // ever relaxed, and this is what would say so.
+            ("solo run with a number anyway", launch(run_with_cap(RunMode::Solo, Some(2)))),
+        ];
+        for (kind, launch) in unaffected {
+            let args = argv(&launch);
+            assert!(!args.iter().any(|a| a == "--enable"), "{kind}: {args:?}");
+            assert!(!args.iter().any(|a| a == "multi_agent"), "{kind}: {args:?}");
+            assert!(!args.iter().any(|a| a.starts_with("agents.")), "{kind}: {args:?}");
+        }
+
+        for mode in [RunMode::Auto, RunMode::Supervised] {
+            let args = argv(&launch(run(mode)));
+            assert!(
+                args.windows(2).any(|pair| pair == ["--enable", "multi_agent"]),
+                "{mode:?}: {args:?}"
+            );
+            assert!(
+                args.windows(2).any(|pair| pair == ["-c", "agents.enabled=true"]),
+                "{mode:?}: {args:?}"
+            );
+            assert!(
+                args.iter().any(|a| a == "agents.max_concurrent_threads_per_session=3"),
+                "{mode:?}: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_with_one_task_asks_codex_for_one_concurrent_thread_and_not_zero() {
+        // N=1 is the case a batch of one ready task actually hits, and it must
+        // still turn multi-agent on rather than reading as "not configured" —
+        // `Some(1)` is a chosen cap, the same way `usage::REDUCED_MAX_TASKS`
+        // reads as a real cap and not an absence of one.
+        use crate::runs::model::RunMode;
+        let args = argv(&launch(run_with_cap(RunMode::Supervised, Some(1))));
+        assert!(
+            args.iter().any(|a| a == "agents.max_concurrent_threads_per_session=1"),
+            "{args:?}"
+        );
+    }
+
+    #[test]
+    fn the_multi_agent_cap_on_the_line_is_the_one_the_prompt_names() {
+        // Established by construction rather than by two readings that could
+        // drift: both `command` (above) and `prompt::build` (via
+        // `prompt_text`) read `settings.max_parallel_tasks` off the identical
+        // `Launch`, so a run's number reaching the CLI differently from the
+        // number reaching the prompt would mean one of the two stopped
+        // reading that field — which this test would catch on any cap, not
+        // only the default 3 every other test in this module uses.
+        use crate::runs::model::RunMode;
+        for (mode, cap) in [(RunMode::Auto, 4u8), (RunMode::Supervised, 6u8)] {
+            let built = launch(run_with_cap(mode, Some(cap)));
+            let args = argv(&built);
+            assert!(
+                args.iter()
+                    .any(|a| a == &format!("agents.max_concurrent_threads_per_session={cap}")),
+                "{mode:?}: {args:?}"
+            );
+            let prompt = Codex.prompt_text(&built).expect("a run always opens on a prompt");
+            assert!(
+                prompt.contains(&format!("at most {cap} task")),
+                "{mode:?}: the CLI's own cap and the prompt's own number must read off the \
+                 same field: {prompt}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_multi_agent_event_this_translator_has_never_heard_of_draws_nothing() {
+        // Native multi-agent adds events of its own to the same `codex exec
+        // --json` stream. This translator was never taught their shape, and
+        // the existing contract — an event type it does not recognise draws
+        // nothing rather than a raw line of JSON — already covers them
+        // without a rule written for them by name, the same as any other
+        // vocabulary word a CLI upgrade adds before this app has been taught
+        // it.
+        assert!(transcript_line(
+            r#"{"type":"agent.spawned","agent_id":"sub-1","task":"smetana-abcd"}"#
+        )
+        .is_empty());
+        assert!(transcript_line(r#"{"type":"agent.turn_completed","agent_id":"sub-1"}"#).is_empty());
+        assert!(transcript_line(
+            r#"{"type":"item.completed","item":{"id":"item_9","type":"agent_spawn","agent_id":"sub-1"}}"#
+        )
+        .is_empty());
+    }
+
     #[test]
     fn the_subcommand_leads_and_the_flag_still_precedes_the_positional_prompt() {
         // The whole argv of an unattended batch, in order. It used to assert
@@ -2427,12 +2600,28 @@ mod tests {
         // `exec --json` and `command` never applied it, so a run spawned the
         // interactive TUI, sat at its prompt for ever and `watch_batch` never
         // came round.
+        //
+        // The multi-agent overrides sit right after the stream flag and before
+        // the autonomy flag — extending `exec --json` rather than displacing
+        // anything that was already on this line, which is the property
+        // `every_non_auto_launch_explicitly_sandboxes_its_current_workspace` and
+        // the model/prompt tests below still check for on their own literals.
         let args = argv(&launch(run(crate::runs::model::RunMode::Auto)));
         assert_eq!(args[0], "codex");
         assert_eq!(args[1], "exec", "the subcommand has one legal position and it is first");
         assert_eq!(args[2], "--json");
-        assert_eq!(args[3], "--dangerously-bypass-approvals-and-sandbox");
-        assert_eq!(args.len(), 5, "binary, subcommand, stream flag, autonomy, prompt: {args:?}");
+        assert_eq!(args[3], "--enable");
+        assert_eq!(args[4], "multi_agent");
+        assert_eq!(args[5], "-c");
+        assert_eq!(args[6], "agents.enabled=true");
+        assert_eq!(args[7], "-c");
+        assert_eq!(args[8], "agents.max_concurrent_threads_per_session=3");
+        assert_eq!(args[9], "--dangerously-bypass-approvals-and-sandbox");
+        assert_eq!(
+            args.len(),
+            11,
+            "binary, subcommand, stream flag, multi-agent (5), autonomy, prompt: {args:?}"
+        );
     }
 
     #[test]

@@ -154,6 +154,36 @@ pane of raw JSON costs them the pane. Codex's translator also strips every contr
 reason Claude Code's records — `serde_json` decodes an escaped escape or bell into a live byte, and a
 pane specified as plain text must not take colour, cursor movement and a bell out of a transcript.
 
+**Codex's own native multi-agent rides the same command line, invocation-local and only for a
+batch's lead.** `Intent::Run` in `Auto` and `Supervised` gets three overrides on top of
+`exec --json`: `--enable multi_agent`, `-c agents.enabled=true` and
+`-c agents.max_concurrent_threads_per_session=<N>`. `-c key=value` is Codex's own syntax for
+overriding a config value for one invocation, so this reaches no file of the person's —
+`~/.codex/config.toml` is read no differently than before and a higher or a lower number sitting in
+it loses either way, the same boundary `SkillDelivery::Inline` already draws around a person's own
+Codex setup. `<N>` is `settings.max_parallel_tasks` off the same `Launch` `prompt::build` reads a few
+lines later for its own "work on at most N tasks" sentence (`.claude/rules/runs.md`) — one field read
+twice rather than two computations of the same number, which is what keeps the CLI's own cap and the
+prompt's cap from ever naming two different limits. `Solo` gets none of it, for `worker_model`'s own
+reason: nothing is delegated, so a concurrency cap would be a promise about workers that are never
+going to exist. Every other intent this profile builds a command line for — a bare session, a new
+task, a resume, a branch review, a one-shot — stays exactly the single conversation it always was.
+Native multi-agent adds events of its own to the same stream; `transcript_line`'s own catch-all above
+— an event type it has never heard of draws nothing — already covers them without a line written for
+them by name, the same as any other vocabulary word a CLI upgrade adds before this app is taught it.
+
+This is the first thing in the Codex profile that needs a CLI newer than the 0.146.0 the rest of this
+file was read against — `--enable multi_agent`, `agents.enabled` and
+`agents.max_concurrent_threads_per_session` were read off 0.155.1 — and there is no version floor
+anywhere in this tree to say so. What was actually measured there is `codex features list --enable
+definitely_not_a_feature` answering `Error: Unknown feature flag`, which is a claim about a CLI that
+knows `--enable` rather than about one older than it — this tree has no captured `--help` at 0.146.0
+to settle whether that flag existed then. So the honest floor: an older Codex refuses these arguments
+and the run dies at spawn either way, with `Error: Unknown feature flag` where it knows `--enable`
+and its own parser's `unexpected argument` where it does not. Either string in a run report means the
+same thing — this CLI predates `multi_agent` — and a person meeting one of them should read it as
+this and not as a harness gone missing.
+
 `oneshot_args` is the only one with no session behind it at all: how this harness is
 asked **one question** and nothing more. Claude Code answers it with the same `-p` `batch_args`
 opens with, and the two are still different questions — that one is "carry this batch out and exit"

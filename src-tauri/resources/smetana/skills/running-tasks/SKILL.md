@@ -514,7 +514,9 @@ on its own. **This runs before you take any new work.**
 For each repository of each claimed task, spawn one worker. What they get is in
 `provisioning`'s last section: the worktree path, the whole spec pasted, that
 repository's gates, the hazards that bear on the change, and that every question comes to
-you. Keep concurrency at the number Phase 0 settled on or below; queue the rest.
+you. Keep concurrency at the number Phase 0 settled on or below; queue the rest, and
+start the next one the moment a slot frees — a task whose review just cleared frees its
+slot the same way a task that finished delegation does.
 
 Where a task spans repositories: independent layers working against a contract they have
 agreed can go in parallel; a layer that is hard-blocked on a contract that does not exist
@@ -523,9 +525,14 @@ yet goes second. Say which you chose and why.
 A worker's question comes to you, never to a human directly. Answer it from the code, the
 spec or the skills. Genuinely needs a person → policy.
 
-**A harness with no subagents runs this sequentially**, one repository at a time, with you
-doing the work in each. Nothing else about the process changes — the review is still an
-independent pass, and it is still against `reviewing`.
+**Codex is not assumed sequential any more.** Here, in Auto and Supervised, it runs with
+its own native multi-agent turned on for the lead's invocation alone, held to the same
+number Phase 0 settled on — so it can hold that many tasks at once the same way a harness
+with subagents already could, and it is still this lead, and no other process, that owns
+bd, the worktrees and the merge. **A harness with no subagents at all** still runs this
+sequentially, one repository at a time, with you doing the work in each. Nothing else
+about the process changes either way: the review is still an independent pass, and it is
+still against `reviewing`.
 
 ### The review loop, and its ceiling
 

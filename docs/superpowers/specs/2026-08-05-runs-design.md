@@ -60,9 +60,13 @@ prose the lead follows, the way `merge-core.md` already is.
 process; the lead spawns workers and a reviewer and talks to them through the harness's mailbox.
 The alternative — Smetana spawning one PTY session per task and relaying review findings itself —
 would work on every harness including Codex, but it buys harness-independence with a relay the app
-has to implement and a set of workers that share no context. Codex therefore degrades to one agent
-working sequentially, which is the same shape of degradation Codex already has in this codebase: no
-layer B detection, so a person waiting on it shows as waiting without the question.
+has to implement and a set of workers that share no context. At the time of this design Codex had no
+subagent mechanism of its own, so it degraded to one agent working sequentially — the same shape of
+degradation Codex already had in this codebase: no layer B detection, so a person waiting on it shows
+as waiting without the question. That was Codex's whole ceiling at 0.146.0; it stopped being one once
+0.155.1 shipped a stable native `multi_agent`, and `agents/codex.rs` now turns it on, invocation-local,
+for a batch's lead in Auto and Supervised — see `.claude/rules/agents.md` and `.claude/rules/runs.md`
+for what that changed and what it deliberately left alone (Solo, and every session outside `Run`).
 
 **The project's shape is a file in the project, written once.** Not derived every run (the same
 facts re-derived per batch, and gates that may differ between runs, which makes a green merge mean
