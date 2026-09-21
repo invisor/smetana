@@ -68,6 +68,15 @@ pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
     let mut cmd = launch.profile.command(launch);
     cmd.cwd(&launch.cwd);
     apply_environment(&mut cmd);
+    // Caps how many workers `vitest` starts inside this session, the other
+    // half of the machine-load fix beside `apply_environment`'s own PATH and
+    // locale lines: `vitest` reads `VITEST_MAX_WORKERS` unconditionally on
+    // every config resolution (measured against vitest 4.1's own source), so
+    // one variable in the session's environment reaches every project a
+    // session might run `npm test` in without touching any project's own
+    // `vitest.config.js`. See `.claude/rules/runs.md`'s note beside Codex's
+    // own concurrency line for why the divisor is the same field.
+    cmd.env("VITEST_MAX_WORKERS", vitest_max_workers(&launch.intent).to_string());
     // The environment half of running without a person. The argument half is
     // applied by the profile itself, because it has to go in front of the
     // positional prompt and `CommandBuilder` only appends; the environment has
@@ -99,6 +108,35 @@ pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
         cmd.env("BEADS_ACTOR", crate::terminal::model::run_actor(id));
     }
     cmd
+}
+
+/// How many tasks this session's own work may be spread across at once — the
+/// divisor `vitest_max_workers` below splits the machine's cores by. Only a
+/// `Run` delegates work at all, and only to as many workers as
+/// `settings.max_parallel_tasks` names; that field is already the batch's own
+/// count after `spawn_batch`'s subscription-limit reduction, the identical
+/// value `agents/codex.rs`'s own multi-agent flag reads, so this is one read
+/// of it rather than a second count. Solo carries `None` there by
+/// construction (`RunSettings::validate` refuses a value on it), and every
+/// other intent — a person's own session, a resume, a fix, a review — is a
+/// single conversation working on one thing, so both answer one task.
+fn concurrent_tasks(intent: &Intent) -> u8 {
+    match intent {
+        Intent::Run { settings, .. } => settings.max_parallel_tasks.unwrap_or(1),
+        _ => 1,
+    }
+}
+
+/// `vitest`'s own default worker count — `os.availableParallelism() − 1` —
+/// divided evenly across however many tasks this session may be working on
+/// at once, floored at one worker whatever the division comes to. A machine
+/// this can't be asked about (`std::thread::available_parallelism` erring) is
+/// read as a single core, which reaches the same floor without a branch of
+/// its own for it.
+fn vitest_max_workers(intent: &Intent) -> usize {
+    let cpus = std::thread::available_parallelism().map(std::num::NonZeroUsize::get).unwrap_or(1);
+    let tasks = usize::from(concurrent_tasks(intent).max(1));
+    (cpus.saturating_sub(1) / tasks).max(1)
 }
 
 /// The person's own shell, in the project's root, with the same environment an
@@ -642,6 +680,28 @@ mod tests {
         }
     }
 
+    /// The one combination `RunSettings::validate` never lets a real run
+    /// carry — a value on `max_parallel_tasks` under `Solo` — built here by
+    /// hand only to stand in for what Solo always answers on its own.
+    fn solo_run_intent() -> Intent {
+        use crate::runs::model::{RunMode, RunScope, RunSettings};
+        Intent::Run {
+            settings: RunSettings {
+                scope: RunScope::Queue,
+                mode: RunMode::Solo,
+                target_branch: "staging".into(),
+                create_target: false,
+                min_priority: Some(2),
+                max_parallel_tasks: None,
+                live_check: false,
+                file_findings: true,
+            },
+            reports: std::path::PathBuf::from("/p/.smetana/runs/1"),
+            batch: 1,
+            remove_worktrees: true,
+        }
+    }
+
     #[test]
     fn the_binary_comes_from_the_profile() {
         assert_eq!(build_command(7, &launch("claude")).get_argv()[0], "claude");
@@ -813,6 +873,44 @@ mod tests {
         let keys: Vec<_> = cmd.iter_extra_env_as_str().map(|(key, _)| key).collect();
         assert_eq!(keys.len(), 3, "{keys:?} — the shared piece is TERM, a locale and PATH");
         assert!(!keys.contains(&"BEADS_ACTOR"), "{keys:?}");
+    }
+
+    /// A run's lead divides the machine's default vitest worker count by
+    /// however many tasks it may be working on at once. Read through
+    /// `iter_extra_env_as_str` and never `get_env`, for the reason the locale
+    /// test spells out: `get_env` answers out of the snapshot of this
+    /// process's own environment, where `VITEST_MAX_WORKERS` could already be
+    /// set by whatever is running this test.
+    #[test]
+    fn a_run_session_divides_the_vitest_worker_cap_by_its_own_concurrency() {
+        let cpus = std::thread::available_parallelism().map(std::num::NonZeroUsize::get).unwrap_or(1);
+        let want = (cpus.saturating_sub(1) / 3).max(1).to_string();
+        let cmd = build_command(42, &with_intent("claude", run_intent()));
+        let value = cmd.iter_extra_env_as_str().find(|(key, _)| *key == "VITEST_MAX_WORKERS");
+        assert_eq!(value, Some(("VITEST_MAX_WORKERS", want.as_str())));
+    }
+
+    /// The other half of the divisor: a session with nobody to delegate to —
+    /// Solo, and every intent that is not a run at all — gets vitest's own
+    /// unmodified default, the machine's cores minus one, floored at one.
+    #[test]
+    fn a_solo_run_and_an_ordinary_session_get_vitests_own_default() {
+        let cpus = std::thread::available_parallelism().map(std::num::NonZeroUsize::get).unwrap_or(1);
+        let want = cpus.saturating_sub(1).max(1).to_string();
+        for intent in [solo_run_intent(), Intent::EditTask { id: "smetana-7".into(), title: "x y".into() }] {
+            let cmd = build_command(42, &with_intent("claude", intent));
+            let value = cmd.iter_extra_env_as_str().find(|(key, _)| *key == "VITEST_MAX_WORKERS");
+            assert_eq!(value, Some(("VITEST_MAX_WORKERS", want.as_str())));
+        }
+    }
+
+    /// A person's own shell gets none of this: `build_shell_command` never
+    /// calls `build_command`, so nothing here ever divides its worker count.
+    #[test]
+    fn a_shell_gets_no_vitest_worker_cap() {
+        let cmd = build_shell_command("/bin/zsh", Path::new("/tmp/project"));
+        let value = cmd.iter_extra_env_as_str().find(|(key, _)| *key == "VITEST_MAX_WORKERS");
+        assert_eq!(value, None, "{value:?}");
     }
 
     #[test]
