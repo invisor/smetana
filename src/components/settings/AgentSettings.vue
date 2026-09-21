@@ -20,7 +20,10 @@
    Which kinds of call have a row of their own is Rust's list and not this
    file's (`agents::Role` and `role_of`), and so is what each dropdown may offer:
    the harnesses and their models come from `stores/agents.js`, which is
-   `agents_catalog` read once at startup. The rule about what a row shows and
+   `agents_catalog` read once at startup, except Codex whose static models are
+   only a pre-success fallback. `codex_models` refreshes its visible menu on
+   each Settings opening and leaves an unknown saved slug unavailable until a
+   deliberate replacement. The rule about what a row shows and
    what a choice in it changes is `settings/agentRoles.js`, out of this file for
    the reason every rule in this tree is out of the component that draws it.
 
@@ -86,7 +89,8 @@ import SettingsRow from './SettingsRow.vue'
 import { agentOf, offersRefresh, usageLines, usageNote } from './usage.js'
 import { thresholdOptions } from './subscription.js'
 /* Which harnesses this build ships, what each can do and what each may be run
-   on, read once at startup. A reactive store rather than props, because the ten
+   on, read once at startup. Codex's static models are replaced separately by
+   `codex_models` on every Settings opening after a complete valid response. A reactive store rather than props, because the ten
    pickers below are the rows on this tab whose *options* are a fact about the
    build rather than about the person's settings, and every window that draws
    this tab would otherwise have to carry the same list to it.

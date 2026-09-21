@@ -28,10 +28,12 @@ use super::{
 use crate::runs::model::RunMode;
 use crate::terminal::model::{Question, QuestionOption};
 
-/// The fallback models this harness offers, the id first and the name a person reads.
-/// `model/list` from the installed app-server replaces this only after a
-/// complete successful read; it is never read from Codex's private cache.
-/// second.
+/// The static, pre-success fallback models this harness offers, the id first
+/// and the name a person reads. `agents_catalog` uses this Profile answer only
+/// for capabilities and the first picker paint. Each Settings opening makes a
+/// separate `codex_models` app-server request; only a complete valid result
+/// replaces the last good list, and a saved unknown slug remains selectable as
+/// unavailable until the person explicitly chooses another model.
 ///
 /// Read off the installed CLI at 0.146.0 on 2026-09-06 rather than recalled.
 /// `codex --help` documents `-m, --model <MODEL>` and no ids at all — it names

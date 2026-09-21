@@ -3,7 +3,11 @@
    is Rust's — `agents::IDS` and the `Profile` methods behind
    `agents::catalogue` — and this store is how it reaches a row being drawn.
 
-   Read **once at startup** and never again. That is the property four
+   Read **once at startup** and never again for harness capabilities. Codex
+   models are the deliberate exception: this static `agents_catalog` row is a
+   pre-success fallback, while `codex_models` is refreshed whenever Settings
+   opens; failures retain last-good and unknown saved slugs remain unavailable
+   choices until explicitly replaced. That is the property four
    hand-written lists in this tree were keeping — one of agent labels in
    `settings/AgentSettings.vue`, two of ids that resume and fork in
    `agent/sessionMenu.js`, one of ids that clear in `agent/agentMenu.js`. Each

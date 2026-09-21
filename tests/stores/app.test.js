@@ -189,6 +189,14 @@ describe('what a re-aimed window reads off the event', () => {
     expect(asked).toHaveBeenCalledWith('storage')
   })
 
+  it('marks a focus-only reopening as a Codex model refresh', async () => {
+    const { stores, emit } = await loadStores()
+    const asked = vi.fn()
+    await stores.app.watchSettingsSection(asked)
+    await emit(stores.app.SETTINGS_SHOW, { tab: null, refreshCodexModels: true })
+    expect(asked).toHaveBeenCalledWith(null, true)
+  })
+
   it('reads the pair out of the words Rust writes', async () => {
     const { compare, emit } = await loadWindows()
     const aimed = vi.fn()

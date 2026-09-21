@@ -202,7 +202,9 @@ const defaults = () => ({
      passed at all and the harness picks for itself — the app's behaviour to
      the letter before this field existed, which is why it ships empty rather
      than naming anything. The legal values are the chosen harness's own, and
-     Rust owns that list (`Profile::models`, read through `stores/agents.js`);
+     Rust owns that static fallback list (`Profile::models`, read through
+     `stores/agents.js`); Codex is refreshed separately through `codex_models`
+     and preserves unknown saved slugs rather than validating them away;
      `settings/model.rs` forgets a model the harness never offered. */
   model: '',
   /* Which harness and which model handle each kind of agent call: filing and

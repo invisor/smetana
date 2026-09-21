@@ -1164,7 +1164,10 @@ pub struct Settings {
     /// rather than at an Auto position: shipping the field changes nothing for
     /// anybody until they go and choose.
     ///
-    /// The set of legal values is the chosen harness's own `Profile::models` and
+    /// The set of legal values is the chosen harness's own `Profile::models`
+    /// static fallback, except Codex: its separately refreshed `codex_models`
+    /// catalogue can advance beyond this build, so unknown saved Codex slugs
+    /// are preserved and shown unavailable until explicitly replaced.
     /// is not repeated here, exactly as `agent` above defers to `agents::IDS`.
     pub model: String,
     /// Which harness and which model handle each kind of agent call. At the root
@@ -1927,7 +1930,7 @@ impl AgentRole {
 /// loses that one field rather than the role around it, and the harness stays,
 /// because it is still a harness this build ships.
 ///
-/// The list is the profile's own and is asked rather than repeated, exactly as
+/// The list is the profile's own static fallback and is asked rather than repeated, exactly as
 /// `agents::IDS` and `agents::LANGUAGES` are above — a second copy of a CLI's
 /// vocabulary is the drift `.claude/rules/agents.md` records the cost of.
 fn known_model(agent: &str, model: &mut String) {
