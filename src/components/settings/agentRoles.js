@@ -185,3 +185,23 @@ export function chooseModel(role, model, roles, rootAgent) {
   const agent = roles?.[role]?.agent || rootAgent
   return { role, pair: { agent, model } }
 }
+
+/* Which of the two tables a session actually reaches: a project's own whole
+   copy of `{ agent, model, agentRoles }` where it has named a harness, the
+   root's three fields otherwise. `agent` is the discriminator and the only
+   one, matching `settings/model.rs::table_pair` on the Rust side — a missing
+   block and a block with an empty `agent` are one state, "the root table,
+   entirely", because `merge` empties a whole block whenever its own harness
+   is empty (`.claude/rules/settings.md`).
+
+   Takes the settings store's own shape — `{ project: { agents }, agent,
+   model, agentRoles }` — rather than three loose arguments, because every
+   caller already holds one `settings` object and a three-argument version
+   would be three places to keep the order straight in. */
+export function effectiveAgentTable(settings) {
+  const block = settings?.project?.agents
+  if (block?.agent) {
+    return { agent: block.agent, model: block.model, agentRoles: block.agentRoles }
+  }
+  return { agent: settings?.agent, model: settings?.model, agentRoles: settings?.agentRoles }
+}

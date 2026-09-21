@@ -33,7 +33,7 @@ import { watchWindowDrops } from './windowDrops.js'
    waiting on both. */
 import { chime } from '../chime.js'
 import { runsState } from './runs.js'
-import { settings } from './settings.js'
+import { effectiveAgents, settings } from './settings.js'
 import { isLockIssue, trackerState } from './tracker.js'
 
 /* The one word that tells a person's own shell from an agent, as `SessionWork`
@@ -447,8 +447,9 @@ function describeWork(work, sessionId) {
 
    The one thing that record now decides is `clearable`, and it is **per row**
    rather than one answer for the panel. Until roles existed every session ran
-   the harness in `settings.agent`, so a single flag keyed to that field was the
-   session's harness by construction; now a session started for the Tasks or the
+   the harness in `settings.agent` (and, since smetana-9x2y, in a project's own
+   override of it), so a single flag keyed to that field was the session's
+   harness by construction; now a session started for the Tasks or the
    Code row can be on another one, and the flag was wrong in both directions —
    a Clear row drawn over a Codex session, which `terminal_clear` then refuses
    in Rust, and no Clear row on a Claude Code session that supports it. It is
@@ -1065,7 +1066,7 @@ export async function createSession(project, intent = { kind: 'bare' }) {
    about a toast. */
 export function resumeRefused(record) {
   const { available, reason } = resumeAvailability(record, {
-    capable: can(settings.agent, 'resume')
+    capable: can(effectiveAgents.value.agent, 'resume')
   })
   if (available) return false
   terminalState.lastError = { title: ERRORS.write.title, description: resumeReasonLine(reason) }

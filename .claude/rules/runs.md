@@ -518,18 +518,46 @@ settings screen must never be a way to change a value silently.
 **The fields go on an explicit Save**, which the settings window's save-as-you-type deliberately is
 not, and the difference is the file rather than the form: `.smetana/project.toml` is committed and
 travels to everybody working in the repository, so a keystroke here has to be a decision, where the
-app's own file on this machine is the other case. **Save is offered only over a parsed file**, and
-this window opens without one, so the ghost button reads Close rather than Cancel where there are no
-fields — there is nothing typed for it to undo.
+app's own file on this machine is the other case.
+
+**Since smetana-9x2y the window edits a second file behind the same Save, and the two disagree about
+when they were ever offered.** A second `SettingsGroup`, captioned **Agents**, sits below the four
+fields: a switch reading "Use own agents for this project", and — while it is on — the identical five
+rows the Agents tab of Settings draws (`AgentRoleRows.vue`, shared by both), bound to a whole
+`ProjectAgents` block rather than to the root table. This is `settings.project.agents`, and
+`.claude/rules/settings.md`'s own "one exception to 'at the root'" is the whole of what a present
+block there means and how it is resolved — this file only says how the block is edited. Turning the
+switch on seeds the draft from the *root* table (`projectAgents.js`'s `seedFromGlobal`, copying all
+four roles rather than leaving the ones untouched to arrive as `undefined`); turning it off drops the
+draft to `null` outright, and the seed is not remembered for a second press. Unlike the four fields
+above, this half is drawn and may be changed **whatever state `project.toml` is in** — a project with
+no configuration, or one whose file will not parse, can still turn its own harness on, because which
+agent this project uses is a fact about `settings.json` and never about the file this dialog's other
+half edits.
+
+That is what makes **Save always offered now, and the ghost button always read Cancel**: before this
+group existed, a project with no parsed file had no fields and nothing to save, so the ghost button
+read Close and Save was not drawn at all. With the Agents group always present there is always
+something on screen a press of Save could write and a press of Cancel could discard, so both buttons
+are unconditional and `components/run/projectAgents.js`'s `canSaveProject` is what decides whether
+Save may be pressed: invalid defaults or `busy` hold everything, a changed agents block with no file
+to offer defaults from is enough on its own, and a changed defaults draft only counts once the file
+has actually parsed and validated. The payload Save emits is `{ defaults, agents }` — `defaults` is
+`null` when the file was never parsed or the draft never moved, `agents` is the block whole or `null`
+— and `saveProjectSettings` in `DesktopApp.vue` writes the two in that order: `saveDefaults` first,
+since that is the call that can refuse, and `settings.project.agents = agents` straight through the
+store second, because the main window is the one writer of `settings.json` and this window already is
+it. That second write only works because the menu item that opens this dialog is live on the active
+project alone (below) — the window never resolves a project of its own for the block it is writing.
 
 The menu item is **live on the active project whatever state its file is in**, and refuses on one
 fact only: another project's row, under `projectMenu.js`'s existing "Switch to this project first".
 Two more captions stood there — "Set this project up first" and "This project's configuration will
 not parse" — and both are gone, because the reason a form cannot help with a damaged file is better
-said **inside the window**, where there is room for a sentence: no fields, no Save, and one line
-naming which of the two states it is (`configNotice`). A caption on a row nobody can press says
-less. Greying each field in turn was the other answer and is more
-code for the same meaning, with four dead controls saying nothing about why.
+said **inside the window**, where there is room for a sentence: no fields for the first half, no
+Save for that half alone, and one line naming which of the two states it is (`configNotice`). A
+caption on a row nobody can press says less. Greying each field in turn was the other answer and is
+more code for the same meaning, with four dead controls saying nothing about why.
 
 The `invoke` is `stores/runs.js`'s `saveDefaults` and not the view's, since the stores are the only
 files in `src/` that know Tauri exists, and it **re-reads through `loadConfig`** on success: without

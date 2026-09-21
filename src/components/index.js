@@ -262,6 +262,7 @@ export { default as StartProjectModal } from './run/StartProjectModal.vue'
 
 // settings
 export { default as AboutSettings } from './settings/AboutSettings.vue'
+export { default as AgentRoleRows } from './settings/AgentRoleRows.vue'
 export { default as AgentSettings } from './settings/AgentSettings.vue'
 export { default as EditorSettings } from './settings/EditorSettings.vue'
 export { default as GeneralSettings } from './settings/GeneralSettings.vue'

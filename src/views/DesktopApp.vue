@@ -191,7 +191,7 @@ import {
   measureStorage,
   notificationsState
 } from '../stores/notifications.js'
-import { applyPatch, initSettingsBridge, settings } from '../stores/settings.js'
+import { applyPatch, effectiveAgents, initSettingsBridge, settings } from '../stores/settings.js'
 import {
   announceBoardColumns,
   announceDialogProps,
@@ -656,18 +656,23 @@ onMounted(initUpdates)
    there is deliberately no second condition here to keep in step with it.
 
    **`canDrive` is the front door and never the gate.** It reads
-   `settings.agent` and `settings.conversationPanel`, both of which are what a
-   person configured, and the profile that actually runs is `agents::pick`'s:
-   when the configured harness is not on `PATH` that function silently
-   substitutes the first one that is. So on a machine with only Codex installed
-   — where `settings.agent` still ships as `claude`, and `Settings::validate`
-   forces any unknown value back to it — the cheap check answers yes and the
-   worker's `driver_for` then refuses. The answer is the road below rather than
-   a better question here: a driven start refused with `SessionError::NotDriven`
-   falls through to `createSession`, which resolves the same harness Rust would
-   have picked and opens the PTY that button has always opened. What the check
-   is still worth is the round trip it saves in the ordinary case, and the
-   refusal it keeps out of the log.
+   `effectiveAgents.agent` and `settings.conversationPanel`, both of which are
+   what a person configured, and the profile that actually runs is
+   `agents::pick`'s: when the configured harness is not on `PATH` that
+   function silently substitutes the first one that is. `effectiveAgents` is
+   the project-aware reading of the same root pair `Intent::Bare` resolves
+   through `Settings::role_pair` — the active project's own `agents` block
+   where it names a harness, the root's `agent` otherwise — so this front
+   door asks the identical question Rust answers, rather than always the root's.
+   On a machine with only Codex installed — where the resolved agent still
+   ships as `claude`, and `Settings::validate` forces any unknown value back
+   to it — the cheap check answers yes and the worker's `driver_for` then
+   refuses. The answer is the road below rather than a better question here: a
+   driven start refused with `SessionError::NotDriven` falls through to
+   `createSession`, which resolves the same harness Rust would have picked and
+   opens the PTY that button has always opened. What the check is still worth
+   is the round trip it saves in the ordinary case, and the refusal it keeps
+   out of the log.
 
    **A fallback is not a failure and must not be said out loud — but only while
    it really is a fallback.** `notDriven` is the one tag this function ever
@@ -764,7 +769,7 @@ async function startAgent(path, intent) {
   /* This is only an inexpensive panel-enabled front door. Rust resolves the
      actual role and binary, then permits Codex's Bare/NewTask app-server slice
      or refuses so this function takes the existing PTY fallback. */
-  if (canDrive(settings.agent)) {
+  if (canDrive(effectiveAgents.value.agent)) {
     /* The tab comes forward on the press; the aim follows the id, so a spawn
        that answers leaves the panel on the new conversation and one that does
        not leaves nothing pointing at a session that was never made. */
@@ -2456,7 +2461,18 @@ const openProjectSettings = async (path) => {
       configState: runsState.config.state,
       branches: gitState.branches,
       busy: savingSettings.value,
-      error: settingsError.value
+      error: settingsError.value,
+      /* The second file's own state, read the way `defaults` above is: the
+         menu item this dialog opens from is live only on the active project
+         (`.claude/rules/runs.md`), so `settings.project` is always this
+         project's and never announced again mid-edit for the reason `defaults`
+         above is not either. `agents` is `null` for every project on disk
+         today; `rootAgent`/`rootModel`/`rootAgentRoles` are what turning the
+         switch on seeds the draft from. */
+      agents: settings.project.agents,
+      rootAgent: settings.agent,
+      rootModel: settings.model,
+      rootAgentRoles: settings.agentRoles
     }),
     forget: () => {
       settingsFor.value = null
@@ -2475,16 +2491,33 @@ const openProjectSettings = async (path) => {
   await loadBranches(path)
 }
 
-const saveProjectSettings = async (draft) => {
+/* One Save over two files, in the order the design settles: `project.toml`
+   first, because `saveDefaults` is the call that can refuse — a file that
+   will not parse, no file at all — and `settings.project.agents` second,
+   through the store directly, because the main window is the one writer of
+   `settings.json` and this window already is it. `payload.defaults` is `null`
+   when that half never moved or the file was never parsed, so a project with
+   no configuration can still turn its own agents block on and save it. */
+const saveProjectSettings = async (payload) => {
   const project = settingsFor.value
   if (!project || savingSettings.value) return
   savingSettings.value = true
   settingsError.value = ''
   try {
-    /* An empty branch is no branch: the file's `target_branch` is an
-       `Option<String>`, and `Select` has no way to hand back `null`. Sending
-       `""` would write a branch name of length zero. */
-    await saveDefaults(project, { ...draft, target_branch: draft.target_branch || null })
+    if (payload.defaults) {
+      /* An empty branch is no branch: the file's `target_branch` is an
+         `Option<String>`, and `Select` has no way to hand back `null`. Sending
+         `""` would write a branch name of length zero. */
+      await saveDefaults(project, {
+        ...payload.defaults,
+        target_branch: payload.defaults.target_branch || null
+      })
+    }
+    /* This dialog opens only on the active project, so `settings.project` is
+       always the one this write is about. `merge` on the Rust side treats a
+       present block as complete and never partial, so the whole draft — or
+       `null` for "back to the root table" — is what lands here. */
+    settings.project.agents = payload.agents
     closeDialog('project-settings')
   } catch (err) {
     /* Shown in the window rather than swallowed: both refusals the command has
@@ -3421,12 +3454,21 @@ onUnmounted(() => {
    happened. */
 /* Whose subscription the strip is about: the harness a run would actually
    start, which is the Run lead row's or the root's behind it. Not
-   `settings.agent`, which is the Default row and answers a different question —
-   with Run lead on Codex under a Claude root the strip would draw Claude Code's
-   allowance, and the band under it, for a run spending Codex's. That is
-   precisely the figure somebody watches to know whether tonight's batch will be
-   gated, and `runs::service` snapshots and gates on the same row. */
-const leadAgent = () => runLeadAgent(settings.agentRoles, settings.agent)
+   `effectiveAgents.agent`, which is the Default row and answers a different
+   question — with Run lead on Codex under a Claude root the strip would draw
+   Claude Code's allowance, and the band under it, for a run spending Codex's.
+   That is precisely the figure somebody watches to know whether tonight's
+   batch will be gated, and `runs::service` snapshots and gates on the same
+   row.
+
+   Read off `effectiveAgents` rather than the root fields, which is what
+   fixes the drift `.claude/rules/settings.md` names: a project carrying its
+   own `agents` block now moves this strip's harness with it, the way
+   `runs::service`'s own gate already resolves `Role::RunLead` against the
+   project a run is actually starting in. `readAgentUsage` below still passes
+   the active project along as well, so Rust's own fallback for a caller that
+   names nobody stays in step with this one. */
+const leadAgent = () => runLeadAgent(effectiveAgents.value.agentRoles, effectiveAgents.value.agent)
 
 const USAGE_EVERY_MS = 10 * 60 * 1000
 const usageReading = ref(null)
@@ -3439,7 +3481,7 @@ const readUsage = async () => {
   usageBusy.value = true
   usageError.value = null
   try {
-    usageReading.value = await readAgentUsage(leadAgent())
+    usageReading.value = await readAgentUsage(leadAgent(), settings.activeProject)
   } catch (err) {
     usageReading.value = null
     usageError.value = err.message
@@ -4114,8 +4156,9 @@ async function deleteSession(session) {
    same one decision said once.** Under a harness this app can drive, a resume
    opens the conversation panel on the transcript it reopened; under any other,
    it is the PTY road this has always taken. `canDrive` is that question —
-   `settings.agent` and the person's own `conversationPanel` switch — and it is
-   asked once, inside `startAgent`, rather than at either of the two gestures
+   `effectiveAgents.agent` and the person's own `conversationPanel` switch —
+   and it is asked once, inside `startAgent`, rather than at either of the two
+   gestures
    that reach this function: this function builds the intent and hands it over,
    so a second copy of the question in `selectAgent` and a third in
    `onSessionAction` would be two copies of one rule to drift apart. Both doors
@@ -4167,7 +4210,7 @@ async function deleteSession(session) {
 async function resumeSession(session, { fork = false } = {}) {
   const path = activePath.value
   if (!path) return
-  const capable = can(settings.agent, fork ? 'fork' : 'resume')
+  const capable = can(effectiveAgents.value.agent, fork ? 'fork' : 'resume')
   if (!resumeAvailability(session, { fork, capable }).available) return
   /* One intent for both roads, and that is the point of it being one variant in
      Rust: the id, the directory and the title are the same three facts whether
@@ -7579,8 +7622,8 @@ const toastStackStyle = {
                   :key="session.id"
                   :session="session"
                   :now="sessionsState.now"
-                  :can-resume="can(settings.agent, 'resume')"
-                  :can-fork="can(settings.agent, 'fork')"
+                  :can-resume="can(effectiveAgents.agent, 'resume')"
+                  :can-fork="can(effectiveAgents.agent, 'fork')"
                   :separated="index > 0"
                   :expanded="isSessionOpen(session.id)"
                   :busy="deletingSessionPath === session.path"

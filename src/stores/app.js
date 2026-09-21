@@ -412,10 +412,16 @@ export async function setAutostart(enabled) {
    changed the agent and asks in the same breath would be answered about the one
    it left — for as long as the probe takes, under a heading honest enough about
    who replied to look like an ordinary substitution. `null` is a caller with no
-   opinion, which is what the file is still for. */
-export async function readAgentUsage(agent = null) {
+   opinion, which is what the file is still for.
+
+   `project` rides beside it, new with smetana-9x2y: `runs/commands.rs`'s own
+   fallback for a caller naming nobody resolves `Role::RunLead` against it, and
+   passing it here keeps this probe answering about the same project the run
+   gate itself would gate a batch in, whichever of the two ever reaches that
+   fallback first. */
+export async function readAgentUsage(agent = null, project = null) {
   try {
-    return await invoke('agent_usage', { agent })
+    return await invoke('agent_usage', { agent, project })
   } catch (err) {
     console.error('[app] the subscription allowance could not be read:', err)
     throw new Error(err && typeof err === 'object' && typeof err.message === 'string' ? err.message : String(err))

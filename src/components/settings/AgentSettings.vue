@@ -88,6 +88,10 @@ import SettingsGroup from './SettingsGroup.vue'
 import SettingsRow from './SettingsRow.vue'
 import { agentOf, offersRefresh, usageLines, usageNote } from './usage.js'
 import { thresholdOptions } from './subscription.js'
+/* The five rows of the Models group, drawn by the component both this tab and
+   the Project settings dialog's own Agents group now share — see that
+   component's own header for why it moved out of here. */
+import AgentRoleRows from './AgentRoleRows.vue'
 /* Which harnesses this build ships, what each can do and what each may be run
    on, read once at startup. Codex's static models are replaced separately by
    `codex_models` on every Settings opening after a complete valid response. A reactive store rather than props, because the ten
@@ -105,14 +109,7 @@ import { thresholdOptions } from './subscription.js'
    Codex used to be drawn `disabled`, with `Not supported yet` beside it. That
    limit is gone: the profile answers resume, fork, batch and one-shot, and finds
    out the id of a session it started. */
-import { agentLabel, agents, codexModelsError } from '../../stores/agents.js'
-/* What a row of the Models group shows and what a choice in one changes. Out of
-   this file because a `.vue` file is unreachable by any test here, and one case
-   in it is silently wrong when it is wrong at all: a model chosen in a row that
-   has chosen no harness has to write the harness in beside it, or validation
-   empties the pair on the next read. */
-import { chooseModel, chooseProvider, modelOptions, pairOf, providerOptions, ROLE_ROWS, unavailableModelOption } from './agentRoles.js'
-
+import { agentLabel, codexModelsError } from '../../stores/agents.js'
 const props = defineProps({
   agent: { type: String, default: 'claude' },
   /* Which model the app asks for behind everything with no row of its own, and
@@ -266,39 +263,6 @@ const PROMPT_WIDTH = '48ch'
    own doc carries that arithmetic. */
 const MAX_AGENT_PROMPT = 4000
 
-/* The five rows, each already knowing which pair it stands for and what its two
-   lists hold. Computed rather than worked out in the template: the model list
-   depends on the harness the row resolves to, which is the root's for a row that
-   has chosen none, and a template expression repeating that would be the place
-   the two halves come apart. */
-const modelRows = computed(() =>
-  ROLE_ROWS.map((row) => {
-    const pair = pairOf(row.role, props.agentRoles, props.agent, props.model)
-    return {
-      ...row,
-      pair,
-      providers: providerOptions(row.role, agents.value),
-      models: unavailableModelOption(modelOptions(row.role, agents.value, pair.agent, pair.inherited), pair.model)
-    }
-  })
-)
-
-/* A row of the Models group asks for two fields side by side, so it asks for
-   twice the column the rows above it take plus the gap between them. In `ch`
-   for the reason `CONTROL_WIDTH` is, and `SettingsRow` lets the pair give way
-   rather than paint outside the panel where there is not that much room. */
-const PAIR_WIDTH = '38ch'
-const pairStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 'var(--space-3)',
-  width: '100%'
-}
-/* Each half takes half of whatever the row got, and neither refuses to shrink:
-   `GPT-5.6-Terra` and `Same as default` are the longest labels either list
-   holds, and `Dropdown` ellipsises a label that does not fit rather than
-   growing its field. */
-const halfStyle = { flex: '1 1 0', minWidth: 0 }
 const modelErrorStyle = { margin: '0 0 var(--space-3)', color: 'var(--text-muted)' }
 
 /* What the block below is headed, and it names **whoever answered the probe**
@@ -429,35 +393,12 @@ const errorStyle = {
       <p v-if="codexModelsError" :style="modelErrorStyle">
         Codex models could not be refreshed: {{ codexModelsError }}
       </p>
-      <SettingsRow
-        v-for="row in modelRows"
-        :key="row.label"
-        :label="row.label"
-        :description="row.description"
-        :control-width="PAIR_WIDTH"
-      >
-        <div :style="pairStyle">
-          <div :style="halfStyle">
-            <Dropdown
-              :model-value="row.pair.inherited ? '' : row.pair.agent"
-              :options="row.providers"
-              @update:model-value="emit('update:agentRole', chooseProvider(row.role, $event))"
-            />
-          </div>
-          <div :style="halfStyle">
-            <Dropdown
-              :model-value="row.pair.model"
-              :options="row.models"
-              @update:model-value="
-                emit(
-                  'update:agentRole',
-                  chooseModel(row.role, $event, props.agentRoles, props.agent)
-                )
-              "
-            />
-          </div>
-        </div>
-      </SettingsRow>
+      <AgentRoleRows
+        :agent="props.agent"
+        :model="props.model"
+        :agent-roles="props.agentRoles"
+        @update:agent-role="emit('update:agentRole', $event)"
+      />
     </SettingsGroup>
 
     <!-- The rows that answer the same question about different writing. -->

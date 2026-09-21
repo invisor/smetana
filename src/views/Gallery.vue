@@ -24,6 +24,7 @@ import {
   AboutSettings,
   AgentList,
   AgentMessage,
+  AgentRoleRows,
   AgentSettings,
   AppShell,
   AskUserQuestion,
@@ -3410,6 +3411,31 @@ const menuTargetStyle = {
       </div>
       <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal :open="true" config-state="broken" @close="() => {}" />
+      </div>
+      <!-- The Agents group's own populated state: a project that already keeps
+           its own table, Codex named on the Default row — the shape a new
+           agent started in this project would pick up, and the shape the
+           usage footer would read Codex's allowance from. Drawn together with
+           `config-state="missing"` on purpose: the group is live and may be
+           saved whatever state `project.toml` is in, so this cell checks that
+           by eye rather than by claim. -->
+      <div :style="{ position: 'relative', height: '760px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <ProjectSettingsModal
+          :open="true"
+          config-state="missing"
+          :agents="{
+            agent: 'codex',
+            model: 'gpt-5.6-sol',
+            agentRoles: {
+              tasks: { agent: '', model: '' },
+              code: { agent: '', model: '' },
+              runLead: { agent: '', model: '' },
+              reviewBranch: { agent: '', model: '' }
+            }
+          }"
+          @close="() => {}"
+          @save="() => {}"
+        />
       </div>
       <!-- Cutting a branch, from a row in the branch list. Live, because the
            line under the field is the half worth looking at: type a space or
@@ -6965,6 +6991,20 @@ const menuTargetStyle = {
         </div>
         <div :style="{ width: '560px' }">
           <AgentSettings busy />
+        </div>
+        <!-- The five rows on their own, the shape the Project settings
+             dialog's own Agents group draws them in — no caption, no
+             surrounding group, since those belong to whichever screen wraps
+             this component and differ between the two callers. Same fixtures
+             as the tab above, so a change to one cannot look right while the
+             other silently stopped matching it. -->
+        <div :style="{ width: '560px' }">
+          <AgentRoleRows
+            :agent="galleryAgent"
+            :model="galleryAgentModel"
+            :agent-roles="galleryAgentRoles"
+            @update:agent-role="galleryChooseRole($event)"
+          />
         </div>
         <div :style="{ width: '380px' }">
           <KanbanSettings
