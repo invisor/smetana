@@ -9,3 +9,8 @@
 pub fn agents_catalog() -> Vec<super::AgentRow> {
     super::catalogue()
 }
+
+#[tauri::command]
+pub async fn codex_models() -> Result<Vec<super::AgentModel>, String> {
+    super::codex::listed_models().await.map(|models| models.into_iter().map(|(id, label)| super::AgentModel { id, label }).collect())
+}

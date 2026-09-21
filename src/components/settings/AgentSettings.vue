@@ -20,7 +20,10 @@
    Which kinds of call have a row of their own is Rust's list and not this
    file's (`agents::Role` and `role_of`), and so is what each dropdown may offer:
    the harnesses and their models come from `stores/agents.js`, which is
-   `agents_catalog` read once at startup. The rule about what a row shows and
+   `agents_catalog` read once at startup, except Codex whose static models are
+   only a pre-success fallback. `codex_models` refreshes its visible menu on
+   each Settings opening and leaves an unknown saved slug unavailable until a
+   deliberate replacement. The rule about what a row shows and
    what a choice in it changes is `settings/agentRoles.js`, out of this file for
    the reason every rule in this tree is out of the component that draws it.
 
@@ -86,7 +89,8 @@ import SettingsRow from './SettingsRow.vue'
 import { agentOf, offersRefresh, usageLines, usageNote } from './usage.js'
 import { thresholdOptions } from './subscription.js'
 /* Which harnesses this build ships, what each can do and what each may be run
-   on, read once at startup. A reactive store rather than props, because the ten
+   on, read once at startup. Codex's static models are replaced separately by
+   `codex_models` on every Settings opening after a complete valid response. A reactive store rather than props, because the ten
    pickers below are the rows on this tab whose *options* are a fact about the
    build rather than about the person's settings, and every window that draws
    this tab would otherwise have to carry the same list to it.
@@ -101,13 +105,13 @@ import { thresholdOptions } from './subscription.js'
    Codex used to be drawn `disabled`, with `Not supported yet` beside it. That
    limit is gone: the profile answers resume, fork, batch and one-shot, and finds
    out the id of a session it started. */
-import { agentLabel, agents } from '../../stores/agents.js'
+import { agentLabel, agents, codexModelsError } from '../../stores/agents.js'
 /* What a row of the Models group shows and what a choice in one changes. Out of
    this file because a `.vue` file is unreachable by any test here, and one case
    in it is silently wrong when it is wrong at all: a model chosen in a row that
    has chosen no harness has to write the harness in beside it, or validation
    empties the pair on the next read. */
-import { chooseModel, chooseProvider, modelOptions, pairOf, providerOptions, ROLE_ROWS } from './agentRoles.js'
+import { chooseModel, chooseProvider, modelOptions, pairOf, providerOptions, ROLE_ROWS, unavailableModelOption } from './agentRoles.js'
 
 const props = defineProps({
   agent: { type: String, default: 'claude' },
@@ -274,7 +278,7 @@ const modelRows = computed(() =>
       ...row,
       pair,
       providers: providerOptions(row.role, agents.value),
-      models: modelOptions(row.role, agents.value, pair.agent, pair.inherited)
+      models: unavailableModelOption(modelOptions(row.role, agents.value, pair.agent, pair.inherited), pair.model)
     }
   })
 )
@@ -295,6 +299,7 @@ const pairStyle = {
    holds, and `Dropdown` ellipsises a label that does not fit rather than
    growing its field. */
 const halfStyle = { flex: '1 1 0', minWidth: 0 }
+const modelErrorStyle = { margin: '0 0 var(--space-3)', color: 'var(--text-muted)' }
 
 /* What the block below is headed, and it names **whoever answered the probe**
    rather than whoever is showing in the picker above. The two can differ:
@@ -421,6 +426,9 @@ const errorStyle = {
          once — which is why "Same as default" appears in both fields of an
          untouched row rather than in one. -->
     <SettingsGroup label="Agents and models">
+      <p v-if="codexModelsError" :style="modelErrorStyle">
+        Codex models could not be refreshed: {{ codexModelsError }}
+      </p>
       <SettingsRow
         v-for="row in modelRows"
         :key="row.label"

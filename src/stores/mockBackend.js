@@ -1353,6 +1353,13 @@ export function installMockBackend() {
         }
       ]
     }
+    if (command === 'codex_models') {
+      return [
+        { id: 'gpt-6-astra', label: 'GPT-6-Astra' },
+        { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' },
+        { id: 'gpt-5.6-terra', label: 'GPT-5.6-Terra' }
+      ]
+    }
     /* What the Agents tab says about the subscription. A read, so it answers:
        without it `?view=settings&tab=agents` opens on the loud refusal at the
        bottom of this file and the block can never be looked at in a browser at

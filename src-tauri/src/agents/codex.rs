@@ -14,10 +14,13 @@
 //! CLI can break it; when it does it breaks softly, leaving layer A in place.
 
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
 use std::time::SystemTime;
 
 use portable_pty::CommandBuilder;
 use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 use super::library::read_skill;
 use super::{
@@ -27,8 +30,12 @@ use crate::runs::model::RunMode;
 use crate::runs::usage::Usage;
 use crate::terminal::model::{Question, QuestionOption};
 
-/// The models this harness offers, the id first and the name a person reads
-/// second.
+/// The static, pre-success fallback models this harness offers, the id first
+/// and the name a person reads. `agents_catalog` uses this Profile answer only
+/// for capabilities and the first picker paint. Each Settings opening makes a
+/// separate `codex_models` app-server request; only a complete valid result
+/// replaces the last good list, and a saved unknown slug remains selectable as
+/// unavailable until the person explicitly chooses another model.
 ///
 /// Read off the installed CLI at 0.146.0 on 2026-09-06 rather than recalled.
 /// `codex --help` documents `-m, --model <MODEL>` and no ids at all — it names
@@ -72,7 +79,299 @@ const MODELS: &[(&str, &str)] = &[
     ("gpt-5.2", "GPT-5.2"),
 ];
 
+const MODEL_LIST_TIMEOUT: Duration = Duration::from_secs(10);
+
+pub async fn listed_models() -> Result<Vec<(String, String)>, String> {
+    listed_models_with("codex", crate::shell_env::path(), MODEL_LIST_TIMEOUT).await
+}
+
+async fn listed_models_with(binary: &str, path: Option<&str>, timeout: Duration) -> Result<Vec<(String, String)>, String> {
+    let mut command = tokio::process::Command::new(binary);
+    command.args(["app-server", "--stdio"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    if let Some(path) = path { command.env("PATH", path); }
+    let mut child = command.spawn().map_err(|err| format!("Could not start Codex: {err}"))?;
+    let result = tokio::time::timeout(timeout, async {
+        let stdin = child.stdin.take().ok_or_else(|| "Codex stdin was unavailable".to_string())?;
+        let stdout = child.stdout.take().ok_or_else(|| "Codex stdout was unavailable".to_string())?;
+        request_models(stdin, stdout).await
+    }).await.map_err(|_| "Codex model list timed out".to_string()).and_then(|result| result);
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+    result
+}
+
+/// The app-server protocol itself, over whatever carries it: `initialize`,
+/// its response, `initialized`, then `model/list` paged through until a null
+/// cursor. Generic over the transport rather than tied to a child process's
+/// pipes, which is what lets `model_list_tests` drive it over an in-process
+/// `tokio::io::duplex()` pair with no spawn and no wall clock anywhere in the
+/// assertion. `listed_models_with` above is the only caller handing it a real
+/// child's stdin and stdout, and it alone owns the timeout and the kill —
+/// this function knows nothing of either.
+async fn request_models<W, R>(mut stdin: W, stdout: R) -> Result<Vec<(String, String)>, String>
+where
+    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+{
+    let mut lines = BufReader::new(stdout).lines();
+    let init = serde_json::json!({ "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "Smetana", "version": "0.1.0" } } });
+    stdin.write_all(init.to_string().as_bytes()).await.map_err(|err| err.to_string())?;
+    stdin.write_all(b"\n").await.map_err(|err| err.to_string())?;
+    stdin.flush().await.map_err(|err| err.to_string())?;
+    next_response(&mut lines, 0).await?;
+    stdin.write_all(b"{\"method\":\"initialized\",\"params\":{}}\n").await.map_err(|err| err.to_string())?;
+    stdin.flush().await.map_err(|err| err.to_string())?;
+    let mut cursor: Option<String> = None;
+    let mut models = Vec::new();
+    for request_id in 1_u64.. {
+        let request = serde_json::json!({ "id": request_id, "method": "model/list", "params": cursor.as_ref().map_or_else(serde_json::Map::new, |cursor| serde_json::Map::from_iter([(String::from("cursor"), serde_json::Value::String(cursor.clone()))])) });
+        stdin.write_all(request.to_string().as_bytes()).await.map_err(|err| err.to_string())?;
+        stdin.write_all(b"\n").await.map_err(|err| err.to_string())?;
+        stdin.flush().await.map_err(|err| err.to_string())?;
+        let (page, next) = model_list_page(&next_response(&mut lines, request_id).await?)?;
+        models.extend(page);
+        if next.as_deref().map_or(true, str::is_empty) { break; }
+        cursor = next;
+    }
+    (!models.is_empty()).then_some(models).ok_or_else(|| "Codex returned no visible models".to_string())
+}
+
+async fn next_response<R>(lines: &mut tokio::io::Lines<BufReader<R>>, id: u64) -> Result<String, String>
+where
+    R: AsyncRead + Unpin,
+{
+    while let Some(line) = lines.next_line().await.map_err(|err| err.to_string())? {
+        if serde_json::from_str::<serde_json::Value>(&line).ok().and_then(|value| value.get("id").and_then(serde_json::Value::as_u64)) == Some(id) { return Ok(line); }
+    }
+    Err("Codex closed the model list stream".into())
+}
+
+fn model_list_page(line: &str) -> Result<(Vec<(String, String)>, Option<String>), String> {
+    let value: serde_json::Value = serde_json::from_str(line).map_err(|_| "Codex returned an invalid model list".to_string())?;
+    if value.get("error").is_some() { return Err("Codex refused the model list request".into()); }
+    let result = value.get("result").ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+    let entries = result.get("data").and_then(serde_json::Value::as_array).ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+    let mut models = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let hidden = entry.get("hidden").and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+        let model = entry.get("model").and_then(serde_json::Value::as_str)
+            .filter(|model| !model.is_empty()).ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+        let label = entry.get("displayName").and_then(serde_json::Value::as_str)
+            .filter(|label| !label.is_empty()).ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+        if !hidden { models.push((model.to_owned(), label.to_owned())); }
+    }
+    let next = match result.get("nextCursor") {
+        Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(cursor)) if !cursor.is_empty() => Some(cursor.to_owned()),
+        _ => return Err("Codex returned an invalid model list".into()),
+    };
+    Ok((models, next))
+}
+
+#[cfg(test)]
+mod model_list_tests {
+    use super::{listed_models_with, model_list_page, request_models};
+    use std::{fs, os::unix::fs::PermissionsExt, time::{Duration, SystemTime}};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    fn fake(body: &str) -> String {
+        let path = std::env::temp_dir().join(format!("smetana-codex-{}", SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::write(&path, format!("#!/bin/sh\n{}", body)).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+    #[test]
+    fn keeps_visible_models_in_response_order_and_uses_model_not_id() {
+        let (models, next) = model_list_page(r#"{"result":{"data":[{"id":"wrong","model":"gpt-6-astra","displayName":"GPT-6-Astra","hidden":false},{"model":"hidden","displayName":"Hidden","hidden":true}],"nextCursor":"page-two"}}"#).unwrap();
+        assert_eq!(models, vec![("gpt-6-astra".into(), "GPT-6-Astra".into())]);
+        assert_eq!(next.as_deref(), Some("page-two"));
+    }
+
+    #[test]
+    fn refuses_malformed_visible_items_and_cursors() {
+        assert!(model_list_page(r#"{"result":{"data":[{"hidden":false,"model":"gpt-6-astra"}]}}"#).is_err());
+        assert!(model_list_page(r#"{"result":{"data":[],"nextCursor":7}}"#).is_err());
+        assert!(model_list_page(r#"{"error":{"message":"refused"}}"#).is_err());
+        assert!(model_list_page("not json").is_err());
+    }
+
+    /* The protocol test, entirely in process. `tokio::io::duplex` stands in
+       for a child's stdin/stdout pair, with the fake side driven by this
+       same test task rather than by a spawned `/bin/sh` — which is what
+       removes both races the spawned stand used to carry: a one-second
+       budget shared with a sibling test's own process spawn, and a script
+       that closed its stdout the moment its last `echo` returned, racing the
+       reader for the final line. Neither failure mode has anything left to
+       attack here — the fake half stays open for exactly as long as this
+       task keeps it, and the outer timeout below is a safety net against a
+       genuine protocol bug hanging the test, not a budget the assertion
+       depends on. */
+    #[tokio::test]
+    async fn duplex_transport_aggregates_paginated_model_list_requests() {
+        let (client, server) = tokio::io::duplex(4096);
+        let (client_read, client_write) = tokio::io::split(client);
+        let (server_read, server_write) = tokio::io::split(server);
+
+        let fake_server = tokio::spawn(async move {
+            let mut lines = BufReader::new(server_read).lines();
+            let mut writer = server_write;
+            lines.next_line().await.unwrap().unwrap(); // initialize, id 0
+            writer.write_all(b"{\"id\":0,\"result\":{}}\n").await.unwrap();
+            writer.flush().await.unwrap();
+            lines.next_line().await.unwrap().unwrap(); // initialized notification
+            lines.next_line().await.unwrap().unwrap(); // model/list, id 1, no cursor
+            writer
+                .write_all(b"{\"id\":1,\"result\":{\"data\":[{\"hidden\":false,\"model\":\"gpt-6-astra\",\"displayName\":\"GPT-6-Astra\"}],\"nextCursor\":\"next\"}}\n")
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+            lines.next_line().await.unwrap().unwrap(); // model/list, id 2, cursor "next"
+            writer
+                .write_all(b"{\"id\":2,\"result\":{\"data\":[{\"hidden\":false,\"model\":\"gpt-5.6-sol\",\"displayName\":\"GPT-5.6-Sol\"}],\"nextCursor\":null}}\n")
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(5), request_models(client_write, client_read))
+            .await
+            .expect("the in-process protocol exchange should never hang")
+            .unwrap();
+        assert_eq!(
+            result,
+            vec![("gpt-6-astra".into(), "GPT-6-Astra".into()), ("gpt-5.6-sol".into(), "GPT-5.6-Sol".into())]
+        );
+        fake_server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fake_app_server_timeout_is_killed_and_reaped() {
+        let pidfile = std::env::temp_dir().join(format!("smetana-codex-pid-{}", SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
+        let binary = fake(&format!("echo $$ > {}; read a; echo '{{\"id\":0,\"result\":{{}}}}'; read b; sleep 30", pidfile.display()));
+        // A budget in seconds and not the fake pagination test's old one —
+        // measured against this stand's own worst case: `fork`/`exec`ing a
+        // one-line `/bin/sh` script took up to 800ms end to end under this
+        // sandbox, so a tight budget would fire `start_kill` before the
+        // script had run its first statement, and the pid below would never
+        // be written whether or not the kill itself behaved.
+        let started = std::time::Instant::now();
+        assert_eq!(listed_models_with(&binary, None, Duration::from_secs(3)).await.unwrap_err(), "Codex model list timed out");
+        // The fake sleeps 30s and answers nothing on its own; the only way
+        // this call returns inside that window is `start_kill` actually
+        // ending the child rather than `wait` merely outliving it. Without
+        // this the ESRCH check below cannot tell "we killed it" from "we sat
+        // in `wait()` until the fake's own sleep ended on its own" — both
+        // reach the same reaped, gone pid, and only the wall clock tells
+        // them apart. 10s leaves 3x clearance under the fake's 30s sleep and
+        // over this call's own 3s budget.
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the call must end the child rather than outlive it: the fake sleeps 30s, this returned after {:?}",
+            started.elapsed()
+        );
+
+        // The fake records its own pid before it ever blocks — since it runs
+        // directly off its shebang rather than under a wrapping shell, that
+        // pid names the exact process `start_kill` was asked to end. `wait`
+        // in `listed_models_with` reaps it; a killed-but-unreaped process is
+        // a zombie and still answers `kill(pid, 0)` with success, so only a
+        // process actually reaped answers ESRCH. That is what running the
+        // fake a second time, the previous shape of this test, never pinned:
+        // a second shell spawn succeeds or fails on its own merits whether
+        // or not the first child had been waited on.
+        let mut pid = None;
+        for _ in 0..100 {
+            if let Ok(text) = fs::read_to_string(&pidfile) {
+                if let Ok(parsed) = text.trim().parse::<libc::pid_t>() {
+                    pid = Some(parsed);
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let pid = pid.expect("the fake should have recorded its own pid before this assertion runs");
+        // errno is read immediately after the call it describes, before
+        // anything else can overwrite it.
+        let kill_result = unsafe { libc::kill(pid, 0) };
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        assert_eq!((kill_result, errno), (-1, Some(libc::ESRCH)), "pid {pid} should be gone: killed and reaped, not a lingering zombie");
+
+        let _ = fs::remove_file(binary);
+        let _ = fs::remove_file(pidfile);
+    }
+}
+
 pub struct Codex;
+
+impl Codex {
+    /// The whole of what a session opens on, composed exactly as `command`
+    /// puts it on the command line — the seam `claude.rs`'s own `prompt_text`
+    /// cuts for the identical reason: `CodexDriver::opening` (the app-server
+    /// road) needs this text without rebuilding a `CommandBuilder` and
+    /// reading its last argument back off it, which is what it used to do.
+    /// Reading the argument back assumed the prompt is the final positional
+    /// one; that held only because nothing else had reason to land after it,
+    /// and on `codex` (this branch was cut before it) `eb62a3e` has already
+    /// put `--sandbox workspace-write` on this same line, ahead of the prompt
+    /// — still true today, but a silent assumption rather than a fact the
+    /// compiler checks, and the next flag to land here would break it with
+    /// nothing anywhere to say so: the session's opening turn would become
+    /// `workspace-write`, or an image path. Asking for the text directly
+    /// removes the assumption instead of re-verifying it.
+    pub(crate) fn prompt_text(&self, launch: &Launch) -> Option<String> {
+        let filing_a_task = matches!(launch.intent, Intent::NewTask { .. });
+        // Only the mode that actually uses the whole process pays for reading
+        // it: `Auto` is handed the path and decides for itself.
+        let discussing = matches!(
+            launch.intent,
+            Intent::NewTask { brainstorm: Stage::On, .. }
+        );
+        // The plan's own process, and only where a plan was actually asked
+        // for: the cascade decides that, never the raw switch, so an `On`
+        // sitting under a discussion nobody wanted costs nothing here either.
+        let planning = matches!(
+            &launch.intent,
+            Intent::NewTask { brainstorm, spec, plan, .. }
+                if cascade(*brainstorm, *spec, *plan).1 == Stage::On
+        );
+        let filing =
+            filing_a_task.then(|| read_skill(&launch.skills.smetana, "filing-a-task")).flatten();
+        // The whole of what a resolving session does, so it is read whenever
+        // one is being started and never otherwise.
+        let resolving = matches!(launch.intent, Intent::ResolveTask { .. })
+            .then(|| read_skill(&launch.skills.smetana, "resolving-questions"))
+            .flatten();
+        // The whole of what a branch review does, so it is read whenever one is
+        // being started and never otherwise — the same reading `resolving`
+        // above gets.
+        let reviewing_branch = matches!(launch.intent, Intent::ReviewBranch { .. })
+            .then(|| read_skill(&launch.skills.smetana, "reviewing-branch-changes"))
+            .flatten();
+        let brainstorming_text =
+            discussing.then(|| read_skill(&launch.skills.superpowers, "brainstorming")).flatten();
+        let plans_text =
+            planning.then(|| read_skill(&launch.skills.superpowers, "writing-plans")).flatten();
+        let text = prompt::SkillText {
+            filing: filing.as_deref(),
+            resolving: resolving.as_deref(),
+            brainstorming: brainstorming_text.as_deref(),
+            plans: plans_text.as_deref(),
+            reviewing_branch: reviewing_branch.as_deref(),
+        };
+        prompt::build(
+            &launch.intent,
+            self.delivery(),
+            self.images(),
+            &launch.skills,
+            launch.facts.as_deref(),
+            text,
+            &launch.languages,
+            &launch.agent_prompt,
+            launch.worker_model.as_deref(),
+        )
+    }
+}
 
 impl Profile for Codex {
     fn id(&self) -> &'static str {
@@ -126,38 +425,6 @@ impl Profile for Codex {
 
     fn command(&self, launch: &Launch) -> CommandBuilder {
         let mut cmd = CommandBuilder::new(self.binary());
-        let filing_a_task = matches!(launch.intent, Intent::NewTask { .. });
-        // Only the mode that actually uses the whole process pays for reading
-        // it: `Auto` is handed the path and decides for itself.
-        let discussing = matches!(
-            launch.intent,
-            Intent::NewTask { brainstorm: Stage::On, .. }
-        );
-        // The plan's own process, and only where a plan was actually asked
-        // for: the cascade decides that, never the raw switch, so an `On`
-        // sitting under a discussion nobody wanted costs nothing here either.
-        let planning = matches!(
-            &launch.intent,
-            Intent::NewTask { brainstorm, spec, plan, .. }
-                if cascade(*brainstorm, *spec, *plan).1 == Stage::On
-        );
-        let filing =
-            filing_a_task.then(|| read_skill(&launch.skills.smetana, "filing-a-task")).flatten();
-        // The whole of what a resolving session does, so it is read whenever
-        // one is being started and never otherwise.
-        let resolving = matches!(launch.intent, Intent::ResolveTask { .. })
-            .then(|| read_skill(&launch.skills.smetana, "resolving-questions"))
-            .flatten();
-        // The whole of what a branch review does, so it is read whenever one is
-        // being started and never otherwise — the same reading `resolving`
-        // above gets.
-        let reviewing_branch = matches!(launch.intent, Intent::ReviewBranch { .. })
-            .then(|| read_skill(&launch.skills.smetana, "reviewing-branch-changes"))
-            .flatten();
-        let brainstorming_text =
-            discussing.then(|| read_skill(&launch.skills.superpowers, "brainstorming")).flatten();
-        let plans_text =
-            planning.then(|| read_skill(&launch.skills.superpowers, "writing-plans")).flatten();
         // First of all, and this is what makes an unattended batch end by
         // itself: `codex exec --json`. `exec` is a **subcommand**, not a flag,
         // so its position is not a preference — it has exactly one legal place
@@ -266,24 +533,7 @@ impl Profile for Codex {
         } else {
             false
         };
-        let text = prompt::SkillText {
-            filing: filing.as_deref(),
-            resolving: resolving.as_deref(),
-            brainstorming: brainstorming_text.as_deref(),
-            plans: plans_text.as_deref(),
-            reviewing_branch: reviewing_branch.as_deref(),
-        };
-        if let Some(built) = prompt::build(
-            &launch.intent,
-            self.delivery(),
-            self.images(),
-            &launch.skills,
-            launch.facts.as_deref(),
-            text,
-            &launch.languages,
-            &launch.agent_prompt,
-            launch.worker_model.as_deref(),
-        ) {
+        if let Some(built) = self.prompt_text(launch) {
             // `-i, --image <FILE>...` accepts more than one value. The
             // separator is how this CLI distinguishes the final, positional
             // prompt from another image path; without it, commas in a prompt
@@ -1424,6 +1674,24 @@ mod tests {
         assert_eq!(args[0], "codex");
         assert_eq!(args[1], "--sandbox");
         assert_eq!(args[2], "workspace-write");
+    }
+
+    #[test]
+    fn prompt_text_answers_byte_for_byte_what_command_puts_on_the_line() {
+        // `CodexDriver::opening` asks `prompt_text` directly instead of
+        // rebuilding a `CommandBuilder` and reading its last argument back —
+        // the seam only earns its keep if the two answers cannot drift.
+        let new_task_launch = launch(new_task(Stage::Off));
+        let args = argv(&new_task_launch);
+        let last = args.last().cloned();
+        assert_eq!(Codex.prompt_text(&new_task_launch), last);
+
+        // A resumed session opens on no prompt at all — `prompt::build`
+        // refuses it one, and `prompt_text` carries that refusal through
+        // rather than answering something `command` never puts on the line.
+        let resume_launch = launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", false));
+        assert_eq!(Codex.prompt_text(&resume_launch), None);
+        assert!(!argv(&resume_launch).iter().any(|arg| arg.contains("Talk to me")));
     }
 
     #[test]
