@@ -31,6 +31,11 @@ export const isAskUserQuestion = (tool) => tool === ASK_USER_QUESTION_TOOL
 export function parseQuestions(input) {
   const list = Array.isArray(input?.questions) ? input.questions : []
   return list.map((raw) => ({
+    /* Codex app-server identifies answers by id; Claude's established wire
+       contract has no such field and therefore remains keyed by question. */
+    ...(typeof raw?.id === 'string'
+      ? { id: raw.id, isOther: raw?.isOther === true, isSecret: raw?.isSecret === true }
+      : {}),
     question: typeof raw?.question === 'string' ? raw.question : '',
     header: typeof raw?.header === 'string' ? raw.header : '',
     multiSelect: raw?.multiSelect === true,
@@ -106,7 +111,7 @@ export function buildAnswers(questions, selectedByIndex, customByIndex) {
   const answers = {}
   questions.forEach((q, i) => {
     const text = formatAnswer(selectedByIndex[i], customByIndex[i])
-    if (text) answers[q.question] = text
+    if (text) answers[q.id || q.question] = text
   })
   return answers
 }
