@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   chooseModel,
   chooseProvider,
+  effectiveAgentTable,
   HARNESS_CHOOSES,
   modelOptions,
   pairOf,
@@ -251,5 +252,50 @@ describe('what a choice changes', () => {
       role: null,
       pair: { agent: 'claude', model: 'opus' }
     })
+  })
+})
+
+describe('which table a session actually reaches', () => {
+  it('the root, when the project has no block', () => {
+    const settings = { agent: 'claude', model: 'opus', agentRoles: empty(), project: { agents: null } }
+    expect(effectiveAgentTable(settings)).toEqual({
+      agent: 'claude',
+      model: 'opus',
+      agentRoles: empty()
+    })
+  })
+
+  it("the project's block whole, when its own agent is not empty", () => {
+    const projectRoles = { ...empty(), tasks: { agent: 'codex', model: 'gpt-5.6-sol' } }
+    const settings = {
+      agent: 'claude',
+      model: 'opus',
+      agentRoles: empty(),
+      project: { agents: { agent: 'codex', model: '', agentRoles: projectRoles } }
+    }
+    expect(effectiveAgentTable(settings)).toEqual({
+      agent: 'codex',
+      model: '',
+      agentRoles: projectRoles
+    })
+  })
+
+  /* Presence is the whole of the rule, matching `Settings::role_pair` exactly
+     — that function matches on `Option::is_some()` and never reads the
+     block's own `agent` field. This input cannot actually arrive from Rust
+     — `ProjectAgents::validate`'s `one_of(&mut self.agent, &agents::IDS,
+     "claude")` rewrites an empty or unknown harness to `"claude"` before a
+     present block ever reaches the wire — but the function still has to
+     answer the same way `role_pair` would if it somehow did: the block
+     whole, not a silent fall-back to the root. */
+  it('the block whole, even with an (unreachable) empty harness on it', () => {
+    const projectRoles = { ...empty(), tasks: { agent: 'codex', model: '' } }
+    const settings = {
+      agent: 'claude',
+      model: '',
+      agentRoles: empty(),
+      project: { agents: { agent: '', model: '', agentRoles: projectRoles } }
+    }
+    expect(effectiveAgentTable(settings)).toEqual({ agent: '', model: '', agentRoles: projectRoles })
   })
 })

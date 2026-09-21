@@ -205,6 +205,17 @@ struct Live {
     /// alone is the wrong answer for exactly the session this field exists to
     /// name.
     cwd: String,
+    /// The three fields a `Restorable` record needs beside the conversation
+    /// id and the fields above, kept here rather than only at the spawn: a
+    /// harness that picks its own id (`Driver::discovered_id`, Codex's
+    /// app-server) has none to record at the spawn at all, so the record has
+    /// to be built again once `note_conversation` learns one — and it needs
+    /// the same three values `spawn_session`'s own first attempt used, not a
+    /// second guess at them. `terminal::service`'s `Live` carries these for
+    /// the identical reason, as part of the `Session` it never lets go of.
+    agent: String,
+    work: crate::terminal::model::SessionWork,
+    started_at: String,
 }
 
 pub fn start(app: AppHandle) -> SessionHandle {
@@ -336,14 +347,25 @@ fn spawnable(builder: &CommandBuilder) -> Option<tokio::process::Command> {
 /// spawned: the child would run, say everything it had to say in a protocol
 /// nothing here can read, and the conversation on screen would stay empty with
 /// no error anywhere to explain it.
+///
+/// Both harnesses drive every intent this road ever sees — `_intent` is
+/// unread — because `drivable` above already refuses `Intent::Run` before
+/// this is ever called, the one intent no harness drives, and this function
+/// answers a question about the *harness* rather than about the intent.
+/// Codex used to be narrower, driving only `Bare` and `NewTask` while its
+/// other manual intents kept the PTY fallback in `.claude/rules/terminal.md`;
+/// that gate was here, on this arm, until every intent a person talks to
+/// gained a Codex codec of its own (`CodexDriver`'s own `reopen`, for the one
+/// intent — `ResumeSession` — that has nothing of a person's own to open on
+/// but still has history worth showing before anybody types a word).
 fn driver_for(
     profile: &'static dyn Profile,
-    intent: &Intent,
+    _intent: &Intent,
     ticket: Option<super::permission::PermissionTicket>,
 ) -> Option<Box<dyn Driver>> {
     match profile.id() {
         "claude" => Some(Box::new(ClaudeDriver::new(ticket))),
-        "codex" if matches!(intent, Intent::Bare | Intent::NewTask { .. }) => Some(Box::new(CodexDriver::new(ticket))),
+        "codex" => Some(Box::new(CodexDriver::new(ticket))),
         _ => None,
     }
 }
@@ -435,8 +457,20 @@ fn spawn_session(
     // the harness replays nothing, so this is the whole of what an interactive
     // `--resume` would have painted. One file, read once, and a failure is an
     // empty history rather than a refusal.
+    //
+    // **Gated on the profile, not tried unconditionally.** `history::read` is
+    // Claude Code's own transcript reader, its own file's header says so in
+    // its first line; a Codex thread's id finds no such file under
+    // `~/.claude/projects` and this call is a harmless wasted lookup for one
+    // today, but which mechanism fills the journal has to be a fact about
+    // the harness actually driving the session rather than an accident of
+    // what a lookup off its id happens to find. Codex's own history arrives
+    // over its own protocol instead, translated inside `CodexDriver` once
+    // its `thread/read` answers — see `Driver::reopen`, called further down
+    // this function, and `.claude/rules/conversation-panel.md`'s account of
+    // the two roads.
     let past = match &intent {
-        Intent::ResumeSession { id, .. } => super::history::read(&cwd, id),
+        Intent::ResumeSession { id, .. } if profile.id() == "claude" => super::history::read(&cwd, id),
         _ => Vec::new(),
     };
     // Taken before the `Launch` moves the intent, and spent after the spawn has
@@ -501,6 +535,12 @@ fn spawn_session(
     read_stdout(id, stdout, chunks.clone());
     read_stderr(id, stderr);
 
+    // Taken once and kept on `Live` as well as spent here: a harness that
+    // picks its own conversation id (`Driver::discovered_id`) has none to
+    // record yet, and `note_conversation` needs the identical stamp when it
+    // writes the record this spawn could not — not a second `now()` call
+    // that would claim the session started later than it did.
+    let started_at = chrono::Utc::now().to_rfc3339();
     // After the spawn and not before it: a record for a session that never
     // started would be a row offering a conversation the harness never opened.
     // The same file, the same key and the same rules the terminal worker's
@@ -514,8 +554,8 @@ fn spawn_session(
                 agent: profile.id().to_owned(),
                 cwd: cwd.to_string_lossy().into_owned(),
                 project: project.to_owned(),
-                work,
-                started_at: chrono::Utc::now().to_rfc3339(),
+                work: work.clone(),
+                started_at: started_at.clone(),
             },
         );
     }
@@ -544,6 +584,9 @@ fn spawn_session(
         conversation,
         project: project.to_owned(),
         cwd: cwd.to_string_lossy().into_owned(),
+        agent: profile.id().to_owned(),
+        work,
+        started_at,
     };
 
     // The brief, as the session's first turn. Into the journal before the
@@ -570,6 +613,19 @@ fn spawn_session(
                 log::warn!("[session {id}] the child stopped reading before its brief was written");
             }
             live.state = state_of(live.journal.events(), true);
+        } else if let Some(bytes) = talking.driver.reopen(&launch) {
+            // `ResumeSession` has nothing of a person's own to open on —
+            // `opening` above answers `None` for it on every driver — but a
+            // resumed or forked conversation still owes its harness a first
+            // word right away: the history it is reopening is worth showing
+            // the moment the panel attaches, not only once somebody types.
+            // Nothing is journalled here: the history itself arrives
+            // asynchronously, translated by the driver once its own protocol
+            // answers, and reaches the journal through the ordinary
+            // `absorb`/`append` path a chunk off the child always takes.
+            if talking.stdin.send(bytes).is_err() {
+                log::warn!("[session {id}] the child stopped reading before it could reopen its conversation");
+            }
         }
     }
     Ok(live)
@@ -929,9 +985,18 @@ fn absorb(
             let kinds = talking.driver.feed(&bytes);
             let outgoing = talking.driver.outgoing();
             let startup = talking.driver.startup();
+            // Asked on every chunk, cheap for the ordinary driver that never
+            // answers (`None` is the default `Driver::discovered_id` keeps):
+            // a harness that names its own conversation has to be asked
+            // somewhere, and the moment its protocol confirms one is exactly
+            // the moment this fires.
+            let discovered = talking.driver.discovered_id();
             append(app, id, live, kinds);
             for bytes in outgoing {
                 if !say(live, bytes) { lost(app, id, live); break; }
+            }
+            if let Some(conversation) = discovered {
+                note_conversation(app, id, live, conversation);
             }
             if let Some(result) = startup {
                 if let Some(tx) = starting.remove(&id) {
@@ -973,8 +1038,22 @@ fn absorb(
             // `Request::ShutDown` returns out of the worker's loop before any
             // of its kills reaches `absorb`, which is what leaves the records in
             // place for the next launch.
-            if let Some(conversation) = live.conversation.as_deref() {
-                crate::terminal::restore::drop_record(Path::new(&live.project), conversation);
+            //
+            // **Guarded on the same predicate `sessions.remove` below reads.**
+            // A resume or a fork whose `thread/resume`/`thread/fork`/
+            // `thread/read` came back an error settles `startup =
+            // Some(Err(_))` in `absorb`'s own `Chunk::Data` arm, which sets
+            // `discard_on_eof` and kills the child — and that kill is what
+            // arrives here as this very `Eof`. The conversation this session
+            // was reopening is still perfectly alive on Codex's side; only
+            // this app's attempt to talk to it has ended. Dropping the
+            // record then would delete the one handle a person has on a
+            // thread that never stopped existing, removing the retry this
+            // refusal is supposed to leave standing.
+            if !never_became_a_conversation(failed_startup, live.discard_on_eof) {
+                if let Some(conversation) = live.conversation.as_deref() {
+                    crate::terminal::restore::drop_record(Path::new(&live.project), conversation);
+                }
             }
             // Reaped on a task of its own: end of stream arrives before the
             // child has necessarily been waited on, and the worker must never
@@ -1002,9 +1081,30 @@ fn absorb(
             // A failed pre-creation startup was never a conversation. Its
             // child has been handed to the reaper above; remove the temporary
             // entry so attach cannot paint a failed empty transcript.
-            if failed_startup || live.discard_on_eof { sessions.remove(&id); }
+            if never_became_a_conversation(failed_startup, live.discard_on_eof) { sessions.remove(&id); }
         }
     }
+}
+
+/// Whether a session that has just ended was ever a conversation worth
+/// keeping an offer of — `false` for the two shapes of "this app never
+/// actually reached the harness": `failed_startup`, the app-server dying
+/// before it ever answered `initialize`, `thread/start`, `thread/resume` or
+/// `thread/fork` at all, and `discard_on_eof`, one of those four answering
+/// with a protocol error. Both are set before this predicate is ever asked —
+/// `failed_startup` by `starting.remove` finding a caller still waiting, and
+/// `discard_on_eof` by the startup-error arm in `absorb`'s own `Chunk::Data`
+/// match — so this is a pure name for a decision made twice over: once about
+/// whether the on-disk record is worth keeping (`Chunk::Eof`'s guard on
+/// `drop_record`), and once about whether the temporary `Live` entry itself
+/// is worth keeping (`sessions.remove`, right below).
+///
+/// Pulled out as its own function so the two flags this file's own async
+/// worker cannot otherwise be reached by a test — `session::service` carries
+/// no unit test for its own I/O and orchestration, this file's header says
+/// so — are still checkable without one.
+fn never_became_a_conversation(failed_startup: bool, discard_on_eof: bool) -> bool {
+    failed_startup || discard_on_eof
 }
 
 /// Copy answers for the journal without retaining an `isSecret` answer. The
@@ -1098,6 +1198,65 @@ fn refresh_state(app: &AppHandle, id: SessionId, live: &mut Live) {
     );
 }
 
+/// The id a harness picked for itself, the moment its own protocol confirms
+/// one. The driven road's counterpart to `terminal::service`'s own
+/// `Request::SessionIdFound`: a profile told its own id up front
+/// (`Launch::session_id`, `Profile::session_id_args`) already has
+/// `live.conversation` set at the spawn, so this never fires for one, and it
+/// exists for the harness that picks its own instead — Codex's app-server,
+/// whose `Driver::discovered_id` hands this the exact string `thread/start`,
+/// `thread/resume` or `thread/fork` answered with, no second read of
+/// anybody's disk needed the way the PTY road's own discovery is.
+///
+/// **An id already set wins**, the same guard `Request::SessionIdFound`
+/// keeps: nothing here can rename a conversation this app did not name, and
+/// a plain resume's redundant report of the id it was already given at the
+/// spawn is exactly the case this guard turns into a no-op rather than a
+/// second, identical record write.
+fn note_conversation(app: &AppHandle, id: SessionId, live: &mut Live, conversation: String) {
+    if live.conversation.is_some() {
+        return;
+    }
+    live.conversation = Some(conversation.clone());
+    // Emitted unconditionally, unlike `refresh_state`'s own emit above: the
+    // state word may not have moved at all — a fresh thread's own
+    // `thread/start` reply carries no event of its own — but the id on the
+    // wire has, and `noteConversation` on the front end reads exactly this
+    // event to key the session's row by it.
+    //
+    // **Not a fix for a mis-keyed row — there is no ordering under which one
+    // happens.** Discovery always precedes the startup promise settling
+    // (`Chunk::Data`'s own `discovered` is read before `startup` in the same
+    // pass), which precedes `Request::Start` answering the caller, which
+    // precedes `session_attach`, so that command's own snapshot already
+    // carries this id in the ordinary case — nothing waits on this emit to
+    // learn it the first time. What the emit buys instead is that this stops
+    // being something the next reader has to reason through: the id reaches
+    // every window this session is open in without depending on that chain
+    // holding, the same way `refresh_state`'s emit is not the only place a
+    // state reaches a window either.
+
+    let _ = app.emit(
+        "session:state",
+        StateChange { id, state: live.state, conversation: live.conversation.clone() },
+    );
+    // The record the spawn could not write, written now that there is an id
+    // to key it by — the same fields the spawn-time record would have used,
+    // taken off `Live` rather than guessed again, which is why they are kept
+    // there at all.
+    crate::terminal::restore::record(
+        Path::new(&live.project),
+        crate::terminal::restore::Restorable {
+            session_id: conversation,
+            agent: live.agent.clone(),
+            cwd: live.cwd.clone(),
+            project: live.project.clone(),
+            work: live.work.clone(),
+            started_at: live.started_at.clone(),
+        },
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1129,5 +1288,104 @@ mod tests {
             batch: 2,
             remove_worktrees: true,
         }));
+    }
+
+    /// The regression matrix smetana-gb7f.2 asks for: every manual intent
+    /// this task added to Codex's own driven road — `EditTask`,
+    /// `ResolveTask`, `FixTask`, `ResolveConflict`, `RepairTracker`,
+    /// `Setup`, `Bootstrap`, `ReviewBranch`, and `ResumeSession` both plain
+    /// and forked — beside the two `driver_for` already served before this
+    /// task, `Bare` and `NewTask`. Codex used to answer `None` here for
+    /// every intent but the first two; the whole point of this table is
+    /// that it no longer does for any of them.
+    #[test]
+    fn codex_now_drives_every_manual_intent_claude_code_already_did() {
+        let codex: &'static dyn crate::agents::Profile = &crate::agents::codex::Codex;
+        let intents = [
+            Intent::Bare,
+            Intent::NewTask {
+                brainstorm: crate::agents::Stage::Off,
+                spec: crate::agents::Stage::Off,
+                plan: crate::agents::Stage::Off,
+                draft: crate::agents::TaskDraft {
+                    text: "Rename the worktree when the branch changes".into(),
+                    issue_type: None,
+                    priority: None,
+                    parent: None,
+                    images: Vec::new(),
+                },
+            },
+            Intent::EditTask { id: "x-1".into(), title: "T".into() },
+            Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
+            Intent::FixTask { id: "x-1".into(), title: "T".into() },
+            Intent::ResolveConflict {
+                repo: "/p".into(),
+                op: crate::vcs::model::OpKind::Merge,
+                ours: "main".into(),
+                theirs: "feature/x".into(),
+                files: vec!["src/main.rs".into()],
+            },
+            Intent::RepairTracker {
+                dir: "/p".into(),
+                bd_version: "1.1.2".into(),
+                command: "bd sync".into(),
+                stderr: "database is older than the binary".into(),
+            },
+            Intent::Setup,
+            Intent::Bootstrap,
+            Intent::ReviewBranch {
+                pairs: vec![crate::agents::ReviewPair { repo: "/p".into(), base: "main".into(), head: "feature/x".into() }],
+                report: ".smetana/reviews/2026-09-21-feature-x".into(),
+                fetch_failed: Vec::new(),
+            },
+            Intent::ResumeSession {
+                id: "9f1c0a2e-0000-4000-8000-000000000000".into(),
+                cwd: "/p".into(),
+                title: None,
+                fork: false,
+            },
+            Intent::ResumeSession {
+                id: "9f1c0a2e-0000-4000-8000-000000000000".into(),
+                cwd: "/p".into(),
+                title: None,
+                fork: true,
+            },
+        ];
+        for intent in &intents {
+            assert!(drivable(intent), "{intent:?} is not Run and must stay drivable");
+            assert!(
+                driver_for(codex, intent, None).is_some(),
+                "codex refused a codec for {intent:?}, which this task widened it to serve",
+            );
+        }
+    }
+
+    /// A driven Codex resume that fails must not delete the only handle a
+    /// person has on a thread that is still perfectly alive on Codex's own
+    /// side (finding 2, review pass 1 of smetana-gb7f.2): a refused resume
+    /// or fork sets `discard_on_eof` rather than `failed_startup`, since the
+    /// app-server did answer — just not with success — and the record has
+    /// to survive that refusal exactly as it survives the sibling case, the
+    /// app-server dying before any reply at all. The full 2×2 is written out
+    /// so each cell reads as the sentence it stands for rather than as a
+    /// bare boolean pair.
+    #[test]
+    fn never_became_a_conversation_covers_both_failure_shapes_and_neither() {
+        // The app-server never answered at all: `starting.remove` still held
+        // the caller's own sender when `Eof` arrived.
+        assert!(never_became_a_conversation(true, false));
+        // It answered, but `thread/resume`, `thread/fork` or the
+        // `thread/read` behind either came back an error — the exact case
+        // this finding is about, and the one a naive `if failed_startup`
+        // alone would have missed.
+        assert!(never_became_a_conversation(false, true));
+        // Both at once is not reachable in practice — `discard_on_eof` is
+        // only ever set once `starting` has already answered the caller —
+        // but the predicate still has to answer honestly about it.
+        assert!(never_became_a_conversation(true, true));
+        // An ordinary session, talked to successfully and now ending on its
+        // own or by the row's own cross: the record and the offer it draws
+        // both survive.
+        assert!(!never_became_a_conversation(false, false));
     }
 }

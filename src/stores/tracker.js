@@ -4,6 +4,11 @@ import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { orderCards } from '../components/kanban/cardOrder.js'
+/* The one thing this store reads out of another: the active project, so a
+   one-shot question the front end sends can be answered against the same
+   project's own `agents` block a session it might start would be — see
+   `searchSemantic` below. */
+import { settings } from './settings.js'
 
 /* bd and the design system call the same thing by different names. RESERVED in
    status.js is ready/running/done, in bd it is open/in_progress/closed. The only
@@ -696,7 +701,7 @@ export async function searchSemantic(query) {
   searchState.answered = false
   searchState.query = asked
   try {
-    const ids = await invoke('tracker_search_semantic', { query })
+    const ids = await invoke('tracker_search_semantic', { query, project: settings.activeProject })
     if (searchState.query !== asked) return
     searchState.ids = ids
     searchState.answered = true

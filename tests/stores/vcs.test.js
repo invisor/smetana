@@ -1597,6 +1597,21 @@ describe('the git panel store', () => {
     expect(stores.vcs.vcsState.suggestError).toBe(null)
   })
 
+  /* `project` rides beside the repository, `vcsState.project`'s own, so the
+     one-shot question can be answered against the active project's own
+     `agents` block rather than always the root table
+     (`.claude/rules/settings.md`). */
+  it('names the project alongside the repository', async () => {
+    const { stores, ipc } = await loadStores()
+    committing(ipc)
+    ipc.on('vcs_suggest_message', 'chore: bump the sidecar')
+
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.suggestMessage()
+
+    expect(ipc.calls('vcs_suggest_message')).toEqual([{ repo: '/p/.', project: '/p' }])
+  })
+
   /* Generating writes nothing, so it must not go through `busy` and take the
      branch rows down with it — and its failure must not reach `writeError`,
      where the panel would title it "Git refused this operation" over a party

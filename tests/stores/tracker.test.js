@@ -6,12 +6,14 @@ import { promotedNote } from '../../src/components/run/promotedNote.js'
 let ipc
 let emit
 let tracker
+let settings
 
 beforeEach(async () => {
   const loaded = await loadStores()
   ipc = loaded.ipc
   emit = loaded.emit
   tracker = loaded.stores.tracker
+  settings = loaded.stores.settings
 })
 
 /* Start the tracker with a given snapshot. Returns once initTracker has run to
@@ -825,10 +827,26 @@ describe('the semantic tier', () => {
 
     await tracker.searchSemantic('the bell is silent')
 
-    expect(ipc.calls('tracker_search_semantic')).toEqual([{ query: 'the bell is silent' }])
+    expect(ipc.calls('tracker_search_semantic')).toEqual([
+      { query: 'the bell is silent', project: null }
+    ])
     expect(tracker.searchState.ids).toEqual(['smetana-a1a', 'smetana-b2b'])
     expect(tracker.searchState.pending).toBe(false)
     expect(tracker.searchState.error).toBe(null)
+  })
+
+  /* `project` rides beside the query so a one-shot question can be answered
+     against the active project's own `agents` block, the same table a session
+     started in it would use (`.claude/rules/settings.md`). */
+  it('names the active project alongside the query', async () => {
+    ipc.on('tracker_search_semantic', () => [])
+    settings.settings.activeProject = '/work/holiday-curb'
+
+    await tracker.searchSemantic('anything')
+
+    expect(ipc.calls('tracker_search_semantic')).toEqual([
+      { query: 'anything', project: '/work/holiday-curb' }
+    ])
   })
 
   it('keeps the refusal as a sentence and stops spinning', async () => {
@@ -968,7 +986,7 @@ describe('the semantic tier', () => {
     const first = tracker.searchSemantic('one thing')
     await tracker.searchSemantic('another thing')
 
-    expect(ipc.calls('tracker_search_semantic')).toEqual([{ query: 'one thing' }])
+    expect(ipc.calls('tracker_search_semantic')).toEqual([{ query: 'one thing', project: null }])
 
     release(['smetana-a1a'])
     await first

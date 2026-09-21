@@ -234,3 +234,27 @@ describe('what a re-aimed window reads off the event', () => {
     expect(shown).toHaveBeenLastCalledWith('/store/b.png', 'b.png')
   })
 })
+
+describe('the subscription probe', () => {
+  /* `project` rides beside `agent` on every call, new with smetana-9x2y: it is
+     what lets `runs/commands.rs`'s own project-aware fallback answer about the
+     same project a run's own gate would, whichever of the two callers ever
+     leaves `agent` unnamed. */
+  it('sends the agent and the project together', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('agent_usage', { state: 'read', sessionPct: 10, sessionReset: '', weekPct: null, weekReset: null })
+
+    await stores.app.readAgentUsage('codex', '/work/holiday-curb')
+
+    expect(ipc.calls('agent_usage')).toEqual([{ agent: 'codex', project: '/work/holiday-curb' }])
+  })
+
+  it('is a caller with no opinion by default', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('agent_usage', { state: 'read', sessionPct: 10, sessionReset: '', weekPct: null, weekReset: null })
+
+    await stores.app.readAgentUsage()
+
+    expect(ipc.calls('agent_usage')).toEqual([{ agent: null, project: null }])
+  })
+})

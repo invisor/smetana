@@ -389,24 +389,34 @@ fn records_a_restorable(intent: &Intent) -> bool {
     !matches!(intent, Intent::Run { .. })
 }
 
-/// The conversation id this session is to be recorded under, or `None` for a
-/// session with no record.
+/// The conversation id this session is to be recorded under **at the
+/// spawn**, or `None` for one this function cannot name yet.
 ///
 /// Three answers in one place, because the three would otherwise be three
 /// scattered conditions saying one thing. A resume carries the id it reopened,
 /// so its record is rewritten under that id and the row survives a second
-/// restart. A **fork** does not: `--fork-session` has Claude Code invent a new
-/// id for the new transcript, and a record written under the original's id
-/// would offer a row that reopens the wrong conversation — so a fork records
-/// nothing, exactly as a harness that cannot be told an id records nothing.
+/// restart. A **fork** answers `None` here regardless of harness, because at
+/// the spawn nobody has told this app the new id yet. On the PTY road that is
+/// the whole of the story: `discovers_its_own_id` excludes every
+/// `ResumeSession`, fork included, so a PTY fork's record stays empty for the
+/// life of the session — and a Claude Code fork never gets one at all, on
+/// either road, since `--fork-session` has it invent an id this app never
+/// learns. **A driven Codex fork is not the same story any more**: its
+/// app-server hands the new id back in `thread/fork`'s own reply, and
+/// `session::service`'s `note_conversation` picks it up from there and writes
+/// the record this function could not — see `Driver::discovered_id`. So "a
+/// fork records nothing" is still true of this function's own answer, and of
+/// every road but that one; it stopped being true of the app as a whole.
 /// Everything else gets a fresh id, when the profile can be told one and the
 /// machine will give the bytes.
 ///
-/// **`pub(crate)` because the driven worker asks it too**, and asks it about
-/// the same two intents a person can start there. A driven session records into
-/// the very same `.smetana/agents.json`, under the same key, and an offline row
-/// cannot know which road made it — so the decision of *whether* to record, and
-/// under what name, has to be one function rather than two that agree today.
+/// **`pub(crate)` because the driven worker asks it too**, for whichever
+/// intent it is building a session for — not a fixed count of them, which
+/// would be wrong again the next time one changes. A driven session records
+/// into the very same `.smetana/agents.json`, under the same key, and an
+/// offline row cannot know which road made it — so the decision of *whether*
+/// to record, and under what name, has to be one function rather than two
+/// that agree today.
 pub(crate) fn conversation_for(
     profile: &'static dyn agents::Profile,
     intent: &Intent,

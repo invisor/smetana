@@ -157,24 +157,42 @@ subscriptions, and committing it would hand a colleague with no Codex account a 
 starts under one. A group named "This project" on the Agents tab of the settings window was
 considered and refused, on the same argument the settings window section below gives for keeping
 `.smetana/project.toml`'s own run configuration out of that window entirely: that window's contract
-is about this machine, not about a project. The dialog that will let somebody actually write this
-block is a separate, later task, and this schema and its resolver merge ahead of it on purpose — but
-that does not mean the key sits untouched until then. `merge` writes `"agents": null` into the active
-project's entry on every save, with no `skip_serializing_if`, exactly like this schema's other
-still-unset per-project `Option` fields; and a block put there by hand is written straight back
-rather than wiped or left alone — **but only once the front end has actually read it in**.
-`settings_load` sends a project's `agents` whole, and `applySection`'s `Object.assign(target,
-fallback, stored)` in `stores/settings.js` copies `stored.project.agents` onto the front end's
-reactive `settings.project` even though `defaults()` never declares that key — Object.assign copies
-every key its arguments have, not only the ones the target already carries — so the next
-`settings_save` serializes whatever landed there. **That read happens at startup and on a project
-switch, and nowhere else**, so a block hand-written while the app is already sitting open on that
-project is not picked up: the in-memory `settings.project` still has no `agents` field, the next
-400 ms debounce writes its stale `null` over the edit, and the block is gone. Hand editing is the
-only road into this block until the follow-up front-end task lands, so the edit has to be made with
-the app closed, or followed by switching away from the project and back, for it to survive the first
-save. A project that is not the one open keeps whatever the file already held, since only the active
-project's state ever crosses the IPC boundary.
+is about this machine, not about a project. A group named "This project" on that tab would have put
+two different kinds of thing behind one door; the door this block actually gets is a dialog of its
+own, `'project-settings'` off the project tile's right-click menu, described in full in
+`.claude/rules/runs.md`'s own section on it — the Agents group there is what writes this block, and
+it is the main window doing the writing, through `settings.project.agents = agents` straight into
+this same reactive object, exactly as every other field on `settings.project` is written. `merge`
+writes `"agents": null` into the active project's entry on every save, with no
+`skip_serializing_if`, exactly like this schema's other still-unset per-project `Option` fields, so
+a project nobody has ever turned the switch on for is the byte-for-byte file every project without
+one was before this existed.
+
+**The front end's own copy of this key is declared now, and that declaring is what makes a project
+switch clear it correctly.** `defaults().project` in `stores/settings.js` lists `agents: null`
+beside `runSettings` and the rest of that object's other fields, for the reason every one of them is
+listed there: `applySection`'s `Object.assign(target, fallback, stored)` can only clear a key it
+knows to fall back on, so a key missing from `defaults()` would leave the departing project's block
+standing under the next project's name the moment somebody switched without the arriving project
+ever having written one of its own. `settings.project.agents` follows the ordinary per-project rule
+from here on — read whole by `settings_load`, applied by `loadProjectLayout`'s `applySection` at
+startup and on every project switch — the same round trip `selectedRepo` and `favoriteBranches`
+already take. `defaults().project` not declaring this key was the state the follow-up front-end
+task (smetana-9x2y) found and was required to fix before writing anything else, and the hazard it
+closed is recorded where the front-end task itself is: a key present on disk only because Rust
+always serialises it is not a key the front end can clear.
+
+**Hand editing the file is still a second road into this block, and it still carries the one caveat
+that predates the dialog.** `settings_load` sends a project's `agents` whole, and that read still
+happens **at startup and on a project switch, and nowhere else** — there is no watcher on the file.
+So a block somebody writes by hand while the app is already sitting open on that project is not
+picked up: the in-memory `settings.project.agents` still holds whatever it read last, the next
+400 ms debounce writes that stale value straight back over the hand edit, and the edit is gone. The
+edit has to be made with the app closed, or followed by switching away from the project and back,
+for it to survive the first save — exactly as before, and unlike the dialog, whose own write lands
+directly in this reactive object and needs no re-read of anything. A project that is not the one
+open keeps whatever the file already held, since only the active project's state ever crosses the
+IPC boundary.
 
 **Two conventions about the empty string, and both are load-bearing.** An empty `model` means the
 flag is **not passed at all** and the harness picks for itself — this app's behaviour to the letter

@@ -518,26 +518,32 @@ function listenToState() {
 /* Which harnesses this app can drive, and the whole of the list.
 
    A driven session is one whose protocol the worker parses itself, and only
-   Claude Code and Codex creation have drivers. Codex is intentionally limited
-   to Bare and NewTask; other manual Codex intents keep their established PTY.
+   Claude Code and Codex have drivers — each for every intent a person talks
+   to, since `Intent::Run` is the one intent neither harness drives at all.
    Rust repeats that gate after resolving a role override or executable
    substitution, which this inexpensive front-door check cannot see.
 
    **This is a cheap front door and cannot be the only gate, because it cannot
-   see `PATH`.** It is asked of `settings.agent`, and the first half of that
-   chain is exact: `Intent::Bare` takes `agents::Role::Default`, which
-   `settings::model::Settings::role_pair` answers with the root pair — the same
-   two fields the front end holds, with no per-project override reaching it. The
-   half it cannot see is downstream of all of that. `agents::pick` substitutes
-   **the first installed profile** when the configured one is not on the machine,
-   silently and by design, and `pick_with_model` is what `spawn_session` calls.
-   `settings.agent` ships as `claude` and `Settings::validate` forces anything
-   unknown back to it, so a machine with only Codex on it answers `true` here and
-   is refused by the driver a round trip later. What answers that is the caller:
-   `startAgent` in `views/DesktopApp.vue` falls through to `createSession` when a
-   driven start comes back with nothing, and `createSession` resolves whatever
-   `pick` would have. Nothing here should grow a second guess at `PATH` instead —
-   the front end does not have one.
+   see `PATH`.** The caller asks it of `effectiveAgents.value.agent`
+   (`components/settings/agentRoles.js`'s `effectiveAgentTable`,
+   `.claude/rules/settings.md`) rather than the bare root field, and the first
+   half of that chain is exact: `Intent::Bare` takes `agents::Role::Default`,
+   which `settings::model::Settings::role_pair` answers project-aware now —
+   the active project's own `agents` block where it names a harness, the root
+   pair otherwise — and `effectiveAgentTable` is the front end's mirror of the
+   identical choice, so a project carrying its own table moves this front door
+   with it rather than leaving it to answer about the root's harness alone.
+   The half it cannot see is downstream of all of that. `agents::pick`
+   substitutes **the first installed profile** when the configured one is not
+   on the machine, silently and by design, and `pick_with_model` is what
+   `spawn_session` calls. The resolved agent ships as `claude` where nothing
+   overrides it and `Settings::validate` forces anything unknown back to it,
+   so a machine with only Codex on it answers `true` here and is refused by
+   the driver a round trip later. What answers that is the caller: `startAgent`
+   in `views/DesktopApp.vue` falls through to `createSession` when a driven
+   start comes back with nothing, and `createSession` resolves whatever `pick`
+   would have. Nothing here should grow a second guess at `PATH` instead — the
+   front end does not have one.
 
    A list here rather than a capability on the harness row, because there is no
    flag for this: `agents::Capabilities` carries `resume`, `fork`, `clear`,
@@ -559,7 +565,6 @@ function listenToState() {
    Read at the moment it is asked and never cached, which is the whole of
    "changes what starts, not what runs": a panel already on screen goes on being
    a panel, and the next session opens in a terminal. */
-/* Codex's narrower intent gate lives beside driver_for after profile picking. */
 const DRIVEN = ['claude', 'codex']
 
 export const canDrive = (agent) => settings.conversationPanel && DRIVEN.includes(agent)
@@ -649,11 +654,21 @@ function noteState(id, state) {
    next thing `startConversation` does, and on every `session:state` after that
    — and this is the one place either of them lands.
 
-   `null` is an ordinary answer and stays one: a fork records nothing, since
-   `--fork-session` has the harness invent an id this app never learns, and a
-   machine that would not give the random bytes records nothing either. Such a
-   row is keyed by `drivenRowId` instead and simply does not survive a restart,
-   which is what `agentMenu.js`'s `nothing to remember it by` says on its Pin.
+   `null` is an ordinary answer and stays one for a session whose harness never
+   hands this app an id at all: `--fork-session` has Claude Code invent one
+   this app never learns, and a machine that would not give the random bytes
+   is the same absence for a different reason. Such a row is keyed by
+   `drivenRowId` instead and simply does not survive a restart, which is what
+   `agentMenu.js`'s `nothing to remember it by` says on its Pin. **A driven
+   Codex fork is not drawn from that list any more** — its app-server invents
+   the new id too, but hands it back in `thread/fork`'s own reply, and
+   `session::service`'s own `note_conversation` writes it into `session:state`
+   a turn or two after the snapshot this function's other caller,
+   `session_attach`, already answered with `null`. This is the one path that
+   still reaches a row through this function rather than through
+   `session_attach`: a null that arrives here later is a real answer landing
+   late, not the row's last word on the subject, and the Pin's own refusal
+   stops applying to such a row the moment this fires.
 
    Never written back to `null` over a value: the two roads carry the same id
    and a payload that arrived without one is a build that stopped sending it,
