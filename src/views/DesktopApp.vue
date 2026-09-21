@@ -663,22 +663,37 @@ onMounted(initUpdates)
    — where `settings.agent` still ships as `claude`, and `Settings::validate`
    forces any unknown value back to it — the cheap check answers yes and the
    worker's `driver_for` then refuses. The answer is the road below rather than
-   a better question here: a driven start that comes back with nothing falls
-   through to `createSession`, which resolves the same harness Rust would have
-   picked and opens the PTY that button has always opened. What the check is
-   still worth is the round trip it saves in the ordinary case, and the refusal
-   it keeps out of the log.
+   a better question here: a driven start refused with `SessionError::NotDriven`
+   falls through to `createSession`, which resolves the same harness Rust would
+   have picked and opens the PTY that button has always opened. What the check
+   is still worth is the round trip it saves in the ordinary case, and the
+   refusal it keeps out of the log.
 
-   **A fallback is not a failure and must not be said out loud.** From where the
-   person is standing they asked for an agent and are getting one, so the
-   sentence `startConversation` left behind is taken off the screen on the way
-   through — held, though, and not dropped: if the PTY road refuses as well, it
-   goes back, because it is then the only account of the press anybody has.
+   **A fallback is not a failure and must not be said out loud — but only while
+   it really is a fallback.** `notDriven` is the one tag this function ever
+   falls through on: it means the driven road never actually tried anything,
+   the same front-door question above answered wrong. From where the person is
+   standing they asked for an agent and are getting one, so the sentence
+   `startConversation` left behind is taken off the screen on the way through —
+   held, though, and not dropped: if the PTY road refuses as well, it goes
+   back, because it is then the only account of the press anybody has.
    `createSession` sets a sentence of its own, but that one does not reliably
    survive to a frame — the next successful terminal read clears
    `terminalState.lastError`, which on a machine with a worker answering reads is
    a matter of microseconds. That behaviour is `terminals.js`'s and predates this
    road; what is this function's business is not resting on it.
+
+   **Every other refusal is an attempt that was actually made, and it stops
+   here.** `badCwd` is one instance of the rule rather than a special case any
+   more: whatever the driven road tried — resolving a resumed session's
+   directory, or, for Codex's app-server slice, `initialize`, `thread/start`
+   or a turn that never got one — it tried it and it failed, so a second try
+   down a PTY built from the very same profile could only fail again, or
+   worse, quietly succeed at something the person never asked the panel for.
+   Acceptance criterion 1 of smetana-gb7f.4 is this branch: an app-server
+   startup or protocol error shows its reason and never falls back in
+   silence. The caller's draft is untouched either way — `submitNewTask`
+   only closes its dialog once this function answers `true`.
 
    **A press that started nothing costs nothing.** The aim is put back with the
    sentence: a project that was watching a conversation when somebody pressed
@@ -759,12 +774,19 @@ async function startAgent(path, intent) {
       showAgentTab(id, path)
       return true
     }
-    /* A refusal about the directory ends it here and the sentence stands:
-       both workers ask `sessions::model::resume_cwd` of the same path, so a
-       resumed session's PTY road could only refuse again and put the same
-       toast up a second time. Every other intent's `session_cwd` never
-       answers this tag, so this branch is inert for them. */
-    if (conversationState.lastError?.kind === 'badCwd') {
+    /* `notDriven` is the one tag that means the driven road never actually
+       tried anything — the front door's cheap `canDrive` check was wrong
+       about a capability Rust alone knows, exactly the case the PTY fallback
+       below exists for. Every other tag is an attempt that was made and
+       failed: `badCwd` (both workers ask `sessions::model::resume_cwd` of
+       the same path, so a resumed session's PTY road could only refuse
+       again and put the same toast up a second time), a Codex app-server
+       that never started or answered with a protocol error, or anything
+       else this store has no special words for. Acceptance criterion 1 of
+       smetana-gb7f.4: the sentence stands, the draft behind this press is
+       untouched, and there is no second attempt down a PTY built from the
+       very same profile. */
+    if (conversationState.lastError?.kind !== 'notDriven') {
       if (agentAimWrites.get(path) === aimWrites) agentAim.set(path, aimed)
       return false
     }

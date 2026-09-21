@@ -40,7 +40,7 @@ which sound each of the two announcements makes and whether a finished run shows
 absolute path to its content state (side tab, right tab, active tab, selected task, `recentTasks`,
 selected path, `selectedRepo`, expanded folders, `branchFolders`, `openTabs`, `previewTab`,
 `columnOrder`, `tabOrder`, `agentOrder`, `pinnedAgents`, `runSettings`,
-`storageWarnedMib`, `usedAt`).
+`storageWarnedMib`, `usedAt`, `agents`).
 
 `tabOrder` sits beside `openTabs` rather than replacing it, and the two answer different questions:
 that one is the **set of files to open again** — the dirty marks, the focus sweep and the closing of
@@ -68,7 +68,13 @@ field was considered and refused on the argument `kanban` and `git.autoFetch` be
 second reason of its own: an instruction meant for one repository already has a better home the
 harness reads by itself — `CLAUDE.md` or `AGENTS.md` — and a project half would have widened the two
 windows' contract for something nobody asked for. What the field reaches, and by which road, is
-`.claude/rules/agents.md`; this file only stores it.
+`.claude/rules/agents.md`; this file only stores it. It stays global even now that `agent`, `model`
+and `agentRoles` can be overridden per project (see below), and for the same reason that override is
+per project **on this machine** rather than in the repository: a harness a project wants varies with
+whose machine is running it, since subscriptions differ per person, while a standing instruction
+varies with the person and not with the project at all — so a project half of `agentPrompt` would
+have widened the settings window's contract for nothing. A project's `agents` block reaches none of
+the three languages or this field.
 
 The ceiling is `MAX_AGENT_PROMPT`, 4000 bytes, checked in both `validate` bodies through
 `forget_if_too_long`. Over it the value is **forgotten whole rather than truncated** — the rule
@@ -128,6 +134,47 @@ behind everything; `agentRoles` is four `{ agent, model }` pairs — `tasks`, `c
 `agents::role_of`'s to say and deliberately not this schema's: this is the stored preference, that is
 the rule, and only one of the two belongs in a file people edit by hand
 (`.claude/rules/agents.md` carries the rule and why there are five rows and not eleven).
+
+**One exception to "at the root": a project may carry its own whole copy of this table,
+`projects.<path>.agents`, and it is all-or-nothing rather than a per-role override.** The request
+behind it is a real one — one project developed by Codex agents, another by Claude Code — and the
+shape it takes is `ProjectState::agents: Option<ProjectAgents>`, a `{ agent, model, agentRoles }`
+identical to the root's three fields and validated by the same rules (`one_of` against
+`agents::IDS`, `known_model`, `agent_roles.validate()`), field by field and never thrown away whole.
+A missing key or an explicit `null` means "the root table, entirely" — which is every file on disk
+today, and the byte-for-byte reading a project with no block keeps. A present block takes over
+**completely**: its own `Default` pair and its own four roles, each inheriting from that project's
+`Default` by the same rule the root's roles keep, and never from the root's. Mixing the two — a
+project's own `Default` with the root's `agentRoles`, or the other way round — was refused, because a
+role that skipped the project's table on the way to the root's would put a Claude model behind a
+Codex project's Tasks row, ready to fail at 2am. There is no per-project-field inheritance and no
+migration for it: the resolver is one function, `Settings::role_pair(project, role)`, choosing the
+whole table before it ever asks which role — a project's table if it has one bound to that path, the
+root's otherwise — with `table_pair` as the one private rule both tables are read through, so the
+inheritance itself is written down exactly once. It lives in `settings.json` rather than in
+`.smetana/project.toml`: which harness a person's own machine runs is a fact about their own
+subscriptions, and committing it would hand a colleague with no Codex account a project that only
+starts under one. A group named "This project" on the Agents tab of the settings window was
+considered and refused, on the same argument the settings window section below gives for keeping
+`.smetana/project.toml`'s own run configuration out of that window entirely: that window's contract
+is about this machine, not about a project. The dialog that will let somebody actually write this
+block is a separate, later task, and this schema and its resolver merge ahead of it on purpose — but
+that does not mean the key sits untouched until then. `merge` writes `"agents": null` into the active
+project's entry on every save, with no `skip_serializing_if`, exactly like this schema's other
+still-unset per-project `Option` fields; and a block put there by hand is written straight back
+rather than wiped or left alone — **but only once the front end has actually read it in**.
+`settings_load` sends a project's `agents` whole, and `applySection`'s `Object.assign(target,
+fallback, stored)` in `stores/settings.js` copies `stored.project.agents` onto the front end's
+reactive `settings.project` even though `defaults()` never declares that key — Object.assign copies
+every key its arguments have, not only the ones the target already carries — so the next
+`settings_save` serializes whatever landed there. **That read happens at startup and on a project
+switch, and nowhere else**, so a block hand-written while the app is already sitting open on that
+project is not picked up: the in-memory `settings.project` still has no `agents` field, the next
+400 ms debounce writes its stale `null` over the edit, and the block is gone. Hand editing is the
+only road into this block until the follow-up front-end task lands, so the edit has to be made with
+the app closed, or followed by switching away from the project and back, for it to survive the first
+save. A project that is not the one open keeps whatever the file already held, since only the active
+project's state ever crosses the IPC boundary.
 
 **Two conventions about the empty string, and both are load-bearing.** An empty `model` means the
 flag is **not passed at all** and the harness picks for itself — this app's behaviour to the letter

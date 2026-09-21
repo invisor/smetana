@@ -386,7 +386,7 @@ fn spawn_session(
     // in its own `Create` arm: this is where a driven session is built, so what
     // a person configured is what starts, rather than a harness this file
     // picked for itself.
-    let (agent, model) = crate::settings::role_model(app, &intent, None);
+    let (agent, model) = crate::settings::role_model(app, Some(project), &intent, None);
     // The login shell's `PATH`, not this process's: a bundled app started from
     // Finder inherits launchd's, where nothing a person installed is reachable
     // and every agent would look uninstalled.
@@ -403,7 +403,10 @@ fn spawn_session(
     // place a session that never existed is swept up.
     let ticket = permission.map(|server| server.register(id));
     let Some(driver) = driver_for(profile, &intent, ticket) else {
-        return Err(SessionError::Spawn(format!(
+        // Not an attempt that failed — the front door was wrong about a
+        // capability, and `startAgent`'s PTY fallback exists exactly for
+        // this tag (`SessionError::NotDriven`'s own header).
+        return Err(SessionError::NotDriven(format!(
             "this action is not supported in the conversation panel for {}",
             profile.label()
         )));
@@ -701,7 +704,10 @@ fn handle(
     match request {
         Request::Start(project, intent, tx) => {
             if !drivable(&intent) {
-                let _ = tx.send(Err(SessionError::Spawn(
+                // The same capability tag `driver_for`'s own `None` answers
+                // with: nothing was attempted, so the PTY fallback this tag
+                // buys is safe — see `SessionError::NotDriven`'s header.
+                let _ = tx.send(Err(SessionError::NotDriven(
                     "a run is not a conversation and cannot be driven".into(),
                 )));
                 return;

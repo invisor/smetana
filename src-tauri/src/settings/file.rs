@@ -63,12 +63,16 @@ pub fn load(path: &Path) -> (Settings, Option<Problem>) {
 /// all — because the first run has no file and that is no reason to refuse to
 /// start an agent.
 ///
+/// `project` is `Settings::role_pair`'s own argument, passed straight through:
+/// `Some(path)` reads that project's own `agents` block where it has one, and
+/// every other case — `None`, an unknown project, one with no block — reads
+/// the root exactly as every caller before this argument existed always did.
+///
 /// Two values rather than the resolved view `settings_load` hands the front end:
-/// the callers here want the file's own answer to one question, and none of them
-/// has a project to resolve against. It is the head of this family and the
-/// readers below it are written against its shape.
-pub fn role_pair(path: &Path, role: crate::agents::Role) -> (String, String) {
-    load(path).0.role_pair(role)
+/// the callers here want the file's own answer to one question. It is the head
+/// of this family and the readers below it are written against its shape.
+pub fn role_pair(path: &Path, project: Option<&str>, role: crate::agents::Role) -> (String, String) {
+    load(path).0.role_pair(project, role)
 }
 
 /// The configured languages, and nothing else out of the file. The same shape
@@ -316,7 +320,35 @@ mod tests {
         let path = dir.join("settings.json");
         fs::write(&path, r#"{"version":1,"agent":"codex"}"#).expect("setup");
 
-        assert_eq!(role_pair(&path, crate::agents::Role::Default).0, "codex");
+        assert_eq!(role_pair(&path, None, crate::agents::Role::Default).0, "codex");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_project_naming_an_agents_block_on_disk_answers_from_it_and_not_the_root() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        fs::write(
+            &path,
+            r#"{"version":1,"agent":"claude","projects":{"/a/project":{"agents":{"agent":"codex","model":"gpt-5.6-luna"}}}}"#,
+        )
+        .expect("setup");
+
+        assert_eq!(
+            role_pair(&path, Some("/a/project"), crate::agents::Role::Default),
+            ("codex".to_owned(), "gpt-5.6-luna".to_owned()),
+            "the project's own block, never the root"
+        );
+        assert_eq!(
+            role_pair(&path, None, crate::agents::Role::Default).0,
+            "claude",
+            "asked with no project, the root still answers"
+        );
+        assert_eq!(
+            role_pair(&path, Some("/no/such/project"), crate::agents::Role::Default).0,
+            "claude",
+            "a project this file has never heard of reads the root"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -331,7 +363,7 @@ mod tests {
 
         let missing = dir.join("settings.json");
         assert_eq!(
-            role_pair(&missing, crate::agents::Role::Default).0,
+            role_pair(&missing, None, crate::agents::Role::Default).0,
             default_agent,
             "a missing file is the first run"
         );
@@ -339,14 +371,14 @@ mod tests {
         let unknown = dir.join("unknown.json");
         fs::write(&unknown, r#"{"version":1,"agent":"cursor"}"#).expect("setup");
         assert_eq!(
-            role_pair(&unknown, crate::agents::Role::Default).0,
+            role_pair(&unknown, None, crate::agents::Role::Default).0,
             default_agent,
             "an id nobody ships loses the field"
         );
 
         let broken = dir.join("broken.json");
         fs::write(&broken, "{not json").expect("setup");
-        assert_eq!(role_pair(&broken, crate::agents::Role::Default).0, default_agent);
+        assert_eq!(role_pair(&broken, None, crate::agents::Role::Default).0, default_agent);
         let _ = fs::remove_dir_all(&dir);
     }
 

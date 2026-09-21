@@ -291,11 +291,17 @@ pub async fn tracker_access_reset(
 /// The snapshot is read **before** the blocking half rather than inside it: the
 /// worker is a tokio task and asking it from a blocking thread would be a
 /// second runtime entry for no gain.
+///
+/// **`project` is `Option<String>` deliberately** — the front end does not send
+/// it yet, so an absent argument reads the root exactly as before, and the
+/// command is ready for a project's own `agents` block once something starts
+/// passing it.
 #[tauri::command]
 pub async fn tracker_search_semantic(
     app: tauri::AppHandle,
     handle: State<'_, TrackerHandle>,
     query: String,
+    project: Option<String>,
 ) -> Result<Vec<String>, OneshotError> {
     let snapshot = ask(&handle, Request::Snapshot)
         .await
@@ -304,7 +310,7 @@ pub async fn tracker_search_semantic(
     tokio::task::spawn_blocking(move || {
         // The Default row, for the reason `vcs_suggest_message` records: a
         // one-shot has no session and therefore no `Intent` to ask a role with.
-        let (agent, model) = crate::settings::default_pair(&app);
+        let (agent, model) = crate::settings::default_pair(&app, project.as_deref());
         // `pick_with_model` for the reason `vcs_suggest_message` records: the
         // substitution stays, the model does not cross it.
         let (profile, model) =

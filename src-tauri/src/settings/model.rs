@@ -938,6 +938,46 @@ pub struct ProjectState {
     pub storage_warned_mib: Option<u32>,
     /// RFC 3339, stamped on write. Needed only for trimming the map.
     pub used_at: Option<String>,
+    /// This project's own `agent`, `model` and `agent_roles`, taken whole in
+    /// place of the root's — `None` for a missing key and for an explicit
+    /// `null` alike, both meaning "the root table, entirely". Not written by
+    /// anything in this app yet: the front end that offers it is a separate,
+    /// later task, and this field merges ahead of it on purpose so that
+    /// `Settings::role_pair` has somewhere to read a project's override from
+    /// the day one is first saved. See `ProjectAgents` for the shape and
+    /// `.claude/rules/settings.md` for why it is whole-table rather than
+    /// per-role.
+    ///
+    /// `#[serde(deserialize_with)]` for `agent_roles`'s own reason at the
+    /// root: `projects()` deserializes each `ProjectState` whole and drops any
+    /// entry that fails, so a hand-edited shorthand like `"agents": "codex"`
+    /// would otherwise cost this project its side tab, its open tabs, its
+    /// recent tasks and everything else beside it, for a value only this
+    /// field owns. Until the front-end task that offers a form for this block
+    /// exists, a hand edit is the only way one can exist at all, which is
+    /// exactly why the leniency matters most here.
+    #[serde(deserialize_with = "lenient_agents")]
+    pub agents: Option<ProjectAgents>,
+}
+
+/// `agents` read the way `section` reads a root section, one field over: a
+/// scalar — a string, a number, a boolean — or an object whose own fields
+/// refuse to read costs this field alone, answering `None`, rather than the
+/// `?` in `projects()` costing the whole project entry to a `.ok()`.
+///
+/// **A JSON array is the one shape this does not catch.** `ProjectAgents`'s
+/// derived `Deserialize` accepts a sequence positionally as well as a map, the
+/// way every derived struct in this file does, so `"agents": ["codex"]` reads
+/// as `Some(ProjectAgents { agent: "codex", model: "", .. })` rather than
+/// `None` — nothing a hand-written JSON object would ever produce, and not a
+/// crash or a lost project either, but not the leniency this function
+/// promises for everything else off the object shape.
+fn lenient_agents<'de, D>(deserializer: D) -> Result<Option<ProjectAgents>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value::<Option<ProjectAgents>>(value).ok().flatten())
 }
 
 impl Default for ProjectState {
@@ -964,6 +1004,7 @@ impl Default for ProjectState {
             run_settings: None,
             storage_warned_mib: None,
             used_at: None,
+            agents: None,
         }
     }
 }
@@ -1075,6 +1116,42 @@ pub struct AgentRoles {
 pub struct AgentRole {
     pub agent: String,
     pub model: String,
+}
+
+/// A project's own whole-table override of `agent`, `model` and `agent_roles`,
+/// stored as `ProjectState::agents`. Absent — a missing key, or an explicit
+/// `null` — means "the root table, entirely"; present means this project takes
+/// none of the root's answer, not even by role. `.claude/rules/settings.md`
+/// carries the reasoning ("whole or nothing" — no per-role mixing of a
+/// project's own Default with the root's roles, and no migration).
+///
+/// Validated exactly as the root fields are — `one_of` against `agents::IDS`,
+/// `known_model` against the chosen harness, `agent_roles.validate()` — by the
+/// same private rules. That is the read's second stage and it is field by
+/// field: a *value* this file does not recognise (an unknown harness, a model
+/// the chosen harness never offered, a role with an empty agent and a
+/// non-empty model) costs only the field that named it. The first stage is
+/// coarser on purpose — `ProjectState::agents`'s own `lenient_agents` costs
+/// the **whole** block, and the project falls back to the root table, for a
+/// *type* the file cannot read at all (`"agent": 5`, `"agentRoles": 5`, or a
+/// role field of the wrong type three levels down): matching the root's own
+/// per-field shape there — `Value::as_str` for `agent`, `section` for
+/// `agentRoles` — is a real narrowing and is wider than this struct's own
+/// task.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ProjectAgents {
+    pub agent: String,
+    pub model: String,
+    pub agent_roles: AgentRoles,
+}
+
+impl ProjectAgents {
+    fn validate(&mut self) {
+        one_of(&mut self.agent, &crate::agents::IDS, "claude");
+        known_model(&self.agent, &mut self.model);
+        self.agent_roles.validate();
+    }
 }
 
 /// The whole file.
@@ -1598,8 +1675,18 @@ fn trim(projects: &mut BTreeMap<String, ProjectState>, current: Option<&str>, op
 }
 
 impl Settings {
-    /// The harness and the model one role asks for: its own pair where it names
-    /// a harness, and the root pair — **whole** — where it does not.
+    /// The harness and the model one role asks for, for one project — its own
+    /// pair where the role names a harness, and the **whole** table it takes
+    /// that role's answer from where it does not.
+    ///
+    /// `project` chooses the table and nothing else: `Some(path)` naming a
+    /// project this file has a `ProjectState` for, with an `agents` block,
+    /// reads that block; every other case — no project, a project this file
+    /// has never heard of, one with no block, one whose block is `null` — reads
+    /// the root, exactly as a caller passing `None` always could. That is the
+    /// "whole or nothing" rule `.claude/rules/settings.md` and
+    /// `ProjectAgents`'s own header record: a project's table is never built by
+    /// mixing a project `Default` with the root's roles.
     ///
     /// Pure, and here rather than in `settings::role_model` for the reason
     /// `agents::role_of` is in `agents/`: the inheritance is a rule about this
@@ -1607,17 +1694,11 @@ impl Settings {
     /// neither. The two empty strings each mean something and neither is a gap:
     /// an empty harness is "inherit", an empty model is "say nothing and let the
     /// harness pick".
-    pub fn role_pair(&self, role: crate::agents::Role) -> (String, String) {
-        let chosen = match role {
-            crate::agents::Role::Tasks => Some(&self.agent_roles.tasks),
-            crate::agents::Role::Code => Some(&self.agent_roles.code),
-            crate::agents::Role::RunLead => Some(&self.agent_roles.run_lead),
-            crate::agents::Role::ReviewBranch => Some(&self.agent_roles.review_branch),
-            crate::agents::Role::Default => None,
-        };
-        match chosen {
-            Some(role) if !role.agent.is_empty() => (role.agent.clone(), role.model.clone()),
-            _ => (self.agent.clone(), self.model.clone()),
+    pub fn role_pair(&self, project: Option<&str>, role: crate::agents::Role) -> (String, String) {
+        let table = project.and_then(|path| self.projects.get(path)).and_then(|state| state.agents.as_ref());
+        match table {
+            Some(agents) => table_pair(&agents.agent, &agents.model, &agents.agent_roles, role),
+            None => table_pair(&self.agent, &self.model, &self.agent_roles, role),
         }
     }
 
@@ -1645,6 +1726,26 @@ impl Settings {
         sane_dialogs(&mut self.dialogs);
         sane_list(&mut self.open_projects, MAX_OPEN, MAX_PATH_LEN);
         active_in(&mut self.last_project, &self.open_projects);
+    }
+}
+
+/// The pair inheritance rule, shared by the root table and by a project's own
+/// `agents` block: a role that names its own harness keeps its own pair, and
+/// every other role — including `Default` — takes the table's own `agent` and
+/// `model` whole. `Settings::role_pair` is the only caller, once for the root
+/// and once for a project's block, so the rule itself is written down exactly
+/// once.
+fn table_pair(agent: &str, model: &str, agent_roles: &AgentRoles, role: crate::agents::Role) -> (String, String) {
+    let chosen = match role {
+        crate::agents::Role::Tasks => Some(&agent_roles.tasks),
+        crate::agents::Role::Code => Some(&agent_roles.code),
+        crate::agents::Role::RunLead => Some(&agent_roles.run_lead),
+        crate::agents::Role::ReviewBranch => Some(&agent_roles.review_branch),
+        crate::agents::Role::Default => None,
+    };
+    match chosen {
+        Some(role) if !role.agent.is_empty() => (role.agent.clone(), role.model.clone()),
+        _ => (agent.to_owned(), model.to_owned()),
     }
 }
 
@@ -1876,6 +1977,15 @@ impl ProjectState {
             || self.open_tabs.iter().any(|t| *t == self.active_tab);
         if !known || self.active_tab.len() > MAX_PATH_LEN {
             self.active_tab = "kanban".into();
+        }
+
+        // Validated exactly as the root's own `agent`/`model`/`agent_roles`
+        // are, by the same private rules — a damaged field inside the block
+        // is repaired on its own, and the block itself is never thrown away
+        // for one bad field. A missing block is left as `None`: that is "no
+        // override here" and there is nothing to repair.
+        if let Some(agents) = self.agents.as_mut() {
+            agents.validate();
         }
     }
 }
@@ -3666,7 +3776,7 @@ mod tests {
             crate::agents::Role::ReviewBranch,
             crate::agents::Role::Default,
         ] {
-            assert_eq!(settings.role_pair(role), ("claude".to_owned(), String::new()), "{role:?}");
+            assert_eq!(settings.role_pair(None, role), ("claude".to_owned(), String::new()), "{role:?}");
         }
     }
 
@@ -3783,19 +3893,163 @@ mod tests {
         settings.validate();
 
         assert_eq!(
-            settings.role_pair(crate::agents::Role::Tasks),
+            settings.role_pair(None, crate::agents::Role::Tasks),
             ("codex".to_owned(), "gpt-5.6-luna".to_owned()),
             "a role that named both halves keeps both"
         );
         assert_eq!(
-            settings.role_pair(crate::agents::Role::Code),
+            settings.role_pair(None, crate::agents::Role::Code),
             ("claude".to_owned(), "opus".to_owned()),
             "a role that named nothing takes the root pair, both halves of it"
         );
         assert_eq!(
-            settings.role_pair(crate::agents::Role::Default),
+            settings.role_pair(None, crate::agents::Role::Default),
             ("claude".to_owned(), "opus".to_owned()),
             "the default row is the root pair by definition"
+        );
+    }
+
+    /// Every role `table_pair` has an arm for — `Default` and the four that
+    /// inherit from it — so a test that only asked three of the five would
+    /// never touch the two arms `runs::service`'s gate and the branch-review
+    /// session actually read.
+    ///
+    /// A hand-kept copy of `agents::Role`'s variants, and that is a known cost
+    /// rather than an oversight: `table_pair`'s own match is exhaustive, so a
+    /// sixth role added tomorrow fails *that* to compile and cannot ship
+    /// silently — what it does not do is add itself here, so the new variant
+    /// would go untested with every test in this file still green. Whoever
+    /// adds a role should add it to this list in the same commit.
+    const ALL_ROLES: [crate::agents::Role; 5] = [
+        crate::agents::Role::Default,
+        crate::agents::Role::Tasks,
+        crate::agents::Role::Code,
+        crate::agents::Role::RunLead,
+        crate::agents::Role::ReviewBranch,
+    ];
+
+    #[test]
+    fn a_project_with_no_agents_block_reads_the_root_exactly_as_before() {
+        let mut settings = Settings::default();
+        settings.agent = "claude".into();
+        settings.model = "opus".into();
+        settings.projects.insert("/a/project".into(), ProjectState::default());
+        settings.validate();
+
+        for project in [None, Some("/a/project"), Some("/no/such/project")] {
+            for role in ALL_ROLES {
+                assert_eq!(
+                    settings.role_pair(project, role),
+                    ("claude".to_owned(), "opus".to_owned()),
+                    "no block anywhere in reach, so the root answers for {role:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_project_with_an_agents_block_never_answers_from_the_root() {
+        let mut settings = Settings::default();
+        settings.agent = "claude".into();
+        settings.model = "opus".into();
+        let mut project = ProjectState::default();
+        project.agents = Some(ProjectAgents {
+            agent: "codex".into(),
+            model: "gpt-5.6-luna".into(),
+            agent_roles: AgentRoles::default(),
+        });
+        settings.projects.insert("/a/project".into(), project);
+        settings.validate();
+
+        // Every role of the block's own `AgentRoles` is `default()`, so every
+        // one of the five arms — including `RunLead` and `ReviewBranch` —
+        // inherits the block's own Default pair, never the root's.
+        for role in ALL_ROLES {
+            assert_eq!(
+                settings.role_pair(Some("/a/project"), role),
+                ("codex".to_owned(), "gpt-5.6-luna".to_owned()),
+                "a role that names nothing inherits the project's own pair for {role:?}"
+            );
+            assert_eq!(
+                settings.role_pair(None, role),
+                ("claude".to_owned(), "opus".to_owned()),
+                "asked with no project, the root still answers for {role:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_role_inside_a_project_block_that_names_both_halves_keeps_both() {
+        let mut settings = Settings::default();
+        settings.agent = "claude".into();
+        settings.model = "opus".into();
+        let mut roles = AgentRoles::default();
+        roles.tasks = AgentRole { agent: "codex".into(), model: "gpt-5.6-luna".into() };
+        let mut project = ProjectState::default();
+        project.agents =
+            Some(ProjectAgents { agent: "claude".into(), model: "sonnet".into(), agent_roles: roles });
+        settings.projects.insert("/a/project".into(), project);
+        settings.validate();
+
+        assert_eq!(
+            settings.role_pair(Some("/a/project"), crate::agents::Role::Tasks),
+            ("codex".to_owned(), "gpt-5.6-luna".to_owned()),
+            "a role naming both halves inside the block keeps both"
+        );
+        assert_eq!(
+            settings.role_pair(Some("/a/project"), crate::agents::Role::Code),
+            ("claude".to_owned(), "sonnet".to_owned()),
+            "a role naming nothing inherits the project's own Default"
+        );
+    }
+
+    #[test]
+    fn a_project_agents_block_is_validated_field_by_field_like_the_root() {
+        // Three corrections at once, exactly the three `Settings::validate`
+        // makes at the root: an unknown harness goes back to `claude`, a model
+        // that harness (after the correction) does not offer is forgotten, and
+        // a role with an empty agent and a non-empty model loses the model —
+        // none of it touching the rest of the project's own state.
+        let mut settings = Settings::default();
+        let mut project = ProjectState::default();
+        project.selected_path = Some("src/main.rs".into());
+        let mut roles = AgentRoles::default();
+        roles.code.model = "opus".into(); // empty agent, non-empty model
+        project.agents = Some(ProjectAgents {
+            agent: "nosuchagent".into(),
+            model: "gpt-5.6-luna".into(), // a codex slug, not one `claude` offers
+            agent_roles: roles,
+        });
+        settings.projects.insert("/a/project".into(), project);
+        settings.validate();
+
+        let state = &settings.projects["/a/project"];
+        let agents = state.agents.as_ref().expect("block survives, repaired field by field");
+        assert_eq!(agents.agent, "claude", "an unknown harness is repaired to the fallback");
+        assert_eq!(agents.model, "", "a model the fallback harness never offered is forgotten");
+        assert_eq!(agents.agent_roles.code.agent, "", "the role's own agent stays empty");
+        assert_eq!(agents.agent_roles.code.model, "", "a role naming a model with no agent loses the model");
+        assert_eq!(
+            state.selected_path.as_deref(),
+            Some("src/main.rs"),
+            "the rest of the project's own state is untouched"
+        );
+    }
+
+    #[test]
+    fn an_agents_block_of_null_or_absent_reads_as_no_block() {
+        let missing = r#"{"version":1,"projects":{"/a/project":{}}}"#;
+        let Outcome::Ok(settings) = parse(missing) else { panic!("a missing key parses") };
+        assert_eq!(
+            settings.projects["/a/project"].agents, None,
+            "a project with no agents key reads as no block"
+        );
+
+        let null = r#"{"version":1,"projects":{"/a/project":{"agents":null}}}"#;
+        let Outcome::Ok(settings) = parse(null) else { panic!("an explicit null parses") };
+        assert_eq!(
+            settings.projects["/a/project"].agents, None,
+            "an explicit null reads exactly as a missing key does"
         );
     }
 
@@ -3857,6 +4111,81 @@ mod tests {
         assert!(roles.get("runLead").is_some(), "runLead, not run_lead");
         assert!(roles.get("reviewBranch").is_some(), "reviewBranch, not review_branch");
         assert!(roles.get("tasks").is_some() && roles.get("code").is_some());
+    }
+
+    #[test]
+    fn a_project_agents_block_serializes_agent_roles_in_camel_case_too() {
+        // The same contract one level deeper: a project's own block is sent
+        // and stored under `agents.agentRoles`, not `agents.agent_roles` — a
+        // dropped `rename_all` on `ProjectAgents` would leave every role
+        // inside every project block invisible to a hand reader of the file
+        // and to any future front end that writes one, with every other test
+        // in this module (which builds `ProjectAgents` in Rust and never
+        // round-trips it through JSON) staying green regardless.
+        let mut settings = Settings::default();
+        let mut roles = AgentRoles::default();
+        roles.run_lead = AgentRole { agent: "claude".into(), model: "opus".into() };
+        let mut project = ProjectState::default();
+        project.agents =
+            Some(ProjectAgents { agent: "codex".into(), model: "gpt-5.6-luna".into(), agent_roles: roles });
+        settings.projects.insert("/p".into(), project);
+
+        let json = serde_json::to_value(&settings).expect("the settings serialize");
+        let agents = json
+            .get("projects")
+            .and_then(|projects| projects.get("/p"))
+            .and_then(|project| project.get("agents"))
+            .expect("the project's own agents block");
+        assert!(agents.get("agentRoles").is_some(), "agentRoles, not agent_roles");
+        assert!(
+            agents.get("agentRoles").unwrap().get("runLead").is_some(),
+            "runLead, not run_lead, inside a project's own block"
+        );
+    }
+
+    #[test]
+    fn a_project_agents_block_is_parsed_out_of_camel_case_json_too() {
+        // The read half of the same contract: a hand-edited (or, later, a
+        // front-end-written) file names a role inside the block as
+        // `agentRoles`/`tasks`, and this is the one test that feeds JSON in
+        // through `parse` rather than building `ProjectAgents` as a Rust
+        // value and asking `role_pair` about it, which is what every other
+        // test in this module does and which cannot see a `rename_all` this
+        // struct is missing.
+        let text = r#"{"version":1,"projects":{"/p":{"agents":{
+            "agent":"claude","model":"opus",
+            "agentRoles":{"tasks":{"agent":"codex","model":"gpt-5.6-luna"}}
+        }}}}"#;
+        let Outcome::Ok(settings) = parse(text) else { panic!("the file parses") };
+        let agents = settings.projects["/p"].agents.as_ref().expect("the block parsed");
+        assert_eq!(agents.agent, "claude");
+        assert_eq!(agents.agent_roles.tasks.agent, "codex", "agentRoles/tasks crossed in");
+        assert_eq!(agents.agent_roles.tasks.model, "gpt-5.6-luna");
+        assert_eq!(
+            settings.role_pair(Some("/p"), crate::agents::Role::Tasks),
+            ("codex".to_owned(), "gpt-5.6-luna".to_owned()),
+            "the role read off camelCase JSON resolves correctly too"
+        );
+    }
+
+    #[test]
+    fn a_hand_edited_agents_of_the_wrong_shape_costs_the_block_and_not_the_project() {
+        // `"agents":"codex"` is a plausible shorthand for somebody editing the
+        // file by hand — until the front end that offers a form for this
+        // block exists, a hand edit is the only way one can exist at all.
+        // `ProjectState::agents` carries `deserialize_with = "lenient_agents"`
+        // for exactly this: without it, `projects()`'s `serde_json::from_value
+        // ::<ProjectState>(..).ok()` drops the whole entry on a type mismatch,
+        // taking this project's side tab, its open tabs, its recent tasks and
+        // everything else beside it down with the one field that was wrong.
+        let text = r#"{"version":1,"projects":{"/p":{
+            "agents":"codex","sideTab":"git","selectedPath":"src/main.rs"
+        }}}"#;
+        let Outcome::Ok(settings) = parse(text) else { panic!("the file parses") };
+        let state = settings.projects.get("/p").expect("the project entry survives");
+        assert_eq!(state.agents, None, "the malformed field alone is forgotten");
+        assert_eq!(state.side_tab, "git", "the rest of the project's own state survives with it");
+        assert_eq!(state.selected_path.as_deref(), Some("src/main.rs"));
     }
 
     #[test]

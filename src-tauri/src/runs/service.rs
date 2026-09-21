@@ -427,7 +427,8 @@ fn handle(
             // here — `terminal::service` resolves that at each spawn, off the
             // same row, and drops it if this snapshot and the file have since
             // come to disagree.
-            let (agent, _) = crate::settings::role_pair(app, crate::agents::Role::RunLead);
+            let (agent, _) =
+                crate::settings::role_pair(app, Some(&project), crate::agents::Role::RunLead);
             // Beside it and read the same way, for the same reason: a run that
             // silently changed its mind about worktrees between batches would
             // leave half a night's checkouts on the disk and sweep the other

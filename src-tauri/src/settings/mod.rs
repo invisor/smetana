@@ -2,9 +2,9 @@
 //! rules, `file.rs` is the disk, `commands.rs` is the two thin commands the
 //! front end calls.
 //!
-//! The two functions here are for the rest of the app rather than for the front
-//! end: a caller that wants one value out of the file, with no project to
-//! resolve against and nobody to report a failure to.
+//! The fourteen functions here are for the rest of the app rather than for the
+//! front end: a caller that wants one value out of the file and nobody to
+//! report a failure to.
 
 pub mod commands;
 pub mod file;
@@ -25,7 +25,13 @@ pub fn path(app: &AppHandle) -> Option<PathBuf> {
 
 /// Which CLI agent the app is configured to start for one kind of call, and
 /// which model it is to be asked for: a role that chose nothing inherits the
-/// root pair, whole.
+/// table it is being asked from, whole.
+///
+/// `project` is the project's own root — `Some(path)` reads that project's
+/// `agents` block where it has one, and every other case (`None`, an unknown
+/// project, one with no block) reads the root table exactly as every caller
+/// answered before this argument existed. See `Settings::role_pair` for the
+/// whole of the rule; this is only the file-shaped half of it.
 ///
 /// Read from the disk on each call rather than cached anywhere: there is no
 /// settings worker, and one read costs milliseconds — the same reasoning that
@@ -35,8 +41,8 @@ pub fn path(app: &AppHandle) -> Option<PathBuf> {
 ///
 /// The rule itself is `Settings::role_pair`, which is pure; this is the half
 /// that touches the file, and it is the head of the family below.
-pub fn role_pair(app: &AppHandle, role: crate::agents::Role) -> (String, String) {
-    path(app).map(|path| file::role_pair(&path, role)).unwrap_or_else(|| {
+pub fn role_pair(app: &AppHandle, project: Option<&str>, role: crate::agents::Role) -> (String, String) {
+    path(app).map(|path| file::role_pair(&path, project, role)).unwrap_or_else(|| {
         let shipped = model::Settings::default();
         (shipped.agent, shipped.model)
     })
@@ -60,12 +66,17 @@ pub fn role_pair(app: &AppHandle, role: crate::agents::Role) -> (String, String)
 ///
 /// `ResumeSession` is given no model at all, whatever the file says — see
 /// `agents::Launch::model`.
+///
+/// `project` is `role_pair`'s own argument, passed straight through: the
+/// project this session is starting in, so a project with its own `agents`
+/// block gets that table's answer rather than the root's.
 pub fn role_model(
     app: &AppHandle,
+    project: Option<&str>,
     intent: &crate::agents::Intent,
     chosen: Option<&str>,
 ) -> (String, Option<String>) {
-    let (mut agent, mut model) = role_pair(app, crate::agents::role_of(intent));
+    let (mut agent, mut model) = role_pair(app, project, crate::agents::role_of(intent));
     if let Some(pinned) = chosen {
         if pinned != agent {
             agent = pinned.to_owned();
@@ -84,18 +95,22 @@ pub fn role_model(
 /// Only the model, because only the model can be asked for: a subagent is
 /// spawned inside the lead's own harness, so that role's harness half reaches
 /// nothing here. `agents::prompt` turns this into one line of the run policy.
-pub fn worker_model(app: &AppHandle) -> Option<String> {
-    let (_, model) = role_pair(app, crate::agents::Role::Code);
+///
+/// `project` is the run's own root, passed to `role_pair` unchanged.
+pub fn worker_model(app: &AppHandle, project: Option<&str>) -> Option<String> {
+    let (_, model) = role_pair(app, project, crate::agents::Role::Code);
     (!model.is_empty()).then_some(model)
 }
 
-/// The root pair, for the two callers that have no `Intent` to ask with: the
-/// Git panel's commit-message button and the tracker's semantic search, both
-/// one-shot calls with no session behind them. They take the `Default` role,
-/// which is the root pair by definition — asked through `role_pair` all the
-/// same, so that one place decides what "the default" means.
-pub fn default_pair(app: &AppHandle) -> (String, Option<String>) {
-    let (agent, model) = role_pair(app, crate::agents::Role::Default);
+/// The table's own pair, for the two callers that have no `Intent` to ask
+/// with: the Git panel's commit-message button and the tracker's semantic
+/// search, both one-shot calls with no session behind them. They take the
+/// `Default` role, which is that table's pair by definition — asked through
+/// `role_pair` all the same, so that one place decides what "the default"
+/// means. `project` is passed straight through, so a one-shot call made from
+/// a project with its own `agents` block answers from that block.
+pub fn default_pair(app: &AppHandle, project: Option<&str>) -> (String, Option<String>) {
+    let (agent, model) = role_pair(app, project, crate::agents::Role::Default);
     (agent, (!model.is_empty()).then_some(model))
 }
 
