@@ -89,10 +89,14 @@ export function usageSegments(answer) {
     { name: usageWindowName(usage?.sessionLabel, 'Session'), value: percent(usage?.sessionPct) },
     { name: usageWindowName(usage?.weekLabel, 'Week'), value: percent(usage?.weekPct) }
   ]
-  // Codex's structured source explicitly tells us which windows exist. A
-  // one-window response must not imply a missing weekly allowance; the older
-  // Claude text source keeps its stable two-slot footer layout and dashes.
-  return answer?.state === READ && answer.agent === 'codex'
+  // `enumeratesWindows` is Rust's word for "this source lists which windows
+  // it has", derived in `runs/usage.rs` from `UsageSource` rather than from
+  // the agent's id — the class of hardcode `agents::catalogue` exists to
+  // remove. True, a one-window response must not imply a missing weekly
+  // allowance; false — including an answer from a build old enough to carry
+  // no such key at all — a text source's own stable two-slot layout and
+  // dashes, unchanged.
+  return answer?.state === READ && answer.enumeratesWindows
     ? windows.filter((_, index) => Number.isFinite(index === 0 ? usage?.sessionPct : usage?.weekPct))
     : windows
 }
@@ -133,13 +137,18 @@ function resetLine(name, resets) {
 
    Empty is a real answer, and the caller has to be ready for it: a reading in a
    band this build cannot name, printing no reset times, leaves nothing true to
-   say. A hint that opened on an empty panel would be worse than none. */
-export function usageTooltip(answer, busy = false, error = null) {
+   say. A hint that opened on an empty panel would be worse than none.
+
+   `nameFor` rides through to `usageNote` unchanged — the same parameter
+   `usageAgentLabel` above already takes from the caller, so a sentence named
+   in the hint and the bare word over the strip agree on what to call the
+   same harness. */
+export function usageTooltip(answer, busy = false, error = null, nameFor = (id) => id) {
   const usage = answer?.state === READ ? answer.usage : null
   return [
     resetLine(usageWindowName(usage?.sessionLabel, 'Session'), usage?.sessionReset),
     resetLine(usageWindowName(usage?.weekLabel, 'Week'), usage?.weekReset),
-    usageNote(answer, busy, error),
+    usageNote(answer, busy, error, nameFor),
     error ? `The allowance could not be read: ${error}` : null
   ]
     .filter(Boolean)

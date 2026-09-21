@@ -1372,6 +1372,10 @@ export function installMockBackend() {
         return {
           state: 'read',
           agent: 'codex',
+          // The app-server source names its own windows outright — see
+          // `runs::usage::AgentUsage::Read` — which is what lets the fixture
+          // print one slot rather than a dash for the week it never sent.
+          enumeratesWindows: true,
           usage: {
             sessionPct: 10,
             sessionLabel: '5 hours',
@@ -1386,6 +1390,7 @@ export function installMockBackend() {
       return {
         state: 'read',
         agent: 'claude',
+        enumeratesWindows: false,
         usage: {
           sessionPct: 10,
           sessionReset: 'Aug 7 at 8pm (Europe/Moscow)',
