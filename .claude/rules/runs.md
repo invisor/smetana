@@ -122,6 +122,9 @@ loses either way. Solo carries none of it, for the reason it carries no worker-m
 Code has no equivalent switch — whatever spawns its own subagents is not reached by a flag on this
 app's command line either — so this is Codex's alone, and it changes nothing about Phase 2: a task
 still merges one at a time, strictly, under the one merge lock, whatever harness reviewed it.
+Which Codex CLI version this needs, and what an older one does instead, is a fact about that harness
+rather than about a run's own policy, so it is held once, in `.claude/rules/agents.md`, and not
+repeated here.
 
 **Stopping is cooperative, and that is a decision with a cost attached.** `request_stop` sets a flag
 and the loop reads it between batches; the batch in flight is allowed to finish, because a run

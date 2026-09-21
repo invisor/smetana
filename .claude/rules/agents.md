@@ -173,10 +173,14 @@ them by name, the same as any other vocabulary word a CLI upgrade adds before th
 This is the first thing in the Codex profile that needs a CLI newer than the 0.146.0 the rest of this
 file was read against — `--enable multi_agent`, `agents.enabled` and
 `agents.max_concurrent_threads_per_session` were read off 0.155.1 — and there is no version floor
-anywhere in this tree to say so. `--enable` on a feature an older Codex has never heard of answers
-`Error: Unknown feature flag`, so on such a CLI an Auto or Supervised run now dies at spawn with that
-argv error rather than falling back to the sequential work it used to do; a person meeting that
-string in a run report should read it as this and not as a harness gone missing.
+anywhere in this tree to say so. What was actually measured there is `codex features list --enable
+definitely_not_a_feature` answering `Error: Unknown feature flag`, which is a claim about a CLI that
+knows `--enable` rather than about one older than it — this tree has no captured `--help` at 0.146.0
+to settle whether that flag existed then. So the honest floor: an older Codex refuses these arguments
+and the run dies at spawn either way, with `Error: Unknown feature flag` where it knows `--enable`
+and its own parser's `unexpected argument` where it does not. Either string in a run report means the
+same thing — this CLI predates `multi_agent` — and a person meeting one of them should read it as
+this and not as a harness gone missing.
 
 `oneshot_args` is the only one with no session behind it at all: how this harness is
 asked **one question** and nothing more. Claude Code answers it with the same `-p` `batch_args`

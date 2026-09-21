@@ -470,12 +470,19 @@ impl Profile for Codex {
         // `agents.max_concurrent_threads_per_session` both parse, the latter with its
         // own "must be at least 1" validator. This is the first fact in this profile
         // that needs a Codex newer than the 0.146.0 the rest of the file was read
-        // against: `--enable` on a feature an older Codex has never heard of answers
-        // `Error: Unknown feature flag`, which is not caught here, so an Auto or
-        // Supervised run on such a CLI dies at spawn with that argv error rather than
-        // falling back to sequential work — there is no version floor anywhere in this
-        // tree to turn that into a named health state the way `EXPECTED_BD_VERSION` in
-        // `tracker::service` turns a sidecar mismatch into `bd-version-mismatch`.
+        // against, and not caught here: `codex features list --enable definitely_not_a_feature`
+        // on 0.155.1 answers `Error: Unknown feature flag`, but that is a claim about
+        // a CLI that knows `--enable` and not about one older than it — this tree has
+        // no captured `--help` at 0.146.0 to say whether that flag existed then, only
+        // the screen fixtures under `src-tauri/tests/fixtures/`, none of which answer
+        // this. So the honest floor is: an older Codex refuses these arguments and the
+        // run dies at spawn either way, with `Error: Unknown feature flag` where it
+        // knows `--enable` and refuses the feature name, and its own parser's
+        // `unexpected argument` where it does not know the flag at all. Either string
+        // in a run report means the same thing — this CLI predates `multi_agent` —
+        // and there is no version floor anywhere in this tree to turn that into a named
+        // health state the way `EXPECTED_BD_VERSION` in `tracker::service` turns a
+        // sidecar mismatch into `bd-version-mismatch`.
         if let Intent::Run { settings, .. } = &launch.intent {
             if matches!(settings.mode, RunMode::Auto | RunMode::Supervised) {
                 if let Some(max_agents) = settings.max_parallel_tasks {
