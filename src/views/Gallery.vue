@@ -3370,15 +3370,14 @@ const menuTargetStyle = {
            and the branch here is one `branchOptions` had to keep because the
            list no longer holds it.
 
-           850, not the 760 this cell drew before the Agents group existed:
-           the switch row alone adds a caption, a spine and one `SettingsRow`
-           to the four fields above it. `overflow: hidden` stays here — the
-           switch is off by default, so this cell never draws the five rows
-           that made the height genuinely hard to bound below — but the
-           number is a generous margin over what was measured before the
-           group existed rather than a fresh measurement of its own; check it
-           by eye rather than trust the figure. -->
-      <div :style="{ position: 'relative', height: '850px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           640, measured against a running build in all four theme × density
+           combinations: this cell holds 575 px comfortable and 501 px
+           compact, the one after it 607 and 529. 640 is a margin over the
+           tallest of the four rather than a fresh guess — `overflow: hidden`
+           stays here, since the switch is off by default and this cell never
+           draws the five rows that made the height genuinely hard to bound
+           before it was measured. -->
+      <div :style="{ position: 'relative', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal
           :open="true"
           :defaults="{
@@ -3394,8 +3393,9 @@ const menuTargetStyle = {
       </div>
       <!-- And the shape a refusal takes: the command's own message under the
            fields, which is what "the file will not parse" looks like when the
-           file changed under an open window. Same 850 and the same reason. -->
-      <div :style="{ position: 'relative', height: '850px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           file changed under an open window. Same 640, measured at 607 px
+           comfortable and 529 px compact. -->
+      <div :style="{ position: 'relative', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal
           :open="true"
           :defaults="{
@@ -3415,12 +3415,12 @@ const menuTargetStyle = {
            their place — which is the whole reason the menu item that opens this
            is no longer greyed in either state. The ghost button reads Close
            rather than Cancel here, since there is nothing on screen to undo.
-           480, not the 400 this pair drew before the Agents group existed —
-           the same margin the two cells above carry, for the switch row alone. -->
-      <div :style="{ position: 'relative', height: '480px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           340, measured at 309 px comfortable and 275 px compact — the same
+           margin the pair above carries, for the switch row alone. -->
+      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal :open="true" config-state="missing" @close="() => {}" />
       </div>
-      <div :style="{ position: 'relative', height: '480px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal :open="true" config-state="broken" @close="() => {}" />
       </div>
       <!-- The Agents group's own populated state: a project that already keeps
@@ -3431,16 +3431,14 @@ const menuTargetStyle = {
            saved whatever state `project.toml` is in, so this cell checks that
            by eye rather than by claim.
 
-           This is the switched-on state, with all five rows drawn under it,
-           and it is the one cell in this file whose height nobody has
-           actually measured against a running build — the box below is sized
-           generously rather than tightly, and `overflow` is left at its
-           default (visible) rather than `hidden` for exactly this cell, so a
-           guess that runs short spills past the border instead of concealing
-           a row. A fixture that hides what it draws is worse than no
-           fixture; check this one by eye and tighten the number once it has
-           actually been looked at. -->
-      <div :style="{ position: 'relative', height: '1500px', border: 'var(--border-w) solid var(--border)' }">
+           This is the switched-on state, with all five rows drawn under it.
+           1010, measured against a running build in all four combinations:
+           973 px comfortable, 881 px compact — about 37 px of margin over the
+           taller of the two, rather than a guess. `overflow` stays at its
+           default (visible) rather than `hidden`, confirmed the right call at
+           this height too: a future row added to the group spills visibly
+           past the border instead of being concealed by it. -->
+      <div :style="{ position: 'relative', height: '1010px', border: 'var(--border-w) solid var(--border)' }">
         <ProjectSettingsModal
           :open="true"
           config-state="missing"
