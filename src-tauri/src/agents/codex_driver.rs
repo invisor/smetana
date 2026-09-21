@@ -3,7 +3,7 @@
 use portable_pty::CommandBuilder;
 use serde_json::{json, Value};
 
-use crate::agents::{codex::Codex, Intent, Launch, Profile};
+use crate::agents::{codex::Codex, Intent, Launch};
 use crate::session::driver::{Driver, Input, LineBuffer};
 use crate::session::model::{Decision, EventKind};
 
@@ -68,8 +68,13 @@ impl Driver for CodexDriver {
 
     fn opening(&self, launch: &Launch) -> Option<String> {
         if matches!(launch.intent, Intent::ResumeSession { .. }) { return None; }
-        // Codex's existing profile owns construction of the complete brief.
-        Codex.command(launch).get_argv().last().map(|arg| arg.to_string_lossy().into_owned())
+        // `Codex::prompt_text` is the seam that answers this directly, the
+        // same one `claude.rs` cuts for `ClaudeDriver`: asking for the text
+        // rather than building a whole `CommandBuilder` and reading its last
+        // argument back stops this from assuming the prompt is always the
+        // final positional one, an assumption a flag landing after it on the
+        // PTY road's own command line would break silently.
+        Codex.prompt_text(launch)
     }
 
     fn feed(&mut self, bytes: &[u8]) -> Vec<EventKind> {
@@ -94,7 +99,16 @@ impl Driver for CodexDriver {
             if response.as_deref() == Some("initialize") {
                 let initialized = Self::notification("initialized", json!({}));
                 let (cwd, model) = self.launch.lock().map(|state| state.clone()).unwrap_or_default();
-                let thread = self.request("thread/start", json!({"cwd":cwd, "model":model}));
+                // Every intent this driver serves is an attended one — `Bare`
+                // and `NewTask`, never the `Auto` run that earns the wider
+                // bypass — so the workspace sandbox this thread starts under
+                // is never left to whatever `~/.codex/config.toml` happens to
+                // say. `codex.rs`'s own PTY road pins the same policy with
+                // `every_non_auto_launch_explicitly_sandboxes_its_current_workspace`.
+                let thread = self.request(
+                    "thread/start",
+                    json!({"cwd":cwd, "model":model, "sandbox":"workspace-write"}),
+                );
                 self.queued.extend([initialized, thread]);
                 continue;
             }
@@ -157,11 +171,21 @@ impl Driver for CodexDriver {
                 Some("item/reasoning/textDelta") | Some("item/reasoning/summaryTextDelta") => {
                     if let (Some(id), Some(text)) = (message.pointer("/params/itemId").and_then(Value::as_str), message.pointer("/params/delta").and_then(Value::as_str).filter(|text| !text.is_empty())) { self.reasoning.entry(id.to_owned()).or_default().push(text.to_owned()); }
                 }
-                Some("item/commandExecution/outputDelta") | Some("item/fileChange/outputDelta") | Some("item/fileChange/patchUpdated") => {
-                    let id = message.pointer("/params/itemId").and_then(Value::as_str).unwrap_or("");
-                    let output = message.pointer("/params/delta").or_else(|| message.pointer("/params/patch")).and_then(Value::as_str).unwrap_or("");
-                    if !id.is_empty() && !output.is_empty() { events.push(EventKind::ToolResult { id: id.to_owned(), ok: true, summary: output.lines().next().unwrap_or("").to_owned() }); }
-                }
+                // `item/commandExecution/outputDelta` and
+                // `item/fileChange/outputDelta` used to turn every chunk of
+                // stdout into its own `ToolResult`, which spends
+                // `Journal::BUDGET` (4000) on a single noisy command — a
+                // `cargo test` or an `npm install` inside a turn is hundreds
+                // to thousands of them. `item/completed` below already
+                // supplies the authoritative result, so nothing here forwards
+                // a delta at all; live output needs its own event kind and its
+                // own collapse, the way `TextDelta` got one, and that is a
+                // later task. `item/fileChange/patchUpdated` went with them
+                // rather than being repaired: it read `/params/delta` and
+                // `/params/patch`, but `FileChangePatchUpdatedNotification`
+                // carries neither — its shape is `{changes: [{diff, kind,
+                // path}], itemId, threadId, turnId}` — so the arm had never
+                // once produced an event.
                 Some("item/completed") => if let Some(item) = message.get("params").and_then(|p| p.get("item")) {
                     match item.get("type").and_then(Value::as_str) {
                         Some("agentMessage") => if let Some(text) = item.get("text").and_then(Value::as_str) { events.push(EventKind::Text { text: text.to_owned() }); },
@@ -184,9 +208,31 @@ impl Driver for CodexDriver {
                 Some("thread/tokenUsage/updated") => if let Some(usage) = message.pointer("/params/tokenUsage/last") {
                     self.usage = (usage.get("inputTokens").and_then(Value::as_u64).unwrap_or(0), usage.get("outputTokens").and_then(Value::as_u64).unwrap_or(0));
                 },
+                // The app-server's own answer that a server request has been
+                // settled — by the person, or by the app-server abandoning it
+                // when the turn that asked it ends. Keyed exactly as `tickets`
+                // is, on the id's own JSON rendering, so a ticket the panel is
+                // still holding open is dropped here rather than pinning
+                // `state_of` at `needs-you` for a card the app-server has
+                // already moved past.
+                Some("serverRequest/resolved") => {
+                    let request_id = message.pointer("/params/requestId").cloned().unwrap_or(Value::Null);
+                    let key = request_id.to_string();
+                    if self.tickets.remove(&key).is_some() {
+                        events.push(EventKind::PermissionAnswered { id: key, decision: Decision::Deny, answers: None });
+                    }
+                }
                 Some("turn/completed") => {
                     self.active_turn = None;
                     self.turn_start_pending = false;
+                    // Any ticket still standing belongs to a question this
+                    // turn's own end has made moot — Stop rather than Deny or
+                    // Allow, say — and `Journal::trim` never drops an
+                    // unanswered `Permission`, so leaving it open here would
+                    // pin the session at `needs-you` for good.
+                    for id in std::mem::take(&mut self.tickets).into_keys() {
+                        events.push(EventKind::PermissionAnswered { id, decision: Decision::Deny, answers: None });
+                    }
                     let failed = message.pointer("/params/turn/status").and_then(Value::as_str) == Some("failed");
                     if let Some(error) = message.pointer("/params/turn/error/message").and_then(Value::as_str) {
                         events.push(EventKind::TurnFailed { text: error.to_owned() });
@@ -197,6 +243,22 @@ impl Driver for CodexDriver {
                     }
                 },
                 Some("error") => if let Some(text) = message.pointer("/params/error/message").and_then(Value::as_str) { events.push(EventKind::Error { text: text.to_owned() }); },
+                Some(method) if message.get("id").is_some() => {
+                    // A JSON-RPC request this driver does not implement.
+                    // `feed` used to fall through here silently, which left the
+                    // app-server waiting on a reply that would never come —
+                    // the turn stalls with nothing on screen to say why.
+                    // `session::permission` answers the same way for its own
+                    // unrecognised methods.
+                    let id = message.get("id").cloned().unwrap_or(Value::Null);
+                    let mut bytes = serde_json::to_vec(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32601, "message": format!("this driver does not implement {method}") },
+                    })).unwrap_or_default();
+                    bytes.push(b'\n');
+                    self.queued.push(bytes);
+                }
                 _ => {}
             }
         }
@@ -292,6 +354,8 @@ mod tests {
         let mut driver = CodexDriver::new(None);
         // Coalesced frames prove that userMessage, plan and unknown items do
         // not become tool calls while app-server stream notifications do.
+        // `outputDelta` frames are included and produce nothing: `item/completed`
+        // is the one authoritative `ToolResult`, never a second one per chunk.
         let events = driver.feed(concat!(
             r#"{"jsonrpc":"2.0","method":"item/started","params":{"item":{"id":"u","type":"userMessage"}}}"#, "\n",
             r#"{"jsonrpc":"2.0","method":"item/started","params":{"item":{"id":"plan","type":"plan"}}}"#, "\n",
@@ -306,12 +370,28 @@ mod tests {
         ).as_bytes());
         assert_eq!(events, vec![
             EventKind::ToolUse { id: "cmd".into(), name: "commandExecution".into(), detail: "git status".into() },
-            EventKind::ToolResult { id: "cmd".into(), ok: true, summary: "On branch main".into() },
             EventKind::Reasoning { text: "Checking".into() },
             EventKind::ToolResult { id: "cmd".into(), ok: true, summary: "On branch main".into() },
             EventKind::Text { text: "Done.".into() },
             EventKind::Result { tokens_in: 12, tokens_out: 7, cost_usd: None, ms: 9 },
         ]);
+    }
+
+    #[test]
+    fn an_output_delta_produces_no_event_of_its_own() {
+        // A `cargo test` or an `npm install` inside a turn streams hundreds to
+        // thousands of these; one `ToolResult` per chunk would evict the
+        // opening turn from `Journal::BUDGET` long before the command ends.
+        // `item/completed` is the one authoritative result.
+        let mut driver = CodexDriver::new(None);
+        let events = driver.feed(concat!(
+            r#"{"jsonrpc":"2.0","method":"item/started","params":{"item":{"id":"cmd","type":"commandExecution","command":"npm install"}}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"item/commandExecution/outputDelta","params":{"itemId":"cmd","delta":"added 1 package\n"}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"item/commandExecution/outputDelta","params":{"itemId":"cmd","delta":"added 2 packages\n"}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"item/fileChange/outputDelta","params":{"itemId":"fc","delta":"diff --git a b\n"}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"item/fileChange/patchUpdated","params":{"itemId":"fc","changes":[{"diff":"@@","kind":"update","path":"a"}],"threadId":"t","turnId":"turn"}}"#, "\n"
+        ).as_bytes());
+        assert_eq!(events, vec![EventKind::ToolUse { id: "cmd".into(), name: "commandExecution".into(), detail: "npm install".into() }]);
     }
 
     #[test]
@@ -336,5 +416,79 @@ mod tests {
         assert!(driver.feed(br#"{"jsonrpc":"2.0","id":1,"result":{}}
 "#).is_empty());
         assert_eq!(driver.outgoing().len(), 2);
+    }
+
+    #[test]
+    fn thread_start_pins_the_workspace_sandbox_for_every_intent_this_driver_serves() {
+        // `CodexDriver` serves only `Bare` and `NewTask` (`session::service`'s
+        // `spawn` match) — an attended launch, never the `Auto` run that earns
+        // the wider bypass — so the workspace sandbox this thread starts under
+        // must never be left to whatever `~/.codex/config.toml` says. This
+        // mirrors `codex.rs`'s own PTY-road pin,
+        // `every_non_auto_launch_explicitly_sandboxes_its_current_workspace`.
+        let mut driver = CodexDriver::new(None);
+        driver.send(Input::Message { text: "task".into(), attachments: vec![] });
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
+        let thread_start = String::from_utf8(driver.outgoing().pop().unwrap()).unwrap();
+        assert!(thread_start.contains("\"sandbox\":\"workspace-write\""), "{thread_start}");
+    }
+
+    #[test]
+    fn a_ticket_still_open_when_its_turn_ends_is_answered_deny_rather_than_left_pinning_needs_you() {
+        // Acceptance criterion 4: a card disappears once its turn ends, even
+        // when nobody pressed Allow or Deny — Stop is the ordinary way that
+        // happens. `Journal::trim` never drops an unanswered `Permission`, so
+        // an event has to close it here or the session is `needs-you` for good.
+        let mut driver = CodexDriver::new(None);
+        let events = driver.feed(concat!(
+            r#"{"jsonrpc":"2.0","id":"cmd-1","method":"item/commandExecution/requestApproval","params":{"command":"rm -rf build"}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"status":"interrupted"}}}"#, "\n"
+        ).as_bytes());
+        assert_eq!(events[0], EventKind::Permission {
+            id: "\"cmd-1\"".into(),
+            tool: "command".into(),
+            detail: "rm -rf build".into(),
+            options: vec![Decision::Allow, Decision::Deny],
+            input: Value::Null,
+        });
+        assert!(events.contains(&EventKind::PermissionAnswered {
+            id: "\"cmd-1\"".into(),
+            decision: Decision::Deny,
+            answers: None,
+        }));
+        // The ticket is gone, so answering it a moment later — a stale click
+        // on a card that should already have cleared — sends nothing.
+        assert!(driver.answer("\"cmd-1\"", Decision::Allow, None).is_none());
+    }
+
+    #[test]
+    fn server_request_resolved_clears_its_own_ticket_and_no_other() {
+        // The protocol's own hook for a ticket the app-server has settled
+        // some other way, keyed on `requestId` exactly as `tickets` is keyed
+        // on the original request's own id.
+        let mut driver = CodexDriver::new(None);
+        let events = driver.feed(concat!(
+            r#"{"jsonrpc":"2.0","id":"cmd-1","method":"item/commandExecution/requestApproval","params":{"command":"git status"}}"#, "\n",
+            r#"{"jsonrpc":"2.0","id":8,"method":"item/fileChange/requestApproval","params":{"reason":"write file"}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"serverRequest/resolved","params":{"requestId":"cmd-1","threadId":"t"}}"#, "\n"
+        ).as_bytes());
+        assert_eq!(events[2], EventKind::PermissionAnswered { id: "\"cmd-1\"".into(), decision: Decision::Deny, answers: None });
+        assert!(driver.answer("\"cmd-1\"", Decision::Allow, None).is_none(), "already resolved");
+        // The other ticket is untouched by an id that is not its own.
+        assert!(driver.answer("8", Decision::Deny, None).is_some(), "its own ticket is still open");
+    }
+
+    #[test]
+    fn an_unhandled_server_request_is_answered_method_not_found_rather_than_left_hanging() {
+        // A JSON-RPC request with no reply leaves the app-server blocked
+        // indefinitely — the turn stalls with no timeout anywhere on this
+        // path. `session::permission` answers its own unknown methods the
+        // same way, `-32601`, "method not found".
+        let mut driver = CodexDriver::new(None);
+        assert!(driver.feed(br#"{"jsonrpc":"2.0","id":"x","method":"item/tool/somethingNew","params":{}}
+"#).is_empty(), "not one of the handled shapes, so no card is drawn for it");
+        let reply = String::from_utf8(driver.outgoing().pop().unwrap()).unwrap();
+        assert!(reply.contains("\"id\":\"x\""), "{reply}");
+        assert!(reply.contains("-32601"), "{reply}");
     }
 }
