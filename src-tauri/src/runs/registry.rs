@@ -338,11 +338,11 @@ pub fn live_actors(
 
 /// May Phase R release an `open` issue which is still assigned to a run?
 ///
-/// The caller supplies an issue that is otherwise eligible for this narrowly
-/// scoped repair: it has no `smetana-lock` label, and this answer never writes
-/// to bd. Human assignees and this run's own actor are outside that scope. A
-/// missing, damaged, or newer registry is `None` and keeps the assignment —
-/// silence becomes evidence only after a version-1 registry was read whole.
+/// `has_smetana_lock` is part of the candidate rather than a promise made by a
+/// caller: this answer never releases the merge lock or writes to bd. Human
+/// assignees and this run's own actor are outside that scope too. A missing,
+/// damaged, or newer registry is `None` and keeps the assignment — silence
+/// becomes evidence only after a version-1 registry was read whole.
 ///
 /// For a matching actor in this project, one live *or unknown* writer protects
 /// the assignment. This matters when session numbers are reused: a dead record
@@ -354,10 +354,11 @@ pub fn stale_open_run_assignee(
     registry: Option<&Registry>,
     project: &Path,
     assignee: &str,
+    has_smetana_lock: bool,
     current_actor: &str,
     table: &impl Fn(i32) -> Seen,
 ) -> bool {
-    if !assignee.starts_with("smetana-run-") || assignee == current_actor {
+    if has_smetana_lock || !assignee.starts_with("smetana-run-") || assignee == current_actor {
         return false;
     }
     let Some(registry) = registry else { return false };
@@ -824,39 +825,50 @@ mod tests {
         ]);
 
         assert!(stale_open_run_assignee(
-            Some(&held), project, "smetana-run-dead", current, &processes
+            Some(&held), project, "smetana-run-dead", false, current, &processes
         ));
         assert!(!stale_open_run_assignee(
-            Some(&held), project, "smetana-run-alive", current, &processes
+            Some(&held), project, "smetana-run-alive", false, current, &processes
         ));
         assert!(!stale_open_run_assignee(
-            Some(&held), project, "smetana-run-unknown", current, &processes
+            Some(&held), project, "smetana-run-unknown", false, current, &processes
         ));
         assert!(stale_open_run_assignee(
-            Some(&held), project, "smetana-run-absent", current, &processes
+            Some(&held), project, "smetana-run-absent", false, current, &processes
         ));
         assert!(!stale_open_run_assignee(
-            Some(&held), project, "smetana-run-reused", current, &processes
+            Some(&held), project, "smetana-run-reused", false, current, &processes
         ));
 
         // The candidate filter belongs here rather than relying on a caller to
-        // remember it: Phase R must never release its own claim or a person's.
+        // remember it: Phase R must never release its own claim, a person's,
+        // or the merge lock even when that lock appears stale by every other
+        // part of the rule.
         assert!(!stale_open_run_assignee(
-            Some(&held), project, current, current, &processes
+            Some(&held), project, current, false, current, &processes
         ));
         assert!(!stale_open_run_assignee(
-            Some(&held), project, "alex", current, &processes
+            Some(&held), project, "alex", false, current, &processes
+        ));
+        assert!(!stale_open_run_assignee(
+            Some(&held), project, "smetana-run-dead", true, current, &processes
         ));
 
         // No valid version-1 registry, no write. `parse` supplies `None` for
         // both damaged text and a newer shape, exactly as the disk reader does.
         assert!(!stale_open_run_assignee(
-            parse("{not json").as_ref(), project, "smetana-run-absent", current, &processes
+            parse("{not json").as_ref(),
+            project,
+            "smetana-run-absent",
+            false,
+            current,
+            &processes
         ));
         assert!(!stale_open_run_assignee(
             parse(r#"{"version":2,"runs":[]}"#).as_ref(),
             project,
             "smetana-run-absent",
+            false,
             current,
             &processes,
         ));
