@@ -648,11 +648,21 @@ function noteState(id, state) {
    next thing `startConversation` does, and on every `session:state` after that
    — and this is the one place either of them lands.
 
-   `null` is an ordinary answer and stays one: a fork records nothing, since
-   `--fork-session` has the harness invent an id this app never learns, and a
-   machine that would not give the random bytes records nothing either. Such a
-   row is keyed by `drivenRowId` instead and simply does not survive a restart,
-   which is what `agentMenu.js`'s `nothing to remember it by` says on its Pin.
+   `null` is an ordinary answer and stays one for a session whose harness never
+   hands this app an id at all: `--fork-session` has Claude Code invent one
+   this app never learns, and a machine that would not give the random bytes
+   is the same absence for a different reason. Such a row is keyed by
+   `drivenRowId` instead and simply does not survive a restart, which is what
+   `agentMenu.js`'s `nothing to remember it by` says on its Pin. **A driven
+   Codex fork is not drawn from that list any more** — its app-server invents
+   the new id too, but hands it back in `thread/fork`'s own reply, and
+   `session::service`'s own `note_conversation` writes it into `session:state`
+   a turn or two after the snapshot this function's other caller,
+   `session_attach`, already answered with `null`. This is the one path that
+   still reaches a row through this function rather than through
+   `session_attach`: a null that arrives here later is a real answer landing
+   late, not the row's last word on the subject, and the Pin's own refusal
+   stops applying to such a row the moment this fires.
 
    Never written back to `null` over a value: the two roads carry the same id
    and a payload that arrived without one is a build that stopped sending it,

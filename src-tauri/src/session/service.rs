@@ -1222,10 +1222,20 @@ fn note_conversation(app: &AppHandle, id: SessionId, live: &mut Live, conversati
     // state word may not have moved at all — a fresh thread's own
     // `thread/start` reply carries no event of its own — but the id on the
     // wire has, and `noteConversation` on the front end reads exactly this
-    // event to key the session's row by it. Without it a session whose
-    // conversation is discovered only here would key its row by
-    // `drivenRowId` for the rest of its life, one attach having already
-    // happened before this ever fires.
+    // event to key the session's row by it.
+    //
+    // **Not a fix for a mis-keyed row — there is no ordering under which one
+    // happens.** Discovery always precedes the startup promise settling
+    // (`Chunk::Data`'s own `discovered` is read before `startup` in the same
+    // pass), which precedes `Request::Start` answering the caller, which
+    // precedes `session_attach`, so that command's own snapshot already
+    // carries this id in the ordinary case — nothing waits on this emit to
+    // learn it the first time. What the emit buys instead is that this stops
+    // being something the next reader has to reason through: the id reaches
+    // every window this session is open in without depending on that chain
+    // holding, the same way `refresh_state`'s emit is not the only place a
+    // state reaches a window either.
+
     let _ = app.emit(
         "session:state",
         StateChange { id, state: live.state, conversation: live.conversation.clone() },
