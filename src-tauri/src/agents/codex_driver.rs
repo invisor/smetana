@@ -11,10 +11,51 @@ pub struct CodexDriver {
     lines: LineBuffer,
     next_id: u64,
     thread: Option<String>,
-    opening: Option<Input>,
+    /// Turns waiting for a thread to exist — the app-server's `initialize`
+    /// handshake is asynchronous, so a message this driver is handed before
+    /// `self.thread` is set has nowhere to go yet. A queue and not a slot:
+    /// nothing in `send`'s own contract may assume it is called at most once
+    /// before the thread exists, so a second message arriving there is
+    /// remembered rather than silently replacing the first, which was the
+    /// defect a slot would reintroduce (finding 3, review pass 1 of
+    /// smetana-gb7f.2). Drained one at a time, oldest first — `flush_opening`
+    /// is the one place that does it — because two `turn/start` requests
+    /// fired at once on the same thread before either has a `turnId` back is
+    /// not a shape this protocol was asked to accept.
+    opening: std::collections::VecDeque<Input>,
     queued: Vec<Vec<u8>>,
     startup: Option<Result<(), String>>,
-    launch: std::sync::Mutex<(String, Option<String>)>,
+    /// The invocation-local state `feed` needs once `initialize` answers: the
+    /// cwd and model every thread carries, and — for a `ResumeSession` —
+    /// which thread to reopen and whether to fork it. Set by `start` (the
+    /// first two) and by `reopen` (the third); read back out whole rather
+    /// than piecemeal, since `feed` needs all three at once to choose between
+    /// `thread/start`, `thread/resume` and `thread/fork`.
+    launch: std::sync::Mutex<(String, Option<String>, Option<(String, bool)>)>,
+    /// Whether `initialize` has already been dispatched — by `reopen` at
+    /// spawn, for a resume or a fork, or by the first `send` otherwise.
+    /// Without it, a second call reaching `send` before the thread exists
+    /// would fire a second `initialize` racing the first for the same reply.
+    ///
+    /// **Not reachable through the front end today, and the guard is kept
+    /// anyway.** `awaits_startup` answers `true` unconditionally for this
+    /// driver, so `session_start`'s own reply — the session id everything
+    /// else needs — is withheld by `session::service` until the handshake
+    /// settles; nothing can call `session_send` without one. What this
+    /// actually protects is the driver's own contract against a caller that
+    /// does not lean on that gate — a test exercising `send` directly, or a
+    /// future change to `Request::Start`'s own wait — rather than a path a
+    /// person can reach today.
+    bootstrapped: bool,
+    /// The thread id, the moment `thread/start`, `thread/resume` or
+    /// `thread/fork` hands one back — taken once by `discovered_id`, which is
+    /// what lets `session::service` write the `.smetana/agents.json` record
+    /// the spawn could not, the way `terminal::service`'s own
+    /// `Request::SessionIdFound` does for the PTY road. Set unconditionally
+    /// in that arm rather than guarded, because the arm itself only ever
+    /// runs once in a driver's life — one thread is started, resumed or
+    /// forked per session, never several.
+    discovered: Option<String>,
     active_turn: Option<String>,
     tickets: std::collections::BTreeMap<String, (Value, String)>,
     items: std::collections::BTreeMap<String, String>,
@@ -28,7 +69,19 @@ pub struct CodexDriver {
 
 impl CodexDriver {
     pub fn new(_permission: Option<crate::session::permission::PermissionTicket>) -> Self {
-        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: None, queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None)), active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false }
+        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: std::collections::VecDeque::new(), queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None, None)), bootstrapped: false, discovered: None, active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false }
+    }
+
+    /// The oldest queued message, if any, sent as the next turn. The one
+    /// place `opening` is drained, called once a thread exists and again
+    /// every time a turn ends, so a second message that queued up behind the
+    /// first is not dropped but sent as its own turn once the one ahead of
+    /// it is out of the way.
+    fn flush_opening(&mut self) {
+        if let Some(opening) = self.opening.pop_front() {
+            let turn = self.turn(opening);
+            self.queued.push(turn);
+        }
     }
 
     fn request(&mut self, method: &str, params: Value) -> Vec<u8> {
@@ -59,7 +112,8 @@ impl CodexDriver {
 impl Driver for CodexDriver {
     fn start(&self, launch: &Launch) -> CommandBuilder {
         if let Ok(mut state) = self.launch.lock() {
-            *state = (launch.cwd.to_string_lossy().into_owned(), launch.model.clone());
+            state.0 = launch.cwd.to_string_lossy().into_owned();
+            state.1 = launch.model.clone();
         }
         let mut command = CommandBuilder::new("codex");
         command.arg("app-server");
@@ -88,7 +142,13 @@ impl Driver for CodexDriver {
             } else { None };
             if let (Some(method), Some(error)) = (response.as_deref(), message.get("error")) {
                 let text = error.get("message").and_then(Value::as_str).unwrap_or("Codex app-server protocol error").to_owned();
-                if matches!(method, "initialize" | "thread/start") { self.startup = Some(Err(text.clone())); }
+                // A resumed or forked thread that the app-server can no
+                // longer find — an expired session, a deleted rollout —
+                // answers here rather than at `thread/start`, and it settles
+                // the startup promise the same way: an understandable error,
+                // never a silent fall-through into a fresh conversation
+                // wearing the old one's name.
+                if matches!(method, "initialize" | "thread/start" | "thread/resume" | "thread/fork" | "thread/read") { self.startup = Some(Err(text.clone())); }
                 if method == "turn/start" {
                     self.turn_start_pending = false;
                     self.interrupt_pending = false;
@@ -98,30 +158,77 @@ impl Driver for CodexDriver {
             }
             if response.as_deref() == Some("initialize") {
                 let initialized = Self::notification("initialized", json!({}));
-                let (cwd, model) = self.launch.lock().map(|state| state.clone()).unwrap_or_default();
-                // Every intent this driver serves is an attended one — `Bare`
-                // and `NewTask`, never the `Auto` run that earns the wider
-                // bypass — so the workspace sandbox this thread starts under
-                // is never left to whatever `~/.codex/config.toml` happens to
+                let (cwd, model, resume) = self.launch.lock().map(|state| state.clone()).unwrap_or_default();
+                // Every intent this driver serves is an attended one — never
+                // the `Auto` run that earns the wider bypass, since
+                // `session::service::drivable` refuses `Intent::Run` outright
+                // — so the workspace sandbox this thread starts under is
+                // never left to whatever `~/.codex/config.toml` happens to
                 // say. `codex.rs`'s own PTY road pins the same policy with
-                // `every_non_auto_launch_explicitly_sandboxes_its_current_workspace`.
-                let thread = self.request(
-                    "thread/start",
-                    json!({"cwd":cwd, "model":model, "sandbox":"workspace-write"}),
-                );
-                self.queued.extend([initialized, thread]);
+                // `every_non_auto_launch_explicitly_sandboxes_its_current_workspace`,
+                // and it is pinned here on all three roads into a thread —
+                // starting one, resuming one and forking one alike — rather
+                // than on `thread/start` alone.
+                let next = match resume {
+                    Some((id, true)) => self.request(
+                        "thread/fork",
+                        json!({"threadId":id, "cwd":cwd, "model":model, "sandbox":"workspace-write"}),
+                    ),
+                    Some((id, false)) => self.request(
+                        "thread/resume",
+                        json!({"threadId":id, "cwd":cwd, "model":model, "sandbox":"workspace-write"}),
+                    ),
+                    None => self.request(
+                        "thread/start",
+                        json!({"cwd":cwd, "model":model, "sandbox":"workspace-write"}),
+                    ),
+                };
+                self.queued.extend([initialized, next]);
                 continue;
             }
-            if response.as_deref() == Some("thread/start") {
+            if matches!(response.as_deref(), Some("thread/start" | "thread/resume" | "thread/fork")) {
                 if let Some(id) = message.pointer("/result/thread/id").and_then(Value::as_str) {
                     self.thread = Some(id.to_owned());
-                    self.startup = Some(Ok(()));
-                    if let Some(opening) = self.opening.take() {
-                        let turn = self.turn(opening);
-                        self.queued.push(turn);
+                    // Handed to `discovered_id` regardless of which of the
+                    // three roads produced it: a fresh `thread/start` has
+                    // never had an id recorded at all, and a `thread/fork`
+                    // hands back one the caller's own `Intent::ResumeSession`
+                    // never named — `session::service` guards on whether it
+                    // already knows one, so a plain resume's redundant report
+                    // of the id it was already given is a harmless no-op
+                    // there rather than something to filter out here.
+                    self.discovered = Some(id.to_owned());
+                    if response.as_deref() == Some("thread/start") {
+                        self.startup = Some(Ok(()));
+                        self.flush_opening();
+                    } else {
+                        // A resume and a fork both reopen a conversation that
+                        // already has words in it, and those words are worth
+                        // showing before anything new goes out — `thread/read`
+                        // with `includeTurns: true` is the app-server's own
+                        // account of them, asked for on its own rather than
+                        // trusted to whatever `result/thread/turns` this reply
+                        // itself carries, so the translation lives in one
+                        // place regardless of which of the two roads got
+                        // here. The startup promise, and any turn a person
+                        // already typed while this was connecting, both wait
+                        // for that reply.
+                        let read = self.request(
+                            "thread/read",
+                            json!({"threadId":id, "includeTurns":true}),
+                        );
+                        self.queued.push(read);
                     }
                     continue;
                 }
+            }
+            if response.as_deref() == Some("thread/read") {
+                if let Some(turns) = message.pointer("/result/thread/turns").and_then(Value::as_array) {
+                    events.extend(translate_history(turns));
+                }
+                self.startup = Some(Ok(()));
+                self.flush_opening();
+                continue;
             }
             if response.as_deref() == Some("turn/start") {
                 if let Some(id) = message.pointer("/result/turn/id").and_then(Value::as_str) {
@@ -141,16 +248,10 @@ impl Driver for CodexDriver {
                     let id = item.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
                     let kind = item.get("type").and_then(Value::as_str).unwrap_or("").to_owned();
                     if !id.is_empty() { self.items.insert(id.clone(), kind.clone()); }
-                    let (name, detail) = match kind.as_str() {
-                        "commandExecution" => ("commandExecution", item.get("command").and_then(Value::as_str).unwrap_or("Command")),
-                        "fileChange" => ("fileChange", item.pointer("/changes/0/path").and_then(Value::as_str).unwrap_or("File change")),
-                        "mcpToolCall" => ("mcpToolCall", item.get("tool").and_then(Value::as_str).unwrap_or("MCP tool")),
-                        "dynamicToolCall" => ("dynamicToolCall", item.get("tool").and_then(Value::as_str).unwrap_or("Tool")),
-                        "webSearch" => ("webSearch", item.get("query").and_then(Value::as_str).unwrap_or("Web search")),
-                        _ => continue,
-                    };
                     if !id.is_empty() {
-                        events.push(EventKind::ToolUse { id, name: name.into(), detail: detail.into() });
+                        if let Some((name, detail)) = tool_use_detail(&kind, item) {
+                            events.push(EventKind::ToolUse { id, name: name.into(), detail });
+                        }
                     }
                 },
                 Some(method @ ("item/commandExecution/requestApproval" | "item/fileChange/requestApproval" | "item/tool/requestUserInput")) => {
@@ -240,6 +341,12 @@ impl Driver for CodexDriver {
                     } else if !failed {
                         events.push(EventKind::Result { tokens_in: self.usage.0, tokens_out: self.usage.1, cost_usd: None, ms: message.pointer("/params/turn/durationMs").and_then(Value::as_u64).unwrap_or(0) });
                     }
+                    // A second message queued up behind the one that just
+                    // finished — reachable only through `send`'s own defensive
+                    // branch (see `bootstrapped`'s header), never through the
+                    // ordinary front end — is sent now rather than left
+                    // waiting for a person to press anything again.
+                    self.flush_opening();
                 },
                 Some("error") => if let Some(text) = message.pointer("/params/error/message").and_then(Value::as_str) { events.push(EventKind::Error { text: text.to_owned() }); },
                 Some(method) if message.get("id").is_some() => {
@@ -271,8 +378,30 @@ impl Driver for CodexDriver {
 
     fn send(&mut self, input: Input) -> Vec<u8> {
         if self.thread.is_some() { return self.turn(input); }
-        self.opening = Some(input);
+        if self.bootstrapped {
+            // Already connecting — a resume or a fork kicked `initialize` off
+            // at spawn, or a person's own earlier message did. A second
+            // `initialize` here would race the first for the same reply, so
+            // this one is queued instead and becomes a turn of its own once
+            // the connection is ready for it — appended rather than
+            // overwriting whatever is already waiting, since two messages
+            // queued here are two turns owed, never one replacing the other.
+            self.opening.push_back(input);
+            return Vec::new();
+        }
+        self.bootstrapped = true;
+        self.opening.push_back(input);
         self.request("initialize", json!({"clientInfo":{"name":"smetana","version":"1"}, "capabilities":{}}))
+    }
+
+    fn reopen(&mut self, launch: &Launch) -> Option<Vec<u8>> {
+        let Intent::ResumeSession { id, fork, .. } = &launch.intent else { return None };
+        if self.bootstrapped { return None; }
+        self.bootstrapped = true;
+        if let Ok(mut state) = self.launch.lock() {
+            state.2 = Some((id.clone(), *fork));
+        }
+        Some(self.request("initialize", json!({"clientInfo":{"name":"smetana","version":"1"}, "capabilities":{}})))
     }
 
     fn answer(&mut self, id: &str, decision: Decision, answers: Option<std::collections::BTreeMap<String, String>>) -> Option<Vec<u8>> {
@@ -295,6 +424,118 @@ impl Driver for CodexDriver {
         };
         Some(self.request("turn/interrupt", json!({"threadId":thread_id, "turnId":turn_id})))
     }
+
+    fn discovered_id(&mut self) -> Option<String> {
+        self.discovered.take()
+    }
+}
+
+/// The name and the one-line detail `ToolUse` draws for an executable
+/// `ThreadItem`, read off the item's own fields rather than off the
+/// notification that announced it. The schema carries `command`, `changes`,
+/// `tool` and `query` on the item itself, never on `item/started`'s own
+/// payload, so a completed item replayed out of `thread/read`'s history
+/// (`translate_history`, below) answers exactly as it would have while it
+/// was still arriving live — one function rather than a second copy of this
+/// match for the history the live `item/started` arm above used to keep to
+/// itself.
+fn tool_use_detail(kind: &str, item: &Value) -> Option<(&'static str, String)> {
+    match kind {
+        "commandExecution" => Some(("commandExecution", item.get("command").and_then(Value::as_str).unwrap_or("Command").to_owned())),
+        "fileChange" => Some(("fileChange", item.pointer("/changes/0/path").and_then(Value::as_str).unwrap_or("File change").to_owned())),
+        "mcpToolCall" => Some(("mcpToolCall", item.get("tool").and_then(Value::as_str).unwrap_or("MCP tool").to_owned())),
+        "dynamicToolCall" => Some(("dynamicToolCall", item.get("tool").and_then(Value::as_str).unwrap_or("Tool").to_owned())),
+        "webSearch" => Some(("webSearch", item.get("query").and_then(Value::as_str).unwrap_or("Web search").to_owned())),
+        _ => None,
+    }
+}
+
+/// A resumed or forked thread's own account of itself, translated into this
+/// driver's ordinary events — the same vocabulary `feed` produces live, so a
+/// person reading a reopened conversation cannot tell the two halves apart.
+/// `turns` is `thread/read`'s own `result/thread/turns`, each a `{id, items,
+/// status}` whose `items` are the very `ThreadItem`s `item/completed`
+/// already knows how to read — `tool_result_outcome` and `tool_use_detail`
+/// above are shared rather than repeated for this half.
+///
+/// **No `TurnStart` is ever produced here, and that omission is the whole of
+/// what keeps `state_of` reading a freshly reopened session as `ready`
+/// rather than as a turn forever in flight.**
+/// `session::history::read` keeps the identical rule for a resumed Claude
+/// Code session and for the identical reason, recorded in its own header: a
+/// `TurnStart` with nothing to close it is what that fold reads as a turn in
+/// flight, and a resumed panel would open with the composer showing Stop and
+/// no way back. Nothing here ever needs a `Result` or a `TurnFailed` to
+/// close one either, because none is ever opened — a translated turn is
+/// simply the agent's part of a conversation already finished, read back as
+/// the same shape its live half would have produced, not replayed as the
+/// turn it once was.
+///
+/// **Each turn's own `status` is deliberately never read, so a past turn
+/// that failed replays exactly like one that succeeded — a decision rather
+/// than an omission the review that added this function caught and left
+/// standing.** The live path's own `turn/completed` arm turns a failed
+/// status into `EventKind::TurnFailed`, but that event only means anything
+/// paired with the `TurnStart` that opened the turn it closes, and this
+/// function produces neither on purpose (the paragraph above). A
+/// `TurnFailed` with no `TurnStart` around it would be exactly the
+/// asymmetry this function otherwise takes care to avoid, drawn once for a
+/// turn nobody watched fail rather than for one in flight. What a failed
+/// past turn's own items still carry through untouched: each executable
+/// item's own `ToolResult { ok, .. }`, off `tool_result_outcome`'s reading
+/// of that item's own status, and any `agentMessage`/`reasoning` the turn
+/// produced before it stopped — the parts of the account that are true
+/// regardless of how the turn as a whole ended.
+fn translate_history(turns: &[Value]) -> Vec<EventKind> {
+    let mut events = Vec::new();
+    for turn in turns {
+        let Some(items) = turn.get("items").and_then(Value::as_array) else { continue };
+        for item in items {
+            let Some(kind) = item.get("type").and_then(Value::as_str) else { continue };
+            match kind {
+                "userMessage" => {
+                    let content = item.get("content").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+                    let text = content
+                        .iter()
+                        .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                        .filter_map(|part| part.get("text").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let attachments = content
+                        .iter()
+                        .filter(|part| part.get("type").and_then(Value::as_str) == Some("localImage"))
+                        .filter_map(|part| part.get("path").and_then(Value::as_str))
+                        .map(str::to_owned)
+                        .collect();
+                    events.push(EventKind::UserMessage { text, attachments });
+                }
+                "agentMessage" => {
+                    if let Some(text) = item.get("text").and_then(Value::as_str).filter(|text| !text.is_empty()) {
+                        events.push(EventKind::Text { text: text.to_owned() });
+                    }
+                }
+                "reasoning" => {
+                    let text = item.get("summary").and_then(Value::as_array).into_iter().flatten()
+                        .chain(item.get("content").and_then(Value::as_array).into_iter().flatten())
+                        .filter_map(Value::as_str)
+                        .filter(|text| !text.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if !text.is_empty() { events.push(EventKind::Reasoning { text }); }
+                }
+                kind @ ("commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" | "webSearch") => {
+                    let id = item.get("id").and_then(Value::as_str).unwrap_or(kind).to_owned();
+                    if let Some((name, detail)) = tool_use_detail(kind, item) {
+                        events.push(EventKind::ToolUse { id: id.clone(), name: name.into(), detail });
+                    }
+                    let (ok, summary) = tool_result_outcome(kind, item);
+                    events.push(EventKind::ToolResult { id, ok, summary });
+                }
+                _ => {}
+            }
+        }
+    }
+    events
 }
 
 /// The outcome of a completed executable item: whether it succeeded, and the
@@ -417,6 +658,45 @@ fn tool_result_outcome(kind: &str, item: &Value) -> (bool, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    /// A `Bare` launch, the shape `session::service::spawn_session` hands a
+    /// driver for an ordinary session — the fixture `claude_driver.rs`'s own
+    /// tests keep under the same name, for the same reason.
+    fn launch() -> Launch {
+        Launch {
+            profile: &Codex,
+            cwd: PathBuf::from("/tmp/project"),
+            intent: Intent::Bare,
+            skills: crate::agents::library::Skills {
+                smetana: PathBuf::from("/app/resources/smetana"),
+                superpowers: PathBuf::from("/app/resources/superpowers"),
+                superpowers_installed: true,
+            },
+            facts: None,
+            session_id: None,
+            languages: crate::agents::Languages::default(),
+            agent_prompt: String::new(),
+            model: None,
+            worker_model: None,
+        }
+    }
+
+    /// A resume, never a fork: the same thread goes on being written into.
+    fn resume_launch(id: &str) -> Launch {
+        Launch {
+            intent: Intent::ResumeSession { id: id.into(), cwd: "/tmp/project".into(), title: None, fork: false },
+            ..launch()
+        }
+    }
+
+    /// A fork: the same history, a new thread, the original left untouched.
+    fn fork_launch(id: &str) -> Launch {
+        Launch {
+            intent: Intent::ResumeSession { id: id.into(), cwd: "/tmp/project".into(), title: None, fork: true },
+            ..launch()
+        }
+    }
 
     #[test]
     fn fragmented_initialize_and_thread_start_keep_request_ids_separate() {
@@ -951,5 +1231,265 @@ mod tests {
         let reply = String::from_utf8(driver.outgoing().pop().unwrap()).unwrap();
         assert!(reply.contains("\"id\":\"x\""), "{reply}");
         assert!(reply.contains("-32601"), "{reply}");
+    }
+
+    // The regression matrix below is smetana-gb7f.2's own: `ResumeSession`,
+    // both plain and forked, going through app-server JSON-RPC rather than
+    // the PTY road's `codex resume <id>` / `codex fork <id>` subcommands. A
+    // driven resume has nothing of a person's own to open on — `opening`
+    // answers `None` for it exactly as it always has — so `reopen` is what
+    // this whole matrix is about: the one thing that has to kick the
+    // handshake off with nothing for a person to have typed yet.
+
+    #[test]
+    fn opening_still_answers_none_for_a_resume_so_reopen_is_the_only_kickoff() {
+        // Unchanged by this task: a reopened conversation already has
+        // somebody's words in it, and `Driver::opening`'s own contract is
+        // that nothing is composed for one. What has to change instead is
+        // covered by the tests below.
+        let driver = CodexDriver::new(None);
+        assert!(driver.opening(&resume_launch("9f1c0a2e-0000-4000-8000-000000000000")).is_none());
+        assert!(driver.opening(&fork_launch("9f1c0a2e-0000-4000-8000-000000000000")).is_none());
+    }
+
+    #[test]
+    fn a_resume_requests_thread_resume_and_shows_its_history_before_anything_new() {
+        let id = "9f1c0a2e-0000-4000-8000-000000000000";
+        let mut driver = CodexDriver::new(None);
+        let initialize = String::from_utf8(driver.reopen(&resume_launch(id)).unwrap()).unwrap();
+        assert!(initialize.contains("\"method\":\"initialize\""));
+        assert!(driver.startup().is_none(), "nothing to report before the handshake has even begun");
+
+        assert!(driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n").is_empty());
+        let queued = driver.outgoing();
+        assert_eq!(queued.len(), 2, "the `initialized` notification and the next request");
+        let resume_request = String::from_utf8_lossy(&queued[1]).into_owned();
+        assert!(resume_request.contains("\"method\":\"thread/resume\""), "{resume_request}");
+        assert!(resume_request.contains(&format!("\"threadId\":\"{id}\"")), "{resume_request}");
+        assert!(!resume_request.contains("thread/start"), "a resume must never fall back to starting a fresh thread");
+
+        // The resume's own reply carries the thread back — same id, since
+        // this is a resume and not a fork — and settles nothing yet: the
+        // history is still to come.
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"thread\":{{\"id\":\"{id}\",\"turns\":[]}}}}}}\n").as_bytes());
+        assert!(driver.startup().is_none(), "the resume's own reply is not yet a usable conversation");
+        let read_request = String::from_utf8(driver.outgoing().pop().unwrap()).unwrap();
+        assert!(read_request.contains("\"method\":\"thread/read\""), "{read_request}");
+        assert!(read_request.contains(&format!("\"threadId\":\"{id}\"")), "{read_request}");
+        assert!(read_request.contains("\"includeTurns\":true"), "{read_request}");
+
+        // `thread/read`'s own reply carries the conversation that already
+        // happened, translated into the same events a live turn would have
+        // produced — shown before the person has said a word since nothing
+        // yet is queued to send.
+        let events = driver.feed(concat!(
+            r#"{"jsonrpc":"2.0","id":3,"result":{"thread":{"id":"9f1c0a2e-0000-4000-8000-000000000000","turns":[{"id":"t1","status":"completed","items":["#,
+            r#"{"id":"u1","type":"userMessage","content":[{"type":"text","text":"Rename the worktree when the branch changes."}]},"#,
+            r#"{"id":"cmd","type":"commandExecution","status":"completed","command":"git status","aggregatedOutput":"On branch main"},"#,
+            r#"{"id":"a1","type":"agentMessage","text":"Renamed it already."}"#,
+            r#"]}]}}}"#, "\n",
+        ).as_bytes());
+        assert_eq!(events, vec![
+            EventKind::UserMessage { text: "Rename the worktree when the branch changes.".into(), attachments: Vec::new() },
+            EventKind::ToolUse { id: "cmd".into(), name: "commandExecution".into(), detail: "git status".into() },
+            EventKind::ToolResult { id: "cmd".into(), ok: true, summary: "On branch main".into() },
+            EventKind::Text { text: "Renamed it already.".into() },
+        ]);
+        assert_eq!(driver.startup(), Some(Ok(())), "the history is what makes this conversation usable");
+        assert!(driver.outgoing().is_empty(), "nothing typed yet, so nothing queued to send");
+
+        // A message the person types afterwards goes on the very thread that
+        // was resumed.
+        let turn = String::from_utf8(driver.send(Input::Message { text: "and the test names too".into(), attachments: vec![] })).unwrap();
+        assert!(turn.contains("\"method\":\"turn/start\""), "{turn}");
+        assert!(turn.contains(&format!("\"threadId\":\"{id}\"")), "{turn}");
+    }
+
+    #[test]
+    fn a_fork_requests_thread_fork_with_the_original_id_and_writes_new_turns_into_the_new_one() {
+        let original = "9f1c0a2e-0000-4000-8000-000000000000";
+        let forked = "aaaaaaaa-1111-4000-8000-000000000000";
+        let mut driver = CodexDriver::new(None);
+        driver.reopen(&fork_launch(original));
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
+        let fork_request = String::from_utf8_lossy(driver.outgoing().last().unwrap()).into_owned();
+        assert!(fork_request.contains("\"method\":\"thread/fork\""), "{fork_request}");
+        assert!(fork_request.contains(&format!("\"threadId\":\"{original}\"")), "a fork asks for the original thread's history, not a fresh one: {fork_request}");
+
+        // The app-server hands back a *different* id: the original is left
+        // exactly as it was, and this is a second, new thread.
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"thread\":{{\"id\":\"{forked}\",\"turns\":[]}}}}}}\n").as_bytes());
+        let read_request = String::from_utf8(driver.outgoing().pop().unwrap()).unwrap();
+        assert!(read_request.contains(&format!("\"threadId\":\"{forked}\"")), "the copied history is read off the new thread: {read_request}");
+
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"thread\":{\"turns\":[]}}}\n");
+        assert_eq!(driver.startup(), Some(Ok(())));
+
+        // Whatever is said from here on lands in the new thread, never the
+        // original one this fork was cut from.
+        let turn = String::from_utf8(driver.send(Input::Message { text: "carry on from here".into(), attachments: vec![] })).unwrap();
+        assert!(turn.contains(&format!("\"threadId\":\"{forked}\"")), "{turn}");
+        assert!(!turn.contains(original), "the original thread is never written into by the fork: {turn}");
+    }
+
+    #[test]
+    fn a_message_typed_while_reconnecting_is_queued_rather_than_restarting_the_handshake() {
+        let id = "9f1c0a2e-0000-4000-8000-000000000000";
+        let mut driver = CodexDriver::new(None);
+        driver.reopen(&resume_launch(id));
+        // A person's own message arrives before the handshake has finished —
+        // it must not start a second `initialize` racing the first for the
+        // same numeric reply.
+        let bytes = driver.send(Input::Message { text: "any word from git status?".into(), attachments: vec![] });
+        assert!(bytes.is_empty(), "remembered rather than sent a second time");
+
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
+        let outgoing = driver.outgoing();
+        assert!(!String::from_utf8_lossy(outgoing.last().unwrap()).contains("initialize"), "no second handshake");
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"thread\":{{\"id\":\"{id}\",\"turns\":[]}}}}}}\n").as_bytes());
+        driver.outgoing();
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{{\"thread\":{{\"id\":\"{id}\",\"turns\":[]}}}}}}\n").as_bytes());
+        // The history was empty, so the only thing left queued is the
+        // message that was waiting to become the opening turn.
+        let turn = String::from_utf8(driver.outgoing().pop().unwrap()).unwrap();
+        assert!(turn.contains("\"method\":\"turn/start\""), "{turn}");
+        assert!(turn.contains("any word from git status?"), "{turn}");
+    }
+
+    /// Finding 3, review pass 1 of smetana-gb7f.2: `opening` used to be a
+    /// slot, so a second message arriving before the thread existed
+    /// silently replaced the first — the composer's own `Ok` would have
+    /// cleared both, and only the second was ever actually sent. This is
+    /// the queue's own regression test: two messages, two turns, in order,
+    /// the second withheld until the first has actually ended.
+    #[test]
+    fn a_second_message_queued_before_the_thread_exists_becomes_its_own_turn_once_the_first_ends() {
+        let id = "9f1c0a2e-0000-4000-8000-000000000000";
+        let mut driver = CodexDriver::new(None);
+        driver.reopen(&resume_launch(id));
+        assert!(driver.send(Input::Message { text: "first".into(), attachments: vec![] }).is_empty());
+        assert!(driver.send(Input::Message { text: "second".into(), attachments: vec![] }).is_empty());
+
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
+        driver.outgoing();
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"thread\":{{\"id\":\"{id}\",\"turns\":[]}}}}}}\n").as_bytes());
+        driver.outgoing();
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{{\"thread\":{{\"id\":\"{id}\",\"turns\":[]}}}}}}\n").as_bytes());
+        let turn_one = String::from_utf8(driver.outgoing().pop().unwrap()).unwrap();
+        assert!(turn_one.contains("\"method\":\"turn/start\"") && turn_one.contains("first"), "{turn_one}");
+
+        // Nothing left to send until the first turn actually ends — the
+        // second message is still waiting rather than racing the first for
+        // the same thread.
+        assert!(driver.outgoing().is_empty());
+
+        driver.feed(br#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"status":"completed","durationMs":1}}}
+"#);
+        let turn_two = String::from_utf8(driver.outgoing().pop().unwrap()).unwrap();
+        assert!(turn_two.contains("\"method\":\"turn/start\"") && turn_two.contains("second"), "{turn_two}");
+        assert!(!turn_two.contains("first"), "{turn_two}");
+    }
+
+    #[test]
+    fn a_missing_thread_refuses_with_the_reported_text_and_never_falls_back_to_a_fresh_thread_start() {
+        // `session::service::absorb` turns this into `SessionError::Spawn` —
+        // an attempt that was actually made — and it must never become a
+        // `thread/start` in disguise: a vanished thread resumed as a fresh
+        // conversation would be a new session wearing the old one's name.
+        let id = "9f1c0a2e-0000-4000-8000-000000000000";
+        let mut driver = CodexDriver::new(None);
+        driver.reopen(&resume_launch(id));
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
+        driver.outgoing();
+        let events = driver.feed(br#"{"jsonrpc":"2.0","id":2,"error":{"message":"no such thread"}}
+"#);
+        assert_eq!(events, vec![EventKind::Error { text: "no such thread".into() }]);
+        assert_eq!(driver.startup(), Some(Err("no such thread".into())));
+        assert!(driver.outgoing().is_empty(), "nothing left queued — no thread/start behind a refused resume");
+    }
+
+    #[test]
+    fn a_missing_thread_on_a_fork_refuses_the_same_way() {
+        let id = "9f1c0a2e-0000-4000-8000-000000000000";
+        let mut driver = CodexDriver::new(None);
+        driver.reopen(&fork_launch(id));
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
+        driver.outgoing();
+        let events = driver.feed(br#"{"jsonrpc":"2.0","id":2,"error":{"message":"the source thread has been deleted"}}
+"#);
+        assert_eq!(events, vec![EventKind::Error { text: "the source thread has been deleted".into() }]);
+        assert_eq!(driver.startup(), Some(Err("the source thread has been deleted".into())));
+    }
+
+    #[test]
+    fn a_failed_thread_read_also_refuses_rather_than_opening_on_a_blank_history() {
+        let id = "9f1c0a2e-0000-4000-8000-000000000000";
+        let mut driver = CodexDriver::new(None);
+        driver.reopen(&resume_launch(id));
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
+        driver.outgoing();
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"thread\":{{\"id\":\"{id}\",\"turns\":[]}}}}}}\n").as_bytes());
+        driver.outgoing();
+        let events = driver.feed(br#"{"jsonrpc":"2.0","id":3,"error":{"message":"the rollout could not be read"}}
+"#);
+        assert_eq!(events, vec![EventKind::Error { text: "the rollout could not be read".into() }]);
+        assert_eq!(driver.startup(), Some(Err("the rollout could not be read".into())));
+    }
+
+    #[test]
+    fn resume_and_fork_both_pin_the_workspace_sandbox_too() {
+        // The same pin `thread_start_pins_the_workspace_sandbox_for_every_intent_this_driver_serves`
+        // holds for `thread/start`, extended to the two roads that reopen a
+        // thread rather than starting one: every intent this driver serves
+        // is attended, never the `Auto` run that earns the wider bypass.
+        let id = "9f1c0a2e-0000-4000-8000-000000000000";
+        let mut driver = CodexDriver::new(None);
+        driver.reopen(&resume_launch(id));
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
+        let resume_request = String::from_utf8_lossy(driver.outgoing().last().unwrap()).into_owned();
+        assert!(resume_request.contains("\"sandbox\":\"workspace-write\""), "{resume_request}");
+
+        let mut driver = CodexDriver::new(None);
+        driver.reopen(&fork_launch(id));
+        driver.feed(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
+        let fork_request = String::from_utf8_lossy(driver.outgoing().last().unwrap()).into_owned();
+        assert!(fork_request.contains("\"sandbox\":\"workspace-write\""), "{fork_request}");
+    }
+
+    #[test]
+    fn translate_history_never_produces_a_turn_start_so_a_reopened_session_reads_ready_not_running() {
+        // `session::history::read` keeps the identical exclusion for a
+        // resumed Claude Code session, and for the identical reason: a
+        // `TurnStart` with nothing to close it is what `state_of` folds into
+        // `running` for good.
+        let turns: Vec<Value> = serde_json::from_str(concat!(
+            r#"[{"id":"t1","status":"completed","items":["#,
+            r#"{"id":"u1","type":"userMessage","content":[{"type":"text","text":"look at this"},{"type":"localImage","path":"/tmp/shot.png"}]},"#,
+            r#"{"id":"r1","type":"reasoning","summary":["Checked the tests"]},"#,
+            r#"{"id":"web","type":"webSearch","query":"rust async book","results":[{"title":"x"}]},"#,
+            r#"{"id":"a1","type":"agentMessage","text":"Found it."}"#,
+            r#"]}]"#,
+        )).unwrap();
+        let events = translate_history(&turns);
+        assert_eq!(events, vec![
+            EventKind::UserMessage { text: "look at this".into(), attachments: vec!["/tmp/shot.png".into()] },
+            EventKind::Reasoning { text: "Checked the tests".into() },
+            EventKind::ToolUse { id: "web".into(), name: "webSearch".into(), detail: "rust async book".into() },
+            EventKind::ToolResult { id: "web".into(), ok: true, summary: "1 result for rust async book".into() },
+            EventKind::Text { text: "Found it.".into() },
+        ]);
+        assert!(!events.iter().any(|event| matches!(event, EventKind::TurnStart { .. })), "{events:?}");
+        assert_eq!(
+            crate::session::model::state_of(
+                &events.into_iter().enumerate().map(|(i, kind)| crate::session::model::Event {
+                    seq: i as u64 + 1,
+                    at: "2026-09-21T00:00:00Z".into(),
+                    kind,
+                }).collect::<Vec<_>>(),
+                true,
+            ),
+            crate::session::model::SessionState::Ready,
+            "a history with no open turn reads as ready, never as a turn forever in flight",
+        );
     }
 }
