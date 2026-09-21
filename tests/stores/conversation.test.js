@@ -434,6 +434,37 @@ describe('the conversation store', () => {
     })
   })
 
+  /* `SessionError::NotDriven` — the one tag `views/DesktopApp.vue`'s
+     `startAgent` reads to decide whether this refusal is the front door
+     being wrong about a capability (fall through to the PTY road in
+     silence) or an app-server this app actually tried to drive failing to
+     start or answering with a protocol error (show the reason, never fall
+     back — acceptance criterion 1 of smetana-gb7f.4). The store itself does
+     not choose between those two; it only has to carry the tag through
+     unharmed, which is what this test actually pins.
+
+     `ERRORS` in `conversation.js` deliberately has **no** entry for this
+     kind — its text is already a sentence, and a second identity function
+     here would be indistinguishable from `sentence`'s own raw-message
+     fallback, which is what let an earlier version of this test go on
+     passing after the mapping it claimed to test was deleted. So the
+     assertion below is on `sentence`'s fallback branch, and the one thing
+     worth pinning is the tag itself. */
+  describe('a refusal the driven road never attempted', () => {
+    it('carries the worker’s own tag, with the sentence read off the untranslated fallback', async () => {
+      const { ipc, stores } = await ready()
+      ipc.fail('session_start', {
+        kind: 'notDriven',
+        message: 'this action is not supported in the conversation panel for Codex'
+      })
+      await stores.conversation.startConversation('/p', { kind: 'editTask', id: 'x-1', title: 'T' })
+
+      const { kind, text } = stores.conversation.conversationState.lastError
+      expect(kind).toBe('notDriven')
+      expect(text).toBe('this action is not supported in the conversation panel for Codex')
+    })
+  })
+
   /* Which driven sessions this window is holding, and for which project. The
      centre's Agent tab is derived from this list (`hasAgentTab` in
      `stores/tabs.js`), which is what makes each of the three below a rule about

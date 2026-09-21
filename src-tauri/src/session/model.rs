@@ -196,6 +196,34 @@ pub enum SessionError {
     /// The payload is the path, unused by that sentence and kept for the log.
     #[error("that folder cannot be a working directory: {0}")]
     BadCwd(String),
+    /// This road never took the intent at all: the harness has no codec for
+    /// it (`driver_for` answered `None`), or the intent is `Run`, which no
+    /// person is ever in the conversation of. Nothing was spawned and nothing
+    /// failed — the front door asked a cheap question and Rust is the one
+    /// that actually knows.
+    ///
+    /// **Its own variant and not a `Spawn`, and the distinction is the whole
+    /// of acceptance criterion 1 of smetana-gb7f.4.** `startAgent` in
+    /// `DesktopApp.vue` reads this tag to decide whether falling through to
+    /// `createSession` — the PTY road — is the front door being wrong about a
+    /// capability, or an app-server this app *did* try to drive failing to
+    /// start or answering with a protocol error. Only this tag may fall
+    /// through in silence; every other kind — `Spawn` above included, which
+    /// now means "the attempt was made and it failed" — stops here; the
+    /// person keeps their reason, and the caller's draft is untouched, since
+    /// the dialog that holds it only closes once `startAgent` says the
+    /// session actually started.
+    ///
+    /// The two `Spawn`s `commands.rs::ask` produces — "the session worker is
+    /// not running" and "the session worker did not answer" — are on the
+    /// stopping side too, even though they are arguably "never attempted" in
+    /// the same sense as this variant: they mean the worker itself could not
+    /// be reached, which says nothing about whether a Codex app-server would
+    /// have driven the intent, and a PTY spawned from a worker that cannot
+    /// answer an `oneshot` channel is not a retry worth making either. Noted
+    /// here so the next reader auditing this split does not re-derive it.
+    #[error("{0}")]
+    NotDriven(String),
 }
 
 /// The whole of what a session's state is: a fold over its journal.
