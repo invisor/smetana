@@ -110,6 +110,14 @@ pub fn subscription(path: &Path) -> crate::settings::model::SubscriptionSettings
     load(path).0.subscription
 }
 
+/// The global run-lead failover policy. It is deliberately read at a safe run
+/// boundary rather than captured with the project lead: changing a project's
+/// lead applies to the next run, while changing how an already-paused run
+/// waits must take effect without a restart.
+pub fn run_failover(path: &Path) -> crate::settings::model::RunFailoverSettings {
+    load(path).0.run_failover
+}
+
 /// Whether a run may remove a task's worktree once it is merged and closed, and
 /// nothing else out of the file. The shape of `role_pair` above, one field over.
 ///

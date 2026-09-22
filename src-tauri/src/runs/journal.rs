@@ -296,6 +296,30 @@ pub fn unreadable_board(read: Read, in_a_row: Option<u32>) -> String {
     }
 }
 
+/// The second board read required before a limited handoff failed. The earlier
+/// snapshot is useful evidence of what was seen, but explicitly not presented
+/// as the current board: a child could have changed it while the old group was
+/// still leaving.
+pub fn stale_handoff_snapshot(snapshot: Option<&QueueSnapshot>, source: Option<BoardSource>) -> String {
+    match (snapshot, source) {
+        (Some(snapshot), Some(source)) => format!(
+            "failover post-quiet board unreadable; pre-quiet diagnostic: {}",
+            board(Read::AfterBatch, snapshot, source)
+        ),
+        _ => "failover post-quiet board unreadable; no pre-quiet diagnostic".to_string(),
+    }
+}
+
+/// A person stopped a run while the old limited attempt still had live writers.
+/// The post-batch board is deliberately not declared final: ownership stays
+/// with the old actor and recovery, rather than a replacement, settles it.
+pub fn interrupted_handoff(batch: u32) -> String {
+    format!(
+        "batch {batch} failover handoff interrupted before writers were quiet; \
+         board=non-final claims=retained replacement=no"
+    )
+}
+
 /// 4. The spend gate: what the harness said, and what was made of it.
 ///
 /// The reading is carried beside the decision because `Decision::Normal` holds
@@ -308,6 +332,28 @@ pub fn gate(usage: Option<&Usage>, decision: &Decision) -> String {
         None => ("unread".to_string(), "unread".to_string()),
     };
     format!("usage session={session} week={week} decision={decision:?}")
+}
+
+/// A named wait is intentionally separate from the ordinary subscription gate:
+/// it says that the run considered every installed harness, rather than merely
+/// going quiet behind the current one.
+pub fn waiting_for_agent(agent: &str, until: Option<chrono::DateTime<chrono::Utc>>) -> String {
+    format!(
+        "failover waiting agent={agent} until={}",
+        until.map(|at| at.to_rfc3339()).unwrap_or_else(|| "unknown".to_string())
+    )
+}
+
+/// All candidates are limited. The wake time is machine-readable in the
+/// journal but never includes the provider's raw response or credentials.
+pub fn waiting_for_any_agent(until: chrono::DateTime<chrono::Utc>) -> String {
+    format!("failover waiting-any until={}", until.to_rfc3339())
+}
+
+/// One logical batch keeps its number while its attempt moves to another
+/// harness, so this line lets a report reader join those attempts safely.
+pub fn agent_switching(from: &str, to: &str, batch: u32, attempt: u32) -> String {
+    format!("failover switching batch={batch} attempt={attempt} from={from} to={to}")
 }
 
 /// 5. `queue::next_action`'s answer, whole, with both of the things it was
@@ -341,6 +387,8 @@ pub fn decision(
 /// mechanics.
 pub fn batch_started(
     n: u32,
+    attempt: u32,
+    agent: &str,
     session: u64,
     actor: &str,
     group: Option<&Proc>,
@@ -348,7 +396,7 @@ pub fn batch_started(
     ready: &[String],
 ) -> String {
     format!(
-        "batch {n} start session={session} actor={actor} group={} max-tasks={} ready={}",
+        "batch {n} attempt={attempt} agent={agent} start session={session} actor={actor} group={} max-tasks={} ready={}",
         group.map(|proc| proc.pid.to_string()).unwrap_or_else(|| "none".to_string()),
         opt(tasks),
         ids(ready),
@@ -665,6 +713,23 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_post_quiet_handoff_labels_the_old_board_as_diagnostic() {
+        let line = stale_handoff_snapshot(Some(&snapshot(&[], &["smetana-late"])), Some(BoardSource::Cache));
+        assert!(line.starts_with("failover post-quiet board unreadable; pre-quiet diagnostic:"));
+        assert!(line.contains("smetana-late"));
+        assert!(stale_handoff_snapshot(None, None).contains("no pre-quiet diagnostic"));
+    }
+
+    #[test]
+    fn an_interrupted_handoff_says_that_its_claims_remain_with_the_old_actor() {
+        assert_eq!(
+            interrupted_handoff(4),
+            "batch 4 failover handoff interrupted before writers were quiet; \
+             board=non-final claims=retained replacement=no"
+        );
+    }
+
+    #[test]
     fn the_gate_keeps_the_reading_beside_the_decision() {
         // `Normal` is the answer both to a fresh week and to a probe that could
         // not be read at all, so the decision alone does not say which night
@@ -672,9 +737,11 @@ mod tests {
         let usage = Usage {
             session_pct: Some(12),
             session_reset: None,
+            session_reset_at: None,
             session_label: None,
             week_pct: Some(40),
             week_reset: None,
+            week_reset_at: None,
             week_label: None,
         };
         assert_eq!(
@@ -690,9 +757,11 @@ mod tests {
             Usage {
                 session_pct: None,
                 session_reset: None,
+                session_reset_at: None,
                 session_label: None,
                 week_pct: Some(96),
                 week_reset: None,
+                week_reset_at: None,
                 week_label: None,
             };
         let line = gate(Some(&usage), &Decision::Pause { pct: 96, resets: None });
@@ -733,6 +802,8 @@ mod tests {
         let group = Proc { pid: 4321, started: 9, command: "node".into() };
         let line = batch_started(
             2,
+            1,
+            "claude",
             9,
             "smetana-run-9",
             Some(&group),
@@ -741,14 +812,14 @@ mod tests {
         );
         assert_eq!(
             line,
-            "batch 2 start session=9 actor=smetana-run-9 group=4321 max-tasks=2 \
+            "batch 2 attempt=1 agent=claude start session=9 actor=smetana-run-9 group=4321 max-tasks=2 \
              ready=[a-1, a-2]"
         );
     }
 
     #[test]
     fn a_batch_whose_group_could_not_be_read_says_none() {
-        let line = batch_started(1, 3, "smetana-run-3", None, None, &[]);
+        let line = batch_started(1, 1, "claude", 3, "smetana-run-3", None, None, &[]);
         assert!(line.contains("group=none"), "{line}");
         assert!(line.contains("ready=[]"), "an empty list, not a missing field: {line}");
     }

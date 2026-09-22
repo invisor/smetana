@@ -371,6 +371,8 @@ mod tests {
     fn batch(n: u32) -> BatchLine {
         BatchLine {
             n,
+            attempt: 1,
+            agent: "claude".into(),
             seconds: 8040,
             tasks: vec![BatchTask { id: "a-1".into(), did: None }],
             notes: None,

@@ -41,6 +41,17 @@ delegation entirely: claim the task, provision its worktrees, do the work, revie
 change against `reviewing`, and then take it through Phase 2 and Phase 3 exactly as
 written.
 
+### Continuing a limited attempt
+
+When the run prompt says that this is a continuation after another agent reached its
+limit, it is still the **same logical batch**. The app confirmed the prior session ended
+and released its ordinary claims, so first inspect the named existing tasks and worktrees,
+then make the normal atomic claim before continuing work in place. Do not recreate a task,
+clear another actor's claim, reset a branch, delete a worktree, or start a competing
+implementation. A refused atomic claim means another actor already lawfully owns the work,
+so skip it. This handoff is not ordinary Phase R recovery: the app preserved its evidence
+and applies the normal merge-lock rule separately.
+
 ### Parking, in Auto
 
 **Park for a question, and for nothing else.** A park is a real question about what the

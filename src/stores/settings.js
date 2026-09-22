@@ -49,6 +49,7 @@ import { REPORTS_DEFAULTS } from '../components/run/reportsPage.js'
    so what the tab offers stays a subset of what Rust accepts. */
 import { NOTIFICATION_DEFAULTS, isSound } from '../sounds.js'
 import { isThreshold, reconcile } from '../components/settings/subscription.js'
+import { isWaitMinutes, priorityOrder } from '../components/settings/runFailover.js'
 /* Pure, no Vue and no DOM: which table a session actually reaches — the active
    project's own block where it names a harness, the root's three fields
    otherwise. Imported so this store's `effectiveAgents` and every reader that
@@ -258,6 +259,12 @@ const defaults = () => ({
   subscription: {
     pauseAt: 90,
     reducedAt: 75
+  },
+  runFailover: {
+    enabled: false,
+    returnToPrimary: true,
+    waitMinutes: 5,
+    priority: ['claude', 'codex']
   },
   openProjects: [],
   activeProject: null,
@@ -568,6 +575,8 @@ export async function loadSettings() {
     applySection(settings.editor, base.editor, stored.editor)
     applySection(settings.git, base.git, stored.git)
     applySection(settings.subscription, base.subscription, stored.subscription)
+    applySection(settings.runFailover, base.runFailover, stored.runFailover)
+    settings.runFailover.priority = priorityOrder(settings.runFailover.priority, base.runFailover.priority)
     applySection(settings.window, base.window, stored.window)
     applySection(settings.updates, base.updates, stored.updates)
     applySection(settings.kanban, base.kanban, stored.kanban)
@@ -665,6 +674,8 @@ function toShared(source) {
   const kanban = { ...base.kanban, ...source.kanban }
   const git = { ...base.git, ...source.git }
   const subscription = { ...base.subscription, ...source.subscription }
+  const runFailover = { ...base.runFailover, ...source.runFailover }
+  runFailover.priority = priorityOrder(runFailover.priority, base.runFailover.priority)
   /* Deliberately not `window`: that name is the global object, and shadowing it
      inside this function would take `window.addEventListener` and every other
      use of it in this module out of reach for whoever edits here next. */
@@ -699,6 +710,10 @@ function toShared(source) {
        other. `0` is off and travels as a number — `adopt()` drops a null. */
     subscriptionPauseAt: subscription.pauseAt,
     subscriptionReducedAt: subscription.reducedAt,
+    runFailoverEnabled: runFailover.enabled,
+    runFailoverReturnToPrimary: runFailover.returnToPrimary,
+    runFailoverWaitMinutes: runFailover.waitMinutes,
+    runFailoverPriority: [...runFailover.priority],
     /* Flat for the same reason, and the whole of what this window may change
        about the main window's geometry — where it is now is not a setting and
        never crosses this contract. */
@@ -896,6 +911,18 @@ export function applyPatch(patch) {
       settings.subscription.pauseAt,
       settings.subscription.reducedAt
     )
+  }
+  if (typeof patch.runFailoverEnabled === 'boolean') {
+    settings.runFailover.enabled = patch.runFailoverEnabled
+  }
+  if (typeof patch.runFailoverReturnToPrimary === 'boolean') {
+    settings.runFailover.returnToPrimary = patch.runFailoverReturnToPrimary
+  }
+  if (isWaitMinutes(patch.runFailoverWaitMinutes)) {
+    settings.runFailover.waitMinutes = patch.runFailoverWaitMinutes
+  }
+  if (Array.isArray(patch.runFailoverPriority)) {
+    settings.runFailover.priority = priorityOrder(patch.runFailoverPriority, defaults().runFailover.priority)
   }
   /* A switch too, checked exactly the way the two above it are and for the same
      reason: `false` is the whole point of this field, so anything that is not a

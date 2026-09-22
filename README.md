@@ -96,6 +96,11 @@ A run is a process inside the app driving the work itself: it reads the board, h
 to agent sessions, waits for them, merges what passed and reads the board again. Every batch gets a
 session of its own, so the context starts clean each time round. It watches the subscription as well
 — when the allowance runs out the run pauses where it stands, and picks up again once it is back.
+On the Agents tab you can instead enable **Switch agents when limited**: the run keeps its primary
+lead fixed, tries installed reserve agents in the chosen global order, and continues the same logical
+batch rather than creating replacement work. A nearby known reset waits for the current agent; an
+unknown or distant reset may hand the batch off. A reserve is never interrupted, and optional return
+to the primary happens only between logical batches.
 
 You start a run on a single task, on an epic, or on the whole Ready queue. Then you say where the
 result is to land — the target branch — how many tasks may go at once (one to eight, three by

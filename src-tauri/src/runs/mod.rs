@@ -11,6 +11,11 @@ pub mod awake;
 pub mod browser;
 pub mod commands;
 pub mod config;
+// The service consumes this once attempt rotation is wired; keeping the pure
+// selector independently testable also lets its policy be validated without a
+// live harness or process group.
+#[allow(dead_code)]
+pub mod failover;
 pub mod gitignore;
 pub mod journal;
 pub mod model;

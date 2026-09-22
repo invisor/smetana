@@ -1247,6 +1247,22 @@ mod tests {
     }
 
     #[test]
+    fn a_limited_handoff_frees_work_for_an_atomic_new_actor_claim_without_transferring_it() {
+        // The app knows the old attempt ended, but it cannot manufacture a
+        // claim for the replacement: bd's atomic claim is the proof that no
+        // other actor took the work between attempts. Both kinds of task are
+        // made claimable without ever naming the new actor.
+        for (status, expected) in [("in_progress", Some("open")), ("ready_to_merge", None)] {
+            let left = Leftover { id: "smetana-handoff".into(), status: status.into(), lock: false };
+            let patch = release(&left, 4, "smetana-run-old", None, BatchLife::ProvenDead)
+                .expect("the ended attempt can release ordinary work");
+            assert_eq!(patch.status.as_deref(), expected, "{status}");
+            assert_eq!(patch.assignee.as_deref(), Some(""), "the replacement is not assigned by us");
+            assert_ne!(patch.assignee.as_deref(), Some("smetana-run-new"));
+        }
+    }
+
+    #[test]
     fn reviewed_work_is_what_the_question_path_releases_and_nothing_else() {
         // `park_claims` takes the `in_progress` claims on that branch — the
         // merge lock apart, which parking filters out and which is not
