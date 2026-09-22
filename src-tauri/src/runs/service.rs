@@ -1111,58 +1111,45 @@ async fn drive(
         );
         record.attempt = run.attempt;
         record.agent = current_agent.clone();
-        // One board read for the whole of this batch's ending, and it is a
-        // resync (`fresh_board`) because what is being looked for are the
+        // The initial board read is a resync (`fresh_board`) because what is
+        // being looked for are the
         // *agent's* own bd writes: those reach this process through the
         // watcher, and a claim made moments before the session died may not
         // have landed in the cached snapshot. It answers three questions at
         // once — what the batch left claimed, whether it moved the board at
         // all, and, through the first, what has to be given back — so that no
-        // arm below can be added later without one of them. The named cost is
+        // arm below can be added later without one of them. A limited attempt
+        // whose writers need time to leave takes a second snapshot just before
+        // its replacement, so that late claims cannot be lost. The named cost is
         // that every batch now pays the resync a silent one used to pay alone,
         // about two seconds at the one moment in a run when nothing at all is
         // waiting on it.
         let actor = crate::terminal::model::run_actor(session);
         // Split the pair the moment it arrives: everything below wants the
         // issues, and only the journal line wants where they came from.
-        let (after, after_source) = match fresh_board(&tracker, &root).await {
+        let (mut after, after_source) = match fresh_board(&tracker, &root).await {
             Some((issues, source)) => (Some(issues), Some(source)),
             None => (None, None),
         };
-        let leftovers =
-            after.as_deref().map(|issues| queue::left_behind(issues, &actor)).unwrap_or_default();
-        // Asked here, once, and about **this batch's own process group** rather
-        // than about the app that started it (smetana-rxzd). It decides one
-        // thing and nothing else: whether the merge lock among those leftovers
-        // is given back. The group is the right question and the writer is not
-        // — a batch killed mid-merge under an app that is still up leaves a
-        // lock no one will ever release, and the writer being alive says only
-        // that the app is.
-        //
-        // It is asked *after* the wait rather than reused from the batch's
-        // start, and that is what makes any release possible at all: at the
-        // start the lead is alive by construction.
-        //
-        // **What is read is the recorded leader, not the group.** `group.pid`
-        // and the stamp beside it are one process, and a process group on Unix
-        // outlives its leader — so a lead that exited while something it
-        // delegated is still merging answers gone here, and the lock is
-        // released under it. That is the limit of this evidence rather than a
-        // hole in the code, and it is named because the write rests on it;
-        // `registry::group_is_dead` carries it too, with the group-wide probe
-        // that would close it (`killpg(pgid, 0)`, `procs.rs`'s to take) and the
-        // reason taking it is a decision of its own.
+        let mut leftovers = leftovers_for(after.as_deref(), &actor);
+        // Ask about this batch's own process group rather than about the app
+        // that started it. A stamped dead leader plus an empty Unix group is
+        // the proof needed to give the merge lock and ordinary work back; on
+        // Windows the terminal's successful Job Object termination is the
+        // equivalent proof. Both checks happen after `watch_batch` rather
+        // than at spawn, when the lead is alive by construction.
         //
         // What keeps the one ending that *kills* a lead out of this is **order
         // rather than the reading**: `remove_session` runs further down, after
         // the release, so on an unanswered question the lead is still sitting
         // at its dialog when this is asked and `life` comes back `Unproven`.
         let mut life = batch_life(group.as_ref());
+        let mut terminal_ack = terminal_handoff_ready(&terminal, session).await;
         // Taken once, here, rather than inside the emptiness rule below: the
         // line on the record and the value the decision is made from have to be
         // the same snapshot, or the journal describes a board the loop did not
         // use.
-        let after_board = after
+        let mut after_board = after
             .as_deref()
             .map(|issues| queue::snapshot(issues, &run.settings.scope, run.settings.min_priority));
         // The load-bearing read of the four. `did_nothing` turns it into
@@ -1242,12 +1229,47 @@ async fn drive(
                 // in its process group stopped writing. Wait at this safe
                 // boundary until the group is provably quiet: until then the
                 // old actor keeps its claims and no replacement is admitted.
-                if !handoff_permitted(life) {
-                    if !wait_for_group_quiet(group.as_ref(), &mut stop).await {
-                        finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
-                        return;
+                if !handoff_permitted(handoff_gate(), life, terminal_ack) {
+                    match wait_for_handoff_quiet(&terminal, session, group.as_ref(), &mut stop).await {
+                        HandoffWait::Quiet { life: quiet_life, terminal_ack: quiet_ack } => {
+                            life = quiet_life;
+                            terminal_ack = quiet_ack;
+                            // A descendant could claim a task, finish review,
+                            // or provision a worktree while we waited. The
+                            // replacement is only allowed to see this fresh
+                            // snapshot, never the pre-quiet board.
+                            let fresh_after = match fresh_board(&tracker, &root).await {
+                                Some((issues, _)) => Some(issues),
+                                None => None,
+                            };
+                            after = fresh_after;
+                            leftovers = leftovers_for(after.as_deref(), &actor);
+                            after_board = after.as_deref().map(|issues| {
+                                queue::snapshot(issues, &run.settings.scope, run.settings.min_priority)
+                            });
+                        }
+                        HandoffWait::Stopped => {
+                            finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
+                            return;
+                        }
+                        HandoffWait::Unproven => {
+                            // A Windows agent without an acknowledged Job
+                            // Object cannot be handed off safely. Stop rather
+                            // than waiting forever or releasing its work.
+                            record.left_behind = leftovers.clone();
+                            account.batches.push(record);
+                            finish(
+                                &mut run,
+                                StopReason::Crashed { attempts: crashes.saturating_add(1) },
+                                &say,
+                                &account,
+                                &root,
+                                &tracker,
+                            )
+                            .await;
+                            return;
+                        }
                     }
-                    life = batch_life(group.as_ref());
                 }
                 // The terminal has confirmed this attempt ended and the fresh
                 // board above is the one it left. Return ordinary claims to
@@ -1263,7 +1285,7 @@ async fn drive(
                     batch_no,
                     &actor,
                     &leftovers,
-                    life,
+                    handoff_life(handoff_gate(), life, terminal_ack),
                 )
                 .await;
                 record.left_behind = leftovers.clone();
@@ -1271,20 +1293,14 @@ async fn drive(
                     record.lock_released = Some(LockRelease { id, actor: actor.clone() });
                 }
                 account.batches.push(record);
-                continuation = Some(crate::agents::RunContinuation {
-                    attempt: run.attempt + 1,
-                    previous_agent: current_agent.clone(),
-                    previous_actor: actor.clone(),
-                    // A merge lock proves ownership of a branch, not work for
-                    // the next lead to claim. Its release has its own evidence
-                    // rule in `queue::release`, so never present it as a task.
-                    task_ids: leftovers
-                        .iter()
-                        .filter(|left| !left.lock)
-                        .map(|left| left.id.clone())
-                        .collect(),
-                    worktrees: continuation_worktrees(&root, &repos, &leftovers),
-                });
+                continuation = Some(limited_continuation(
+                    run.attempt + 1,
+                    &current_agent,
+                    &actor,
+                    &root,
+                    &repos,
+                    &leftovers,
+                ));
                 last_batch = LastBatch::Limited;
                 counted(last_batch, crashes, empties, None);
                 continue;
@@ -1547,6 +1563,37 @@ fn continuation_worktrees(root: &Path, repos: &[String], held: &[queue::Leftover
     found
 }
 
+fn leftovers_for(issues: Option<&[crate::tracker::model::Issue]>, actor: &str) -> Vec<queue::Leftover> {
+    issues.map(|issues| queue::left_behind(issues, actor)).unwrap_or_default()
+}
+
+/// The only continuation shape a limited batch can hand forward. Keeping this
+/// beside the read-only worktree discovery makes the post-quiet snapshot the
+/// sole source of task ids, merge-lock state, and existing directories.
+fn limited_continuation(
+    attempt: u32,
+    previous_agent: &str,
+    previous_actor: &str,
+    root: &Path,
+    repos: &[String],
+    leftovers: &[queue::Leftover],
+) -> crate::agents::RunContinuation {
+    crate::agents::RunContinuation {
+        attempt,
+        previous_agent: previous_agent.to_owned(),
+        previous_actor: previous_actor.to_owned(),
+        // A merge lock proves ownership of a branch, not work for the next
+        // lead to claim. Its release has its own evidence rule in
+        // `queue::release`, so never present it as a task.
+        task_ids: leftovers
+            .iter()
+            .filter(|left| !left.lock)
+            .map(|left| left.id.clone())
+            .collect(),
+        worktrees: continuation_worktrees(root, repos, leftovers),
+    }
+}
+
 /// The identity of the one session about to start. A limited attempt's
 /// continuation is consumed here, after the allowance and spawn gates, so it
 /// cannot leak into a later logical batch.
@@ -1693,19 +1740,74 @@ fn batch_life_with(
     }
 }
 
-fn handoff_permitted(life: queue::BatchLife) -> bool {
-    life == queue::BatchLife::ProvenDead
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HandoffGate {
+    ProcessGroup,
+    WindowsJob,
+}
+
+fn handoff_gate() -> HandoffGate {
+    if cfg!(windows) { HandoffGate::WindowsJob } else { HandoffGate::ProcessGroup }
+}
+
+/// Windows has no process-group proof, but the terminal worker terminates an
+/// agent's Job Object before it reports exit. A positive acknowledgement is
+/// therefore the equivalent proof that every assigned writer is gone.
+fn handoff_permitted(gate: HandoffGate, life: queue::BatchLife, terminal_ack: bool) -> bool {
+    match gate {
+        HandoffGate::ProcessGroup => life == queue::BatchLife::ProvenDead,
+        HandoffGate::WindowsJob => terminal_ack,
+    }
+}
+
+fn handoff_life(
+    gate: HandoffGate,
+    life: queue::BatchLife,
+    terminal_ack: bool,
+) -> queue::BatchLife {
+    handoff_permitted(gate, life, terminal_ack)
+        .then_some(queue::BatchLife::ProvenDead)
+        .unwrap_or(queue::BatchLife::Unproven)
+}
+
+async fn terminal_handoff_ready(terminal: &TerminalHandle, session: u64) -> bool {
+    let (tx, rx) = oneshot::channel();
+    if terminal.0.send(TerminalRequest::HandoffReady(session, tx)).await.is_err() {
+        return false;
+    }
+    rx.await.unwrap_or(false)
+}
+
+enum HandoffWait {
+    Quiet { life: queue::BatchLife, terminal_ack: bool },
+    Stopped,
+    /// The platform cannot establish a safe handoff. Windows returns this
+    /// immediately for an agent whose Job Object was unavailable or refused
+    /// termination; it must not become an infinite wait.
+    Unproven,
 }
 
 /// Stay at the boundary while a writer may still exist. The stop request is
 /// always honoured; settings cannot start another agent until this returns.
-async fn wait_for_group_quiet(group: Option<&Proc>, stop: &mut mpsc::Receiver<()>) -> bool {
+async fn wait_for_handoff_quiet(
+    terminal: &TerminalHandle,
+    session: u64,
+    group: Option<&Proc>,
+    stop: &mut mpsc::Receiver<()>,
+) -> HandoffWait {
+    if matches!(handoff_gate(), HandoffGate::WindowsJob) {
+        let terminal_ack = terminal_handoff_ready(terminal, session).await;
+        return terminal_ack
+            .then_some(HandoffWait::Quiet { life: queue::BatchLife::Unproven, terminal_ack })
+            .unwrap_or(HandoffWait::Unproven);
+    }
     loop {
-        if batch_life(group) == queue::BatchLife::ProvenDead {
-            return true;
+        let life = batch_life(group);
+        if handoff_permitted(HandoffGate::ProcessGroup, life, false) {
+            return HandoffWait::Quiet { life, terminal_ack: false };
         }
         tokio::select! {
-            _ = stop.recv() => return false,
+            _ = stop.recv() => return HandoffWait::Stopped,
             _ = tokio::time::sleep(Duration::from_secs(1)) => {}
         }
     }
@@ -2666,6 +2768,41 @@ mod tests {
     }
 
     #[test]
+    fn a_post_quiet_snapshot_carries_a_childs_late_claim_and_worktree_forward() {
+        let root = tempfile::tempdir().expect("project root");
+        let actor = "smetana-run-old";
+        let before: Vec<crate::tracker::model::Issue> = vec![];
+        assert!(leftovers_for(Some(&before), actor).is_empty(), "the first read precedes the child claim");
+
+        // The child claims and provisions after that first read, while the
+        // service is waiting for the process group to become quiet.
+        let worktree = root.path().join(".worktrees/smetana-late-child-work");
+        std::fs::create_dir_all(&worktree).expect("late child worktree");
+        let mut claimed = crate::tracker::model::Issue {
+            id: "smetana-late".into(),
+            status: "in_progress".into(),
+            ..Default::default()
+        };
+        claimed.assignee = Some(actor.into());
+        let after = vec![claimed];
+
+        let leftovers = leftovers_for(Some(&after), actor);
+        let continuation = limited_continuation(2, "claude", actor, root.path(), &[], &leftovers);
+        assert_eq!(continuation.task_ids, vec!["smetana-late"]);
+        assert_eq!(continuation.worktrees, vec![worktree.to_string_lossy().into_owned()]);
+        let release = queue::release(
+            leftovers.first().expect("late claim is released for atomic reclaim"),
+            1,
+            actor,
+            None,
+            queue::BatchLife::ProvenDead,
+        )
+        .expect("the replacement can make a normal atomic claim");
+        assert_eq!(release.status.as_deref(), Some("open"));
+        assert_eq!(release.assignee.as_deref(), Some(""));
+    }
+
+    #[test]
     fn a_replacement_consumes_its_continuation_before_the_next_logical_batch() {
         let mut run = Run::new(1, "/p".into(), settings(RunScope::Queue));
         run.batches = 4;
@@ -2702,13 +2839,39 @@ mod tests {
 
         assert_eq!(leader_exited_but_member_writes, queue::BatchLife::Unproven);
         assert!(
-            !handoff_permitted(leader_exited_but_member_writes),
+            !handoff_permitted(HandoffGate::ProcessGroup, leader_exited_but_member_writes, false),
             "without a quiet group the service cannot release claims or start a replacement"
         );
         assert_eq!(
             batch_life_with(Some(&group), &|_| registry::Seen::Gone, &|_| true),
             queue::BatchLife::ProvenDead
         );
+    }
+
+    #[test]
+    fn a_windows_job_acknowledgement_opens_one_limited_replacement_boundary() {
+        let unproven = queue::BatchLife::Unproven;
+        assert!(
+            !handoff_permitted(HandoffGate::WindowsJob, unproven, false),
+            "a missing Job Object acknowledgement stops the run instead of waiting forever"
+        );
+        assert!(handoff_permitted(HandoffGate::WindowsJob, unproven, true));
+        assert_eq!(
+            handoff_life(HandoffGate::WindowsJob, unproven, true),
+            queue::BatchLife::ProvenDead
+        );
+
+        let run = Run::new(1, "/p".into(), settings(RunScope::Queue));
+        let mut continuation = Some(crate::agents::RunContinuation {
+            attempt: 2,
+            previous_agent: "codex".into(),
+            previous_actor: "smetana-run-old".into(),
+            task_ids: vec![],
+            worktrees: vec![],
+        });
+        let replacement = take_attempt(&run, &mut continuation);
+        assert_eq!((replacement.batch, replacement.number), (0, 2));
+        assert!(continuation.is_none(), "the acknowledged handoff starts exactly one replacement");
     }
 
     #[test]
