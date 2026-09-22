@@ -42,6 +42,13 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, SettingsError> {
         .map_err(|err| SettingsError::Dir(err.to_string()))
 }
 
+/// The successful end of `settings_save`, kept as a seam so the wake contract
+/// can be exercised without inventing a Tauri application directory in a unit
+/// test. Failed writes never reach this function.
+fn saved_settings() {
+    crate::settings::notify_run_settings_changed();
+}
+
 /// `project` means "show me this project's state": that is how the front end
 /// gets another project's layout when switching. With no argument we answer
 /// about the active project from the file.
@@ -98,6 +105,24 @@ pub async fn settings_save(app: AppHandle, settings: ResolvedSettings) -> Result
 
     merge(&mut stored, settings, chrono::Utc::now().to_rfc3339());
     file::save(&path, &stored).map_err(SettingsError::Write)?;
-    crate::settings::notify_run_settings_changed();
+    saved_settings();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_successful_settings_save_wakes_a_waiting_run() {
+        let mut changed = crate::settings::run_settings_changes();
+        let before = *changed.borrow_and_update();
+
+        // This is the exact post-write hook above. A disk failure returns
+        // before it, so a waiting run is only woken for a saved policy.
+        saved_settings();
+        changed.changed().await.expect("settings change sender stays alive");
+
+        assert_ne!(*changed.borrow(), before);
+    }
 }

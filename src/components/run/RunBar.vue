@@ -21,6 +21,7 @@ import { computed } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import { TONE, endingDetail, stopReason } from './stopReason.js'
+import { failoverDetail, failoverLabel } from './failoverVoice.js'
 
 const props = defineProps({
   /* The whole Run from the worker, or null when nothing has been started. */
@@ -75,6 +76,8 @@ const releasable = computed(() => paused.value && props.speaks && !state.value?.
 const label = computed(() => {
   if (!state.value) return ''
   if (mute.value) return ''
+  const failover = failoverLabel(state.value)
+  if (failover) return failover
   switch (state.value.kind) {
     case 'preflight':
       return 'Bringing the project up'
@@ -87,12 +90,6 @@ const label = computed(() => {
        in the detail because it is the whole of what happened. */
     case 'paused':
       return `Paused — subscription limit reached (${state.value.pct}%)`
-    case 'waiting_for_agent':
-      return `Waiting for ${state.value.agent} (${state.value.pct}%)`
-    case 'waiting_for_any_agent':
-      return 'Waiting for any available agent'
-    case 'switching_agent':
-      return `Switching from ${state.value.from} to ${state.value.to}`
     default:
       return reason.value.text
   }
@@ -120,9 +117,8 @@ const detail = computed(() => {
      hang, which is the very thing making the pause a state was meant to
      prevent. */
   if (paused.value) return state.value.resets ? `resets ${state.value.resets}` : 're-checking every 10 min'
-  if (waiting.value) {
-    return state.value.resets ? `resets ${state.value.resets}` : 're-checking every minute'
-  }
+  const failover = failoverDetail(state.value)
+  if (failover) return failover
   if (props.run?.stopping) return 'stopping after this batch'
   /* A batch running smaller than was asked for has nothing else on screen to
      explain it, and "why is it only doing two" is a question somebody would

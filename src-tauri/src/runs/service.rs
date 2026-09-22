@@ -1221,10 +1221,10 @@ async fn drive(
         }
 
         // A confirmed exhausted allowance is the one failed attempt that keeps
-        // its claims and worktree for a replacement lead. The session has
-        // already exited (`watch_batch` returned), the board above is fresh,
-        // and no release is performed below before the next attempt begins.
-        // Ordinary failures still take the historical release/crash path.
+        // its worktree for a replacement lead. The session has already exited
+        // (`watch_batch` returned), the board above is fresh, and its ordinary
+        // claims are released below for the replacement's atomic claim.
+        // Ordinary failures still take the historical crash path.
         let could_be_limited = matches!(&outcome, Batch::Ended(Exit::Code(code)) if *code != 0)
             || matches!(&outcome, Batch::Ended(Exit::NoCode));
         if could_be_limited {
@@ -1235,17 +1235,41 @@ async fn drive(
             .await
             .unwrap_or(None);
             if usage::spent(reading.as_ref()) {
+                // The terminal has confirmed this attempt ended and the fresh
+                // board above is the one it left. Return ordinary claims to
+                // the board so the new actor must make bd's normal atomic
+                // claim. A refused claim is therefore somebody else's work,
+                // never an overwrite by this replacement. `queue::release`
+                // keeps the merge lock unless `life` proves its own process
+                // group gone.
+                let released_lock = release_claims(
+                    &tracker,
+                    &root,
+                    &repos,
+                    batch_no,
+                    &actor,
+                    &leftovers,
+                    life,
+                )
+                .await;
                 record.left_behind = leftovers.clone();
+                if let Some(id) = released_lock {
+                    record.lock_released = Some(LockRelease { id, actor: actor.clone() });
+                }
                 account.batches.push(record);
                 continuation = Some(crate::agents::RunContinuation {
                     attempt: run.attempt + 1,
                     previous_agent: current_agent.clone(),
                     previous_actor: actor.clone(),
-                    task_ids: leftovers.iter().map(|left| left.id.clone()).collect(),
-                    // The tracker is the source of truth for paths. The skill
-                    // inspects its existing worktrees rather than accepting a
-                    // guessed path from a stale terminal snapshot.
-                    worktrees: Vec::new(),
+                    // A merge lock proves ownership of a branch, not work for
+                    // the next lead to claim. Its release has its own evidence
+                    // rule in `queue::release`, so never present it as a task.
+                    task_ids: leftovers
+                        .iter()
+                        .filter(|left| !left.lock)
+                        .map(|left| left.id.clone())
+                        .collect(),
+                    worktrees: continuation_worktrees(&root, &repos, &leftovers),
                 });
                 last_batch = LastBatch::Limited;
                 counted(last_batch, crashes, empties, None);
@@ -1476,6 +1500,37 @@ async fn drive(
             }
         }
     }
+}
+
+/// Read only the worktrees that follow Smetana's task-slug convention. A
+/// continuation does not trust an actor's terminal cwd: the board says which
+/// tasks were held and the filesystem supplies the existing directories.
+///
+/// Repository paths come from the run's frozen config. `read_dir` failure and
+/// non-directory entries are ordinary — a task may not have reached provision
+/// before the limit, and a continuation must not invent a path for it.
+fn continuation_worktrees(root: &Path, repos: &[String], held: &[queue::Leftover]) -> Vec<String> {
+    let ids: Vec<&str> = held.iter().filter(|left| !left.lock).map(|left| left.id.as_str()).collect();
+    let mut homes = Vec::with_capacity(repos.len() + 1);
+    homes.push(root.to_path_buf());
+    homes.extend(repos.iter().map(|repo| root.join(repo)));
+    let mut found = Vec::new();
+    for home in homes {
+        let Ok(entries) = std::fs::read_dir(home.join(".worktrees")) else { continue };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else { continue };
+            if !kind.is_dir() {
+                continue;
+            }
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
+            if ids.iter().any(|id| name == *id || name.starts_with(&format!("{id}-"))) {
+                found.push(entry.path().to_string_lossy().into_owned());
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
 }
 
 /// The single way the loop task ends a run.
@@ -2521,6 +2576,29 @@ mod tests {
 
     fn state(token: u64, run: &Run) -> Report {
         Report::State { token, run: Box::new(run.clone()) }
+    }
+
+    #[test]
+    fn a_continuation_names_only_existing_worktrees_for_its_claimed_tasks() {
+        let root = tempfile::tempdir().expect("project root");
+        let first = root.path().join(".worktrees/smetana-a-first-task");
+        let second = root.path().join("repo/.worktrees/smetana-b-second-task");
+        std::fs::create_dir_all(&first).expect("first task worktree");
+        std::fs::create_dir_all(&second).expect("second task worktree");
+        std::fs::create_dir_all(root.path().join(".worktrees/unrelated-task"))
+            .expect("unrelated worktree");
+        std::fs::write(root.path().join(".worktrees/smetana-a-not-a-directory"), "x")
+            .expect("ordinary file");
+        let held = vec![
+            queue::Leftover { id: "smetana-a".into(), status: "in_progress".into(), lock: false },
+            queue::Leftover { id: "smetana-b".into(), status: "ready_to_merge".into(), lock: false },
+            queue::Leftover { id: "lock".into(), status: "in_progress".into(), lock: true },
+        ];
+
+        assert_eq!(
+            continuation_worktrees(root.path(), &["repo".into()], &held),
+            vec![first.to_string_lossy().into_owned(), second.to_string_lossy().into_owned()]
+        );
     }
 
     #[test]

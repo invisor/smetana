@@ -432,8 +432,10 @@ return-to-primary is on, the primary is considered first only for the next logic
 A handoff preserves the run token, report directory and logical batch number. Each session is an
 attempt with its own agent, actor and registry entry. Only a confirmed spent limit rotates: a normal
 crash, launch failure, or question keeps the old lifecycle. The previous session has exited before
-the replacement starts; the fresh board snapshot and continuation prompt preserve claimed work and
-tell the new lead to inspect and continue existing worktrees, never recreate or reset them.
+the replacement starts; a fresh board snapshot releases only ordinary claims and the new lead must
+make the tracker's normal atomic claim. A refusal means another actor took the work and is skipped.
+The continuation names only existing task worktrees discovered read-only, never recreates or resets
+them, while merge-lock release retains its separate proven-dead evidence rule.
 
 A released run says nothing special about itself: the bar goes back to the ordinary "Batch N". A
 detail on the model of the reduced batch ("past the limit, 92% used") was refused — that the run is

@@ -959,7 +959,7 @@ fn run(
     if let Some(continuation) = continuation {
         let _ = writeln!(
             out,
-            "\n\nContinue logical batch {batch}, attempt {} after {} (actor {}). Inspect existing claimed tasks and worktrees before doing anything; continue their work, do not recreate, clean, reset, or delete a worktree. If an atomic claim is refused, another actor lawfully owns that work: skip it. Known task ids: {}. Known worktrees: {}.",
+            "\n\nContinue logical batch {batch}, attempt {} after {} (actor {}). Its session has ended and its ordinary claims were released. Inspect existing tasks and worktrees before doing anything; make the normal atomic claim before continuing work, and if it is refused another actor lawfully owns it: skip it. Do not recreate, clean, reset, or delete a worktree. Known task ids: {}. Known worktrees: {}.",
             continuation.attempt,
             continuation.previous_agent,
             continuation.previous_actor,
@@ -1968,7 +1968,9 @@ mod tests {
         };
         let text = prompt_of(intent, SkillDelivery::PluginDir);
         assert!(text.contains("Continue logical batch 2, attempt 2 after claude"), "{text}");
-        assert!(text.contains("do not recreate, clean, reset, or delete a worktree"), "{text}");
+        assert!(text.contains("make the normal atomic claim before continuing"), "{text}");
+        assert!(text.contains("if it is refused another actor lawfully owns it: skip it"), "{text}");
+        assert!(text.contains("Do not recreate, clean, reset, or delete a worktree"), "{text}");
         assert!(text.contains("smetana-abc"), "{text}");
     }
 
