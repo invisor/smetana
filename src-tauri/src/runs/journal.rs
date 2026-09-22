@@ -672,9 +672,11 @@ mod tests {
         let usage = Usage {
             session_pct: Some(12),
             session_reset: None,
+            session_reset_at: None,
             session_label: None,
             week_pct: Some(40),
             week_reset: None,
+            week_reset_at: None,
             week_label: None,
         };
         assert_eq!(
@@ -690,9 +692,11 @@ mod tests {
             Usage {
                 session_pct: None,
                 session_reset: None,
+                session_reset_at: None,
                 session_label: None,
                 week_pct: Some(96),
                 week_reset: None,
+                week_reset_at: None,
                 week_label: None,
             };
         let line = gate(Some(&usage), &Decision::Pause { pct: 96, resets: None });

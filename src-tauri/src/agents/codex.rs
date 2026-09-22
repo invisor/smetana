@@ -761,9 +761,11 @@ pub fn rate_limits(response: &Value) -> Option<Usage> {
     (primary.is_some() || secondary.is_some()).then(|| Usage {
         session_pct: primary.as_ref().map(|window| window.pct),
         session_reset: primary.as_ref().and_then(|window| window.resets.clone()),
+        session_reset_at: primary.as_ref().and_then(|window| window.reset_at),
         session_label: primary.as_ref().map(|window| window.label.clone()),
         week_pct: secondary.as_ref().map(|window| window.pct),
         week_reset: secondary.as_ref().and_then(|window| window.resets.clone()),
+        week_reset_at: secondary.as_ref().and_then(|window| window.reset_at),
         week_label: secondary.as_ref().map(|window| window.label.clone()),
     })
 }
@@ -778,6 +780,7 @@ fn compatible_rate_limits(snapshot: &Value) -> bool {
 struct RateLimitWindow {
     pct: u8,
     resets: Option<String>,
+    reset_at: Option<chrono::DateTime<chrono::Utc>>,
     label: String,
 }
 
@@ -785,8 +788,13 @@ fn rate_limit_window(snapshot: &Value, field: &str, fallback: &str) -> Option<Ra
     let window = snapshot.get(field)?.as_object()?;
     let pct = window.get("usedPercent")?.as_u64().filter(|pct| *pct <= 100)? as u8;
     let minutes = window.get("windowDurationMins").and_then(Value::as_i64).filter(|mins| *mins > 0);
-    let resets = window.get("resetsAt").and_then(Value::as_i64).filter(|seconds| *seconds >= 0).and_then(reset_at);
-    Some(RateLimitWindow { pct, resets, label: duration_label(minutes, fallback) })
+    let reset_at = window
+        .get("resetsAt")
+        .and_then(Value::as_i64)
+        .filter(|seconds| *seconds >= 0)
+        .and_then(|seconds| chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0));
+    let resets = reset_at.map(|time| time.with_timezone(&chrono::Local).format("%b %-d at %-I:%M%P (%Z)").to_string());
+    Some(RateLimitWindow { pct, resets, reset_at, label: duration_label(minutes, fallback) })
 }
 
 /// Codex names a window by its length, not by a fixed "session" or "week"
@@ -807,10 +815,6 @@ fn plural(amount: i64, unit: &str) -> String {
     if amount == 1 { format!("1 {unit}") } else { format!("{amount} {unit}s") }
 }
 
-fn reset_at(seconds: i64) -> Option<String> {
-    chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0)
-        .map(|time| time.with_timezone(&chrono::Local).format("%b %-d at %-I:%M%P (%Z)").to_string())
-}
 
 /// The glyph Codex draws against the option the cursor is on: U+203A, a single
 /// right-pointing angle quotation mark. Not Claude Code's U+276F, and the two
@@ -1380,9 +1384,11 @@ mod tests {
         assert_eq!(usage.session_pct, Some(41));
         assert_eq!(usage.session_label.as_deref(), Some("5 hours"));
         assert!(usage.session_reset.is_some());
+        assert_eq!(usage.session_reset_at, chrono::DateTime::from_timestamp(0, 0));
         assert_eq!(usage.week_pct, Some(79));
         assert_eq!(usage.week_label.as_deref(), Some("7 days"));
         assert!(usage.week_reset.is_some());
+        assert_eq!(usage.week_reset_at, chrono::DateTime::from_timestamp(60, 0));
     }
 
     #[test]
