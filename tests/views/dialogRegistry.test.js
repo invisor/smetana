@@ -183,10 +183,9 @@ describe('the project settings window', () => {
   it('is a kind of its own, standing on the project', () => {
     expect(isDialogKind('project-settings')).toBe(true)
     expect(dialogGround('project-settings')).toEqual(['project'])
-    /* 560, the settings window's own column: the Agents group's rows
-       (`AgentRoleRows.vue`) were verified at that width, and `SettingsRow`'s
-       control column collapses the label/description side at 440. */
-    expect(dialogWidth('project-settings')).toBe(560)
+    /* 840 is the handoff's measured table width: it leaves one text column and
+       two 150 px agent-control columns without collapsing any of them. */
+    expect(dialogWidth('project-settings')).toBe(840)
   })
 
   it('closes with a sentence naming itself when the project changes', () => {

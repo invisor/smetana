@@ -46,6 +46,14 @@ const props = defineProps({
       reviewBranch: { agent: '', model: '' }
     })
   },
+  /* The root Settings tab keeps its existing stacked rows. Project settings
+     opts into its measured table without duplicating option or inheritance
+     logic. */
+  layout: {
+    type: String,
+    default: 'settings',
+    validator: (value) => ['settings', 'project'].includes(value)
+  },
   disabled: { type: Boolean, default: false }
 })
 
@@ -73,6 +81,8 @@ const modelRows = computed(() =>
     }
   })
 )
+const defaultRow = computed(() => modelRows.value[0])
+const inheritedRows = computed(() => modelRows.value.slice(1))
 
 /* A row of this group asks for two fields side by side, so it asks for twice
    the column a single-field row takes plus the gap between them. In `ch` for
@@ -90,26 +100,121 @@ const pairStyle = {
    list holds, and `Dropdown` ellipsises a label that does not fit rather than
    growing its field. */
 const halfStyle = { flex: '1 1 0', minWidth: 0 }
+
+/* Project settings has enough room to make the table's two control columns
+   fixed. The default layout above deliberately remains the Settings window's
+   responsive pair of dropdowns. */
+const projectGridStyle = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr) 150px 150px',
+  gap: 'var(--space-5)',
+  alignItems: 'start'
+}
+const projectHeaderStyle = {
+  ...projectGridStyle,
+  paddingBottom: 'var(--space-3)',
+  borderBottom: 'var(--border-w) solid var(--border)'
+}
+const projectHeadingStyle = {
+  color: 'var(--text-muted)',
+  font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-mono)',
+  letterSpacing: 'var(--tracking-caps)',
+  textTransform: 'uppercase'
+}
+const projectRowStyle = {
+  ...projectGridStyle,
+  padding: 'var(--space-5) 0'
+}
+const inheritedStyle = {
+  borderLeft: 'var(--border-w) solid var(--border-subtle)',
+  paddingLeft: 'var(--space-7)'
+}
+const inheritedRowStyle = {
+  ...projectRowStyle,
+  borderTop: 'var(--border-w) solid var(--border-subtle)'
+}
+const projectLabelStyle = {
+  color: 'var(--text-primary)',
+  font: 'var(--weight-medium) var(--text-ui-size)/var(--leading-snug) var(--font-sans)'
+}
+const projectDescriptionStyle = {
+  marginTop: 'var(--space-2)',
+  color: 'var(--text-muted)',
+  font: 'var(--weight-regular) var(--text-label-size)/var(--leading-normal) var(--font-sans)'
+}
 </script>
 
 <template>
-  <SettingsRow
-    v-for="row in modelRows"
-    :key="row.label"
-    :label="row.label"
-    :description="row.description"
-    :control-width="PAIR_WIDTH"
-  >
-    <div :style="pairStyle">
-      <div :style="halfStyle">
+  <template v-if="props.layout === 'settings'">
+    <SettingsRow
+      v-for="row in modelRows"
+      :key="row.label"
+      :label="row.label"
+      :description="row.description"
+      :control-width="PAIR_WIDTH"
+    >
+      <div :style="pairStyle">
+        <div :style="halfStyle">
+          <Dropdown
+            :model-value="row.pair.inherited ? '' : row.pair.agent"
+            :options="row.providers"
+            :disabled="props.disabled"
+            @update:model-value="emit('update:agentRole', chooseProvider(row.role, $event))"
+          />
+        </div>
+        <div :style="halfStyle">
+          <Dropdown
+            :model-value="row.pair.model"
+            :options="row.models"
+            :disabled="props.disabled"
+            @update:model-value="
+              emit('update:agentRole', chooseModel(row.role, $event, props.agentRoles, props.agent))
+            "
+          />
+        </div>
+      </div>
+    </SettingsRow>
+  </template>
+  <template v-else>
+    <div :style="projectHeaderStyle">
+      <span :style="projectHeadingStyle">Agent</span>
+      <span :style="projectHeadingStyle">Harness</span>
+      <span :style="projectHeadingStyle">Model</span>
+    </div>
+    <div :style="projectRowStyle">
+      <div>
+        <div :style="projectLabelStyle">{{ defaultRow.label }}</div>
+        <div :style="projectDescriptionStyle">{{ defaultRow.description }}</div>
+      </div>
+      <Dropdown
+        :model-value="defaultRow.pair.inherited ? '' : defaultRow.pair.agent"
+        :options="defaultRow.providers"
+        :disabled="props.disabled"
+        @update:model-value="emit('update:agentRole', chooseProvider(defaultRow.role, $event))"
+      />
+      <Dropdown
+        :model-value="defaultRow.pair.model"
+        :options="defaultRow.models"
+        :disabled="props.disabled"
+        @update:model-value="
+          emit('update:agentRole', chooseModel(defaultRow.role, $event, props.agentRoles, props.agent))
+        "
+      />
+    </div>
+    <div :style="inheritedStyle">
+      <div v-for="row in inheritedRows" :key="row.label" :style="inheritedRowStyle">
+        <div>
+          <div :style="projectLabelStyle">{{ row.label }}</div>
+          <div :style="projectDescriptionStyle">{{ row.description }}</div>
+        </div>
         <Dropdown
           :model-value="row.pair.inherited ? '' : row.pair.agent"
           :options="row.providers"
           :disabled="props.disabled"
-          @update:model-value="emit('update:agentRole', chooseProvider(row.role, $event))"
+          @update:model-value="
+            emit('update:agentRole', chooseProvider(row.role, $event))
+          "
         />
-      </div>
-      <div :style="halfStyle">
         <Dropdown
           :model-value="row.pair.model"
           :options="row.models"
@@ -120,5 +225,5 @@ const halfStyle = { flex: '1 1 0', minWidth: 0 }
         />
       </div>
     </div>
-  </SettingsRow>
+  </template>
 </template>
