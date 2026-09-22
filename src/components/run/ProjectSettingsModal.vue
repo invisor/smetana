@@ -201,6 +201,12 @@ const introStyle = {
   color: 'var(--text-secondary)',
   font: 'var(--weight-regular) var(--text-body-size)/var(--leading-normal) var(--font-sans)'
 }
+const noticeStyle = {
+  margin: 'var(--space-2) 0 0',
+  maxWidth: '74ch',
+  color: 'var(--text-secondary)',
+  font: 'var(--weight-regular) var(--text-body-size)/var(--leading-normal) var(--font-sans)'
+}
 const fileNoteStyle = {
   margin: 'var(--space-2) 0 0',
   color: 'var(--text-muted)',
@@ -275,13 +281,13 @@ const modelErrorStyle = { margin: '0 0 var(--space-3)', color: 'var(--text-muted
     :open="open"
     :closable="!busy"
     title="Project settings"
-    description="What a run in this project starts from."
     :width="840"
     body-padding="var(--space-7) var(--space-8) var(--space-8)"
     footer-padding="var(--space-5) var(--space-8)"
     @close="$emit('close')"
   >
     <div :style="bodyStyle">
+      <p :style="introStyle">What a run in this project starts from.</p>
       <!-- The file the four fields below are stored in, named where somebody
            can find the rest of the settings this form does not offer, and
            named as *theirs* rather than the dialog's — since the Agents group
@@ -299,7 +305,7 @@ const modelErrorStyle = { margin: '0 0 var(--space-3)', color: 'var(--text-muted
            Read narrowly — "nothing here to fill in", not "nothing here" — it
            is a sentence about that one file too, and the Agents group below
            is drawn and may be saved whatever state it names. -->
-      <p v-else :style="introStyle">
+      <p v-else :style="noticeStyle">
         {{ notice.lead }} <span :style="pathStyle">{{ CONFIG_FILE }}</span> {{ notice.tail }}
       </p>
 
