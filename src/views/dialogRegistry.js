@@ -53,19 +53,10 @@ const REGISTRY = {
      settings window, and the split is by subject rather than by file: this one
      is about one project, that one is about the machine.
 
-     **560, not 440, since smetana-9x2y.** `AgentRoleRows.vue`'s two dropdowns
-     per row ask `SettingsRow` for a `38ch` control column — the settings
-     window's own width, where those rows were drawn and verified — and
-     `SettingsRow`'s control column is `flex: 0 1 auto`, so at 440 the two
-     dropdowns won every row and the label/description column collapsed to a
-     sliver. Measured before this line existed: the Default row's description
-     rendered 74×314 px in dark/comfortable, 90×264 in light/compact, and the
-     panel ran to about 1813 px tall with no parsed file, taller than any
-     screen. 560 is the width these rows were built for, so they go back to it
-     rather than `AgentRoleRows` growing a layout prop of its own — a second
-     row shape is a second thing to keep in step, which is the whole point of
-     sharing one component defeated. */
-  'project-settings': { width: 560, ground: ['project'] },
+     **840, from the approved handoff.** It leaves a readable text column
+     beside the two fixed 150 px Harness and Model columns in the project's
+     agent table. */
+  'project-settings': { width: 840, ground: ['project'] },
   /* Throwing away what one file has that the last commit does not — the last
      row of a change's context menu, and the one thing in the Git panel that
      destroys work with nothing to undo it.

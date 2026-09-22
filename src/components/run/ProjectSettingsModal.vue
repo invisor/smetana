@@ -27,8 +27,6 @@ import Button from '../core/Button.vue'
 import Input from '../core/Input.vue'
 import Select from '../core/Select.vue'
 import Switch from '../core/Switch.vue'
-import SettingsGroup from '../settings/SettingsGroup.vue'
-import SettingsRow from '../settings/SettingsRow.vue'
 import AgentRoleRows from '../settings/AgentRoleRows.vue'
 import { codexModelsError } from '../../stores/agents.js'
 import {
@@ -196,57 +194,104 @@ const PRIORITIES = [
   { value: '4', label: '4 — lowest' }
 ]
 
-const body = { display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }
+const bodyStyle = { display: 'flex', flexDirection: 'column', minHeight: 0 }
 const introStyle = {
-  fontSize: 'var(--text-xs)',
-  lineHeight: 'var(--leading-normal)',
-  color: 'var(--text-secondary)'
-}
-const row = { display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }
-const labelStyle = {
-  fontSize: 'var(--text-xs)',
+  margin: 0,
+  maxWidth: '74ch',
   color: 'var(--text-secondary)',
-  fontFamily: 'var(--font-sans)'
+  font: 'var(--weight-regular) var(--text-body-size)/var(--leading-normal) var(--font-sans)'
+}
+const fileNoteStyle = {
+  margin: 'var(--space-2) 0 0',
+  color: 'var(--text-muted)',
+  font: 'var(--weight-regular) var(--text-ui-size)/var(--leading-normal) var(--font-sans)'
 }
 const pathStyle = {
-  font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)',
-  color: 'var(--text-primary)'
+  fontFamily: 'var(--font-mono)',
+  color: 'var(--text-secondary)'
 }
+const defaultsStyle = {
+  marginTop: 'var(--space-6)',
+  borderTop: 'var(--border-w) solid var(--border-subtle)'
+}
+const fieldRowStyle = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr) auto',
+  alignItems: 'center',
+  gap: 'var(--space-6)',
+  padding: 'var(--space-4) 0',
+  borderBottom: 'var(--border-w) solid var(--border-subtle)'
+}
+const fieldLabelStyle = {
+  color: 'var(--text-primary)',
+  font: 'var(--weight-medium) var(--text-ui-size)/var(--leading-snug) var(--font-sans)'
+}
+const selectControlStyle = { width: '170px', justifySelf: 'end' }
+const numberControlStyle = { width: '84px', justifySelf: 'end' }
+const agentSectionStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-5)',
+  marginTop: 'var(--space-9)'
+}
+const agentHeadingStyle = {
+  color: 'var(--text-muted)',
+  font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-mono)',
+  letterSpacing: 'var(--tracking-caps)',
+  textTransform: 'uppercase'
+}
+const agentRuleStyle = { height: 'var(--border-w)', flex: 1, background: 'var(--border-subtle)' }
+const ownAgentsStyle = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr) auto',
+  alignItems: 'start',
+  gap: 'var(--space-6)',
+  padding: 'var(--space-5) 0 var(--space-6)'
+}
+const ownAgentsLabelStyle = {
+  color: 'var(--text-primary)',
+  font: 'var(--weight-medium) var(--text-body-size)/var(--leading-snug) var(--font-sans)'
+}
+const ownAgentsDescriptionStyle = {
+  margin: 'var(--space-2) 0 0',
+  maxWidth: '78ch',
+  color: 'var(--text-secondary)',
+  font: 'var(--weight-regular) var(--text-ui-size)/var(--leading-normal) var(--font-sans)'
+}
+const switchStyle = { justifySelf: 'end', paddingTop: 'var(--space-1)' }
+const fieldControlStyle = { display: 'flex', flexDirection: 'column', alignItems: 'end' }
 const errorStyle = {
-  fontSize: 'var(--text-xs)',
-  lineHeight: 'var(--leading-normal)',
-  color: 'var(--status-failed-fg)'
+  marginTop: 'var(--space-2)',
+  color: 'var(--status-failed-fg)',
+  font: 'var(--weight-regular) var(--text-label-size)/var(--leading-normal) var(--font-sans)'
 }
 const modelErrorStyle = { margin: '0 0 var(--space-3)', color: 'var(--text-muted)' }
 </script>
 
 <template>
-  <!-- The width is read only outside a dialog window — inside one `Modal`
-       takes the whole frame, which is already the registry's number. It is
-       here so that `?view=gallery` draws this dialog at the width it has in
-       the app, and it has to agree with `project-settings` in
-       `views/dialogRegistry.js`: 560, the settings window's own column,
-       because `AgentRoleRows` below asks for a `38ch` control column that
-       was verified at that width and not at `Modal`'s 440 default. -->
+  <!-- The registry gives a native dialog this same width; outside a native
+       window, Gallery uses it as the handoff-sized modal. -->
   <Modal
     :open="open"
     :closable="!busy"
     title="Project settings"
     description="What a run in this project starts from."
-    :width="560"
+    :width="840"
+    body-padding="var(--space-7) var(--space-8) var(--space-8)"
+    footer-padding="var(--space-5) var(--space-8)"
     @close="$emit('close')"
   >
-    <div :style="body">
+    <div :style="bodyStyle">
       <!-- The file the four fields below are stored in, named where somebody
            can find the rest of the settings this form does not offer, and
            named as *theirs* rather than the dialog's — since the Agents group
            further down is a different file, `settings.json`, the one thing
            this dialog must not leave somebody unsure of is which switch
            writes to which. An identifier, so mono. -->
-      <div v-if="fields" :style="introStyle">
+      <p v-if="fields" :style="fileNoteStyle">
         These four fields are stored in <span :style="pathStyle">{{ CONFIG_FILE }}</span>.
         Everything else in that file is the setup agent's.
-      </div>
+      </p>
       <!-- And what stands in their place when there is no file to fill them
            from. Every word of it is `projectDefaults.js`'s, in two halves with
            the path between them, because the path is an identifier and is set
@@ -254,61 +299,77 @@ const modelErrorStyle = { margin: '0 0 var(--space-3)', color: 'var(--text-muted
            Read narrowly — "nothing here to fill in", not "nothing here" — it
            is a sentence about that one file too, and the Agents group below
            is drawn and may be saved whatever state it names. -->
-      <div v-else :style="introStyle">
+      <p v-else :style="introStyle">
         {{ notice.lead }} <span :style="pathStyle">{{ CONFIG_FILE }}</span> {{ notice.tail }}
-      </div>
+      </p>
 
       <!-- The file's own four, drawn together or not at all: with no parsed
            file there is nothing to put in them, and four disabled controls say
            less than the one sentence above. -->
-      <template v-if="fields">
-        <div :style="row">
-          <span :style="labelStyle">Target branch</span>
-          <Select
-            :model-value="draft.target_branch ?? ''"
-            :options="branchList"
-            :disabled="busy"
-            @update:model-value="draft.target_branch = $event"
-          />
+      <div v-if="fields" :style="defaultsStyle">
+        <div :style="fieldRowStyle">
+          <span :style="fieldLabelStyle">Target branch</span>
+          <div :style="selectControlStyle">
+            <Select
+              :model-value="draft.target_branch ?? ''"
+              :options="branchList"
+              :disabled="busy"
+              @update:model-value="draft.target_branch = $event"
+            />
+          </div>
         </div>
 
-        <div :style="row">
-          <span :style="labelStyle">Minimum priority</span>
-          <Select
-            :model-value="String(draft.min_priority ?? '')"
-            :options="PRIORITIES"
-            :disabled="busy"
-            @update:model-value="setNumber('min_priority', $event)"
-          />
-          <span v-if="errors.min_priority" :style="errorStyle">{{ errors.min_priority }}</span>
+        <div :style="fieldRowStyle">
+          <span :style="fieldLabelStyle">Minimum priority</span>
+          <div :style="fieldControlStyle">
+            <div :style="selectControlStyle">
+              <Select
+                :model-value="String(draft.min_priority ?? '')"
+                :options="PRIORITIES"
+                :disabled="busy"
+                @update:model-value="setNumber('min_priority', $event)"
+              />
+            </div>
+            <span v-if="errors.min_priority" :style="errorStyle">{{ errors.min_priority }}</span>
+          </div>
         </div>
 
-        <div :style="row">
-          <span :style="labelStyle">Max parallel tasks</span>
-          <Input
-            type="number"
-            :model-value="draft.max_parallel_tasks"
-            :invalid="Boolean(errors.max_parallel_tasks)"
-            :disabled="busy"
-            @update:model-value="setNumber('max_parallel_tasks', $event)"
-          />
-          <span v-if="errors.max_parallel_tasks" :style="errorStyle">
-            {{ errors.max_parallel_tasks }}
-          </span>
+        <div :style="fieldRowStyle">
+          <span :style="fieldLabelStyle">Max parallel tasks</span>
+          <div :style="fieldControlStyle">
+            <div :style="numberControlStyle">
+              <Input
+                type="number"
+                mono
+                :model-value="draft.max_parallel_tasks"
+                :invalid="Boolean(errors.max_parallel_tasks)"
+                :disabled="busy"
+                @update:model-value="setNumber('max_parallel_tasks', $event)"
+              />
+            </div>
+            <span v-if="errors.max_parallel_tasks" :style="errorStyle">
+              {{ errors.max_parallel_tasks }}
+            </span>
+          </div>
         </div>
 
-        <div :style="row">
-          <span :style="labelStyle">Review passes</span>
-          <Input
-            type="number"
-            :model-value="draft.review_passes"
-            :invalid="Boolean(errors.review_passes)"
-            :disabled="busy"
-            @update:model-value="setNumber('review_passes', $event)"
-          />
-          <span v-if="errors.review_passes" :style="errorStyle">{{ errors.review_passes }}</span>
+        <div :style="fieldRowStyle">
+          <span :style="fieldLabelStyle">Review passes</span>
+          <div :style="fieldControlStyle">
+            <div :style="numberControlStyle">
+              <Input
+                type="number"
+                mono
+                :model-value="draft.review_passes"
+                :invalid="Boolean(errors.review_passes)"
+                :disabled="busy"
+                @update:model-value="setNumber('review_passes', $event)"
+              />
+            </div>
+            <span v-if="errors.review_passes" :style="errorStyle">{{ errors.review_passes }}</span>
+          </div>
         </div>
-      </template>
+      </div>
 
       <span v-if="error" :style="errorStyle">{{ error }}</span>
 
@@ -317,26 +378,37 @@ const modelErrorStyle = { margin: '0 0 var(--space-3)', color: 'var(--text-muted
            machine's `settings.json`, not about `project.toml`, so a broken or
            missing project file has no bearing on whether this group may be
            edited or saved. -->
-      <SettingsGroup label="Agents">
-        <SettingsRow :label="OWN_AGENTS_LABEL" :description="OWN_AGENTS_DESCRIPTION">
-          <Switch
-            :model-value="agentsDraft !== null"
-            :disabled="busy"
-            @update:model-value="toggleOwnAgents($event)"
-          />
-        </SettingsRow>
+      <section aria-label="Agents">
+        <div :style="agentSectionStyle">
+          <span :style="agentHeadingStyle">Agents</span>
+          <span :style="agentRuleStyle" />
+        </div>
+        <div :style="ownAgentsStyle">
+          <div>
+            <div :style="ownAgentsLabelStyle">{{ OWN_AGENTS_LABEL }}</div>
+            <p :style="ownAgentsDescriptionStyle">{{ OWN_AGENTS_DESCRIPTION }}</p>
+          </div>
+          <div :style="switchStyle">
+            <Switch
+              :model-value="agentsDraft !== null"
+              :disabled="busy"
+              @update:model-value="toggleOwnAgents($event)"
+            />
+          </div>
+        </div>
         <p v-if="codexModelsError" :style="modelErrorStyle">
           Codex models could not be refreshed: {{ codexModelsError }}
         </p>
         <AgentRoleRows
           v-if="agentsDraft"
+          layout="project"
           :agent="agentsDraft.agent"
           :model="agentsDraft.model"
           :agent-roles="agentsDraft.agentRoles"
           :disabled="busy"
           @update:agent-role="onAgentRole($event)"
         />
-      </SettingsGroup>
+      </section>
     </div>
     <template #footer>
       <!-- Always Cancel now: the Agents group above is drawn and may be

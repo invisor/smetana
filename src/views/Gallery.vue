@@ -3370,14 +3370,10 @@ const menuTargetStyle = {
            and the branch here is one `branchOptions` had to keep because the
            list no longer holds it.
 
-           640, measured against a running build in all four theme × density
-           combinations: this cell holds 575 px comfortable and 501 px
-           compact, the one after it 607 and 529. 640 is a margin over the
-           tallest of the four rather than a fresh guess — `overflow: hidden`
-           stays here, since the switch is off by default and this cell never
-           draws the five rows that made the height genuinely hard to bound
-           before it was measured. -->
-      <div :style="{ position: 'relative', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           The 920 px frame leaves the 840 px modal and its 92% maximum width
+           intact. The switch is off in this state, so the table must not be
+           mounted; the frame remains tall enough for the fixed footer. -->
+      <div :style="{ position: 'relative', width: '920px', maxWidth: '100%', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal
           :open="true"
           :defaults="{
@@ -3393,9 +3389,9 @@ const menuTargetStyle = {
       </div>
       <!-- And the shape a refusal takes: the command's own message under the
            fields, which is what "the file will not parse" looks like when the
-           file changed under an open window. Same 640, measured at 607 px
-           comfortable and 529 px compact. -->
-      <div :style="{ position: 'relative', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           file changed under an open window. The table is still absent while
+           the project-agent override remains off. -->
+      <div :style="{ position: 'relative', width: '920px', maxWidth: '100%', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal
           :open="true"
           :defaults="{
@@ -3413,14 +3409,12 @@ const menuTargetStyle = {
       <!-- The same window over a project with no configuration at all, and over
            one whose file will not parse: no fields, no Save, one sentence in
            their place — which is the whole reason the menu item that opens this
-           is no longer greyed in either state. The ghost button reads Close
-           rather than Cancel here, since there is nothing on screen to undo.
-           340, measured at 309 px comfortable and 275 px compact — the same
-           margin the pair above carries, for the switch row alone. -->
-      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           is no longer greyed in either state. The Agents switch and its fixed
+           footer remain available even though the defaults form is absent. -->
+      <div :style="{ position: 'relative', width: '920px', maxWidth: '100%', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal :open="true" config-state="missing" @close="() => {}" />
       </div>
-      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+      <div :style="{ position: 'relative', width: '920px', maxWidth: '100%', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal :open="true" config-state="broken" @close="() => {}" />
       </div>
       <!-- The Agents group's own populated state: a project that already keeps
@@ -3431,14 +3425,10 @@ const menuTargetStyle = {
            saved whatever state `project.toml` is in, so this cell checks that
            by eye rather than by claim.
 
-           This is the switched-on state, with all five rows drawn under it.
-           1010, measured against a running build in all four combinations:
-           973 px comfortable, 881 px compact — about 37 px of margin over the
-           taller of the two, rather than a guess. `overflow` stays at its
-           default (visible) rather than `hidden`, confirmed the right call at
-           this height too: a future row added to the group spills visibly
-           past the border instead of being concealed by it. -->
-      <div :style="{ position: 'relative', height: '1010px', border: 'var(--border-w) solid var(--border)' }">
+           This is the switched-on state, with the table header, Default row
+           and all four dependency-spine rows. Its frame is deliberately wide
+           enough for the 840 px layout and tall enough to inspect every row. -->
+      <div :style="{ position: 'relative', width: '920px', maxWidth: '100%', height: '1010px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal
           :open="true"
           config-state="missing"
