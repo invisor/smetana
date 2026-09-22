@@ -31,7 +31,7 @@
 //! branches; the only thing they share is a subscription limit, and a run does
 //! not reserve one (smetana-tra).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -40,6 +40,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use super::awake;
 use super::config::{self, ConfigState};
+use super::failover::{self, Boundary, Next};
 use super::journal::{self, Journal};
 use super::model::{
     Asked, OnQuestion, RepeatedQuestion, Run, RunError, RunScope, RunSettings, RunState, StopReason,
@@ -157,7 +158,14 @@ enum Report {
     /// Its own report rather than a field on `State`, because the group is
     /// asked of the terminal worker and may not answer: a batch whose pid could
     /// not be read still has an actor worth writing down.
-    Started { token: u64, session: u64, group: Option<Proc> },
+    Started {
+        token: u64,
+        session: u64,
+        group: Option<Proc>,
+        batch: u32,
+        attempt: u32,
+        agent: String,
+    },
     /// May another batch go out? The worker's answer *is* the decision — see
     /// `may_spawn`.
     Spawning { token: u64, allow: oneshot::Sender<bool> },
@@ -440,10 +448,11 @@ fn handle(
             // rather than on the next one. See `usage::Limits` for why this
             // field is the exception to their snapshot.
             let settings_path = crate::settings::path(app);
+            let settings_changed = crate::settings::run_settings_changes();
 
             let token = *next_token;
             *next_token += 1;
-            let run = Run::new(token, project.clone(), settings);
+            let run = Run::new(token, project.clone(), settings).with_primary(agent.clone());
             let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
             // False for every run, whatever any earlier press said: a release
             // is given to the runs that were alive when it happened, and this
@@ -470,6 +479,7 @@ fn handle(
                 agent,
                 remove_worktrees,
                 settings_path,
+                settings_changed,
                 released_rx,
                 tracker.clone(),
                 terminal.clone(),
@@ -524,10 +534,13 @@ fn record(active: &HashMap<u64, Active>, report: &Report) {
     };
     let root = Path::new(&project);
     match report {
-        Report::Started { session, group, .. } => {
-            recovery::note_batch(
+        Report::Started { session, group, batch, attempt, agent, .. } => {
+            recovery::note_attempt(
                 root,
                 token,
+                *batch,
+                *attempt,
+                agent.clone(),
                 crate::terminal::model::run_actor(*session),
                 group.clone(),
             );
@@ -748,6 +761,9 @@ async fn drive(
     // are the one thing about a run a person may usefully change while it is
     // going.
     settings_path: Option<PathBuf>,
+    // Successful settings saves wake only the boundary wait below; a live
+    // session is intentionally never pre-empted by a changed reserve order.
+    mut settings_changed: watch::Receiver<u64>,
     // Whether "Run anyway" has been pressed while this run was alive. Read at
     // every gate check and never written here — see `Active::released`.
     mut released: watch::Receiver<bool>,
@@ -820,7 +836,12 @@ async fn drive(
     //
     // Nothing installed is not an error here — the gate simply cannot ask, and
     // `spawn_batch` is where that failure belongs and is already reported.
-    let profile = crate::agents::pick(&agent, crate::shell_env::path());
+    let primary_agent = agent;
+    let mut current_agent = primary_agent.clone();
+    // A value here is one unfinished logical batch. Its report directory and
+    // number are retained, while each replacement session gets a higher
+    // attempt number and a continuation briefing.
+    let mut continuation: Option<crate::agents::RunContinuation> = None;
 
     let mut previous: Option<QueueSnapshot> = None;
     let mut crashes: u32 = 0;
@@ -917,6 +938,55 @@ async fn drive(
         }
         previous = Some(now);
 
+        // A failover decision is made only where no attempt is live. The
+        // primary was fixed above; the policy is deliberately re-read here so
+        // a save can change an already-waiting run without changing its lead.
+        let policy = crate::settings::run_failover_at(settings_path.as_deref());
+        let installed = installed_agents();
+        let probes = failover_probes(&installed, probe.clone()).await;
+        let boundary = if continuation.is_some() { Boundary::ForcedHandoff } else { Boundary::NewBatch };
+        match failover::select(
+            &policy,
+            &primary_agent,
+            Some(&current_agent),
+            &installed,
+            &probes,
+            boundary,
+            chrono::Utc::now(),
+        ) {
+            Next::Stay { agent } => current_agent = agent,
+            Next::Start { agent } => {
+                let from = current_agent.clone();
+                run.advance(RunState::SwitchingAgent { from: from.clone(), to: agent.clone() });
+                run.agent = agent.clone();
+                say(&run);
+                account.journal.say(&journal::agent_switching(&from, &agent, run.batches + 1, run.attempt + 1));
+                current_agent = agent;
+            }
+            Next::WaitOne { agent, until, pct, resets } => {
+                run.advance(RunState::WaitingForAgent { agent: agent.clone(), pct, resets });
+                say(&run);
+                account.journal.say(&journal::waiting_for_agent(&agent, until));
+                if !wait_for_failover(until, &mut stop, &mut settings_changed).await {
+                    finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
+                    return;
+                }
+                continue;
+            }
+            Next::WaitAny { wake_at } => {
+                run.advance(RunState::WaitingForAnyAgent);
+                say(&run);
+                account.journal.say(&journal::waiting_for_any_agent(wake_at));
+                if !wait_for_failover(Some(wake_at), &mut stop, &mut settings_changed).await {
+                    finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
+                    return;
+                }
+                continue;
+            }
+        }
+
+        let profile = crate::agents::resolve(&current_agent);
+
         // Before spending the allowance, find out what is left of it. This is
         // the whole reason the gate is worth having: an exhausted limit costs
         // no session at all, where discovering it by failing costs one every
@@ -951,22 +1021,30 @@ async fn drive(
         // The batch's own number and its own clock. The number is what names
         // the file the lead writes its account into, so the app can match an
         // account to the batch it timed rather than trusting a count kept twice.
-        let batch_no = run.batches + 1;
+        // A continuation belongs to one actual replacement session, not to the
+        // rest of the run. Take it only after all gates have admitted that
+        // session: waits keep it intact, while a successful replacement leaves
+        // the following boundary as an ordinary new batch.
+        let attempt = take_attempt(&run, &mut continuation);
+        let batch_no = attempt.batch;
         let batch_started = Instant::now();
 
         // Before the batch that writes it, never after: this batch's account is
         // what says it handed the work back, and `token` counts from zero on
         // every app start, so a previous launch's file can be sitting under this
         // very name already. See `clear_account`.
-        clear_account(&account.reports, batch_no);
+        if attempt.continuation.is_none() {
+            clear_account(&account.reports, batch_no);
+        }
 
         let session = match spawn_batch(
             &terminal,
             &run,
             tasks,
-            &agent,
+            &current_agent,
             &account.reports,
             batch_no,
+            attempt.continuation.clone(),
             remove_worktrees,
         )
         .await
@@ -985,6 +1063,8 @@ async fn drive(
         let group = group_of(&terminal, session).await;
         account.journal.say(&journal::batch_started(
             batch_no,
+            attempt.number,
+            &current_agent,
             session,
             &crate::terminal::model::run_actor(session),
             group.as_ref(),
@@ -994,10 +1074,21 @@ async fn drive(
             // the decision above was made from, which is that set.
             previous.as_ref().map(|snapshot| snapshot.ready.as_slice()).unwrap_or_default(),
         ));
-        let _ = report.send(Report::Started { token, session, group: group.clone() });
+        let _ = report.send(Report::Started {
+            token,
+            session,
+            group: group.clone(),
+            batch: batch_no,
+            attempt: attempt.number,
+            agent: current_agent.clone(),
+        });
 
         run.working_in(session);
-        run.batches += 1;
+        if attempt.continuation.is_none() {
+            run.batches += 1;
+        }
+        run.attempt = attempt.number;
+        run.agent = current_agent.clone();
         run.advance(RunState::Working { iteration });
         say(&run);
 
@@ -1018,14 +1109,18 @@ async fn drive(
             batch_started.elapsed().as_secs(),
             outcome_of(&outcome),
         );
-        // One board read for the whole of this batch's ending, and it is a
-        // resync (`fresh_board`) because what is being looked for are the
+        record.attempt = run.attempt;
+        record.agent = current_agent.clone();
+        // The initial board read is a resync (`fresh_board`) because what is
+        // being looked for are the
         // *agent's* own bd writes: those reach this process through the
         // watcher, and a claim made moments before the session died may not
         // have landed in the cached snapshot. It answers three questions at
         // once — what the batch left claimed, whether it moved the board at
         // all, and, through the first, what has to be given back — so that no
-        // arm below can be added later without one of them. The named cost is
+        // arm below can be added later without one of them. A limited attempt
+        // whose writers need time to leave takes a second snapshot just before
+        // its replacement, so that late claims cannot be lost. The named cost is
         // that every batch now pays the resync a silent one used to pay alone,
         // about two seconds at the one moment in a run when nothing at all is
         // waiting on it.
@@ -1036,35 +1131,20 @@ async fn drive(
             Some((issues, source)) => (Some(issues), Some(source)),
             None => (None, None),
         };
-        let leftovers =
-            after.as_deref().map(|issues| queue::left_behind(issues, &actor)).unwrap_or_default();
-        // Asked here, once, and about **this batch's own process group** rather
-        // than about the app that started it (smetana-rxzd). It decides one
-        // thing and nothing else: whether the merge lock among those leftovers
-        // is given back. The group is the right question and the writer is not
-        // — a batch killed mid-merge under an app that is still up leaves a
-        // lock no one will ever release, and the writer being alive says only
-        // that the app is.
-        //
-        // It is asked *after* the wait rather than reused from the batch's
-        // start, and that is what makes any release possible at all: at the
-        // start the lead is alive by construction.
-        //
-        // **What is read is the recorded leader, not the group.** `group.pid`
-        // and the stamp beside it are one process, and a process group on Unix
-        // outlives its leader — so a lead that exited while something it
-        // delegated is still merging answers gone here, and the lock is
-        // released under it. That is the limit of this evidence rather than a
-        // hole in the code, and it is named because the write rests on it;
-        // `registry::group_is_dead` carries it too, with the group-wide probe
-        // that would close it (`killpg(pgid, 0)`, `procs.rs`'s to take) and the
-        // reason taking it is a decision of its own.
+        let leftovers = leftovers_for(after.as_deref(), &actor);
+        // Ask about this batch's own process group rather than about the app
+        // that started it. A stamped dead leader plus an empty Unix group is
+        // the proof needed to give the merge lock and ordinary work back; on
+        // Windows the terminal's successful Job Object termination is the
+        // equivalent proof. Both checks happen after `watch_batch` rather
+        // than at spawn, when the lead is alive by construction.
         //
         // What keeps the one ending that *kills* a lead out of this is **order
         // rather than the reading**: `remove_session` runs further down, after
         // the release, so on an unanswered question the lead is still sitting
         // at its dialog when this is asked and `life` comes back `Unproven`.
-        let life = batch_life(group.as_ref());
+        let mut life = batch_life(group.as_ref());
+        let mut terminal_ack = terminal_handoff_ready(&terminal, session).await;
         // Taken once, here, rather than inside the emptiness rule below: the
         // line on the record and the value the decision is made from have to be
         // the same snapshot, or the journal describes a board the loop did not
@@ -1074,32 +1154,11 @@ async fn drive(
             .map(|issues| queue::snapshot(issues, &run.settings.scope, run.settings.min_priority));
         // The load-bearing read of the four. `did_nothing` turns it into
         // `LastBatch::Empty` or `LastBatch::Completed`, which is the very
-        // discrimination the night of 29 August could not make — and a read
-        // that *failed* falls to the arm that counts the batch as having
-        // completed, so the failure has to be on the record as loudly as the
-        // success.
-        account.journal.say(&match (&after_board, after_source) {
-            (Some(snapshot), Some(source)) => {
-                journal::board(journal::Read::AfterBatch, snapshot, source)
-            }
-            _ => journal::unreadable_board(journal::Read::AfterBatch, None),
-        });
-        // In the document, only for a batch that said nothing: an account is a
-        // lead telling somebody where it left the board, and a line about the
-        // leftovers behind a lead that already answered is one nobody needed.
-        // The release below is not conditioned on it — a lead's account says
-        // where the work was left and releases nothing.
+        // discrimination the night of 29 August could not make. Journal
+        // output is deliberately deferred until a limited handoff has taken
+        // its required post-quiet snapshot, so it cannot contradict the
+        // continuation and report.
         let reported = record.reported;
-        if !reported {
-            record.left_behind = leftovers.clone();
-        }
-        account.journal.say(&journal::batch_ended(
-            batch_no,
-            &outcome,
-            record.seconds,
-            reported,
-            &leftovers,
-        ));
         // One line per batch about both counters, whichever of them moved, and
         // a closure rather than seven copies of it: every arm below ends the
         // batch, and seven call sites is how one of them comes to be missing
@@ -1128,6 +1187,172 @@ async fn drive(
         // "In a row" is literal, the same way it is for a repeated question.
         if !nothing_done {
             empties = 0;
+        }
+
+        // A confirmed exhausted allowance is the one failed attempt that keeps
+        // its worktree for a replacement lead. The session has already exited
+        // (`watch_batch` returned), the board above is fresh, and its ordinary
+        // claims are released below for the replacement's atomic claim.
+        // Ordinary failures still take the historical crash path.
+        let could_be_limited = matches!(&outcome, Batch::Ended(Exit::Code(code)) if *code != 0)
+            || matches!(&outcome, Batch::Ended(Exit::NoCode));
+        if could_be_limited {
+            let probe_now = probe.clone();
+            let reading = tokio::task::spawn_blocking(move || {
+                usage::read(profile?, probe_now.as_deref()?)
+            })
+            .await
+            .unwrap_or(None);
+            if usage::spent(reading.as_ref()) {
+                // `AwaitExit` proves the lead stopped, not that every child
+                // in its process group stopped writing. Wait at this safe
+                // boundary until the group is provably quiet: until then the
+                // old actor keeps its claims and no replacement is admitted.
+                if !handoff_permitted(handoff_gate(), life, terminal_ack) {
+                    match wait_for_handoff_quiet(&terminal, session, group.as_ref(), &mut stop).await {
+                        HandoffWait::Quiet { life: quiet_life, terminal_ack: quiet_ack } => {
+                            life = quiet_life;
+                            terminal_ack = quiet_ack;
+                        }
+                        HandoffWait::Stopped => {
+                            // The stop arrived while a descendant could still
+                            // write. Keep the attempt in both records, but do
+                            // not turn the pre-quiet board into permission to
+                            // release it or start a replacement.
+                            record_interrupted_handoff(&mut account, batch_no, &outcome, record);
+                            finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
+                            return;
+                        }
+                        HandoffWait::Unproven => {
+                            // A missing Unix group or a Windows agent without
+                            // an acknowledged Job Object cannot be handed off
+                            // safely. Stop rather than waiting forever or
+                            // releasing a snapshot that may already be stale.
+                            journal_batch_state(
+                                &account.journal,
+                                None,
+                                None,
+                                batch_no,
+                                &outcome,
+                                record.seconds,
+                                reported,
+                                &[],
+                            );
+                            account.batches.push(record);
+                            finish(
+                                &mut run,
+                                StopReason::Crashed { attempts: crashes.saturating_add(1) },
+                                &say,
+                                &account,
+                                &root,
+                                &tracker,
+                            )
+                            .await;
+                            return;
+                        }
+                    }
+                }
+                // This second tracker read is mandatory even where the first
+                // group probe was already quiet: the only snapshot a
+                // replacement may release or inspect is the one taken after
+                // its predecessor was proved unable to write. Losing the read
+                // is a conservative stop, never an empty handoff.
+                let Some((fresh_after, fresh_source)) = fresh_board(&tracker, &root).await else {
+                    account.journal.say(&journal::stale_handoff_snapshot(
+                        after_board.as_ref(),
+                        after_source,
+                    ));
+                    journal_batch_state(
+                        &account.journal,
+                        None,
+                        None,
+                        batch_no,
+                        &outcome,
+                        record.seconds,
+                        reported,
+                        &[],
+                    );
+                    account.batches.push(record);
+                    finish(
+                        &mut run,
+                        StopReason::Crashed { attempts: crashes.saturating_add(1) },
+                        &say,
+                        &account,
+                        &root,
+                        &tracker,
+                    )
+                    .await;
+                    return;
+                };
+                let fresh_board = queue::snapshot(
+                    &fresh_after,
+                    &run.settings.scope,
+                    run.settings.min_priority,
+                );
+                let final_leftovers = handoff_leftovers(Some(&fresh_after), &actor)
+                    .expect("a successful post-quiet board read has a claim set");
+                journal_batch_state(
+                    &account.journal,
+                    Some(&fresh_board),
+                    Some(fresh_source),
+                    batch_no,
+                    &outcome,
+                    record.seconds,
+                    reported,
+                    &final_leftovers,
+                );
+                // The terminal has confirmed this attempt ended and the fresh
+                // board above is the one it left. Return ordinary claims to
+                // the board so the new actor must make bd's normal atomic
+                // claim. A refused claim is therefore somebody else's work,
+                // never an overwrite by this replacement. `queue::release`
+                // keeps the merge lock unless `life` proves its own process
+                // group gone.
+                let released_lock = release_claims(
+                    &tracker,
+                    &root,
+                    &repos,
+                    batch_no,
+                    &actor,
+                    &final_leftovers,
+                    handoff_life(handoff_gate(), life, terminal_ack),
+                )
+                .await;
+                record.left_behind = final_leftovers.clone();
+                if let Some(id) = released_lock {
+                    record.lock_released = Some(LockRelease { id, actor: actor.clone() });
+                }
+                account.batches.push(record);
+                continuation = Some(limited_continuation(
+                    run.attempt + 1,
+                    &current_agent,
+                    &actor,
+                    &root,
+                    &repos,
+                    &final_leftovers,
+                ));
+                last_batch = LastBatch::Limited;
+                counted(last_batch, crashes, empties, None);
+                continue;
+            }
+        }
+
+        journal_batch_state(
+            &account.journal,
+            after_board.as_ref(),
+            after_source,
+            batch_no,
+            &outcome,
+            record.seconds,
+            reported,
+            &leftovers,
+        );
+        // In the document, only for a batch that said nothing: an account is
+        // a lead telling somebody where it left the board. Ordinary outcomes
+        // use their initial final snapshot; limited handoffs did the same
+        // above with their mandatory post-quiet snapshot.
+        if !reported {
+            record.left_behind = leftovers.clone();
         }
 
         // Give back what this batch left claimed, after every ending that
@@ -1355,6 +1580,158 @@ async fn drive(
     }
 }
 
+/// Read only the worktrees that follow Smetana's task-slug convention. A
+/// continuation does not trust an actor's terminal cwd: the board says which
+/// tasks were held and the filesystem supplies the existing directories.
+///
+/// Repository paths come from the run's frozen config. `read_dir` failure and
+/// non-directory entries are ordinary — a task may not have reached provision
+/// before the limit, and a continuation must not invent a path for it.
+fn continuation_worktrees(root: &Path, repos: &[String], held: &[queue::Leftover]) -> Vec<String> {
+    let ids: Vec<&str> = held.iter().filter(|left| !left.lock).map(|left| left.id.as_str()).collect();
+    let mut homes = Vec::with_capacity(repos.len() + 1);
+    homes.push(root.to_path_buf());
+    homes.extend(repos.iter().map(|repo| root.join(repo)));
+    let mut found = Vec::new();
+    for home in homes {
+        let Ok(entries) = std::fs::read_dir(home.join(".worktrees")) else { continue };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else { continue };
+            if !kind.is_dir() {
+                continue;
+            }
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
+            if ids.iter().any(|id| name == *id || name.starts_with(&format!("{id}-"))) {
+                found.push(entry.path().to_string_lossy().into_owned());
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+fn leftovers_for(issues: Option<&[crate::tracker::model::Issue]>, actor: &str) -> Vec<queue::Leftover> {
+    issues.map(|issues| queue::left_behind(issues, actor)).unwrap_or_default()
+}
+
+/// `None` is intentionally distinct from an empty board. The former means a
+/// post-quiet tracker read failed and is never allowed to start a replacement.
+fn handoff_leftovers(
+    issues: Option<&[crate::tracker::model::Issue]>,
+    actor: &str,
+) -> Option<Vec<queue::Leftover>> {
+    issues.map(|issues| queue::left_behind(issues, actor))
+}
+
+/// The after-batch board line and ending line describe one identical final
+/// snapshot. A limited handoff calls this only after its post-quiet read;
+/// when that read fails, both lines explicitly say the board was unreadable
+/// rather than accidentally documenting an earlier claim set as current.
+fn journal_batch_state(
+    journal: &Journal,
+    snapshot: Option<&QueueSnapshot>,
+    source: Option<BoardSource>,
+    batch: u32,
+    outcome: &Batch,
+    seconds: u64,
+    reported: bool,
+    leftovers: &[queue::Leftover],
+) {
+    let (board, ended) = journal_batch_lines(
+        snapshot, source, batch, outcome, seconds, reported, leftovers,
+    );
+    journal.say(&board);
+    journal.say(&ended);
+}
+
+fn journal_batch_lines(
+    snapshot: Option<&QueueSnapshot>,
+    source: Option<BoardSource>,
+    batch: u32,
+    outcome: &Batch,
+    seconds: u64,
+    reported: bool,
+    leftovers: &[queue::Leftover],
+) -> (String, String) {
+    let board = match (snapshot, source) {
+        (Some(snapshot), Some(source)) => journal::board(journal::Read::AfterBatch, snapshot, source),
+        _ => journal::unreadable_board(journal::Read::AfterBatch, None),
+    };
+    let ended = journal::batch_ended(batch, outcome, seconds, reported, leftovers);
+    (board, ended)
+}
+
+/// Finish the record of a limited attempt stopped while writers still had a
+/// chance to be alive. This has no tracker write and makes no continuation:
+/// recovery keeps the old actor's claims until it can establish its own proof.
+fn record_interrupted_handoff(
+    account: &mut Account,
+    batch: u32,
+    outcome: &Batch,
+    record: BatchLine,
+) {
+    account.journal.say(&journal::interrupted_handoff(batch));
+    journal_batch_state(
+        &account.journal,
+        None,
+        None,
+        batch,
+        outcome,
+        record.seconds,
+        record.reported,
+        &[],
+    );
+    account.batches.push(record);
+}
+
+/// The only continuation shape a limited batch can hand forward. Keeping this
+/// beside the read-only worktree discovery makes the post-quiet snapshot the
+/// sole source of task ids, merge-lock state, and existing directories.
+fn limited_continuation(
+    attempt: u32,
+    previous_agent: &str,
+    previous_actor: &str,
+    root: &Path,
+    repos: &[String],
+    leftovers: &[queue::Leftover],
+) -> crate::agents::RunContinuation {
+    crate::agents::RunContinuation {
+        attempt,
+        previous_agent: previous_agent.to_owned(),
+        previous_actor: previous_actor.to_owned(),
+        // A merge lock proves ownership of a branch, not work for the next
+        // lead to claim. Its release has its own evidence rule in
+        // `queue::release`, so never present it as a task.
+        task_ids: leftovers
+            .iter()
+            .filter(|left| !left.lock)
+            .map(|left| left.id.clone())
+            .collect(),
+        worktrees: continuation_worktrees(root, repos, leftovers),
+    }
+}
+
+/// The identity of the one session about to start. A limited attempt's
+/// continuation is consumed here, after the allowance and spawn gates, so it
+/// cannot leak into a later logical batch.
+struct AttemptContext {
+    batch: u32,
+    number: u32,
+    continuation: Option<crate::agents::RunContinuation>,
+}
+
+fn take_attempt(run: &Run, continuation: &mut Option<crate::agents::RunContinuation>) -> AttemptContext {
+    match continuation.take() {
+        Some(continuation) => AttemptContext {
+            batch: run.batches,
+            number: continuation.attempt,
+            continuation: Some(continuation),
+        },
+        None => AttemptContext { batch: run.batches + 1, number: 1, continuation: None },
+    }
+}
+
 /// The single way the loop task ends a run.
 ///
 /// Every ending *this task* reaches goes through here, so that the next one
@@ -1441,6 +1818,8 @@ fn read_batch(dir: &Path, n: u32, seconds: u64, outcome: BatchOutcome) -> BatchL
     };
     BatchLine {
         n,
+        attempt: 1,
+        agent: String::new(),
         seconds,
         tasks: parsed.tasks,
         notes: parsed.notes,
@@ -1455,16 +1834,111 @@ fn read_batch(dir: &Path, n: u32, seconds: u64, outcome: BatchOutcome) -> BatchL
 /// What the app can prove about this batch's process group, in the one
 /// vocabulary `queue::release` reads (smetana-rxzd).
 ///
-/// The rule itself is `registry::group_is_dead`, where the liveness vocabulary
-/// and the `Unknown` asymmetry already live and where its tests are; this is
-/// the two lines that put the live process table in front of it. `procs::look`
-/// is the same reader `recovery`'s start-up sweep uses, so there is one answer
-/// to "what is under this pid" in the subsystem and not two.
+/// The leader stamp must be dead and the operating system must find no member
+/// in its process group. `procs::look` is the same reader recovery uses, and
+/// `group_is_empty` refuses every answer other than a positive empty result.
 fn batch_life(group: Option<&Proc>) -> queue::BatchLife {
-    match registry::group_is_dead(group, &super::procs::look) {
-        true => queue::BatchLife::ProvenDead,
-        false => queue::BatchLife::Unproven,
+    batch_life_with(group, &super::procs::look, &super::procs::group_is_empty)
+}
+
+/// A leader's exit is insufficient for a handoff: its process group can still
+/// contain a compiler, merger, or a child writing the same worktree. Both
+/// independent observations must say it is quiet, and an unavailable group
+/// probe is deliberately the conservative answer.
+fn batch_life_with(
+    group: Option<&Proc>,
+    table: &impl Fn(i32) -> registry::Seen,
+    group_is_empty: &impl Fn(i32) -> bool,
+) -> queue::BatchLife {
+    match group {
+        Some(group) if registry::group_is_dead(Some(group), table) && group_is_empty(group.pid) => {
+            queue::BatchLife::ProvenDead
+        }
+        _ => queue::BatchLife::Unproven,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HandoffGate {
+    ProcessGroup,
+    WindowsJob,
+}
+
+fn handoff_gate() -> HandoffGate {
+    if cfg!(windows) { HandoffGate::WindowsJob } else { HandoffGate::ProcessGroup }
+}
+
+/// Windows has no process-group proof, but the terminal worker terminates an
+/// agent's Job Object before it reports exit. A positive acknowledgement is
+/// therefore the equivalent proof that every assigned writer is gone.
+fn handoff_permitted(gate: HandoffGate, life: queue::BatchLife, terminal_ack: bool) -> bool {
+    match gate {
+        HandoffGate::ProcessGroup => life == queue::BatchLife::ProvenDead,
+        HandoffGate::WindowsJob => terminal_ack,
+    }
+}
+
+fn handoff_life(
+    gate: HandoffGate,
+    life: queue::BatchLife,
+    terminal_ack: bool,
+) -> queue::BatchLife {
+    handoff_permitted(gate, life, terminal_ack)
+        .then_some(queue::BatchLife::ProvenDead)
+        .unwrap_or(queue::BatchLife::Unproven)
+}
+
+async fn terminal_handoff_ready(terminal: &TerminalHandle, session: u64) -> bool {
+    let (tx, rx) = oneshot::channel();
+    if terminal.0.send(TerminalRequest::HandoffReady(session, tx)).await.is_err() {
+        return false;
+    }
+    rx.await.unwrap_or(false)
+}
+
+enum HandoffWait {
+    Quiet { life: queue::BatchLife, terminal_ack: bool },
+    Stopped,
+    /// The platform cannot establish a safe handoff. Windows returns this
+    /// immediately for an agent whose Job Object was unavailable or refused
+    /// termination; it must not become an infinite wait.
+    Unproven,
+}
+
+/// Stay at the boundary while a writer may still exist. The stop request is
+/// always honoured; settings cannot start another agent until this returns.
+async fn wait_for_handoff_quiet(
+    terminal: &TerminalHandle,
+    session: u64,
+    group: Option<&Proc>,
+    stop: &mut mpsc::Receiver<()>,
+) -> HandoffWait {
+    if matches!(handoff_gate(), HandoffGate::WindowsJob) {
+        let terminal_ack = terminal_handoff_ready(terminal, session).await;
+        return terminal_ack
+            .then_some(HandoffWait::Quiet { life: queue::BatchLife::Unproven, terminal_ack })
+            .unwrap_or(HandoffWait::Unproven);
+    }
+    if !can_wait_for_group(group) {
+        // No stamped Unix group means there is no bounded evidence query left
+        // to become true. Preserve recovery's existing claims and end this
+        // handoff rather than turning the run into a permanent wait.
+        return HandoffWait::Unproven;
+    }
+    loop {
+        let life = batch_life(group);
+        if handoff_permitted(HandoffGate::ProcessGroup, life, false) {
+            return HandoffWait::Quiet { life, terminal_ack: false };
+        }
+        tokio::select! {
+            _ = stop.recv() => return HandoffWait::Stopped,
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+        }
+    }
+}
+
+fn can_wait_for_group(group: Option<&Proc>) -> bool {
+    group.is_some()
 }
 
 /// The loop's own ending for a batch, in the vocabulary the document draws.
@@ -1724,6 +2198,68 @@ async fn ask(
         .unwrap_or(None);
     let decision = usage::gate(read.as_ref(), limits, after_limited);
     (read, decision)
+}
+
+/// Installed profiles only. The list is global by design; a project picks its
+/// primary but does not own a second, divergent reserve order.
+fn installed_agents() -> Vec<String> {
+    let path = crate::shell_env::path();
+    crate::agents::IDS
+        .iter()
+        .filter_map(|id| crate::agents::resolve(id).map(|profile| (*id, profile)))
+        .filter(|(_, profile)| crate::agents::on_path(profile.binary(), path))
+        .map(|(id, _)| id.to_owned())
+        .collect()
+}
+
+/// Read every installed allowance before choosing. A failure is intentionally
+/// `Unreadable`: a stale CLI answer must not make a healthy harness invisible.
+async fn failover_probes(
+    installed: &[String],
+    probe: Option<PathBuf>,
+) -> BTreeMap<String, failover::Probe> {
+    let mut result = BTreeMap::new();
+    for id in installed {
+        let Some(profile) = crate::agents::resolve(id) else { continue };
+        let cwd = probe.clone();
+        let reading = tokio::task::spawn_blocking(move || usage::read(profile, cwd.as_deref()?))
+            .await
+            .unwrap_or(None);
+        let state = match reading {
+            Some(reading) if usage::spent(Some(&reading)) => {
+                let blocking = reading.blocking();
+                failover::Probe::Limited {
+                    pct: blocking.map(|window| window.pct).unwrap_or(usage::SPENT),
+                    reset_at: blocking.and_then(|window| window.reset_at),
+                    resets: blocking.and_then(|window| window.resets).map(str::to_owned),
+                }
+            }
+            Some(_) => failover::Probe::Ready,
+            None => failover::Probe::Unreadable,
+        };
+        result.insert(id.clone(), state);
+    }
+    result
+}
+
+/// Re-read failover settings and unknown allowance clocks at least once a
+/// minute, even where a provider gave a reset far in the future.
+async fn wait_for_failover(
+    until: Option<chrono::DateTime<chrono::Utc>>,
+    stop: &mut mpsc::Receiver<()>,
+    settings_changed: &mut watch::Receiver<u64>,
+) -> bool {
+    let now = chrono::Utc::now();
+    let requested = until
+        .and_then(|at| (at > now).then_some((at - now).to_std().ok()))
+        .flatten()
+        .unwrap_or_else(|| Duration::from_secs(60));
+    let wait = requested.min(Duration::from_secs(60));
+    tokio::select! {
+        _ = tokio::time::sleep(wait) => true,
+        _ = stop.recv() => false,
+        changed = settings_changed.changed() => changed.is_ok(),
+    }
 }
 
 /// Wait until there is allowance enough to run a batch, and answer with how
@@ -2094,6 +2630,7 @@ async fn spawn_batch(
     agent: &str,
     reports: &Path,
     batch: u32,
+    continuation: Option<crate::agents::RunContinuation>,
     remove_worktrees: bool,
 ) -> Result<u64, String> {
     let (tx, rx) = oneshot::channel();
@@ -2106,7 +2643,13 @@ async fn spawn_batch(
     // the field's own doc on `Intent::Run` says why: `RunSettings` has a
     // per-project mirror in `settings.json`, and this answer is global.
     let intent =
-        Intent::Run { settings, reports: reports.to_path_buf(), batch, remove_worktrees };
+        Intent::Run {
+            settings,
+            reports: reports.to_path_buf(),
+            batch,
+            continuation,
+            remove_worktrees,
+        };
     terminal
         .0
         .send(TerminalRequest::Create(
@@ -2327,6 +2870,253 @@ mod tests {
 
     fn state(token: u64, run: &Run) -> Report {
         Report::State { token, run: Box::new(run.clone()) }
+    }
+
+    #[test]
+    fn a_continuation_names_only_existing_worktrees_for_its_claimed_tasks() {
+        let root = tempfile::tempdir().expect("project root");
+        let first = root.path().join(".worktrees/smetana-a-first-task");
+        let second = root.path().join("repo/.worktrees/smetana-b-second-task");
+        std::fs::create_dir_all(&first).expect("first task worktree");
+        std::fs::create_dir_all(&second).expect("second task worktree");
+        std::fs::create_dir_all(root.path().join(".worktrees/unrelated-task"))
+            .expect("unrelated worktree");
+        std::fs::write(root.path().join(".worktrees/smetana-a-not-a-directory"), "x")
+            .expect("ordinary file");
+        let held = vec![
+            queue::Leftover { id: "smetana-a".into(), status: "in_progress".into(), lock: false },
+            queue::Leftover { id: "smetana-b".into(), status: "ready_to_merge".into(), lock: false },
+            queue::Leftover { id: "lock".into(), status: "in_progress".into(), lock: true },
+        ];
+
+        assert_eq!(
+            continuation_worktrees(root.path(), &["repo".into()], &held),
+            vec![first.to_string_lossy().into_owned(), second.to_string_lossy().into_owned()]
+        );
+    }
+
+    #[test]
+    fn a_post_quiet_snapshot_carries_a_childs_late_claim_and_worktree_forward() {
+        let root = tempfile::tempdir().expect("project root");
+        let actor = "smetana-run-old";
+        let before: Vec<crate::tracker::model::Issue> = vec![];
+        assert!(leftovers_for(Some(&before), actor).is_empty(), "the first read precedes the child claim");
+
+        // The child claims and provisions after that first read, while the
+        // service is waiting for the process group to become quiet.
+        let worktree = root.path().join(".worktrees/smetana-late-child-work");
+        std::fs::create_dir_all(&worktree).expect("late child worktree");
+        let mut claimed = crate::tracker::model::Issue {
+            id: "smetana-late".into(),
+            status: "in_progress".into(),
+            ..Default::default()
+        };
+        claimed.assignee = Some(actor.into());
+        let after = vec![claimed];
+
+        let leftovers = leftovers_for(Some(&after), actor);
+        let continuation = limited_continuation(2, "claude", actor, root.path(), &[], &leftovers);
+        assert_eq!(continuation.task_ids, vec!["smetana-late"]);
+        assert_eq!(continuation.worktrees, vec![worktree.to_string_lossy().into_owned()]);
+        let release = queue::release(
+            leftovers.first().expect("late claim is released for atomic reclaim"),
+            1,
+            actor,
+            None,
+            queue::BatchLife::ProvenDead,
+        )
+        .expect("the replacement can make a normal atomic claim");
+        assert_eq!(release.status.as_deref(), Some("open"));
+        assert_eq!(release.assignee.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn a_failed_post_quiet_read_never_turns_a_known_claim_into_an_empty_handoff() {
+        let actor = "smetana-run-old";
+        let mut claimed = crate::tracker::model::Issue {
+            id: "smetana-late".into(),
+            status: "in_progress".into(),
+            ..Default::default()
+        };
+        claimed.assignee = Some(actor.into());
+        let initial = vec![claimed];
+        assert_eq!(leftovers_for(Some(&initial), actor).len(), 1, "diagnostic snapshot saw the claim");
+
+        // A failed second resync is not an empty board. The `None` carries all
+        // the way to the stop branch, where it creates neither a release patch
+        // nor a continuation for a replacement actor.
+        let missing: Option<Vec<crate::tracker::model::Issue>> = None;
+        assert!(handoff_leftovers(missing.as_deref(), actor).is_none());
+    }
+
+    #[test]
+    fn a_post_quiet_journal_uses_the_late_claim_not_the_pre_quiet_snapshot() {
+        let held = vec![queue::Leftover {
+            id: "smetana-late".into(),
+            status: "in_progress".into(),
+            lock: false,
+        }];
+        let snapshot = QueueSnapshot {
+            unfinished: vec!["smetana-late".into()],
+            ..Default::default()
+        };
+        let (board, ended) = journal_batch_lines(
+            Some(&snapshot),
+            Some(BoardSource::Cache),
+            1,
+            &Batch::Ended(Exit::Code(1)),
+            3,
+            false,
+            &held,
+        );
+        assert!(board.contains("smetana-late"), "the corrected after-batch board is named");
+        assert!(ended.contains("smetana-late"), "the ending names the same late claim");
+    }
+
+    #[test]
+    fn a_replacement_consumes_its_continuation_before_the_next_logical_batch() {
+        let mut run = Run::new(1, "/p".into(), settings(RunScope::Queue));
+        run.batches = 4;
+        run.attempt = 1;
+        let mut continuation = Some(crate::agents::RunContinuation {
+            attempt: 2,
+            previous_agent: "claude".into(),
+            previous_actor: "smetana-run-old".into(),
+            task_ids: vec!["smetana-task".into()],
+            worktrees: vec!["/p/.worktrees/smetana-task".into()],
+        });
+
+        let replacement = take_attempt(&run, &mut continuation);
+        assert_eq!((replacement.batch, replacement.number), (4, 2));
+        assert!(replacement.continuation.is_some());
+        assert!(continuation.is_none(), "a continuation belongs to one replacement only");
+
+        // The replacement exited successfully. Its next boundary starts a
+        // new logical batch, not attempt three of the old one.
+        run.attempt = replacement.number;
+        let ordinary = take_attempt(&run, &mut continuation);
+        assert_eq!((ordinary.batch, ordinary.number), (5, 1));
+        assert!(ordinary.continuation.is_none());
+    }
+
+    #[test]
+    fn a_live_group_member_blocks_a_limited_handoff() {
+        let group = Proc { pid: 4213, started: 10, command: "claude".into() };
+        let leader_exited_but_member_writes = batch_life_with(
+            Some(&group),
+            &|_| registry::Seen::Gone,
+            &|_| false,
+        );
+
+        assert_eq!(leader_exited_but_member_writes, queue::BatchLife::Unproven);
+        assert!(
+            !handoff_permitted(HandoffGate::ProcessGroup, leader_exited_but_member_writes, false),
+            "without a quiet group the service cannot release claims or start a replacement"
+        );
+        assert_eq!(
+            batch_life_with(Some(&group), &|_| registry::Seen::Gone, &|_| true),
+            queue::BatchLife::ProvenDead
+        );
+    }
+
+    #[test]
+    fn a_missing_unix_group_ends_the_handoff_without_a_replacement_wait() {
+        assert!(!can_wait_for_group(None));
+        assert!(
+            !handoff_permitted(HandoffGate::ProcessGroup, queue::BatchLife::Unproven, false),
+            "there is neither a group proof nor a replacement admission"
+        );
+    }
+
+    #[test]
+    fn stopping_during_a_live_child_handoff_keeps_the_attempt_and_claims_without_replacement() {
+        let root = tempfile::tempdir().expect("project root");
+        let reports = root.path().join("reports");
+        std::fs::create_dir_all(&reports).expect("reports directory");
+        let journal = Journal::open(&reports, 17, chrono::Local::now());
+        let journal_path = journal.path().expect("journal path").to_owned();
+        let mut account = Account {
+            started: Instant::now(),
+            journal,
+            baseline: None,
+            batches: vec![],
+            reports: reports.clone(),
+        };
+        let group = Proc { pid: 4213, started: 10, command: "claude".into() };
+        assert_eq!(
+            batch_life_with(Some(&group), &|_| registry::Seen::Gone, &|_| false),
+            queue::BatchLife::Unproven,
+            "the child is still alive, so this follows the stopped wait arm"
+        );
+        let claims = vec![queue::Leftover {
+            id: "smetana-live-child".into(),
+            status: "in_progress".into(),
+            lock: false,
+        }];
+        let record = BatchLine {
+            n: 3,
+            attempt: 2,
+            agent: "codex".into(),
+            seconds: 9,
+            tasks: vec![],
+            notes: None,
+            summary: None,
+            reported: false,
+            outcome: BatchOutcome::Failed { code: 1 },
+            left_behind: vec![],
+            lock_released: None,
+        };
+        let outcome = Batch::Ended(Exit::Code(1));
+        let continuation: Option<crate::agents::RunContinuation> = None;
+
+        record_interrupted_handoff(&mut account, 3, &outcome, record);
+
+        assert_eq!(account.batches.len(), 1, "the result retains the attempt");
+        assert_eq!(account.batches[0].attempt, 2);
+        assert!(account.batches[0].left_behind.is_empty(), "no stale board is recorded as final");
+        assert!(continuation.is_none(), "a stopped handoff never starts a replacement");
+        assert_eq!(claims[0].status, "in_progress", "the live child's claim is untouched");
+
+        let html = report::render(&report::RunReport {
+            title: "Run",
+            project: "project",
+            scope: "queue",
+            finished: "now",
+            seconds: 9,
+            tasks: None,
+            batches: &account.batches,
+            journal: account.journal.path(),
+        });
+        assert!(html.contains("batch 3 attempt 2 (codex)"), "the report retains the attempt");
+        let text = std::fs::read_to_string(journal_path).expect("journal text");
+        assert!(text.contains("handoff interrupted before writers were quiet"));
+        assert!(text.contains("board (after batch) unreadable"));
+    }
+
+    #[test]
+    fn a_windows_job_acknowledgement_opens_one_limited_replacement_boundary() {
+        let unproven = queue::BatchLife::Unproven;
+        assert!(
+            !handoff_permitted(HandoffGate::WindowsJob, unproven, false),
+            "a missing Job Object acknowledgement stops the run instead of waiting forever"
+        );
+        assert!(handoff_permitted(HandoffGate::WindowsJob, unproven, true));
+        assert_eq!(
+            handoff_life(HandoffGate::WindowsJob, unproven, true),
+            queue::BatchLife::ProvenDead
+        );
+
+        let run = Run::new(1, "/p".into(), settings(RunScope::Queue));
+        let mut continuation = Some(crate::agents::RunContinuation {
+            attempt: 2,
+            previous_agent: "codex".into(),
+            previous_actor: "smetana-run-old".into(),
+            task_ids: vec![],
+            worktrees: vec![],
+        });
+        let replacement = take_attempt(&run, &mut continuation);
+        assert_eq!((replacement.batch, replacement.number), (0, 2));
+        assert!(continuation.is_none(), "the acknowledged handoff starts exactly one replacement");
     }
 
     #[test]

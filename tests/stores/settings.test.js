@@ -1067,6 +1067,10 @@ describe('the settings window', () => {
       gitRemoveWorktrees: true,
       subscriptionPauseAt: 90,
       subscriptionReducedAt: 75,
+      runFailoverEnabled: false,
+      runFailoverReturnToPrimary: true,
+      runFailoverWaitMinutes: 5,
+      runFailoverPriority: ['claude', 'codex'],
       restoreGeometry: true,
       updatesAutoCheck: true,
       notificationRunFinished: 'sound-1',
@@ -1167,6 +1171,10 @@ describe('the settings window', () => {
       gitRemoveWorktrees: true,
       subscriptionPauseAt: 90,
       subscriptionReducedAt: 75,
+      runFailoverEnabled: false,
+      runFailoverReturnToPrimary: true,
+      runFailoverWaitMinutes: 5,
+      runFailoverPriority: ['claude', 'codex'],
       restoreGeometry: true,
       updatesAutoCheck: true,
       notificationRunFinished: 'sound-1',
@@ -1317,5 +1325,31 @@ describe('closing the window', () => {
     settings.applyPatch({ gitAutoFetch: false })
 
     expect(settings.settings.subscription).toEqual({ pauseAt: 0, reducedAt: 75 })
+  })
+
+  it('loads and shares the run failover policy with the shipped defaults', async () => {
+    ipc.on('settings_load', { runFailover: { enabled: true, waitMinutes: 10, priority: ['codex', 'claude'] } })
+
+    await settings.loadSettings()
+
+    expect(settings.settings.runFailover).toEqual({
+      enabled: true,
+      returnToPrimary: true,
+      waitMinutes: 10,
+      priority: ['codex', 'claude']
+    })
+    expect(settings.sharedSettings()).toMatchObject({
+      runFailoverEnabled: true,
+      runFailoverReturnToPrimary: true,
+      runFailoverWaitMinutes: 10,
+      runFailoverPriority: ['codex', 'claude']
+    })
+  })
+
+  it('normalizes a failover priority patch without accepting invalid wait values', () => {
+    settings.applyPatch({ runFailoverWaitMinutes: 4, runFailoverPriority: ['codex', 'unknown', 'codex'] })
+
+    expect(settings.settings.runFailover.waitMinutes).toBe(5)
+    expect(settings.settings.runFailover.priority).toEqual(['codex', 'claude'])
   })
 })

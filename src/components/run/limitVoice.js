@@ -25,6 +25,6 @@
    speaks is a footer where every run would claim to. */
 export function limitVoice(runs) {
   if (!Array.isArray(runs)) return null
-  const speaker = runs.find((run) => run?.state?.kind === 'paused')
+  const speaker = runs.find((run) => ['paused', 'waiting_for_agent', 'waiting_for_any_agent'].includes(run?.state?.kind))
   return speaker ? speaker.token : null
 }

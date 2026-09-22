@@ -916,8 +916,8 @@ fn body(
         Intent::ReviewBranch { pairs, report, fetch_failed } => {
             Some(review_branch(pairs, report, fetch_failed, delivery, skills, text.reviewing_branch))
         }
-        Intent::Run { settings, reports, batch, remove_worktrees } => {
-            Some(run(settings, reports, *batch, *remove_worktrees, delivery, skills, worker_model))
+        Intent::Run { settings, reports, batch, continuation, remove_worktrees } => {
+            Some(run(settings, reports, *batch, continuation.as_ref(), *remove_worktrees, delivery, skills, worker_model))
         }
     }
 }
@@ -935,6 +935,7 @@ fn run(
     settings: &RunSettings,
     reports: &Path,
     batch: u32,
+    continuation: Option<&crate::agents::RunContinuation>,
     remove_worktrees: bool,
     delivery: SkillDelivery,
     skills: &Skills,
@@ -953,6 +954,18 @@ fn run(
         RunScope::Epic { id } => {
             let _ = write!(out, "Work only on the children of {id}, and nothing else.");
         }
+    }
+
+    if let Some(continuation) = continuation {
+        let _ = writeln!(
+            out,
+            "\n\nContinue logical batch {batch}, attempt {} after {} (actor {}). Its session has ended and its ordinary claims were released. Inspect existing tasks and worktrees before doing anything; make the normal atomic claim before continuing work, and if it is refused another actor lawfully owns it: skip it. Do not recreate, clean, reset, or delete a worktree. Known task ids: {}. Known worktrees: {}.",
+            continuation.attempt,
+            continuation.previous_agent,
+            continuation.previous_actor,
+            if continuation.task_ids.is_empty() { "none".to_owned() } else { continuation.task_ids.join(", ") },
+            if continuation.worktrees.is_empty() { "none".to_owned() } else { continuation.worktrees.join(", ") },
+        );
     }
 
     out.push_str("\n\nThis run:\n");
@@ -1841,6 +1854,7 @@ mod tests {
             settings,
             reports: std::path::PathBuf::from("/p/.smetana/runs/7"),
             batch: 2,
+            continuation: None,
             remove_worktrees,
         }
     }
@@ -1935,6 +1949,29 @@ mod tests {
                 "the JSON is beside the prose report, never instead of it: {text}"
             );
         }
+    }
+
+    #[test]
+    fn a_replacement_attempt_is_told_to_continue_existing_work() {
+        let intent = Intent::Run {
+            settings: run_settings(RunMode::Auto, RunScope::Queue),
+            reports: std::path::PathBuf::from("/p/.smetana/runs/7"),
+            batch: 2,
+            continuation: Some(crate::agents::RunContinuation {
+                attempt: 2,
+                previous_agent: "claude".into(),
+                previous_actor: "smetana-run-9".into(),
+                task_ids: vec!["smetana-abc".into()],
+                worktrees: vec!["/p/.worktrees/smetana-abc".into()],
+            }),
+            remove_worktrees: true,
+        };
+        let text = prompt_of(intent, SkillDelivery::PluginDir);
+        assert!(text.contains("Continue logical batch 2, attempt 2 after claude"), "{text}");
+        assert!(text.contains("make the normal atomic claim before continuing"), "{text}");
+        assert!(text.contains("if it is refused another actor lawfully owns it: skip it"), "{text}");
+        assert!(text.contains("Do not recreate, clean, reset, or delete a worktree"), "{text}");
+        assert!(text.contains("smetana-abc"), "{text}");
     }
 
     #[test]

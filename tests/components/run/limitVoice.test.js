@@ -21,6 +21,11 @@ describe('which paused run says why they are all waiting', () => {
     expect(limitVoice([run(7, 'paused')])).toBe(7)
   })
 
+  it('gives failover waits one clear voice too', () => {
+    expect(limitVoice([run(7, 'waiting_for_agent'), run(8, 'waiting_for_any_agent')])).toBe(7)
+    expect(limitVoice([run(8, 'waiting_for_any_agent')])).toBe(8)
+  })
+
   it('refuses to let every segment claim the sentence when the list is not one', () => {
     expect(limitVoice(null)).toBe(null)
     expect(limitVoice(undefined)).toBe(null)

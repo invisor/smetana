@@ -88,6 +88,7 @@ import SettingsGroup from './SettingsGroup.vue'
 import SettingsRow from './SettingsRow.vue'
 import { agentOf, offersRefresh, usageLines, usageNote } from './usage.js'
 import { thresholdOptions } from './subscription.js'
+import { movePriority, priorityOrder, waitOptions } from './runFailover.js'
 /* The five rows of the Models group, drawn by the component both this tab and
    the Project settings dialog's own Agents group now share — see that
    component's own header for why it moved out of here. */
@@ -109,7 +110,7 @@ import AgentRoleRows from './AgentRoleRows.vue'
    Codex used to be drawn `disabled`, with `Not supported yet` beside it. That
    limit is gone: the profile answers resume, fork, batch and one-shot, and finds
    out the id of a session it started. */
-import { agentLabel, codexModelsError } from '../../stores/agents.js'
+import { agentLabel, agents, codexModelsError } from '../../stores/agents.js'
 const props = defineProps({
   agent: { type: String, default: 'claude' },
   /* Which model the app asks for behind everything with no row of its own, and
@@ -160,6 +161,10 @@ const props = defineProps({
      doing in the moment before the first answer arrives. */
   subscriptionPauseAt: { type: Number, default: 90 },
   subscriptionReducedAt: { type: Number, default: 75 },
+  runFailoverEnabled: { type: Boolean, default: false },
+  runFailoverReturnToPrimary: { type: Boolean, default: true },
+  runFailoverWaitMinutes: { type: Number, default: 5 },
+  runFailoverPriority: { type: Array, default: () => ['claude', 'codex'] },
   /* Whether **Show run report** is on, which lives on the General tab and is
      `view.notificationShowReport` in `SettingsWindow.vue`. Read and never
      emitted back: this tab does not own it, it only draws the Report language
@@ -200,6 +205,10 @@ const emit = defineEmits([
   'update:conversationPanel',
   'update:subscriptionPauseAt',
   'update:subscriptionReducedAt',
+  'update:runFailoverEnabled',
+  'update:runFailoverReturnToPrimary',
+  'update:runFailoverWaitMinutes',
+  'update:runFailoverPriority',
   'refresh'
 ])
 
@@ -232,6 +241,16 @@ const LANGUAGES = [
    where it and its guard live — out of the component for the reason every rule
    in this tree is, that a `.vue` file is unreachable by any test here. */
 const thresholds = thresholdOptions()
+const failoverWaits = waitOptions()
+const agentIds = computed(() => agents.value.map((agent) => agent.id).filter(Boolean).length ? agents.value.map((agent) => agent.id) : ['claude', 'codex'])
+const priorityRows = computed(() => priorityOrder(props.runFailoverPriority, agentIds.value).map((id) => ({
+  id,
+  label: agentLabel(id)
+})))
+const moveFailoverPriority = (id, direction) => emit(
+  'update:runFailoverPriority',
+  movePriority(props.runFailoverPriority, agentIds.value, id, direction)
+)
 
 /* Every row on this tab shares one control column, wider than the shipped
    default: "Chinese (Simplified)" is the longest label any of the lists holds,
@@ -247,6 +266,10 @@ const CONTROL_WIDTH = '30ch'
    every row above rather than a second component being invented. In `ch` for
    the reason the width above is. */
 const PROMPT_WIDTH = '48ch'
+const priorityStyle = { width: CONTROL_WIDTH, display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }
+const priorityRowStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)' }
+const priorityLabelStyle = { color: 'var(--text-primary)', font: 'var(--weight-regular) var(--text-ui-size)/var(--leading-normal) var(--font-sans)' }
+const priorityButtonsStyle = { display: 'flex', gap: 'var(--space-1)' }
 
 /* The same 4000 as `MAX_AGENT_PROMPT` in `src-tauri/src/settings/model.rs`, and
    the fifth copy of a number this feature keeps in two places — worth it here
@@ -502,6 +525,68 @@ const errorStyle = {
           :options="thresholds"
           @update:model-value="emit('update:subscriptionReducedAt', $event)"
         />
+      </SettingsRow>
+
+      <SettingsRow
+        label="Switch agents when limited"
+        description="When an agent's allowance is spent, continue the unfinished batch with the next installed agent instead of waiting for the same subscription."
+      >
+        <Switch
+          :model-value="props.runFailoverEnabled"
+          @update:model-value="emit('update:runFailoverEnabled', $event)"
+        />
+      </SettingsRow>
+
+      <SettingsRow
+        label="Return to primary agent"
+        description="After a batch finishes, use the primary Run lead again when its allowance has recovered. A working backup is never interrupted."
+      >
+        <Switch
+          :model-value="props.runFailoverReturnToPrimary"
+          :disabled="!props.runFailoverEnabled"
+          @update:model-value="emit('update:runFailoverReturnToPrimary', $event)"
+        />
+      </SettingsRow>
+
+      <SettingsRow
+        label="Wait before switching"
+        description="Keep waiting for a known nearby reset for this long before trying another agent."
+        :control-width="CONTROL_WIDTH"
+      >
+        <Dropdown
+          :model-value="props.runFailoverWaitMinutes"
+          :options="failoverWaits"
+          :disabled="!props.runFailoverEnabled"
+          @update:model-value="emit('update:runFailoverWaitMinutes', $event)"
+        />
+      </SettingsRow>
+
+      <SettingsRow
+        label="Failover priority"
+        description="The next installed agent is chosen in this order. Agents not installed here remain visible and are skipped."
+        :control-width="CONTROL_WIDTH"
+      >
+        <div :style="priorityStyle" :aria-disabled="!props.runFailoverEnabled">
+          <div v-for="(agent, index) in priorityRows" :key="agent.id" :style="priorityRowStyle">
+            <span :style="priorityLabelStyle">
+              {{ agent.label }}
+            </span>
+            <span :style="priorityButtonsStyle">
+              <Button
+                size="sm"
+                variant="ghost"
+                :disabled="!props.runFailoverEnabled || index === 0"
+                @click="moveFailoverPriority(agent.id, -1)"
+              >Up</Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                :disabled="!props.runFailoverEnabled || index === priorityRows.length - 1"
+                @click="moveFailoverPriority(agent.id, 1)"
+              >Down</Button>
+            </span>
+          </div>
+        </div>
       </SettingsRow>
     </SettingsGroup>
 

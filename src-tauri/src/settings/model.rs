@@ -262,6 +262,46 @@ impl SubscriptionSettings {
     }
 }
 
+/// How a run moves to another installed harness when its current allowance is
+/// exhausted. This is global because subscriptions belong to the person, not
+/// to an individual project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RunFailoverSettings {
+    pub enabled: bool,
+    pub return_to_primary: bool,
+    pub wait_minutes: u8,
+    pub priority: Vec<String>,
+}
+
+pub const RUN_FAILOVER_WAIT_STEPS: [u8; 6] = [0, 1, 5, 10, 15, 30];
+
+impl Default for RunFailoverSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            return_to_primary: true,
+            wait_minutes: 5,
+            priority: crate::agents::IDS.iter().map(|id| (*id).to_owned()).collect(),
+        }
+    }
+}
+
+impl RunFailoverSettings {
+    fn validate(&mut self) {
+        if !RUN_FAILOVER_WAIT_STEPS.contains(&self.wait_minutes) {
+            self.wait_minutes = Self::default().wait_minutes;
+        }
+        let mut seen = HashSet::new();
+        self.priority.retain(|id| crate::agents::IDS.contains(&id.as_str()) && seen.insert(id.clone()));
+        for id in crate::agents::IDS {
+            if seen.insert(id.to_owned()) {
+                self.priority.push(id.to_owned());
+            }
+        }
+    }
+}
+
 /// What the main window does with the size and position it was left at.
 ///
 /// Global rather than under a project, on `GitSettings`' argument exactly:
@@ -1176,6 +1216,8 @@ pub struct Settings {
     /// The percentages at which a run holds itself back. At the root for the
     /// reason `SubscriptionSettings` records.
     pub subscription: SubscriptionSettings,
+    /// The global policy for rotating a limited run to another harness.
+    pub run_failover: RunFailoverSettings,
     /// What the main window does with the geometry it was left at. At the root
     /// for the reason `WindowSettings` records.
     pub window: WindowSettings,
@@ -1295,6 +1337,7 @@ impl Default for Settings {
             reports: ReportsSettings::default(),
             git: GitSettings::default(),
             subscription: SubscriptionSettings::default(),
+            run_failover: RunFailoverSettings::default(),
             window: WindowSettings::default(),
             updates: UpdateSettings::default(),
             notifications: NotificationSettings::default(),
@@ -1337,6 +1380,8 @@ pub struct ResolvedSettings {
     pub git: GitSettings,
     /// The run gate's thresholds. See `Settings::subscription`.
     pub subscription: SubscriptionSettings,
+    /// The global run failover policy. See `Settings::run_failover`.
+    pub run_failover: RunFailoverSettings,
     /// What the main window does with its geometry. See `Settings::window`.
     pub window: WindowSettings,
     /// Whether the app checks for a newer version by itself. See
@@ -1383,6 +1428,7 @@ impl Default for ResolvedSettings {
             reports: ReportsSettings::default(),
             git: GitSettings::default(),
             subscription: SubscriptionSettings::default(),
+            run_failover: RunFailoverSettings::default(),
             window: WindowSettings::default(),
             updates: UpdateSettings::default(),
             notifications: NotificationSettings::default(),
@@ -1436,6 +1482,7 @@ pub fn parse(text: &str) -> Outcome {
         reports: section(&object, "reports"),
         git: section(&object, "git"),
         subscription: section(&object, "subscription"),
+        run_failover: section(&object, "runFailover"),
         window: section(&object, "window"),
         updates: section(&object, "updates"),
         notifications: section(&object, "notifications"),
@@ -1503,6 +1550,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         reports: file.reports.clone(),
         git: file.git.clone(),
         subscription: file.subscription,
+        run_failover: file.run_failover.clone(),
         window: file.window.clone(),
         updates: file.updates.clone(),
         notifications: file.notifications.clone(),
@@ -1537,6 +1585,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.reports = resolved.reports;
     file.git = resolved.git;
     file.subscription = resolved.subscription;
+    file.run_failover = resolved.run_failover;
     file.window = resolved.window;
     file.updates = resolved.updates;
     file.notifications = resolved.notifications;
@@ -1719,6 +1768,7 @@ impl Settings {
         self.kanban.validate();
         self.reports.validate();
         self.subscription.validate();
+        self.run_failover.validate();
         self.notifications.validate();
         for state in self.projects.values_mut() {
             state.validate();
@@ -1765,6 +1815,7 @@ impl ResolvedSettings {
         self.kanban.validate();
         self.reports.validate();
         self.subscription.validate();
+        self.run_failover.validate();
         self.notifications.validate();
         self.project.validate();
         sane_list(&mut self.open_projects, MAX_OPEN, MAX_PATH_LEN);
@@ -4541,6 +4592,32 @@ mod tests {
         merge(&mut file, resolved, "2026-09-01T00:00:00Z".into());
         assert_eq!(file.subscription.pause_at, 95);
         assert_eq!(file.subscription.reduced_at, 0);
+    }
+
+    #[test]
+    fn run_failover_defaults_for_old_files_and_round_trips() {
+        let Outcome::Ok(mut file) = parse(r#"{"version":1}"#) else { panic!("the file did not parse") };
+        assert_eq!(file.run_failover, RunFailoverSettings::default());
+
+        let mut resolved = resolve(&file, None);
+        resolved.run_failover = RunFailoverSettings {
+            enabled: true,
+            return_to_primary: false,
+            wait_minutes: 10,
+            priority: vec!["codex".into(), "claude".into()],
+        };
+        merge(&mut file, resolved, "2026-09-22T00:00:00Z".into());
+        assert_eq!(file.run_failover.wait_minutes, 10);
+        assert_eq!(file.run_failover.priority, ["codex", "claude"]);
+    }
+
+    #[test]
+    fn invalid_run_failover_values_are_normalized_without_losing_supported_agents() {
+        let file = settings_of(
+            r#"{"version":1,"runFailover":{"waitMinutes":4,"priority":["codex","unknown","codex"]}}"#,
+        );
+        assert_eq!(file.run_failover.wait_minutes, 5);
+        assert_eq!(file.run_failover.priority, ["codex", "claude"]);
     }
 
     /// Nothing remembers a dialog size until somebody drags a window, so the

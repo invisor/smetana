@@ -11,8 +11,27 @@ pub mod file;
 pub mod model;
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use tauri::{AppHandle, Manager};
+use tokio::sync::watch;
+
+/// A successful settings write wakes runs waiting at a safe failover boundary.
+/// The counter avoids a stale `true` flag waking every future run.
+static RUN_SETTINGS_CHANGED: OnceLock<watch::Sender<u64>> = OnceLock::new();
+
+fn run_settings_sender() -> &'static watch::Sender<u64> {
+    RUN_SETTINGS_CHANGED.get_or_init(|| watch::channel(0).0)
+}
+
+pub fn run_settings_changes() -> watch::Receiver<u64> {
+    run_settings_sender().subscribe()
+}
+
+pub fn notify_run_settings_changed() {
+    let sender = run_settings_sender();
+    sender.send_modify(|version| *version = version.wrapping_add(1));
+}
 
 /// Where the file lives. `None` only when the platform will not name a config
 /// directory at all, which costs the caller the same as a missing file does.
@@ -159,6 +178,16 @@ pub fn subscription(app: &AppHandle) -> crate::runs::usage::Limits {
 pub fn subscription_at(path: Option<&std::path::Path>) -> crate::runs::usage::Limits {
     let stored = path.map(file::subscription).unwrap_or_default();
     crate::runs::usage::Limits { pause_at: stored.pause_at, reduced_at: stored.reduced_at }
+}
+
+/// The same live read for the run failover policy. A missing settings path is
+/// the shipped disabled policy, which preserves the historical single-agent
+/// wait rather than silently rotating a run on a machine with no settings
+/// directory.
+pub fn run_failover_at(
+    path: Option<&std::path::Path>,
+) -> crate::settings::model::RunFailoverSettings {
+    path.map(file::run_failover).unwrap_or_default()
 }
 
 /// Whether a run may remove each task's worktree after it is merged and closed.

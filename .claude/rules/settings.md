@@ -248,6 +248,14 @@ exactly, 90 and 75, and both take their default from `runs::usage` rather than r
 here. A per-project version was refused: it would have widened the two windows' contract and put one
 subscription under several policies at once.
 
+`runFailover` is a second root-only section, because reserve order is likewise a machine-wide
+subscription policy rather than project data. Its `enabled`, `returnToPrimary`, `waitMinutes`, and
+complete unique `priority` list are normalized in `RunFailoverSettings`; invalid waits become five
+minutes and unknown or duplicate ids are removed before missing shipped agents are appended. The
+project Agents panel still overrides only Run lead, and that effective lead is frozen when a run
+starts. Saving settings wakes a run only while it is waiting at a safe batch boundary; it never
+interrupts a living attempt.
+
 **`0` is off, and never `null`**, in the file and on the wire alike. That is against this schema's
 own habit — `min_priority` and `Usage::session_pct` are `Option` precisely so "nobody chose" cannot
 be read as a number — and the reason is mechanical rather than aesthetic: `adopt()` in

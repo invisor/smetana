@@ -82,6 +82,14 @@ pub struct Proc {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Batch {
+    /// The logical batch number. Several attempt records may share it after a
+    /// confirmed limit handoff; missing values keep old registries readable.
+    #[serde(default)]
+    pub batch: u32,
+    #[serde(default)]
+    pub attempt: u32,
+    #[serde(default)]
+    pub agent: String,
     /// `smetana-run-<session-id>` — `terminal::model::run_actor`'s answer, and
     /// the string an issue's assignee carries.
     pub actor: String,
@@ -202,11 +210,11 @@ pub fn liveness(recorded: &Proc, seen: Seen) -> Liveness {
 /// as readily as when the session was already over; `forget_run` keeps such a
 /// batch for exactly that reason and this refuses it for the same one.
 ///
-/// The caller is `runs::service`, giving back the merge lock a batch died
-/// holding (smetana-rxzd). A lead the process table says is gone is not merging
-/// anything, so the half-merged target branch the lock exists to prevent is not
-/// on the table — which is the whole of what makes that release safe, and why
-/// nothing weaker than this may stand in for it.
+/// Recovery uses this leader fact as its durable record rule. The live run
+/// failover path pairs it with `procs::group_is_empty` before it releases work
+/// or starts a replacement, because an exited leader can still have a writer
+/// in its group. Keeping that transient group observation out of this pure
+/// registry predicate preserves the record's one-process recovery contract.
 pub fn group_is_dead(group: Option<&Proc>, table: &impl Fn(i32) -> Seen) -> bool {
     match group {
         None => false,
@@ -540,7 +548,7 @@ mod tests {
             batches: groups
                 .iter()
                 .enumerate()
-                .map(|(n, group)| Batch { actor: format!("smetana-run-{n}"), group: group.clone() })
+                .map(|(n, group)| Batch { batch: 0, attempt: 0, agent: String::new(), actor: format!("smetana-run-{n}"), group: group.clone() })
                 .collect(),
         }
     }
@@ -758,7 +766,7 @@ mod tests {
             coalition: None,
             batches: actors
                 .iter()
-                .map(|actor| Batch { actor: (*actor).to_string(), group: None })
+                .map(|actor| Batch { batch: 0, attempt: 0, agent: String::new(), actor: (*actor).to_string(), group: None })
                 .collect(),
         }
     }
@@ -900,7 +908,7 @@ mod tests {
             &mut held,
             &writer,
             1,
-            Batch { actor: "smetana-run-4".into(), group: Some(stamp(20, 2)) }
+            Batch { batch: 0, attempt: 0, agent: String::new(), actor: "smetana-run-4".into(), group: Some(stamp(20, 2)) }
         ));
         assert_eq!(held.runs[0].batches[0].actor, "smetana-run-4");
 
@@ -924,13 +932,13 @@ mod tests {
             &mut held,
             &writer,
             1,
-            Batch { actor: "smetana-run-4".into(), group: Some(stamp(20, 2)) },
+            Batch { batch: 0, attempt: 0, agent: String::new(), actor: "smetana-run-4".into(), group: Some(stamp(20, 2)) },
         );
         note_batch(
             &mut held,
             &writer,
             1,
-            Batch { actor: "smetana-run-9".into(), group: Some(stamp(21, 3)) },
+            Batch { batch: 0, attempt: 0, agent: String::new(), actor: "smetana-run-9".into(), group: Some(stamp(21, 3)) },
         );
 
         // The earlier batch's agent is long gone; the one at the prompt is not.
@@ -961,7 +969,7 @@ mod tests {
             ("unreadable", Some(stamp(21, 3))),
             ("never-read", None),
         ] {
-            note_batch(&mut held, &writer, 1, Batch { actor: actor.into(), group });
+            note_batch(&mut held, &writer, 1, Batch { batch: 0, attempt: 0, agent: String::new(), actor: actor.into(), group });
         }
 
         forget_run(&mut held, &writer, 1, &table(&[(21, Seen::Unknown)]));
@@ -1004,7 +1012,7 @@ mod tests {
             &mut held,
             &stamp(12, 3),
             1,
-            Batch { actor: "smetana-run-1".into(), group: None }
+            Batch { batch: 0, attempt: 0, agent: String::new(), actor: "smetana-run-1".into(), group: None }
         ), "a batch belongs to the run of the app that started it");
         assert!(forget_run(&mut held, &ours, 1, &table(&[])));
         assert_eq!(held.runs.len(), 1);
@@ -1023,7 +1031,7 @@ mod tests {
                 &mut held,
                 &writer,
                 1,
-                Batch { actor: "smetana-run-4".into(), group: Some(stamp(20, started)) },
+                Batch { batch: 0, attempt: 0, agent: String::new(), actor: "smetana-run-4".into(), group: Some(stamp(20, started)) },
             );
         }
         assert_eq!(held.runs[0].batches.len(), 1);

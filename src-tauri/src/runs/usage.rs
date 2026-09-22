@@ -49,6 +49,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use crate::agents::{Profile, UsageSource};
 
 /// At or above this, take no work at all and wait for the reset. The source's
@@ -133,14 +134,31 @@ pub struct Usage {
     /// parse of the same prose — one whose failure would be a run that woke at
     /// the wrong hour rather than one that showed a line it could not use.
     pub session_reset: Option<String>,
+    /// The same reset as `session_reset`, normalized for failover scheduling.
+    /// A failed parse leaves the visible text and percentage intact.
+    #[serde(skip_serializing)]
+    pub session_reset_at: Option<DateTime<Utc>>,
     /// The source's name for the first window. Claude Code's prose parser
     /// leaves this absent, preserving its established "Session" wording;
     /// Codex derives it from `windowDurationMins` (for example, "5 hours").
     pub session_label: Option<String>,
     pub week_pct: Option<u8>,
     pub week_reset: Option<String>,
+    /// The same reset as `week_reset`, normalized for failover scheduling.
+    #[serde(skip_serializing)]
+    pub week_reset_at: Option<DateTime<Utc>>,
     /// The source's name for the second window; see `session_label`.
     pub week_label: Option<String>,
+}
+
+/// The one allowance window currently blocking work. Keeping these facts in a
+/// single value prevents a percentage from one window being paired with a reset
+/// from another while deciding whether a failover wait is short enough.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockingAllowance<'a> {
+    pub pct: u8,
+    pub resets: Option<&'a str>,
+    pub reset_at: Option<DateTime<Utc>>,
 }
 
 impl Usage {
@@ -152,7 +170,7 @@ impl Usage {
     /// `Ord` on `Option` puts `None` below every `Some`, so the missing half
     /// can never win the comparison and can never be read as a zero either.
     pub fn pct(&self) -> Option<u8> {
-        self.session_pct.max(self.week_pct)
+        self.blocking().map(|allowance| allowance.pct)
     }
 
     /// When *that* one resets. A tie goes to the session, which is the sooner
@@ -160,10 +178,24 @@ impl Usage {
     /// by the same ordering, a session that was not read loses to a week that
     /// was.
     fn reset(&self) -> Option<&str> {
+        self.blocking().and_then(|allowance| allowance.resets)
+    }
+
+    /// The largest measured window, with the historical session-first tie
+    /// rule. The text and machine reset moment travel from that same window.
+    pub fn blocking(&self) -> Option<BlockingAllowance<'_>> {
         if self.session_pct >= self.week_pct {
-            self.session_reset.as_deref()
+            self.session_pct.map(|pct| BlockingAllowance {
+                pct,
+                resets: self.session_reset.as_deref(),
+                reset_at: self.session_reset_at,
+            })
         } else {
-            self.week_reset.as_deref()
+            self.week_pct.map(|pct| BlockingAllowance {
+                pct,
+                resets: self.week_reset.as_deref(),
+                reset_at: self.week_reset_at,
+            })
         }
     }
 }
@@ -755,11 +787,32 @@ mod tests {
         Usage {
             session_pct: Some(session),
             session_reset: Some("Aug 7 at 8pm".into()),
+            session_reset_at: None,
             session_label: None,
             week_pct: Some(week),
             week_reset: Some("Aug 11 at 5:59pm".into()),
+            week_reset_at: None,
             week_label: None,
         }
+    }
+
+    #[test]
+    fn blocking_keeps_the_percentage_text_and_reset_instant_from_one_window() {
+        let session_at = chrono::DateTime::parse_from_rfc3339("2026-09-22T10:00:00Z").unwrap().with_timezone(&Utc);
+        let week_at = chrono::DateTime::parse_from_rfc3339("2026-09-23T10:00:00Z").unwrap().with_timezone(&Utc);
+        let usage = Usage {
+            session_pct: Some(90),
+            session_reset: Some("soon".into()),
+            session_reset_at: Some(session_at),
+            week_pct: Some(80),
+            week_reset: Some("later".into()),
+            week_reset_at: Some(week_at),
+            ..Usage::default()
+        };
+        let blocking = usage.blocking().expect("a window was measured");
+        assert_eq!(blocking.pct, 90);
+        assert_eq!(blocking.resets, Some("soon"));
+        assert_eq!(blocking.reset_at, Some(session_at));
     }
 
     /// A reading with only the session in it: the shape `agents/claude.rs`
@@ -1040,9 +1093,11 @@ mod tests {
         let reading = Usage {
             session_pct: Some(96),
             session_reset: Some("Sep 1 at 6pm (Europe/Moscow)".into()),
+            session_reset_at: None,
             session_label: None,
             week_pct: Some(20),
             week_reset: Some("Sep 4 at 9am (Europe/Moscow)".into()),
+            week_reset_at: None,
             week_label: None,
         };
         assert_eq!(

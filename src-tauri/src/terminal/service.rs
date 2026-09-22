@@ -155,6 +155,10 @@ pub enum Request {
     /// `ExitWaiter` for why it is a request and not a subscription, and `Exit`
     /// for why the answer is three-valued rather than an exit code.
     AwaitExit(SessionId, oneshot::Sender<Exit>),
+    /// Did the terminal worker terminate this exited agent session's Windows
+    /// Job Object? This is the proof a run needs before handing its work to a
+    /// replacement on a platform without Unix process groups.
+    HandoffReady(SessionId, oneshot::Sender<bool>),
     /// The id a harness chose for itself, arriving after the spawn — see
     /// `discovers_its_own_id` and `Profile::session_id_after_start`.
     ///
@@ -212,6 +216,10 @@ struct Live {
     /// keep in step with `profile`.
     #[cfg(target_os = "macos")]
     descendants: crate::runs::procs::Descendants,
+    /// `Chunk::Gone` terminated this agent session's Windows Job Object.
+    /// Meaningful only on Windows; retained everywhere so the request handler
+    /// has one shape and its safety contract is testable without that host.
+    handoff_ready: bool,
 }
 
 /// Somebody waiting for a session to end — in practice the run worker, which
@@ -753,7 +761,7 @@ fn absorb(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk
             live.bell_pending = false;
             // Windows point 1: this session's own Job Object, gone at once —
             // a no-op everywhere else, see `runs::procs`'s module note.
-            live.pty.terminate_job();
+            live.handoff_ready = live.pty.terminate_job();
             // macOS point 1's own evidence, taken before `live` goes out of
             // scope below: a clone rather than a borrow, because the second
             // call site for this same sweep (`Request::Remove`) has already
@@ -1320,6 +1328,7 @@ fn handle(
                         seq: 0,
                         #[cfg(target_os = "macos")]
                         descendants: crate::runs::procs::Descendants::default(),
+                        handoff_ready: false,
                     };
                     // After the spawn and not before it: a record for a session
                     // that never started would be a row offering a conversation
@@ -1467,6 +1476,7 @@ fn handle(
                         seq: 0,
                         #[cfg(target_os = "macos")]
                         descendants: crate::runs::procs::Descendants::default(),
+                        handoff_ready: false,
                     };
                     sessions.insert(id, live);
                     emit_state(app, &session);
@@ -1692,6 +1702,12 @@ fn handle(
             // next tick, sixteen milliseconds later.
             exit_waiters.push(ExitWaiter { id, tx, grace: None });
         }
+        Request::HandoffReady(id, tx) => {
+            let ready = sessions
+                .get(&id)
+                .is_some_and(|live| live.session.state == SessionState::Exited && live.handoff_ready);
+            let _ = tx.send(ready);
+        }
         // Handled by the loop, which is the only place that can await the
         // grace period; it never reaches here.
         Request::ShutDown(_) => {}
@@ -1776,6 +1792,7 @@ mod tests {
             },
             reports: PathBuf::from("/p/.smetana/runs/1"),
             batch: 1,
+            continuation: None,
             remove_worktrees: false,
         }
     }

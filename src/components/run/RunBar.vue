@@ -21,6 +21,7 @@ import { computed } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import { TONE, endingDetail, stopReason } from './stopReason.js'
+import { failoverDetail, failoverLabel } from './failoverVoice.js'
 
 const props = defineProps({
   /* The whole Run from the worker, or null when nothing has been started. */
@@ -41,6 +42,7 @@ defineEmits(['stop', 'release'])
 const state = computed(() => props.run?.state ?? null)
 const over = computed(() => state.value?.kind === 'stopped')
 const paused = computed(() => state.value?.kind === 'paused')
+const waiting = computed(() => ['waiting_for_agent', 'waiting_for_any_agent'].includes(state.value?.kind))
 
 /* What an ending says, in what colour, under what glyph: `stopReason.js`, pure
    and next door, because a table of which endings read as failures is worth a
@@ -56,7 +58,7 @@ const glyph = computed(() => {
      knows and for every one it does not, so a default written at this call site
      would be a second copy of a decision that lives next door. */
   if (over.value) return reason.value.icon
-  return paused.value ? 'pause' : 'play'
+  return (paused.value || waiting.value) ? 'pause' : 'play'
 })
 
 /* The one state that may be drawn without words: a second and a third run
@@ -74,6 +76,8 @@ const releasable = computed(() => paused.value && props.speaks && !state.value?.
 const label = computed(() => {
   if (!state.value) return ''
   if (mute.value) return ''
+  const failover = failoverLabel(state.value)
+  if (failover) return failover
   switch (state.value.kind) {
     case 'preflight':
       return 'Bringing the project up'
@@ -113,6 +117,8 @@ const detail = computed(() => {
      hang, which is the very thing making the pause a state was meant to
      prevent. */
   if (paused.value) return state.value.resets ? `resets ${state.value.resets}` : 're-checking every 10 min'
+  const failover = failoverDetail(state.value)
+  if (failover) return failover
   if (props.run?.stopping) return 'stopping after this batch'
   /* A batch running smaller than was asked for has nothing else on screen to
      explain it, and "why is it only doing two" is a question somebody would

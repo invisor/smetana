@@ -149,6 +149,10 @@ const view = reactive({
      into one.  */
   subscriptionPauseAt: 90,
   subscriptionReducedAt: 75,
+  runFailoverEnabled: false,
+  runFailoverReturnToPrimary: true,
+  runFailoverWaitMinutes: 5,
+  runFailoverPriority: ['claude', 'codex'],
   /* Whether the main window opens where it was left. Shipped on, the same as
      `settings/model.rs` and `stores/settings.js`, for the reason the switch
      above it carries. */
@@ -666,6 +670,10 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :conversation-panel="view.conversationPanel"
           :subscription-pause-at="view.subscriptionPauseAt"
           :subscription-reduced-at="view.subscriptionReducedAt"
+          :run-failover-enabled="view.runFailoverEnabled"
+          :run-failover-return-to-primary="view.runFailoverReturnToPrimary"
+          :run-failover-wait-minutes="view.runFailoverWaitMinutes"
+          :run-failover-priority="view.runFailoverPriority"
           :show-report="view.notificationShowReport"
           :usage="usage.reading"
           :busy="usage.busy"
@@ -679,6 +687,10 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @update:conversation-panel="change({ conversationPanel: $event })"
           @update:subscription-pause-at="change({ subscriptionPauseAt: $event })"
           @update:subscription-reduced-at="change({ subscriptionReducedAt: $event })"
+          @update:run-failover-enabled="change({ runFailoverEnabled: $event })"
+          @update:run-failover-return-to-primary="change({ runFailoverReturnToPrimary: $event })"
+          @update:run-failover-wait-minutes="change({ runFailoverWaitMinutes: $event })"
+          @update:run-failover-priority="change({ runFailoverPriority: $event })"
           @refresh="readUsage()"
         />
         <KanbanSettings

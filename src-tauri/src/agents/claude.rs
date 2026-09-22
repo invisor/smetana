@@ -574,11 +574,13 @@ fn usage(output: &str) -> Option<Usage> {
             if let Some((pct, resets)) = used(rest) {
                 usage.session_pct = Some(pct);
                 usage.session_reset = resets;
+                usage.session_reset_at = usage.session_reset.as_deref().and_then(|text| parse_reset_at(text, chrono::Utc::now()));
             }
         } else if let Some(rest) = line.strip_prefix(WEEK) {
             if let Some((pct, resets)) = used(rest) {
                 usage.week_pct = Some(pct);
                 usage.week_reset = resets;
+                usage.week_reset_at = usage.week_reset.as_deref().and_then(|text| parse_reset_at(text, chrono::Utc::now()));
             }
         }
     }
@@ -607,6 +609,49 @@ fn used(rest: &str) -> Option<(u8, Option<String>)> {
         .map(|at| tail[at + RESETS.len()..].trim().to_owned())
         .filter(|text| !text.is_empty());
     Some((pct, resets))
+}
+
+/// Parse Claude Code's displayed reset prose without changing the text shown to
+/// the person. A reset is annual prose with no year, so a current-year date in
+/// the past means the next year. Ambiguous and non-existent wall-clock times
+/// deliberately remain unknown instead of waking a run at a guessed instant.
+pub fn parse_reset_at(text: &str, now: chrono::DateTime<chrono::Utc>) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::{Datelike, LocalResult, TimeZone};
+    use std::str::FromStr;
+
+    let (wall, zone) = text.trim().rsplit_once(" (")?;
+    let zone = zone.strip_suffix(')')?;
+    let zone = chrono_tz::Tz::from_str(zone).ok()?;
+    let year = now.with_timezone(&zone).year();
+    let (date, clock) = wall.rsplit_once(" at ")?;
+    let date = chrono::NaiveDate::parse_from_str(&format!("{year} {date}"), "%Y %b %e").ok()?;
+    let meridiem = clock.get(clock.len().checked_sub(2)?..)?.to_ascii_lowercase();
+    if meridiem != "am" && meridiem != "pm" {
+        return None;
+    }
+    let mut parts = clock[..clock.len() - 2].split(':');
+    let hour: u32 = parts.next()?.parse().ok()?;
+    let minute: u32 = parts.next().map(str::parse).transpose().ok()?.unwrap_or(0);
+    if parts.next().is_some() || !(1..=12).contains(&hour) || minute > 59 {
+        return None;
+    }
+    let hour = match (hour, meridiem.as_str()) {
+        (12, "am") => 0,
+        (12, "pm") => 12,
+        (hour, "pm") => hour + 12,
+        (hour, "am") => hour,
+        _ => return None,
+    };
+    let wall = date.and_hms_opt(hour, minute, 0)?;
+    let resolve = |wall| match zone.from_local_datetime(&wall) {
+        LocalResult::Single(value) => Some(value.with_timezone(&chrono::Utc)),
+        LocalResult::Ambiguous(_, _) | LocalResult::None => None,
+    };
+    let current = resolve(wall)?;
+    if current >= now {
+        return Some(current);
+    }
+    resolve(wall.with_year(year + 1)?)
 }
 
 /// An option line: `❯ 1. Yes` or `  2. Yes, and don't ask again`.
@@ -1386,6 +1431,7 @@ mod tests {
             },
             reports: std::path::PathBuf::from("/p/.smetana/runs/1"),
             batch: 1,
+            continuation: None,
             remove_worktrees: true,
         }
     }
@@ -1435,6 +1481,7 @@ mod tests {
             },
             reports: PathBuf::from("/p/.smetana/runs/7"),
             batch: 1,
+            continuation: None,
             remove_worktrees: true,
         }
     }
@@ -1663,6 +1710,23 @@ Last 24h · 2269 requests · 24 sessions
     }
 
     #[test]
+    fn reset_prose_keeps_its_zone_and_rolls_a_past_date_into_next_year() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-12-30T12:00:00Z").unwrap().with_timezone(&chrono::Utc);
+        let reset = parse_reset_at("Jan 2 at 8pm (Europe/Moscow)", now).expect("valid reset prose");
+        assert_eq!(reset, chrono::DateTime::parse_from_rfc3339("2027-01-02T17:00:00Z").unwrap().with_timezone(&chrono::Utc));
+    }
+
+    #[test]
+    fn malformed_or_zone_less_reset_prose_is_unknown_without_losing_the_percentage() {
+        let now = chrono::Utc::now();
+        assert_eq!(parse_reset_at("tomorrow", now), None);
+        assert_eq!(parse_reset_at("Aug 7 at 8pm (Not/AZone)", now), None);
+        let read = usage("Current session: 95% used · resets tomorrow").expect("the percentage still reads");
+        assert_eq!(read.session_pct, Some(95));
+        assert_eq!(read.session_reset_at, None);
+    }
+
+    #[test]
     fn a_per_model_allowance_is_not_one_of_them() {
         // `Current week (Fable): 0% used` sits between the two lines that do
         // count, and reading it as the weekly figure would report 0% while the
@@ -1755,5 +1819,3 @@ Last 24h · 2269 requests · 24 sessions
         assert_eq!(tool_detail("AskUserQuestion", &serde_json::json!({})), "");
     }
 }
-
-

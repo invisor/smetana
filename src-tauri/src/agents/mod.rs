@@ -430,6 +430,11 @@ pub enum Intent {
         /// the folder, because a number the agent had to work out for itself
         /// is a number the app could not then match to the batch it timed.
         batch: u32,
+        /// Present only when an earlier attempt of this same logical batch
+        /// ended because its allowance was exhausted. The replacement lead is
+        /// told to inspect and continue existing work, never to clear or
+        /// recreate it.
+        continuation: Option<RunContinuation>,
         /// Whether this run removes each task's worktree once it is merged and
         /// closed — `settings.json`'s `git.removeWorktrees`, read once when the
         /// run started.
@@ -444,6 +449,17 @@ pub enum Intent {
         /// for exactly that: a fact about the run the dialog never asked about.
         remove_worktrees: bool,
     },
+}
+
+/// Evidence a replacement run lead needs to continue one logical batch.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunContinuation {
+    pub attempt: u32,
+    pub previous_agent: String,
+    pub previous_actor: String,
+    pub task_ids: Vec<String>,
+    pub worktrees: Vec<String>,
 }
 
 impl Intent {
@@ -1823,6 +1839,7 @@ mod tests {
             },
             reports: std::path::PathBuf::from("/p/.smetana/runs/7"),
             batch: 1,
+            continuation: None,
             remove_worktrees: true,
         }
     }
