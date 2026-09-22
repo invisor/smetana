@@ -310,6 +310,16 @@ pub fn stale_handoff_snapshot(snapshot: Option<&QueueSnapshot>, source: Option<B
     }
 }
 
+/// A person stopped a run while the old limited attempt still had live writers.
+/// The post-batch board is deliberately not declared final: ownership stays
+/// with the old actor and recovery, rather than a replacement, settles it.
+pub fn interrupted_handoff(batch: u32) -> String {
+    format!(
+        "batch {batch} failover handoff interrupted before writers were quiet; \
+         board=non-final claims=retained replacement=no"
+    )
+}
+
 /// 4. The spend gate: what the harness said, and what was made of it.
 ///
 /// The reading is carried beside the decision because `Decision::Normal` holds
@@ -708,6 +718,15 @@ mod tests {
         assert!(line.starts_with("failover post-quiet board unreadable; pre-quiet diagnostic:"));
         assert!(line.contains("smetana-late"));
         assert!(stale_handoff_snapshot(None, None).contains("no pre-quiet diagnostic"));
+    }
+
+    #[test]
+    fn an_interrupted_handoff_says_that_its_claims_remain_with_the_old_actor() {
+        assert_eq!(
+            interrupted_handoff(4),
+            "batch 4 failover handoff interrupted before writers were quiet; \
+             board=non-final claims=retained replacement=no"
+        );
     }
 
     #[test]

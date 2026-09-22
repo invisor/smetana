@@ -1215,6 +1215,11 @@ async fn drive(
                             terminal_ack = quiet_ack;
                         }
                         HandoffWait::Stopped => {
+                            // The stop arrived while a descendant could still
+                            // write. Keep the attempt in both records, but do
+                            // not turn the pre-quiet board into permission to
+                            // release it or start a replacement.
+                            record_interrupted_handoff(&mut account, batch_no, &outcome, record);
                             finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
                             return;
                         }
@@ -1655,6 +1660,29 @@ fn journal_batch_lines(
     };
     let ended = journal::batch_ended(batch, outcome, seconds, reported, leftovers);
     (board, ended)
+}
+
+/// Finish the record of a limited attempt stopped while writers still had a
+/// chance to be alive. This has no tracker write and makes no continuation:
+/// recovery keeps the old actor's claims until it can establish its own proof.
+fn record_interrupted_handoff(
+    account: &mut Account,
+    batch: u32,
+    outcome: &Batch,
+    record: BatchLine,
+) {
+    account.journal.say(&journal::interrupted_handoff(batch));
+    journal_batch_state(
+        &account.journal,
+        None,
+        None,
+        batch,
+        outcome,
+        record.seconds,
+        record.reported,
+        &[],
+    );
+    account.batches.push(record);
 }
 
 /// The only continuation shape a limited batch can hand forward. Keeping this
@@ -2998,6 +3026,71 @@ mod tests {
             !handoff_permitted(HandoffGate::ProcessGroup, queue::BatchLife::Unproven, false),
             "there is neither a group proof nor a replacement admission"
         );
+    }
+
+    #[test]
+    fn stopping_during_a_live_child_handoff_keeps_the_attempt_and_claims_without_replacement() {
+        let root = tempfile::tempdir().expect("project root");
+        let reports = root.path().join("reports");
+        std::fs::create_dir_all(&reports).expect("reports directory");
+        let journal = Journal::open(&reports, 17, chrono::Local::now());
+        let journal_path = journal.path().expect("journal path").to_owned();
+        let mut account = Account {
+            started: Instant::now(),
+            journal,
+            baseline: None,
+            batches: vec![],
+            reports: reports.clone(),
+        };
+        let group = Proc { pid: 4213, started: 10, command: "claude".into() };
+        assert_eq!(
+            batch_life_with(Some(&group), &|_| registry::Seen::Gone, &|_| false),
+            queue::BatchLife::Unproven,
+            "the child is still alive, so this follows the stopped wait arm"
+        );
+        let claims = vec![queue::Leftover {
+            id: "smetana-live-child".into(),
+            status: "in_progress".into(),
+            lock: false,
+        }];
+        let record = BatchLine {
+            n: 3,
+            attempt: 2,
+            agent: "codex".into(),
+            seconds: 9,
+            tasks: vec![],
+            notes: None,
+            summary: None,
+            reported: false,
+            outcome: BatchOutcome::Failed { code: 1 },
+            left_behind: vec![],
+            lock_released: None,
+        };
+        let outcome = Batch::Ended(Exit::Code(1));
+        let continuation: Option<crate::agents::RunContinuation> = None;
+
+        record_interrupted_handoff(&mut account, 3, &outcome, record);
+
+        assert_eq!(account.batches.len(), 1, "the result retains the attempt");
+        assert_eq!(account.batches[0].attempt, 2);
+        assert!(account.batches[0].left_behind.is_empty(), "no stale board is recorded as final");
+        assert!(continuation.is_none(), "a stopped handoff never starts a replacement");
+        assert_eq!(claims[0].status, "in_progress", "the live child's claim is untouched");
+
+        let html = report::render(&report::RunReport {
+            title: "Run",
+            project: "project",
+            scope: "queue",
+            finished: "now",
+            seconds: 9,
+            tasks: None,
+            batches: &account.batches,
+            journal: account.journal.path(),
+        });
+        assert!(html.contains("batch 3 attempt 2 (codex)"), "the report retains the attempt");
+        let text = std::fs::read_to_string(journal_path).expect("journal text");
+        assert!(text.contains("handoff interrupted before writers were quiet"));
+        assert!(text.contains("board (after batch) unreadable"));
     }
 
     #[test]
