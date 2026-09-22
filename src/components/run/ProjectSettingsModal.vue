@@ -30,6 +30,7 @@ import Switch from '../core/Switch.vue'
 import SettingsGroup from '../settings/SettingsGroup.vue'
 import SettingsRow from '../settings/SettingsRow.vue'
 import AgentRoleRows from '../settings/AgentRoleRows.vue'
+import { codexModelsError } from '../../stores/agents.js'
 import {
   CONFIG_FILE,
   branchOptions,
@@ -216,6 +217,7 @@ const errorStyle = {
   lineHeight: 'var(--leading-normal)',
   color: 'var(--status-failed-fg)'
 }
+const modelErrorStyle = { margin: '0 0 var(--space-3)', color: 'var(--text-muted)' }
 </script>
 
 <template>
@@ -323,6 +325,9 @@ const errorStyle = {
             @update:model-value="toggleOwnAgents($event)"
           />
         </SettingsRow>
+        <p v-if="codexModelsError" :style="modelErrorStyle">
+          Codex models could not be refreshed: {{ codexModelsError }}
+        </p>
         <AgentRoleRows
           v-if="agentsDraft"
           :agent="agentsDraft.agent"

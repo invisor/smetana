@@ -88,6 +88,7 @@ import {
   sizeDialogWindow,
   watchDialogProps
 } from '../stores/app.js'
+import { refreshCodexModels } from '../stores/agents.js'
 import { readSharedSettings, watchSharedSettings } from '../stores/settings.js'
 
 const props = defineProps({
@@ -635,6 +636,7 @@ onMounted(async () => {
       console.warn('[dialog-window] the attachment store did not load:', err)
     })
   }
+  if (props.kind === 'project-settings') refreshCodexModels()
   /* A kind this build has never heard of gets no subscription at all: there is
      nothing to draw and nothing to ask about. What is on screen in that case is
      the template's own note at the foot of this file. */

@@ -15,8 +15,8 @@
    Codex's `models` field is the one thing on a row this store goes on to
    change while the app runs, and it is a deliberate exception rather than a
    hole in the paragraph above: `agents_catalog`'s own list for that row is a
-   pre-success fallback, and `refreshCodexModels` — called whenever Settings
-   opens — mutates `row.models` in place on the very row the startup read
+   pre-success fallback, and `refreshCodexModels` — called whenever the Settings
+   window or Project settings dialog opens — mutates `row.models` in place on the very row the startup read
    built, through a separate `codex_models` command. A failed refresh keeps
    the last good list rather than emptying it, and a saved slug the freshest
    catalogue has never heard of stays in the field, marked unavailable, until
