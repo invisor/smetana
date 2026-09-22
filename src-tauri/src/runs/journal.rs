@@ -296,6 +296,20 @@ pub fn unreadable_board(read: Read, in_a_row: Option<u32>) -> String {
     }
 }
 
+/// The second board read required before a limited handoff failed. The earlier
+/// snapshot is useful evidence of what was seen, but explicitly not presented
+/// as the current board: a child could have changed it while the old group was
+/// still leaving.
+pub fn stale_handoff_snapshot(snapshot: Option<&QueueSnapshot>, source: Option<BoardSource>) -> String {
+    match (snapshot, source) {
+        (Some(snapshot), Some(source)) => format!(
+            "failover post-quiet board unreadable; pre-quiet diagnostic: {}",
+            board(Read::AfterBatch, snapshot, source)
+        ),
+        _ => "failover post-quiet board unreadable; no pre-quiet diagnostic".to_string(),
+    }
+}
+
 /// 4. The spend gate: what the harness said, and what was made of it.
 ///
 /// The reading is carried beside the decision because `Decision::Normal` holds
@@ -686,6 +700,14 @@ mod tests {
             "board (after batch) unreadable"
         );
         assert_eq!(unreadable_board(Read::Ending, None), "board (ending) unreadable");
+    }
+
+    #[test]
+    fn a_failed_post_quiet_handoff_labels_the_old_board_as_diagnostic() {
+        let line = stale_handoff_snapshot(Some(&snapshot(&[], &["smetana-late"])), Some(BoardSource::Cache));
+        assert!(line.starts_with("failover post-quiet board unreadable; pre-quiet diagnostic:"));
+        assert!(line.contains("smetana-late"));
+        assert!(stale_handoff_snapshot(None, None).contains("no pre-quiet diagnostic"));
     }
 
     #[test]

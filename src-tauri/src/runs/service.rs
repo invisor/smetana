@@ -1127,11 +1127,11 @@ async fn drive(
         let actor = crate::terminal::model::run_actor(session);
         // Split the pair the moment it arrives: everything below wants the
         // issues, and only the journal line wants where they came from.
-        let (mut after, after_source) = match fresh_board(&tracker, &root).await {
+        let (after, after_source) = match fresh_board(&tracker, &root).await {
             Some((issues, source)) => (Some(issues), Some(source)),
             None => (None, None),
         };
-        let mut leftovers = leftovers_for(after.as_deref(), &actor);
+        let leftovers = leftovers_for(after.as_deref(), &actor);
         // Ask about this batch's own process group rather than about the app
         // that started it. A stamped dead leader plus an empty Unix group is
         // the proof needed to give the merge lock and ordinary work back; on
@@ -1149,37 +1149,16 @@ async fn drive(
         // line on the record and the value the decision is made from have to be
         // the same snapshot, or the journal describes a board the loop did not
         // use.
-        let mut after_board = after
+        let after_board = after
             .as_deref()
             .map(|issues| queue::snapshot(issues, &run.settings.scope, run.settings.min_priority));
         // The load-bearing read of the four. `did_nothing` turns it into
         // `LastBatch::Empty` or `LastBatch::Completed`, which is the very
-        // discrimination the night of 29 August could not make — and a read
-        // that *failed* falls to the arm that counts the batch as having
-        // completed, so the failure has to be on the record as loudly as the
-        // success.
-        account.journal.say(&match (&after_board, after_source) {
-            (Some(snapshot), Some(source)) => {
-                journal::board(journal::Read::AfterBatch, snapshot, source)
-            }
-            _ => journal::unreadable_board(journal::Read::AfterBatch, None),
-        });
-        // In the document, only for a batch that said nothing: an account is a
-        // lead telling somebody where it left the board, and a line about the
-        // leftovers behind a lead that already answered is one nobody needed.
-        // The release below is not conditioned on it — a lead's account says
-        // where the work was left and releases nothing.
+        // discrimination the night of 29 August could not make. Journal
+        // output is deliberately deferred until a limited handoff has taken
+        // its required post-quiet snapshot, so it cannot contradict the
+        // continuation and report.
         let reported = record.reported;
-        if !reported {
-            record.left_behind = leftovers.clone();
-        }
-        account.journal.say(&journal::batch_ended(
-            batch_no,
-            &outcome,
-            record.seconds,
-            reported,
-            &leftovers,
-        ));
         // One line per batch about both counters, whichever of them moved, and
         // a closure rather than seven copies of it: every arm below ends the
         // batch, and seven call sites is how one of them comes to be missing
@@ -1234,29 +1213,26 @@ async fn drive(
                         HandoffWait::Quiet { life: quiet_life, terminal_ack: quiet_ack } => {
                             life = quiet_life;
                             terminal_ack = quiet_ack;
-                            // A descendant could claim a task, finish review,
-                            // or provision a worktree while we waited. The
-                            // replacement is only allowed to see this fresh
-                            // snapshot, never the pre-quiet board.
-                            let fresh_after = match fresh_board(&tracker, &root).await {
-                                Some((issues, _)) => Some(issues),
-                                None => None,
-                            };
-                            after = fresh_after;
-                            leftovers = leftovers_for(after.as_deref(), &actor);
-                            after_board = after.as_deref().map(|issues| {
-                                queue::snapshot(issues, &run.settings.scope, run.settings.min_priority)
-                            });
                         }
                         HandoffWait::Stopped => {
                             finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
                             return;
                         }
                         HandoffWait::Unproven => {
-                            // A Windows agent without an acknowledged Job
-                            // Object cannot be handed off safely. Stop rather
-                            // than waiting forever or releasing its work.
-                            record.left_behind = leftovers.clone();
+                            // A missing Unix group or a Windows agent without
+                            // an acknowledged Job Object cannot be handed off
+                            // safely. Stop rather than waiting forever or
+                            // releasing a snapshot that may already be stale.
+                            journal_batch_state(
+                                &account.journal,
+                                None,
+                                None,
+                                batch_no,
+                                &outcome,
+                                record.seconds,
+                                reported,
+                                &[],
+                            );
                             account.batches.push(record);
                             finish(
                                 &mut run,
@@ -1271,6 +1247,55 @@ async fn drive(
                         }
                     }
                 }
+                // This second tracker read is mandatory even where the first
+                // group probe was already quiet: the only snapshot a
+                // replacement may release or inspect is the one taken after
+                // its predecessor was proved unable to write. Losing the read
+                // is a conservative stop, never an empty handoff.
+                let Some((fresh_after, fresh_source)) = fresh_board(&tracker, &root).await else {
+                    account.journal.say(&journal::stale_handoff_snapshot(
+                        after_board.as_ref(),
+                        after_source,
+                    ));
+                    journal_batch_state(
+                        &account.journal,
+                        None,
+                        None,
+                        batch_no,
+                        &outcome,
+                        record.seconds,
+                        reported,
+                        &[],
+                    );
+                    account.batches.push(record);
+                    finish(
+                        &mut run,
+                        StopReason::Crashed { attempts: crashes.saturating_add(1) },
+                        &say,
+                        &account,
+                        &root,
+                        &tracker,
+                    )
+                    .await;
+                    return;
+                };
+                let fresh_board = queue::snapshot(
+                    &fresh_after,
+                    &run.settings.scope,
+                    run.settings.min_priority,
+                );
+                let final_leftovers = handoff_leftovers(Some(&fresh_after), &actor)
+                    .expect("a successful post-quiet board read has a claim set");
+                journal_batch_state(
+                    &account.journal,
+                    Some(&fresh_board),
+                    Some(fresh_source),
+                    batch_no,
+                    &outcome,
+                    record.seconds,
+                    reported,
+                    &final_leftovers,
+                );
                 // The terminal has confirmed this attempt ended and the fresh
                 // board above is the one it left. Return ordinary claims to
                 // the board so the new actor must make bd's normal atomic
@@ -1284,11 +1309,11 @@ async fn drive(
                     &repos,
                     batch_no,
                     &actor,
-                    &leftovers,
+                    &final_leftovers,
                     handoff_life(handoff_gate(), life, terminal_ack),
                 )
                 .await;
-                record.left_behind = leftovers.clone();
+                record.left_behind = final_leftovers.clone();
                 if let Some(id) = released_lock {
                     record.lock_released = Some(LockRelease { id, actor: actor.clone() });
                 }
@@ -1299,12 +1324,30 @@ async fn drive(
                     &actor,
                     &root,
                     &repos,
-                    &leftovers,
+                    &final_leftovers,
                 ));
                 last_batch = LastBatch::Limited;
                 counted(last_batch, crashes, empties, None);
                 continue;
             }
+        }
+
+        journal_batch_state(
+            &account.journal,
+            after_board.as_ref(),
+            after_source,
+            batch_no,
+            &outcome,
+            record.seconds,
+            reported,
+            &leftovers,
+        );
+        // In the document, only for a batch that said nothing: an account is
+        // a lead telling somebody where it left the board. Ordinary outcomes
+        // use their initial final snapshot; limited handoffs did the same
+        // above with their mandatory post-quiet snapshot.
+        if !reported {
+            record.left_behind = leftovers.clone();
         }
 
         // Give back what this batch left claimed, after every ending that
@@ -1567,6 +1610,53 @@ fn leftovers_for(issues: Option<&[crate::tracker::model::Issue]>, actor: &str) -
     issues.map(|issues| queue::left_behind(issues, actor)).unwrap_or_default()
 }
 
+/// `None` is intentionally distinct from an empty board. The former means a
+/// post-quiet tracker read failed and is never allowed to start a replacement.
+fn handoff_leftovers(
+    issues: Option<&[crate::tracker::model::Issue]>,
+    actor: &str,
+) -> Option<Vec<queue::Leftover>> {
+    issues.map(|issues| queue::left_behind(issues, actor))
+}
+
+/// The after-batch board line and ending line describe one identical final
+/// snapshot. A limited handoff calls this only after its post-quiet read;
+/// when that read fails, both lines explicitly say the board was unreadable
+/// rather than accidentally documenting an earlier claim set as current.
+fn journal_batch_state(
+    journal: &Journal,
+    snapshot: Option<&QueueSnapshot>,
+    source: Option<BoardSource>,
+    batch: u32,
+    outcome: &Batch,
+    seconds: u64,
+    reported: bool,
+    leftovers: &[queue::Leftover],
+) {
+    let (board, ended) = journal_batch_lines(
+        snapshot, source, batch, outcome, seconds, reported, leftovers,
+    );
+    journal.say(&board);
+    journal.say(&ended);
+}
+
+fn journal_batch_lines(
+    snapshot: Option<&QueueSnapshot>,
+    source: Option<BoardSource>,
+    batch: u32,
+    outcome: &Batch,
+    seconds: u64,
+    reported: bool,
+    leftovers: &[queue::Leftover],
+) -> (String, String) {
+    let board = match (snapshot, source) {
+        (Some(snapshot), Some(source)) => journal::board(journal::Read::AfterBatch, snapshot, source),
+        _ => journal::unreadable_board(journal::Read::AfterBatch, None),
+    };
+    let ended = journal::batch_ended(batch, outcome, seconds, reported, leftovers);
+    (board, ended)
+}
+
 /// The only continuation shape a limited batch can hand forward. Keeping this
 /// beside the read-only worktree discovery makes the post-quiet snapshot the
 /// sole source of task ids, merge-lock state, and existing directories.
@@ -1801,6 +1891,12 @@ async fn wait_for_handoff_quiet(
             .then_some(HandoffWait::Quiet { life: queue::BatchLife::Unproven, terminal_ack })
             .unwrap_or(HandoffWait::Unproven);
     }
+    if !can_wait_for_group(group) {
+        // No stamped Unix group means there is no bounded evidence query left
+        // to become true. Preserve recovery's existing claims and end this
+        // handoff rather than turning the run into a permanent wait.
+        return HandoffWait::Unproven;
+    }
     loop {
         let life = batch_life(group);
         if handoff_permitted(HandoffGate::ProcessGroup, life, false) {
@@ -1811,6 +1907,10 @@ async fn wait_for_handoff_quiet(
             _ = tokio::time::sleep(Duration::from_secs(1)) => {}
         }
     }
+}
+
+fn can_wait_for_group(group: Option<&Proc>) -> bool {
+    group.is_some()
 }
 
 /// The loop's own ending for a batch, in the vocabulary the document draws.
@@ -2803,6 +2903,49 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_post_quiet_read_never_turns_a_known_claim_into_an_empty_handoff() {
+        let actor = "smetana-run-old";
+        let mut claimed = crate::tracker::model::Issue {
+            id: "smetana-late".into(),
+            status: "in_progress".into(),
+            ..Default::default()
+        };
+        claimed.assignee = Some(actor.into());
+        let initial = vec![claimed];
+        assert_eq!(leftovers_for(Some(&initial), actor).len(), 1, "diagnostic snapshot saw the claim");
+
+        // A failed second resync is not an empty board. The `None` carries all
+        // the way to the stop branch, where it creates neither a release patch
+        // nor a continuation for a replacement actor.
+        let missing: Option<Vec<crate::tracker::model::Issue>> = None;
+        assert!(handoff_leftovers(missing.as_deref(), actor).is_none());
+    }
+
+    #[test]
+    fn a_post_quiet_journal_uses_the_late_claim_not_the_pre_quiet_snapshot() {
+        let held = vec![queue::Leftover {
+            id: "smetana-late".into(),
+            status: "in_progress".into(),
+            lock: false,
+        }];
+        let snapshot = QueueSnapshot {
+            unfinished: vec!["smetana-late".into()],
+            ..Default::default()
+        };
+        let (board, ended) = journal_batch_lines(
+            Some(&snapshot),
+            Some(BoardSource::Cache),
+            1,
+            &Batch::Ended(Exit::Code(1)),
+            3,
+            false,
+            &held,
+        );
+        assert!(board.contains("smetana-late"), "the corrected after-batch board is named");
+        assert!(ended.contains("smetana-late"), "the ending names the same late claim");
+    }
+
+    #[test]
     fn a_replacement_consumes_its_continuation_before_the_next_logical_batch() {
         let mut run = Run::new(1, "/p".into(), settings(RunScope::Queue));
         run.batches = 4;
@@ -2845,6 +2988,15 @@ mod tests {
         assert_eq!(
             batch_life_with(Some(&group), &|_| registry::Seen::Gone, &|_| true),
             queue::BatchLife::ProvenDead
+        );
+    }
+
+    #[test]
+    fn a_missing_unix_group_ends_the_handoff_without_a_replacement_wait() {
+        assert!(!can_wait_for_group(None));
+        assert!(
+            !handoff_permitted(HandoffGate::ProcessGroup, queue::BatchLife::Unproven, false),
+            "there is neither a group proof nor a replacement admission"
         );
     }
 
