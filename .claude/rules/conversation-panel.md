@@ -159,7 +159,8 @@ The expand control (`button[data-expand]`, opening the picture in `ImageWindow.v
 for a figure with a real file behind it — resolved through `image_read`, the same command
 `.claude/rules/attachments.md` describes for a stored attachment. A `data:` source and a validated
 inline `<svg>` are never read off disk, so there is no absolute path to aim that window at, and the
-caption row draws without the control rather than with a dead one.
+caption row draws without the control rather than with a dead one. Clicking a resolved raster image
+opens it through the same path; the button remains for keyboard access.
 
 ## The copy button is always visible, never hover-revealed
 

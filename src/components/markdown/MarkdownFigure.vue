@@ -210,7 +210,7 @@ function onExpand() {
 
 <template>
   <figure data-figure :data-state="state">
-    <img v-if="showImg" :src="imgSrc" :alt="block.alt" />
+    <img v-if="showImg" :src="imgSrc" :alt="block.alt" @click="onExpand" />
     <InlineFigureSvg v-else-if="showSvg" :node="svgResult.root" />
     <div v-else data-placeholder>
       <template v-if="state === 'error'">

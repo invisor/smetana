@@ -565,6 +565,11 @@
   border-color:var(--prose-rule);
   color:var(--text-secondary);
 }
+.sm-prose figure[data-figure] > img:hover ~ button[data-expand]{
+  background:var(--surface-hover);
+  border-color:var(--prose-rule);
+  color:var(--text-secondary);
+}
 .sm-prose button[data-copy]:active,
 .sm-prose button[data-expand]:active{
   background:var(--surface-active);

@@ -338,7 +338,8 @@ dark-theme failure case.
   appear on every figure.** Decided when smetana-je5v was unparked, once the
   renderer actually read a path's bytes rather than only accepting the
   markup: the control opens the file `image_read` resolved, in the app's
-  image window, and there is a file behind it for exactly one of these forms
+  image window, and a click on that raster image opens the same file. The
+  button remains as the keyboard path. There is a file behind it for exactly one of these forms
   — a raster source read off disk by path. A `data:` source, raster or
   vector, and a validated inline `<svg>`, carry no such file and draw no
   control; neither does a figure still loading or one that failed, since
