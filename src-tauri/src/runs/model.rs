@@ -206,6 +206,16 @@ pub enum RunState {
     /// two are indistinguishable from the outside otherwise: both carry a
     /// percentage and a reset, and both arrive as `Decision::Pause`.
     Paused { pct: u8, resets: Option<String>, spent: bool },
+    /// The current harness is limited but its known reset is close enough that
+    /// preserving its session is better than handing work to another harness.
+    WaitingForAgent { agent: String, pct: u8, resets: Option<String> },
+    /// Every installed harness is limited. The loop wakes at the earliest
+    /// known reset, or at least once per minute when a reset cannot be parsed.
+    WaitingForAnyAgent,
+    /// An ended limited attempt is being handed to another harness. No session
+    /// is live in this state; the next attempt starts only after the old one is
+    /// known to have stopped writing.
+    SwitchingAgent { from: String, to: String },
     Stopped { reason: StopReason },
 }
 
@@ -221,6 +231,18 @@ pub struct Run {
     pub token: u64,
     pub project: String,
     pub settings: RunSettings,
+    /// The effective Run lead fixed when this run started. Project role edits
+    /// deliberately do not change it midway through the run.
+    #[serde(default)]
+    pub primary_agent: String,
+    /// The harness assigned to the current logical batch. It can differ from
+    /// `primary_agent` only after a confirmed exhausted allowance.
+    #[serde(default)]
+    pub agent: String,
+    /// Attempt number within the current logical batch. `batches` counts only
+    /// logical batches, so a handoff never inflates the visible batch count.
+    #[serde(default)]
+    pub attempt: u32,
     pub state: RunState,
     /// The session working right now. `None` between batches, and `None` once
     /// the run has stopped — a row pointing at a dead session is worse than no
@@ -492,6 +514,9 @@ impl Run {
             token,
             project,
             settings,
+            primary_agent: String::new(),
+            agent: String::new(),
+            attempt: 0,
             state: RunState::Preflight,
             session: None,
             last_session: None,
@@ -500,6 +525,15 @@ impl Run {
             reduced: None,
             summary: None,
         }
+    }
+
+    /// Pin the lead chosen by the effective project role before the worker is
+    /// visible. Keeping this one write beside construction avoids a run state
+    /// that says one primary while its first session was launched by another.
+    pub fn with_primary(mut self, agent: String) -> Self {
+        self.primary_agent = agent.clone();
+        self.agent = agent;
+        self
     }
 
     pub fn is_over(&self) -> bool {

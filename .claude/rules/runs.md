@@ -412,12 +412,28 @@ round at some point:
   which is exactly why it is a flag on each of them rather than state on the app: an app-wide flag
   would have no moment at which to be cleared.
 - **It does not override a hold on a spent allowance.** `usage::held` is that distinction —
-  `after_limited && spent` — and it rides out on `RunState::Paused { spent }`, because the two pauses
+`after_limited && spent` — and it rides out on `RunState::Paused { spent }`, because the two pauses
   are otherwise identical from the front end: both carry a percentage and a reset. Where it is true
   the button is not drawn at all, since pressing it would let a session through that dies the moment
   it starts, which is the churn the gate exists to prevent. `gate` reaches the hold whatever
-  `pause_at` says, which is what makes the release structurally unable to override it — the released
-  run has its `pause_at` moved to `OFF` and nothing else.
+`pause_at` says, which is what makes the release structurally unable to override it — the released
+run has its `pause_at` moved to `OFF` and nothing else.
+
+## Run lead failover
+
+The effective Run lead is frozen as `Run.primary_agent` on admission. With global `runFailover`
+enabled, the loop probes every installed harness at an attempt boundary and uses the normalized
+global order with that primary removed from the reserves. A known reset within `waitMinutes` waits
+for that agent; a distant or unknown reset hands off to a readable or unreadable reserve. If every
+harness is limited the state is `waiting_for_any_agent`, waking at the earliest known reset or at
+least once a minute. Settings saves wake the same wait. A healthy reserve is never pre-empted; when
+return-to-primary is on, the primary is considered first only for the next logical batch.
+
+A handoff preserves the run token, report directory and logical batch number. Each session is an
+attempt with its own agent, actor and registry entry. Only a confirmed spent limit rotates: a normal
+crash, launch failure, or question keeps the old lifecycle. The previous session has exited before
+the replacement starts; the fresh board snapshot and continuation prompt preserve claimed work and
+tell the new lead to inspect and continue existing worktrees, never recreate or reset them.
 
 A released run says nothing special about itself: the bar goes back to the ordinary "Batch N". A
 detail on the model of the reduced batch ("past the limit, 92% used") was refused — that the run is

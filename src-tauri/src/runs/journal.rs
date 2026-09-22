@@ -310,6 +310,28 @@ pub fn gate(usage: Option<&Usage>, decision: &Decision) -> String {
     format!("usage session={session} week={week} decision={decision:?}")
 }
 
+/// A named wait is intentionally separate from the ordinary subscription gate:
+/// it says that the run considered every installed harness, rather than merely
+/// going quiet behind the current one.
+pub fn waiting_for_agent(agent: &str, until: Option<chrono::DateTime<chrono::Utc>>) -> String {
+    format!(
+        "failover waiting agent={agent} until={}",
+        until.map(|at| at.to_rfc3339()).unwrap_or_else(|| "unknown".to_string())
+    )
+}
+
+/// All candidates are limited. The wake time is machine-readable in the
+/// journal but never includes the provider's raw response or credentials.
+pub fn waiting_for_any_agent(until: chrono::DateTime<chrono::Utc>) -> String {
+    format!("failover waiting-any until={}", until.to_rfc3339())
+}
+
+/// One logical batch keeps its number while its attempt moves to another
+/// harness, so this line lets a report reader join those attempts safely.
+pub fn agent_switching(from: &str, to: &str, batch: u32, attempt: u32) -> String {
+    format!("failover switching batch={batch} attempt={attempt} from={from} to={to}")
+}
+
 /// 5. `queue::next_action`'s answer, whole, with both of the things it was
 /// decided from: the ending of the batch before, and whether this board is the
 /// board the last decision saw.
@@ -341,6 +363,8 @@ pub fn decision(
 /// mechanics.
 pub fn batch_started(
     n: u32,
+    attempt: u32,
+    agent: &str,
     session: u64,
     actor: &str,
     group: Option<&Proc>,
@@ -348,7 +372,7 @@ pub fn batch_started(
     ready: &[String],
 ) -> String {
     format!(
-        "batch {n} start session={session} actor={actor} group={} max-tasks={} ready={}",
+        "batch {n} attempt={attempt} agent={agent} start session={session} actor={actor} group={} max-tasks={} ready={}",
         group.map(|proc| proc.pid.to_string()).unwrap_or_else(|| "none".to_string()),
         opt(tasks),
         ids(ready),
@@ -737,6 +761,8 @@ mod tests {
         let group = Proc { pid: 4321, started: 9, command: "node".into() };
         let line = batch_started(
             2,
+            1,
+            "claude",
             9,
             "smetana-run-9",
             Some(&group),
@@ -745,14 +771,14 @@ mod tests {
         );
         assert_eq!(
             line,
-            "batch 2 start session=9 actor=smetana-run-9 group=4321 max-tasks=2 \
+            "batch 2 attempt=1 agent=claude start session=9 actor=smetana-run-9 group=4321 max-tasks=2 \
              ready=[a-1, a-2]"
         );
     }
 
     #[test]
     fn a_batch_whose_group_could_not_be_read_says_none() {
-        let line = batch_started(1, 3, "smetana-run-3", None, None, &[]);
+        let line = batch_started(1, 1, "claude", 3, "smetana-run-3", None, None, &[]);
         assert!(line.contains("group=none"), "{line}");
         assert!(line.contains("ready=[]"), "an empty list, not a missing field: {line}");
     }

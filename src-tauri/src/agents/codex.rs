@@ -2469,6 +2469,7 @@ mod tests {
             },
             reports: std::path::PathBuf::from("/p/.smetana/runs/1"),
             batch: 1,
+            continuation: None,
             remove_worktrees: true,
         }
     }
@@ -2491,10 +2492,11 @@ mod tests {
         max_parallel_tasks: Option<u8>,
     ) -> Intent {
         match run(mode) {
-            Intent::Run { settings, reports, batch, remove_worktrees } => Intent::Run {
+            Intent::Run { settings, reports, batch, continuation, remove_worktrees } => Intent::Run {
                 settings: crate::runs::model::RunSettings { max_parallel_tasks, ..settings },
                 reports,
                 batch,
+                continuation,
                 remove_worktrees,
             },
             _ => unreachable!("run() always answers Intent::Run"),

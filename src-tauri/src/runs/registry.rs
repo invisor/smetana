@@ -82,6 +82,14 @@ pub struct Proc {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Batch {
+    /// The logical batch number. Several attempt records may share it after a
+    /// confirmed limit handoff; missing values keep old registries readable.
+    #[serde(default)]
+    pub batch: u32,
+    #[serde(default)]
+    pub attempt: u32,
+    #[serde(default)]
+    pub agent: String,
     /// `smetana-run-<session-id>` — `terminal::model::run_actor`'s answer, and
     /// the string an issue's assignee carries.
     pub actor: String,
@@ -540,7 +548,7 @@ mod tests {
             batches: groups
                 .iter()
                 .enumerate()
-                .map(|(n, group)| Batch { actor: format!("smetana-run-{n}"), group: group.clone() })
+                .map(|(n, group)| Batch { batch: 0, attempt: 0, agent: String::new(), actor: format!("smetana-run-{n}"), group: group.clone() })
                 .collect(),
         }
     }
@@ -758,7 +766,7 @@ mod tests {
             coalition: None,
             batches: actors
                 .iter()
-                .map(|actor| Batch { actor: (*actor).to_string(), group: None })
+                .map(|actor| Batch { batch: 0, attempt: 0, agent: String::new(), actor: (*actor).to_string(), group: None })
                 .collect(),
         }
     }
@@ -900,7 +908,7 @@ mod tests {
             &mut held,
             &writer,
             1,
-            Batch { actor: "smetana-run-4".into(), group: Some(stamp(20, 2)) }
+            Batch { batch: 0, attempt: 0, agent: String::new(), actor: "smetana-run-4".into(), group: Some(stamp(20, 2)) }
         ));
         assert_eq!(held.runs[0].batches[0].actor, "smetana-run-4");
 
@@ -924,13 +932,13 @@ mod tests {
             &mut held,
             &writer,
             1,
-            Batch { actor: "smetana-run-4".into(), group: Some(stamp(20, 2)) },
+            Batch { batch: 0, attempt: 0, agent: String::new(), actor: "smetana-run-4".into(), group: Some(stamp(20, 2)) },
         );
         note_batch(
             &mut held,
             &writer,
             1,
-            Batch { actor: "smetana-run-9".into(), group: Some(stamp(21, 3)) },
+            Batch { batch: 0, attempt: 0, agent: String::new(), actor: "smetana-run-9".into(), group: Some(stamp(21, 3)) },
         );
 
         // The earlier batch's agent is long gone; the one at the prompt is not.
@@ -961,7 +969,7 @@ mod tests {
             ("unreadable", Some(stamp(21, 3))),
             ("never-read", None),
         ] {
-            note_batch(&mut held, &writer, 1, Batch { actor: actor.into(), group });
+            note_batch(&mut held, &writer, 1, Batch { batch: 0, attempt: 0, agent: String::new(), actor: actor.into(), group });
         }
 
         forget_run(&mut held, &writer, 1, &table(&[(21, Seen::Unknown)]));
@@ -1004,7 +1012,7 @@ mod tests {
             &mut held,
             &stamp(12, 3),
             1,
-            Batch { actor: "smetana-run-1".into(), group: None }
+            Batch { batch: 0, attempt: 0, agent: String::new(), actor: "smetana-run-1".into(), group: None }
         ), "a batch belongs to the run of the app that started it");
         assert!(forget_run(&mut held, &ours, 1, &table(&[])));
         assert_eq!(held.runs.len(), 1);
@@ -1023,7 +1031,7 @@ mod tests {
                 &mut held,
                 &writer,
                 1,
-                Batch { actor: "smetana-run-4".into(), group: Some(stamp(20, started)) },
+                Batch { batch: 0, attempt: 0, agent: String::new(), actor: "smetana-run-4".into(), group: Some(stamp(20, started)) },
             );
         }
         assert_eq!(held.runs[0].batches.len(), 1);

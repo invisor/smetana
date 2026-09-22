@@ -100,6 +100,14 @@ pub fn select(
         order.retain(|agent| Some(*agent) != current);
     }
 
+    // No installed candidate is not evidence of a spent subscription. Preserve
+    // the historical launch path so terminal creation can report the real
+    // installation error instead of leaving a run in an invented all-limited
+    // wait forever.
+    if order.is_empty() {
+        return Next::Start { agent: primary.to_owned() };
+    }
+
     for agent in &order {
         match probes.get(*agent) {
             Some(Probe::Ready) | Some(Probe::Unreadable) | None => {
@@ -184,5 +192,13 @@ mod tests {
         assert_eq!(select(&policy(), "claude", Some("claude"), &installed(), &unreadable, Boundary::ForcedHandoff, now()), Next::Start { agent: "codex".into() });
         let all = BTreeMap::from([("claude".into(), limited(60)), ("codex".into(), limited(20))]);
         assert_eq!(select(&policy(), "claude", Some("claude"), &installed(), &all, Boundary::ForcedHandoff, now()), Next::WaitAny { wake_at: now() + Duration::minutes(20) });
+    }
+
+    #[test]
+    fn no_installed_candidate_keeps_the_existing_launch_error_path() {
+        assert_eq!(
+            select(&policy(), "claude", Some("claude"), &[], &BTreeMap::new(), Boundary::NewBatch, now()),
+            Next::Start { agent: "claude".into() }
+        );
     }
 }

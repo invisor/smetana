@@ -1286,6 +1286,7 @@ mod tests {
             },
             reports: std::path::PathBuf::from("/p/.smetana/runs/7"),
             batch: 2,
+            continuation: None,
             remove_worktrees: true,
         }));
     }

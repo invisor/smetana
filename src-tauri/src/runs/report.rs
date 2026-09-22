@@ -85,6 +85,9 @@ pub enum BatchOutcome {
 #[derive(Debug, Clone)]
 pub struct BatchLine {
     pub n: u32,
+    /// An attempt shares `n` with the logical batch it resumes.
+    pub attempt: u32,
+    pub agent: String,
     pub seconds: u64,
     pub tasks: Vec<BatchTask>,
     pub notes: Option<String>,
@@ -195,6 +198,14 @@ pub fn parse_batch(text: &str) -> ParsedBatch {
 /// showed the shared batch's words beside the solo batch's hour.
 fn last_naming<'a>(batches: &'a [BatchLine], id: &str) -> Option<&'a BatchLine> {
     batches.iter().rev().find(|b| b.tasks.iter().any(|t| t.id == id))
+}
+
+/// Several attempts can describe one logical batch after a limit handoff.
+/// Reports retain every attempt but never present them as extra work batches.
+fn logical_batches(batches: &[BatchLine]) -> usize {
+    let mut seen = std::collections::BTreeSet::new();
+    seen.extend(batches.iter().map(|batch| batch.n));
+    seen.len()
 }
 
 /// A task gets a duration of its own only when the batch that owns its row held
@@ -367,12 +378,19 @@ pub fn render(report: &RunReport) -> String {
     }
 
     if !report.batches.is_empty() {
-        header(&mut out, "batches", report.batches.len());
+        header(&mut out, "batches", logical_batches(report.batches));
         out.push_str("<div class=\"list\">");
         for b in report.batches {
             out.push_str("<div class=\"card card-batch\"><div class=\"head\">");
             out.push_str("<span class=\"batch-label\">batch ");
             out.push_str(&b.n.to_string());
+            if b.attempt > 1 {
+                out.push_str(" attempt ");
+                out.push_str(&b.attempt.to_string());
+            }
+            out.push_str(" (");
+            out.push_str(&escape(&b.agent));
+            out.push(')');
             out.push_str("</span><span class=\"right\">");
             out.push_str(&human(b.seconds));
             out.push_str("</span></div>");
@@ -831,6 +849,8 @@ mod tests {
     fn batch(n: u32) -> BatchLine {
         BatchLine {
             n,
+            attempt: 1,
+            agent: "claude".into(),
             seconds: 600,
             tasks: vec![],
             notes: None,
@@ -1315,6 +1335,8 @@ mod tests {
     fn batch_naming(n: u32, seconds: u64, ids: &[&str]) -> BatchLine {
         BatchLine {
             n,
+            attempt: 1,
+            agent: "claude".into(),
             seconds,
             tasks: ids.iter().map(|id| BatchTask { id: (*id).into(), did: None }).collect(),
             notes: None,

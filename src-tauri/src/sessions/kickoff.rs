@@ -345,6 +345,7 @@ mod tests {
             },
             reports: PathBuf::from("/p/.smetana/runs/7"),
             batch: 2,
+            continuation: None,
             remove_worktrees: true,
         };
         let conflict = Intent::ResolveConflict {

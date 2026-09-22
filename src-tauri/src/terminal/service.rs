@@ -1776,6 +1776,7 @@ mod tests {
             },
             reports: PathBuf::from("/p/.smetana/runs/1"),
             batch: 1,
+            continuation: None,
             remove_worktrees: false,
         }
     }

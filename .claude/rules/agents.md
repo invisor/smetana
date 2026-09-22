@@ -408,6 +408,11 @@ the footer or the run gate. The direct app-server child is always killed and rea
 pipe a descendant holds is deliberately not joined on failure, because a sixty-second probe may
 not become an unbounded wait. Claude Code keeps `usage_command` and `parse_usage` unchanged.
 
+Both supported readers also retain the machine reset instant for the limiting window beside the
+human text. Codex converts its source `resetsAt` directly; Claude parses the dated `/usage` prose,
+timezone and year rollover. A malformed date never discards the percentage: it leaves the instant
+unknown, which permits a failover trial instead of inventing a wait.
+
 ## One catalogue, instead of four lists
 
 `Profile::label` is the newest method and the **only one with no default**, deliberately: a harness

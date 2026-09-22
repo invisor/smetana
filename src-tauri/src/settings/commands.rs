@@ -97,5 +97,7 @@ pub async fn settings_save(app: AppHandle, settings: ResolvedSettings) -> Result
     }
 
     merge(&mut stored, settings, chrono::Utc::now().to_rfc3339());
-    file::save(&path, &stored).map_err(SettingsError::Write)
+    file::save(&path, &stored).map_err(SettingsError::Write)?;
+    crate::settings::notify_run_settings_changed();
+    Ok(())
 }

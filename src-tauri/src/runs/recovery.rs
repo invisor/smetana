@@ -211,9 +211,25 @@ pub fn dead_writer_coalitions(_projects: &[PathBuf]) -> Vec<u64> {
 
 /// Remember the batch a run has just started: the actor it claims under and the
 /// process group it can be found in.
+#[cfg(test)]
 pub fn note_batch(root: &Path, token: u64, actor: String, group: Option<Proc>) {
+    note_attempt(root, token, 0, 0, String::new(), actor, group);
+}
+
+/// Record an individual harness attempt before it can write tracker state.
+pub fn note_attempt(
+    root: &Path,
+    token: u64,
+    batch: u32,
+    attempt: u32,
+    agent: String,
+    actor: String,
+    group: Option<Proc>,
+) {
     let Some(writer) = writer() else { return };
-    update(root, |held| registry::note_batch(held, writer, token, Batch { actor, group }));
+    update(root, |held| {
+        registry::note_batch(held, writer, token, Batch { batch, attempt, agent, actor, group })
+    });
 }
 
 /// The run's loop task is gone, however it went. The record goes with it unless
@@ -624,7 +640,7 @@ mod tests {
                     started_at: Utc::now().to_rfc3339(),
                     writer: Proc { pid: i32::MAX, started: 1, command: "smetana".into() },
                     coalition: None,
-                    batches: vec![Batch { actor: "smetana-run-1".into(), group: Some(group) }],
+                    batches: vec![Batch { batch: 0, attempt: 0, agent: String::new(), actor: "smetana-run-1".into(), group: Some(group) }],
                 }],
             },
         );
