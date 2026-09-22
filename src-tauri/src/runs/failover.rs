@@ -58,6 +58,19 @@ pub fn select(
         };
     }
 
+    // A recovered primary is chosen ahead of a reserve's close reset, but
+    // only between logical batches. A limited primary and a forced handoff
+    // still honour the close-reset wait below: no running reserve is ever
+    // pre-empted, and no limited work is bounced pointlessly.
+    if policy.return_to_primary
+        && matches!(boundary, Boundary::NewBatch)
+        && current != Some(primary)
+        && installed.iter().any(|available| available == primary)
+        && matches!(probes.get(primary), Some(Probe::Ready | Probe::Unreadable) | None)
+    {
+        return Next::Start { agent: primary.to_owned() };
+    }
+
     if let (Some(agent), Some(Probe::Limited { pct, reset_at, resets })) = (current, current_probe) {
         if reset_at.is_some_and(|at| at >= now && at - now <= Duration::minutes(policy.wait_minutes.into())) {
             return Next::WaitOne {
@@ -184,6 +197,19 @@ mod tests {
         assert_eq!(select(&policy, "claude", Some("codex"), &installed(), &healthy, Boundary::NewBatch, now()), Next::Stay { agent: "codex".into() });
         let limited_reserve = BTreeMap::from([("claude".into(), Probe::Ready), ("codex".into(), limited(60))]);
         assert_eq!(select(&policy, "claude", Some("codex"), &installed(), &limited_reserve, Boundary::ForcedHandoff, now()), Next::Start { agent: "claude".into() });
+    }
+
+    #[test]
+    fn return_to_primary_starts_a_healthy_primary_before_waiting_for_a_reserves_close_reset() {
+        let probes = BTreeMap::from([("claude".into(), Probe::Ready), ("codex".into(), limited(4))]);
+        assert_eq!(
+            select(&policy(), "claude", Some("codex"), &installed(), &probes, Boundary::NewBatch, now()),
+            Next::Start { agent: "claude".into() }
+        );
+        assert!(matches!(
+            select(&policy(), "claude", Some("codex"), &installed(), &probes, Boundary::ForcedHandoff, now()),
+            Next::WaitOne { agent, .. } if agent == "codex"
+        ));
     }
 
     #[test]

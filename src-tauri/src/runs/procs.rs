@@ -219,6 +219,27 @@ pub fn kill_group(pid: i32) -> bool {
     signal_group(pid, KILL)
 }
 
+/// Can the kernel prove that this process group has no members? `killpg` with
+/// signal zero observes the group without changing it. `ESRCH` is the one
+/// positive answer; permission failures and unsupported platforms remain
+/// unknown, expressed as `false`, because a run handoff must not overlap a
+/// writer it cannot rule out.
+#[cfg(unix)]
+pub fn group_is_empty(pid: i32) -> bool {
+    if pid <= 1 {
+        return false;
+    }
+    if unsafe { libc::killpg(pid as libc::pid_t, 0) } == 0 {
+        return false;
+    }
+    matches!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH))
+}
+
+#[cfg(not(unix))]
+pub fn group_is_empty(_pid: i32) -> bool {
+    false
+}
+
 #[cfg(unix)]
 const HANGUP: libc::c_int = libc::SIGHUP;
 #[cfg(unix)]

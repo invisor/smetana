@@ -1021,14 +1021,19 @@ async fn drive(
         // The batch's own number and its own clock. The number is what names
         // the file the lead writes its account into, so the app can match an
         // account to the batch it timed rather than trusting a count kept twice.
-        let batch_no = if continuation.is_some() { run.batches } else { run.batches + 1 };
+        // A continuation belongs to one actual replacement session, not to the
+        // rest of the run. Take it only after all gates have admitted that
+        // session: waits keep it intact, while a successful replacement leaves
+        // the following boundary as an ordinary new batch.
+        let attempt = take_attempt(&run, &mut continuation);
+        let batch_no = attempt.batch;
         let batch_started = Instant::now();
 
         // Before the batch that writes it, never after: this batch's account is
         // what says it handed the work back, and `token` counts from zero on
         // every app start, so a previous launch's file can be sitting under this
         // very name already. See `clear_account`.
-        if continuation.is_none() {
+        if attempt.continuation.is_none() {
             clear_account(&account.reports, batch_no);
         }
 
@@ -1039,7 +1044,7 @@ async fn drive(
             &current_agent,
             &account.reports,
             batch_no,
-            continuation.clone(),
+            attempt.continuation.clone(),
             remove_worktrees,
         )
         .await
@@ -1058,7 +1063,7 @@ async fn drive(
         let group = group_of(&terminal, session).await;
         account.journal.say(&journal::batch_started(
             batch_no,
-            if continuation.is_some() { run.attempt + 1 } else { 1 },
+            attempt.number,
             &current_agent,
             session,
             &crate::terminal::model::run_actor(session),
@@ -1074,17 +1079,15 @@ async fn drive(
             session,
             group: group.clone(),
             batch: batch_no,
-            attempt: if continuation.is_some() { run.attempt + 1 } else { 1 },
+            attempt: attempt.number,
             agent: current_agent.clone(),
         });
 
         run.working_in(session);
-        if continuation.is_none() {
+        if attempt.continuation.is_none() {
             run.batches += 1;
-            run.attempt = 1;
-        } else {
-            run.attempt += 1;
         }
+        run.attempt = attempt.number;
         run.agent = current_agent.clone();
         run.advance(RunState::Working { iteration });
         say(&run);
@@ -1154,7 +1157,7 @@ async fn drive(
         // rather than the reading**: `remove_session` runs further down, after
         // the release, so on an unanswered question the lead is still sitting
         // at its dialog when this is asked and `life` comes back `Unproven`.
-        let life = batch_life(group.as_ref());
+        let mut life = batch_life(group.as_ref());
         // Taken once, here, rather than inside the emptiness rule below: the
         // line on the record and the value the decision is made from have to be
         // the same snapshot, or the journal describes a board the loop did not
@@ -1235,6 +1238,17 @@ async fn drive(
             .await
             .unwrap_or(None);
             if usage::spent(reading.as_ref()) {
+                // `AwaitExit` proves the lead stopped, not that every child
+                // in its process group stopped writing. Wait at this safe
+                // boundary until the group is provably quiet: until then the
+                // old actor keeps its claims and no replacement is admitted.
+                if !handoff_permitted(life) {
+                    if !wait_for_group_quiet(group.as_ref(), &mut stop).await {
+                        finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
+                        return;
+                    }
+                    life = batch_life(group.as_ref());
+                }
                 // The terminal has confirmed this attempt ended and the fresh
                 // board above is the one it left. Return ordinary claims to
                 // the board so the new actor must make bd's normal atomic
@@ -1533,6 +1547,26 @@ fn continuation_worktrees(root: &Path, repos: &[String], held: &[queue::Leftover
     found
 }
 
+/// The identity of the one session about to start. A limited attempt's
+/// continuation is consumed here, after the allowance and spawn gates, so it
+/// cannot leak into a later logical batch.
+struct AttemptContext {
+    batch: u32,
+    number: u32,
+    continuation: Option<crate::agents::RunContinuation>,
+}
+
+fn take_attempt(run: &Run, continuation: &mut Option<crate::agents::RunContinuation>) -> AttemptContext {
+    match continuation.take() {
+        Some(continuation) => AttemptContext {
+            batch: run.batches,
+            number: continuation.attempt,
+            continuation: Some(continuation),
+        },
+        None => AttemptContext { batch: run.batches + 1, number: 1, continuation: None },
+    }
+}
+
 /// The single way the loop task ends a run.
 ///
 /// Every ending *this task* reaches goes through here, so that the next one
@@ -1635,15 +1669,45 @@ fn read_batch(dir: &Path, n: u32, seconds: u64, outcome: BatchOutcome) -> BatchL
 /// What the app can prove about this batch's process group, in the one
 /// vocabulary `queue::release` reads (smetana-rxzd).
 ///
-/// The rule itself is `registry::group_is_dead`, where the liveness vocabulary
-/// and the `Unknown` asymmetry already live and where its tests are; this is
-/// the two lines that put the live process table in front of it. `procs::look`
-/// is the same reader `recovery`'s start-up sweep uses, so there is one answer
-/// to "what is under this pid" in the subsystem and not two.
+/// The leader stamp must be dead and the operating system must find no member
+/// in its process group. `procs::look` is the same reader recovery uses, and
+/// `group_is_empty` refuses every answer other than a positive empty result.
 fn batch_life(group: Option<&Proc>) -> queue::BatchLife {
-    match registry::group_is_dead(group, &super::procs::look) {
-        true => queue::BatchLife::ProvenDead,
-        false => queue::BatchLife::Unproven,
+    batch_life_with(group, &super::procs::look, &super::procs::group_is_empty)
+}
+
+/// A leader's exit is insufficient for a handoff: its process group can still
+/// contain a compiler, merger, or a child writing the same worktree. Both
+/// independent observations must say it is quiet, and an unavailable group
+/// probe is deliberately the conservative answer.
+fn batch_life_with(
+    group: Option<&Proc>,
+    table: &impl Fn(i32) -> registry::Seen,
+    group_is_empty: &impl Fn(i32) -> bool,
+) -> queue::BatchLife {
+    match group {
+        Some(group) if registry::group_is_dead(Some(group), table) && group_is_empty(group.pid) => {
+            queue::BatchLife::ProvenDead
+        }
+        _ => queue::BatchLife::Unproven,
+    }
+}
+
+fn handoff_permitted(life: queue::BatchLife) -> bool {
+    life == queue::BatchLife::ProvenDead
+}
+
+/// Stay at the boundary while a writer may still exist. The stop request is
+/// always honoured; settings cannot start another agent until this returns.
+async fn wait_for_group_quiet(group: Option<&Proc>, stop: &mut mpsc::Receiver<()>) -> bool {
+    loop {
+        if batch_life(group) == queue::BatchLife::ProvenDead {
+            return true;
+        }
+        tokio::select! {
+            _ = stop.recv() => return false,
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+        }
     }
 }
 
@@ -2598,6 +2662,52 @@ mod tests {
         assert_eq!(
             continuation_worktrees(root.path(), &["repo".into()], &held),
             vec![first.to_string_lossy().into_owned(), second.to_string_lossy().into_owned()]
+        );
+    }
+
+    #[test]
+    fn a_replacement_consumes_its_continuation_before_the_next_logical_batch() {
+        let mut run = Run::new(1, "/p".into(), settings(RunScope::Queue));
+        run.batches = 4;
+        run.attempt = 1;
+        let mut continuation = Some(crate::agents::RunContinuation {
+            attempt: 2,
+            previous_agent: "claude".into(),
+            previous_actor: "smetana-run-old".into(),
+            task_ids: vec!["smetana-task".into()],
+            worktrees: vec!["/p/.worktrees/smetana-task".into()],
+        });
+
+        let replacement = take_attempt(&run, &mut continuation);
+        assert_eq!((replacement.batch, replacement.number), (4, 2));
+        assert!(replacement.continuation.is_some());
+        assert!(continuation.is_none(), "a continuation belongs to one replacement only");
+
+        // The replacement exited successfully. Its next boundary starts a
+        // new logical batch, not attempt three of the old one.
+        run.attempt = replacement.number;
+        let ordinary = take_attempt(&run, &mut continuation);
+        assert_eq!((ordinary.batch, ordinary.number), (5, 1));
+        assert!(ordinary.continuation.is_none());
+    }
+
+    #[test]
+    fn a_live_group_member_blocks_a_limited_handoff() {
+        let group = Proc { pid: 4213, started: 10, command: "claude".into() };
+        let leader_exited_but_member_writes = batch_life_with(
+            Some(&group),
+            &|_| registry::Seen::Gone,
+            &|_| false,
+        );
+
+        assert_eq!(leader_exited_but_member_writes, queue::BatchLife::Unproven);
+        assert!(
+            !handoff_permitted(leader_exited_but_member_writes),
+            "without a quiet group the service cannot release claims or start a replacement"
+        );
+        assert_eq!(
+            batch_life_with(Some(&group), &|_| registry::Seen::Gone, &|_| true),
+            queue::BatchLife::ProvenDead
         );
     }
 

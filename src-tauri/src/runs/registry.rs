@@ -210,11 +210,11 @@ pub fn liveness(recorded: &Proc, seen: Seen) -> Liveness {
 /// as readily as when the session was already over; `forget_run` keeps such a
 /// batch for exactly that reason and this refuses it for the same one.
 ///
-/// The caller is `runs::service`, giving back the merge lock a batch died
-/// holding (smetana-rxzd). A lead the process table says is gone is not merging
-/// anything, so the half-merged target branch the lock exists to prevent is not
-/// on the table — which is the whole of what makes that release safe, and why
-/// nothing weaker than this may stand in for it.
+/// Recovery uses this leader fact as its durable record rule. The live run
+/// failover path pairs it with `procs::group_is_empty` before it releases work
+/// or starts a replacement, because an exited leader can still have a writer
+/// in its group. Keeping that transient group observation out of this pure
+/// registry predicate preserves the record's one-process recovery contract.
 pub fn group_is_dead(group: Option<&Proc>, table: &impl Fn(i32) -> Seen) -> bool {
     match group {
         None => false,
