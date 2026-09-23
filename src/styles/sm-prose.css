@@ -146,6 +146,12 @@
   display:block;
   min-width:0;
   max-width:100%;
+  /* The ordinary prose rhythm below (`li + li`) is for vertical markdown
+     lists. These are flex items instead: applying that top margin to every
+     chip after the first lowers it within its row. Reset it here so wrapped
+     rows are spaced only by the parent's `gap`, and every chip in a row
+     shares its top and bottom edge. */
+  margin-top:var(--space-0);
   white-space:nowrap;
 }
 /* The chip's own look, shared by the two shapes the name can take —
