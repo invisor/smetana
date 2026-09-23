@@ -222,7 +222,12 @@ const defaultsStyle = {
 }
 const fieldRowStyle = {
   display: 'grid',
-  gridTemplateColumns: 'minmax(0, 1fr) auto',
+  /* One bounded grid column, rather than a width on each kind of control:
+     the column gives all four fields one right edge and may still shrink with
+     the window. `Select` is inline-flex at its root, so its own fill below is
+     required as well — a width on this wrapper alone leaves a short selected
+     value visibly narrower. */
+  gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 170px)',
   alignItems: 'center',
   gap: 'var(--space-6)',
   padding: 'var(--space-4) 0',
@@ -232,8 +237,7 @@ const fieldLabelStyle = {
   color: 'var(--text-primary)',
   font: 'var(--weight-medium) var(--text-ui-size)/var(--leading-snug) var(--font-sans)'
 }
-const selectControlStyle = { width: '170px', justifySelf: 'end' }
-const numberControlStyle = { width: '84px', justifySelf: 'end' }
+const controlStyle = { width: '100%', minWidth: 0 }
 const agentSectionStyle = {
   display: 'flex',
   alignItems: 'center',
@@ -265,7 +269,7 @@ const ownAgentsDescriptionStyle = {
   font: 'var(--weight-regular) var(--text-ui-size)/var(--leading-normal) var(--font-sans)'
 }
 const switchStyle = { justifySelf: 'end', paddingTop: 'var(--space-1)' }
-const fieldControlStyle = { display: 'flex', flexDirection: 'column', alignItems: 'end' }
+const fieldControlStyle = { display: 'flex', flexDirection: 'column', alignItems: 'end', minWidth: 0 }
 const errorStyle = {
   marginTop: 'var(--space-2)',
   color: 'var(--status-failed-fg)',
@@ -315,8 +319,9 @@ const modelErrorStyle = { margin: '0 0 var(--space-3)', color: 'var(--text-muted
       <div v-if="fields" :style="defaultsStyle">
         <div :style="fieldRowStyle">
           <span :style="fieldLabelStyle">Target branch</span>
-          <div :style="selectControlStyle">
+          <div :style="controlStyle">
             <Select
+              :style="controlStyle"
               :model-value="draft.target_branch ?? ''"
               :options="branchList"
               :disabled="busy"
@@ -328,8 +333,9 @@ const modelErrorStyle = { margin: '0 0 var(--space-3)', color: 'var(--text-muted
         <div :style="fieldRowStyle">
           <span :style="fieldLabelStyle">Minimum priority</span>
           <div :style="fieldControlStyle">
-            <div :style="selectControlStyle">
+            <div :style="controlStyle">
               <Select
+                :style="controlStyle"
                 :model-value="String(draft.min_priority ?? '')"
                 :options="PRIORITIES"
                 :disabled="busy"
@@ -343,8 +349,9 @@ const modelErrorStyle = { margin: '0 0 var(--space-3)', color: 'var(--text-muted
         <div :style="fieldRowStyle">
           <span :style="fieldLabelStyle">Max parallel tasks</span>
           <div :style="fieldControlStyle">
-            <div :style="numberControlStyle">
+            <div :style="controlStyle">
               <Input
+                :style="controlStyle"
                 type="number"
                 mono
                 :model-value="draft.max_parallel_tasks"
@@ -362,8 +369,9 @@ const modelErrorStyle = { margin: '0 0 var(--space-3)', color: 'var(--text-muted
         <div :style="fieldRowStyle">
           <span :style="fieldLabelStyle">Review passes</span>
           <div :style="fieldControlStyle">
-            <div :style="numberControlStyle">
+            <div :style="controlStyle">
               <Input
+                :style="controlStyle"
                 type="number"
                 mono
                 :model-value="draft.review_passes"
