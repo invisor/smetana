@@ -73,6 +73,7 @@ import { formatElapsedClock } from './elapsed.js'
 import {
   ASK_USER_QUESTION_TOOL,
   buildAnswers,
+  canSubmitCustomAnswer,
   formatAnswer,
   isComplete,
   parseQuestions,
@@ -215,9 +216,30 @@ const answeredCount = computed(() => {
 })
 
 function send() {
-  if (state.value !== 'pending') return
+  if (!isReadyToSend()) return
   emit('answer', 'allow', buildAnswers(questions.value, selectedLabels(questions.value, selected), custom))
   state.value = 'answered'
+}
+
+/* Recompute the existing complete rule at the point of sending rather than
+   trusting the footer's last rendered disabled state. Both a mouse press and
+   a keyboard event take this same gate, so an event already queued after the
+   card settles cannot emit a second answer. */
+function isReadyToSend() {
+  return state.value === 'pending' && isComplete(questions.value, selectedLabels(questions.value, selected), custom)
+}
+
+function sendCustomAnswer(qi, event) {
+  if (!canSubmitCustomAnswer({
+    customAnswer: custom[qi],
+    complete: isReadyToSend(),
+    state: state.value,
+    /* `isComposing` is the standard signal; Chromium also reports 229 for an
+       IME keydown on some platforms, including compositions which do not set
+       the flag on their synthetic Enter event. */
+    isComposing: event.isComposing || event.keyCode === 229
+  })) return
+  send()
 }
 
 function decline() {
@@ -321,7 +343,12 @@ const root = { padding: 0, gap: 0 }
 
         <label v-if="state === 'pending' && question.isOther !== false" data-own>
           <span>Or, in your own words</span>
-          <input :type="question.isSecret ? 'password' : 'text'" v-model="custom[qi]" placeholder="Type an answer">
+          <input
+            :type="question.isSecret ? 'password' : 'text'"
+            v-model="custom[qi]"
+            placeholder="Type an answer"
+            @keydown.enter="sendCustomAnswer(qi, $event)"
+          >
         </label>
       </div>
 
