@@ -23,6 +23,7 @@ pub const TEAM_ENV: &str = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS";
 pub const TEAM_FLAG: &str = "--teammate-mode";
 pub const TEAM_MODE: &str = "in-process";
 pub const MIN_VERSION: (u32, u32, u32) = (2, 1, 281);
+pub const BOOTSTRAP_MEMBER_NAME: &str = "smetana-bootstrap";
 
 /// Claude creates its native Team files only after it receives interactive
 /// work. This deliberately inert first turn asks it to establish that runtime
@@ -571,7 +572,33 @@ impl Drop for InboxLock {
 /// Reads `members[]` from a team config. Native Claude teams are one level
 /// deep, so every teammate's parent is the Smetana root regardless of the
 /// provider's own member ordering.
-pub fn members(config: &Value) -> Vec<ProviderNode> {
+/// Capture the provider identity of *our* bootstrap helper at admission. Its
+/// name is only used at that controlled handshake; every later exclusion is by
+/// this exact provider id, so a real teammate with a similar label is never
+/// hidden.
+pub fn bootstrap_member_id(config: &Value) -> Option<String> {
+    config
+        .get("members")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|member| member.get("name").and_then(Value::as_str) == Some(BOOTSTRAP_MEMBER_NAME))?
+        .get("agentId")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+pub fn member_id(config: &Value, name: &str) -> Option<String> {
+    config
+        .get("members")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|member| member.get("name").and_then(Value::as_str) == Some(name))?
+        .get("agentId")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+pub fn members_excluding(config: &Value, excluded_provider: Option<&str>) -> Vec<ProviderNode> {
     config
         .get("members")
         .and_then(Value::as_array)
@@ -580,6 +607,9 @@ pub fn members(config: &Value) -> Vec<ProviderNode> {
         .filter_map(|member| {
             let id = member.get("agentId").and_then(Value::as_str)?.to_owned();
             if member.get("agentType").and_then(Value::as_str) == Some("team-lead") {
+                return None;
+            }
+            if excluded_provider == Some(id.as_str()) {
                 return None;
             }
             let name = member
@@ -668,12 +698,37 @@ mod tests {
         .unwrap();
         assert_eq!(team_name(&config), Some("session-fixture-team".into()));
         assert_eq!(
-            members(&config),
+            members_excluding(&config, None),
             vec![ProviderNode {
                 id: "fixture-worker@session-fixture-team".into(),
                 parent: None,
                 state: ProviderState::Starting,
                 label: Some("fixture-worker".into()),
+                can_message: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn bootstrap_member_is_excluded_by_exact_provider_identity() {
+        let config: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/claude-2.1.281-bootstrap-team-config.json"
+        ))
+        .unwrap();
+        let bootstrap = bootstrap_member_id(&config).expect("captured bootstrap id");
+        assert_eq!(bootstrap, "smetana-bootstrap@session-bootstrap-fixture");
+        assert_eq!(
+            config.pointer("/members/1/status").and_then(Value::as_str),
+            Some("idle"),
+            "the captured native config retains the bootstrap lifecycle state"
+        );
+        assert_eq!(
+            members_excluding(&config, Some(&bootstrap)),
+            vec![ProviderNode {
+                id: "real-worker@session-bootstrap-fixture".into(),
+                parent: None,
+                state: ProviderState::Running,
+                label: Some("bootstrap-helper".into()),
                 can_message: true,
             }]
         );

@@ -155,10 +155,22 @@ pub fn hydrated_journal(value: &Value) -> Option<(String, Vec<EventKind>)> {
     let turns = value
         .pointer("/result/thread/turns")
         .and_then(Value::as_array)?;
-    Some((
-        thread,
-        crate::agents::codex_driver::translate_history(turns),
-    ))
+    let mut events = crate::agents::codex_driver::translate_history(turns);
+    // A completed snapshot turn is the one completed lifecycle fact that is
+    // already present before buffered `turn/completed` arrives. Unlike normal
+    // conversation-history reopen, this is an active Crew child's live
+    // journal, so retain the terminal marker once.
+    for turn in turns {
+        if matches!(turn.get("status").and_then(Value::as_str), Some("completed")) {
+            events.push(EventKind::Result {
+                tokens_in: 0,
+                tokens_out: 0,
+                cost_usd: None,
+                ms: turn.get("durationMs").and_then(Value::as_u64).unwrap_or(0),
+            });
+        }
+    }
+    Some((thread, events))
 }
 
 /// Snapshot coverage is intentionally distinct from live-event identity. It
@@ -208,7 +220,10 @@ pub fn journal_key(value: &Value) -> Option<(String, String)> {
             .pointer("/params/item/id")
             .and_then(Value::as_str)
             .map(|id| format!("live:item-complete:{id}")),
-        _ => Some(format!("live:wire:{method}")),
+        // A wire notification without an item/turn id has no stable provider
+        // identity. Do not collapse two errors merely because their method is
+        // both `error`; the worker appends every such occurrence.
+        _ => None,
     }?;
     Some((thread, key))
 }
@@ -216,10 +231,18 @@ pub fn journal_key(value: &Value) -> Option<(String, String)> {
 /// The one buffered live fact a snapshot is allowed to cover. Lifecycle and
 /// delta records deliberately answer `None` here.
 pub fn buffered_snapshot_coverage(value: &Value) -> Option<(String, String)> {
-    (value.get("method").and_then(Value::as_str) == Some("item/completed")).then_some(())?;
     let thread = value.pointer("/params/threadId").and_then(Value::as_str)?.to_owned();
-    let item = value.pointer("/params/item/id").and_then(Value::as_str)?;
-    Some((thread, format!("snapshot:item:{item}")))
+    match value.get("method").and_then(Value::as_str)? {
+        "item/completed" => value
+            .pointer("/params/item/id")
+            .and_then(Value::as_str)
+            .map(|item| (thread, format!("snapshot:item:{item}"))),
+        "turn/completed" => value
+            .pointer("/params/turn/id")
+            .and_then(Value::as_str)
+            .map(|turn| (thread, format!("snapshot:turn:{turn}"))),
+        _ => None,
+    }
 }
 
 fn completed(item: &Value) -> Vec<EventKind> {
@@ -437,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_turn_start_and_completion_are_distinct_after_hydration() {
+    fn snapshot_covers_only_a_buffered_turn_completion() {
         let started = serde_json::json!({
             "method": "turn/started",
             "params": {"threadId": "child", "turn": {"id": "turn-1"}}
@@ -449,7 +472,10 @@ mod tests {
         assert_eq!(journal_key(&started), Some(("child".into(), "live:turn-start:turn-1".into())));
         assert_eq!(journal_key(&completed), Some(("child".into(), "live:turn-complete:turn-1".into())));
         assert_eq!(buffered_snapshot_coverage(&started), None);
-        assert_eq!(buffered_snapshot_coverage(&completed), None);
+        assert_eq!(
+            buffered_snapshot_coverage(&completed),
+            Some(("child".into(), "snapshot:turn:turn-1".into()))
+        );
     }
 
     #[test]
@@ -460,5 +486,23 @@ mod tests {
         });
         assert_eq!(journal_key(&delta), None);
         assert_eq!(buffered_snapshot_coverage(&delta), None);
+    }
+
+    #[test]
+    fn unkeyed_errors_are_independent_wire_occurrences() {
+        let error = serde_json::json!({
+            "method": "error",
+            "params": {"threadId": "child", "error": {"message": "same error"}}
+        });
+        assert_eq!(journal_key(&error), None);
+        assert_eq!(
+            journal(&error),
+            Some((
+                "child".into(),
+                vec![EventKind::Error {
+                    text: "same error".into()
+                }]
+            ))
+        );
     }
 }

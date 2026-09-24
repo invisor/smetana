@@ -271,13 +271,6 @@ impl CrewTree {
             .collect()
     }
 
-    pub fn node_for_label(&self, label: &str) -> Option<CrewNodeId> {
-        self.nodes
-            .values()
-            .find(|node| node.label == label)
-            .map(|node| node.id)
-    }
-
     pub fn nodes(&self) -> Vec<CrewNode> {
         self.nodes.values().cloned().collect()
     }

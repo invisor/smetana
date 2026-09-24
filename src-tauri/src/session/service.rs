@@ -332,6 +332,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
         let mut claude_teams: HashMap<u64, PathBuf> = HashMap::new();
         let mut claude_team_baselines: HashMap<u64, HashSet<PathBuf>> = HashMap::new();
         let mut claude_expected_sessions: HashMap<u64, String> = HashMap::new();
+        let mut claude_bootstrap_members: HashMap<u64, String> = HashMap::new();
         let mut claude_starting: HashMap<u64, ClaudeAdmission> = HashMap::new();
         let mut claude_tails: HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail> = HashMap::new();
         let mut claude_lead_tails: HashMap<u64, crate::agents::claude_crew::TranscriptTail> = HashMap::new();
@@ -383,6 +384,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         &mut claude_teams,
                         &mut claude_team_baselines,
                         &mut claude_expected_sessions,
+                        &mut claude_bootstrap_members,
                         &mut claude_starting,
                         &mut claude_tails,
                         &mut claude_lead_tails,
@@ -419,12 +421,12 @@ pub fn start(app: AppHandle) -> SessionHandle {
                 }
                 _ = crew_tick.tick(), if !claude_crews.is_empty() => {
                     let mut admission_failures = Vec::new();
-                    refresh_claude_crews(&app, &mut crews, &mut crew_ptys, &claude_crews, &mut claude_teams, &claude_team_baselines, &claude_expected_sessions, &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes, &mut claude_starting, &mut admission_failures);
+                    refresh_claude_crews(&app, &mut crews, &mut crew_ptys, &claude_crews, &mut claude_teams, &claude_team_baselines, &claude_expected_sessions, &mut claude_bootstrap_members, &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes, &mut claude_starting, &mut admission_failures);
                     for (root, reason) in admission_failures {
                         let Some(admission) = claude_starting.remove(&root) else { continue };
                         clear_crew(
                             &app, &mut sessions, &mut crews, &mut crew_ptys, &mut claude_crews,
-                            &mut claude_teams, &mut claude_team_baselines, &mut claude_expected_sessions, &mut claude_starting,
+                            &mut claude_teams, &mut claude_team_baselines, &mut claude_expected_sessions, &mut claude_bootstrap_members, &mut claude_starting,
                             &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes,
                             &mut crew_leads, &mut crew_waiters, &mut crew_exits, &mut crew_send_waiters,
                             root, crate::terminal::model::Exit::NoCode, false,
@@ -438,7 +440,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         let admission = claude_starting.remove(&root).expect("timed out Claude start exists");
                         clear_crew(
                             &app, &mut sessions, &mut crews, &mut crew_ptys, &mut claude_crews,
-                            &mut claude_teams, &mut claude_team_baselines, &mut claude_expected_sessions, &mut claude_starting,
+                            &mut claude_teams, &mut claude_team_baselines, &mut claude_expected_sessions, &mut claude_bootstrap_members, &mut claude_starting,
                             &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes,
                             &mut crew_leads, &mut crew_waiters, &mut crew_exits, &mut crew_send_waiters,
                             root, crate::terminal::model::Exit::NoCode, false,
@@ -463,6 +465,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                             &mut claude_teams,
                             &mut claude_team_baselines,
                             &mut claude_expected_sessions,
+                            &mut claude_bootstrap_members,
                             &mut claude_starting,
                             &mut claude_tails,
                             &mut claude_lead_tails,
@@ -1114,9 +1117,8 @@ fn absorb_codex_journals(
 }
 
 /// A history response races live notifications by design. Keep live records
-/// behind it and collapse exact duplicate JSON-RPC records by their provider
-/// scoped wire value, so an attach never sees another child's events or two
-/// copies of the same child delta.
+/// behind it and collapse only records with a stable provider-local identity.
+/// Deltas and unkeyed provider errors are occurrences, not duplicates.
 fn append_codex_journal(
     app: &AppHandle,
     crews: &mut HashMap<u64, CrewPackage>,
@@ -1127,19 +1129,8 @@ fn append_codex_journal(
     record: &serde_json::Value,
     buffered_before_hydration: bool,
 ) {
-    if buffered_before_hydration {
-        if let Some((_, coverage)) = crate::agents::codex_crew::buffered_snapshot_coverage(record) {
-            if seen.contains(&(root, provider.to_owned(), coverage)) {
-                return;
-            }
-        }
-    }
-    // A delta has no de-duplication key: every occurrence belongs to the
-    // selected thread's live journal, including equal text from one item.
-    if let Some((_, key)) = crate::agents::codex_crew::journal_key(record) {
-        if !seen.insert((root, provider.to_owned(), key)) {
-            return;
-        }
+    if !should_append_codex_record(seen, root, provider, record, buffered_before_hydration) {
+        return;
     }
     let Some(package) = crews.get_mut(&root) else { return };
     let node = package
@@ -1151,6 +1142,29 @@ fn append_codex_journal(
     if let Some(events) = package.append(node, kinds) {
         emit_crew_events(app, root, node, events);
     }
+}
+
+/// Keep snapshot coverage separate from the identities of subsequent live
+/// records. This pure gate is the service-level seam for the hydration race.
+fn should_append_codex_record(
+    seen: &mut HashSet<(u64, String, String)>,
+    root: u64,
+    provider: &str,
+    record: &serde_json::Value,
+    buffered_before_hydration: bool,
+) -> bool {
+    if buffered_before_hydration {
+        if let Some((_, coverage)) = crate::agents::codex_crew::buffered_snapshot_coverage(record) {
+            if seen.contains(&(root, provider.to_owned(), coverage)) {
+                return false;
+            }
+        }
+    }
+    // A delta or unkeyed wire event has no stable provider-local identity; it
+    // is an occurrence rather than a duplicate and remains appendable.
+    crate::agents::codex_crew::journal_key(record)
+        .map(|(_, key)| seen.insert((root, provider.to_owned(), key)))
+        .unwrap_or(true)
 }
 
 fn codex_hydration_requests(
@@ -1182,6 +1196,7 @@ fn refresh_claude_crews(
     teams: &mut HashMap<u64, PathBuf>,
     baselines: &HashMap<u64, HashSet<PathBuf>>,
     expected_sessions: &HashMap<u64, String>,
+    bootstrap_members: &mut HashMap<u64, String>,
     tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
     lead_tails: &mut HashMap<u64, crate::agents::claude_crew::TranscriptTail>,
     transcript_nodes: &mut HashMap<(u64, PathBuf), u64>,
@@ -1228,7 +1243,23 @@ fn refresh_claude_crews(
             continue;
         }
         teams.insert(*root, team.clone());
-        for node in crate::agents::claude_crew::members(&config) {
+        // The bootstrap name is used only to capture its provider-issued id
+        // during admission. Thereafter topology and transcript routing exclude
+        // that exact id, never a display label.
+        if starting.contains_key(root) && !bootstrap_members.contains_key(root) {
+            let Some(bootstrap) = crate::agents::claude_crew::bootstrap_member_id(&config) else {
+                package.tree.fail_node(*root);
+                admission_failures.push((
+                    *root,
+                    "Claude Crew bootstrap teammate is absent from the admitted runtime".into(),
+                ));
+                emit_crew(app, package);
+                continue;
+            };
+            bootstrap_members.insert(*root, bootstrap);
+        }
+        let bootstrap = bootstrap_members.get(root).map(String::as_str);
+        for node in crate::agents::claude_crew::members_excluding(&config, bootstrap) {
             package.apply(node);
         }
         let Some(subagents) = crate::agents::claude_crew::lead_subagents(&home, &config) else {
@@ -1270,20 +1301,25 @@ fn refresh_claude_crews(
         };
         match lead_tails.entry(*root).or_default().read_new_with_lifecycle(&lead_transcript) {
             Ok((events, lifecycle)) => {
-                let kinds = events.into_iter().map(|(kind, _)| kind).collect();
-                if let Some(events) = package.append(package.root, kinds) {
-                    emit_crew_events(app, *root, package.root, events);
-                }
-                for state in lifecycle {
-                    match state {
-                        crate::agents::claude_crew::LeadLifecycle::TurnStart => {
-                            package.tree.set_state(package.root, CrewState::Running);
-                        }
-                        crate::agents::claude_crew::LeadLifecycle::Ready => {
-                            package.tree.set_state(package.root, CrewState::Waiting);
-                        }
-                        crate::agents::claude_crew::LeadLifecycle::Failed => {
-                            package.tree.fail_node(package.root);
+                // This first read advances past only the constrained
+                // bootstrap/READY exchange. It is provider initialization,
+                // not the Run itself, so must not become root journal rows.
+                if !starting.contains_key(root) {
+                    let kinds = events.into_iter().map(|(kind, _)| kind).collect();
+                    if let Some(events) = package.append(package.root, kinds) {
+                        emit_crew_events(app, *root, package.root, events);
+                    }
+                    for state in lifecycle {
+                        match state {
+                            crate::agents::claude_crew::LeadLifecycle::TurnStart => {
+                                package.tree.set_state(package.root, CrewState::Running);
+                            }
+                            crate::agents::claude_crew::LeadLifecycle::Ready => {
+                                package.tree.set_state(package.root, CrewState::Waiting);
+                            }
+                            crate::agents::claude_crew::LeadLifecycle::Failed => {
+                                package.tree.fail_node(package.root);
+                            }
                         }
                     }
                 }
@@ -1323,6 +1359,7 @@ fn refresh_claude_crews(
                 // prompt. Removing the pending admission makes delivery
                 // exactly-once even as later config polls continue.
                 pty.write(&input);
+                package.tree.set_state(package.root, CrewState::Running);
             }
             let _ = admission.reply.send(Ok((*root, *root)));
         }
@@ -1346,8 +1383,11 @@ fn refresh_claude_crews(
                         // transcript id. Confirm the path is for that exact
                         // id before it can acquire a Smetana node.
                         (crate::agents::claude_crew::transcript(&subagents, &internal) == path)
-                            .then(|| package.tree.node_for_label(&name))
+                            .then(|| crate::agents::claude_crew::member_id(&config, &name))
                             .flatten()
+                            .filter(|provider| bootstrap != Some(provider.as_str()))
+                            .and_then(|provider| package.tree.provider_nodes().into_iter()
+                                .find_map(|(id, node)| (id == provider).then_some(node)))
                     }),
             };
             let Some(node) = node else { continue };
@@ -1385,6 +1425,7 @@ fn clear_crew(
     claude_teams: &mut HashMap<u64, PathBuf>,
     claude_team_baselines: &mut HashMap<u64, HashSet<PathBuf>>,
     claude_expected_sessions: &mut HashMap<u64, String>,
+    claude_bootstrap_members: &mut HashMap<u64, String>,
     claude_starting: &mut HashMap<u64, ClaudeAdmission>,
     claude_tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
     claude_lead_tails: &mut HashMap<u64, crate::agents::claude_crew::TranscriptTail>,
@@ -1401,6 +1442,7 @@ fn clear_crew(
     claude_teams.remove(&root);
     claude_team_baselines.remove(&root);
     claude_expected_sessions.remove(&root);
+    claude_bootstrap_members.remove(&root);
     claude_starting.remove(&root);
     claude_tails.retain(|(crew, _), _| *crew != root);
     claude_lead_tails.remove(&root);
@@ -1442,6 +1484,7 @@ fn handle(
     claude_teams: &mut HashMap<u64, PathBuf>,
     claude_team_baselines: &mut HashMap<u64, HashSet<PathBuf>>,
     claude_expected_sessions: &mut HashMap<u64, String>,
+    claude_bootstrap_members: &mut HashMap<u64, String>,
     claude_starting: &mut HashMap<u64, ClaudeAdmission>,
     claude_tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
     claude_lead_tails: &mut HashMap<u64, crate::agents::claude_crew::TranscriptTail>,
@@ -1640,7 +1683,7 @@ fn handle(
             }
             let admitted = !claude_starting.contains_key(&root);
             clear_crew(
-                app, sessions, crews, crew_ptys, claude_crews, claude_teams, claude_team_baselines, claude_expected_sessions, claude_starting, claude_tails,
+                app, sessions, crews, crew_ptys, claude_crews, claude_teams, claude_team_baselines, claude_expected_sessions, claude_bootstrap_members, claude_starting, claude_tails,
                 claude_lead_tails, claude_transcript_nodes, crew_leads, crew_waiters, crew_exits, crew_send_waiters, root,
                 crate::terminal::model::Exit::Removed, admitted,
             );
@@ -1657,6 +1700,7 @@ fn handle(
                 claude_teams,
                 claude_team_baselines,
                 claude_expected_sessions,
+                claude_bootstrap_members,
                 claude_starting,
                 claude_tails,
                 claude_lead_tails,
@@ -2334,6 +2378,65 @@ mod tests {
         assert_eq!(gate.take_real(), Some(b"REAL-RUN-BRIEF\n".to_vec()));
         assert_eq!(gate.take_real(), None, "the admitted brief is exactly once");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hydrated_turn_suppresses_its_buffered_completion_once() {
+        let snapshot = serde_json::json!({
+            "crewThreadId": "child",
+            "result": {"thread": {"turns": [{
+                "id": "turn-1",
+                "status": "completed",
+                "durationMs": 9,
+                "items": []
+            }]}}
+        });
+        let (_, history) = crate::agents::codex_crew::hydrated_journal(&snapshot)
+            .expect("hydrated child journal");
+        assert_eq!(
+            history
+                .iter()
+                .filter(|event| matches!(event, EventKind::Result { .. }))
+                .count(),
+            1,
+            "thread/read supplies the completed turn's one terminal result"
+        );
+
+        let mut seen = HashSet::new();
+        let (_, keys) = crate::agents::codex_crew::hydrated_journal_keys(&snapshot)
+            .expect("snapshot keys");
+        for key in keys {
+            seen.insert((7, "child".to_owned(), key));
+        }
+        let buffered_completion = serde_json::json!({
+            "method": "turn/completed",
+            "params": {"threadId": "child", "turn": {"id": "turn-1"}}
+        });
+        assert!(
+            !should_append_codex_record(&mut seen, 7, "child", &buffered_completion, true),
+            "the buffered completion was already represented by thread/read"
+        );
+    }
+
+    #[test]
+    fn post_hydration_turn_phases_and_unkeyed_errors_remain_occurrences() {
+        let mut seen = HashSet::new();
+        let started = serde_json::json!({
+            "method": "turn/started",
+            "params": {"threadId": "child", "turn": {"id": "turn-new"}}
+        });
+        let completed = serde_json::json!({
+            "method": "turn/completed",
+            "params": {"threadId": "child", "turn": {"id": "turn-new"}}
+        });
+        let error = serde_json::json!({
+            "method": "error",
+            "params": {"threadId": "child", "error": {"message": "same"}}
+        });
+        assert!(should_append_codex_record(&mut seen, 7, "child", &started, false));
+        assert!(should_append_codex_record(&mut seen, 7, "child", &completed, false));
+        assert!(should_append_codex_record(&mut seen, 7, "child", &error, false));
+        assert!(should_append_codex_record(&mut seen, 7, "child", &error, false));
     }
 
     #[test]
