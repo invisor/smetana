@@ -10,6 +10,17 @@ use super::crew::{ProviderNode, ProviderState};
 
 pub const MIN_VERSION: (u32, u32, u32) = (0, 155, 1);
 
+pub fn supports_version(found: &str) -> bool {
+    let mut values = found
+        .split(|character: char| !character.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse::<u32>().ok());
+    matches!(
+        (values.next(), values.next(), values.next()),
+        (Some(major), Some(minor), Some(patch)) if (major, minor, patch) >= MIN_VERSION
+    )
+}
+
 /// A `thread/started` notification or `thread/list` response can carry one or
 /// many thread records. Ignore a malformed record rather than inventing a row.
 pub fn nodes(value: &Value) -> Vec<ProviderNode> {

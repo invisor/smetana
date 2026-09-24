@@ -16,11 +16,32 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::crew::{ProviderNode, ProviderState};
+use super::{claude::Claude, Launch};
 
 pub const TEAM_ENV: &str = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS";
 pub const TEAM_FLAG: &str = "--teammate-mode";
 pub const TEAM_MODE: &str = "in-process";
 pub const MIN_VERSION: (u32, u32, u32) = (2, 1, 281);
+
+/// The only supported Claude Crew lead line. It is deliberately separate from
+/// `ClaudeDriver`, whose `-p --input-format stream-json` protocol cannot make
+/// native teammates. The team runtime must remain interactive while Smetana
+/// observes its documented config/transcript/mailbox files.
+pub fn interactive_lead_command(launch: &Launch) -> portable_pty::CommandBuilder {
+    let claude = Claude;
+    let mut command = claude.command_without_prompt(launch);
+    command.env(TEAM_ENV, "1");
+    command.arg(TEAM_FLAG);
+    command.arg(TEAM_MODE);
+    if let Some(prompt) = claude.prompt_text(launch) {
+        command.arg(prompt);
+    }
+    command
+}
+
+pub fn supports_version(found: &str) -> bool {
+    version_at_least(found, MIN_VERSION)
+}
 
 /// A message as Claude's interactive team runtime stores it in a teammate's
 /// inbox. `recipient` does not travel in the file: the inbox filename is the

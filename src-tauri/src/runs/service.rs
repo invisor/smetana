@@ -393,23 +393,12 @@ fn provider_version(profile: &dyn Profile) -> Result<String, String> {
     Ok(version)
 }
 
-fn version_at_least(found: &str, minimum: (u32, u32, u32)) -> bool {
-    let mut values = found
-        .split(|character: char| !character.is_ascii_digit())
-        .filter(|part| !part.is_empty())
-        .filter_map(|part| part.parse::<u32>().ok());
-    matches!(
-        (values.next(), values.next(), values.next()),
-        (Some(major), Some(minor), Some(patch)) if (major, minor, patch) >= minimum
-    )
-}
-
 fn claude_version_supported(version: &str) -> bool {
-    version_at_least(version, crate::agents::claude_crew::MIN_VERSION)
+    crate::agents::claude_crew::supports_version(version)
 }
 
 fn codex_version_supported(version: &str) -> bool {
-    version_at_least(version, crate::agents::codex_crew::MIN_VERSION)
+    crate::agents::codex_crew::supports_version(version)
 }
 
 fn handle(
