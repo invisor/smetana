@@ -376,6 +376,7 @@ pub fn run() {
       terminal::commands::terminal_forget,
       session::commands::session_start,
             session::commands::crew_tree,
+            session::commands::crew_attach,
             session::commands::crew_send,
       session::commands::session_attach,
       session::commands::session_since,

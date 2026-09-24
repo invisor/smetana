@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 
 use super::model::{Decision, Event, SessionError, SessionId};
 use super::crew::CrewNode;
-use super::service::{Attached, Request, SessionHandle};
+use super::service::{Attached, CrewAttached, Request, SessionHandle};
 use crate::agents::Intent;
 
 async fn ask<T>(
@@ -46,6 +46,15 @@ pub async fn crew_tree(
     root: u64,
 ) -> Result<Option<Vec<CrewNode>>, SessionError> {
     ask(&handle, |tx| Request::CrewTree(root, tx)).await
+}
+
+#[tauri::command]
+pub async fn crew_attach(
+    handle: State<'_, SessionHandle>,
+    root: u64,
+    node: u64,
+) -> Result<CrewAttached, SessionError> {
+    ask(&handle, |tx| Request::CrewAttach(root, node, tx)).await?
 }
 
 /// Address the selected native Crew node. A failed send is intentionally an

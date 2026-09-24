@@ -110,6 +110,18 @@ pub struct Attached {
     pub cwd: String,
 }
 
+/// A snapshot of exactly one native Crew node. Node ids stay scoped by `root`
+/// on every command/event, so a stable Smetana id is never mistaken for an
+/// ordinary session id or a provider thread id.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrewAttached {
+    pub events: Vec<Event>,
+    pub seq: u64,
+    pub state: super::crew::CrewState,
+    pub cwd: String,
+}
+
 pub enum Request {
     Start(String, Intent, oneshot::Sender<Result<SessionId, SessionError>>),
     /// A run transport creates a Smetana-owned Crew root before provider ids
@@ -125,6 +137,7 @@ pub enum Request {
         oneshot::Sender<Result<(u64, SessionId), SessionError>>,
     ),
     CrewTree(u64, oneshot::Sender<Option<Vec<CrewNode>>>),
+    CrewAttach(u64, u64, oneshot::Sender<Result<CrewAttached, SessionError>>),
     CrewApply(u64, crate::agents::crew::ProviderNode),
     CrewSend(u64, u64, String, oneshot::Sender<Result<(), SessionError>>),
     CrewClear(u64),
@@ -838,6 +851,14 @@ struct CrewTreeChange {
     nodes: Vec<CrewNode>,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CrewEventsChange {
+    root: u64,
+    node: u64,
+    events: Vec<Event>,
+}
+
 fn emit_crew(app: &AppHandle, package: &CrewPackage) {
     let _ = app.emit(
         "crew:tree",
@@ -847,6 +868,37 @@ fn emit_crew(app: &AppHandle, package: &CrewPackage) {
             nodes: package.tree.nodes(),
         },
     );
+}
+
+fn emit_crew_events(app: &AppHandle, root: u64, node: u64, events: Vec<Event>) {
+    if !events.is_empty() {
+        let _ = app.emit("crew:events", CrewEventsChange { root, node, events });
+    }
+}
+
+fn record_crew_message(
+    app: &AppHandle,
+    crews: &mut HashMap<u64, CrewPackage>,
+    root: u64,
+    node: u64,
+    text: String,
+) {
+    let Some(package) = crews.get_mut(&root) else { return };
+    let events = package.append(
+        node,
+        vec![
+            EventKind::TurnStart {
+                by: super::model::Actor::Person,
+            },
+            EventKind::UserMessage {
+                text,
+                attachments: Vec::new(),
+            },
+        ],
+    );
+    if let Some(events) = events {
+        emit_crew_events(app, root, node, events);
+    }
 }
 
 /// Apply only Codex's documented structured app-server records. The driver
@@ -973,6 +1025,18 @@ fn handle(
         Request::CrewTree(root, tx) => {
             let _ = tx.send(crews.get(&root).map(|package| package.tree.nodes()));
         }
+        Request::CrewAttach(root, node, tx) => {
+            let answer = crews
+                .get(&root)
+                .and_then(|package| package.snapshot(node).map(|(events, seq, state)| CrewAttached {
+                    events,
+                    seq,
+                    state,
+                    cwd: package.project.clone(),
+                }))
+                .ok_or(SessionError::NoSuchSession(node));
+            let _ = tx.send(answer);
+        }
         Request::CrewApply(root, node) => {
             if let Some(package) = crews.get_mut(&root) {
                 package.apply(node);
@@ -1014,6 +1078,9 @@ fn handle(
                     "Message from Smetana",
                 )
                 .map_err(|error| SessionError::Spawn(error.to_string()));
+                if result.is_ok() {
+                    record_crew_message(app, crews, root, node, text);
+                }
                 let _ = tx.send(result);
                 return;
             }
@@ -1024,9 +1091,10 @@ fn handle(
             let delivered = live
                 .talking
                 .as_mut()
-                .and_then(|talking| talking.driver.crew_send(&provider, text).ok())
+                .and_then(|talking| talking.driver.crew_send(&provider, text.clone()).ok())
                 .is_some_and(|bytes| say(live, bytes));
             let _ = tx.send(if delivered {
+                record_crew_message(app, crews, root, node, text);
                 Ok(())
             } else {
                 Err(SessionError::Spawn(UNREACHABLE.into()))

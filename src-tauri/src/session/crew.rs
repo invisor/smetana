@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use crate::agents::crew::{ProviderNode, ProviderState};
 use super::journal::Journal;
+use super::model::{Event, EventKind};
 
 /// The session worker owns one of these per Crew package. Its project is kept
 /// beside the topology so `crew:tree` can update the right window without a
@@ -36,6 +37,19 @@ impl CrewPackage {
         let id = self.tree.upsert(self.root, node)?;
         self.journals.entry(id).or_insert_with(Journal::new);
         Some(id)
+    }
+
+    pub fn snapshot(&self, node: CrewNodeId) -> Option<(Vec<Event>, u64, CrewState)> {
+        let journal = self.journals.get(&node)?;
+        let state = self.tree.node(node)?.state;
+        let (events, seq) = journal.snapshot();
+        Some((events, seq, state))
+    }
+
+    pub fn append(&mut self, node: CrewNodeId, kinds: Vec<EventKind>) -> Option<Vec<Event>> {
+        let journal = self.journals.get_mut(&node)?;
+        let at = chrono::Utc::now().to_rfc3339();
+        Some(kinds.into_iter().map(|kind| journal.append(kind, at.clone())).collect())
     }
 }
 

@@ -161,6 +161,7 @@ import {
   conversationState,
   conversationsIn,
   crewAgentsIn,
+  crewConversationsIn,
   drivenSessions,
   forget,
   startConversation,
@@ -2762,6 +2763,11 @@ watch(lastHandover, (handover) => {
    No await — selection is local state, and TerminalView attaches to whatever
    activeId names once it is on screen. */
 function selectAgent(id) {
+  if (typeof id === 'string' && id.startsWith('crew:')) {
+    showAgentTab(id)
+    rightFocus.value = null
+    return
+  }
   /* A driven row names a conversation rather than a session of the terminal
      worker, and both halves of a click are different for it. What comes forward
      is the conversation panel, which is `showAgentTab(conversation)`; and
@@ -3198,7 +3204,9 @@ function showAgentTab(conversation = null, path = activePath.value) {
    beside it. */
 const conversationId = computed(() => {
   const aimed = agentAim.get(activePath.value) ?? null
-  return aimed !== null && conversationsIn(activePath.value).includes(aimed) ? aimed : null
+  return aimed !== null && [...conversationsIn(activePath.value), ...crewConversationsIn(activePath.value)].includes(aimed)
+    ? aimed
+    : null
 })
 
 /* Which row of the agents panel is drawn as the selected one.
@@ -3214,7 +3222,11 @@ const conversationId = computed(() => {
    field is untouched by a driven selection, so it is still there to go back
    to. */
 const activeAgentRow = computed(() =>
-  conversationId.value !== null ? drivenRowId(conversationId.value) : terminalState.activeId
+  conversationId.value === null
+    ? terminalState.activeId
+    : typeof conversationId.value === 'string' && conversationId.value.startsWith('crew:')
+      ? conversationId.value
+      : drivenRowId(conversationId.value)
 )
 
 /* The caption of the row the panel is drawing, for its opening turn: label and

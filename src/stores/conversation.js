@@ -89,6 +89,13 @@ const conversations = reactive(new Map())
    the package root in the identity all the way to Vue. */
 const crews = reactive(new Map())
 
+const crewAddress = (id) => {
+  if (typeof id !== 'string') return null
+  const match = /^crew:(\d+):(\d+)$/.exec(id)
+  if (!match) return null
+  return { root: Number(match[1]), node: Number(match[2]) }
+}
+
 export const crewAgentsIn = (project) =>
   [...crews.values()]
     .filter((crew) => crew.project === project)
@@ -110,6 +117,8 @@ export const crewAgentsIn = (project) =>
         depth: node.depth
       }))
     )
+
+export const crewConversationsIn = (project) => crewAgentsIn(project).map((row) => row.id)
 
 /* The unsent words, kept beside the conversations rather than inside them, so
    that they outlive `detach`. A journal can be taken again from the worker
@@ -365,7 +374,10 @@ export async function attach(id) {
     report(id, 'subscribing to the session events', err)
     return
   }
-  const current = invoke('session_attach', { id })
+  const address = crewAddress(id)
+  const current = address
+    ? invoke('crew_attach', address)
+    : invoke('session_attach', { id })
   attaching.set(id, current)
   try {
     const { events, seq, state, conversation, cwd } = await current
@@ -446,6 +458,7 @@ async function register() {
     made.push(await listenToEvents())
     made.push(await listenToState())
     made.push(await listenToCrew())
+    made.push(await listenToCrewEvents())
   } catch (err) {
     for (const dispose of made) {
       /* Unsubscribing is itself an `invoke`, and can be refused in exactly the
@@ -557,6 +570,16 @@ function listenToCrew() {
       return
     }
     crews.set(root, { project, root, nodes })
+  })
+}
+
+function listenToCrewEvents() {
+  return listen('crew:events', (event) => {
+    const { root, node, events } = event.payload ?? {}
+    const id = `crew:${root}:${node}`
+    const held = conversations.get(id)
+    if (!held || !Array.isArray(events)) return
+    if (!absorb(held, events)) attach(id).catch(() => {})
   })
 }
 
@@ -800,7 +823,13 @@ export async function startConversation(project, intent = { kind: 'bare' }) {
 export async function sendMessage(id, text, attachments = []) {
   if (!String(text ?? '').trim() && attachments.length === 0) return
   try {
-    await invoke('session_send', { id, text, attachments })
+    const address = crewAddress(id)
+    if (address) {
+      if (attachments.length) throw new Error('Crew messages cannot include attachments')
+      await invoke('crew_send', { ...address, text })
+    } else {
+      await invoke('session_send', { id, text, attachments })
+    }
     conversationState.lastError = null
     /* Cleared only while it is still the words that went. A slow worker invites
        somebody to go on typing during the round trip, and an unconditional
