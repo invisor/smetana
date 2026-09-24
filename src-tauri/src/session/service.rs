@@ -1259,7 +1259,18 @@ fn refresh_claude_crews(
             bootstrap_members.insert(*root, bootstrap);
         }
         let bootstrap = bootstrap_members.get(root).map(String::as_str);
-        for node in crate::agents::claude_crew::members_excluding(&config, bootstrap) {
+        // Keep the inert helper private through admission and while it is
+        // still idle afterwards. A provider-owned status transition to real
+        // work makes this exact member public again; do not hide a teammate
+        // forever merely because it began as our bootstrap.
+        let hidden_bootstrap = bootstrap.filter(|provider| {
+            crate::agents::claude_crew::bootstrap_is_internal(
+                &config,
+                provider,
+                starting.contains_key(root),
+            )
+        });
+        for node in crate::agents::claude_crew::members_excluding(&config, hidden_bootstrap) {
             package.apply(node);
         }
         let Some(subagents) = crate::agents::claude_crew::lead_subagents(&home, &config) else {
@@ -1375,20 +1386,36 @@ fn refresh_claude_crews(
             let key = (*root, path.clone());
             let node = match transcript_nodes.get(&key).copied() {
                 Some(node) => Some(node),
-                None => crate::agents::claude_crew::subagent_start_from_file(&path)
-                    .ok()
-                    .flatten()
-                    .and_then(|(internal, name)| {
+                None => {
+                    let provider = crate::agents::claude_crew::subagent_start_from_file(&path)
+                        .ok()
+                        .flatten()
+                        .and_then(|(internal, name)| {
                         // The hook maps a member name to a private internal
                         // transcript id. Confirm the path is for that exact
                         // id before it can acquire a Smetana node.
                         (crate::agents::claude_crew::transcript(&subagents, &internal) == path)
                             .then(|| crate::agents::claude_crew::member_id(&config, &name))
                             .flatten()
-                            .filter(|provider| bootstrap != Some(provider.as_str()))
-                            .and_then(|provider| package.tree.provider_nodes().into_iter()
-                                .find_map(|(id, node)| (id == provider).then_some(node)))
-                    }),
+                        });
+                    if provider.as_deref() == hidden_bootstrap {
+                        // Advance the actual file cursor through the private
+                        // bootstrap exchange. If the exact member later goes
+                        // working, its public node begins at that boundary
+                        // instead of replaying READY as task output.
+                        if let Err(error) = tails.entry(key).or_default().read_new(&path) {
+                            log::warn!("[crew] hidden Claude bootstrap {} could not be tailed: {error}", path.display());
+                        }
+                        continue;
+                    }
+                    provider.and_then(|provider| {
+                        package
+                            .tree
+                            .provider_nodes()
+                            .into_iter()
+                            .find_map(|(id, node)| (id == provider).then_some(node))
+                    })
+                }
             };
             let Some(node) = node else { continue };
             transcript_nodes.insert(key.clone(), node);
@@ -2416,6 +2443,78 @@ mod tests {
             !should_append_codex_record(&mut seen, 7, "child", &buffered_completion, true),
             "the buffered completion was already represented by thread/read"
         );
+    }
+
+    #[test]
+    fn failed_snapshot_suppresses_only_its_buffered_failed_completion() {
+        let snapshot = serde_json::json!({
+            "crewThreadId": "child",
+            "result": {"thread": {"turns": [{
+                "id": "turn-failed",
+                "status": "failed",
+                "error": {"message": "rate limited"},
+                "items": []
+            }]}}
+        });
+        let (_, history) = crate::agents::codex_crew::hydrated_journal(&snapshot)
+            .expect("hydrated child journal");
+        assert_eq!(
+            history
+                .iter()
+                .filter(|event| matches!(event, EventKind::TurnFailed { .. }))
+                .count(),
+            1
+        );
+        let mut seen = HashSet::new();
+        let (_, keys) = crate::agents::codex_crew::hydrated_journal_keys(&snapshot)
+            .expect("snapshot keys");
+        for key in keys {
+            seen.insert((7, "child".to_owned(), key));
+        }
+        let buffered_failure = serde_json::json!({
+            "method": "turn/completed",
+            "params": {"threadId": "child", "turn": {
+                "id": "turn-failed", "status": "failed",
+                "error": {"message": "rate limited"}
+            }}
+        });
+        assert!(!should_append_codex_record(
+            &mut seen,
+            7,
+            "child",
+            &buffered_failure,
+            true
+        ));
+    }
+
+    #[test]
+    fn nonterminal_snapshot_keeps_its_buffered_terminal_completion() {
+        let snapshot = serde_json::json!({
+            "crewThreadId": "child",
+            "result": {"thread": {"turns": [{
+                "id": "turn-live", "status": "inProgress", "items": []
+            }]}}
+        });
+        let (_, keys) = crate::agents::codex_crew::hydrated_journal_keys(&snapshot)
+            .expect("snapshot keys");
+        assert!(keys.is_empty());
+        let mut seen = HashSet::new();
+        for key in keys {
+            seen.insert((7, "child".to_owned(), key));
+        }
+        let buffered_completion = serde_json::json!({
+            "method": "turn/completed",
+            "params": {"threadId": "child", "turn": {
+                "id": "turn-live", "status": "completed"
+            }}
+        });
+        assert!(should_append_codex_record(
+            &mut seen,
+            7,
+            "child",
+            &buffered_completion,
+            true
+        ));
     }
 
     #[test]

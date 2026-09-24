@@ -598,6 +598,24 @@ pub fn member_id(config: &Value, name: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The bootstrap helper is private only while it remains the inert admission
+/// handshake. If Claude later changes this exact member to active work, it is
+/// a normal native teammate and must regain a public node and transcript.
+pub fn bootstrap_is_working(config: &Value, provider: &str) -> bool {
+    config
+        .get("members")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|member| member.get("agentId").and_then(Value::as_str) == Some(provider))
+        .and_then(|member| member.get("status").and_then(Value::as_str))
+        .is_some_and(|status| matches!(status, "working" | "active"))
+}
+
+pub fn bootstrap_is_internal(config: &Value, provider: &str, admission_pending: bool) -> bool {
+    admission_pending || !bootstrap_is_working(config, provider)
+}
+
 pub fn members_excluding(config: &Value, excluded_provider: Option<&str>) -> Vec<ProviderNode> {
     config
         .get("members")
@@ -620,7 +638,7 @@ pub fn members_excluding(config: &Value, excluded_provider: Option<&str>) -> Vec
                 Some("idle") => ProviderState::Waiting,
                 Some("left") | Some("completed") => ProviderState::Done,
                 Some("failed") => ProviderState::Failed,
-                Some("working") => ProviderState::Running,
+                Some("working" | "active") => ProviderState::Running,
                 _ => ProviderState::Starting,
             };
             Some(ProviderNode {
@@ -732,6 +750,29 @@ mod tests {
                 can_message: true,
             }]
         );
+    }
+
+    #[test]
+    fn an_admitted_bootstrap_that_starts_working_becomes_a_real_member() {
+        let mut config: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/claude-2.1.281-bootstrap-team-config.json"
+        ))
+        .unwrap();
+        let bootstrap = bootstrap_member_id(&config).expect("captured bootstrap id");
+        assert!(!bootstrap_is_working(&config, &bootstrap));
+        assert!(bootstrap_is_internal(&config, &bootstrap, true));
+        assert!(bootstrap_is_internal(&config, &bootstrap, false));
+        config["members"][1]["status"] = Value::String("working".into());
+        assert!(bootstrap_is_working(&config, &bootstrap));
+        assert!(!bootstrap_is_internal(&config, &bootstrap, false));
+        assert_eq!(
+            member_id(&config, BOOTSTRAP_MEMBER_NAME).as_deref(),
+            Some(bootstrap.as_str()),
+            "post-admission transcript routing stays bound to the exact id"
+        );
+        assert!(members_excluding(&config, None)
+            .iter()
+            .any(|node| node.id == bootstrap && node.state == ProviderState::Running));
     }
 
     #[test]

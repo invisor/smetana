@@ -156,18 +156,26 @@ pub fn hydrated_journal(value: &Value) -> Option<(String, Vec<EventKind>)> {
         .pointer("/result/thread/turns")
         .and_then(Value::as_array)?;
     let mut events = crate::agents::codex_driver::translate_history(turns);
-    // A completed snapshot turn is the one completed lifecycle fact that is
-    // already present before buffered `turn/completed` arrives. Unlike normal
+    // A terminal snapshot turn is the one terminal lifecycle fact already
+    // present before its buffered `turn/completed` arrives. Unlike normal
     // conversation-history reopen, this is an active Crew child's live
-    // journal, so retain the terminal marker once.
+    // journal, so retain that marker exactly once.
     for turn in turns {
-        if matches!(turn.get("status").and_then(Value::as_str), Some("completed")) {
-            events.push(EventKind::Result {
+        match turn.get("status").and_then(Value::as_str) {
+            Some("completed") => events.push(EventKind::Result {
                 tokens_in: 0,
                 tokens_out: 0,
                 cost_usd: None,
                 ms: turn.get("durationMs").and_then(Value::as_u64).unwrap_or(0),
-            });
+            }),
+            Some("failed") => events.push(EventKind::TurnFailed {
+                text: turn
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Codex turn failed")
+                    .to_owned(),
+            }),
+            _ => {}
         }
     }
     Some((thread, events))
@@ -181,8 +189,13 @@ pub fn hydrated_journal_keys(value: &Value) -> Option<(String, Vec<String>)> {
     let turns = value.pointer("/result/thread/turns")?.as_array()?;
     let mut keys = Vec::new();
     for turn in turns {
-        if let Some(id) = turn.get("id").and_then(Value::as_str) {
-            keys.push(format!("snapshot:turn:{id}"));
+        if matches!(
+            turn.get("status").and_then(Value::as_str),
+            Some("completed" | "failed")
+        ) {
+            if let Some(id) = turn.get("id").and_then(Value::as_str) {
+                keys.push(format!("snapshot:turn:{id}"));
+            }
         }
         for item in turn.get("items").and_then(Value::as_array).into_iter().flatten() {
             if let Some(id) = item.get("id").and_then(Value::as_str) {
@@ -437,6 +450,7 @@ mod tests {
             "crewThreadId": "child-two",
             "result": {"thread": {"turns": [{
                 "id": "turn-7",
+                "status": "completed",
                 "items": [{"id": "item-9", "type": "agentMessage", "text": "snapshot"}]
             }]}}
         });
@@ -476,6 +490,46 @@ mod tests {
             buffered_snapshot_coverage(&completed),
             Some(("child".into(), "snapshot:turn:turn-1".into()))
         );
+    }
+
+    #[test]
+    fn failed_snapshot_materializes_and_covers_its_terminal_failure() {
+        let snapshot = serde_json::json!({
+            "crewThreadId": "child",
+            "result": {"thread": {"turns": [{
+                "id": "turn-failed",
+                "status": "failed",
+                "error": {"message": "rate limited"},
+                "items": []
+            }]}}
+        });
+        assert_eq!(
+            hydrated_journal(&snapshot),
+            Some((
+                "child".into(),
+                vec![EventKind::TurnFailed {
+                    text: "rate limited".into()
+                }]
+            ))
+        );
+        assert_eq!(
+            hydrated_journal_keys(&snapshot),
+            Some(("child".into(), vec!["snapshot:turn:turn-failed".into()]))
+        );
+    }
+
+    #[test]
+    fn nonterminal_snapshot_never_covers_a_later_terminal_completion() {
+        let snapshot = serde_json::json!({
+            "crewThreadId": "child",
+            "result": {"thread": {"turns": [{
+                "id": "turn-live",
+                "status": "inProgress",
+                "items": []
+            }]}}
+        });
+        assert_eq!(hydrated_journal(&snapshot), Some(("child".into(), Vec::new())));
+        assert_eq!(hydrated_journal_keys(&snapshot), Some(("child".into(), Vec::new())));
     }
 
     #[test]

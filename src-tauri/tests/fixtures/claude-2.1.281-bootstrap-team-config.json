@@ -8,6 +8,7 @@
       "name": "team-lead",
       "agentType": "team-lead",
       "backendType": "in-process",
+      "cwd": "/fixture/project",
       "status": "working"
     },
     {
