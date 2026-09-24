@@ -10,6 +10,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -228,6 +229,15 @@ pub fn teams_for_project(home: &Path, project: &Path) -> Vec<(PathBuf, Value)> {
         .collect()
 }
 
+/// Snapshot provider-owned team directories before spawning an interactive
+/// lead. A later discovery is only eligible when its directory was created by
+/// this launch window, which prevents an old same-cwd team from being adopted.
+pub fn team_dirs(home: &Path) -> HashSet<PathBuf> {
+    fs::read_dir(home.join(".claude").join("teams"))
+        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_default()
+}
+
 /// The child path is relative to the lead session directory. This deliberately
 /// does not reconstruct Claude's encoded-project folder name: the existing
 /// session reader already owns that provider-specific path mapping.
@@ -282,6 +292,19 @@ pub fn lead_subagents(home: &Path, config: &Value) -> Option<PathBuf> {
     entries.flatten().find_map(|entry| {
         let path = entry.path().join(session).join("subagents");
         path.is_dir().then_some(path)
+    })
+}
+
+/// The interactive lead's structured JSONL transcript. Claude keeps the lead
+/// record beside (rather than inside) its `<session>/subagents` directory.
+/// This is the same provider-owned `leadSessionId` used for child discovery;
+/// no terminal byte is used as a substitute when the file is absent.
+pub fn lead_transcript(home: &Path, config: &Value) -> Option<PathBuf> {
+    let session = config.get("leadSessionId")?.as_str()?;
+    let projects = home.join(".claude").join("projects");
+    fs::read_dir(projects).ok()?.flatten().find_map(|entry| {
+        let path = entry.path().join(format!("{session}.jsonl"));
+        path.is_file().then_some(path)
     })
 }
 

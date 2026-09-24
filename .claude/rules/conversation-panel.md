@@ -15,6 +15,15 @@ paths:
 
 # The conversation panel: what it renders, and why
 
+## Crew node journals
+
+A native Crew row uses a composite `crew:<root>:<node>` address. The backend
+owns both stable ids and one journal per node; selecting a row attaches only
+that journal, so concurrently streaming children never mix output or drafts.
+Completed children remain readable but lose their composer capability. Only a
+Crew root offers Stop; native child permission/interrupt verbs are hidden, and
+row close routes to Crew cleanup rather than terminal/session commands.
+
 `.claude/rules/terminal.md` is where a driven session's *identity* is decided — which harness, which
 id, which tab it is drawn under. This file is the other half: what the panel that shows one actually
 puts on screen, and what the epic that built it (`smetana-qix9`) decided against on the way there.

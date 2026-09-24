@@ -82,7 +82,8 @@ const props = defineProps({
      above for why this component cannot work that out for itself. */
   openAttachments: { type: Array, default: () => [] },
   /* A turn is in flight: the one button is Stop. */
-  busy: { type: Boolean, default: false }
+  busy: { type: Boolean, default: false },
+  canStop: { type: Boolean, default: true }
 })
 
 const emit = defineEmits([
@@ -341,7 +342,7 @@ const fieldStyle = computed(() => ({
         @blur="focus = false"
       />
       <!-- One control in two states, and never two controls: see the header. -->
-      <Button v-if="busy" size="sm" icon="square" @click="emit('stop')">Stop</Button>
+      <Button v-if="busy && canStop" size="sm" icon="square" @click="emit('stop')">Stop</Button>
       <Button
         v-else
         size="sm"

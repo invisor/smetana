@@ -251,6 +251,20 @@ describe('the conversation store', () => {
     expect(stores.conversation.conversationState.lastError.session).toBe('crew:42:3')
   })
 
+  it('routes Crew root stop and close to Crew IPC, never a numeric session command', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('crew_stop', null)
+    ipc.on('crew_clear', null)
+
+    await stores.conversation.stopConversation('crew:71:71')
+    await stores.conversation.closeConversation('crew:71:72')
+
+    expect(ipc.calls('crew_stop')).toEqual([{ root: 71 }])
+    expect(ipc.calls('crew_clear')).toEqual([{ root: 71 }])
+    expect(ipc.calls('session_stop')).toEqual([])
+    expect(ipc.calls('session_close')).toEqual([])
+  })
+
   it('refuses to send nothing at all', async () => {
     const { ipc, stores } = await ready()
     ipc.on('session_send', null)

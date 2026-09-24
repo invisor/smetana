@@ -378,6 +378,8 @@ pub fn run() {
             session::commands::crew_tree,
             session::commands::crew_attach,
             session::commands::crew_send,
+            session::commands::crew_stop,
+            session::commands::crew_clear,
       session::commands::session_attach,
       session::commands::session_since,
       session::commands::session_send,

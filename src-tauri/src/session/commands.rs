@@ -69,6 +69,28 @@ pub async fn crew_send(
     ask(&handle, |tx| Request::CrewSend(root, node, text, tx)).await?
 }
 
+/// Stop a Crew root. The native provider owns its children, so this terminates
+/// the complete package rather than attempting an unsafe child interrupt.
+#[tauri::command]
+pub async fn crew_stop(
+    handle: State<'_, SessionHandle>,
+    root: u64,
+) -> Result<(), SessionError> {
+    ask(&handle, |tx| Request::CrewStop(root, tx)).await?
+}
+
+/// End a Crew package from its row's close control. Kept separate from
+/// `crew_stop` at the IPC boundary so the UI never mistakes a node id for an
+/// ordinary terminal session id.
+#[tauri::command]
+pub async fn crew_clear(handle: State<'_, SessionHandle>, root: u64) -> Result<(), SessionError> {
+    handle
+        .0
+        .send(Request::CrewClear(root))
+        .await
+        .map_err(|_| SessionError::Spawn("the session worker is not running".into()))
+}
+
 /// The whole conversation, the sequence number to continue from, and where the
 /// session stands. Asked whenever a window opens on a session, however many
 /// times that is: the journal lives in the worker, so the second attach hands

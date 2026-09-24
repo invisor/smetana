@@ -69,11 +69,13 @@ pub struct CodexDriver {
     crew_journal_records: Vec<Value>,
     crew_history: std::collections::BTreeMap<u64, String>,
     crew_lists: std::collections::BTreeSet<u64>,
+    crew_sends: std::collections::BTreeSet<u64>,
+    crew_send_results: Vec<Result<(), String>>,
 }
 
 impl CodexDriver {
     pub fn new(_permission: Option<crate::session::permission::PermissionTicket>) -> Self {
-        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: std::collections::VecDeque::new(), queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None, None)), bootstrapped: false, discovered: None, active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false, crew_records: Vec::new(), crew_journal_records: Vec::new(), crew_history: std::collections::BTreeMap::new(), crew_lists: std::collections::BTreeSet::new() }
+        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: std::collections::VecDeque::new(), queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None, None)), bootstrapped: false, discovered: None, active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false, crew_records: Vec::new(), crew_journal_records: Vec::new(), crew_history: std::collections::BTreeMap::new(), crew_lists: std::collections::BTreeSet::new(), crew_sends: std::collections::BTreeSet::new(), crew_send_results: Vec::new() }
     }
 
     /// The oldest queued message, if any, sent as the next turn. The one
@@ -148,6 +150,18 @@ impl Driver for CodexDriver {
             }
             if message.get("method").is_none() {
                 if let Some(id) = message.get("id").and_then(Value::as_u64) {
+                    if self.crew_sends.remove(&id) {
+                        self.pending.remove(&id);
+                        let receipt = if let Some(error) = message.get("error") {
+                            Err(error.get("message").and_then(Value::as_str).unwrap_or("Codex rejected the addressed message").to_owned())
+                        } else if message.pointer("/result/turn/id").and_then(Value::as_str).is_some() {
+                            Ok(())
+                        } else {
+                            Err("Codex did not confirm the addressed message".into())
+                        };
+                        self.crew_send_results.push(receipt);
+                        continue;
+                    }
                     if self.crew_lists.remove(&id) {
                         self.pending.remove(&id);
                         self.crew_records.push(message.clone());
@@ -457,7 +471,14 @@ impl Driver for CodexDriver {
             .get("params")
             .cloned()
             .ok_or_else(|| "the Codex addressed-turn contract has no parameters".to_string())?;
-        Ok(self.request(method, params))
+        let id = self.next_id;
+        let bytes = self.request(method, params);
+        self.crew_sends.insert(id);
+        Ok(bytes)
+    }
+
+    fn crew_send_results(&mut self) -> Vec<Result<(), String>> {
+        std::mem::take(&mut self.crew_send_results)
     }
 
     fn startup(&mut self) -> Option<Result<(), String>> { self.startup.take() }
@@ -1441,6 +1462,30 @@ mod tests {
         let turn = String::from_utf8(driver.outgoing().pop().unwrap()).unwrap();
         assert!(turn.contains("\"method\":\"turn/start\""), "{turn}");
         assert!(turn.contains("any word from git status?"), "{turn}");
+    }
+
+    #[test]
+    fn an_addressed_child_turn_waits_for_its_own_rpc_receipt() {
+        let mut driver = CodexDriver::new(None);
+        driver.thread = Some("lead-thread".into());
+        let request = String::from_utf8(driver.crew_send("child-thread", "only this child".into()).unwrap()).unwrap();
+        assert!(request.contains("\"threadId\":\"child-thread\""), "{request}");
+        assert!(driver.crew_send_results().is_empty(), "writing stdin is not a receipt");
+        driver.feed(br#"{"jsonrpc":"2.0","id":1,"result":{"turn":{"id":"child-turn"}}}
+"#);
+        assert_eq!(driver.crew_send_results(), vec![Ok(())]);
+        assert_eq!(driver.active_turn, None, "a child receipt must not replace the lead turn");
+    }
+
+    #[test]
+    fn an_addressed_child_rejection_is_not_reported_as_delivered() {
+        let mut driver = CodexDriver::new(None);
+        driver.thread = Some("lead-thread".into());
+        driver.crew_send("child-thread", "keep this draft".into()).unwrap();
+        driver.feed(br#"{"jsonrpc":"2.0","id":1,"error":{"message":"thread ended"}}
+"#);
+        assert_eq!(driver.crew_send_results(), vec![Err("thread ended".into())]);
+        assert_eq!(driver.active_turn, None);
     }
 
     /// Finding 3, review pass 1 of smetana-gb7f.2: `opening` used to be a

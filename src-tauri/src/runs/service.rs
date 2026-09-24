@@ -374,14 +374,22 @@ fn select_run_session(
         "codex" => CrewCapabilities::NONE,
         _ => CrewCapabilities::NONE,
     };
-    session::select(settings.mode, panel, profile.label(), version, capabilities)
-        .map_err(|error| RunError::CrewUnsupported(error.to_string()))
+    let mut selected = session::select(settings.mode, panel, profile.label(), version, capabilities)
+        .map_err(|error| RunError::CrewUnsupported(error.to_string()))?;
+    selected.profile = profile.id().to_owned();
+    Ok(selected)
 }
 
 fn provider_version(profile: &dyn Profile) -> Result<String, String> {
-    let output = std::process::Command::new(profile.binary())
-        .arg("--version")
-        .output()
+    let mut command = std::process::Command::new(profile.binary());
+    command.arg("--version");
+    // Preflight must resolve the exact shell PATH the driven child receives.
+    // Finder's launchd PATH is not the user's login shell and probing it would
+    // reject a provider that the subsequently pinned spawn can run.
+    if let Some(path) = crate::shell_env::path() {
+        command.env("PATH", path);
+    }
+    let output = command.output()
         .map_err(|error| format!("{} version could not be checked: {error}", profile.label()))?;
     if !output.status.success() {
         return Err(format!("{} version could not be checked", profile.label()));
@@ -2760,7 +2768,7 @@ async fn spawn_batch(
     let RunTransport::Pty(terminal) = transport else {
         let RunTransport::Driven {
             session,
-            run: _run_session,
+            run: run_session,
         } = transport
         else {
             unreachable!()
@@ -2768,7 +2776,7 @@ async fn spawn_batch(
         let (tx, rx) = oneshot::channel();
         session
             .0
-            .send(crate::session::service::Request::CrewStart(run.project.clone(), intent, tx))
+            .send(crate::session::service::Request::CrewStart(run.project.clone(), intent, run_session.profile.clone(), tx))
             .await
             .map_err(|_| "the driven Crew worker is not running".to_string())?;
         return match rx.await {
@@ -2937,6 +2945,18 @@ async fn asking(transport: &RunTransport, run: &Run, session: u64) -> Option<Str
 /// without a code, never as a session somebody removed: `Removed` stops the run
 /// outright, and a worker that has gone away is not a person's decision.
 async fn await_exit(transport: &RunTransport, session: u64) -> Exit {
+    if let RunTransport::Driven { session: driven, .. } = transport {
+        let (tx, rx) = oneshot::channel();
+        if driven
+            .0
+            .send(crate::session::service::Request::CrewAwaitExit(session, tx))
+            .await
+            .is_err()
+        {
+            return Exit::NoCode;
+        }
+        return rx.await.unwrap_or(Exit::NoCode);
+    }
     let RunTransport::Pty(terminal) = transport else { return Exit::NoCode };
     let (tx, rx) = oneshot::channel();
     if terminal.0.send(TerminalRequest::AwaitExit(session, tx)).await.is_err() {

@@ -12,6 +12,17 @@ paths:
 
 # The agents: one intent, two harnesses
 
+## Native Crew transports
+
+Crew does not parse an ANSI TUI. Codex uses app-server threads and their
+thread/turn/item JSON-RPC records; Claude Code uses its interactive in-process
+Agent Teams runtime, config/transcript files and addressed inbox contract.
+Both adapters produce the neutral provider-node tree consumed by
+`session::crew`; provider ids never become front-end ids. A Codex addressed
+`turn/start` is successful only after its JSON-RPC response confirms the child
+thread; a Claude send is a checked mailbox update. Neither may redirect a
+failed child message to the lead.
+
 `src-tauri/src/agents/` is what the app knows about the CLI coding agents it runs, one file per
 agent, and everything harness-specific lives in it. Claude Code and Codex are supported; which one
 runs is the `agent` field in `settings.json` — or, for a project carrying its own `agents` block,

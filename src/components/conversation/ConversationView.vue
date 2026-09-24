@@ -146,6 +146,9 @@ const props = defineProps({
      parent owns this capability; hiding the composer is safer than letting a
      send race be redirected to the lead. */
   canMessage: { type: Boolean, default: true },
+  /* Native Crew children can receive addressed messages but do not offer the
+     provider's root interruption/permission channels. */
+  canStop: { type: Boolean, default: true },
   /* What the opening turn is drawn as when it carries no words of the
      person's own — the session row's caption, "Editing smetana-abc", handed
      down by the view so that the list and the panel say the same thing. See
@@ -849,6 +852,7 @@ const refusal = computed(() => ({
         :attachments="attachments"
         :open-attachments="openableAttachments(attachments)"
         :busy="busy"
+        :can-stop="canStop"
         @update:attachments="attachments = $event"
         @send="send"
         @stop="stop"

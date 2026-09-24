@@ -17,6 +17,10 @@ pub enum Transport {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunSession {
+    /// The configured profile id frozen at package admission. `provider` is
+    /// presentation text; this is the executable contract passed to the
+    /// session worker so a later settings save cannot switch a live run.
+    pub profile: String,
     pub provider: String,
     pub transport: Transport,
 }
@@ -52,6 +56,7 @@ pub fn select(
     let version = version.into();
     if mode != RunMode::Supervised || !conversation_panel {
         return Ok(RunSession {
+            profile: provider.clone(),
             provider,
             transport: Transport::Pty,
         });
@@ -74,6 +79,7 @@ pub fn select(
             missing,
         }),
         None => Ok(RunSession {
+            profile: provider.clone(),
             provider,
             transport: Transport::DrivenCrew,
         }),

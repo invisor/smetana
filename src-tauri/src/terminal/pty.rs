@@ -499,12 +499,13 @@ pub struct Pty {
 impl Pty {
     /// An interactive provider runtime that Smetana observes through its
     /// structured side-channel (Claude Agent Teams' config/transcripts), not
-    /// through terminal pixels. The reader is intentionally disconnected: it
-    /// exists only because a PTY must have a master, and no ANSI byte crosses
-    /// into the application model from this route.
+    /// through terminal pixels. The reader is drained into a private sink: a
+    /// PTY keeps producing output even when nobody renders its ANSI stream,
+    /// and dropping its receiver would make the reader quit at its first
+    /// write, eventually blocking the interactive provider on a full master.
     pub fn spawn_structured(command: CommandBuilder, what: &str) -> Result<Self, TerminalError> {
-        let (out, receiver) = mpsc::unbounded_channel();
-        drop(receiver);
+        let (out, mut receiver) = mpsc::unbounded_channel();
+        std::thread::spawn(move || while receiver.blocking_recv().is_some() {});
         Self::start(0, command, what, 80, 24, out, true)
     }
 

@@ -856,6 +856,7 @@ export async function sendMessage(id, text, attachments = []) {
    a plain `deny` whatever tool it is refusing. */
 export async function answerQuestion(id, question, decision, answers = null) {
   try {
+    if (crewAddress(id)) throw new Error('Crew agents do not expose permission answers')
     await invoke('session_answer', { id, question, decision, answers })
     conversationState.lastError = null
   } catch (err) {
@@ -872,7 +873,13 @@ export async function answerQuestion(id, question, decision, answers = null) {
    session outright. */
 export async function stopConversation(id) {
   try {
-    await invoke('session_stop', { id })
+    const address = crewAddress(id)
+    if (address) {
+      if (address.node !== address.root) throw new Error('Only the Crew lead can be stopped')
+      await invoke('crew_stop', { root: address.root })
+    } else {
+      await invoke('session_stop', { id })
+    }
     conversationState.lastError = null
   } catch (err) {
     report(id, 'stopping a session', err)
@@ -891,7 +898,9 @@ export async function stopConversation(id) {
    no longer be trusted to end a session at all. */
 export async function closeConversation(id) {
   try {
-    await invoke('session_close', { id })
+    const address = crewAddress(id)
+    if (address) await invoke('crew_clear', { root: address.root })
+    else await invoke('session_close', { id })
     conversationState.lastError = null
   } catch (err) {
     report(id, 'closing a session', err)

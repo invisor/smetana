@@ -131,11 +131,19 @@ pub enum Request {
     CrewStart(
         String,
         Intent,
+        String,
         oneshot::Sender<Result<(u64, SessionId), SessionError>>,
     ),
     CrewTree(u64, oneshot::Sender<Option<Vec<CrewNode>>>),
     CrewAttach(u64, u64, oneshot::Sender<Result<CrewAttached, SessionError>>),
     CrewSend(u64, u64, String, oneshot::Sender<Result<(), SessionError>>),
+    /// End an entire native package from the Crew composer. Native child
+    /// agents do not expose a safe interrupt verb, so the front end only
+    /// offers this on the root and it follows the same cleanup path as close.
+    CrewStop(u64, oneshot::Sender<Result<(), SessionError>>),
+    /// Wait for a driven Crew root's provider lead to end. This is the run
+    /// worker's completion channel; it is distinct from removing the tree.
+    CrewAwaitExit(u64, oneshot::Sender<crate::terminal::model::Exit>),
     CrewClear(u64),
     Attach(SessionId, oneshot::Sender<Result<Attached, SessionError>>),
     /// Everything after `seq`, or `None` when the journal no longer holds it —
@@ -244,6 +252,15 @@ struct Live {
     started_at: String,
 }
 
+/// A Codex addressed turn remains pending until its JSON-RPC response confirms
+/// the target thread accepted it. The provider id scopes the receipt; it is
+/// never exposed to the UI and cannot be mistaken for a lead session id.
+struct CrewSendWaiter {
+    node: u64,
+    text: String,
+    reply: oneshot::Sender<Result<(), SessionError>>,
+}
+
 pub fn start(app: AppHandle) -> SessionHandle {
     let (tx, mut rx) = mpsc::channel::<Request>(32);
     let (chunks_tx, mut chunks_rx) = mpsc::unbounded_channel::<Chunk>();
@@ -272,7 +289,9 @@ pub fn start(app: AppHandle) -> SessionHandle {
         let mut crew_ptys: HashMap<u64, crate::terminal::pty::Pty> = HashMap::new();
         let mut claude_crews: HashSet<u64> = HashSet::new();
         let mut claude_teams: HashMap<u64, PathBuf> = HashMap::new();
+        let mut claude_team_baselines: HashMap<u64, HashSet<PathBuf>> = HashMap::new();
         let mut claude_tails: HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail> = HashMap::new();
+        let mut claude_lead_tails: HashMap<u64, crate::agents::claude_crew::TranscriptTail> = HashMap::new();
         let mut claude_transcript_nodes: HashMap<(u64, PathBuf), u64> = HashMap::new();
         let mut crew_tick = tokio::time::interval(std::time::Duration::from_millis(300));
         // Session id -> public Crew root for the special Codex lead whose
@@ -282,7 +301,14 @@ pub fn start(app: AppHandle) -> SessionHandle {
         // it is first discovered. Its later live records stay separate.
         let mut codex_hydrated: HashSet<(u64, String)> = HashSet::new();
         let mut codex_reconciled: HashSet<u64> = HashSet::new();
+        let mut crew_waiters: HashMap<u64, Vec<oneshot::Sender<crate::terminal::model::Exit>>> =
+            HashMap::new();
+        let mut crew_send_waiters: HashMap<(u64, String), CrewSendWaiter> = HashMap::new();
         let mut starting: HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>> = HashMap::new();
+        // Crew admission is withheld until the structured provider transport
+        // has created its root. A run must not claim work behind a failed
+        // app-server initialize/thread handshake.
+        let mut crew_starting: HashMap<SessionId, (u64, oneshot::Sender<Result<(u64, SessionId), SessionError>>)> = HashMap::new();
         let mut next_id: SessionId = 1;
 
         loop {
@@ -305,11 +331,16 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         &mut crew_ptys,
                         &mut claude_crews,
                         &mut claude_teams,
+                        &mut claude_team_baselines,
                         &mut claude_tails,
+                        &mut claude_lead_tails,
                         &mut claude_transcript_nodes,
                         &mut crew_leads,
+                        &mut crew_waiters,
+                        &mut crew_send_waiters,
                         &mut next_id,
                         &mut starting,
+                        &mut crew_starting,
                         permission.as_ref(),
                         &chunks_tx,
                         request,
@@ -321,7 +352,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                     // breaking is a stopped worker, whereas continuing is a
                     // branch that is instantly ready forever.
                     let Some(chunk) = chunk else { break };
-                    absorb(&app, &mut sessions, &mut crews, &mut crew_leads, &mut codex_hydrated, &mut codex_reconciled, &mut starting, permission.as_ref(), chunk);
+                    absorb(&app, &mut sessions, &mut crews, &mut crew_leads, &mut crew_waiters, &mut crew_send_waiters, &mut codex_hydrated, &mut codex_reconciled, &mut starting, &mut crew_starting, permission.as_ref(), chunk);
                 }
                 asked = asked_rx.recv(), if asked_open => {
                     let Some(asked) = asked else {
@@ -334,15 +365,15 @@ pub fn start(app: AppHandle) -> SessionHandle {
                     question(&app, &mut sessions, asked);
                 }
                 _ = crew_tick.tick(), if !claude_crews.is_empty() => {
-                    refresh_claude_crews(&app, &mut crews, &claude_crews, &mut claude_teams, &mut claude_tails, &mut claude_transcript_nodes);
+                    refresh_claude_crews(&app, &mut crews, &claude_crews, &mut claude_teams, &claude_team_baselines, &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes);
                     // An interactive Claude lead has no pipe reader to emit a
                     // `Chunk::Eof`. Poll its real child here so an exited root
                     // cannot retain its team tailers or a stale Crew row.
                     let exited: Vec<_> = crew_ptys
                         .iter_mut()
-                        .filter_map(|(root, pty)| pty.exit_code().map(|_| *root))
+                        .filter_map(|(root, pty)| pty.exit_code().map(|code| (*root, code)))
                         .collect();
-                    for root in exited {
+                    for (root, code) in exited {
                         clear_crew(
                             &app,
                             &mut sessions,
@@ -350,10 +381,15 @@ pub fn start(app: AppHandle) -> SessionHandle {
                             &mut crew_ptys,
                             &mut claude_crews,
                             &mut claude_teams,
+                            &mut claude_team_baselines,
                             &mut claude_tails,
+                            &mut claude_lead_tails,
                             &mut claude_transcript_nodes,
                             &mut crew_leads,
+                            &mut crew_waiters,
+                            &mut crew_send_waiters,
                             root,
+                            crate::terminal::model::Exit::Code(code),
                         );
                     }
                 }
@@ -477,9 +513,10 @@ fn spawn_claude_crew(
     app: &AppHandle,
     project: &str,
     intent: Intent,
+    pinned_agent: &str,
 ) -> Result<crate::terminal::pty::Pty, SessionError> {
-    let (agent, model) = crate::settings::role_model(app, Some(project), &intent, None);
-    let Some((profile, model)) = agents::pick_with_model(&agent, model, crate::shell_env::path()) else {
+    let (_, model) = crate::settings::role_model(app, Some(project), &intent, None);
+    let Some((profile, model)) = agents::pick_with_model(pinned_agent, model, crate::shell_env::path()) else {
         return Err(SessionError::Spawn(format!(
             "{} is not installed",
             crate::agents::claude::Claude.binary()
@@ -521,16 +558,18 @@ fn spawn_session(
     intent: Intent,
     permission: Option<&PermissionServer>,
     chunks: &mpsc::UnboundedSender<Chunk>,
+    pinned_agent: Option<&str>,
 ) -> Result<Live, SessionError> {
     // The one resolver, read here for the reason `terminal::service` reads it
     // in its own `Create` arm: this is where a driven session is built, so what
     // a person configured is what starts, rather than a harness this file
     // picked for itself.
-    let (agent, model) = crate::settings::role_model(app, Some(project), &intent, None);
+    let (configured_agent, model) = crate::settings::role_model(app, Some(project), &intent, None);
+    let agent = pinned_agent.unwrap_or(&configured_agent);
     // The login shell's `PATH`, not this process's: a bundled app started from
     // Finder inherits launchd's, where nothing a person installed is reachable
     // and every agent would look uninstalled.
-    let picked = agents::pick_with_model(&agent, model, crate::shell_env::path());
+    let picked = agents::pick_with_model(agent, model, crate::shell_env::path());
     let Some((profile, model)) = picked else {
         return Err(SessionError::Spawn(format!(
             "none of these is installed: {}",
@@ -1004,13 +1043,18 @@ fn refresh_claude_crews(
     crews: &mut HashMap<u64, CrewPackage>,
     roots: &HashSet<u64>,
     teams: &mut HashMap<u64, PathBuf>,
+    baselines: &HashMap<u64, HashSet<PathBuf>>,
     tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
+    lead_tails: &mut HashMap<u64, crate::agents::claude_crew::TranscriptTail>,
     transcript_nodes: &mut HashMap<(u64, PathBuf), u64>,
 ) {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
     for root in roots {
         let Some(package) = crews.get_mut(root) else { continue };
-        let candidates = crate::agents::claude_crew::teams_for_project(&home, Path::new(&package.project));
+        let candidates: Vec<_> = crate::agents::claude_crew::teams_for_project(&home, Path::new(&package.project))
+            .into_iter()
+            .filter(|(team, _)| teams.get(root) == Some(team) || !baselines.get(root).is_some_and(|baseline| baseline.contains(team)))
+            .collect();
         if candidates.len() != 1 {
             continue;
         }
@@ -1053,6 +1097,26 @@ fn refresh_claude_crews(
             log::warn!("[crew] Claude runtime preflight failed: {error}");
             emit_crew(app, package);
             continue;
+        }
+        let Some(lead_transcript) = crate::agents::claude_crew::lead_transcript(&home, &config) else {
+            package.tree.fail_node(*root);
+            log::warn!("[crew] Claude lead transcript is unavailable");
+            emit_crew(app, package);
+            continue;
+        };
+        match lead_tails.entry(*root).or_default().read_new(&lead_transcript) {
+            Ok(events) => {
+                let kinds = events.into_iter().map(|(kind, _)| kind).collect();
+                if let Some(events) = package.append(package.root, kinds) {
+                    emit_crew_events(app, *root, package.root, events);
+                }
+            }
+            Err(error) => {
+                package.tree.fail_node(*root);
+                log::warn!("[crew] {} could not be tailed: {error}", lead_transcript.display());
+                emit_crew(app, package);
+                continue;
+            }
         }
         let Ok(entries) = std::fs::read_dir(&subagents) else {
             emit_crew(app, package);
@@ -1111,14 +1175,21 @@ fn clear_crew(
     crew_ptys: &mut HashMap<u64, crate::terminal::pty::Pty>,
     claude_crews: &mut HashSet<u64>,
     claude_teams: &mut HashMap<u64, PathBuf>,
+    claude_team_baselines: &mut HashMap<u64, HashSet<PathBuf>>,
     claude_tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
+    claude_lead_tails: &mut HashMap<u64, crate::agents::claude_crew::TranscriptTail>,
     claude_transcript_nodes: &mut HashMap<(u64, PathBuf), u64>,
     crew_leads: &mut HashMap<SessionId, u64>,
+    crew_waiters: &mut HashMap<u64, Vec<oneshot::Sender<crate::terminal::model::Exit>>>,
+    crew_send_waiters: &mut HashMap<(u64, String), CrewSendWaiter>,
     root: u64,
+    exit: crate::terminal::model::Exit,
 ) {
     claude_crews.remove(&root);
     claude_teams.remove(&root);
+    claude_team_baselines.remove(&root);
     claude_tails.retain(|(crew, _), _| *crew != root);
+    claude_lead_tails.remove(&root);
     claude_transcript_nodes.retain(|(crew, _), _| *crew != root);
     if let Some(live) = sessions.get_mut(&root) {
         if let Some(child) = live.child.as_mut() {
@@ -1129,6 +1200,12 @@ fn clear_crew(
         pty.kill();
     }
     crew_leads.retain(|_, lead_root| *lead_root != root);
+    for waiter in crew_waiters.remove(&root).unwrap_or_default() {
+        let _ = waiter.send(exit);
+    }
+    for (_, waiter) in crew_send_waiters.extract_if(|(crew, _), _| *crew == root) {
+        let _ = waiter.reply.send(Err(SessionError::Spawn(ENDED.into())));
+    }
     if let Some(mut package) = crews.remove(&root) {
         package.tree.clear();
         emit_crew(app, &package);
@@ -1142,33 +1219,43 @@ fn handle(
     crew_ptys: &mut HashMap<u64, crate::terminal::pty::Pty>,
     claude_crews: &mut HashSet<u64>,
     claude_teams: &mut HashMap<u64, PathBuf>,
+    claude_team_baselines: &mut HashMap<u64, HashSet<PathBuf>>,
     claude_tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
+    claude_lead_tails: &mut HashMap<u64, crate::agents::claude_crew::TranscriptTail>,
     claude_transcript_nodes: &mut HashMap<(u64, PathBuf), u64>,
     crew_leads: &mut HashMap<SessionId, u64>,
+    crew_waiters: &mut HashMap<u64, Vec<oneshot::Sender<crate::terminal::model::Exit>>>,
+    crew_send_waiters: &mut HashMap<(u64, String), CrewSendWaiter>,
     next_id: &mut SessionId,
     starting: &mut HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>>,
+    crew_starting: &mut HashMap<SessionId, (u64, oneshot::Sender<Result<(u64, SessionId), SessionError>>)>,
     permission: Option<&PermissionServer>,
     chunks: &mpsc::UnboundedSender<Chunk>,
     request: Request,
 ) {
     match request {
-        Request::CrewStart(project, intent, tx) => {
+        Request::CrewStart(project, intent, pinned_agent, tx) => {
             let id = *next_id;
             *next_id += 1;
-            let (agent, _) = crate::settings::role_model(app, Some(&project), &intent, None);
+            let agent = pinned_agent.as_str();
             // Claude's native teams require its interactive runtime and are
             // deliberately not sent through ClaudeDriver (`-p`). The caller
             // gets an explicit refusal until that interactive transport has
             // established its team config, rather than a deceptive TUI
             // fallback or a fake pipe session.
             if agent == "claude" {
-                match spawn_claude_crew(app, &project, intent) {
+                let baseline = std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .map(|home| crate::agents::claude_crew::team_dirs(&home))
+                    .unwrap_or_default();
+                match spawn_claude_crew(app, &project, intent, agent) {
                     Ok(pty) => {
                         let package = CrewPackage::new(project, id, "Crew lead");
                         emit_crew(app, &package);
                         crews.insert(id, package);
                         crew_ptys.insert(id, pty);
                         claude_crews.insert(id);
+                        claude_team_baselines.insert(id, baseline);
                         let _ = tx.send(Ok((id, id)));
                     }
                     Err(error) => {
@@ -1177,14 +1264,19 @@ fn handle(
                 }
                 return;
             }
-            match spawn_session(app, id, &project, intent, permission, chunks) {
+            match spawn_session(app, id, &project, intent, permission, chunks, Some(agent)) {
                 Ok(live) => {
+                    let waits = live.talking.as_ref().is_some_and(|talking| talking.driver.awaits_startup());
                     let package = CrewPackage::new(project, id, "Crew lead");
                     emit_crew(app, &package);
                     crews.insert(id, package);
                     crew_leads.insert(id, id);
                     sessions.insert(id, live);
-                    let _ = tx.send(Ok((id, id)));
+                    if waits {
+                        crew_starting.insert(id, (id, tx));
+                    } else {
+                        let _ = tx.send(Ok((id, id)));
+                    }
                 }
                 Err(error) => {
                     if let Some(server) = permission {
@@ -1279,17 +1371,39 @@ fn handle(
                 let _ = tx.send(Err(SessionError::NoSuchSession(root)));
                 return;
             };
+            if crew_send_waiters.contains_key(&(root, provider.clone())) {
+                let _ = tx.send(Err(SessionError::Spawn("a message is already awaiting this Crew agent".into())));
+                return;
+            }
             let delivered = live
                 .talking
                 .as_mut()
                 .and_then(|talking| talking.driver.crew_send(&provider, text.clone()).ok())
                 .is_some_and(|bytes| say(live, bytes));
-            let _ = tx.send(if delivered {
-                record_crew_message(app, crews, root, node, text);
-                Ok(())
+            if delivered {
+                crew_send_waiters.insert((root, provider), CrewSendWaiter { node, text, reply: tx });
             } else {
-                Err(SessionError::Spawn(UNREACHABLE.into()))
-            });
+                let _ = tx.send(Err(SessionError::Spawn(UNREACHABLE.into())));
+            }
+        }
+        Request::CrewAwaitExit(root, tx) => {
+            if crews.contains_key(&root) {
+                crew_waiters.entry(root).or_default().push(tx);
+            } else {
+                let _ = tx.send(crate::terminal::model::Exit::Removed);
+            }
+        }
+        Request::CrewStop(root, tx) => {
+            if !crews.contains_key(&root) {
+                let _ = tx.send(Err(SessionError::NoSuchSession(root)));
+                return;
+            }
+            clear_crew(
+                app, sessions, crews, crew_ptys, claude_crews, claude_teams, claude_team_baselines, claude_tails,
+                claude_lead_tails, claude_transcript_nodes, crew_leads, crew_waiters, crew_send_waiters, root,
+                crate::terminal::model::Exit::Removed,
+            );
+            let _ = tx.send(Ok(()));
         }
         Request::CrewClear(root) => {
             clear_crew(
@@ -1299,10 +1413,15 @@ fn handle(
                 crew_ptys,
                 claude_crews,
                 claude_teams,
+                claude_team_baselines,
                 claude_tails,
+                claude_lead_tails,
                 claude_transcript_nodes,
                 crew_leads,
+                crew_waiters,
+                crew_send_waiters,
                 root,
+                crate::terminal::model::Exit::Removed,
             );
         }
         Request::Start(project, intent, tx) => {
@@ -1317,7 +1436,7 @@ fn handle(
             }
             let id = *next_id;
             *next_id += 1;
-            let started = spawn_session(app, id, &project, intent, permission, chunks);
+            let started = spawn_session(app, id, &project, intent, permission, chunks, None);
             match started {
                 Ok(live) => {
                     sessions.insert(id, live);
@@ -1523,20 +1642,24 @@ fn absorb(
     sessions: &mut HashMap<SessionId, Live>,
     crews: &mut HashMap<u64, CrewPackage>,
     crew_leads: &mut HashMap<SessionId, u64>,
+    crew_waiters: &mut HashMap<u64, Vec<oneshot::Sender<crate::terminal::model::Exit>>>,
+    crew_send_waiters: &mut HashMap<(u64, String), CrewSendWaiter>,
     codex_hydrated: &mut HashSet<(u64, String)>,
     codex_reconciled: &mut HashSet<u64>,
     starting: &mut HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>>,
+    crew_starting: &mut HashMap<SessionId, (u64, oneshot::Sender<Result<(u64, SessionId), SessionError>>)>,
     permission: Option<&PermissionServer>,
     chunk: Chunk,
 ) {
     match chunk {
         Chunk::Data(id, bytes) => {
             let Some(live) = sessions.get_mut(&id) else { return };
-            let (kinds, crew_records, crew_journal_records, mut outgoing, startup, discovered) = {
+            let (kinds, crew_records, crew_journal_records, crew_send_results, mut outgoing, startup, discovered) = {
                 let Some(talking) = live.talking.as_mut() else { return };
                 let kinds = talking.driver.feed(&bytes);
                 let crew_records = talking.driver.crew_records();
                 let crew_journal_records = talking.driver.crew_journal_records();
+                let crew_send_results = talking.driver.crew_send_results();
                 let outgoing = talking.driver.outgoing();
                 let startup = talking.driver.startup();
             // Asked on every chunk, cheap for the ordinary driver that never
@@ -1545,15 +1668,43 @@ fn absorb(
             // somewhere, and the moment its protocol confirms one is exactly
             // the moment this fires.
                 let discovered = talking.driver.discovered_id();
-                (kinds, crew_records, crew_journal_records, outgoing, startup, discovered)
+                (kinds, crew_records, crew_journal_records, crew_send_results, outgoing, startup, discovered)
             };
+            let lead_kinds = kinds.clone();
             append(app, id, live, kinds);
             if let Some(conversation) = discovered.as_ref() {
                 note_conversation(app, id, live, conversation.clone());
             }
             if let Some(root) = crew_leads.get(&id).copied() {
+                if let Some(package) = crews.get_mut(&root) {
+                    if let Some(events) = package.append(package.root, lead_kinds) {
+                        if !events.is_empty() {
+                            emit_crew_events(app, root, package.root, events);
+                        }
+                    }
+                }
                 absorb_codex_crew(app, crews, root, discovered.as_deref(), crew_records);
                 absorb_codex_journals(app, crews, root, crew_journal_records);
+                for receipt in crew_send_results {
+                    // Responses are ordered by one app-server stream. A send
+                    // is never reported successful merely because its bytes
+                    // reached stdin; only this receipt clears the draft.
+                    let Some((key, _)) = crew_send_waiters
+                        .iter()
+                        .find(|((wait_root, _), _)| *wait_root == root)
+                        .map(|(key, value)| (key.clone(), value.node))
+                    else { continue };
+                    let Some(waiter) = crew_send_waiters.remove(&key) else { continue };
+                    match receipt {
+                        Ok(()) => {
+                            record_crew_message(app, crews, root, waiter.node, waiter.text);
+                            let _ = waiter.reply.send(Ok(()));
+                        }
+                        Err(error) => {
+                            let _ = waiter.reply.send(Err(SessionError::Spawn(error)));
+                        }
+                    }
+                }
                 if discovered.is_some() && codex_reconciled.insert(root) {
                     if let Some(talking) = live.talking.as_mut() {
                         if let Some(request) = talking.driver.crew_reconcile() {
@@ -1575,6 +1726,21 @@ fn absorb(
                 if !say(live, bytes) { lost(app, id, live); break; }
             }
             if let Some(result) = startup {
+                if let Some((root, tx)) = crew_starting.remove(&id) {
+                    match &result {
+                        Ok(()) => { let _ = tx.send(Ok((root, id))); }
+                        Err(text) => {
+                            live.discard_on_eof = true;
+                            if let Some(child) = live.child.as_mut() { let _ = child.start_kill(); }
+                            crew_leads.remove(&id);
+                            if let Some(mut package) = crews.remove(&root) {
+                                package.tree.clear();
+                                emit_crew(app, &package);
+                            }
+                            let _ = tx.send(Err(SessionError::Spawn(text.clone())));
+                        }
+                    }
+                }
                 if let Some(tx) = starting.remove(&id) {
                     match result {
                         Ok(()) => { let _ = tx.send(Ok(id)); }
@@ -1588,6 +1754,9 @@ fn absorb(
             }
         }
         Chunk::Eof(id) => {
+            if let Some((_root, tx)) = crew_starting.remove(&id) {
+                let _ = tx.send(Err(SessionError::Spawn("Codex app-server ended before it created a Crew thread".into())));
+            }
             let was_starting = starting.remove(&id);
             let failed_startup = was_starting.is_some();
             if let Some(tx) = was_starting {
@@ -1658,8 +1827,14 @@ fn absorb(
             // retained until here; now drop the complete tree and all provider
             // indexes together so no row is orphaned after Stop/exit.
             if let Some(root) = crew_leads.remove(&id) {
+                for (_, waiter) in crew_send_waiters.extract_if(|(crew, _), _| *crew == root) {
+                    let _ = waiter.reply.send(Err(SessionError::Spawn(ENDED.into())));
+                }
                 codex_hydrated.retain(|(crew, _)| *crew != root);
                 codex_reconciled.remove(&root);
+                for waiter in crew_waiters.remove(&root).unwrap_or_default() {
+                    let _ = waiter.send(crate::terminal::model::Exit::NoCode);
+                }
                 if let Some(mut package) = crews.remove(&root) {
                     package.tree.clear();
                     emit_crew(app, &package);

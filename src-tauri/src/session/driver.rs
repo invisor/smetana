@@ -87,6 +87,11 @@ pub trait Driver: Send {
         Err("this provider does not support addressed Crew messages".into())
     }
 
+    /// Completion receipts for addressed sends. A JSON-RPC write is not a
+    /// delivery: Codex confirms `turn/start` asynchronously, and the worker
+    /// must preserve a draft until this receipt succeeds.
+    fn crew_send_results(&mut self) -> Vec<Result<(), String>> { Vec::new() }
+
     /// Requests produced while decoding a response. Most line protocols never
     /// need this; JSON-RPC bootstraps its thread after each prior reply.
     fn outgoing(&mut self) -> Vec<Vec<u8>> { Vec::new() }

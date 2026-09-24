@@ -106,6 +106,10 @@ pub struct CrewTree {
     next: CrewNodeId,
     nodes: BTreeMap<CrewNodeId, CrewNode>,
     provider: BTreeMap<String, CrewNodeId>,
+    /// Provider parent identities survive an out-of-order snapshot. A child
+    /// first renders under root, then moves under its intended stable parent
+    /// automatically when that provider node arrives.
+    desired_parent: BTreeMap<String, Option<String>>,
 }
 
 impl CrewTree {
@@ -142,6 +146,7 @@ impl CrewTree {
             return false;
         }
         self.provider.insert(provider_id.into(), root);
+        self.reparent_known(root);
         true
     }
 
@@ -158,6 +163,7 @@ impl CrewTree {
             self.provider.insert(incoming.id.clone(), id);
             id
         });
+        self.desired_parent.insert(incoming.id.clone(), incoming.parent.clone());
         let parent = incoming
             .parent
             .as_deref()
@@ -178,6 +184,7 @@ impl CrewTree {
                     && !matches!(state, CrewState::Done | CrewState::Failed),
             },
         );
+        self.reparent_known(root);
         Some(id)
     }
 
@@ -247,11 +254,31 @@ impl CrewTree {
     pub fn clear(&mut self) {
         self.nodes.clear();
         self.provider.clear();
+        self.desired_parent.clear();
     }
 
     fn mint(&mut self) -> CrewNodeId {
         self.next = self.next.saturating_add(1);
         self.next
+    }
+
+    fn reparent_known(&mut self, root: CrewNodeId) {
+        let links: Vec<_> = self
+            .desired_parent
+            .iter()
+            .map(|(provider, parent)| (provider.clone(), parent.clone()))
+            .collect();
+        for (provider, desired) in links {
+            let Some(id) = self.provider.get(&provider).copied() else { continue };
+            let parent = desired
+                .as_deref()
+                .and_then(|provider| self.provider.get(provider).copied())
+                .filter(|parent| *parent != id)
+                .or(Some(root));
+            if let Some(node) = self.nodes.get_mut(&id) {
+                node.parent = parent;
+            }
+        }
     }
 }
 
@@ -292,6 +319,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tree.node(child).unwrap().parent, Some(root));
+    }
+
+    #[test]
+    fn an_unknown_parent_reparents_when_its_snapshot_arrives() {
+        let mut tree = CrewTree::default();
+        let root = tree.root("Lead");
+        let child = tree.upsert(root, worker("child", Some("parent"), ProviderState::Running)).unwrap();
+        assert_eq!(tree.node(child).unwrap().parent, Some(root));
+        let parent = tree.upsert(root, worker("parent", None, ProviderState::Running)).unwrap();
+        assert_eq!(tree.node(child).unwrap().parent, Some(parent));
     }
 
     #[test]

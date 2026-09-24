@@ -2996,6 +2996,10 @@ function reorderAgents(rows) {
    the trace. This is the one place in the front end that ends a session
    outright; the composer's own Stop button stays on `stopConversation`. */
 function removeAgentRow(id) {
+  if (typeof id === 'string' && id.startsWith('crew:')) {
+    closeConversation(id)
+    return
+  }
   const conversation = drivenSessionOf(id)
   if (conversation !== null) {
     /* Three acts for this one, and the third is the one that is easy to miss.
@@ -3256,6 +3260,16 @@ const conversationCaption = computed(() => {
 const conversationCanMessage = computed(
   () => orderedAgentRows.value.find((candidate) => candidate.id === activeAgentRow.value)?.canMessage ?? true
 )
+
+/* Native children support addressed sends, not provider turn interruption or
+   structured permission answers. The lead's Stop ends the package through
+   Crew IPC; ordinary driven conversations retain their existing Stop path. */
+const conversationCanStop = computed(() => {
+  const id = conversationId.value
+  if (typeof id !== 'string' || !id.startsWith('crew:')) return true
+  const [, root, node] = id.split(':')
+  return root === node
+})
 
 /* Whether that panel is on screen this moment.
 
@@ -7411,6 +7425,7 @@ const toastStackStyle = {
             :session-id="conversationId"
             :caption="conversationCaption"
             :can-message="conversationCanMessage"
+            :can-stop="conversationCanStop"
             @open-local="onConversationLocalLink"
           />
           <TerminalView
