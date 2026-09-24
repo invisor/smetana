@@ -290,6 +290,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
         let mut claude_crews: HashSet<u64> = HashSet::new();
         let mut claude_teams: HashMap<u64, PathBuf> = HashMap::new();
         let mut claude_team_baselines: HashMap<u64, HashSet<PathBuf>> = HashMap::new();
+        let mut claude_expected_sessions: HashMap<u64, String> = HashMap::new();
         let mut claude_tails: HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail> = HashMap::new();
         let mut claude_lead_tails: HashMap<u64, crate::agents::claude_crew::TranscriptTail> = HashMap::new();
         let mut claude_transcript_nodes: HashMap<(u64, PathBuf), u64> = HashMap::new();
@@ -335,6 +336,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         &mut claude_crews,
                         &mut claude_teams,
                         &mut claude_team_baselines,
+                        &mut claude_expected_sessions,
                         &mut claude_tails,
                         &mut claude_lead_tails,
                         &mut claude_transcript_nodes,
@@ -368,7 +370,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                     question(&app, &mut sessions, asked);
                 }
                 _ = crew_tick.tick(), if !claude_crews.is_empty() => {
-                    refresh_claude_crews(&app, &mut crews, &claude_crews, &mut claude_teams, &claude_team_baselines, &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes);
+                    refresh_claude_crews(&app, &mut crews, &claude_crews, &mut claude_teams, &claude_team_baselines, &claude_expected_sessions, &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes);
                     // An interactive Claude lead has no pipe reader to emit a
                     // `Chunk::Eof`. Poll its real child here so an exited root
                     // cannot retain its team tailers or a stale Crew row.
@@ -385,6 +387,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                             &mut claude_crews,
                             &mut claude_teams,
                             &mut claude_team_baselines,
+                            &mut claude_expected_sessions,
                             &mut claude_tails,
                             &mut claude_lead_tails,
                             &mut claude_transcript_nodes,
@@ -517,6 +520,7 @@ fn spawn_claude_crew(
     project: &str,
     intent: Intent,
     pinned_agent: &str,
+    lead_session: String,
 ) -> Result<crate::terminal::pty::Pty, SessionError> {
     let (_, model) = crate::settings::role_model(app, Some(project), &intent, None);
     let Some((profile, model)) = agents::pick_with_model(pinned_agent, model, crate::shell_env::path()) else {
@@ -540,7 +544,7 @@ fn spawn_claude_crew(
         languages: crate::settings::languages(app),
         agent_prompt: crate::settings::agent_prompt(app),
         facts,
-        session_id: None,
+        session_id: Some(lead_session),
         model,
         worker_model: None,
     };
@@ -1072,14 +1076,17 @@ fn codex_hydration_requests(
 
 /// Poll the documented Claude team config. This does not touch the PTY at all:
 /// the config is the runtime's structured source for members and lifecycle.
-/// A project with two indistinguishable configs is left unchanged until one is
-/// unambiguous rather than attaching a package to its neighbour.
+/// The config must carry the UUID passed to this root's `--session-id`; cwd and
+/// a pre-spawn directory baseline are only secondary defenses. Two concurrent
+/// launches in one project are therefore distinct before either creates a
+/// teammate, rather than attaching a package to its neighbour.
 fn refresh_claude_crews(
     app: &AppHandle,
     crews: &mut HashMap<u64, CrewPackage>,
     roots: &HashSet<u64>,
     teams: &mut HashMap<u64, PathBuf>,
     baselines: &HashMap<u64, HashSet<PathBuf>>,
+    expected_sessions: &HashMap<u64, String>,
     tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
     lead_tails: &mut HashMap<u64, crate::agents::claude_crew::TranscriptTail>,
     transcript_nodes: &mut HashMap<(u64, PathBuf), u64>,
@@ -1087,10 +1094,19 @@ fn refresh_claude_crews(
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
     for root in roots {
         let Some(package) = crews.get_mut(root) else { continue };
-        let candidates: Vec<_> = crate::agents::claude_crew::teams_for_project(&home, Path::new(&package.project))
-            .into_iter()
-            .filter(|(team, _)| teams.get(root) == Some(team) || !baselines.get(root).is_some_and(|baseline| baseline.contains(team)))
-            .collect();
+        let Some(expected_session) = expected_sessions.get(root) else { continue };
+        let candidates = if let Some(team) = teams.get(root) {
+            crate::agents::claude_crew::teams_for_project(&home, Path::new(&package.project))
+                .into_iter()
+                .filter(|(candidate, config)| candidate == team && config.get("leadSessionId").and_then(serde_json::Value::as_str) == Some(expected_session.as_str()))
+                .collect()
+        } else {
+            crate::agents::claude_crew::teams_for_lead(
+                crate::agents::claude_crew::teams_for_project(&home, Path::new(&package.project)),
+                expected_session,
+                baselines.get(root).unwrap_or(&HashSet::new()),
+            )
+        };
         if candidates.len() != 1 {
             continue;
         }
@@ -1212,6 +1228,7 @@ fn clear_crew(
     claude_crews: &mut HashSet<u64>,
     claude_teams: &mut HashMap<u64, PathBuf>,
     claude_team_baselines: &mut HashMap<u64, HashSet<PathBuf>>,
+    claude_expected_sessions: &mut HashMap<u64, String>,
     claude_tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
     claude_lead_tails: &mut HashMap<u64, crate::agents::claude_crew::TranscriptTail>,
     claude_transcript_nodes: &mut HashMap<(u64, PathBuf), u64>,
@@ -1224,6 +1241,7 @@ fn clear_crew(
     claude_crews.remove(&root);
     claude_teams.remove(&root);
     claude_team_baselines.remove(&root);
+    claude_expected_sessions.remove(&root);
     claude_tails.retain(|(crew, _), _| *crew != root);
     claude_lead_tails.remove(&root);
     claude_transcript_nodes.retain(|(crew, _), _| *crew != root);
@@ -1256,6 +1274,7 @@ fn handle(
     claude_crews: &mut HashSet<u64>,
     claude_teams: &mut HashMap<u64, PathBuf>,
     claude_team_baselines: &mut HashMap<u64, HashSet<PathBuf>>,
+    claude_expected_sessions: &mut HashMap<u64, String>,
     claude_tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
     claude_lead_tails: &mut HashMap<u64, crate::agents::claude_crew::TranscriptTail>,
     claude_transcript_nodes: &mut HashMap<(u64, PathBuf), u64>,
@@ -1280,11 +1299,15 @@ fn handle(
             // established its team config, rather than a deceptive TUI
             // fallback or a fake pipe session.
             if agent == "claude" {
+                let Some(lead_session) = crate::terminal::conversation::new_id() else {
+                    let _ = tx.send(Err(SessionError::Spawn("the system could not create a Claude Crew lead session id".into())));
+                    return;
+                };
                 let baseline = std::env::var_os("HOME")
                     .map(PathBuf::from)
                     .map(|home| crate::agents::claude_crew::team_dirs(&home))
                     .unwrap_or_default();
-                match spawn_claude_crew(app, &project, intent, agent) {
+                match spawn_claude_crew(app, &project, intent, agent, lead_session.clone()) {
                     Ok(pty) => {
                         let package = CrewPackage::new(project, id, "Crew lead");
                         emit_crew(app, &package);
@@ -1292,6 +1315,7 @@ fn handle(
                         crew_ptys.insert(id, pty);
                         claude_crews.insert(id);
                         claude_team_baselines.insert(id, baseline);
+                        claude_expected_sessions.insert(id, lead_session);
                         let _ = tx.send(Ok((id, id)));
                     }
                     Err(error) => {
@@ -1435,7 +1459,7 @@ fn handle(
                 return;
             }
             clear_crew(
-                app, sessions, crews, crew_ptys, claude_crews, claude_teams, claude_team_baselines, claude_tails,
+                app, sessions, crews, crew_ptys, claude_crews, claude_teams, claude_team_baselines, claude_expected_sessions, claude_tails,
                 claude_lead_tails, claude_transcript_nodes, crew_leads, crew_waiters, crew_send_waiters, root,
                 crate::terminal::model::Exit::Removed,
             );
@@ -1450,6 +1474,7 @@ fn handle(
                 claude_crews,
                 claude_teams,
                 claude_team_baselines,
+                claude_expected_sessions,
                 claude_tails,
                 claude_lead_tails,
                 claude_transcript_nodes,

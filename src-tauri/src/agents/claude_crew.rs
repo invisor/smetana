@@ -238,6 +238,24 @@ pub fn team_dirs(home: &Path) -> HashSet<PathBuf> {
         .unwrap_or_default()
 }
 
+/// Narrow candidates to the exact lead Claude was told to create. The config's
+/// `leadSessionId` is the runtime's structured binding between our
+/// `--session-id` and its generated team name; cwd alone cannot distinguish
+/// two concurrent Crew packages.
+pub fn teams_for_lead(
+    candidates: Vec<(PathBuf, Value)>,
+    expected_session: &str,
+    baseline: &HashSet<PathBuf>,
+) -> Vec<(PathBuf, Value)> {
+    candidates
+        .into_iter()
+        .filter(|(team, config)| {
+            !baseline.contains(team)
+                && config.get("leadSessionId").and_then(Value::as_str) == Some(expected_session)
+        })
+        .collect()
+}
+
 /// The child path is relative to the lead session directory. This deliberately
 /// does not reconstruct Claude's encoded-project folder name: the existing
 /// session reader already owns that provider-specific path mapping.
@@ -570,6 +588,31 @@ mod tests {
             team_name(&serde_json::json!({"leadSessionId":"different"})),
             None
         );
+    }
+
+    #[test]
+    fn lead_session_selects_its_exact_new_config_among_stale_and_concurrent_teams() {
+        let stale = PathBuf::from("/teams/stale");
+        let ours = PathBuf::from("/teams/ours");
+        let other = PathBuf::from("/teams/other");
+        let baseline = HashSet::from([stale.clone()]);
+        let candidates = vec![
+            (stale, serde_json::json!({"leadSessionId":"lead-a"})),
+            (ours.clone(), serde_json::json!({"leadSessionId":"lead-a"})),
+            (other, serde_json::json!({"leadSessionId":"lead-b"})),
+        ];
+        let selected = teams_for_lead(candidates, "lead-a", &baseline);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].0, ours);
+    }
+
+    #[test]
+    fn lead_session_never_adopts_a_concurrent_config_with_another_id() {
+        let candidates = vec![
+            (PathBuf::from("/teams/a"), serde_json::json!({"leadSessionId":"lead-a"})),
+            (PathBuf::from("/teams/b"), serde_json::json!({"leadSessionId":"lead-b"})),
+        ];
+        assert!(teams_for_lead(candidates, "lead-c", &HashSet::new()).is_empty());
     }
 
     #[test]
