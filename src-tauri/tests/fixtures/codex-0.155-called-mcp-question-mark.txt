@@ -1,0 +1,10 @@
+› Inspect the document and stop for confirmation.
+
+
+• Called server.tool({"document":"what?"})
+  └ {"status":"completed"}
+
+
+›
+
+  gpt-6-astra high · /tmp/example/project

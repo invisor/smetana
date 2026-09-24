@@ -53,6 +53,78 @@ impl Screen {
         // [start_col, start_col+width).
         screen.rows(0, cols).collect()
     }
+
+    /// The visible rows plus whether each row's first printed glyph is dim.
+    ///
+    /// Codex renders its activity summaries with a dim `•`, while a completed
+    /// assistant reply owns a bold one. `vt100` deliberately keeps cells'
+    /// attributes private, but its formatted screen is the public faithful
+    /// projection of those attributes. Read only the SGR state at each row's
+    /// first non-whitespace glyph; the text reader remains a reader of the
+    /// same visible rows a person sees.
+    pub fn lines_with_entry_dim(&self) -> (Vec<String>, Vec<bool>) {
+        let lines = self.lines();
+        let formatted = self.parser.screen().contents_formatted();
+        let styles = entry_dim(&formatted, lines.len());
+        (lines, styles)
+    }
+}
+
+/// Whether each visible row begins in SGR dim style.
+///
+/// `contents_formatted` emits a sparse grid with cursor positions and CRLF
+/// between adjacent rows. Only SGR's reset, dim, and normal-intensity controls
+/// affect the one fact callers need. Cursor-position CSI commands keep the row
+/// counter aligned with the plain `rows` view; all other CSI commands are
+/// irrelevant to entry style.
+fn entry_dim(formatted: &[u8], rows: usize) -> Vec<bool> {
+    let mut out = vec![false; rows];
+    let mut seen = vec![false; rows];
+    let mut row = 0;
+    let mut dim = false;
+    let mut at = 0;
+    while at < formatted.len() && row < rows {
+        match formatted[at] {
+            b'\x1b' if formatted.get(at + 1) == Some(&b'[') => {
+                let Some(end) = formatted[at + 2..]
+                    .iter()
+                    .position(|byte| (b'@'..=b'~').contains(byte))
+                    .map(|offset| at + 2 + offset)
+                else {
+                    break;
+                };
+                let codes: Vec<u16> = formatted[at + 2..end]
+                        .split(|byte| *byte == b';')
+                        .map(|part| std::str::from_utf8(part).ok().and_then(|part| part.parse::<u16>().ok()).unwrap_or(0))
+                        .collect();
+                if formatted[end] == b'm' {
+                    for code in codes {
+                        match code {
+                            0 | 22 => dim = false,
+                            2 => dim = true,
+                            _ => {}
+                        }
+                    }
+                } else if matches!(formatted[end], b'H' | b'f') {
+                    row = codes.first().copied().unwrap_or(1).saturating_sub(1) as usize;
+                }
+                at = end + 1;
+            }
+            b'\r' => at += 1,
+            b'\n' => {
+                row += 1;
+                at += 1;
+            }
+            byte => {
+                if !seen[row] && !byte.is_ascii_whitespace() {
+                    seen[row] = true;
+                    out[row] = dim;
+                }
+                at += 1;
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -66,6 +138,16 @@ mod tests {
         let lines = screen.lines();
         assert_eq!(lines[0].trim_end(), "hello");
         assert_eq!(lines[1].trim_end(), "world");
+    }
+
+    #[test]
+    fn preserves_dim_entry_style_beside_the_visible_rows() {
+        let mut screen = Screen::new(40, 3);
+        screen.feed(b"\x1b[2m\xe2\x80\xa2 \x1b[22mCalled server.tool(what?)\r\n\x1b[1m\xe2\x80\xa2 \x1b[22mRead this? Then confirm.\r\n");
+        let (lines, dim) = screen.lines_with_entry_dim();
+        assert_eq!(lines[0].trim_end(), "• Called server.tool(what?)");
+        assert_eq!(lines[1].trim_end(), "• Read this? Then confirm.");
+        assert_eq!(dim, vec![true, false, false]);
     }
 
     #[test]

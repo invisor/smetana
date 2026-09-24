@@ -602,8 +602,8 @@ impl Profile for Codex {
         question(screen)
     }
 
-    fn text_question(&self, screen: &[String]) -> bool {
-        completed_text_question(screen)
+    fn text_question(&self, screen: &[String], entry_dim: &[bool]) -> bool {
+        completed_text_question(screen, entry_dim)
     }
 
     /// `--dangerously-bypass-approvals-and-sandbox` rather than the gentler
@@ -896,9 +896,11 @@ fn is_turn(line: &str) -> bool {
 /// A completed turn ends at an empty composer. Its immediately preceding
 /// top-level transcript entry must be a filled assistant bullet; a later
 /// person entry or hollow working bullet means the previous reply is already
-/// stale. Activity rows use the same bullet, so their measured verbs are
-/// rejected before the shared paragraph predicate sees their tool output.
-fn completed_text_question(screen: &[String]) -> bool {
+/// stale. Codex's activity bullet is dim in the terminal's actual SGR layout,
+/// whereas an assistant turn's bullet is bold; that visual distinction, not
+/// the English word that follows it, fences tool output before the shared
+/// paragraph predicate sees its `?`.
+fn completed_text_question(screen: &[String], entry_dim: &[bool]) -> bool {
     let Some(composer) = screen.iter().rposition(|line| line.trim() == CURSOR.to_string()) else {
         return false;
     };
@@ -911,7 +913,7 @@ fn completed_text_question(screen: &[String]) -> bool {
     let Some(first) = screen[turn].strip_prefix('\u{2022}').map(str::trim_start) else {
         return false;
     };
-    if is_activity(first) {
+    if entry_dim.get(turn).copied().unwrap_or(false) {
         return false;
     }
     let mut text = first.to_owned();
@@ -926,30 +928,6 @@ fn completed_text_question(screen: &[String]) -> bool {
         text.push_str(line);
     }
     crate::session::model::text_waits_for_reply(&text)
-}
-
-/// Codex uses filled transcript bullets for short tool/activity summaries as
-/// well as prose replies. These are the leading verbs measured in captured
-/// terminal layouts; accepting one would let a `?` in a command or its output
-/// manufacture a human wait.
-fn is_activity(text: &str) -> bool {
-    [
-        "Working",
-        "Running ",
-        "Ran ",
-        "Edited ",
-        "Read ",
-        "Searched ",
-        "Explored",
-        "Checked ",
-        "Created ",
-        "Deleted ",
-        "Updated ",
-        "Applied ",
-        "Executed ",
-    ]
-    .iter()
-    .any(|prefix| text.starts_with(prefix))
 }
 
 /// The whole of an option's label, head row and any rows it wrapped onto.
@@ -2030,6 +2008,31 @@ mod tests {
         std::fs::read_to_string(path).unwrap().lines().map(str::to_owned).collect()
     }
 
+    fn no_dim(screen: &[String]) -> Vec<bool> {
+        vec![false; screen.len()]
+    }
+
+    /// Repaint the captured text through the actual terminal grid with the
+    /// SGR style Codex 0.155.1 gives tool/activity bullets. The fixture keeps
+    /// the human-readable layout; this small adapter preserves the one visual
+    /// fact the grid has that plain fixture text cannot carry.
+    fn dim_activity_fixture(name: &str) -> (Vec<String>, Vec<bool>) {
+        let source = fixture(name);
+        let mut terminal = crate::terminal::screen::Screen::new(160, source.len() as u16 + 1);
+        let mut bytes = Vec::new();
+        for line in source {
+            if let Some(rest) = line.strip_prefix("• ") {
+                bytes.extend_from_slice(b"\x1b[2m\xe2\x80\xa2 \x1b[22m");
+                bytes.extend_from_slice(rest.as_bytes());
+            } else {
+                bytes.extend_from_slice(line.as_bytes());
+            }
+            bytes.extend_from_slice(b"\r\n");
+        }
+        terminal.feed(&bytes);
+        terminal.lines_with_entry_dim()
+    }
+
     #[test]
     fn recognises_the_command_approval_dialog() {
         let q = question(&fixture("codex-0.146-approval-command.txt"))
@@ -2395,7 +2398,8 @@ mod tests {
 
     #[test]
     fn a_completed_text_turn_reads_its_last_paragraph_as_a_question() {
-        assert!(completed_text_question(&fixture("codex-0.146-completed-text-question.txt")));
+        let completed = fixture("codex-0.146-completed-text-question.txt");
+        assert!(completed_text_question(&completed, &no_dim(&completed)));
 
         let earlier_paragraph: Vec<String> = [
             "• Do you confirm the document?",
@@ -2407,41 +2411,54 @@ mod tests {
         .iter()
         .map(|line| (*line).to_owned())
         .collect();
-        assert!(!completed_text_question(&earlier_paragraph));
+        assert!(!completed_text_question(&earlier_paragraph, &no_dim(&earlier_paragraph)));
     }
 
     #[test]
     fn a_later_person_entry_releases_an_earlier_text_question() {
+        let screen = fixture("codex-0.146-text-question-after-user-entry.txt");
         assert!(
-            !completed_text_question(&fixture("codex-0.146-text-question-after-user-entry.txt")),
+            !completed_text_question(&screen, &no_dim(&screen)),
             "an earlier answer stayed loud after the person had sent their next turn"
         );
     }
 
     #[test]
     fn activity_blocks_with_question_marks_are_not_text_questions() {
+        let (command, command_dim) = dim_activity_fixture("codex-0.146-activity-question-mark.txt");
         assert!(
-            !completed_text_question(&fixture("codex-0.146-activity-question-mark.txt")),
+            !completed_text_question(&command, &command_dim),
             "a command and its output were read as an agent question"
         );
+        let (edit, edit_dim) = dim_activity_fixture("codex-0.146-edited-activity-question-mark.txt");
         assert!(
-            !completed_text_question(&fixture("codex-0.146-edited-activity-question-mark.txt")),
+            !completed_text_question(&edit, &edit_dim),
             "an edit summary and its preview were read as an agent question"
         );
-        for activity in [
-            "Running touch probe.txt",
-            "Edited readme.txt (+1 -0)",
-            "Searched the workspace",
-            "Explored",
-        ] {
-            assert!(is_activity(activity), "the activity prefix was not fenced: {activity}");
+        let (mcp, mcp_dim) = dim_activity_fixture("codex-0.155-called-mcp-question-mark.txt");
+        assert!(
+            !completed_text_question(&mcp, &mcp_dim),
+            "a completed MCP call and its argument were read as an agent question"
+        );
+    }
+
+    #[test]
+    fn assistant_prose_starting_with_an_activity_verb_is_still_a_question() {
+        for prose in ["Read this? Then confirm.", "Working correctly? Please verify."] {
+            let screen = vec![format!("• {prose}"), String::new(), "›".into()];
+            assert!(
+                completed_text_question(&screen, &no_dim(&screen)),
+                "assistant prose was rejected for its opening verb: {prose}"
+            );
         }
     }
 
     #[test]
     fn a_working_turn_or_a_non_empty_composer_is_not_a_completed_text_question() {
-        assert!(!completed_text_question(&fixture("codex-0.146-working.txt")));
-        assert!(!completed_text_question(&fixture("codex-0.146-draft-in-the-composer.txt")));
+        let working = fixture("codex-0.146-working.txt");
+        assert!(!completed_text_question(&working, &no_dim(&working)));
+        let draft = fixture("codex-0.146-draft-in-the-composer.txt");
+        assert!(!completed_text_question(&draft, &no_dim(&draft)));
     }
 
     #[test]

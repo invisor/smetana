@@ -947,7 +947,7 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
             }
             continue;
         }
-        let lines = live.screen.lines();
+        let (lines, entry_dim) = live.screen.lines_with_entry_dim();
         // The screen against the one this session showed last tick — the
         // clock is restarted by a change to the picture, not by the arrival of
         // bytes. `into_std` because `Quiet` keeps no clock of its own and is
@@ -962,6 +962,7 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
             // agent having stopped. See `DetectInput::transcript`.
             transcript: live.transcript.is_some(),
             text_questions: live.text_questions,
+            entry_dim: &entry_dim,
             profile: live.profile,
             // The state as it stands *before* this tick's `apply`, which is
             // the whole of what layer B's threshold is asymmetric about: a
