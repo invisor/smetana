@@ -185,6 +185,13 @@ impl CrewTree {
         true
     }
 
+    pub fn fail_node(&mut self, id: CrewNodeId) -> bool {
+        let Some(node) = self.nodes.get_mut(&id) else { return false };
+        node.state = CrewState::Failed;
+        node.can_message = false;
+        true
+    }
+
     pub fn node(&self, id: CrewNodeId) -> Option<&CrewNode> {
         self.nodes.get(&id)
     }
@@ -193,6 +200,13 @@ impl CrewTree {
         self.provider
             .iter()
             .find_map(|(provider, node)| (*node == id).then_some(provider.as_str()))
+    }
+
+    pub fn node_for_label(&self, label: &str) -> Option<CrewNodeId> {
+        self.nodes
+            .values()
+            .find(|node| node.label == label)
+            .map(|node| node.id)
     }
 
     pub fn nodes(&self) -> Vec<CrewNode> {

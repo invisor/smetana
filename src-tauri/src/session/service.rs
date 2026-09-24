@@ -276,6 +276,8 @@ pub fn start(app: AppHandle) -> SessionHandle {
         let mut crew_ptys: HashMap<u64, crate::terminal::pty::Pty> = HashMap::new();
         let mut claude_crews: HashSet<u64> = HashSet::new();
         let mut claude_teams: HashMap<u64, PathBuf> = HashMap::new();
+        let mut claude_tails: HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail> = HashMap::new();
+        let mut claude_transcript_nodes: HashMap<(u64, PathBuf), u64> = HashMap::new();
         let mut crew_tick = tokio::time::interval(std::time::Duration::from_millis(300));
         // Session id -> public Crew root for the special Codex lead whose
         // normal app-server stream also carries thread lifecycle records.
@@ -332,7 +334,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                     question(&app, &mut sessions, asked);
                 }
                 _ = crew_tick.tick(), if !claude_crews.is_empty() => {
-                    refresh_claude_crews(&app, &mut crews, &claude_crews, &mut claude_teams);
+                    refresh_claude_crews(&app, &mut crews, &claude_crews, &mut claude_teams, &mut claude_tails, &mut claude_transcript_nodes);
                 }
             }
         }
@@ -938,6 +940,8 @@ fn refresh_claude_crews(
     crews: &mut HashMap<u64, CrewPackage>,
     roots: &HashSet<u64>,
     teams: &mut HashMap<u64, PathBuf>,
+    tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
+    transcript_nodes: &mut HashMap<(u64, PathBuf), u64>,
 ) {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
     for root in roots {
@@ -950,6 +954,45 @@ fn refresh_claude_crews(
         teams.insert(*root, team);
         for node in crate::agents::claude_crew::members(&config) {
             package.apply(node);
+        }
+        let Some(subagents) = crate::agents::claude_crew::lead_subagents(&home, &config) else {
+            emit_crew(app, package);
+            continue;
+        };
+        let Ok(entries) = std::fs::read_dir(subagents) else {
+            emit_crew(app, package);
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(std::ffi::OsStr::to_str) != Some("jsonl") {
+                continue;
+            }
+            let key = (*root, path.clone());
+            let node = match transcript_nodes.get(&key).copied() {
+                Some(node) => Some(node),
+                None => crate::agents::claude_crew::subagent_start_from_file(&path)
+                    .ok()
+                    .flatten()
+                    .and_then(|(_, name)| package.tree.node_for_label(&name)),
+            };
+            let Some(node) = node else { continue };
+            transcript_nodes.insert(key.clone(), node);
+            let tail = tails.entry(key).or_default();
+            match tail.read_new(&path) {
+                Ok(events) => {
+                    let kinds = events.into_iter().map(|(kind, _)| kind).collect();
+                    if let Some(events) = package.append(node, kinds) {
+                        emit_crew_events(app, *root, node, events);
+                    }
+                }
+                Err(error) => {
+                    // Child-tail failures do not fail the root package. Mark
+                    // only its node unavailable and leave its existing log.
+                    package.tree.fail_node(node);
+                    log::warn!("[crew] {} could not be tailed: {error}", path.display());
+                }
+            }
         }
         emit_crew(app, package);
     }

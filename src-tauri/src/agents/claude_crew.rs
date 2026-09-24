@@ -8,7 +8,7 @@
 //! before it performs the read/modify/write.
 
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -216,6 +216,90 @@ pub fn transcript(lead_session_dir: &Path, internal_agent_id: &str) -> PathBuf {
     lead_session_dir
         .join("subagents")
         .join(format!("agent-{internal_agent_id}.jsonl"))
+}
+
+/// Incremental reader for one native child transcript. The cursor advances
+/// only past newline-terminated JSONL records, so a writer caught halfway
+/// through an object is retried on the next poll rather than parsed as a
+/// corrupt event or silently skipped. Each child owns one cursor, which keeps
+/// repeated config polls from duplicating its journal.
+#[derive(Default)]
+pub struct TranscriptTail {
+    offset: u64,
+}
+
+/// The documented hook record is the bridge between Claude's two unrelated
+/// identities: config/mailbox member `name` and child transcript `agentId`.
+/// The ids must never be compared directly. `None` is an explicit absence a
+/// runtime preflight can refuse, never an invitation to attach the first file.
+pub fn subagent_start_identity(line: &str) -> Option<(String, String)> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    let internal = value.get("agentId").and_then(Value::as_str)?.to_owned();
+    let hook_name = find_hook_name(&value)?;
+    let member = hook_name.strip_prefix("SubagentStart:")?.trim();
+    (!member.is_empty()).then_some((internal, member.to_owned()))
+}
+
+pub fn subagent_start_from_file(path: &Path) -> std::io::Result<Option<(String, String)>> {
+    let file = fs::File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    while reader.read_line(&mut line)? != 0 {
+        if let Some(identity) = subagent_start_identity(&line) {
+            return Ok(Some(identity));
+        }
+        line.clear();
+    }
+    Ok(None)
+}
+
+/// Resolve the provider-owned lead session id in config to its actual
+/// transcript directory. This searches only the documented project/session
+/// layout; no TUI or guessed encoded project path is involved.
+pub fn lead_subagents(home: &Path, config: &Value) -> Option<PathBuf> {
+    let session = config.get("leadSessionId")?.as_str()?;
+    let projects = home.join(".claude").join("projects");
+    let entries = fs::read_dir(projects).ok()?;
+    entries.flatten().find_map(|entry| {
+        let path = entry.path().join(session).join("subagents");
+        path.is_dir().then_some(path)
+    })
+}
+
+fn find_hook_name(value: &Value) -> Option<&str> {
+    match value {
+        Value::Object(object) => {
+            if object.get("hookEvent").and_then(Value::as_str) == Some("SubagentStart") {
+                if let Some(name) = object.get("hookName").and_then(Value::as_str) {
+                    return Some(name);
+                }
+            }
+            object.values().find_map(find_hook_name)
+        }
+        Value::Array(values) => values.iter().find_map(find_hook_name),
+        _ => None,
+    }
+}
+
+impl TranscriptTail {
+    pub fn read_new(&mut self, path: &Path) -> std::io::Result<Vec<crate::session::history::Past>> {
+        let file = fs::File::open(path)?;
+        let mut reader = BufReader::new(file);
+        reader.seek(SeekFrom::Start(self.offset))?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut events = Vec::new();
+        loop {
+            let mut line = Vec::new();
+            let bytes = reader.read_until(b'\n', &mut line)?;
+            if bytes == 0 || !line.ends_with(b"\n") {
+                break;
+            }
+            self.offset = self.offset.saturating_add(bytes as u64);
+            let line = String::from_utf8_lossy(&line);
+            events.extend(crate::session::history::events_of(&line, &now));
+        }
+        Ok(events)
+    }
 }
 
 /// An addressed message is written to the *member name* inbox, not the
@@ -556,5 +640,37 @@ mod tests {
             Err(PreflightError::Journal(_))
         ));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn transcript_tail_deduplicates_complete_lines_and_retries_a_partial_one() {
+        let path = std::env::temp_dir().join(format!("smetana-team-tail-{}.jsonl", std::process::id()));
+        fs::write(
+            &path,
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first\"}]}}\n",
+        )
+        .unwrap();
+        let mut tail = TranscriptTail::default();
+        assert!(!tail.read_new(&path).unwrap().is_empty());
+        assert!(tail.read_new(&path).unwrap().is_empty());
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"{\"type\":\"assistant\"").unwrap();
+        assert!(tail.read_new(&path).unwrap().is_empty());
+        file.write_all(b",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"second\"}]}}\n")
+            .unwrap();
+        assert!(!tail.read_new(&path).unwrap().is_empty());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn subagent_start_hook_maps_internal_transcript_identity_to_member_name() {
+        let line = include_str!("../../tests/fixtures/claude-2.1.281-subagent-start.jsonl");
+        assert_eq!(
+            subagent_start_identity(line.trim()),
+            Some((
+                "afixture-worker-75e6a9dd8a6d5c7d".into(),
+                "fixture-worker".into()
+            ))
+        );
     }
 }
