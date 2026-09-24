@@ -105,7 +105,7 @@ fn events_of_value(value: &Value, at: &str) -> Vec<Past> {
 /// day one appears it is the difference between a panel that works and a panel
 /// that is wedged, with nothing failing anywhere to say so.
 ///
-/// **`TextDelta` is excluded for the same reason and belongs to a fact that
+/// **`TextDelta` and `TextQuestion` are excluded for the same reason and belong to a fact that
 /// has already been checked rather than merely hoped for.** Claude Code's own
 /// `.jsonl` transcript — what `read_file` below streams — never contains a
 /// `stream_event` record; `one_event` only ever produces one from a *live*
@@ -113,9 +113,13 @@ fn events_of_value(value: &Value, at: &str) -> Vec<Past> {
 /// would otherwise hand a stray one to `journal.js` on a re-entry, leaving a
 /// caret pinned to a reply nothing is still writing. Excluding it here costs
 /// nothing on the ordinary path and does not depend on that fact staying
-/// true if some later transcript format ever changes.
+/// true if some later transcript format ever changes. The latter is a live
+/// completion marker, not a historical request somebody can answer again.
 fn is_past(kind: &EventKind) -> bool {
-    !matches!(kind, EventKind::TurnStart { .. } | EventKind::TextDelta { .. })
+    !matches!(
+        kind,
+        EventKind::TurnStart { .. } | EventKind::TextDelta { .. } | EventKind::TextQuestion
+    )
 }
 
 /// The conversation a session has already had, oldest first.
@@ -293,6 +297,11 @@ mod tests {
     fn a_stray_partial_delta_in_a_transcript_is_never_replayed() {
         let line = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}}"#;
         assert!(kinds(line).is_empty());
+    }
+
+    #[test]
+    fn a_live_text_question_marker_is_never_replayed() {
+        assert!(!is_past(&EventKind::TextQuestion));
     }
 
     #[test]

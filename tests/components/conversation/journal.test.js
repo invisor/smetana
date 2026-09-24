@@ -450,6 +450,13 @@ describe('the journal as rows', () => {
     expect(journalRows([event(1, 'thermostat-changed', { to: 21 })])).toEqual([])
   })
 
+  it('draws no row or structured card marker for a text question', () => {
+    expect(journalRows([
+      event(1, 'text', { text: 'Do you confirm the document?' }),
+      event(2, 'text-question')
+    ])).toEqual([{ key: 1, kind: 'agent', text: 'Do you confirm the document?' }])
+  })
+
   it('takes no events at all', () => {
     expect(journalRows()).toEqual([])
   })

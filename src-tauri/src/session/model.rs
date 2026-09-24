@@ -496,6 +496,12 @@ mod tests {
     }
 
     #[test]
+    fn a_text_question_is_on_the_wire_without_a_structured_request() {
+        let json = serde_json::to_value(EventKind::TextQuestion).unwrap();
+        assert_eq!(json, serde_json::json!({ "kind": "text-question" }));
+    }
+
+    #[test]
     fn a_question_that_is_standing_is_one_to_answer_exactly_once() {
         let asked = vec![ev(1, permission("q1"))];
         assert!(is_open_question(&asked, "q1"));

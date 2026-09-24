@@ -1,0 +1,10 @@
+› Inspect the document and stop for confirmation.
+
+
+• Ran rg 'what?' src
+  src/check.rs: what? is only a fixture string
+
+
+›
+
+  gpt-5.5 high · /tmp/example/project

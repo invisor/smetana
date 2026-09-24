@@ -893,32 +893,63 @@ fn is_turn(line: &str) -> bool {
 
 /// Is the last completed Codex turn a plain-text question for the person?
 ///
-/// A completed turn ends at an empty composer. The nearest filled bullet above
-/// it is the agent's final reply; a hollow bullet is work in progress and a
-/// non-empty composer is an unsent human draft. The reply itself shares the
-/// driven-session predicate so both roads agree about paragraphs and `?`.
+/// A completed turn ends at an empty composer. Its immediately preceding
+/// top-level transcript entry must be a filled assistant bullet; a later
+/// person entry or hollow working bullet means the previous reply is already
+/// stale. Activity rows use the same bullet, so their measured verbs are
+/// rejected before the shared paragraph predicate sees their tool output.
 fn completed_text_question(screen: &[String]) -> bool {
     let Some(composer) = screen.iter().rposition(|line| line.trim() == CURSOR.to_string()) else {
         return false;
     };
     let Some(turn) = screen[..composer]
         .iter()
-        .rposition(|line| line.starts_with('\u{2022}'))
+        .rposition(|line| is_entry(line))
     else {
         return false;
     };
-    let first = screen[turn].strip_prefix('\u{2022}').unwrap_or("").trim_start();
-    if first.starts_with("Working") {
+    let Some(first) = screen[turn].strip_prefix('\u{2022}').map(str::trim_start) else {
+        return false;
+    };
+    if is_activity(first) {
         return false;
     }
     let mut text = first.to_owned();
-    for line in &screen[turn + 1..composer] {
+    let end = screen[turn + 1..composer]
+        .iter()
+        .position(|line| is_entry(line))
+        .map_or(composer, |offset| turn + 1 + offset);
+    for line in &screen[turn + 1..end] {
         if !text.is_empty() {
             text.push('\n');
         }
         text.push_str(line);
     }
     crate::session::model::text_waits_for_reply(&text)
+}
+
+/// Codex uses filled transcript bullets for short tool/activity summaries as
+/// well as prose replies. These are the leading verbs measured in captured
+/// terminal layouts; accepting one would let a `?` in a command or its output
+/// manufacture a human wait.
+fn is_activity(text: &str) -> bool {
+    [
+        "Working",
+        "Running ",
+        "Ran ",
+        "Edited ",
+        "Read ",
+        "Searched ",
+        "Explored",
+        "Checked ",
+        "Created ",
+        "Deleted ",
+        "Updated ",
+        "Applied ",
+        "Executed ",
+    ]
+    .iter()
+    .any(|prefix| text.starts_with(prefix))
 }
 
 /// The whole of an option's label, head row and any rows it wrapped onto.
@@ -2364,19 +2395,7 @@ mod tests {
 
     #[test]
     fn a_completed_text_turn_reads_its_last_paragraph_as_a_question() {
-        let completed: Vec<String> = [
-            "› Please inspect the document.",
-            "",
-            "• Do you confirm the document? After that I will make the plan and create the task.",
-            "",
-            "›",
-            "",
-            "  gpt-5.6-sol · /tmp/project",
-        ]
-        .iter()
-        .map(|line| (*line).to_owned())
-        .collect();
-        assert!(completed_text_question(&completed));
+        assert!(completed_text_question(&fixture("codex-0.146-completed-text-question.txt")));
 
         let earlier_paragraph: Vec<String> = [
             "• Do you confirm the document?",
@@ -2389,6 +2408,34 @@ mod tests {
         .map(|line| (*line).to_owned())
         .collect();
         assert!(!completed_text_question(&earlier_paragraph));
+    }
+
+    #[test]
+    fn a_later_person_entry_releases_an_earlier_text_question() {
+        assert!(
+            !completed_text_question(&fixture("codex-0.146-text-question-after-user-entry.txt")),
+            "an earlier answer stayed loud after the person had sent their next turn"
+        );
+    }
+
+    #[test]
+    fn activity_blocks_with_question_marks_are_not_text_questions() {
+        assert!(
+            !completed_text_question(&fixture("codex-0.146-activity-question-mark.txt")),
+            "a command and its output were read as an agent question"
+        );
+        assert!(
+            !completed_text_question(&fixture("codex-0.146-edited-activity-question-mark.txt")),
+            "an edit summary and its preview were read as an agent question"
+        );
+        for activity in [
+            "Running touch probe.txt",
+            "Edited readme.txt (+1 -0)",
+            "Searched the workspace",
+            "Explored",
+        ] {
+            assert!(is_activity(activity), "the activity prefix was not fenced: {activity}");
+        }
     }
 
     #[test]
