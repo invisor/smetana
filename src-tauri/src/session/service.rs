@@ -865,7 +865,7 @@ fn absorb_codex_crew(
     }
     for record in records {
         for node in crate::agents::codex_crew::nodes(&record) {
-            package.tree.upsert(root, node);
+            package.apply(node);
         }
         if let Some((id, state, can_message)) = crate::agents::codex_crew::status_change(&record) {
             package.tree.update_provider(&id, state, can_message);
@@ -897,7 +897,7 @@ fn refresh_claude_crews(
         let (team, config) = candidates.into_iter().next().expect("one candidate");
         teams.insert(*root, team);
         for node in crate::agents::claude_crew::members(&config) {
-            package.tree.upsert(*root, node);
+            package.apply(node);
         }
         emit_crew(app, package);
     }
@@ -975,7 +975,7 @@ fn handle(
         }
         Request::CrewApply(root, node) => {
             if let Some(package) = crews.get_mut(&root) {
-                package.tree.upsert(root, node);
+                package.apply(node);
                 emit_crew(app, package);
             }
         }

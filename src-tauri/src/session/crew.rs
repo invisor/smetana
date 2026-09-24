@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use crate::agents::crew::{ProviderNode, ProviderState};
+use super::journal::Journal;
 
 /// The session worker owns one of these per Crew package. Its project is kept
 /// beside the topology so `crew:tree` can update the right window without a
@@ -15,6 +16,9 @@ pub struct CrewPackage {
     pub project: String,
     pub root: CrewNodeId,
     pub tree: CrewTree,
+    /// One journal per stable Smetana node. It is deliberately not keyed by a
+    /// provider id: a completed child keeps its own log until package cleanup.
+    pub journals: BTreeMap<CrewNodeId, Journal>,
 }
 
 impl CrewPackage {
@@ -23,7 +27,15 @@ impl CrewPackage {
     pub fn new(project: String, root: CrewNodeId, label: impl Into<String>) -> Self {
         let mut tree = CrewTree::default();
         tree.root_with_id(root, label);
-        Self { project, root, tree }
+        let mut journals = BTreeMap::new();
+        journals.insert(root, Journal::new());
+        Self { project, root, tree, journals }
+    }
+
+    pub fn apply(&mut self, node: ProviderNode) -> Option<CrewNodeId> {
+        let id = self.tree.upsert(self.root, node)?;
+        self.journals.entry(id).or_insert_with(Journal::new);
+        Some(id)
     }
 }
 
