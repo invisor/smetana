@@ -919,7 +919,7 @@ fn completed_text_question(screen: &[String], entry_style: &[crate::terminal::sc
         .position(|line| is_entry(line))
         .map_or(composer, |offset| turn + 1 + offset);
     let style = entry_style.get(turn).copied().unwrap_or_default();
-    if style.is_coloured_bold_marker() || explored_tree(style, &screen[turn + 1..end]) {
+    if style.is_coloured_bold_marker() || explored_tree(style, first, &screen[turn + 1..end]) {
         return false;
     }
     let mut text = first.to_owned();
@@ -936,11 +936,16 @@ fn completed_text_question(screen: &[String], entry_style: &[crate::terminal::sc
 /// assistant's dim/default bullet. Its bold header is followed by the TUI's
 /// indented tree (`└`, `├`, or `│`), which ordinary assistant prose — even a
 /// bold introduction — does not own.
-fn explored_tree(style: crate::terminal::screen::EntryStyle, detail: &[String]) -> bool {
+fn explored_tree(
+    style: crate::terminal::screen::EntryStyle,
+    header: &str,
+    detail: &[String],
+) -> bool {
     style.dim
         && !style.foreground
         && style.header_bold
         && !style.header_foreground
+        && header.split_whitespace().next() == Some("Explored")
         && detail.iter().any(|line| {
             matches!(line.trim_start().chars().next(), Some('\u{2514}' | '\u{251C}' | '\u{2502}'))
         })
@@ -2448,6 +2453,15 @@ mod tests {
                 "assistant prose was rejected for its opening verb: {capture}"
             );
         }
+    }
+
+    #[test]
+    fn a_bold_assistant_intro_and_tree_do_not_impersonate_explored_activity() {
+        let (screen, style) = raw_fixture("codex-0.155-assistant-bold-tree-question.ansi");
+        assert!(
+            completed_text_question(&screen, &style),
+            "a renderer-unowned bold header and tree suppressed the assistant's final question"
+        );
     }
 
     #[test]
