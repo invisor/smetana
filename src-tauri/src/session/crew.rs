@@ -6,9 +6,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::agents::crew::{ProviderNode, ProviderState};
 use super::journal::Journal;
 use super::model::{Event, EventKind};
+use crate::agents::crew::{ProviderNode, ProviderState};
 
 /// The session worker owns one of these per Crew package. Its project is kept
 /// beside the topology so `crew:tree` can update the right window without a
@@ -30,7 +30,12 @@ impl CrewPackage {
         tree.root_with_id(root, label);
         let mut journals = BTreeMap::new();
         journals.insert(root, Journal::new());
-        Self { project, root, tree, journals }
+        Self {
+            project,
+            root,
+            tree,
+            journals,
+        }
     }
 
     pub fn apply(&mut self, node: ProviderNode) -> Option<CrewNodeId> {
@@ -49,7 +54,12 @@ impl CrewPackage {
     pub fn append(&mut self, node: CrewNodeId, kinds: Vec<EventKind>) -> Option<Vec<Event>> {
         let journal = self.journals.get_mut(&node)?;
         let at = chrono::Utc::now().to_rfc3339();
-        Some(kinds.into_iter().map(|kind| journal.append(kind, at.clone())).collect())
+        Some(
+            kinds
+                .into_iter()
+                .map(|kind| journal.append(kind, at.clone()))
+                .collect(),
+        )
     }
 }
 
@@ -179,15 +189,22 @@ impl CrewTree {
         state: ProviderState,
         can_message: bool,
     ) -> bool {
-        let Some(id) = self.provider.get(provider_id).copied() else { return false };
-        let Some(node) = self.nodes.get_mut(&id) else { return false };
+        let Some(id) = self.provider.get(provider_id).copied() else {
+            return false;
+        };
+        let Some(node) = self.nodes.get_mut(&id) else {
+            return false;
+        };
         node.state = CrewState::from(state);
-        node.can_message = can_message && !matches!(node.state, CrewState::Done | CrewState::Failed);
+        node.can_message =
+            can_message && !matches!(node.state, CrewState::Done | CrewState::Failed);
         true
     }
 
     pub fn fail_node(&mut self, id: CrewNodeId) -> bool {
-        let Some(node) = self.nodes.get_mut(&id) else { return false };
+        let Some(node) = self.nodes.get_mut(&id) else {
+            return false;
+        };
         node.state = CrewState::Failed;
         node.can_message = false;
         true
@@ -376,17 +393,26 @@ mod tests {
         let (first_events, _, _) = package.snapshot(first).unwrap();
         let (second_events, _, _) = package.snapshot(second).unwrap();
         assert!(matches!(first_events[0].kind, EventKind::TextDelta { ref text } if text == "ONE"));
-        assert!(matches!(second_events[0].kind, EventKind::TextDelta { ref text } if text == "TWO"));
+        assert!(
+            matches!(second_events[0].kind, EventKind::TextDelta { ref text } if text == "TWO")
+        );
     }
 
     #[test]
     fn a_child_failure_does_not_fail_its_sibling_or_root() {
         let mut package = CrewPackage::new("/project".into(), 7, "Lead");
-        let first = package.apply(worker("one", None, ProviderState::Running)).unwrap();
-        let second = package.apply(worker("two", None, ProviderState::Running)).unwrap();
+        let first = package
+            .apply(worker("one", None, ProviderState::Running))
+            .unwrap();
+        let second = package
+            .apply(worker("two", None, ProviderState::Running))
+            .unwrap();
         assert!(package.tree.fail_node(first));
         assert_eq!(package.tree.node(first).unwrap().state, CrewState::Failed);
         assert_eq!(package.tree.node(second).unwrap().state, CrewState::Running);
-        assert_eq!(package.tree.node(package.root).unwrap().state, CrewState::Starting);
+        assert_eq!(
+            package.tree.node(package.root).unwrap().state,
+            CrewState::Starting
+        );
     }
 }

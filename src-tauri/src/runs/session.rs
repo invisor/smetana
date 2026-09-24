@@ -64,7 +64,9 @@ pub fn select(
         Some("separate agent journals")
     } else if !capabilities.addressed_messages {
         Some("addressed agent messages")
-    } else { unreachable!("CrewCapabilities::supported covered every capability") };
+    } else {
+        unreachable!("CrewCapabilities::supported covered every capability")
+    };
     match missing {
         Some(missing) => Err(UnsupportedCrew {
             provider,

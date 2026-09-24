@@ -104,15 +104,23 @@ pub fn journal(value: &Value) -> Option<(String, Vec<EventKind>)> {
             .pointer("/params/delta")
             .and_then(Value::as_str)
             .filter(|text| !text.is_empty())
-            .map(|text| vec![EventKind::TextDelta { text: text.to_owned() }])
+            .map(|text| {
+                vec![EventKind::TextDelta {
+                    text: text.to_owned(),
+                }]
+            })
             .unwrap_or_default(),
         "item/completed" => completed(value.pointer("/params/item")?),
         "turn/completed" => {
             let turn = value.pointer("/params/turn")?;
             if let Some(error) = turn.pointer("/error/message").and_then(Value::as_str) {
-                vec![EventKind::TurnFailed { text: error.to_owned() }]
+                vec![EventKind::TurnFailed {
+                    text: error.to_owned(),
+                }]
             } else if turn.get("status").and_then(Value::as_str) == Some("failed") {
-                vec![EventKind::TurnFailed { text: "Codex turn failed".into() }]
+                vec![EventKind::TurnFailed {
+                    text: "Codex turn failed".into(),
+                }]
             } else {
                 vec![EventKind::Result {
                     tokens_in: 0,
@@ -125,7 +133,11 @@ pub fn journal(value: &Value) -> Option<(String, Vec<EventKind>)> {
         "error" => value
             .pointer("/params/error/message")
             .and_then(Value::as_str)
-            .map(|text| vec![EventKind::Error { text: text.to_owned() }])
+            .map(|text| {
+                vec![EventKind::Error {
+                    text: text.to_owned(),
+                }]
+            })
             .unwrap_or_default(),
         _ => Vec::new(),
     };
@@ -136,9 +148,17 @@ pub fn journal(value: &Value) -> Option<(String, Vec<EventKind>)> {
 /// its requested child thread id. It is history, so the shared translator
 /// deliberately produces no open `TurnStart` event.
 pub fn hydrated_journal(value: &Value) -> Option<(String, Vec<EventKind>)> {
-    let thread = value.get("crewThreadId").and_then(Value::as_str)?.to_owned();
-    let turns = value.pointer("/result/thread/turns").and_then(Value::as_array)?;
-    Some((thread, crate::agents::codex_driver::translate_history(turns)))
+    let thread = value
+        .get("crewThreadId")
+        .and_then(Value::as_str)?
+        .to_owned();
+    let turns = value
+        .pointer("/result/thread/turns")
+        .and_then(Value::as_array)?;
+    Some((
+        thread,
+        crate::agents::codex_driver::translate_history(turns),
+    ))
 }
 
 fn completed(item: &Value) -> Vec<EventKind> {
@@ -147,7 +167,11 @@ fn completed(item: &Value) -> Vec<EventKind> {
             .get("text")
             .and_then(Value::as_str)
             .filter(|text| !text.is_empty())
-            .map(|text| vec![EventKind::Text { text: text.to_owned() }])
+            .map(|text| {
+                vec![EventKind::Text {
+                    text: text.to_owned(),
+                }]
+            })
             .unwrap_or_default(),
         Some("reasoning") => {
             let text = item
@@ -155,17 +179,39 @@ fn completed(item: &Value) -> Vec<EventKind> {
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .chain(item.get("content").and_then(Value::as_array).into_iter().flatten())
+                .chain(
+                    item.get("content")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten(),
+                )
                 .filter_map(Value::as_str)
                 .filter(|text| !text.is_empty())
                 .collect::<Vec<_>>()
                 .join("\n");
-            (!text.is_empty()).then_some(EventKind::Reasoning { text }).into_iter().collect()
+            (!text.is_empty())
+                .then_some(EventKind::Reasoning { text })
+                .into_iter()
+                .collect()
         }
-        Some(kind @ ("commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" | "webSearch")) => {
-            let id = item.get("id").and_then(Value::as_str).unwrap_or(kind).to_owned();
-            let ok = !matches!(item.get("status").and_then(Value::as_str), Some("failed" | "error"));
-            vec![EventKind::ToolResult { id, ok, summary: kind.into() }]
+        Some(
+            kind @ ("commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall"
+            | "webSearch"),
+        ) => {
+            let id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or(kind)
+                .to_owned();
+            let ok = !matches!(
+                item.get("status").and_then(Value::as_str),
+                Some("failed" | "error")
+            );
+            vec![EventKind::ToolResult {
+                id,
+                ok,
+                summary: kind.into(),
+            }]
         }
         _ => Vec::new(),
     }
@@ -294,7 +340,9 @@ mod tests {
             hydrated_journal(&record),
             Some((
                 "child-two".into(),
-                vec![EventKind::Text { text: "only child two".into() }]
+                vec![EventKind::Text {
+                    text: "only child two".into()
+                }]
             ))
         );
     }
