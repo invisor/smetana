@@ -8,10 +8,20 @@
    `AgentList.vue`, which turns each into an event of its own, the same seam
    `branchMenu.js` has with `BranchList.vue`. The test pins this side.
 
-   **Four verbs and no more.** The panel is 236px wide by default and a row is
+   **Five verbs and no more.** The panel is 236px wide by default and a row is
    one line; everything else an agent can be asked to do is a gesture somewhere
    else in the app — starting one is the project tile's menu, watching one is
    the row's own click, answering one is the terminal.
+
+   Renaming was the fifth and arrived last (smetana-b9se), and it goes first —
+   before pinning, not after it — because pinning and renaming are both marks a
+   person puts on the row itself, and a name is the mark somebody reaches for
+   first once there is one to give. `pencil` is the glyph, borrowed rather than
+   invented: it is what the file tree's own Rename already wears, and a second
+   glyph for the identical verb would say the two are different acts. It
+   refuses on the same fact pinning does — `AGENT_REASON.noConversation` — and
+   for the identical reason: a name written under anything but a conversation
+   id would not survive the row it was given to.
 
    Clearing was the third and arrived after the other two, from its own task
    (smetana-xyck), and the wait was the point: what clears a conversation is
@@ -30,8 +40,10 @@
    the menu is open on, minus the pinned and the still-starting, which is
    exactly the set that already carries a cross of its own.
 
-   The order is pinning, clearing, closing, closing every other row. Pinning
-   first because it is wanted most often, clearing between pinning and closing
+   The order is renaming, pinning, clearing, closing, closing every other row.
+   Rename first, before Pin, because both are marks on the row itself and a
+   name is what a person reaches for first once it exists. Pinning next because
+   it is wanted most often after that, clearing between pinning and closing
    because it is neither — it deletes nothing, the transcript stays a file and
    the Sessions tab goes on listing it, which is also why it asks for no
    confirmation where `DeleteSessionModal` must — and the two closes last,
@@ -40,12 +52,14 @@
    a roughly aimed pointer keeps its widest, most destructive row at the very
    foot.
 
-   `pin` is the glyph — the same one the board's `pinned` status draws — `x` is
-   the close, which is the mark the row already carries for that verb, and
-   `eraser` is the clear, deliberately not the bin: the bin is deletion and
-   these two verbs must not look alike. `close-others` takes `x` again rather
-   than a glyph of its own: it is the same verb applied more widely, not a
-   different one, and no glyph was added to `core/icons.js` for it. */
+   `pencil` is rename's glyph, already registered for the file tree's own row of
+   the same name. `pin` is the glyph — the same one the board's `pinned` status
+   draws — `x` is the close, which is the mark the row already carries for that
+   verb, and `eraser` is the clear, deliberately not the bin: the bin is
+   deletion and these two verbs must not look alike. `close-others` takes `x`
+   again rather than a glyph of its own: it is the same verb applied more
+   widely, not a different one, and no glyph was added to `core/icons.js` for
+   it. */
 
 /* Whether a row is one of the pinned ones — `closableOthers` below reads the
    very rule `agentOrder.js` keeps rather than a second copy of it, since two
@@ -61,7 +75,8 @@ import { isPinned } from './agentOrder.js'
    else to close` at 42 characters, against `Clear session — this agent cannot
    do it` at 39, `Pin to top — nothing to remember it by` and `Clear session —
    it has not started yet` at 38 apiece, `Close agent — it has not started
-   yet` at 36, `Close other agents` at 18 on its own and `Close agent` at 11.
+   yet` at 36, `Rename — nothing to remember it by` at 34, `Close other agents`
+   at 18 on its own and `Close agent` at 11.
    `sessionMenu.js` measured a menu row at 6.4px a character of `--text-sm` in
    `--font-sans` and `ContextMenu` at 70px of chrome around the label (`MENU_W`
    in `kanban/taskMenu.js` itemises where those pixels go), which puts the
@@ -142,6 +157,7 @@ const AGENT_REASON = {
   nothingElse: 'nothing else to close'
 }
 
+export const RENAME_LABEL = 'Rename'
 export const PIN_LABEL = 'Pin to top'
 export const UNPIN_LABEL = 'Unpin'
 export const CLEAR_LABEL = 'Clear session'
@@ -193,14 +209,14 @@ export function closableOthers(rows, keptId, pinned) {
   return list.filter((row) => row?.id !== keptId && !row?.starting && !isPinned(row, pinned))
 }
 
-/* The four rows.
+/* The five rows.
 
    `pinned` and `starting` are facts about the row; `conversation` is the id the
-   row carries, and its absence is what refuses the pin. `state` is the row's ui
-   state, the same word `attentionLevel` reads, and `clearable` is whether the
-   project's **configured** harness has a line that clears a conversation at all
-   — neither is about this row alone, which is why only the clear row asks for
-   them.
+   row carries, and its absence is what refuses both the rename and the pin.
+   `state` is the row's ui state, the same word `attentionLevel` reads, and
+   `clearable` is whether the project's **configured** harness has a line that
+   clears a conversation at all — neither is about this row alone, which is why
+   only the clear row asks for them.
 
    That last one is handed in rather than looked up, so this module stays pure
    and reachable by a test: the caller has it from `stores/agents.js` before the
@@ -208,19 +224,21 @@ export function closableOthers(rows, keptId, pinned) {
    `agents::pick` actually started, for the reason `sessionMenu.js` records
    about the same substitution.
 
-   Three of the four ask nothing about what kind of row this is: the panel is
+   Four of the five ask nothing about what kind of row this is: the panel is
    one flat list on purpose, and a live session, a start and an offline record
-   can be pinned, dragged and closed alike — closing an offline row takes its
-   record away rather than ending a process, which is `AgentList`'s caller's
-   business and not this file's, and closing every other row is the same verb
-   spent on every row but one. Clearing is the one that has to know, because it
-   is the one that writes into a process, and a row with none is refused here
-   rather than at the wire.
+   can be renamed, pinned, dragged and closed alike — closing an offline row
+   takes its record away rather than ending a process, which is `AgentList`'s
+   caller's business and not this file's, and closing every other row is the
+   same verb spent on every row but one. Clearing is the one that has to know,
+   because it is the one that writes into a process, and a row with none is
+   refused here rather than at the wire.
 
    The pin's label is the act and not the state: a row already pinned offers the
    way back out, which is the whole of what tells somebody the mark is theirs to
    remove. `branchMenu.js`'s favourite row is the same rule, written down there
-   first.
+   first. Rename's label never changes with the row: unlike a pin there is no
+   "already renamed" state to read back out of — a named row draws its name as
+   the caption and offers the same `Rename` to change it again.
 
    `others` is the one argument none of the row's own facts can answer: how
    many rows a `close-others` press would actually reach is a fact about the
@@ -235,6 +253,13 @@ export function agentMenuItems({
   clearable = false,
   others = 0
 } = {}) {
+  /* Rename asks the plain question rather than the pin's `pinned ||`
+     shortcut: a pinned row is still one that may carry no conversation id at
+     all (the two never-has-one rows are refused for a pin exactly the same
+     way), and there is no state a rename could have already reached that
+     would make the id unnecessary the way being pinned already does for
+     `pin`. */
+  const renameReason = conversation ? null : AGENT_REASON.noConversation
   /* Asked in this order because a pinned row cannot also be one with no
      conversation — pinning is what needed the id in the first place — so the
      two never compete, and the pin's own refusal is the only one it has. */
@@ -270,6 +295,12 @@ export function agentMenuItems({
   const closeOthersReason = others === 0 ? AGENT_REASON.nothingElse : null
 
   return [
+    {
+      kind: 'rename',
+      label: agentMenuLabel(RENAME_LABEL, renameReason),
+      icon: 'pencil',
+      disabled: Boolean(renameReason)
+    },
     {
       kind: 'pin',
       label: agentMenuLabel(pinned ? UNPIN_LABEL : PIN_LABEL, pinReason),
