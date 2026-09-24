@@ -497,6 +497,17 @@ pub struct Pty {
 }
 
 impl Pty {
+    /// An interactive provider runtime that Smetana observes through its
+    /// structured side-channel (Claude Agent Teams' config/transcripts), not
+    /// through terminal pixels. The reader is intentionally disconnected: it
+    /// exists only because a PTY must have a master, and no ANSI byte crosses
+    /// into the application model from this route.
+    pub fn spawn_structured(command: CommandBuilder, what: &str) -> Result<Self, TerminalError> {
+        let (out, receiver) = mpsc::unbounded_channel();
+        drop(receiver);
+        Self::start(0, command, what, 80, 24, out, true)
+    }
+
     /// A session running a coding agent.
     pub fn spawn(
         id: SessionId,

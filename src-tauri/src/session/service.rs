@@ -260,6 +260,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
 
         let mut sessions: HashMap<SessionId, Live> = HashMap::new();
         let mut crews: HashMap<u64, CrewPackage> = HashMap::new();
+        let mut crew_ptys: HashMap<u64, crate::terminal::pty::Pty> = HashMap::new();
         // Session id -> public Crew root for the special Codex lead whose
         // normal app-server stream also carries thread lifecycle records.
         let mut crew_leads: HashMap<SessionId, u64> = HashMap::new();
@@ -274,6 +275,9 @@ pub fn start(app: AppHandle) -> SessionHandle {
                     let Some(request) = request else { break };
                     if let Request::ShutDown(tx) = request {
                         kill_all(&mut sessions);
+                        for pty in crew_ptys.values_mut() {
+                            pty.kill();
+                        }
                         let _ = tx.send(());
                         return;
                     }
@@ -281,6 +285,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         &app,
                         &mut sessions,
                         &mut crews,
+                        &mut crew_ptys,
                         &mut crew_leads,
                         &mut next_crew,
                         &mut next_id,
@@ -418,6 +423,50 @@ fn session_cwd(project: &str, intent: &Intent) -> Result<PathBuf, SessionError> 
     let Intent::ResumeSession { cwd, .. } = intent else { return Ok(root) };
     crate::sessions::model::resume_cwd(&root, cwd)
         .ok_or_else(|| SessionError::BadCwd(cwd.to_owned()))
+}
+
+/// Start Claude's native team runtime on a PTY without ever consuming the PTY
+/// output. Agent Teams is interactive by contract; topology and journals are
+/// discovered from its structured files by the Crew watcher, so routing this
+/// through `ClaudeDriver` would be a protocol lie.
+fn spawn_claude_crew(
+    app: &AppHandle,
+    project: &str,
+    intent: Intent,
+) -> Result<crate::terminal::pty::Pty, SessionError> {
+    let (agent, model) = crate::settings::role_model(app, Some(project), &intent, None);
+    let Some((profile, model)) = agents::pick_with_model(&agent, model, crate::shell_env::path()) else {
+        return Err(SessionError::Spawn(format!(
+            "{} is not installed",
+            crate::agents::claude::Claude.binary()
+        )));
+    };
+    if profile.id() != "claude" {
+        return Err(SessionError::NotDriven(
+            "the configured Crew provider is not Claude Code".into(),
+        ));
+    }
+    let cwd = session_cwd(project, &intent)?;
+    let facts = crate::runs::setup_facts::for_intent(Path::new(project), &intent);
+    let launch = Launch {
+        profile,
+        cwd: cwd.clone(),
+        intent,
+        skills: agents::library::resolve(app),
+        languages: crate::settings::languages(app),
+        agent_prompt: crate::settings::agent_prompt(app),
+        facts,
+        session_id: None,
+        model,
+        worker_model: None,
+    };
+    let mut command = crate::agents::claude_crew::interactive_lead_command(&launch);
+    command.cwd(&cwd);
+    if let Some(path) = crate::shell_env::path() {
+        command.env("PATH", path);
+    }
+    crate::terminal::pty::Pty::spawn_structured(command, profile.binary())
+        .map_err(|error| SessionError::Spawn(error.to_string()))
 }
 
 /// Start a child for this session, or say why not.
@@ -824,6 +873,7 @@ fn handle(
     app: &AppHandle,
     sessions: &mut HashMap<SessionId, Live>,
     crews: &mut HashMap<u64, CrewPackage>,
+    crew_ptys: &mut HashMap<u64, crate::terminal::pty::Pty>,
     crew_leads: &mut HashMap<SessionId, u64>,
     next_crew: &mut u64,
     next_id: &mut SessionId,
@@ -852,9 +902,18 @@ fn handle(
             // established its team config, rather than a deceptive TUI
             // fallback or a fake pipe session.
             if agent == "claude" {
-                let _ = tx.send(Err(SessionError::NotDriven(
-                    "Claude Code Crew requires the interactive agent-team transport".into(),
-                )));
+                match spawn_claude_crew(app, &project, intent) {
+                    Ok(pty) => {
+                        let package = CrewPackage::new(project, id, "Crew lead");
+                        emit_crew(app, &package);
+                        crews.insert(id, package);
+                        crew_ptys.insert(id, pty);
+                        let _ = tx.send(Ok((id, id)));
+                    }
+                    Err(error) => {
+                        let _ = tx.send(Err(error));
+                    }
+                }
                 return;
             }
             match spawn_session(app, id, &project, intent, permission, chunks) {
@@ -919,6 +978,9 @@ fn handle(
             });
         }
         Request::CrewClear(root) => {
+            if let Some(mut pty) = crew_ptys.remove(&root) {
+                pty.kill();
+            }
             crew_leads.retain(|_, lead_root| *lead_root != root);
             if let Some(mut package) = crews.remove(&root) {
                 package.tree.clear();
