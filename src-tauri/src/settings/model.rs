@@ -116,6 +116,15 @@ const MAX_DIALOG_SIDE: u32 = 10_000;
 /// is a ceiling on the count rather than a check of the names — it exists to
 /// stop a hand-edited file growing without bound.
 const MAX_DIALOGS: usize = 32;
+/// How long a person's own name for an agent row may be. The same 120
+/// `session::model::TITLE_CHARS` cuts the worker's own automatic title at,
+/// deliberately not repeated as a cross-module constant: the two are read
+/// together on one row and a name much longer than the title it can replace
+/// would be a fact about this ceiling rather than about the row. An overlong
+/// entry is dropped whole rather than cut — `agentPrompt`'s rule, since a name
+/// truncated mid-word is a worse read than the automatic title it would
+/// otherwise still be standing in for.
+const MAX_AGENT_NAME_LEN: usize = 120;
 
 /// Appearance is about the person and their screen, hence shared by all projects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -953,6 +962,13 @@ pub struct ProjectState {
     /// be offered back. Taking one off is a person's own gesture and nothing
     /// else's.
     pub pinned_agents: Vec<String>,
+    /// A person's own name for an agent row, by the same conversation id the
+    /// pins use. Written only by the rename gesture, never pruned and never
+    /// checked against what is on screen — `pinned_agents`'s rules, and for
+    /// the same reason: it has to outlive the session so an offline row comes
+    /// back under the name it was given. It outranks the worker's own title
+    /// for good; the automatic rule never writes here.
+    pub agent_names: BTreeMap<String, String>,
     /// What the run dialog was last set to here. `None` until somebody opens
     /// it, which is every settings file written before this existed.
     ///
@@ -1041,6 +1057,7 @@ impl Default for ProjectState {
             tab_order: Vec::new(),
             agent_order: Vec::new(),
             pinned_agents: Vec::new(),
+            agent_names: BTreeMap::new(),
             run_settings: None,
             storage_warned_mib: None,
             used_at: None,
@@ -1974,6 +1991,13 @@ impl ProjectState {
         // different gestures, and a pin put on an agent nobody has ever dragged
         // is the ordinary case rather than an inconsistency.
         sane_list(&mut self.pinned_agents, MAX_AGENT_ORDER, MAX_ID_LEN);
+        // A conversation id keying a person's own name, cleaned the way the
+        // two lists above are and capped at the same ceiling — a third fact
+        // about the same panel. Deliberately no check that a named id is
+        // also in `agent_order` or `pinned_agents`, for their own reason: a
+        // name given to an agent nobody has dragged or pinned is the
+        // ordinary case.
+        sane_agent_names(&mut self.agent_names);
         if let Some(run) = self.run_settings.as_mut() {
             run.validate();
         }
@@ -2166,6 +2190,34 @@ fn sane_list(items: &mut Vec<String>, max: usize, max_item: usize) {
     let mut seen = HashSet::new();
     items.retain(|item| !item.is_empty() && item.len() <= max_item && seen.insert(item.clone()));
     items.truncate(max);
+}
+
+/// Drops what cannot be a name for a row: a key longer than a conversation id
+/// may be, a value that is empty once trimmed — the front end's own
+/// `withAgentName` removes the entry the same way rather than keeping an
+/// empty one — a value longer than [`MAX_AGENT_NAME_LEN`], and anything past
+/// [`MAX_AGENT_ORDER`] on the count, the same ceiling `agent_order` and
+/// `pinned_agents` are held to since this map is a third fact about the same
+/// panel. Trimmed in place and not merely checked, so a hand-edited file with
+/// leading or trailing whitespace round-trips to the name it actually reads
+/// as.
+fn sane_agent_names(names: &mut BTreeMap<String, String>) {
+    let cleaned: BTreeMap<String, String> = names
+        .iter()
+        .filter(|(id, _)| !id.is_empty() && id.len() <= MAX_ID_LEN)
+        .filter_map(|(id, name)| {
+            let name = name.trim();
+            (!name.is_empty() && name.len() <= MAX_AGENT_NAME_LEN)
+                .then(|| (id.clone(), name.to_string()))
+        })
+        .collect();
+    *names = cleaned;
+    while names.len() > MAX_AGENT_ORDER {
+        let Some(last) = names.keys().next_back().cloned() else {
+            break;
+        };
+        names.remove(&last);
+    }
 }
 
 /// The active project must be in the open list: otherwise the board would show
@@ -4446,6 +4498,39 @@ mod tests {
         state.validate();
         assert_eq!(state.agent_order, vec!["a".to_string(), "b".to_string()]);
         assert_eq!(state.pinned_agents, vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn agent_names_default_empty_and_round_trip() {
+        let state = ProjectState::default();
+        assert!(state.agent_names.is_empty(), "nothing named until somebody names it");
+        let old: ProjectState = serde_json::from_str(r#"{"sideTab":"agents"}"#).expect("deserializes");
+        assert!(old.agent_names.is_empty(), "a file from before the field reads");
+        let named: ProjectState =
+            serde_json::from_str(r#"{"agentNames":{"conv-a":"Fix the build"}}"#).expect("deserializes");
+        assert_eq!(named.agent_names.get("conv-a").map(String::as_str), Some("Fix the build"));
+        let text = serde_json::to_string(&named).expect("serializes");
+        assert!(text.contains(r#""agentNames":{"conv-a":"Fix the build"}"#), "{text}");
+    }
+
+    #[test]
+    fn a_hand_edited_agent_name_is_trimmed_and_an_overlong_one_is_dropped() {
+        let long = "x".repeat(MAX_AGENT_NAME_LEN + 1);
+        let mut state = ProjectState {
+            agent_names: BTreeMap::from([
+                ("conv-a".into(), "  Fix the build  ".into()),
+                ("conv-b".into(), "   ".into()),
+                ("conv-c".into(), long),
+                ("".into(), "Nothing to key it by".into()),
+            ]),
+            ..ProjectState::default()
+        };
+        state.validate();
+        assert_eq!(
+            state.agent_names,
+            BTreeMap::from([("conv-a".to_string(), "Fix the build".to_string())]),
+            "a value trims, an empty or overlong one drops, and an empty key drops"
+        );
     }
 
     #[test]
