@@ -232,6 +232,23 @@ pub enum SessionError {
     NotDriven(String),
 }
 
+/// How long an automatic title may be, in characters. A row is one line and
+/// clips with an ellipsis; this only keeps a pasted page out of the record and
+/// off the wire on every state change.
+pub const TITLE_CHARS: usize = 120;
+
+/// The automatic title a session opens with: the first thing the person said,
+/// on one line, cut to [`TITLE_CHARS`]. `None` when they said nothing, so the
+/// row keeps its intent caption rather than going blank.
+pub fn first_words(text: &str) -> Option<String> {
+    let line = crate::sessions::model::one_line(text);
+    let cut = match line.char_indices().nth(TITLE_CHARS) {
+        Some((at, _)) => line[..at].trim_end().to_owned(),
+        None => line,
+    };
+    (!cut.is_empty()).then_some(cut)
+}
+
 /// The whole of what a session's state is: a fold over its journal.
 ///
 /// There is no bell here and no silence timer. Both existed to guess at what
@@ -339,6 +356,20 @@ pub fn is_open_question(events: &[Event], question: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_words_collapse_whitespace_and_stop_at_the_budget() {
+        assert_eq!(first_words("  Rename\n\nthe   rows ").as_deref(), Some("Rename the rows"));
+        let long = "слово ".repeat(40);
+        let title = first_words(&long).expect("a long draft still titles");
+        assert_eq!(title.chars().count(), TITLE_CHARS - 1, "cut on a character boundary, trailing space trimmed");
+    }
+
+    #[test]
+    fn nothing_said_is_no_title() {
+        assert_eq!(first_words(""), None);
+        assert_eq!(first_words(" \n\t "), None);
+    }
 
     fn ev(seq: u64, kind: EventKind) -> Event {
         Event { seq, at: "2026-09-10T12:00:00Z".into(), kind }
