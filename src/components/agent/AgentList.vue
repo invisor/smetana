@@ -36,11 +36,14 @@
    row's own height, the way `FileTreeDraftRow.vue` replaces a tree row rather
    than opening over the whole screen — the answer to "which row is this" is
    the row's own position, which a modal in the middle of the panel cannot
-   give. It differs from that draft row in one decision, and the difference is
-   deliberate: losing the focus **commits** here rather than cancelling.
-   Nothing under this row redraws while it is open, where the tree redraws
-   under a draft on every `catchUp`, and a name somebody typed and then clicked
-   away from is worth more to keep than to throw away. `withAgentName` and
+   give. It differs from that draft row in one decision, and the difference
+   is deliberate: losing the focus **commits** here rather than cancelling.
+   The tree's row genuinely stands still under an open draft; this one does
+   not — a `session:state` can still repaint the row's own label under the
+   field while somebody is typing — but the field itself is untouched by
+   that: it is keyed by `agentKey`, and `v-model` owns its value regardless
+   of what the row around it does, so a name typed and then clicked away
+   from is worth keeping rather than throwing away. `withAgentName` and
    `nameAgentRows` in `agentName.js` are the pure rules this component leans
    on; the write itself is the caller's, through the `rename` event below. */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
@@ -408,7 +411,22 @@ const openMenu = (row, event) => {
 /* The row whose caption is a field right now, by `agentKey`, and the text in
    it. One at a time: opening a second closes the first without saving, the
    way the tree's draft row does — `startRename` simply overwrites both refs,
-   and the field that was standing unmounts as the new one mounts. */
+   and the field that was standing unmounts as the new one mounts.
+
+   `renameField` is written by the input's own `:ref` function below, and it
+   has to be a **function** rather than the plain `ref="renameField"` string
+   form: this element sits inside the `v-for`, and the string form marks the
+   binding `ref_for` regardless of the `v-if` limiting it to one element at a
+   time, which makes Vue's runtime collect it into an array rather than hand
+   back the element itself. A function ref is called with the raw element on
+   every mount and unmount whichever way it is reached. Inside the function
+   the compiler auto-unwraps a bare `renameField` identifier exactly the way
+   `v-model` unwraps `renameDraft` two lines down — do **not** write
+   `renameField.value = el` in the template: this same auto-unwrap already
+   turns that into `renameField.value.value = el` at build time (confirmed by
+   compiling this template through `@vue/compiler-sfc` in both its dev and
+   its inlined production shape), which throws on the first mount because
+   `renameField.value` is still `null`. */
 const renaming = ref(null)
 const renameDraft = ref('')
 const renameField = ref(null)
@@ -423,17 +441,45 @@ const startRename = (row) => {
 }
 
 /* Enter and blur commit, Esc cancels. Blur commits where the tree's draft
-   cancels, deliberately: nothing redraws under this row, and a name typed and
-   then clicked away from is worth more than nothing. An empty commit is the
-   rule's business — `withAgentName` on the caller's side removes the entry
-   and the automatic title shows again. */
+   cancels, deliberately: the row this field sits in is not otherwise static
+   while it is open — a fresh automatic title can still arrive and repaint
+   the row underneath it — but nothing about *this field* is torn down by
+   that, since the input is keyed by `agentKey` and `v-model` keeps its own
+   binding, so what somebody has typed survives it untouched. A name typed
+   and then clicked away from is worth keeping rather than throwing away,
+   which is the tree's own reason for the opposite rule turned around: nothing
+   there is mid-edit until a person deliberately starts one.
+
+   Committing exactly what was already there is a no-op and emits nothing at
+   all, compared after trimming so trailing whitespace typed by accident does
+   not count as a change. Without this, pressing Enter on a field opened and
+   left untouched would still emit `withAgentName`'s write — freezing
+   whatever the row's automatic title happened to say at that moment into a
+   permanent manual name, one the automatic rule could then never move again.
+   An empty commit that *is* a change from what was there is still the
+   caller's business: `withAgentName` removes the entry and the automatic
+   title (or the intent's caption) shows again. */
 const commitRename = () => {
   const row = props.rows.find((one) => agentKey(one) === renaming.value)
-  if (row) emit('rename', { conversation: row.conversation, name: renameDraft.value })
+  if (row) {
+    const name = renameDraft.value.trim()
+    if (name !== (row.label ?? '')) emit('rename', { conversation: row.conversation, name: renameDraft.value })
+  }
   renaming.value = null
 }
 const cancelRename = () => {
   renaming.value = null
+}
+
+/* IME composition sends its own Enter to confirm a candidate — the field
+   must not read that as "commit the name" while somebody is still choosing
+   the characters they meant to type. `event.isComposing` is what tells the
+   two apart; a `keydown.enter` bound with `.prevent` alone cannot, since it
+   fires for both. */
+const onRenameEnter = (event) => {
+  if (event.isComposing) return
+  event.preventDefault()
+  commitRename()
 }
 
 /* The row is handed back with the pick rather than read from `menuFor`, which
@@ -536,6 +582,15 @@ const idsStyle = {
   textOverflow: 'ellipsis'
 }
 const labelStyle = { overflow: 'hidden', textOverflow: 'ellipsis' }
+/* Pairs with `MAX_AGENT_NAME_LEN` in `src-tauri/src/settings/model.rs`,
+   written out a second time for the reason every doubled ceiling in this app
+   is: Rust validates on save, this is what stops the field accepting more
+   than a save would keep. A character count and not a byte count on both
+   sides — `maxlength` is UTF-16 code units, which is looser for anything
+   outside Latin text, so the field stays the generous half of the pair and
+   Rust's own count is still the real ceiling. */
+const AGENT_NAME_MAX = 120
+
 /* The field that stands in for the caption while a row is being renamed.
    Every value a `var(--token)` reference, and the height is `--control-h-sm`
    rather than `--row-h` — a full-height field would touch the row's own top
@@ -611,11 +666,12 @@ const empty = computed(() => props.rows.length === 0)
         <span :style="captionBoxStyle(row)">
           <input
             v-if="renaming === agentKey(row)"
-            :ref="(el) => (renameField.value = el)"
+            :ref="(el) => (renameField = el)"
             v-model="renameDraft"
+            :maxlength="AGENT_NAME_MAX"
             :style="renameStyle"
             aria-label="Agent name"
-            @keydown.enter.prevent="commitRename"
+            @keydown.enter="onRenameEnter"
             @keydown.esc.prevent="cancelRename"
             @blur="commitRename"
             @click.stop
