@@ -602,6 +602,10 @@ impl Profile for Codex {
         question(screen)
     }
 
+    fn text_question(&self, screen: &[String]) -> bool {
+        completed_text_question(screen)
+    }
+
     /// `--dangerously-bypass-approvals-and-sandbox` rather than the gentler
     /// `--ask-for-approval never --sandbox workspace-write`, and the difference
     /// is not caution but reach: a run cuts worktrees in sibling repositories
@@ -885,6 +889,36 @@ fn is_entry(line: &str) -> bool {
 /// here anyway: everything in this set only ever adds refusals.
 fn is_turn(line: &str) -> bool {
     is_entry(line) && line.starts_with(['\u{2022}', '\u{25E6}', CURSOR])
+}
+
+/// Is the last completed Codex turn a plain-text question for the person?
+///
+/// A completed turn ends at an empty composer. The nearest filled bullet above
+/// it is the agent's final reply; a hollow bullet is work in progress and a
+/// non-empty composer is an unsent human draft. The reply itself shares the
+/// driven-session predicate so both roads agree about paragraphs and `?`.
+fn completed_text_question(screen: &[String]) -> bool {
+    let Some(composer) = screen.iter().rposition(|line| line.trim() == CURSOR.to_string()) else {
+        return false;
+    };
+    let Some(turn) = screen[..composer]
+        .iter()
+        .rposition(|line| line.starts_with('\u{2022}'))
+    else {
+        return false;
+    };
+    let first = screen[turn].strip_prefix('\u{2022}').unwrap_or("").trim_start();
+    if first.starts_with("Working") {
+        return false;
+    }
+    let mut text = first.to_owned();
+    for line in &screen[turn + 1..composer] {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(line);
+    }
+    crate::session::model::text_waits_for_reply(&text)
 }
 
 /// The whole of an option's label, head row and any rows it wrapped onto.
@@ -2326,6 +2360,41 @@ mod tests {
         .map(|s| (*s).to_owned())
         .collect();
         assert!(question(&screen).is_none(), "the agent's own one-line turn was read as a dialog");
+    }
+
+    #[test]
+    fn a_completed_text_turn_reads_its_last_paragraph_as_a_question() {
+        let completed: Vec<String> = [
+            "› Please inspect the document.",
+            "",
+            "• Do you confirm the document? After that I will make the plan and create the task.",
+            "",
+            "›",
+            "",
+            "  gpt-5.6-sol · /tmp/project",
+        ]
+        .iter()
+        .map(|line| (*line).to_owned())
+        .collect();
+        assert!(completed_text_question(&completed));
+
+        let earlier_paragraph: Vec<String> = [
+            "• Do you confirm the document?",
+            "",
+            "  I will make the plan.",
+            "",
+            "›",
+        ]
+        .iter()
+        .map(|line| (*line).to_owned())
+        .collect();
+        assert!(!completed_text_question(&earlier_paragraph));
+    }
+
+    #[test]
+    fn a_working_turn_or_a_non_empty_composer_is_not_a_completed_text_question() {
+        assert!(!completed_text_question(&fixture("codex-0.146-working.txt")));
+        assert!(!completed_text_question(&fixture("codex-0.146-draft-in-the-composer.txt")));
     }
 
     #[test]

@@ -72,6 +72,11 @@ pub enum EventKind {
     Opening { text: Option<String>, attachments: Vec<String> },
     /// Markdown as the agent wrote it. Rendering is the front end's business.
     Text { text: String },
+    /// A completed plain-text reply whose final paragraph asks the person a
+    /// question. There is no protocol request to answer, so this deliberately
+    /// carries neither an id nor options: the ordinary composer remains the
+    /// only response path.
+    TextQuestion,
     /// One incremental piece of the reply now being written, in the order it
     /// arrived — never accumulated here. `journal.js` is what stitches a run of
     /// these into a growing row, and the closing `Text` above replaces the
@@ -242,17 +247,22 @@ pub enum SessionError {
 pub fn state_of(events: &[Event], child_alive: bool) -> SessionState {
     let mut open_turn = false;
     let mut pending: Vec<&str> = Vec::new();
+    let mut text_question = false;
     let mut seen_anything = false;
     for event in events {
         seen_anything = true;
         match &event.kind {
-            EventKind::TurnStart { .. } => open_turn = true,
+            EventKind::TurnStart { .. } => {
+                open_turn = true;
+                text_question = false;
+            }
             EventKind::Result { .. } => open_turn = false,
             EventKind::TurnFailed { .. } => open_turn = false,
             EventKind::Permission { id, .. } => pending.push(id),
             // By id rather than by count: an answer that arrives out of order
             // must settle its own question and leave the others standing.
             EventKind::PermissionAnswered { id, .. } => pending.retain(|open| open != id),
+            EventKind::TextQuestion => text_question = true,
             _ => {}
         }
     }
@@ -262,7 +272,7 @@ pub fn state_of(events: &[Event], child_alive: bool) -> SessionState {
         return if open_turn { SessionState::Failed } else { SessionState::Exited };
     }
     // A question outranks a turn in flight: the agent is not working, it waits.
-    if !pending.is_empty() {
+    if !pending.is_empty() || text_question {
         return SessionState::NeedsYou;
     }
     if open_turn {
@@ -273,6 +283,32 @@ pub fn state_of(events: &[Event], child_alive: bool) -> SessionState {
     } else {
         SessionState::Starting
     }
+}
+
+/// Does a completed plain-text reply leave the person a question to answer?
+///
+/// Paragraphs are separated by blank or whitespace-only lines. Only the last
+/// non-empty paragraph matters, and an ASCII question mark anywhere in it is
+/// sufficient: a sentence after the question is still part of the same ask.
+pub fn text_waits_for_reply(text: &str) -> bool {
+    let mut paragraph = String::new();
+    let mut last = String::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            if !paragraph.trim().is_empty() {
+                last = std::mem::take(&mut paragraph);
+            }
+        } else {
+            if !paragraph.is_empty() {
+                paragraph.push('\n');
+            }
+            paragraph.push_str(line);
+        }
+    }
+    if !paragraph.trim().is_empty() {
+        last = paragraph;
+    }
+    last.contains('?')
 }
 
 /// Is this session holding this question open — a `Permission` with that id and
@@ -377,6 +413,29 @@ mod tests {
             ev(3, EventKind::Result { tokens_in: 10, tokens_out: 20, cost_usd: None, ms: 400 }),
         ];
         assert_eq!(state_of(&events, true), SessionState::Ready);
+    }
+
+    #[test]
+    fn a_completed_text_question_waits_until_the_next_turn_starts() {
+        let events = vec![
+            ev(1, EventKind::TurnStart { by: Actor::Person }),
+            ev(2, EventKind::Result { tokens_in: 1, tokens_out: 1, cost_usd: None, ms: 1 }),
+            ev(3, EventKind::TextQuestion),
+        ];
+        assert_eq!(state_of(&events, true), SessionState::NeedsYou);
+
+        let mut answered = events;
+        answered.push(ev(4, EventKind::TurnStart { by: Actor::Person }));
+        assert_eq!(state_of(&answered, true), SessionState::Running);
+    }
+
+    #[test]
+    fn text_questions_read_only_the_last_non_empty_paragraph() {
+        assert!(text_waits_for_reply(
+            "Do you confirm the document? After that I will make the plan and create the task."
+        ));
+        assert!(!text_waits_for_reply("Do you confirm the document?\n\nI will make the plan."));
+        assert!(!text_waits_for_reply("The plan is ready.\n \t\n"));
     }
 
     #[test]
