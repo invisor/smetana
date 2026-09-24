@@ -602,8 +602,8 @@ impl Profile for Codex {
         question(screen)
     }
 
-    fn text_question(&self, screen: &[String], entry_dim: &[bool]) -> bool {
-        completed_text_question(screen, entry_dim)
+    fn text_question(&self, screen: &[String], entry_style: &[crate::terminal::screen::EntryStyle]) -> bool {
+        completed_text_question(screen, entry_style)
     }
 
     /// `--dangerously-bypass-approvals-and-sandbox` rather than the gentler
@@ -896,11 +896,11 @@ fn is_turn(line: &str) -> bool {
 /// A completed turn ends at an empty composer. Its immediately preceding
 /// top-level transcript entry must be a filled assistant bullet; a later
 /// person entry or hollow working bullet means the previous reply is already
-/// stale. Codex's activity bullet is dim in the terminal's actual SGR layout,
-/// whereas an assistant turn's bullet is bold; that visual distinction, not
-/// the English word that follows it, fences tool output before the shared
-/// paragraph predicate sees its `?`.
-fn completed_text_question(screen: &[String], entry_dim: &[bool]) -> bool {
+/// stale. Codex's assistant bullet stays default-colour dim, whereas a
+/// completed tool/activity bullet is coloured and bold; that visual
+/// distinction, not the English word that follows it, fences tool output
+/// before the shared paragraph predicate sees its `?`.
+fn completed_text_question(screen: &[String], entry_style: &[crate::terminal::screen::EntryStyle]) -> bool {
     let Some(composer) = screen.iter().rposition(|line| line.trim() == CURSOR.to_string()) else {
         return false;
     };
@@ -913,7 +913,7 @@ fn completed_text_question(screen: &[String], entry_dim: &[bool]) -> bool {
     let Some(first) = screen[turn].strip_prefix('\u{2022}').map(str::trim_start) else {
         return false;
     };
-    if entry_dim.get(turn).copied().unwrap_or(false) {
+    if entry_style.get(turn).copied().is_some_and(crate::terminal::screen::EntryStyle::is_codex_activity) {
         return false;
     }
     let mut text = first.to_owned();
@@ -2008,29 +2008,11 @@ mod tests {
         std::fs::read_to_string(path).unwrap().lines().map(str::to_owned).collect()
     }
 
-    fn no_dim(screen: &[String]) -> Vec<bool> {
-        vec![false; screen.len()]
-    }
-
-    /// Repaint the captured text through the actual terminal grid with the
-    /// SGR style Codex 0.155.1 gives tool/activity bullets. The fixture keeps
-    /// the human-readable layout; this small adapter preserves the one visual
-    /// fact the grid has that plain fixture text cannot carry.
-    fn dim_activity_fixture(name: &str) -> (Vec<String>, Vec<bool>) {
-        let source = fixture(name);
-        let mut terminal = crate::terminal::screen::Screen::new(160, source.len() as u16 + 1);
-        let mut bytes = Vec::new();
-        for line in source {
-            if let Some(rest) = line.strip_prefix("• ") {
-                bytes.extend_from_slice(b"\x1b[2m\xe2\x80\xa2 \x1b[22m");
-                bytes.extend_from_slice(rest.as_bytes());
-            } else {
-                bytes.extend_from_slice(line.as_bytes());
-            }
-            bytes.extend_from_slice(b"\r\n");
-        }
-        terminal.feed(&bytes);
-        terminal.lines_with_entry_dim()
+    fn raw_fixture(name: &str) -> (Vec<String>, Vec<crate::terminal::screen::EntryStyle>) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
+        let mut terminal = crate::terminal::screen::Screen::new(160, 8);
+        terminal.feed(&std::fs::read(path).unwrap());
+        terminal.lines_with_entry_style()
     }
 
     #[test]
@@ -2398,8 +2380,8 @@ mod tests {
 
     #[test]
     fn a_completed_text_turn_reads_its_last_paragraph_as_a_question() {
-        let completed = fixture("codex-0.146-completed-text-question.txt");
-        assert!(completed_text_question(&completed, &no_dim(&completed)));
+        let (completed, style) = raw_fixture("codex-0.155-completed-assistant-question.ansi");
+        assert!(completed_text_question(&completed, &style));
 
         let earlier_paragraph: Vec<String> = [
             "• Do you confirm the document?",
@@ -2411,44 +2393,43 @@ mod tests {
         .iter()
         .map(|line| (*line).to_owned())
         .collect();
-        assert!(!completed_text_question(&earlier_paragraph, &no_dim(&earlier_paragraph)));
+        assert!(!completed_text_question(&earlier_paragraph, &[]));
     }
 
     #[test]
     fn a_later_person_entry_releases_an_earlier_text_question() {
         let screen = fixture("codex-0.146-text-question-after-user-entry.txt");
         assert!(
-            !completed_text_question(&screen, &no_dim(&screen)),
+            !completed_text_question(&screen, &[]),
             "an earlier answer stayed loud after the person had sent their next turn"
         );
     }
 
     #[test]
     fn activity_blocks_with_question_marks_are_not_text_questions() {
-        let (command, command_dim) = dim_activity_fixture("codex-0.146-activity-question-mark.txt");
-        assert!(
-            !completed_text_question(&command, &command_dim),
-            "a command and its output were read as an agent question"
-        );
-        let (edit, edit_dim) = dim_activity_fixture("codex-0.146-edited-activity-question-mark.txt");
-        assert!(
-            !completed_text_question(&edit, &edit_dim),
-            "an edit summary and its preview were read as an agent question"
-        );
-        let (mcp, mcp_dim) = dim_activity_fixture("codex-0.155-called-mcp-question-mark.txt");
-        assert!(
-            !completed_text_question(&mcp, &mcp_dim),
-            "a completed MCP call and its argument were read as an agent question"
-        );
+        for capture in [
+            "codex-0.155-completed-ran-question.ansi",
+            "codex-0.155-completed-called-question.ansi",
+            "codex-0.155-completed-explored-question.ansi",
+        ] {
+            let (screen, style) = raw_fixture(capture);
+            assert!(
+                !completed_text_question(&screen, &style),
+                "a completed tool activity was read as an agent question: {capture}"
+            );
+        }
     }
 
     #[test]
     fn assistant_prose_starting_with_an_activity_verb_is_still_a_question() {
-        for prose in ["Read this? Then confirm.", "Working correctly? Please verify."] {
-            let screen = vec![format!("• {prose}"), String::new(), "›".into()];
+        for capture in [
+            "codex-0.155-completed-assistant-question.ansi",
+            "codex-0.155-completed-assistant-working-question.ansi",
+        ] {
+            let (screen, style) = raw_fixture(capture);
             assert!(
-                completed_text_question(&screen, &no_dim(&screen)),
-                "assistant prose was rejected for its opening verb: {prose}"
+                completed_text_question(&screen, &style),
+                "assistant prose was rejected for its opening verb: {capture}"
             );
         }
     }
@@ -2456,9 +2437,9 @@ mod tests {
     #[test]
     fn a_working_turn_or_a_non_empty_composer_is_not_a_completed_text_question() {
         let working = fixture("codex-0.146-working.txt");
-        assert!(!completed_text_question(&working, &no_dim(&working)));
+        assert!(!completed_text_question(&working, &[]));
         let draft = fixture("codex-0.146-draft-in-the-composer.txt");
-        assert!(!completed_text_question(&draft, &no_dim(&draft)));
+        assert!(!completed_text_question(&draft, &[]));
     }
 
     #[test]

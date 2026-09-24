@@ -187,11 +187,11 @@ pub struct DetectInput<'a> {
     /// Whether this launch has a person available to answer a free-text
     /// question. Unattended batches intentionally cannot become interactive.
     pub text_questions: bool,
-    /// Whether each visible row's entry marker is drawn dim. The plain screen
-    /// text deliberately remains the quiet fingerprint, while Codex's own
-    /// free-text reader uses this style metadata to distinguish a tool/activity
+    /// The SGR presentation of each visible row's entry marker. The plain
+    /// screen text deliberately remains the quiet fingerprint, while Codex's
+    /// own free-text reader uses this metadata to distinguish a tool/activity
     /// summary from an assistant reply without guessing from English prose.
-    pub entry_dim: &'a [bool],
+    pub entry_style: &'a [crate::terminal::screen::EntryStyle],
     /// Which agent this session runs — layer B is that agent's own dialog
     /// reader, not a hardcoded one.
     ///
@@ -264,7 +264,7 @@ pub fn detect(input: DetectInput) -> Detected {
         if let Some(question) = input.profile.and_then(|p| p.question(input.screen)) {
             return Detected { state: SessionState::NeedsYou, question: Some(question) };
         }
-        if input.text_questions && input.profile.is_some_and(|p| p.text_question(input.screen, input.entry_dim)) {
+        if input.text_questions && input.profile.is_some_and(|p| p.text_question(input.screen, input.entry_style)) {
             return Detected { state: SessionState::NeedsYou, question: None };
         }
     }
@@ -303,7 +303,7 @@ mod tests {
             screen: Box::leak(lines(screen).into_boxed_slice()),
             transcript: false,
             text_questions: true,
-            entry_dim: &[],
+            entry_style: &[],
             profile: Some(crate::agents::resolve("claude").unwrap()),
             // A session that has not been loud before this tick. The tests
             // about holding `NeedsYou` say so for themselves rather than
@@ -361,7 +361,7 @@ mod tests {
             screen: dialog(),
             transcript: false,
             text_questions: true,
-            entry_dim: &[],
+            entry_style: &[],
             profile: Some(crate::agents::resolve("claude").unwrap()),
             was: SessionState::Running,
         });
@@ -380,7 +380,7 @@ mod tests {
             screen: dialog(),
             transcript: false,
             text_questions: true,
-            entry_dim: &[],
+            entry_style: &[],
             profile: Some(crate::agents::resolve("claude").unwrap()),
             was: SessionState::Running,
         });
@@ -396,7 +396,7 @@ mod tests {
             screen: dialog(),
             transcript: false,
             text_questions: true,
-            entry_dim: &[],
+            entry_style: &[],
             profile: Some(crate::agents::resolve("claude").unwrap()),
             was: SessionState::Running,
         });
@@ -418,7 +418,7 @@ mod tests {
             screen: &screen,
             transcript: false,
             text_questions: true,
-            entry_dim: &[],
+            entry_style: &[],
             profile: Some(crate::agents::resolve("codex").unwrap()),
             was: SessionState::Running,
         });
@@ -427,15 +427,19 @@ mod tests {
     }
 
     #[test]
-    fn a_dim_codex_activity_with_a_question_mark_is_not_a_text_question() {
-        let screen = lines(&["› Inspect the document.", "", "• Called server.tool(what?)", "", "›"]);
+    fn a_coloured_bold_codex_activity_with_a_question_mark_is_not_a_text_question() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/codex-0.155-completed-called-question.ansi");
+        let mut terminal = crate::terminal::screen::Screen::new(160, 8);
+        terminal.feed(&std::fs::read(path).unwrap());
+        let (screen, entry_style) = terminal.lines_with_entry_style();
         let out = detect(DetectInput {
             bell_pending: false,
             still_for: Duration::from_millis(500),
             screen: &screen,
             transcript: false,
             text_questions: true,
-            entry_dim: &[false, false, true, false, false],
+            entry_style: &entry_style,
             profile: Some(crate::agents::resolve("codex").unwrap()),
             was: SessionState::Running,
         });
@@ -456,7 +460,7 @@ mod tests {
             screen: &screen,
             transcript: false,
             text_questions: false,
-            entry_dim: &[],
+            entry_style: &[],
             profile: Some(crate::agents::resolve("codex").unwrap()),
             was: SessionState::Running,
         });
@@ -473,7 +477,7 @@ mod tests {
             screen: dialog(),
             transcript: false,
             text_questions: true,
-            entry_dim: &[],
+            entry_style: &[],
             profile: None,
             was: SessionState::Running,
         });
@@ -488,7 +492,7 @@ mod tests {
             screen: dialog(),
             transcript: false,
             text_questions: true,
-            entry_dim: &[],
+            entry_style: &[],
             profile: None,
             was: SessionState::Running,
         });
@@ -507,7 +511,7 @@ mod tests {
             screen: dialog(),
             transcript: false,
             text_questions: true,
-            entry_dim: &[],
+            entry_style: &[],
             profile: Some(no_layer_b()),
             was: SessionState::Running,
         });
@@ -586,7 +590,7 @@ mod tests {
                 screen,
                 transcript: batch,
                 text_questions: true,
-                entry_dim: &[],
+                entry_style: &[],
                 profile,
                 was,
             };
@@ -771,7 +775,7 @@ mod tests {
             screen: &screen,
             transcript: true,
             text_questions: true,
-            entry_dim: &[],
+            entry_style: &[],
             profile: Some(no_layer_b()),
             was: SessionState::Running,
         });
@@ -789,7 +793,7 @@ mod tests {
             screen: dialog(),
             transcript: true,
             text_questions: true,
-            entry_dim: &[],
+            entry_style: &[],
             profile: Some(crate::agents::resolve("claude").unwrap()),
             was: SessionState::Running,
         });
@@ -887,7 +891,7 @@ mod tests {
             screen,
             transcript: false,
             text_questions: true,
-            entry_dim: &[],
+            entry_style: &[],
             profile: Some(crate::agents::resolve("claude").unwrap()),
             was,
         })

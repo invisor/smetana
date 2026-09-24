@@ -687,7 +687,7 @@ pub trait Profile: Sync {
     /// Whether this profile's completed free-text turn on screen leaves the
     /// person a question to answer. Unlike `question`, this has no structured
     /// reply to send and therefore produces no `Question` card.
-    fn text_question(&self, _screen: &[String], _entry_dim: &[bool]) -> bool {
+    fn text_question(&self, _screen: &[String], _entry_style: &[crate::terminal::screen::EntryStyle]) -> bool {
         false
     }
 
