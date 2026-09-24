@@ -300,6 +300,9 @@ pub fn start(app: AppHandle) -> SessionHandle {
         // A child receives one `thread/read(includeTurns:true)` hydration when
         // it is first discovered. Its later live records stay separate.
         let mut codex_hydrated: HashSet<(u64, String)> = HashSet::new();
+        let mut codex_hydration_requested: HashSet<(u64, String)> = HashSet::new();
+        let mut codex_buffered: HashMap<(u64, String), Vec<serde_json::Value>> = HashMap::new();
+        let mut codex_seen: HashSet<(u64, String, String)> = HashSet::new();
         let mut codex_reconciled: HashSet<u64> = HashSet::new();
         let mut crew_waiters: HashMap<u64, Vec<oneshot::Sender<crate::terminal::model::Exit>>> =
             HashMap::new();
@@ -352,7 +355,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                     // breaking is a stopped worker, whereas continuing is a
                     // branch that is instantly ready forever.
                     let Some(chunk) = chunk else { break };
-                    absorb(&app, &mut sessions, &mut crews, &mut crew_leads, &mut crew_waiters, &mut crew_send_waiters, &mut codex_hydrated, &mut codex_reconciled, &mut starting, &mut crew_starting, permission.as_ref(), chunk);
+                    absorb(&app, &mut sessions, &mut crews, &mut crew_leads, &mut crew_waiters, &mut crew_send_waiters, &mut codex_hydrated, &mut codex_hydration_requested, &mut codex_buffered, &mut codex_seen, &mut codex_reconciled, &mut starting, &mut crew_starting, permission.as_ref(), chunk);
                 }
                 asked = asked_rx.recv(), if asked_open => {
                     let Some(asked) = asked else {
@@ -999,23 +1002,56 @@ fn absorb_codex_journals(
     crews: &mut HashMap<u64, CrewPackage>,
     root: u64,
     records: Vec<serde_json::Value>,
+    hydrated: &mut HashSet<(u64, String)>,
+    buffered: &mut HashMap<(u64, String), Vec<serde_json::Value>>,
+    seen: &mut HashSet<(u64, String, String)>,
 ) {
-    let Some(package) = crews.get_mut(&root) else { return };
     for record in records {
-        let parsed = crate::agents::codex_crew::hydrated_journal(&record)
-            .or_else(|| crate::agents::codex_crew::journal(&record));
-        let Some((provider, kinds)) = parsed else { continue };
-        let node = package
-            .tree
-            .provider_nodes()
-            .into_iter()
-            .find_map(|(id, node)| (id == provider).then_some(node));
-        let Some(node) = node else { continue };
-        if let Some(events) = package.append(node, kinds) {
-            if !events.is_empty() {
-                emit_crew_events(app, root, node, events);
+        if let Some((provider, kinds)) = crate::agents::codex_crew::hydrated_journal(&record) {
+            append_codex_journal(app, crews, root, &provider, kinds, seen, &record);
+            hydrated.insert((root, provider.clone()));
+            for live in buffered.remove(&(root, provider)).unwrap_or_default() {
+                if let Some((provider, kinds)) = crate::agents::codex_crew::journal(&live) {
+                    append_codex_journal(app, crews, root, &provider, kinds, seen, &live);
+                }
             }
+            continue;
         }
+        let Some((provider, kinds)) = crate::agents::codex_crew::journal(&record) else { continue };
+        if !hydrated.contains(&(root, provider.clone())) {
+            buffered.entry((root, provider)).or_default().push(record);
+            continue;
+        }
+        append_codex_journal(app, crews, root, &provider, kinds, seen, &record);
+    }
+}
+
+/// A history response races live notifications by design. Keep live records
+/// behind it and collapse exact duplicate JSON-RPC records by their provider
+/// scoped wire value, so an attach never sees another child's events or two
+/// copies of the same child delta.
+fn append_codex_journal(
+    app: &AppHandle,
+    crews: &mut HashMap<u64, CrewPackage>,
+    root: u64,
+    provider: &str,
+    kinds: Vec<EventKind>,
+    seen: &mut HashSet<(u64, String, String)>,
+    record: &serde_json::Value,
+) {
+    let key = serde_json::to_string(record).unwrap_or_default();
+    if !seen.insert((root, provider.to_owned(), key)) {
+        return;
+    }
+    let Some(package) = crews.get_mut(&root) else { return };
+    let node = package
+        .tree
+        .provider_nodes()
+        .into_iter()
+        .find_map(|(id, node)| (id == provider).then_some(node));
+    let Some(node) = node else { return };
+    if let Some(events) = package.append(node, kinds) {
+        emit_crew_events(app, root, node, events);
     }
 }
 
@@ -1645,6 +1681,9 @@ fn absorb(
     crew_waiters: &mut HashMap<u64, Vec<oneshot::Sender<crate::terminal::model::Exit>>>,
     crew_send_waiters: &mut HashMap<(u64, String), CrewSendWaiter>,
     codex_hydrated: &mut HashSet<(u64, String)>,
+    codex_hydration_requested: &mut HashSet<(u64, String)>,
+    codex_buffered: &mut HashMap<(u64, String), Vec<serde_json::Value>>,
+    codex_seen: &mut HashSet<(u64, String, String)>,
     codex_reconciled: &mut HashSet<u64>,
     starting: &mut HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>>,
     crew_starting: &mut HashMap<SessionId, (u64, oneshot::Sender<Result<(u64, SessionId), SessionError>>)>,
@@ -1684,7 +1723,7 @@ fn absorb(
                     }
                 }
                 absorb_codex_crew(app, crews, root, discovered.as_deref(), crew_records);
-                absorb_codex_journals(app, crews, root, crew_journal_records);
+                absorb_codex_journals(app, crews, root, crew_journal_records, codex_hydrated, codex_buffered, codex_seen);
                 for receipt in crew_send_results {
                     // Responses are ordered by one app-server stream. A send
                     // is never reported successful merely because its bytes
@@ -1713,7 +1752,7 @@ fn absorb(
                     }
                 }
                 if let Some(package) = crews.get(&root) {
-                    for provider in codex_hydration_requests(package, codex_hydrated) {
+                    for provider in codex_hydration_requests(package, codex_hydration_requested) {
                         if let Some(talking) = live.talking.as_mut() {
                             if let Some(request) = talking.driver.crew_hydrate(&provider) {
                                 outgoing.push(request);
@@ -1831,6 +1870,9 @@ fn absorb(
                     let _ = waiter.reply.send(Err(SessionError::Spawn(ENDED.into())));
                 }
                 codex_hydrated.retain(|(crew, _)| *crew != root);
+                codex_hydration_requested.retain(|(crew, _)| *crew != root);
+                codex_buffered.retain(|(crew, _), _| *crew != root);
+                codex_seen.retain(|(crew, _, _)| *crew != root);
                 codex_reconciled.remove(&root);
                 for waiter in crew_waiters.remove(&root).unwrap_or_default() {
                     let _ = waiter.send(crate::terminal::model::Exit::NoCode);
