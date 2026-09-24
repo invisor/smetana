@@ -159,6 +159,64 @@ failure — no shell, a five-second timeout, unrecognisable output — falls bac
 The bug is invisible in development, which is why it is a module rather than a line: `npm run tauri
 dev` starts the binary from a terminal, so the process already has the full `PATH`.
 
+## What a row is called
+
+A driven row's prose label is, in order: the intent's own caption (`CAPTION[kind]` in
+`components/agent/captions.js`) — "Creating a task", "Editing" plus an id — until the session worker
+has something better to say, and then the automatic **title** it recorded, which replaces the prose
+outright while the mono identifiers beside it (an issue id, a repository, a branch) stay untouched.
+This is the smetana-6q46 half of the feature; a person's own name for a row, which outranks the title
+in turn, is the next task's (smetana-b9se) and does not exist yet — `captionOf`'s third parameter is
+already shaped for it (`captionOf(work, claimed = [], title = null)`) so that seam does not have to be
+reopened. A run row (claimed ids, no label) is never titled, whatever the worker sends: `captionOf`
+checks for a run before it looks at the title at all.
+
+**Two sources, in the order they can arrive.** The first is the person's own opening words —
+`Intent::opening_words()` at the spawn, when there are any (a filing's own draft, mainly), reduced by
+`session::model::first_words`: whitespace collapsed through `sessions::model::one_line` and then cut
+to `TITLE_CHARS` (120) characters on a character boundary, empty read as no title at all. A `Bare`
+session opens with none of its own, so the *first* `Request::Send` that reaches a session with no
+title yet supplies it the same way — and only the first: once a title exists, nothing after it
+overwrites it from this source. The second is Claude Code's own session title, the `{"type":
+"ai-title","aiTitle":…}` record it writes into its transcript once a turn has actually produced one.
+`session::service::refresh_state` looks for it the moment a session's state settles to `Ready` or
+`NeedsYou`, through `sessions::read::transcript(live.cwd, conversation)` to find the file and
+`sessions::read::ai_title_in` to read the first non-empty `ai-title` out of it, bounded by the same
+`HEAD_LINES` the Sessions tab's own read is. Found once, it is never looked for again — every
+`ai-title` record of one transcript carries the same text — and it always replaces whatever the first
+source had set, which is `Live::title_settled` on the worker's own session state: `false` at the spawn
+for a Claude Code session, `true` immediately for every other profile, since only Claude Code's
+transcript carries a record worth reading a second time. That is the whole of why Codex keeps the
+person's words for good rather than moving on to some title of its own.
+
+**Where the name rides.** `Restorable` (`terminal::restore.rs`) carries `title: Option<String>`,
+serde-defaulted so a file written before this shipped still reads with `title: None`, and
+`session::service::record_live` is the one function that writes it — built from `Live` rather than
+from a hand-assembled literal, so the spawn's own write, `note_conversation`'s and a title change's
+cannot disagree about a field. On the wire, `Attached` (the `session_attach` snapshot) and
+`StateChange` (every `session:state`) both carry the same `title`, for `conversation`'s own reason
+beside it: a window that missed one event must still learn the name of the row it is drawing, and the
+snapshot is what a store reads before the first state change has had a chance to arrive at all. The
+PTY road (`terminal::service`) writes `title: None` on both of its own `Restorable` literals and
+touches none of this further — a shell and an unsupported-harness session are captioned exactly as
+they always were.
+
+**The front end resolves and carries the title in exactly the shape `conversation` already
+has**, and for the identical reason: `stores/conversation.js`'s `noteTitle` is `noteConversation`'s own
+twin, never writing a `null` or an empty string back over a title already known, called from `attach`
+(off the snapshot) and from the `session:state` listener alike. `drivenAgentRow` in
+`components/agent/drivenRows.js` takes a `title` alongside `work` and hands it to `captionOf`;
+`stores/terminals.js`'s `describeWork` takes the same third parameter for the one PTY-side caller that
+can ever have one — the restored rows, built from `record.title`, since a record in `.smetana/
+agents.json` may carry a title whichever road wrote it. `views/DesktopApp.vue`'s `drivenAgents` passes
+`title: session.title ?? null` through unchanged, the same shape `conversation` travels in on that same
+computed.
+
+**Untouched by any of this**: the Sessions tab and its own title rule (`sessions/read.rs`'s
+`generated_title`, described below under "The other list of sessions") is a different subject reusing
+a similar idea over a different file; a run's own row, which is never titled; and the PTY road beyond
+the `title: None` two of its literals now carry.
+
 ## Not every session is an agent: the shell
 
 `SessionWork::Shell` is the one entry in that enum with no `Intent` behind it, no profile and nothing
