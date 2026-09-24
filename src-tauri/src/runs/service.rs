@@ -216,6 +216,15 @@ struct Active {
     released: watch::Sender<bool>,
 }
 
+/// The run loop talks to one frozen transport rather than reaching the terminal
+/// worker directly. A driven Crew implementation fills the second branch; it
+/// must never silently use the first one once selected.
+#[derive(Clone)]
+enum RunTransport {
+    Pty(TerminalHandle),
+    Driven(SessionHandle),
+}
+
 /// Sends `Report::Ended` when the loop task ends, whichever way it ends. That
 /// is what makes "there is an entry in the map" and "a loop task is alive" the
 /// same fact rather than two that agree most of the time; the map's own comment
@@ -774,7 +783,7 @@ async fn drive(
     mut released: watch::Receiver<bool>,
     tracker: TrackerHandle,
     terminal: TerminalHandle,
-    _session: SessionHandle,
+    session: SessionHandle,
     report: mpsc::UnboundedSender<Report>,
     mut stop: mpsc::Receiver<()>,
     // Where a headless probe of this run's own harness runs — the gate and
@@ -783,6 +792,11 @@ async fn drive(
     // as an unreadable probe: never a reason to hold the run up.
     probe: Option<PathBuf>,
 ) {
+    // Auto, Solo and panel-off Crew begin on the unchanged PTY transport.
+    // `runs::session::select` replaces this construction before the first
+    // board/claim when supervised Crew has a conversation panel.
+    let transport = RunTransport::Pty(terminal);
+    let _driven_handle = session;
     let say = |run: &Run| {
         let _ = report.send(Report::State { token, run: Box::new(run.clone()) });
     };
@@ -1044,7 +1058,7 @@ async fn drive(
         }
 
         let session = match spawn_batch(
-            &terminal,
+            &transport,
             &run,
             tasks,
             &current_agent,
@@ -1066,7 +1080,7 @@ async fn drive(
         // Before anything waits on the batch: from here on the app may be
         // killed at any moment, and what the registry does not know about by
         // then is an agent nobody will ever signal.
-        let group = group_of(&terminal, session).await;
+        let group = group_of(&transport, session).await;
         account.journal.say(&journal::batch_started(
             batch_no,
             attempt.number,
@@ -1098,7 +1112,7 @@ async fn drive(
         run.advance(RunState::Working { iteration });
         say(&run);
 
-        let outcome = watch_batch(&terminal, &run, session, &account.reports, batch_no).await;
+        let outcome = watch_batch(&transport, &run, session, &account.reports, batch_no).await;
         // Read here rather than at the ending, so that a batch's account is
         // taken while it is the freshest thing on disk and every way out of the
         // match below is covered by one read instead of three.
@@ -1150,7 +1164,7 @@ async fn drive(
         // the release, so on an unanswered question the lead is still sitting
         // at its dialog when this is asked and `life` comes back `Unproven`.
         let mut life = batch_life(group.as_ref());
-        let mut terminal_ack = terminal_handoff_ready(&terminal, session).await;
+        let mut terminal_ack = terminal_handoff_ready(&transport, session).await;
         // Taken once, here, rather than inside the emptiness rule below: the
         // line on the record and the value the decision is made from have to be
         // the same snapshot, or the journal describes a board the loop did not
@@ -1215,7 +1229,7 @@ async fn drive(
                 // boundary until the group is provably quiet: until then the
                 // old actor keeps its claims and no replacement is admitted.
                 if !handoff_permitted(handoff_gate(), life, terminal_ack) {
-                    match wait_for_handoff_quiet(&terminal, session, group.as_ref(), &mut stop).await {
+                    match wait_for_handoff_quiet(&transport, session, group.as_ref(), &mut stop).await {
                         HandoffWait::Quiet { life: quiet_life, terminal_ack: quiet_ack } => {
                             life = quiet_life;
                             terminal_ack = quiet_ack;
@@ -1471,7 +1485,7 @@ async fn drive(
                     // and a claim that lands after the parking stays
                     // `in_progress`, which the next batch reads as unfinished
                     // work to recover rather than losing.
-                    remove_session(&terminal, session).await;
+                    remove_session(&transport, session).await;
                     park_claims(&tracker, &root, session, &question).await;
                     last_batch = LastBatch::Asked;
                     counted(last_batch, crashes, empties, None);
@@ -1894,7 +1908,8 @@ fn handoff_life(
         .unwrap_or(queue::BatchLife::Unproven)
 }
 
-async fn terminal_handoff_ready(terminal: &TerminalHandle, session: u64) -> bool {
+async fn terminal_handoff_ready(transport: &RunTransport, session: u64) -> bool {
+    let RunTransport::Pty(terminal) = transport else { return false };
     let (tx, rx) = oneshot::channel();
     if terminal.0.send(TerminalRequest::HandoffReady(session, tx)).await.is_err() {
         return false;
@@ -1914,13 +1929,13 @@ enum HandoffWait {
 /// Stay at the boundary while a writer may still exist. The stop request is
 /// always honoured; settings cannot start another agent until this returns.
 async fn wait_for_handoff_quiet(
-    terminal: &TerminalHandle,
+    transport: &RunTransport,
     session: u64,
     group: Option<&Proc>,
     stop: &mut mpsc::Receiver<()>,
 ) -> HandoffWait {
     if matches!(handoff_gate(), HandoffGate::WindowsJob) {
-        let terminal_ack = terminal_handoff_ready(terminal, session).await;
+        let terminal_ack = terminal_handoff_ready(transport, session).await;
         return terminal_ack
             .then_some(HandoffWait::Quiet { life: queue::BatchLife::Unproven, terminal_ack })
             .unwrap_or(HandoffWait::Unproven);
@@ -2593,7 +2608,8 @@ async fn park_claims(tracker: &TrackerHandle, root: &Path, session: u64, questio
 /// does. Awaited rather than fired off, so the parking that follows starts
 /// after the kill has gone in rather than beside it — what that kill does and
 /// does not reach is recorded at the call site.
-async fn remove_session(terminal: &TerminalHandle, session: u64) {
+async fn remove_session(transport: &RunTransport, session: u64) {
+    let RunTransport::Pty(terminal) = transport else { return };
     let (tx, rx) = oneshot::channel();
     if terminal.0.send(TerminalRequest::Remove(session, tx)).await.is_ok() {
         let _ = rx.await;
@@ -2630,7 +2646,7 @@ async fn may_spawn(report: &mpsc::UnboundedSender<Report>, token: u64) -> bool {
 /// condition of the moment — the same split `views/panelWidths.js` makes.
 #[allow(clippy::too_many_arguments)]
 async fn spawn_batch(
-    terminal: &TerminalHandle,
+    transport: &RunTransport,
     run: &Run,
     tasks: Option<u8>,
     agent: &str,
@@ -2656,6 +2672,9 @@ async fn spawn_batch(
             continuation,
             remove_worktrees,
         };
+    let RunTransport::Pty(terminal) = transport else {
+        return Err("the selected driven Crew transport has no terminal fallback".into());
+    };
     terminal
         .0
         .send(TerminalRequest::Create(
@@ -2691,7 +2710,8 @@ async fn spawn_batch(
 /// wait is the comment at the call site — from there on the app may be killed
 /// at any moment and the registry does not know about this agent yet — so the
 /// ceiling is `recovery::EXEC`, a second, against an ordinary cost of one poll.
-async fn group_of(terminal: &TerminalHandle, session: u64) -> Option<Proc> {
+async fn group_of(transport: &RunTransport, session: u64) -> Option<Proc> {
+    let RunTransport::Pty(terminal) = transport else { return None };
     let (tx, rx) = oneshot::channel();
     terminal.0.send(TerminalRequest::Group(session, tx)).await.ok()?;
     recovery::group(rx.await.ok()??).await
@@ -2743,13 +2763,13 @@ pub(super) enum Batch {
 /// agent having finished a task well. A question is also the only form of this
 /// a person can be told anything useful about.
 async fn watch_batch(
-    terminal: &TerminalHandle,
+    transport: &RunTransport,
     run: &Run,
     session: u64,
     reports: &Path,
     batch: u32,
 ) -> Batch {
-    let mut ended = std::pin::pin!(await_exit(terminal, session));
+    let mut ended = std::pin::pin!(await_exit(transport, session));
     // A supervised or solo run has somebody who can answer in the terminal, and
     // that is the mode's whole point — ending their run at the first question
     // would be taking it away from them. See `RunMode::unattended`.
@@ -2783,7 +2803,7 @@ async fn watch_batch(
         tokio::select! {
             exit = &mut ended => return Batch::Ended(exit),
             _ = tokio::time::sleep(ASK_POLL) => {
-                let seen = asking(terminal, run, session).await;
+                let seen = asking(transport, run, session).await;
                 if let Some(question) = asked.confirm(seen.as_deref()) {
                     return Batch::Unanswered { question };
                 }
@@ -2798,7 +2818,8 @@ async fn watch_batch(
 /// `None` for a session that is working, that has gone from the worker's map,
 /// or that is loud with nothing readable behind it — the last of those is the
 /// bell case, and it is deliberately not evidence of anything here.
-async fn asking(terminal: &TerminalHandle, run: &Run, session: u64) -> Option<String> {
+async fn asking(transport: &RunTransport, run: &Run, session: u64) -> Option<String> {
+    let RunTransport::Pty(terminal) = transport else { return None };
     let (tx, rx) = oneshot::channel();
     terminal.0.send(TerminalRequest::List(run.project.clone(), tx)).await.ok()?;
     rx.await
@@ -2813,7 +2834,8 @@ async fn asking(terminal: &TerminalHandle, run: &Run, session: u64) -> Option<St
 /// A terminal worker that is not there to answer counts as a batch that ended
 /// without a code, never as a session somebody removed: `Removed` stops the run
 /// outright, and a worker that has gone away is not a person's decision.
-async fn await_exit(terminal: &TerminalHandle, session: u64) -> Exit {
+async fn await_exit(transport: &RunTransport, session: u64) -> Exit {
+    let RunTransport::Pty(terminal) = transport else { return Exit::NoCode };
     let (tx, rx) = oneshot::channel();
     if terminal.0.send(TerminalRequest::AwaitExit(session, tx)).await.is_err() {
         return Exit::NoCode;
