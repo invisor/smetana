@@ -339,4 +339,15 @@ mod tests {
         assert_eq!(first_events.len(), 1);
         assert!(second_events.is_empty());
     }
+
+    #[test]
+    fn a_child_failure_does_not_fail_its_sibling_or_root() {
+        let mut package = CrewPackage::new("/project".into(), 7, "Lead");
+        let first = package.apply(worker("one", None, ProviderState::Running)).unwrap();
+        let second = package.apply(worker("two", None, ProviderState::Running)).unwrap();
+        assert!(package.tree.fail_node(first));
+        assert_eq!(package.tree.node(first).unwrap().state, CrewState::Failed);
+        assert_eq!(package.tree.node(second).unwrap().state, CrewState::Running);
+        assert_eq!(package.tree.node(package.root).unwrap().state, CrewState::Starting);
+    }
 }

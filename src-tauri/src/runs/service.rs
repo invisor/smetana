@@ -2686,7 +2686,15 @@ async fn park_claims(tracker: &TrackerHandle, root: &Path, session: u64, questio
 /// after the kill has gone in rather than beside it — what that kill does and
 /// does not reach is recorded at the call site.
 async fn remove_session(transport: &RunTransport, session: u64) {
-    let RunTransport::Pty(terminal) = transport else { return };
+    let RunTransport::Pty(terminal) = transport else {
+        if let RunTransport::Driven { session: driven, .. } = transport {
+            // A driven root owns its provider child processes and watcher
+            // subscriptions. `CrewClear` kills the interactive PTY (where
+            // present) and removes the package tree atomically.
+            let _ = driven.0.send(crate::session::service::Request::CrewClear(session)).await;
+        }
+        return;
+    };
     let (tx, rx) = oneshot::channel();
     if terminal.0.send(TerminalRequest::Remove(session, tx)).await.is_ok() {
         let _ = rx.await;

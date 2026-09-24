@@ -1146,6 +1146,11 @@ fn handle(
         Request::CrewClear(root) => {
             claude_crews.remove(&root);
             claude_teams.remove(&root);
+            if let Some(live) = sessions.get_mut(&root) {
+                if let Some(child) = live.child.as_mut() {
+                    let _ = child.start_kill();
+                }
+            }
             if let Some(mut pty) = crew_ptys.remove(&root) {
                 pty.kill();
             }
