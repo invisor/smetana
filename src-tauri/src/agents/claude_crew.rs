@@ -150,6 +150,12 @@ pub fn preflight(
         if member.get("agentType").and_then(Value::as_str) == Some("team-lead") {
             continue;
         }
+        if matches!(
+            member.get("status").and_then(Value::as_str),
+            Some("left" | "completed" | "failed")
+        ) {
+            continue;
+        }
         let Some(name) = member.get("name").and_then(Value::as_str) else {
             continue;
         };
