@@ -190,6 +190,67 @@ describe('the conversation store', () => {
     ])
   })
 
+  it('addresses each selected Crew child without mixing its journal or message', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    const snapshots = {
+      2: { events: [text(1, 'only worker one')], seq: 1, state: 'running', cwd: '/p' },
+      3: { events: [text(1, 'only worker two')], seq: 1, state: 'running', cwd: '/p' }
+    }
+    ipc.on('crew_attach', ({ node }) => snapshots[node])
+    ipc.on('crew_send', null)
+    await emit('crew:tree', {
+      project: '/p',
+      root: 41,
+      nodes: [
+        { id: 1, parent: null, state: 'running', canMessage: true, label: 'Lead' },
+        { id: 2, parent: 1, state: 'running', canMessage: true, label: 'Worker one' },
+        { id: 3, parent: 1, state: 'running', canMessage: true, label: 'Worker two' }
+      ]
+    })
+    await stores.conversation.attach('crew:41:2')
+    await stores.conversation.attach('crew:41:3')
+    await emit('crew:events', { root: 41, node: 2, events: [text(2, 'one live event')] })
+    await nextTick()
+
+    expect(stores.conversation.conversationFor('crew:41:2').events.map((event) => event.text)).toEqual([
+      'only worker one',
+      'one live event'
+    ])
+    expect(stores.conversation.conversationFor('crew:41:3').events.map((event) => event.text)).toEqual([
+      'only worker two'
+    ])
+
+    await stores.conversation.sendMessage('crew:41:2', 'UNIQUE-WORKER-ONE', [])
+    await stores.conversation.sendMessage('crew:41:3', 'UNIQUE-WORKER-TWO', [])
+    expect(ipc.calls('crew_send')).toEqual([
+      { root: 41, node: 2, text: 'UNIQUE-WORKER-ONE' },
+      { root: 41, node: 3, text: 'UNIQUE-WORKER-TWO' }
+    ])
+  })
+
+  it('keeps a Crew draft when its selected child ends during addressed send', async () => {
+    const { ipc, stores, emit } = await ready()
+    ipc.on('crew_attach', () => ({ events: [], seq: 0, state: 'running', cwd: '/p' }))
+    ipc.fail('crew_send', new Error('This session has ended, so the message was not delivered.'))
+    await emit('crew:tree', {
+      project: '/p',
+      root: 42,
+      nodes: [
+        { id: 2, parent: null, state: 'running', canMessage: true, label: 'Lead' },
+        { id: 3, parent: 2, state: 'running', canMessage: true, label: 'Selected child' },
+        { id: 4, parent: 2, state: 'running', canMessage: true, label: 'Neighbour' }
+      ]
+    })
+    await stores.conversation.attach('crew:42:3')
+    const held = stores.conversation.conversationFor('crew:42:3')
+    held.draft = 'do not reroute this'
+    await stores.conversation.sendMessage('crew:42:3', held.draft, [])
+
+    expect(held.draft).toBe('do not reroute this')
+    expect(ipc.calls('crew_send')).toEqual([{ root: 42, node: 3, text: 'do not reroute this' }])
+    expect(stores.conversation.conversationState.lastError.session).toBe('crew:42:3')
+  })
+
   it('refuses to send nothing at all', async () => {
     const { ipc, stores } = await ready()
     ipc.on('session_send', null)

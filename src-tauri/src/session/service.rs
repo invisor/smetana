@@ -124,9 +124,6 @@ pub struct CrewAttached {
 
 pub enum Request {
     Start(String, Intent, oneshot::Sender<Result<SessionId, SessionError>>),
-    /// A run transport creates a Smetana-owned Crew root before provider ids
-    /// exist. Provider discovery later fills it through `CrewApply`.
-    CrewBegin(String, String, oneshot::Sender<u64>),
     /// Start a driven lead and register its Smetana-owned root in one worker
     /// pass. It intentionally bypasses `Request::Start`'s ordinary Run
     /// refusal: a Crew Run is not a normal conversation, but its Codex
@@ -138,7 +135,6 @@ pub enum Request {
     ),
     CrewTree(u64, oneshot::Sender<Option<Vec<CrewNode>>>),
     CrewAttach(u64, u64, oneshot::Sender<Result<CrewAttached, SessionError>>),
-    CrewApply(u64, crate::agents::crew::ProviderNode),
     CrewSend(u64, u64, String, oneshot::Sender<Result<(), SessionError>>),
     CrewClear(u64),
     Attach(SessionId, oneshot::Sender<Result<Attached, SessionError>>),
@@ -282,7 +278,6 @@ pub fn start(app: AppHandle) -> SessionHandle {
         // Session id -> public Crew root for the special Codex lead whose
         // normal app-server stream also carries thread lifecycle records.
         let mut crew_leads: HashMap<SessionId, u64> = HashMap::new();
-        let mut next_crew: u64 = 1;
         let mut starting: HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>> = HashMap::new();
         let mut next_id: SessionId = 1;
 
@@ -309,7 +304,6 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         &mut claude_tails,
                         &mut claude_transcript_nodes,
                         &mut crew_leads,
-                        &mut next_crew,
                         &mut next_id,
                         &mut starting,
                         permission.as_ref(),
@@ -974,7 +968,20 @@ fn refresh_claude_crews(
             continue;
         }
         let (team, config) = candidates.into_iter().next().expect("one candidate");
-        teams.insert(*root, team);
+        let Some(name) = crate::agents::claude_crew::team_name(&config) else {
+            package.tree.fail_node(*root);
+            emit_crew(app, package);
+            continue;
+        };
+        // The directory was discovered from the runtime; still require that
+        // its config names that same directory before retaining an address.
+        // This prevents a half-replaced team config from crossing packages.
+        if crate::agents::claude_crew::team_config(&home, &name) != team.join("config.json") {
+            package.tree.fail_node(*root);
+            emit_crew(app, package);
+            continue;
+        }
+        teams.insert(*root, team.clone());
         for node in crate::agents::claude_crew::members(&config) {
             package.apply(node);
         }
@@ -982,7 +989,25 @@ fn refresh_claude_crews(
             emit_crew(app, package);
             continue;
         };
-        let Ok(entries) = std::fs::read_dir(subagents) else {
+        let Some(lead_session_dir) = subagents.parent() else {
+            package.tree.fail_node(*root);
+            emit_crew(app, package);
+            continue;
+        };
+        // Version selection happened before the run entered the board loop;
+        // this is the runtime half: the actual config, transcript directory,
+        // and writable member inboxes supplied by this interactive lead.
+        if let Err(error) = crate::agents::claude_crew::preflight(
+            "2.1.281",
+            &team,
+            lead_session_dir,
+        ) {
+            package.tree.fail_node(*root);
+            log::warn!("[crew] Claude runtime preflight failed: {error}");
+            emit_crew(app, package);
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&subagents) else {
             emit_crew(app, package);
             continue;
         };
@@ -997,7 +1022,14 @@ fn refresh_claude_crews(
                 None => crate::agents::claude_crew::subagent_start_from_file(&path)
                     .ok()
                     .flatten()
-                    .and_then(|(_, name)| package.tree.node_for_label(&name)),
+                    .and_then(|(internal, name)| {
+                        // The hook maps a member name to a private internal
+                        // transcript id. Confirm the path is for that exact
+                        // id before it can acquire a Smetana node.
+                        (crate::agents::claude_crew::transcript(&subagents, &internal) == path)
+                            .then(|| package.tree.node_for_label(&name))
+                            .flatten()
+                    }),
             };
             let Some(node) = node else { continue };
             transcript_nodes.insert(key.clone(), node);
@@ -1066,7 +1098,6 @@ fn handle(
     claude_tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
     claude_transcript_nodes: &mut HashMap<(u64, PathBuf), u64>,
     crew_leads: &mut HashMap<SessionId, u64>,
-    next_crew: &mut u64,
     next_id: &mut SessionId,
     starting: &mut HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>>,
     permission: Option<&PermissionServer>,
@@ -1074,15 +1105,6 @@ fn handle(
     request: Request,
 ) {
     match request {
-        Request::CrewBegin(project, label, tx) => {
-            let root = *next_crew;
-            *next_crew = next_crew.saturating_add(1);
-            let package = CrewPackage::new(project, root, label);
-            let root = package.root;
-            emit_crew(app, &package);
-            crews.insert(root, package);
-            let _ = tx.send(root);
-        }
         Request::CrewStart(project, intent, tx) => {
             let id = *next_id;
             *next_id += 1;
@@ -1139,12 +1161,6 @@ fn handle(
                 }))
                 .ok_or(SessionError::NoSuchSession(node));
             let _ = tx.send(answer);
-        }
-        Request::CrewApply(root, node) => {
-            if let Some(package) = crews.get_mut(&root) {
-                package.apply(node);
-                emit_crew(app, package);
-            }
         }
         Request::CrewSend(root, node, text, tx) => {
             let Some(package) = crews.get(&root) else {

@@ -99,6 +99,7 @@ pub struct CrewTree {
 }
 
 impl CrewTree {
+    #[cfg(test)]
     pub fn root(&mut self, label: impl Into<String>) -> CrewNodeId {
         let id = self.mint();
         self.root_with_id(id, label);

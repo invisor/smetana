@@ -138,8 +138,21 @@ pub fn preflight(
     }
     // A configured member's actual inbox is the only writable contract. Do
     // not pre-create it: that would masquerade as a provider runtime surface.
-    for member in members(&config) {
-        let Some(name) = member.label else { continue };
+    for member in config
+        .get("members")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        // The lead is addressed through its own interactive text input. Only
+        // teammates have provider-owned inbox files, so demanding a fictitious
+        // `team-lead.json` would reject a healthy native runtime.
+        if member.get("agentType").and_then(Value::as_str) == Some("team-lead") {
+            continue;
+        }
+        let Some(name) = member.get("name").and_then(Value::as_str) else {
+            continue;
+        };
         let path = inbox(&team_dir, &name);
         OpenOptions::new()
             .read(true)

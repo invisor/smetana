@@ -56,15 +56,15 @@ pub fn select(
             transport: Transport::Pty,
         });
     }
-    let missing = if !capabilities.discover_nodes {
+    let missing = if capabilities.supported() {
+        None
+    } else if !capabilities.discover_nodes {
         Some("native agent discovery")
     } else if !capabilities.separate_journals {
         Some("separate agent journals")
     } else if !capabilities.addressed_messages {
         Some("addressed agent messages")
-    } else {
-        None
-    };
+    } else { unreachable!("CrewCapabilities::supported covered every capability") };
     match missing {
         Some(missing) => Err(UnsupportedCrew {
             provider,

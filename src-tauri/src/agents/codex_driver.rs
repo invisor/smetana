@@ -393,10 +393,16 @@ impl Driver for CodexDriver {
         // This is exactly the generated app-server `turn/start` contract for
         // a child thread. It deliberately does not use `self.thread`: that is
         // the lead and using it here would redirect a completed child's draft.
-        Ok(self.request(
-            "turn/start",
-            json!({"threadId":provider_id, "input":[{"type":"text", "text":text}]}),
-        ))
+        let request = crate::agents::codex_crew::addressed_turn(provider_id, &text);
+        let method = request
+            .get("method")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "the Codex addressed-turn contract is malformed".to_string())?;
+        let params = request
+            .get("params")
+            .cloned()
+            .ok_or_else(|| "the Codex addressed-turn contract has no parameters".to_string())?;
+        Ok(self.request(method, params))
     }
 
     fn startup(&mut self) -> Option<Result<(), String>> { self.startup.take() }
