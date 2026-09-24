@@ -161,9 +161,11 @@ dev` starts the binary from a terminal, so the process already has the full `PAT
 
 ## What a row is called
 
-A driven row's prose label, in order: a person's own name (not yet built — smetana-b9se); the
-worker's automatic **title**, replacing the caption's prose while the mono identifiers stay put; the
-intent's own caption otherwise (`components/agent/captions.js`). A run row is never titled.
+A driven row's prose label, in order: a person's own name (`settings.json`'s `agentNames`, by
+conversation id — smetana-b9se); the worker's automatic **title**, replacing the caption's prose
+while the mono identifiers stay put; the intent's own caption otherwise
+(`components/agent/captions.js`). A run row is never titled and never named — a run's batch carries
+no conversation id, which the name and the title alike are keyed by.
 
 **Three ways the title is set.** `session::model::first_words` (whitespace collapsed, cut to
 `TITLE_CHARS`/120 on a character boundary) reduces `Intent::opening_words()` at the spawn, or — for a
@@ -180,6 +182,46 @@ resume that falls through to it cannot clobber a title the driven road already g
 
 **Untouched**: the Sessions tab's own `generated_title`, run rows, and the PTY road's own titling,
 which only ever carries a title forward.
+
+**The manual name lives beside the pins and never on the record.**
+`ProjectState::agent_names: BTreeMap<String, String>` (`agentNames` on the wire) is keyed by the same
+conversation id `pinned_agents` and `agent_order` already are, for the same reason: it has to outlive
+the session so an offline row comes back under the name it was given, and `sane_agent_names` cleans it
+the way those two lists are cleaned — a hand-edited entry with an overlong key or value, or one that
+trims to nothing, is dropped rather than refusing the file. It is written only by the rename gesture
+and never pruned against what is on screen — the automatic rule above never writes here, and it
+outranks a fresh title for good rather than for one turn. `.smetana/agents.json`'s `Restorable` record
+was the rejected place for it: that file is the worker's account of a session and is rewritten by the
+worker's own rules, where a name is a person's mark on a *row* and belongs with the other marks a
+person puts on one, the same argument `pinned_agents` already settled.
+
+`src/components/agent/agentName.js` is the pure half of it, of the family every rule in this
+subsystem keeps outside its component. `withAgentName(names, conversation, value)` writes a trimmed
+name into a **new** map, or removes the entry on a value that trims to nothing — a name of nothing is
+no name, and the automatic title (or, failing that, the intent's caption) shows again — and returns
+the map untouched when there is no conversation id to key it by, the same refusal the menu has
+already greyed. `nameAgentRows(rows, names)` is the read, applied once in `orderedAgentRows`
+(`DesktopApp.vue`), after `mergeAgentRows` and before `orderAgents`: a row whose conversation is named
+gets that name as its `label` and nothing else about it changes — `title` stays what the worker said,
+so a later cleared name falls back to it rather than to nothing. Applying it after the merge and
+before the order is what keeps a fresh automatic title from ever being seen on a named row, even for
+one frame: `session:state` still updates the merged row's own label, and the overlay puts the stored
+name back over it on the same tick `orderedAgentRows` recomputes on.
+
+**The gesture is the menu, then the row itself.** `Rename` is `agentMenu.js`'s first verb — before
+`Pin`, since both are marks a person puts on the row itself and a name is the one reached for first
+once it exists — on `pencil`, borrowed from the file tree's own Rename, and refused with `nothing to
+remember it by` on the identical fact the pin is refused on: a fork, a run's batch and the first frame
+of a session all carry no conversation id, so there is nothing a name could survive a restart under.
+Picking it turns `AgentList.vue`'s caption into an `<input>` in place, at the row's own height,
+prefilled with the current label and selected whole; `@click.stop`/`@pointerdown.stop` on the field
+keep a click inside it from selecting the row or arming the drag the row otherwise answers a press
+with. Enter commits, Esc cancels, and **losing the focus commits** — the one place this parts company
+with the tree's own draft row, which cancels on blur. The difference is deliberate: nothing under an
+agent row redraws while the field is open, where the tree redraws under a draft on every `catchUp`, so
+a name typed and then clicked away from is worth keeping rather than throwing away. A commit of the
+empty string is `withAgentName`'s business and not a special case here: the entry is removed, and the
+row's label falls back through the same three-way order this section opens with.
 
 ## Not every session is an agent: the shell
 
