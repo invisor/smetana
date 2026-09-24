@@ -98,14 +98,15 @@ export function drivenSessionOf(rowId) {
    for the second before the worker answers; this row exists only because
    `session_start` already has, so there is a session behind it to stop and the
    cross is live from the first frame. */
-export function drivenAgentRow({ id, state, elapsed, conversation = null, work }) {
+export function drivenAgentRow({ id, state, elapsed, conversation = null, work, title = null }) {
   return {
     id: drivenRowId(id),
     conversation,
     clearable: false,
     work: work ?? { kind: 'bare' },
     claimed: [],
-    ...captionOf(work),
+    title,
+    ...captionOf(work, [], title),
     state,
     elapsed
   }

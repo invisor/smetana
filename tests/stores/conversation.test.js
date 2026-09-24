@@ -476,6 +476,32 @@ describe('the conversation store', () => {
     expect(stores.conversation.conversationFor(1).state).toBe('needs-you')
   })
 
+  /* The automatic title arrives the same two ways `conversation` does — the
+     attach snapshot, then every `session:state` after it — and a payload with
+     no title is a build that stopped sending one, not a session that has lost
+     its name: `noteTitle` never writes a `null` or an empty string back over a
+     value already known, the same rule `noteConversation` keeps. */
+  it('keeps the title the worker sends and never erases it on a null', async () => {
+    const { ipc, stores, emit, nextTick } = await ready({
+      events: [],
+      seq: 0,
+      state: 'starting',
+      title: 'First words'
+    })
+    ipc.on('session_start', 7)
+    const id = await stores.conversation.startConversation('/p', { kind: 'bare' })
+    await nextTick()
+    expect(stores.conversation.drivenSessions.value.find((s) => s.id === id).title).toBe('First words')
+
+    await emit('session:state', { id, state: 'ready', conversation: 'c', title: 'Claude names it' })
+    await nextTick()
+    expect(stores.conversation.drivenSessions.value.find((s) => s.id === id).title).toBe('Claude names it')
+
+    await emit('session:state', { id, state: 'running', conversation: 'c', title: null })
+    await nextTick()
+    expect(stores.conversation.drivenSessions.value.find((s) => s.id === id).title).toBe('Claude names it')
+  })
+
   /* The refusal the ordinary resume meets: a worktree removed once its task
      merged, with the transcript still on disk. Both stores answer `badCwd` with
      one sentence, and `views/DesktopApp.vue` reads the tag rather than the

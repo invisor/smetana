@@ -2899,7 +2899,11 @@ const drivenAgents = computed(() =>
        the worker's own id and the second is `workOf`'s reduction of the
        intent — and both are read by `drivenRows.js` alone. */
     conversation: session.conversation ?? null,
-    work: session.work
+    work: session.work,
+    /* The worker's own automatic title, carried through exactly as
+       `conversation` above is — `drivenRows.js` is the one place it turns
+       into a caption. */
+    title: session.title ?? null
   }))
 )
 

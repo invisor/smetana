@@ -27,4 +27,13 @@ describe('what a session row is captioned by', () => {
     expect(captionOf({ kind: 'run' }, ['x-1', 'x-2'])).toEqual({ label: null, tasks: ['x-1', 'x-2'] })
     expect(captionOf({ kind: 'run' }, [])).toEqual({ label: 'Agent', tasks: [] })
   })
+
+  it('names a row by its title when the worker has one, and keeps the ids beside it', () => {
+    expect(captionOf({ kind: 'newTask', text: 'x' }, [], 'Rename the rows'))
+      .toEqual({ label: 'Rename the rows', tasks: [] })
+    expect(captionOf({ kind: 'editTask', id: 'x-1' }, [], 'Tighten the criteria'))
+      .toEqual({ label: 'Tighten the criteria', tasks: ['x-1'] })
+    expect(captionOf({ kind: 'newTask', text: 'x' }, [], '   ')).toEqual({ label: 'Creating a task', tasks: [] })
+    expect(captionOf({ kind: 'run' }, ['a-1'], 'ignored')).toEqual({ label: null, tasks: ['a-1'] })
+  })
 })

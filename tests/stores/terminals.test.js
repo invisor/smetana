@@ -1492,6 +1492,15 @@ describe('the sessions a project offers back after a restart', () => {
     })
   })
 
+  /* The worker's own automatic title outranks the intent's prose here exactly
+     as it does for a live row — `describeWork`'s one caller for this kind of
+     row, and `captions.js`'s rule underneath it. */
+  it('names an offered row by the title its record carries', async () => {
+    const { stores } = await offering({ ...offered(), title: 'Yesterday’s filing' })
+
+    expect(stores.terminals.agentRows.value[0].label).toBe('Yesterday’s filing')
+  })
+
   /* `attentionLevel` reads the row's state and `AgentList` dims anything quiet.
      `done` is the same word an ordinary session that exited cleanly carries —
      a row for a dead process is a row for a dead process. */

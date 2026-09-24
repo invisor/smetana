@@ -121,6 +121,15 @@ describe('a driven conversation among the agents', () => {
         .toMatchObject({ label: 'Creating a task', tasks: [] })
     })
 
+    /* The worker's own automatic title, which outranks the intent's prose the
+       moment it exists — `captions.js`'s own rule, carried through the row so
+       a test of the merge does not have to re-derive it from a caption. */
+    it('carries the title into the row label', () => {
+      const row = drivenAgentRow({ id: 3, state: 'running', elapsed: '1m', conversation: 'c', work: { kind: 'bare' }, title: 'Fix the build' })
+      expect(row.label).toBe('Fix the build')
+      expect(row.title).toBe('Fix the build')
+    })
+
     /* The whole point of the id reaching the row: the panel's order and its
        pins are kept under the conversation, which is the one name for this
        session that will still mean something tomorrow. */

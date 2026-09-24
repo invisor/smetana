@@ -383,7 +383,7 @@ export async function attach(id) {
     : invoke('session_attach', { id })
   attaching.set(id, current)
   try {
-    const { events, seq, state, conversation, cwd } = await current
+    const { events, seq, state, conversation, cwd, title } = await current
     if (attaching.get(id) !== current) return
     /* Replaced whole and never merged: this *is* the conversation, and the one
        thing a snapshot is for is being trusted over whatever was drawn before
@@ -405,6 +405,9 @@ export async function attach(id) {
        whole turn: `session:state` goes out on a *change*, and a session that
        has just started and said nothing has not changed state yet. */
     noteConversation(id, conversation)
+    /* Same reasoning, same round trip early: the snapshot is the freshest
+       word on the title too. */
+    noteTitle(id, title)
     conversationState.lastError = null
   } catch (err) {
     // A newer attach has already overtaken this one; its outcome is what the
@@ -500,7 +503,7 @@ function listenToEvents() {
 
 function listenToState() {
   return listen('session:state', (event) => {
-    const { id, state, conversation } = event.payload
+    const { id, state, conversation, title } = event.payload
     /* The state this session was last known to be in, read before `noteState`
        overwrites it below — the same shape `before` takes in `terminals.js`'s
        own `terminal:state` listener, and for the same reason: the transition
@@ -521,6 +524,7 @@ function listenToState() {
        somebody last looked at it. */
     noteState(id, state)
     noteConversation(id, conversation)
+    noteTitle(id, title)
     /* An agent that has stopped to ask something rings the same sound
        `terminal:state` rings for a PTY session — same sound, same
        `onlyWhenUnfocused`, same rule: on the way *in* only, so a session
@@ -750,6 +754,21 @@ function noteConversation(id, conversation) {
   if (record) record.conversation = conversation
 }
 
+/* The automatic title, for a session this window has started.
+
+   Never written back to `null` over a value, for `noteConversation`'s own
+   reason above: a payload without one is a build that stopped sending it,
+   not a session that has lost its name. An empty or whitespace-only string is
+   read as the same absence, since that is what the worker sends before it has
+   words at all — `Restorable.title` and `StateChange.title` are both `Option`
+   but the wire has no way to distinguish "not yet" from "explicitly empty",
+   and there is no case where a session's title is meant to be blank. */
+function noteTitle(id, title) {
+  if (typeof title !== 'string' || !title.trim()) return
+  const record = started.find((session) => session.id === id)
+  if (record) record.title = title
+}
+
 /* This window stops holding a session at all: the record goes, and the row in
    the agents panel with it.
 
@@ -803,7 +822,14 @@ export async function startConversation(project, intent = { kind: 'bare' }) {
          number alone. Until then the row is keyed by `drivenRowId`, which is
          what that function's absence has always meant. */
       conversation: null,
-      work: workOf(intent)
+      work: workOf(intent),
+      /* Filled in by `noteTitle`, from the same two places `conversation`
+         above is filled in from: the attach snapshot and every
+         `session:state` after it. `null` until the worker has words —
+         `captions.js`'s `captionOf` reads that the same way it reads a fresh
+         session's `conversation: null`, as "nothing yet" rather than "never
+         will". */
+      title: null
     })
     await attach(id)
     return id
