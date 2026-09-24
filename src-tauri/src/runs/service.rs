@@ -53,6 +53,7 @@ use super::report::{self, BatchLine, BatchOutcome, LockRelease};
 use super::summary::{self, Baseline, RunSummary};
 use super::usage::{self, Decision};
 use crate::agents::{Intent, Profile};
+use crate::session::service::SessionHandle;
 use crate::terminal::model::{Exit, SessionState};
 use crate::terminal::service::{Request as TerminalRequest, TerminalHandle};
 use crate::tracker::model::IssuePatch;
@@ -246,6 +247,7 @@ pub fn start(
     app: AppHandle,
     tracker: TrackerHandle,
     terminal: TerminalHandle,
+    session: SessionHandle,
     known: Vec<PathBuf>,
 ) -> RunHandle {
     let (tx, mut rx) = mpsc::channel::<Request>(8);
@@ -293,6 +295,7 @@ pub fn start(
                         &mut next_token,
                         &tracker,
                         &terminal,
+                        &session,
                         &report_tx,
                         probe.as_deref(),
                         request,
@@ -332,6 +335,7 @@ fn handle(
     next_token: &mut u64,
     tracker: &TrackerHandle,
     terminal: &TerminalHandle,
+    session: &SessionHandle,
     report: &mpsc::UnboundedSender<Report>,
     // Where a headless probe of the run's own harness runs — the usage gate
     // and the crash classification alike. `None` only where the platform
@@ -483,6 +487,7 @@ fn handle(
                 released_rx,
                 tracker.clone(),
                 terminal.clone(),
+                session.clone(),
                 report.clone(),
                 stop_rx,
                 // Owned rather than borrowed: `drive` is spawned onto a task
@@ -769,6 +774,7 @@ async fn drive(
     mut released: watch::Receiver<bool>,
     tracker: TrackerHandle,
     terminal: TerminalHandle,
+    _session: SessionHandle,
     report: mpsc::UnboundedSender<Report>,
     mut stop: mpsc::Receiver<()>,
     // Where a headless probe of this run's own harness runs — the gate and

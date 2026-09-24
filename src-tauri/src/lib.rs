@@ -232,14 +232,20 @@ pub fn run() {
       // of its own either — a session carries the directory it was started in.
       // What it owns that the terminal does not is the in-app permission
       // listener, which it binds once when it starts.
-      let session = session::service::start(app.handle().clone());
-      app.manage(session);
+            let session = session::service::start(app.handle().clone());
+            app.manage(session.clone());
 
       // The run worker drives the other two rather than owning anything of its
       // own: it reads the board from the tracker and starts one session per
       // batch through the terminal. Handed clones of both, so it queues behind
       // them like every other caller.
-      let runs = runs::service::start(app.handle().clone(), tracker.clone(), terminal, known);
+            let runs = runs::service::start(
+                app.handle().clone(),
+                tracker.clone(),
+                terminal,
+                session,
+                known,
+            );
       app.manage(runs);
 
       // Whether there is a newer version, and the download of it, are the
