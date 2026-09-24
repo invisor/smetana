@@ -178,6 +178,17 @@ other. Nothing here chimes on `session_attach`'s own snapshot either, the driven
 `terminal_marks`'s first read — a session already waiting when the snapshot lands was waiting before
 this window opened, exactly as on the PTY road.
 
+**Codex has one additional source of that same transition on both interactive roads.** Its completed
+plain-text reply is a wait when the last non-empty paragraph contains an ASCII `?`: the driven
+app-server records `text-question` after a successful turn, while the interactive PTY reads a
+completed filled `•` turn followed by an empty `›` composer. Neither is a structured request — no
+card or permission response is invented, and the ordinary composer remains how the person answers.
+The next person turn clears the driven marker; a later PTY transcript entry, a working marker, a
+non-empty composer, or an activity/tool row does not keep an earlier question loud. Both arrive as
+ordinary live transitions into `needs-you`, so the existing listeners ring once under the same sound
+and focus settings. Snapshots and replayed history do not re-announce them: the listeners chime only
+on a state event's transition, never on attach or initial state.
+
 **The watcher rejected above for the PTY road is not rejected again here for the same reason, and
 that is worth being exact about.** `terminalState.sessions` is the one objection that graph carries,
 and it does not apply to the driven road at all: `started` already holds every project's driven

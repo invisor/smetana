@@ -189,6 +189,9 @@ struct Live {
     /// `terminal::transcript`. `None` for every session a person is sitting in
     /// front of, whose harness is already drawing for them.
     transcript: Option<crate::terminal::transcript::Transcript>,
+    /// Plain-text questions belong only to interactive launches. An unattended
+    /// batch has no person to answer and must keep its non-interactive contract.
+    text_questions: bool,
     /// A bell rang and has not been cleared yet. It is cleared by a write
     /// into the session — a human answering, from the keyboard or with a
     /// button — by a view attaching, which is a human looking at it, and by
@@ -944,7 +947,7 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
             }
             continue;
         }
-        let lines = live.screen.lines();
+        let (lines, entry_style) = live.screen.lines_with_entry_style();
         // The screen against the one this session showed last tick — the
         // clock is restarted by a change to the picture, not by the arrival of
         // bytes. `into_std` because `Quiet` keeps no clock of its own and is
@@ -958,6 +961,8 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
             // a rendered transcript holds still between tool calls without the
             // agent having stopped. See `DetectInput::transcript`.
             transcript: live.transcript.is_some(),
+            text_questions: live.text_questions,
+            entry_style: &entry_style,
             profile: live.profile,
             // The state as it stands *before* this tick's `apply`, which is
             // the whole of what layer B's threshold is asymmetric about: a
@@ -1321,6 +1326,7 @@ fn handle(
                             .then(|| profile.transcript())
                             .flatten()
                             .map(crate::terminal::transcript::Transcript::new),
+                        text_questions: !agents::is_batch(&launch.intent),
                         bell_pending: false,
                         quiet: Quiet::new(),
                         last_output: Instant::now(),
@@ -1469,6 +1475,7 @@ fn handle(
                         // A shell prints for the person in front of it and for
                         // nobody else; there is no machine format to translate.
                         transcript: None,
+                        text_questions: false,
                         bell_pending: false,
                         quiet: Quiet::new(),
                         last_output: Instant::now(),

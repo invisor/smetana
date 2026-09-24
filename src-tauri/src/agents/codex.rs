@@ -602,6 +602,10 @@ impl Profile for Codex {
         question(screen)
     }
 
+    fn text_question(&self, screen: &[String], entry_style: &[crate::terminal::screen::EntryStyle]) -> bool {
+        completed_text_question(screen, entry_style)
+    }
+
     /// `--dangerously-bypass-approvals-and-sandbox` rather than the gentler
     /// `--ask-for-approval never --sandbox workspace-write`, and the difference
     /// is not caution but reach: a run cuts worktrees in sibling repositories
@@ -885,6 +889,66 @@ fn is_entry(line: &str) -> bool {
 /// here anyway: everything in this set only ever adds refusals.
 fn is_turn(line: &str) -> bool {
     is_entry(line) && line.starts_with(['\u{2022}', '\u{25E6}', CURSOR])
+}
+
+/// Is the last completed Codex turn a plain-text question for the person?
+///
+/// A completed turn ends at an empty composer. Its immediately preceding
+/// top-level transcript entry must be a filled assistant bullet; a later
+/// person entry or hollow working bullet means the previous reply is already
+/// stale. Codex's assistant bullet stays default-colour dim. `Ran` and
+/// `Called` use a coloured bold bullet; `Explored` keeps the dim bullet but
+/// gives its header a bold span and draws a tree detail below it. Those
+/// renderer structures, not the English word that follows them, fence tool
+/// output before the shared paragraph predicate sees its `?`.
+fn completed_text_question(screen: &[String], entry_style: &[crate::terminal::screen::EntryStyle]) -> bool {
+    let Some(composer) = screen.iter().rposition(|line| line.trim() == CURSOR.to_string()) else {
+        return false;
+    };
+    let Some(turn) = screen[..composer]
+        .iter()
+        .rposition(|line| is_entry(line))
+    else {
+        return false;
+    };
+    let Some(first) = screen[turn].strip_prefix('\u{2022}').map(str::trim_start) else {
+        return false;
+    };
+    let end = screen[turn + 1..composer]
+        .iter()
+        .position(|line| is_entry(line))
+        .map_or(composer, |offset| turn + 1 + offset);
+    let style = entry_style.get(turn).copied().unwrap_or_default();
+    if style.is_coloured_bold_marker() || explored_tree(style, first, &screen[turn + 1..end]) {
+        return false;
+    }
+    let mut text = first.to_owned();
+    for line in &screen[turn + 1..end] {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(line);
+    }
+    crate::session::model::text_waits_for_reply(&text)
+}
+
+/// `Explored` is the one completed Codex activity whose marker looks like an
+/// assistant's dim/default bullet. Its bold header is followed by the TUI's
+/// indented tree (`└`, `├`, or `│`), which ordinary assistant prose — even a
+/// bold introduction — does not own.
+fn explored_tree(
+    style: crate::terminal::screen::EntryStyle,
+    header: &str,
+    detail: &[String],
+) -> bool {
+    style.dim
+        && !style.foreground
+        && style.header_bold
+        && !style.header_foreground
+        && header.split_whitespace().next() == Some("Explored")
+        && detail.iter().any(|line| {
+            matches!(line.trim_start().chars().next(), Some('\u{2514}' | '\u{251C}' | '\u{2502}'))
+        })
 }
 
 /// The whole of an option's label, head row and any rows it wrapped onto.
@@ -1965,6 +2029,13 @@ mod tests {
         std::fs::read_to_string(path).unwrap().lines().map(str::to_owned).collect()
     }
 
+    fn raw_fixture(name: &str) -> (Vec<String>, Vec<crate::terminal::screen::EntryStyle>) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
+        let mut terminal = crate::terminal::screen::Screen::new(160, 8);
+        terminal.feed(&std::fs::read(path).unwrap());
+        terminal.lines_with_entry_style()
+    }
+
     #[test]
     fn recognises_the_command_approval_dialog() {
         let q = question(&fixture("codex-0.146-approval-command.txt"))
@@ -2326,6 +2397,79 @@ mod tests {
         .map(|s| (*s).to_owned())
         .collect();
         assert!(question(&screen).is_none(), "the agent's own one-line turn was read as a dialog");
+    }
+
+    #[test]
+    fn a_completed_text_turn_reads_its_last_paragraph_as_a_question() {
+        let (completed, style) = raw_fixture("codex-0.155-completed-assistant-question.ansi");
+        assert!(completed_text_question(&completed, &style));
+
+        let earlier_paragraph: Vec<String> = [
+            "• Do you confirm the document?",
+            "",
+            "  I will make the plan.",
+            "",
+            "›",
+        ]
+        .iter()
+        .map(|line| (*line).to_owned())
+        .collect();
+        assert!(!completed_text_question(&earlier_paragraph, &[]));
+    }
+
+    #[test]
+    fn a_later_person_entry_releases_an_earlier_text_question() {
+        let screen = fixture("codex-0.146-text-question-after-user-entry.txt");
+        assert!(
+            !completed_text_question(&screen, &[]),
+            "an earlier answer stayed loud after the person had sent their next turn"
+        );
+    }
+
+    #[test]
+    fn activity_blocks_with_question_marks_are_not_text_questions() {
+        for capture in [
+            "codex-0.155-completed-ran-question.ansi",
+            "codex-0.155-completed-called-question.ansi",
+            "codex-0.155-completed-explored-question.ansi",
+        ] {
+            let (screen, style) = raw_fixture(capture);
+            assert!(
+                !completed_text_question(&screen, &style),
+                "a completed tool activity was read as an agent question: {capture}"
+            );
+        }
+    }
+
+    #[test]
+    fn assistant_prose_starting_with_an_activity_verb_is_still_a_question() {
+        for capture in [
+            "codex-0.155-completed-assistant-question.ansi",
+            "codex-0.155-completed-assistant-working-question.ansi",
+        ] {
+            let (screen, style) = raw_fixture(capture);
+            assert!(
+                completed_text_question(&screen, &style),
+                "assistant prose was rejected for its opening verb: {capture}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bold_assistant_intro_and_tree_do_not_impersonate_explored_activity() {
+        let (screen, style) = raw_fixture("codex-0.155-assistant-bold-tree-question.ansi");
+        assert!(
+            completed_text_question(&screen, &style),
+            "a renderer-unowned bold header and tree suppressed the assistant's final question"
+        );
+    }
+
+    #[test]
+    fn a_working_turn_or_a_non_empty_composer_is_not_a_completed_text_question() {
+        let working = fixture("codex-0.146-working.txt");
+        assert!(!completed_text_question(&working, &[]));
+        let draft = fixture("codex-0.146-draft-in-the-composer.txt");
+        assert!(!completed_text_question(&draft, &[]));
     }
 
     #[test]

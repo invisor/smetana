@@ -684,6 +684,13 @@ pub trait Profile: Sync {
         None
     }
 
+    /// Whether this profile's completed free-text turn on screen leaves the
+    /// person a question to answer. Unlike `question`, this has no structured
+    /// reply to send and therefore produces no `Question` card.
+    fn text_question(&self, _screen: &[String], _entry_style: &[crate::terminal::screen::EntryStyle]) -> bool {
+        false
+    }
+
     /// How this harness is asked what is left of the subscription's allowance,
     /// as arguments after `binary()`, and how its answer reads. A pair: the
     /// command is worth nothing without something able to read what it prints,

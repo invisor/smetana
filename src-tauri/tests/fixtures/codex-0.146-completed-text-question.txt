@@ -1,0 +1,9 @@
+› Inspect the document and stop for confirmation.
+
+
+• Do you confirm the document? After that I will make the plan and create the task.
+
+
+›
+
+  gpt-5.5 high · /tmp/example/project
