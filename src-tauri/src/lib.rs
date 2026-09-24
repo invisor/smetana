@@ -375,6 +375,7 @@ pub fn run() {
       terminal::commands::terminal_restorable,
       terminal::commands::terminal_forget,
       session::commands::session_start,
+      session::commands::crew_tree,
       session::commands::session_attach,
       session::commands::session_since,
       session::commands::session_send,

@@ -43,6 +43,7 @@ use tokio::process::Child;
 use tokio::sync::{mpsc, oneshot};
 
 use super::driver::{Driver, Input, LineBuffer};
+use super::crew::{CrewNode, CrewPackage};
 use super::journal::Journal;
 use super::model::{
     is_open_question, state_of, Decision, Event, EventKind, SessionError, SessionId, SessionState,
@@ -111,6 +112,12 @@ pub struct Attached {
 
 pub enum Request {
     Start(String, Intent, oneshot::Sender<Result<SessionId, SessionError>>),
+    /// A run transport creates a Smetana-owned Crew root before provider ids
+    /// exist. Provider discovery later fills it through `CrewApply`.
+    CrewBegin(String, String, oneshot::Sender<u64>),
+    CrewTree(u64, oneshot::Sender<Option<Vec<CrewNode>>>),
+    CrewApply(u64, crate::agents::crew::ProviderNode),
+    CrewClear(u64),
     Attach(SessionId, oneshot::Sender<Result<Attached, SessionError>>),
     /// Everything after `seq`, or `None` when the journal no longer holds it —
     /// which is the front end's cue to take a fresh snapshot rather than draw a
@@ -242,6 +249,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
         let mut asked_open = permission.is_some();
 
         let mut sessions: HashMap<SessionId, Live> = HashMap::new();
+        let mut crews: HashMap<u64, CrewPackage> = HashMap::new();
         let mut starting: HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>> = HashMap::new();
         let mut next_id: SessionId = 1;
 
@@ -258,6 +266,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                     handle(
                         &app,
                         &mut sessions,
+                        &mut crews,
                         &mut next_id,
                         &mut starting,
                         permission.as_ref(),
@@ -748,9 +757,29 @@ fn drivable(intent: &Intent) -> bool {
     !matches!(intent, Intent::Run { .. })
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CrewTreeChange {
+    project: String,
+    root: u64,
+    nodes: Vec<CrewNode>,
+}
+
+fn emit_crew(app: &AppHandle, package: &CrewPackage) {
+    let _ = app.emit(
+        "crew:tree",
+        CrewTreeChange {
+            project: package.project.clone(),
+            root: package.root,
+            nodes: package.tree.nodes(),
+        },
+    );
+}
+
 fn handle(
     app: &AppHandle,
     sessions: &mut HashMap<SessionId, Live>,
+    crews: &mut HashMap<u64, CrewPackage>,
     next_id: &mut SessionId,
     starting: &mut HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>>,
     permission: Option<&PermissionServer>,
@@ -758,6 +787,28 @@ fn handle(
     request: Request,
 ) {
     match request {
+        Request::CrewBegin(project, label, tx) => {
+            let package = CrewPackage::new(project, label);
+            let root = package.root;
+            emit_crew(app, &package);
+            crews.insert(root, package);
+            let _ = tx.send(root);
+        }
+        Request::CrewTree(root, tx) => {
+            let _ = tx.send(crews.get(&root).map(|package| package.tree.nodes()));
+        }
+        Request::CrewApply(root, node) => {
+            if let Some(package) = crews.get_mut(&root) {
+                package.tree.upsert(root, node);
+                emit_crew(app, package);
+            }
+        }
+        Request::CrewClear(root) => {
+            if let Some(mut package) = crews.remove(&root) {
+                package.tree.clear();
+                emit_crew(app, &package);
+            }
+        }
         Request::Start(project, intent, tx) => {
             if !drivable(&intent) {
                 // The same capability tag `driver_for`'s own `None` answers

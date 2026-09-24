@@ -9,6 +9,7 @@ use tauri::State;
 use tokio::sync::oneshot;
 
 use super::model::{Decision, Event, SessionError, SessionId};
+use super::crew::CrewNode;
 use super::service::{Attached, Request, SessionHandle};
 use crate::agents::Intent;
 
@@ -35,6 +36,16 @@ pub async fn session_start(
     intent: Intent,
 ) -> Result<SessionId, SessionError> {
     ask(&handle, |tx| Request::Start(project, intent, tx)).await?
+}
+
+/// Snapshot a Crew package's backend-owned hierarchy. Individual updates use
+/// `crew:tree`; this command closes the subscribe-before-first-event gap.
+#[tauri::command]
+pub async fn crew_tree(
+    handle: State<'_, SessionHandle>,
+    root: u64,
+) -> Result<Option<Vec<CrewNode>>, SessionError> {
+    ask(&handle, |tx| Request::CrewTree(root, tx)).await
 }
 
 /// The whole conversation, the sequence number to continue from, and where the

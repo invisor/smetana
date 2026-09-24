@@ -8,6 +8,23 @@ use std::collections::BTreeMap;
 
 use crate::agents::crew::{ProviderNode, ProviderState};
 
+/// The session worker owns one of these per Crew package. Its project is kept
+/// beside the topology so `crew:tree` can update the right window without a
+/// provider id becoming a front-end key.
+pub struct CrewPackage {
+    pub project: String,
+    pub root: CrewNodeId,
+    pub tree: CrewTree,
+}
+
+impl CrewPackage {
+    pub fn new(project: String, label: impl Into<String>) -> Self {
+        let mut tree = CrewTree::default();
+        let root = tree.root(label);
+        Self { project, root, tree }
+    }
+}
+
 pub type CrewNodeId = u64;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
