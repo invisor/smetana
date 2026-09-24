@@ -89,6 +89,7 @@ import { CommandPalette, ConversationView, TaskSearchButton, TerminalView } from
 import AgentList from '../components/agent/AgentList.vue'
 import { agentKey, conversationsOf, orderAgents } from '../components/agent/agentOrder.js'
 import { closableOthers } from '../components/agent/agentMenu.js'
+import { nameAgentRows, withAgentName } from '../components/agent/agentName.js'
 /* What a driven conversation is in the three places this file counts agents:
    the panel's rows, the footer's numbers and the rail's map. The rule is pure
    and lives there rather than here for the reason every rule in this app does —
@@ -2964,7 +2965,7 @@ const agentArrangement = ref([])
    pinned and closed by the same rules every other row is. */
 const orderedAgentRows = computed(() => [
   ...orderAgents(
-    mergeAgentRows(agentRows.value, drivenHere.value),
+    nameAgentRows(mergeAgentRows(agentRows.value, drivenHere.value), project.agentNames),
     agentArrangement.value.length ? agentArrangement.value : project.agentOrder,
     project.pinnedAgents
   ),
@@ -2978,6 +2979,15 @@ const orderedAgentRows = computed(() => [
 function reorderAgents(rows) {
   agentArrangement.value = rows.map(agentKey)
   project.agentOrder = conversationsOf(rows)
+}
+
+/* The rename, written the way a pin is: the whole map back into the
+   project's settings, through the pure rule, so the save watch sees a new
+   object. An empty `name` is `withAgentName`'s business — the entry is
+   removed and the row falls back to the worker's own title or, failing
+   that, the intent's caption. */
+const renameAgent = ({ conversation, name }) => {
+  project.agentNames = withAgentName(project.agentNames, conversation, name)
 }
 
 /* The X on a row in the agents panel, and which of the three removals it is.
@@ -7250,6 +7260,7 @@ const toastStackStyle = {
                 @reorder="reorderAgents"
                 @pin="project.pinnedAgents = $event"
                 @clear="clearSession"
+                @rename="renameAgent"
               />
             </div>
           </div>

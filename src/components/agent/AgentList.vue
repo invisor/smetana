@@ -29,7 +29,20 @@
    open here. Clearing a session is one of its rows and is the only verb here
    that reaches the harness rather than the app: the row carries the session id
    and nothing more, and which words clear a conversation is
-   `agents::Profile::clear_command`'s to say. */
+   `agents::Profile::clear_command`'s to say.
+
+   Rename is the menu's own first row (smetana-b9se) and is drawn here rather
+   than through a dialog: the field replaces the caption **in place**, at the
+   row's own height, the way `FileTreeDraftRow.vue` replaces a tree row rather
+   than opening over the whole screen — the answer to "which row is this" is
+   the row's own position, which a modal in the middle of the panel cannot
+   give. It differs from that draft row in one decision, and the difference is
+   deliberate: losing the focus **commits** here rather than cancelling.
+   Nothing under this row redraws while it is open, where the tree redraws
+   under a draft on every `catchUp`, and a name somebody typed and then clicked
+   away from is worth more to keep than to throw away. `withAgentName` and
+   `nameAgentRows` in `agentName.js` are the pure rules this component leans
+   on; the write itself is the caller's, through the `rename` event below. */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
@@ -64,8 +77,12 @@ const props = defineProps({
    nothing more — the same shape `remove` already has, and the caller asks
    `closableOthers` the same question this component just asked it, from the
    rows and the pins it already owns, rather than being handed a list of ids
-   to remove one by one. */
-const emit = defineEmits(['select', 'remove', 'reorder', 'pin', 'clear', 'remove-others'])
+   to remove one by one. `rename` carries `{ conversation, name }` — the
+   conversation id the field was opened on and the text it held when it
+   closed, trimmed or not; `withAgentName` on the caller's side is where an
+   empty value becomes the removal of a stored name, so this component sends
+   exactly what was typed. */
+const emit = defineEmits(['select', 'remove', 'reorder', 'pin', 'clear', 'remove-others', 'rename'])
 
 const body = { flex: 1, minHeight: 0, overflow: 'auto' }
 
@@ -388,6 +405,37 @@ const openMenu = (row, event) => {
   menu.value?.open(event, agentKey(row))
 }
 
+/* The row whose caption is a field right now, by `agentKey`, and the text in
+   it. One at a time: opening a second closes the first without saving, the
+   way the tree's draft row does — `startRename` simply overwrites both refs,
+   and the field that was standing unmounts as the new one mounts. */
+const renaming = ref(null)
+const renameDraft = ref('')
+const renameField = ref(null)
+
+const startRename = (row) => {
+  renaming.value = agentKey(row)
+  renameDraft.value = row.label ?? ''
+  nextTick(() => {
+    renameField.value?.focus()
+    renameField.value?.select()
+  })
+}
+
+/* Enter and blur commit, Esc cancels. Blur commits where the tree's draft
+   cancels, deliberately: nothing redraws under this row, and a name typed and
+   then clicked away from is worth more than nothing. An empty commit is the
+   rule's business — `withAgentName` on the caller's side removes the entry
+   and the automatic title shows again. */
+const commitRename = () => {
+  const row = props.rows.find((one) => agentKey(one) === renaming.value)
+  if (row) emit('rename', { conversation: row.conversation, name: renameDraft.value })
+  renaming.value = null
+}
+const cancelRename = () => {
+  renaming.value = null
+}
+
 /* The row is handed back with the pick rather than read from `menuFor`, which
    closing has already cleared — see `PointerMenu`'s header. The kinds are
    turned into events by hand for `BranchList`'s reason: the words happen to
@@ -396,7 +444,8 @@ const openMenu = (row, event) => {
 const pick = (item, key) => {
   const row = props.rows.find((one) => agentKey(one) === key)
   if (!row) return
-  if (item.kind === 'pin') emit('pin', togglePin(props.pinned, row.conversation))
+  if (item.kind === 'rename') startRename(row)
+  else if (item.kind === 'pin') emit('pin', togglePin(props.pinned, row.conversation))
   /* The session and nothing else: what to write is the harness's own word for
      it and this window never learns which harness a session runs, so the caller
      hands the id to the store and Rust composes the line. */
@@ -464,21 +513,46 @@ const markColour = (state) => (state === 'running' ? 'var(--attn-live)' : 'var(-
    end of the row: a flex item refuses by default to shrink below its own
    content. Baseline rather than centre, because the two halves are set in
    different families and centring would leave them sitting at different
-   heights. */
-const captionBox = {
+   heights.
+
+   `flex` is a function of the row rather than a constant, and only for the
+   one row being renamed: the box otherwise sizes to its own content and the
+   sibling spacer eats what is left, the same shrink-to-fit every other row
+   keeps, but a field open for editing is worth the whole width the spacer
+   would have taken rather than whatever the label's own text happened to
+   measure. */
+const captionBoxStyle = (row) => ({
   display: 'flex',
   alignItems: 'baseline',
   gap: 'var(--space-2)',
   minWidth: 0,
+  flex: renaming.value === agentKey(row) ? '1 1 0%' : 'initial',
   overflow: 'hidden',
   whiteSpace: 'nowrap'
-}
+})
 const idsStyle = {
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
   overflow: 'hidden',
   textOverflow: 'ellipsis'
 }
 const labelStyle = { overflow: 'hidden', textOverflow: 'ellipsis' }
+/* The field that stands in for the caption while a row is being renamed.
+   Every value a `var(--token)` reference, and the height is `--control-h-sm`
+   rather than `--row-h` — a full-height field would touch the row's own top
+   and bottom rules, where this one sits inside it the way the pin's box
+   already does. */
+const renameStyle = {
+  width: '100%',
+  minWidth: 0,
+  height: 'var(--control-h-sm)',
+  padding: '0 var(--space-2)',
+  border: 'var(--border-w) solid var(--focus-ring)',
+  borderRadius: 'var(--radius-2)',
+  outline: 'none',
+  background: 'var(--surface-raised)',
+  color: 'var(--text-primary)',
+  font: 'inherit'
+}
 /* The elapsed time stays mono: it is a measurement in a column, and a
    proportional face would let "18m" and "2h 14m" wander sideways as the clock
    ticks. */
@@ -534,9 +608,23 @@ const empty = computed(() => props.rows.length === 0)
           />
           <Icon v-else :name="AGENT_ICON" :size="MARK" :style="{ color: markColour(row.state) }" />
         </span>
-        <span :style="captionBox">
-          <span v-if="row.label" :style="labelStyle">{{ row.label }}</span>
-          <span v-if="row.tasks?.length" :style="idsStyle">{{ row.tasks.join(', ') }}</span>
+        <span :style="captionBoxStyle(row)">
+          <input
+            v-if="renaming === agentKey(row)"
+            :ref="(el) => (renameField.value = el)"
+            v-model="renameDraft"
+            :style="renameStyle"
+            aria-label="Agent name"
+            @keydown.enter.prevent="commitRename"
+            @keydown.esc.prevent="cancelRename"
+            @blur="commitRename"
+            @click.stop
+            @pointerdown.stop
+          />
+          <template v-else>
+            <span v-if="row.label" :style="labelStyle">{{ row.label }}</span>
+            <span v-if="row.tasks?.length" :style="idsStyle">{{ row.tasks.join(', ') }}</span>
+          </template>
         </span>
         <span :style="{ flex: 1 }" />
         <span :style="[elapsedStyle, { color: row.state === 'needs-you' ? 'var(--attn-loud)' : 'var(--text-muted)' }]">
