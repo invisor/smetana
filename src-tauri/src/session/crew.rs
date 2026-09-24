@@ -144,8 +144,29 @@ impl CrewTree {
         Some(id)
     }
 
+    /// Apply a status-only provider notification without replacing the label
+    /// and parent learned from `thread/started`/`thread/list`.
+    pub fn update_provider(
+        &mut self,
+        provider_id: &str,
+        state: ProviderState,
+        can_message: bool,
+    ) -> bool {
+        let Some(id) = self.provider.get(provider_id).copied() else { return false };
+        let Some(node) = self.nodes.get_mut(&id) else { return false };
+        node.state = CrewState::from(state);
+        node.can_message = can_message && !matches!(node.state, CrewState::Done | CrewState::Failed);
+        true
+    }
+
     pub fn node(&self, id: CrewNodeId) -> Option<&CrewNode> {
         self.nodes.get(&id)
+    }
+
+    pub fn provider_id(&self, id: CrewNodeId) -> Option<&str> {
+        self.provider
+            .iter()
+            .find_map(|(provider, node)| (*node == id).then_some(provider.as_str()))
     }
 
     pub fn nodes(&self) -> Vec<CrewNode> {

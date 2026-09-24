@@ -48,6 +48,18 @@ pub async fn crew_tree(
     ask(&handle, |tx| Request::CrewTree(root, tx)).await
 }
 
+/// Address the selected native Crew node. A failed send is intentionally an
+/// error so the composer keeps its draft; it is never retried against the lead.
+#[tauri::command]
+pub async fn crew_send(
+    handle: State<'_, SessionHandle>,
+    root: u64,
+    node: u64,
+    text: String,
+) -> Result<(), SessionError> {
+    ask(&handle, |tx| Request::CrewSend(root, node, text, tx)).await?
+}
+
 /// The whole conversation, the sequence number to continue from, and where the
 /// session stands. Asked whenever a window opens on a session, however many
 /// times that is: the journal lives in the worker, so the second attach hands

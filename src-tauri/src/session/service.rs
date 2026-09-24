@@ -126,6 +126,7 @@ pub enum Request {
     ),
     CrewTree(u64, oneshot::Sender<Option<Vec<CrewNode>>>),
     CrewApply(u64, crate::agents::crew::ProviderNode),
+    CrewSend(u64, u64, String, oneshot::Sender<Result<(), SessionError>>),
     CrewClear(u64),
     Attach(SessionId, oneshot::Sender<Result<Attached, SessionError>>),
     /// Everything after `seq`, or `None` when the journal no longer holds it —
@@ -259,6 +260,9 @@ pub fn start(app: AppHandle) -> SessionHandle {
 
         let mut sessions: HashMap<SessionId, Live> = HashMap::new();
         let mut crews: HashMap<u64, CrewPackage> = HashMap::new();
+        // Session id -> public Crew root for the special Codex lead whose
+        // normal app-server stream also carries thread lifecycle records.
+        let mut crew_leads: HashMap<SessionId, u64> = HashMap::new();
         let mut next_crew: u64 = 1;
         let mut starting: HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>> = HashMap::new();
         let mut next_id: SessionId = 1;
@@ -277,6 +281,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         &app,
                         &mut sessions,
                         &mut crews,
+                        &mut crew_leads,
                         &mut next_crew,
                         &mut next_id,
                         &mut starting,
@@ -291,7 +296,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                     // breaking is a stopped worker, whereas continuing is a
                     // branch that is instantly ready forever.
                     let Some(chunk) = chunk else { break };
-                    absorb(&app, &mut sessions, &mut starting, permission.as_ref(), chunk);
+                    absorb(&app, &mut sessions, &mut crews, &mut crew_leads, &mut starting, permission.as_ref(), chunk);
                 }
                 asked = asked_rx.recv(), if asked_open => {
                     let Some(asked) = asked else {
@@ -787,10 +792,39 @@ fn emit_crew(app: &AppHandle, package: &CrewPackage) {
     );
 }
 
+/// Apply only Codex's documented structured app-server records. The driver
+/// has already translated turn output into the lead journal; these records are
+/// for topology/lifecycle, never a second parsing of rendered output.
+fn absorb_codex_crew(
+    app: &AppHandle,
+    crews: &mut HashMap<u64, CrewPackage>,
+    root: u64,
+    lead_provider: Option<&str>,
+    records: Vec<serde_json::Value>,
+) {
+    let Some(package) = crews.get_mut(&root) else { return };
+    if let Some(lead) = lead_provider {
+        package.tree.bind_root(root, lead);
+    }
+    for record in records {
+        for node in crate::agents::codex_crew::nodes(&record) {
+            package.tree.upsert(root, node);
+        }
+        if let Some((id, state, can_message)) = crate::agents::codex_crew::status_change(&record) {
+            package.tree.update_provider(&id, state, can_message);
+        }
+        for (id, state, can_message) in crate::agents::codex_crew::collaboration_states(&record) {
+            package.tree.update_provider(&id, state, can_message);
+        }
+    }
+    emit_crew(app, package);
+}
+
 fn handle(
     app: &AppHandle,
     sessions: &mut HashMap<SessionId, Live>,
     crews: &mut HashMap<u64, CrewPackage>,
+    crew_leads: &mut HashMap<SessionId, u64>,
     next_crew: &mut u64,
     next_id: &mut SessionId,
     starting: &mut HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>>,
@@ -828,6 +862,7 @@ fn handle(
                     let package = CrewPackage::new(project, id, "Crew lead");
                     emit_crew(app, &package);
                     crews.insert(id, package);
+                    crew_leads.insert(id, id);
                     sessions.insert(id, live);
                     let _ = tx.send(Ok((id, id)));
                 }
@@ -848,7 +883,43 @@ fn handle(
                 emit_crew(app, package);
             }
         }
+        Request::CrewSend(root, node, text, tx) => {
+            let Some(package) = crews.get(&root) else {
+                let _ = tx.send(Err(SessionError::NoSuchSession(root)));
+                return;
+            };
+            let Some(selected) = package.tree.node(node) else {
+                let _ = tx.send(Err(SessionError::NoSuchSession(node)));
+                return;
+            };
+            // This is the second membership/capability check, immediately
+            // before bytes are made. A completed child is never redirected to
+            // its root or a sibling; callers retain their draft on this Err.
+            if !selected.can_message {
+                let _ = tx.send(Err(SessionError::Spawn(ENDED.into())));
+                return;
+            }
+            let Some(provider) = package.tree.provider_id(node).map(str::to_owned) else {
+                let _ = tx.send(Err(SessionError::Spawn(UNREACHABLE.into())));
+                return;
+            };
+            let Some(live) = sessions.get_mut(&root) else {
+                let _ = tx.send(Err(SessionError::NoSuchSession(root)));
+                return;
+            };
+            let delivered = live
+                .talking
+                .as_mut()
+                .and_then(|talking| talking.driver.crew_send(&provider, text).ok())
+                .is_some_and(|bytes| say(live, bytes));
+            let _ = tx.send(if delivered {
+                Ok(())
+            } else {
+                Err(SessionError::Spawn(UNREACHABLE.into()))
+            });
+        }
         Request::CrewClear(root) => {
+            crew_leads.retain(|_, lead_root| *lead_root != root);
             if let Some(mut package) = crews.remove(&root) {
                 package.tree.clear();
                 emit_crew(app, &package);
@@ -1070,6 +1141,8 @@ fn handle(
 fn absorb(
     app: &AppHandle,
     sessions: &mut HashMap<SessionId, Live>,
+    crews: &mut HashMap<u64, CrewPackage>,
+    crew_leads: &mut HashMap<SessionId, u64>,
     starting: &mut HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>>,
     permission: Option<&PermissionServer>,
     chunk: Chunk,
@@ -1079,6 +1152,7 @@ fn absorb(
             let Some(live) = sessions.get_mut(&id) else { return };
             let Some(talking) = live.talking.as_mut() else { return };
             let kinds = talking.driver.feed(&bytes);
+            let crew_records = talking.driver.crew_records();
             let outgoing = talking.driver.outgoing();
             let startup = talking.driver.startup();
             // Asked on every chunk, cheap for the ordinary driver that never
@@ -1091,8 +1165,11 @@ fn absorb(
             for bytes in outgoing {
                 if !say(live, bytes) { lost(app, id, live); break; }
             }
-            if let Some(conversation) = discovered {
-                note_conversation(app, id, live, conversation);
+            if let Some(conversation) = discovered.as_ref() {
+                note_conversation(app, id, live, conversation.clone());
+            }
+            if let Some(root) = crew_leads.get(&id).copied() {
+                absorb_codex_crew(app, crews, root, discovered.as_deref(), crew_records);
             }
             if let Some(result) = startup {
                 if let Some(tx) = starting.remove(&id) {
@@ -1174,6 +1251,15 @@ fn absorb(
             // opens a tab on to read.
             live.talking = None;
             refresh_state(app, id, live);
+            // The package lifetime ends with its lead. Finished children were
+            // retained until here; now drop the complete tree and all provider
+            // indexes together so no row is orphaned after Stop/exit.
+            if let Some(root) = crew_leads.remove(&id) {
+                if let Some(mut package) = crews.remove(&root) {
+                    package.tree.clear();
+                    emit_crew(app, &package);
+                }
+            }
             // A failed pre-creation startup was never a conversation. Its
             // child has been handed to the reaper above; remove the temporary
             // entry so attach cannot paint a failed empty transcript.

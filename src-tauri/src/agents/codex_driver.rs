@@ -65,11 +65,12 @@ pub struct CodexDriver {
     pending: std::collections::BTreeMap<u64, String>,
     interrupt_pending: bool,
     turn_start_pending: bool,
+    crew_records: Vec<Value>,
 }
 
 impl CodexDriver {
     pub fn new(_permission: Option<crate::session::permission::PermissionTicket>) -> Self {
-        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: std::collections::VecDeque::new(), queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None, None)), bootstrapped: false, discovered: None, active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false }
+        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: std::collections::VecDeque::new(), queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None, None)), bootstrapped: false, discovered: None, active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false, crew_records: Vec::new() }
     }
 
     /// The oldest queued message, if any, sent as the next turn. The one
@@ -135,6 +136,16 @@ impl Driver for CodexDriver {
         let mut events = Vec::new();
         for line in self.lines.feed(bytes) {
             let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
+            if matches!(
+                message.get("method").and_then(Value::as_str),
+                Some("thread/started" | "thread/status/changed")
+            ) || message
+                .pointer("/params/item/type")
+                .and_then(Value::as_str)
+                == Some("collabAgentToolCall")
+            {
+                self.crew_records.push(message.clone());
+            }
             // A server request can use a numeric id that collides with ours.
             // It is a request because it has `method`, never a response.
             let response = if message.get("method").is_none() && (message.get("result").is_some() || message.get("error").is_some()) {
@@ -372,6 +383,21 @@ impl Driver for CodexDriver {
     }
 
     fn outgoing(&mut self) -> Vec<Vec<u8>> { std::mem::take(&mut self.queued) }
+
+    fn crew_records(&mut self) -> Vec<Value> { std::mem::take(&mut self.crew_records) }
+
+    fn crew_send(&mut self, provider_id: &str, text: String) -> Result<Vec<u8>, String> {
+        if provider_id.is_empty() {
+            return Err("the selected Codex thread has ended".into());
+        }
+        // This is exactly the generated app-server `turn/start` contract for
+        // a child thread. It deliberately does not use `self.thread`: that is
+        // the lead and using it here would redirect a completed child's draft.
+        Ok(self.request(
+            "turn/start",
+            json!({"threadId":provider_id, "input":[{"type":"text", "text":text}]}),
+        ))
+    }
 
     fn startup(&mut self) -> Option<Result<(), String>> { self.startup.take() }
     fn awaits_startup(&self) -> bool { true }

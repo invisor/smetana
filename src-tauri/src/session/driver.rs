@@ -17,6 +17,7 @@
 use portable_pty::CommandBuilder;
 
 use std::collections::BTreeMap;
+use serde_json::Value;
 use super::model::{Decision, EventKind};
 use crate::agents::Launch;
 
@@ -57,6 +58,19 @@ pub trait Driver: Send {
     /// Bytes off the child's stdout, as events. Zero events is the commonest
     /// answer and an ordinary one.
     fn feed(&mut self, bytes: &[u8]) -> Vec<EventKind>;
+
+    /// Provider-neutral conversation events are not enough for a native Crew
+    /// tree: Codex emits thread lifecycle records alongside a normal turn.
+    /// The worker consumes these opaque structured records only for a driven
+    /// Crew package; ordinary conversations leave the default empty.
+    fn crew_records(&mut self) -> Vec<Value> { Vec::new() }
+
+    /// Send a turn to one provider-owned native child. The worker resolves the
+    /// Smetana node and checks its capability before this method is called;
+    /// drivers must not substitute their lead when the selected child is gone.
+    fn crew_send(&mut self, _provider_id: &str, _text: String) -> Result<Vec<u8>, String> {
+        Err("this provider does not support addressed Crew messages".into())
+    }
 
     /// Requests produced while decoding a response. Most line protocols never
     /// need this; JSON-RPC bootstraps its thread after each prior reply.
