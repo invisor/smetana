@@ -303,4 +303,26 @@ mod tests {
         assert!(first.tree.node(41).is_some());
         assert!(second.tree.node(42).is_some());
     }
+
+    #[test]
+    fn two_children_keep_separate_journals_under_stable_node_ids() {
+        let mut package = CrewPackage::new("/project".into(), 7, "Lead");
+        let first = package
+            .apply(worker("one", None, ProviderState::Running))
+            .expect("first node");
+        let second = package
+            .apply(worker("two", None, ProviderState::Running))
+            .expect("second node");
+        package.append(
+            first,
+            vec![super::EventKind::UserMessage {
+                text: "ONLY-FIRST".into(),
+                attachments: Vec::new(),
+            }],
+        );
+        let (first_events, _, _) = package.snapshot(first).expect("first journal");
+        let (second_events, _, _) = package.snapshot(second).expect("second journal");
+        assert_eq!(first_events.len(), 1);
+        assert!(second_events.is_empty());
+    }
 }
