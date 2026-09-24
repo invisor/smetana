@@ -89,6 +89,7 @@ import { CommandPalette, ConversationView, TaskSearchButton, TerminalView } from
 import AgentList from '../components/agent/AgentList.vue'
 import { agentKey, conversationsOf, orderAgents } from '../components/agent/agentOrder.js'
 import { closableOthers } from '../components/agent/agentMenu.js'
+import { nameAgentRows, withAgentName } from '../components/agent/agentName.js'
 /* What a driven conversation is in the three places this file counts agents:
    the panel's rows, the footer's numbers and the rail's map. The rule is pure
    and lives there rather than here for the reason every rule in this app does —
@@ -2961,10 +2962,18 @@ const agentArrangement = ref([])
 /* The two kinds of session in one list, and the merge is here rather than in
    `stores/terminals.js` deliberately — `drivenRows.js` carries the whole of
    why. What the panel is handed is one flat list, so a driven row is dragged,
-   pinned and closed by the same rules every other row is. */
+   pinned and closed by the same rules every other row is.
+
+   Kept separate from the name overlay below it, and read on its own by
+   `conversationCaption`: that caption is what the person pressed to open the
+   conversation, and a manual name is a mark put on the *row* afterwards —
+   showing it in the opening bubble would claim somebody typed their own name
+   as the first word of a session they have not started yet. */
+const mergedAgentRows = computed(() => mergeAgentRows(agentRows.value, drivenHere.value))
+
 const orderedAgentRows = computed(() => [
   ...orderAgents(
-    mergeAgentRows(agentRows.value, drivenHere.value),
+    nameAgentRows(mergedAgentRows.value, project.agentNames),
     agentArrangement.value.length ? agentArrangement.value : project.agentOrder,
     project.pinnedAgents
   ),
@@ -2978,6 +2987,15 @@ const orderedAgentRows = computed(() => [
 function reorderAgents(rows) {
   agentArrangement.value = rows.map(agentKey)
   project.agentOrder = conversationsOf(rows)
+}
+
+/* The rename, written the way a pin is: the whole map back into the
+   project's settings, through the pure rule, so the save watch sees a new
+   object. An empty `name` is `withAgentName`'s business — the entry is
+   removed and the row falls back to the worker's own title or, failing
+   that, the intent's caption. */
+const renameAgent = ({ conversation, name }) => {
+  project.agentNames = withAgentName(project.agentNames, conversation, name)
 }
 
 /* The X on a row in the agents panel, and which of the three removals it is.
@@ -3258,10 +3276,19 @@ const activeAgentRow = computed(() =>
    the mono identifiers beside it, joined the way the row reads them — this is
    the sentence `ConversationView` substitutes when the turn itself carries no
    words of the person's own (`.claude/rules/conversation-panel.md`, "The
-   opening turn"). `''` for a row that is not (yet) in `orderedAgentRows`,
-   which the panel reads as `UserMessage`'s own default. */
+   opening turn"). `''` for a row that is not (yet) found, which the panel
+   reads as `UserMessage`'s own default.
+
+   Read off `mergedAgentRows` and `crewHere` — the panel's rows **before**
+   `nameAgentRows` — and deliberately not `orderedAgentRows`: this sentence
+   stands for what the person pressed to get here, and a manual name is a mark
+   put on the row afterwards, not a word anybody said at the start of the
+   session. Showing it here would put a name somebody typed into the agent's
+   own row inside a bubble claiming to be the person's opening turn. */
 const conversationCaption = computed(() => {
-  const row = orderedAgentRows.value.find((candidate) => candidate.id === activeAgentRow.value)
+  const row = [...mergedAgentRows.value, ...crewHere.value].find(
+    (candidate) => candidate.id === activeAgentRow.value
+  )
   if (!row) return ''
   return [row.label, ...row.tasks].filter(Boolean).join(' ')
 })
@@ -7250,6 +7277,7 @@ const toastStackStyle = {
                 @reorder="reorderAgents"
                 @pin="project.pinnedAgents = $event"
                 @clear="clearSession"
+                @rename="renameAgent"
               />
             </div>
           </div>

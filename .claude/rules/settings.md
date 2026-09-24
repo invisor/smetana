@@ -39,7 +39,7 @@ which sound each of the two announcements makes and whether a finished run shows
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
 absolute path to its content state (side tab, right tab, active tab, selected task, `recentTasks`,
 selected path, `selectedRepo`, expanded folders, `branchFolders`, `openTabs`, `previewTab`,
-`columnOrder`, `tabOrder`, `agentOrder`, `pinnedAgents`, `runSettings`,
+`columnOrder`, `tabOrder`, `agentOrder`, `pinnedAgents`, `agentNames`, `runSettings`,
 `storageWarnedMib`, `usedAt`, `agents`).
 
 `tabOrder` sits beside `openTabs` rather than replacing it, and the two answer different questions:
@@ -60,6 +60,15 @@ the way `tabOrder` is while the second is written only when somebody pins or unp
 validated with `sane_list` against `MAX_AGENT_ORDER` and the identifier ceiling, an id being a UUID
 rather than a path. What they *mean* is `.claude/rules/terminal.md`, which owns the panel; the rule
 that reads them is `components/agent/agentOrder.js`.
+
+`agentNames` is a third field beside that pair, keyed the identical way and for the identical
+reason — a person's own name for a row, written only by the rename gesture and never checked against
+what is on screen, so it outlives the session exactly as a pin does. `sane_agent_names` is its own
+validator rather than a call to `sane_list`: an entry is a `String → String` pair and not a bare
+identifier, so what is cleaned is a key against the same ceiling `agentOrder`'s ids take and a value
+trimmed and bounded by `MAX_AGENT_NAME_LEN`, with the count held to `MAX_AGENT_ORDER` the same as the
+other two. The rule that reads it is `components/agent/agentName.js`, applied once at the seam
+`.claude/rules/terminal.md` names.
 
 `agentPrompt` sits at the root beside the four languages and for their reason rather than a new one:
 a standing instruction of the "talk to me briefly", "this machine has no Docker" kind is a fact about

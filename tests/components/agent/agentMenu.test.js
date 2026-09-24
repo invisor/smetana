@@ -5,6 +5,7 @@ import {
   CLOSE_LABEL,
   CLOSE_OTHERS_LABEL,
   PIN_LABEL,
+  RENAME_LABEL,
   UNPIN_LABEL,
   agentMenuItems,
   agentMenuLabel,
@@ -30,8 +31,20 @@ describe('what an agent row offers', () => {
   /* The verbs and their order are the acceptance criteria of this task, and the
      consuming side of the pair is a `.vue` file no runner here can read — so
      this is the only mechanical check either half gets. */
-  it('offers the four verbs, pinning first and the two closes last', () => {
-    expect(kinds(agentMenuItems(row()))).toEqual(['pin', 'clear', 'close', 'close-others'])
+  it('offers the five verbs, renaming first, pinning next and the two closes last', () => {
+    expect(kinds(agentMenuItems(row()))).toEqual(['rename', 'pin', 'clear', 'close', 'close-others'])
+  })
+
+  it('offers Rename first, on the pencil, and refuses it without a conversation id', () => {
+    const items = agentMenuItems(row())
+    expect(kinds(items)[0]).toBe('rename')
+    expect(items[0].icon).toBe('pencil')
+    expect(labelOf(items, 'rename')).toBe(RENAME_LABEL)
+    expect(disabled(items, 'rename')).toBe(false)
+
+    const unnamed = agentMenuItems(row({ conversation: null }))
+    expect(labelOf(unnamed, 'rename')).toBe('Rename — nothing to remember it by')
+    expect(disabled(unnamed, 'rename')).toBe(true)
   })
 
   /* The fourth row, offered plainly whenever there is something for it to
