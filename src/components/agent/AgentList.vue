@@ -423,9 +423,13 @@ const openMenu = (row, event) => {
 const AGENT_NAME_MAX = 120
 
 /* The row whose caption is a field right now, by `agentKey`, and the text in
-   it. One at a time: opening a second closes the first without saving, the
-   way the tree's draft row does — `startRename` simply overwrites both refs,
-   and the field that was standing unmounts as the new one mounts.
+   it. One at a time, but not by closing the first unsaved: `startRename`
+   only ever runs from a menu pick, and picking a second row's Rename first
+   takes the pointer through the first field's own `blur`, which commits it
+   — so by the time `startRename` overwrites `renaming` for the new row, the
+   old one has already been saved rather than discarded. What `startRename`
+   itself does is simpler than that account: it overwrites the refs, and the
+   field that was standing unmounts as the new one mounts.
 
    `renameFrom` is what the field opened with, clipped to `AGENT_NAME_MAX`
    the same way the prefill itself is (see `startRename`), and held apart
@@ -464,8 +468,12 @@ const startRename = (row) => {
   // set programmatically: a resumed row's caption is "Resume session:
   // <title>" and a title can run to 120 characters on its own, so the raw
   // label can already be past `AGENT_NAME_MAX` before anybody has touched
-  // the field.
-  renameFrom.value = Array.from(row.label ?? '').slice(0, AGENT_NAME_MAX).join('')
+  // the field. Trimmed after the clip, and not only inside `commitRename`:
+  // a clip can land the cut on a space, and an untrimmed `renameFrom` would
+  // then never equal `commitRename`'s own trimmed draft even when nothing
+  // was typed, defeating the no-op check on the one row long enough to need
+  // clipping at all.
+  renameFrom.value = Array.from(row.label ?? '').slice(0, AGENT_NAME_MAX).join('').trim()
   renameDraft.value = renameFrom.value
   nextTick(() => {
     renameField.value?.focus()
@@ -484,10 +492,11 @@ const startRename = (row) => {
    there is mid-edit until a person deliberately starts one.
 
    Committing exactly what the field opened with is a no-op and emits
-   nothing at all, compared after trimming so trailing whitespace typed by
-   accident does not count as a change — against `renameFrom`, the clipped
-   text the field opened on, and never against `row.label` read fresh: the
-   row can have a new automatic title by the time Enter is pressed, and
+   nothing at all, the draft trimmed before the comparison so trailing
+   whitespace typed by accident does not count as a change — against
+   `renameFrom`, the clipped and already-trimmed text the field opened on
+   (see `startRename`), and never against `row.label` read fresh: the row
+   can have a new automatic title by the time Enter is pressed, and
    comparing against that would let an untouched field still commit,
    freezing whatever the title had become in the meantime into a permanent
    manual name the automatic rule could then never move again. An empty
