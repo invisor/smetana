@@ -1162,11 +1162,32 @@ fn handle(
                 let _ = tx.send(Err(SessionError::Spawn(ENDED.into())));
                 return;
             }
-            let Some(provider) = package.tree.provider_id(node).map(str::to_owned) else {
-                let _ = tx.send(Err(SessionError::Spawn(UNREACHABLE.into())));
-                return;
-            };
-            if let Some(team) = claude_teams.get(&root) {
+            if let Some(team) = claude_teams.get(&root).cloned() {
+                if node == root {
+                    // The interactive lead has a normal text input, not a
+                    // mailbox addressed to itself. This writes one complete
+                    // line to that input; it neither reads nor navigates the
+                    // provider TUI. Teammates still use the documented
+                    // structured inbox below.
+                    let delivered = crew_ptys.get_mut(&root).is_some_and(|pty| {
+                        if pty.exit_code().is_some() {
+                            false
+                        } else {
+                            let mut input = text.clone().into_bytes();
+                            input.push(b'\n');
+                            pty.write(&input);
+                            true
+                        }
+                    });
+                    let answer = if delivered {
+                        record_crew_message(app, crews, root, node, text);
+                        Ok(())
+                    } else {
+                        Err(SessionError::Spawn(ENDED.into()))
+                    };
+                    let _ = tx.send(answer);
+                    return;
+                }
                 // Claude's mailbox addresses the member's runtime name, which
                 // is the structured config label, not agentId/provider id.
                 // `append_message` repeats the membership check under its
@@ -1174,7 +1195,7 @@ fn handle(
                 // refusal with the draft intact.
                 let member = selected.label.clone();
                 let result = crate::agents::claude_crew::append_message(
-                    team,
+                    &team,
                     &member,
                     "team-lead",
                     &text,
@@ -1187,6 +1208,10 @@ fn handle(
                 let _ = tx.send(result);
                 return;
             }
+            let Some(provider) = package.tree.provider_id(node).map(str::to_owned) else {
+                let _ = tx.send(Err(SessionError::Spawn(UNREACHABLE.into())));
+                return;
+            };
             let Some(live) = sessions.get_mut(&root) else {
                 let _ = tx.send(Err(SessionError::NoSuchSession(root)));
                 return;
