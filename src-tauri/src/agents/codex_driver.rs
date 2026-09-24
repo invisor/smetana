@@ -66,11 +66,14 @@ pub struct CodexDriver {
     interrupt_pending: bool,
     turn_start_pending: bool,
     crew_records: Vec<Value>,
+    crew_journal_records: Vec<Value>,
+    crew_history: std::collections::BTreeMap<u64, String>,
+    crew_lists: std::collections::BTreeSet<u64>,
 }
 
 impl CodexDriver {
     pub fn new(_permission: Option<crate::session::permission::PermissionTicket>) -> Self {
-        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: std::collections::VecDeque::new(), queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None, None)), bootstrapped: false, discovered: None, active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false, crew_records: Vec::new() }
+        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: std::collections::VecDeque::new(), queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None, None)), bootstrapped: false, discovered: None, active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false, crew_records: Vec::new(), crew_journal_records: Vec::new(), crew_history: std::collections::BTreeMap::new(), crew_lists: std::collections::BTreeSet::new() }
     }
 
     /// The oldest queued message, if any, sent as the next turn. The one
@@ -136,10 +139,40 @@ impl Driver for CodexDriver {
         let mut events = Vec::new();
         for line in self.lines.feed(bytes) {
             let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
-            if matches!(
+            let lifecycle = matches!(
                 message.get("method").and_then(Value::as_str),
                 Some("thread/started" | "thread/status/changed")
-            ) || message
+            );
+            if lifecycle {
+                self.crew_records.push(message.clone());
+            }
+            if message.get("method").is_none() {
+                if let Some(id) = message.get("id").and_then(Value::as_u64) {
+                    if self.crew_lists.remove(&id) {
+                        self.pending.remove(&id);
+                        self.crew_records.push(message.clone());
+                        continue;
+                    }
+                    if let Some(thread_id) = self.crew_history.remove(&id) {
+                        self.pending.remove(&id);
+                        let mut record = message.clone();
+                        record["crewThreadId"] = Value::String(thread_id);
+                        self.crew_journal_records.push(record);
+                        continue;
+                    }
+                }
+            }
+            let thread_id = message
+                .pointer("/params/threadId")
+                .or_else(|| message.pointer("/params/item/threadId"))
+                .and_then(Value::as_str);
+            if let Some(thread_id) = thread_id {
+                if self.thread.as_deref() != Some(thread_id) {
+                    self.crew_journal_records.push(message.clone());
+                    continue;
+                }
+            }
+            if message
                 .pointer("/params/item/type")
                 .and_then(Value::as_str)
                 == Some("collabAgentToolCall")
@@ -386,6 +419,28 @@ impl Driver for CodexDriver {
 
     fn crew_records(&mut self) -> Vec<Value> { std::mem::take(&mut self.crew_records) }
 
+    fn crew_journal_records(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.crew_journal_records)
+    }
+
+    fn crew_hydrate(&mut self, provider_id: &str) -> Option<Vec<u8>> {
+        if provider_id.is_empty() || self.thread.as_deref() == Some(provider_id) {
+            return None;
+        }
+        let id = self.next_id;
+        let bytes = self.request("thread/read", json!({"threadId":provider_id, "includeTurns":true}));
+        self.crew_history.insert(id, provider_id.to_owned());
+        Some(bytes)
+    }
+
+    fn crew_reconcile(&mut self) -> Option<Vec<u8>> {
+        let lead = self.thread.clone()?;
+        let id = self.next_id;
+        let bytes = self.request("thread/list", json!({"ancestorThreadId":lead}));
+        self.crew_lists.insert(id);
+        Some(bytes)
+    }
+
     fn crew_send(&mut self, provider_id: &str, text: String) -> Result<Vec<u8>, String> {
         if provider_id.is_empty() {
             return Err("the selected Codex thread has ended".into());
@@ -518,7 +573,7 @@ fn tool_use_detail(kind: &str, item: &Value) -> Option<(&'static str, String)> {
 /// of that item's own status, and any `agentMessage`/`reasoning` the turn
 /// produced before it stopped — the parts of the account that are true
 /// regardless of how the turn as a whole ended.
-fn translate_history(turns: &[Value]) -> Vec<EventKind> {
+pub(crate) fn translate_history(turns: &[Value]) -> Vec<EventKind> {
     let mut events = Vec::new();
     for turn in turns {
         let Some(items) = turn.get("items").and_then(Value::as_array) else { continue };
@@ -1522,6 +1577,33 @@ mod tests {
             ),
             crate::session::model::SessionState::Ready,
             "a history with no open turn reads as ready, never as a turn forever in flight",
+        );
+    }
+
+    #[test]
+    fn a_child_thread_record_never_enters_the_lead_journal_and_hydrates_by_its_own_id() {
+        let mut driver = CodexDriver::new(None);
+        driver.thread = Some("lead".into());
+        let child = b"{\"jsonrpc\":\"2.0\",\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"child\",\"delta\":\"only child\"}}\n";
+        assert!(driver.feed(child).is_empty());
+        assert_eq!(
+            driver.crew_journal_records()[0].pointer("/params/threadId").and_then(Value::as_str),
+            Some("child")
+        );
+
+        let request = driver.crew_hydrate("child").unwrap();
+        let id = serde_json::from_slice::<Value>(&request)
+            .unwrap()
+            .get("id")
+            .and_then(Value::as_u64)
+            .unwrap();
+        let response = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"thread\":{{\"turns\":[]}}}}}}\n"
+        );
+        assert!(driver.feed(response.as_bytes()).is_empty());
+        assert_eq!(
+            driver.crew_journal_records()[0].get("crewThreadId").and_then(Value::as_str),
+            Some("child")
         );
     }
 }

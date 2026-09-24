@@ -278,6 +278,10 @@ pub fn start(app: AppHandle) -> SessionHandle {
         // Session id -> public Crew root for the special Codex lead whose
         // normal app-server stream also carries thread lifecycle records.
         let mut crew_leads: HashMap<SessionId, u64> = HashMap::new();
+        // A child receives one `thread/read(includeTurns:true)` hydration when
+        // it is first discovered. Its later live records stay separate.
+        let mut codex_hydrated: HashSet<(u64, String)> = HashSet::new();
+        let mut codex_reconciled: HashSet<u64> = HashSet::new();
         let mut starting: HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>> = HashMap::new();
         let mut next_id: SessionId = 1;
 
@@ -317,7 +321,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                     // breaking is a stopped worker, whereas continuing is a
                     // branch that is instantly ready forever.
                     let Some(chunk) = chunk else { break };
-                    absorb(&app, &mut sessions, &mut crews, &mut crew_leads, &mut starting, permission.as_ref(), chunk);
+                    absorb(&app, &mut sessions, &mut crews, &mut crew_leads, &mut codex_hydrated, &mut codex_reconciled, &mut starting, permission.as_ref(), chunk);
                 }
                 asked = asked_rx.recv(), if asked_open => {
                     let Some(asked) = asked else {
@@ -948,6 +952,49 @@ fn absorb_codex_crew(
     emit_crew(app, package);
 }
 
+/// Route every Codex child record through the backend's provider-id index
+/// before appending it. The front end receives only the stable node id and can
+/// therefore switch between two simultaneous children without a shared log.
+fn absorb_codex_journals(
+    app: &AppHandle,
+    crews: &mut HashMap<u64, CrewPackage>,
+    root: u64,
+    records: Vec<serde_json::Value>,
+) {
+    let Some(package) = crews.get_mut(&root) else { return };
+    for record in records {
+        let parsed = crate::agents::codex_crew::hydrated_journal(&record)
+            .or_else(|| crate::agents::codex_crew::journal(&record));
+        let Some((provider, kinds)) = parsed else { continue };
+        let node = package
+            .tree
+            .provider_nodes()
+            .into_iter()
+            .find_map(|(id, node)| (id == provider).then_some(node));
+        let Some(node) = node else { continue };
+        if let Some(events) = package.append(node, kinds) {
+            if !events.is_empty() {
+                emit_crew_events(app, root, node, events);
+            }
+        }
+    }
+}
+
+fn codex_hydration_requests(
+    package: &CrewPackage,
+    hydrated: &mut HashSet<(u64, String)>,
+) -> Vec<String> {
+    package
+        .tree
+        .provider_nodes()
+        .into_iter()
+        .filter_map(|(provider, node)| {
+            (node != package.root && hydrated.insert((package.root, provider.clone())))
+                .then_some(provider)
+        })
+        .collect()
+}
+
 /// Poll the documented Claude team config. This does not touch the PTY at all:
 /// the config is the runtime's structured source for members and lifecycle.
 /// A project with two indistinguishable configs is left unchanged until one is
@@ -1476,6 +1523,8 @@ fn absorb(
     sessions: &mut HashMap<SessionId, Live>,
     crews: &mut HashMap<u64, CrewPackage>,
     crew_leads: &mut HashMap<SessionId, u64>,
+    codex_hydrated: &mut HashSet<(u64, String)>,
+    codex_reconciled: &mut HashSet<u64>,
     starting: &mut HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>>,
     permission: Option<&PermissionServer>,
     chunk: Chunk,
@@ -1483,26 +1532,47 @@ fn absorb(
     match chunk {
         Chunk::Data(id, bytes) => {
             let Some(live) = sessions.get_mut(&id) else { return };
-            let Some(talking) = live.talking.as_mut() else { return };
-            let kinds = talking.driver.feed(&bytes);
-            let crew_records = talking.driver.crew_records();
-            let outgoing = talking.driver.outgoing();
-            let startup = talking.driver.startup();
+            let (kinds, crew_records, crew_journal_records, mut outgoing, startup, discovered) = {
+                let Some(talking) = live.talking.as_mut() else { return };
+                let kinds = talking.driver.feed(&bytes);
+                let crew_records = talking.driver.crew_records();
+                let crew_journal_records = talking.driver.crew_journal_records();
+                let outgoing = talking.driver.outgoing();
+                let startup = talking.driver.startup();
             // Asked on every chunk, cheap for the ordinary driver that never
             // answers (`None` is the default `Driver::discovered_id` keeps):
             // a harness that names its own conversation has to be asked
             // somewhere, and the moment its protocol confirms one is exactly
             // the moment this fires.
-            let discovered = talking.driver.discovered_id();
+                let discovered = talking.driver.discovered_id();
+                (kinds, crew_records, crew_journal_records, outgoing, startup, discovered)
+            };
             append(app, id, live, kinds);
-            for bytes in outgoing {
-                if !say(live, bytes) { lost(app, id, live); break; }
-            }
             if let Some(conversation) = discovered.as_ref() {
                 note_conversation(app, id, live, conversation.clone());
             }
             if let Some(root) = crew_leads.get(&id).copied() {
                 absorb_codex_crew(app, crews, root, discovered.as_deref(), crew_records);
+                absorb_codex_journals(app, crews, root, crew_journal_records);
+                if discovered.is_some() && codex_reconciled.insert(root) {
+                    if let Some(talking) = live.talking.as_mut() {
+                        if let Some(request) = talking.driver.crew_reconcile() {
+                            outgoing.push(request);
+                        }
+                    }
+                }
+                if let Some(package) = crews.get(&root) {
+                    for provider in codex_hydration_requests(package, codex_hydrated) {
+                        if let Some(talking) = live.talking.as_mut() {
+                            if let Some(request) = talking.driver.crew_hydrate(&provider) {
+                                outgoing.push(request);
+                            }
+                        }
+                    }
+                }
+            }
+            for bytes in outgoing {
+                if !say(live, bytes) { lost(app, id, live); break; }
             }
             if let Some(result) = startup {
                 if let Some(tx) = starting.remove(&id) {
@@ -1588,6 +1658,8 @@ fn absorb(
             // retained until here; now drop the complete tree and all provider
             // indexes together so no row is orphaned after Stop/exit.
             if let Some(root) = crew_leads.remove(&id) {
+                codex_hydrated.retain(|(crew, _)| *crew != root);
+                codex_reconciled.remove(&root);
                 if let Some(mut package) = crews.remove(&root) {
                     package.tree.clear();
                     emit_crew(app, &package);

@@ -7,6 +7,7 @@
 use serde_json::Value;
 
 use super::crew::{ProviderNode, ProviderState};
+use crate::session::model::{Actor, EventKind};
 
 pub const MIN_VERSION: (u32, u32, u32) = (0, 155, 1);
 
@@ -85,6 +86,89 @@ pub fn addressed_turn(thread_id: &str, text: &str) -> Value {
         "method": "turn/start",
         "params": {"threadId": thread_id, "input": [{"type": "text", "text": text}]}
     })
+}
+
+/// Translate one non-lead app-server notification into the selected child's
+/// journal. The root driver deliberately hands these records over before it
+/// folds them, so interleaved child output can never enter the lead journal.
+pub fn journal(value: &Value) -> Option<(String, Vec<EventKind>)> {
+    let thread = value
+        .pointer("/params/threadId")
+        .or_else(|| value.pointer("/params/item/threadId"))
+        .and_then(Value::as_str)?
+        .to_owned();
+    let method = value.get("method").and_then(Value::as_str)?;
+    let events = match method {
+        "turn/started" => vec![EventKind::TurnStart { by: Actor::Agent }],
+        "item/agentMessage/delta" => value
+            .pointer("/params/delta")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(|text| vec![EventKind::TextDelta { text: text.to_owned() }])
+            .unwrap_or_default(),
+        "item/completed" => completed(value.pointer("/params/item")?),
+        "turn/completed" => {
+            let turn = value.pointer("/params/turn")?;
+            if let Some(error) = turn.pointer("/error/message").and_then(Value::as_str) {
+                vec![EventKind::TurnFailed { text: error.to_owned() }]
+            } else if turn.get("status").and_then(Value::as_str) == Some("failed") {
+                vec![EventKind::TurnFailed { text: "Codex turn failed".into() }]
+            } else {
+                vec![EventKind::Result {
+                    tokens_in: 0,
+                    tokens_out: 0,
+                    cost_usd: None,
+                    ms: turn.get("durationMs").and_then(Value::as_u64).unwrap_or(0),
+                }]
+            }
+        }
+        "error" => value
+            .pointer("/params/error/message")
+            .and_then(Value::as_str)
+            .map(|text| vec![EventKind::Error { text: text.to_owned() }])
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    Some((thread, events))
+}
+
+/// A `thread/read(includeTurns:true)` response tagged by `CodexDriver` with
+/// its requested child thread id. It is history, so the shared translator
+/// deliberately produces no open `TurnStart` event.
+pub fn hydrated_journal(value: &Value) -> Option<(String, Vec<EventKind>)> {
+    let thread = value.get("crewThreadId").and_then(Value::as_str)?.to_owned();
+    let turns = value.pointer("/result/thread/turns").and_then(Value::as_array)?;
+    Some((thread, crate::agents::codex_driver::translate_history(turns)))
+}
+
+fn completed(item: &Value) -> Vec<EventKind> {
+    match item.get("type").and_then(Value::as_str) {
+        Some("agentMessage") => item
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(|text| vec![EventKind::Text { text: text.to_owned() }])
+            .unwrap_or_default(),
+        Some("reasoning") => {
+            let text = item
+                .get("summary")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .chain(item.get("content").and_then(Value::as_array).into_iter().flatten())
+                .filter_map(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!text.is_empty()).then_some(EventKind::Reasoning { text }).into_iter().collect()
+        }
+        Some(kind @ ("commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" | "webSearch")) => {
+            let id = item.get("id").and_then(Value::as_str).unwrap_or(kind).to_owned();
+            let ok = !matches!(item.get("status").and_then(Value::as_str), Some("failed" | "error"));
+            vec![EventKind::ToolResult { id, ok, summary: kind.into() }]
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn thread_node(thread: &Value) -> Option<ProviderNode> {
@@ -169,6 +253,49 @@ mod tests {
         assert_eq!(
             turn.pointer("/params/input/0/text").and_then(Value::as_str),
             Some("UNIQUE-CHILD-MESSAGE")
+        );
+    }
+
+    #[test]
+    fn interleaved_child_items_keep_their_provider_thread_identity() {
+        let first = serde_json::json!({
+            "method": "item/agentMessage/delta",
+            "params": {"threadId": "child-one", "delta": "ONE"}
+        });
+        let second = serde_json::json!({
+            "method": "item/agentMessage/delta",
+            "params": {"threadId": "child-two", "delta": "TWO"}
+        });
+        assert_eq!(
+            journal(&first),
+            Some((
+                "child-one".into(),
+                vec![EventKind::TextDelta { text: "ONE".into() }]
+            ))
+        );
+        assert_eq!(
+            journal(&second),
+            Some((
+                "child-two".into(),
+                vec![EventKind::TextDelta { text: "TWO".into() }]
+            ))
+        );
+    }
+
+    #[test]
+    fn hydration_translates_only_the_requested_child_history() {
+        let record = serde_json::json!({
+            "crewThreadId": "child-two",
+            "result": {"thread": {"turns": [{"items": [
+                {"type": "agentMessage", "text": "only child two"}
+            ]}]}}
+        });
+        assert_eq!(
+            hydrated_journal(&record),
+            Some((
+                "child-two".into(),
+                vec![EventKind::Text { text: "only child two".into() }]
+            ))
         );
     }
 }

@@ -203,6 +203,16 @@ impl CrewTree {
             .find_map(|(provider, node)| (*node == id).then_some(provider.as_str()))
     }
 
+    /// Private provider identities remain behind the backend boundary, but the
+    /// worker needs this reconciliation view to hydrate every child exactly
+    /// once. Callers still receive only `CrewNode` ids over IPC.
+    pub fn provider_nodes(&self) -> Vec<(String, CrewNodeId)> {
+        self.provider
+            .iter()
+            .map(|(provider, node)| (provider.clone(), *node))
+            .collect()
+    }
+
     pub fn node_for_label(&self, label: &str) -> Option<CrewNodeId> {
         self.nodes
             .values()
@@ -339,6 +349,34 @@ mod tests {
         let (second_events, _, _) = package.snapshot(second).expect("second journal");
         assert_eq!(first_events.len(), 1);
         assert!(second_events.is_empty());
+    }
+
+    #[test]
+    fn interleaved_codex_records_append_only_to_their_selected_child() {
+        let mut package = CrewPackage::new("/project".into(), 7, "Lead");
+        let first = package
+            .apply(worker("thread-one", None, ProviderState::Running))
+            .unwrap();
+        let second = package
+            .apply(worker("thread-two", None, ProviderState::Running))
+            .unwrap();
+        for record in [
+            serde_json::json!({"method":"item/agentMessage/delta","params":{"threadId":"thread-one","delta":"ONE"}}),
+            serde_json::json!({"method":"item/agentMessage/delta","params":{"threadId":"thread-two","delta":"TWO"}}),
+        ] {
+            let (provider, kinds) = crate::agents::codex_crew::journal(&record).unwrap();
+            let node = package
+                .tree
+                .provider_nodes()
+                .into_iter()
+                .find_map(|(id, node)| (id == provider).then_some(node))
+                .unwrap();
+            package.append(node, kinds);
+        }
+        let (first_events, _, _) = package.snapshot(first).unwrap();
+        let (second_events, _, _) = package.snapshot(second).unwrap();
+        assert!(matches!(first_events[0].kind, EventKind::TextDelta { ref text } if text == "ONE"));
+        assert!(matches!(second_events[0].kind, EventKind::TextDelta { ref text } if text == "TWO"));
     }
 
     #[test]

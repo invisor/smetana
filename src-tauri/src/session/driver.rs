@@ -65,6 +65,21 @@ pub trait Driver: Send {
     /// Crew package; ordinary conversations leave the default empty.
     fn crew_records(&mut self) -> Vec<Value> { Vec::new() }
 
+    /// Live provider records that belong to a native child rather than this
+    /// driver's lead conversation. They stay opaque until the Crew owner has
+    /// resolved the provider id to one stable Smetana node.
+    fn crew_journal_records(&mut self) -> Vec<Value> { Vec::new() }
+
+    /// Ask a provider for one child's finished history after discovery. The
+    /// response returns through `crew_journal_records`, never through the
+    /// lead journal.
+    fn crew_hydrate(&mut self, _provider_id: &str) -> Option<Vec<u8>> { None }
+
+    /// Reconcile a native Crew tree after the lead's provider id is known.
+    /// Notification loss must never make a live child disappear from the
+    /// Smetana-owned tree.
+    fn crew_reconcile(&mut self) -> Option<Vec<u8>> { None }
+
     /// Send a turn to one provider-owned native child. The worker resolves the
     /// Smetana node and checks its capability before this method is called;
     /// drivers must not substitute their lead when the selected child is gone.
