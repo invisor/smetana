@@ -161,36 +161,65 @@ pub fn hydrated_journal(value: &Value) -> Option<(String, Vec<EventKind>)> {
     ))
 }
 
-/// Stable identities shared by a `thread/read` snapshot and later live item
-/// notifications. The worker seeds these before releasing buffered live
-/// events, so a late `item/completed` for an item already in the snapshot is
-/// not rendered twice merely because its JSON envelope differs.
+/// Snapshot coverage is intentionally distinct from live-event identity. It
+/// may suppress a buffered `item/completed` that was already in `thread/read`,
+/// but can never suppress a later turn completion or a text delta.
 pub fn hydrated_journal_keys(value: &Value) -> Option<(String, Vec<String>)> {
     let thread = value.get("crewThreadId")?.as_str()?.to_owned();
     let turns = value.pointer("/result/thread/turns")?.as_array()?;
     let mut keys = Vec::new();
     for turn in turns {
         if let Some(id) = turn.get("id").and_then(Value::as_str) {
-            keys.push(format!("turn:{id}"));
+            keys.push(format!("snapshot:turn:{id}"));
         }
         for item in turn.get("items").and_then(Value::as_array).into_iter().flatten() {
             if let Some(id) = item.get("id").and_then(Value::as_str) {
-                keys.push(format!("item:{id}"));
+                keys.push(format!("snapshot:item:{id}"));
             }
         }
     }
     Some((thread, keys))
 }
 
-/// A live event's provider-local identity. Deltas without an item id remain
-/// distinct stream fragments; completed items and turns use their stable ids.
+/// A live event's provider-local identity. A turn start and completion are
+/// separate facts even with the same turn id. Deltas return no de-duplication
+/// key: `params.itemId` identifies their stream, but every occurrence is
+/// meaningful and must remain appendable.
 pub fn journal_key(value: &Value) -> Option<(String, String)> {
     let thread = value.pointer("/params/threadId").or_else(|| value.pointer("/params/item/threadId")).and_then(Value::as_str)?.to_owned();
     let method = value.get("method")?.as_str()?;
-    let key = value.pointer("/params/item/id").or_else(|| value.pointer("/params/turn/id")).and_then(Value::as_str)
-        .map(|id| if method.starts_with("turn/") { format!("turn:{id}") } else { format!("item:{id}") })
-        .unwrap_or_else(|| format!("wire:{method}:{}", value.pointer("/params/delta").and_then(Value::as_str).unwrap_or("")));
+    if method.ends_with("/delta") {
+        // `itemId` is deliberately read (rather than pretending the message
+        // text is identity), but no key is returned: identical consecutive
+        // deltas are two real stream occurrences.
+        let _ = value.pointer("/params/itemId").and_then(Value::as_str);
+        return None;
+    }
+    let key = match method {
+        "turn/started" => value
+            .pointer("/params/turn/id")
+            .and_then(Value::as_str)
+            .map(|id| format!("live:turn-start:{id}")),
+        "turn/completed" => value
+            .pointer("/params/turn/id")
+            .and_then(Value::as_str)
+            .map(|id| format!("live:turn-complete:{id}")),
+        "item/completed" => value
+            .pointer("/params/item/id")
+            .and_then(Value::as_str)
+            .map(|id| format!("live:item-complete:{id}")),
+        _ => Some(format!("live:wire:{method}")),
+    }?;
     Some((thread, key))
+}
+
+/// The one buffered live fact a snapshot is allowed to cover. Lifecycle and
+/// delta records deliberately answer `None` here.
+pub fn buffered_snapshot_coverage(value: &Value) -> Option<(String, String)> {
+    (value.get("method").and_then(Value::as_str) == Some("item/completed")).then_some(())?;
+    let thread = value.pointer("/params/threadId").and_then(Value::as_str)?.to_owned();
+    let item = value.pointer("/params/item/id").and_then(Value::as_str)?;
+    Some((thread, format!("snapshot:item:{item}")))
 }
 
 fn completed(item: &Value) -> Vec<EventKind> {
@@ -380,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn hydration_and_live_completion_share_stable_item_identity() {
+    fn snapshot_coverage_is_not_a_live_completion_identity() {
         let snapshot = serde_json::json!({
             "crewThreadId": "child-two",
             "result": {"thread": {"turns": [{
@@ -395,11 +424,41 @@ mod tests {
             }}
         });
         let (_, keys) = hydrated_journal_keys(&snapshot).expect("snapshot keys");
-        assert!(keys.contains(&"turn:turn-7".into()));
-        assert!(keys.contains(&"item:item-9".into()));
+        assert!(keys.contains(&"snapshot:turn:turn-7".into()));
+        assert!(keys.contains(&"snapshot:item:item-9".into()));
         assert_eq!(
             journal_key(&live),
-            Some(("child-two".into(), "item:item-9".into()))
+            Some(("child-two".into(), "live:item-complete:item-9".into()))
         );
+        assert_eq!(
+            buffered_snapshot_coverage(&live),
+            Some(("child-two".into(), "snapshot:item:item-9".into()))
+        );
+    }
+
+    #[test]
+    fn a_fresh_turn_start_and_completion_are_distinct_after_hydration() {
+        let started = serde_json::json!({
+            "method": "turn/started",
+            "params": {"threadId": "child", "turn": {"id": "turn-1"}}
+        });
+        let completed = serde_json::json!({
+            "method": "turn/completed",
+            "params": {"threadId": "child", "turn": {"id": "turn-1"}}
+        });
+        assert_eq!(journal_key(&started), Some(("child".into(), "live:turn-start:turn-1".into())));
+        assert_eq!(journal_key(&completed), Some(("child".into(), "live:turn-complete:turn-1".into())));
+        assert_eq!(buffered_snapshot_coverage(&started), None);
+        assert_eq!(buffered_snapshot_coverage(&completed), None);
+    }
+
+    #[test]
+    fn deltas_with_an_item_id_are_occurrences_not_deduplication_keys() {
+        let delta = serde_json::json!({
+            "method": "item/agentMessage/delta",
+            "params": {"threadId": "child", "itemId": "item-1", "delta": "same"}
+        });
+        assert_eq!(journal_key(&delta), None);
+        assert_eq!(buffered_snapshot_coverage(&delta), None);
     }
 }

@@ -17,11 +17,13 @@ transport is driven. Auto, Solo and a panel-disabled Crew retain the existing
 PTY route. A failed capability/startup preflight happens before a task claim or
 worktree and is a refusal, never a hidden fallback to a provider TUI.
 
-For Claude, admission additionally precedes delivery of the Run brief: the
-interactive process is started only to establish the exact runtime and receives
-its retained input once after that succeeds. Its structured transcript maps
-`system/init` to the root's running state and a result to waiting (or failed
-for an error result); terminal bytes never participate in that state.
+For Claude, admission additionally precedes delivery of the Run brief: a
+non-working bootstrap initializes the native runtime, then the process receives
+its retained input once config, transcript and inbox admission succeeds. Its
+structured transcript maps `system/init` to the root's running state and a
+result to waiting (or failed for an error result); a successfully delivered root
+message also opens the next root turn. Terminal bytes never participate in logs
+or topology.
 
 The root remains the sole owner of claims, worktrees, review, merge and report.
 Provider children are display/routing nodes only; their journals survive their

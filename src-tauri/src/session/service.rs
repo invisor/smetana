@@ -128,12 +128,39 @@ pub struct CrewAttached {
 /// therefore be killed without ever starting work against the board.
 struct ClaudeAdmission {
     started: std::time::Instant,
-    prompt: Option<String>,
+    gate: ClaudePromptGate,
     reply: oneshot::Sender<Result<(u64, SessionId), SessionError>>,
 }
 
-fn claude_admission_input(prompt: Option<String>) -> Option<Vec<u8>> {
-    prompt.map(|prompt| format!("{prompt}\n").into_bytes())
+/// The two explicit inputs to a native Claude Crew lead. `take_real` is a
+/// one-shot capability only after the harmless bootstrap was put on the PTY;
+/// it gives tests and the worker one shared proof that the Run brief cannot
+/// precede provider-runtime admission.
+struct ClaudePromptGate {
+    bootstrap_sent: bool,
+    real_prompt: Option<String>,
+}
+
+impl ClaudePromptGate {
+    fn new(real_prompt: Option<String>) -> Self {
+        Self { bootstrap_sent: false, real_prompt }
+    }
+
+    fn bootstrap(&mut self) -> Vec<u8> {
+        self.bootstrap_sent = true;
+        crate::agents::claude_crew::bootstrap_input()
+    }
+
+    fn take_real(&mut self) -> Option<Vec<u8>> {
+        self.bootstrap_sent
+            .then(|| self.real_prompt.take())
+            .flatten()
+            .map(|prompt| format!("{prompt}\n").into_bytes())
+    }
+}
+
+fn retain_crew_exit(admitted: bool, waiter_count: usize) -> bool {
+    admitted && waiter_count == 0
 }
 
 pub enum Request {
@@ -400,7 +427,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                             &mut claude_teams, &mut claude_team_baselines, &mut claude_expected_sessions, &mut claude_starting,
                             &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes,
                             &mut crew_leads, &mut crew_waiters, &mut crew_exits, &mut crew_send_waiters,
-                            root, crate::terminal::model::Exit::NoCode,
+                            root, crate::terminal::model::Exit::NoCode, false,
                         );
                         let _ = admission.reply.send(Err(SessionError::Spawn(reason)));
                     }
@@ -414,7 +441,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                             &mut claude_teams, &mut claude_team_baselines, &mut claude_expected_sessions, &mut claude_starting,
                             &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes,
                             &mut crew_leads, &mut crew_waiters, &mut crew_exits, &mut crew_send_waiters,
-                            root, crate::terminal::model::Exit::NoCode,
+                            root, crate::terminal::model::Exit::NoCode, false,
                         );
                         let _ = admission.reply.send(Err(SessionError::Spawn("Claude Crew runtime did not establish an exact team config, transcript, and inbox contract within 10 seconds".into())));
                     }
@@ -426,6 +453,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         .filter_map(|(root, pty)| pty.exit_code().map(|code| (*root, code)))
                         .collect();
                     for (root, code) in exited {
+                        let admitted = !claude_starting.contains_key(&root);
                         clear_crew(
                             &app,
                             &mut sessions,
@@ -445,6 +473,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                             &mut crew_send_waiters,
                             root,
                             crate::terminal::model::Exit::Code(code),
+                            admitted,
                         );
                     }
                 }
@@ -1012,21 +1041,11 @@ fn record_crew_message(
     text: String,
 ) {
     let Some(package) = crews.get_mut(&root) else { return };
-    let events = package.append(
-        node,
-        vec![
-            EventKind::TurnStart {
-                by: super::model::Actor::Person,
-            },
-            EventKind::UserMessage {
-                text,
-                attachments: Vec::new(),
-            },
-        ],
-    );
+    let events = package.record_message(node, text);
     if let Some(events) = events {
         emit_crew_events(app, root, node, events);
     }
+    emit_crew(app, package);
 }
 
 /// Apply only Codex's documented structured app-server records. The driver
@@ -1076,11 +1095,11 @@ fn absorb_codex_journals(
                     seen.insert((root, provider.clone(), key));
                 }
             }
-            append_codex_journal(app, crews, root, &provider, kinds, seen, &record);
+            append_codex_journal(app, crews, root, &provider, kinds, seen, &record, false);
             hydrated.insert((root, provider.clone()));
             for live in buffered.remove(&(root, provider)).unwrap_or_default() {
                 if let Some((provider, kinds)) = crate::agents::codex_crew::journal(&live) {
-                    append_codex_journal(app, crews, root, &provider, kinds, seen, &live);
+                    append_codex_journal(app, crews, root, &provider, kinds, seen, &live, true);
                 }
             }
             continue;
@@ -1090,7 +1109,7 @@ fn absorb_codex_journals(
             buffered.entry((root, provider)).or_default().push(record);
             continue;
         }
-        append_codex_journal(app, crews, root, &provider, kinds, seen, &record);
+        append_codex_journal(app, crews, root, &provider, kinds, seen, &record, false);
     }
 }
 
@@ -1106,12 +1125,21 @@ fn append_codex_journal(
     kinds: Vec<EventKind>,
     seen: &mut HashSet<(u64, String, String)>,
     record: &serde_json::Value,
+    buffered_before_hydration: bool,
 ) {
-    let key = crate::agents::codex_crew::journal_key(record)
-        .map(|(_, key)| key)
-        .unwrap_or_else(|| serde_json::to_string(record).unwrap_or_default());
-    if !seen.insert((root, provider.to_owned(), key)) {
-        return;
+    if buffered_before_hydration {
+        if let Some((_, coverage)) = crate::agents::codex_crew::buffered_snapshot_coverage(record) {
+            if seen.contains(&(root, provider.to_owned(), coverage)) {
+                return;
+            }
+        }
+    }
+    // A delta has no de-duplication key: every occurrence belongs to the
+    // selected thread's live journal, including equal text from one item.
+    if let Some((_, key)) = crate::agents::codex_crew::journal_key(record) {
+        if !seen.insert((root, provider.to_owned(), key)) {
+            return;
+        }
     }
     let Some(package) = crews.get_mut(&root) else { return };
     let node = package
@@ -1279,9 +1307,18 @@ fn refresh_claude_crews(
             emit_crew(app, package);
             continue;
         }
-        if let Some(admission) = starting.remove(root) {
+        if starting.get(root).is_some_and(|admission| !admission.gate.bootstrap_sent) {
+            package.tree.fail_node(*root);
+            admission_failures.push((
+                *root,
+                "Claude Crew bootstrap was not delivered before runtime admission".into(),
+            ));
+            emit_crew(app, package);
+            continue;
+        }
+        if let Some(mut admission) = starting.remove(root) {
             let pty = crew_ptys.get_mut(root).expect("admitted Claude lead owns its PTY");
-            if let Some(input) = claude_admission_input(admission.prompt) {
+            if let Some(input) = admission.gate.take_real() {
                 // Only the admitted interactive runtime receives the Run
                 // prompt. Removing the pending admission makes delivery
                 // exactly-once even as later config polls continue.
@@ -1358,6 +1395,7 @@ fn clear_crew(
     crew_send_waiters: &mut HashMap<(u64, u64), CrewSendWaiter>,
     root: u64,
     exit: crate::terminal::model::Exit,
+    admitted: bool,
 ) {
     claude_crews.remove(&root);
     claude_teams.remove(&root);
@@ -1376,10 +1414,16 @@ fn clear_crew(
         pty.kill();
     }
     crew_leads.retain(|_, lead_root| *lead_root != root);
-    for waiter in crew_waiters.remove(&root).unwrap_or_default() {
+    let waiters = crew_waiters.remove(&root).unwrap_or_default();
+    let keep_exit = retain_crew_exit(admitted, waiters.len());
+    for waiter in waiters {
         let _ = waiter.send(exit.clone());
     }
-    crew_exits.insert(root, exit);
+    if keep_exit {
+        crew_exits.insert(root, exit);
+    } else {
+        crew_exits.remove(&root);
+    }
     for (_, waiter) in crew_send_waiters.extract_if(|(crew, _), _| *crew == root) {
         let _ = waiter.reply.send(Err(SessionError::Spawn(ENDED.into())));
     }
@@ -1433,7 +1477,13 @@ fn handle(
                     .map(|home| crate::agents::claude_crew::team_dirs(&home))
                     .unwrap_or_default();
                 match spawn_claude_crew(app, &project, intent, agent, lead_session.clone()) {
-                    Ok((pty, prompt)) => {
+                    Ok((mut pty, prompt)) => {
+                        // Team config/inboxes do not exist until Claude has
+                        // received an interactive turn. This constrained
+                        // bootstrap creates only that provider runtime; the
+                        // real Run brief remains in `ClaudeAdmission`.
+                        let mut gate = ClaudePromptGate::new(prompt);
+                        pty.write(&gate.bootstrap());
                         let package = CrewPackage::new(project, id, "Crew lead");
                         emit_crew(app, &package);
                         crews.insert(id, package);
@@ -1443,7 +1493,7 @@ fn handle(
                         claude_expected_sessions.insert(id, lead_session);
                         claude_starting.insert(id, ClaudeAdmission {
                             started: std::time::Instant::now(),
-                            prompt,
+                            gate,
                             reply: tx,
                         });
                     }
@@ -1588,14 +1638,16 @@ fn handle(
                 let _ = tx.send(Err(SessionError::NoSuchSession(root)));
                 return;
             }
+            let admitted = !claude_starting.contains_key(&root);
             clear_crew(
                 app, sessions, crews, crew_ptys, claude_crews, claude_teams, claude_team_baselines, claude_expected_sessions, claude_starting, claude_tails,
                 claude_lead_tails, claude_transcript_nodes, crew_leads, crew_waiters, crew_exits, crew_send_waiters, root,
-                crate::terminal::model::Exit::Removed,
+                crate::terminal::model::Exit::Removed, admitted,
             );
             let _ = tx.send(Ok(()));
         }
         Request::CrewClear(root) => {
+            let admitted = !claude_starting.contains_key(&root);
             clear_crew(
                 app,
                 sessions,
@@ -1614,7 +1666,7 @@ fn handle(
                 crew_exits,
                 crew_send_waiters,
                 root,
-                crate::terminal::model::Exit::Removed,
+                crate::terminal::model::Exit::Removed, admitted,
             );
         }
         Request::Start(project, intent, tx) => {
@@ -1946,7 +1998,9 @@ fn absorb(
             }
         }
         Chunk::Eof(id) => {
-            if let Some((_root, tx)) = crew_starting.remove(&id) {
+            let crew_failed_admission = crew_starting.remove(&id);
+            let crew_failed_admission_pending = crew_failed_admission.is_some();
+            if let Some((_root, tx)) = crew_failed_admission {
                 let _ = tx.send(Err(SessionError::Spawn("Codex app-server ended before it created a Crew thread".into())));
             }
             let was_starting = starting.remove(&id);
@@ -2027,10 +2081,16 @@ fn absorb(
                 codex_buffered.retain(|(crew, _), _| *crew != root);
                 codex_seen.retain(|(crew, _, _)| *crew != root);
                 codex_reconciled.remove(&root);
-                for waiter in crew_waiters.remove(&root).unwrap_or_default() {
+                let waiters = crew_waiters.remove(&root).unwrap_or_default();
+                let keep_exit = retain_crew_exit(!crew_failed_admission_pending, waiters.len());
+                for waiter in waiters {
                     let _ = waiter.send(crate::terminal::model::Exit::NoCode);
                 }
-                crew_exits.insert(root, crate::terminal::model::Exit::NoCode);
+                if keep_exit {
+                    crew_exits.insert(root, crate::terminal::model::Exit::NoCode);
+                } else {
+                    crew_exits.remove(&root);
+                }
                 if let Some(mut package) = crews.remove(&root) {
                     package.tree.clear();
                     emit_crew(app, &package);
@@ -2221,13 +2281,66 @@ mod tests {
     use crate::agents::Intent;
 
     #[test]
-    fn claude_brief_is_one_interactive_input_only_after_admission() {
-        let first = claude_admission_input(Some("RUN-ONCE".into()));
-        assert_eq!(first, Some(b"RUN-ONCE\n".to_vec()));
-        // `ClaudeAdmission` consumes its Option while it is removed from the
-        // pending map. A second poll therefore has neither a pending entry nor
-        // another input to put on the PTY.
-        assert_eq!(claude_admission_input(None), None);
+    fn claude_fresh_baseline_bootstraps_then_admits_one_real_brief() {
+        let expected_session = "exact-lead-session";
+        let baseline = HashSet::new();
+        let mut gate = ClaudePromptGate::new(Some("REAL-RUN-BRIEF".into()));
+
+        // A fresh baseline has no team config yet, and the real prompt is not
+        // a legal PTY input before the non-working bootstrap is sent.
+        assert!(crate::agents::claude_crew::teams_for_lead(Vec::new(), expected_session, &baseline).is_empty());
+        assert_eq!(gate.take_real(), None);
+        let bootstrap = gate.bootstrap();
+        assert!(String::from_utf8_lossy(&bootstrap).contains("MUST NOT read the board"));
+        assert!(!String::from_utf8_lossy(&bootstrap).contains("REAL-RUN-BRIEF"));
+
+        // Model the newly-created provider files. The exact generated lead
+        // session, not a same-cwd neighbour, must pass config, journal and
+        // inbox admission before the real brief is obtainable.
+        let root = std::env::temp_dir().join(format!(
+            "smetana-claude-bootstrap-{}",
+            std::process::id()
+        ));
+        let home = root.join("home");
+        let team = home.join(".claude/teams/session-new");
+        let lead_dir = home.join(".claude/projects/encoded-project").join(expected_session);
+        std::fs::create_dir_all(team.join("inboxes")).unwrap();
+        std::fs::create_dir_all(lead_dir.join("subagents")).unwrap();
+        std::fs::write(
+            team.join("config.json"),
+            format!(
+                r#"{{"name":"session-new","leadSessionId":"{expected_session}","members":[{{"name":"team-lead","agentType":"team-lead","cwd":"/project"}},{{"name":"smetana-bootstrap","agentType":"general-purpose"}}]}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(team.join("inboxes/smetana-bootstrap.json"), "[]").unwrap();
+        std::fs::write(
+            lead_dir.parent().unwrap().join(format!("{expected_session}.jsonl")),
+            r#"{"type":"system","subtype":"init"}"#,
+        )
+        .unwrap();
+        let candidates = crate::agents::claude_crew::teams_for_lead(
+            crate::agents::claude_crew::teams_for_project(&home, Path::new("/project")),
+            expected_session,
+            &baseline,
+        );
+        assert_eq!(
+            candidates.len(),
+            1
+        );
+        let (_, config) = &candidates[0];
+        assert!(crate::agents::claude_crew::preflight("2.1.281", &team, &lead_dir).is_ok());
+        assert!(crate::agents::claude_crew::lead_transcript(&home, config).is_some());
+        assert_eq!(gate.take_real(), Some(b"REAL-RUN-BRIEF\n".to_vec()));
+        assert_eq!(gate.take_real(), None, "the admitted brief is exactly once");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn only_an_unobserved_admitted_crew_exit_becomes_a_tombstone() {
+        assert!(retain_crew_exit(true, 0));
+        assert!(!retain_crew_exit(true, 1));
+        assert!(!retain_crew_exit(false, 0));
     }
 
     #[test]

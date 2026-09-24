@@ -61,6 +61,27 @@ impl CrewPackage {
                 .collect(),
         )
     }
+
+    /// A successfully addressed root message starts a new lead turn even when
+    /// Claude's transcript has not yet emitted its next `system/init`. Native
+    /// child messages deliberately do not change the root's lifecycle.
+    pub fn record_message(&mut self, node: CrewNodeId, text: String) -> Option<Vec<Event>> {
+        if node == self.root {
+            self.tree.set_state(self.root, CrewState::Running);
+        }
+        self.append(
+            node,
+            vec![
+                EventKind::TurnStart {
+                    by: super::model::Actor::Person,
+                },
+                EventKind::UserMessage {
+                    text,
+                    attachments: Vec::new(),
+                },
+            ],
+        )
+    }
 }
 
 pub type CrewNodeId = u64;
@@ -416,6 +437,28 @@ mod tests {
         let (second_events, _, _) = package.snapshot(second).expect("second journal");
         assert_eq!(first_events.len(), 1);
         assert!(second_events.is_empty());
+    }
+
+    #[test]
+    fn two_consecutive_root_messages_reopen_the_lead_from_waiting() {
+        let mut package = CrewPackage::new("/project".into(), 7, "Lead");
+        package.tree.set_state(package.root, CrewState::Waiting);
+        package.record_message(package.root, "first".into());
+        assert_eq!(package.tree.node(package.root).unwrap().state, CrewState::Running);
+        package.append(package.root, vec![super::EventKind::Result {
+            tokens_in: 0, tokens_out: 0, cost_usd: None, ms: 0,
+        }]);
+        package.tree.set_state(package.root, CrewState::Waiting);
+        package.record_message(package.root, "second".into());
+        assert_eq!(package.tree.node(package.root).unwrap().state, CrewState::Running);
+        let (events, _, _) = package.snapshot(package.root).unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(&event.kind, super::EventKind::UserMessage { .. }))
+                .count(),
+            2
+        );
     }
 
     #[test]

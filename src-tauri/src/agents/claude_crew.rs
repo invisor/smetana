@@ -24,15 +24,23 @@ pub const TEAM_FLAG: &str = "--teammate-mode";
 pub const TEAM_MODE: &str = "in-process";
 pub const MIN_VERSION: (u32, u32, u32) = (2, 1, 281);
 
+/// Claude creates its native Team files only after it receives interactive
+/// work. This deliberately inert first turn asks it to establish that runtime
+/// and nothing else, allowing the real Run brief to stay behind capability
+/// admission. It is not a rendered-TUI command or a navigation sequence.
+pub const BOOTSTRAP_PROMPT: &str = "Initialize a native Claude Agent Team runtime now: create one inert teammate named smetana-bootstrap and tell it only to reply READY. Reply READY once the structured team config, lead transcript, and teammate inboxes exist. You and that teammate MUST NOT read the board, claim tasks, create worktrees, inspect or modify project files, run project commands, review code, merge, or perform any task work. This is transport initialization only.";
+
+pub fn bootstrap_input() -> Vec<u8> {
+    format!("{BOOTSTRAP_PROMPT}\n").into_bytes()
+}
+
 /// The only supported Claude Crew lead line. It is deliberately separate from
 /// `ClaudeDriver`, whose `-p --input-format stream-json` protocol cannot make
 /// native teammates. The team runtime must remain interactive while Smetana
 /// observes its documented config/transcript/mailbox files.
-/// Build the interactive runtime without a positional brief. Crew admission is
-/// deliberately proved from the config, transcript and inboxes first; only
-/// then does the session worker write this returned brief to the live PTY.
-/// That keeps an unsupported runtime from receiving a Run prompt (and claiming
-/// work) before Smetana can own its structured transport.
+/// Build the interactive runtime without a positional Run brief. The session
+/// worker first writes [`BOOTSTRAP_PROMPT`], proves the structured runtime, and
+/// only then writes this returned real brief to the live PTY.
 pub fn interactive_lead_command(launch: &Launch) -> (portable_pty::CommandBuilder, Option<String>) {
     let claude = Claude;
     let mut command = claude.command_without_prompt(launch);

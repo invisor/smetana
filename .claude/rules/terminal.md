@@ -49,9 +49,9 @@ the conversation panel is disabled. A panel-enabled Supervised Crew is instead
 owned by `session::service`'s driven Crew package. Claude still needs a PTY for
 its interactive runtime, but that master is drained privately and is never
 rendered or interpreted; topology and logs come only from structured provider
-surfaces. Its Run brief is held until that structured runtime is admitted, then
-written once through the private PTY input; a failed admission kills it without
-delivering a brief. Closing a Crew row therefore uses `crew_clear`, not
+surfaces. A constrained bootstrap creates that runtime; the real Run brief is
+held until admission, then written once through the private PTY input. A failed
+admission kills it without delivering the real brief. Closing a Crew row therefore uses `crew_clear`, not
 `terminal_remove`.
 
 The centre's `terminal` tab (`chat` before it grew a terminal — `ProjectState::validate` migrates the
