@@ -371,6 +371,13 @@ const defaults = () => ({
        opened the next project. */
     agentOrder: [],
     pinnedAgents: [],
+    /* A person's own name per agent row, by conversation id — `agentName.js`
+       is the rule. Listed here for `pinnedAgents`'s reason, one line up:
+       applySection is Object.assign(target, defaults, stored), so a key
+       missing from this object is one the defaults layer cannot clear
+       between projects, and one project's own names would still be showing
+       on the next project's rows. */
+    agentNames: {},
     /* What the run dialog was last set to here — null until somebody runs
        something. Listed rather than left out, and the difference is not
        cosmetic: applySection is Object.assign(target, defaults, stored), so a
