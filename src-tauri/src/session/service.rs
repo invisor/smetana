@@ -999,6 +999,24 @@ fn handle(
                 let _ = tx.send(Err(SessionError::Spawn(UNREACHABLE.into())));
                 return;
             };
+            if let Some(team) = claude_teams.get(&root) {
+                // Claude's mailbox addresses the member's runtime name, which
+                // is the structured config label, not agentId/provider id.
+                // `append_message` repeats the membership check under its
+                // lock, so a leave between selection and this write remains a
+                // refusal with the draft intact.
+                let member = selected.label.clone();
+                let result = crate::agents::claude_crew::append_message(
+                    team,
+                    &member,
+                    "team-lead",
+                    &text,
+                    "Message from Smetana",
+                )
+                .map_err(|error| SessionError::Spawn(error.to_string()));
+                let _ = tx.send(result);
+                return;
+            }
             let Some(live) = sessions.get_mut(&root) else {
                 let _ = tx.send(Err(SessionError::NoSuchSession(root)));
                 return;
