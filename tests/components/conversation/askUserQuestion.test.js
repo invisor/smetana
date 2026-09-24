@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { createApp, nextTick } from 'vue'
+import AskUserQuestion from '../../../src/components/conversation/AskUserQuestion.vue'
 import {
   ASK_USER_QUESTION_TOOL,
   buildAnswers,
+  canSubmitCustomAnswer,
   formatAnswer,
   isAskUserQuestion,
   isComplete,
@@ -212,5 +215,112 @@ describe('isComplete', () => {
 
   it('is false for an empty call — nothing to answer is not answered', () => {
     expect(isComplete([], [], [])).toBe(false)
+  })
+})
+
+describe('canSubmitCustomAnswer', () => {
+  const ready = {
+    customAnswer: 'Which option would you recommend?',
+    complete: true,
+    state: 'pending',
+    isComposing: false
+  }
+
+  it('allows Enter on a meaningful custom answer when the whole form is ready', () => {
+    expect(canSubmitCustomAnswer(ready)).toBe(true)
+  })
+
+  it('refuses empty and whitespace-only custom answers', () => {
+    expect(canSubmitCustomAnswer({ ...ready, customAnswer: '' })).toBe(false)
+    expect(canSubmitCustomAnswer({ ...ready, customAnswer: '   \t' })).toBe(false)
+  })
+
+  it('refuses a partial multi-question form even when the focused field has text', () => {
+    expect(canSubmitCustomAnswer({ ...ready, complete: false })).toBe(false)
+  })
+
+  it('refuses a composing IME value and a card that has already answered', () => {
+    expect(canSubmitCustomAnswer({ ...ready, isComposing: true })).toBe(false)
+    expect(canSubmitCustomAnswer({ ...ready, state: 'answered' })).toBe(false)
+  })
+})
+
+/* This deliberately mounts the card without Vue Test Utils: the application
+   already depends on Vue, while a second test-only DOM abstraction would add
+   nothing to the keyboard path under test. The pure cases above pin the
+   predicate; these checks prove the field actually routes Enter through the
+   same emitted answer and settled state as Send answer. */
+describe('AskUserQuestion custom-answer Enter', () => {
+  const mounted = []
+
+  afterEach(() => {
+    mounted.splice(0).forEach(({ app, host }) => {
+      app.unmount()
+      host.remove()
+    })
+  })
+
+  function mount(input) {
+    const answers = []
+    const host = document.createElement('div')
+    document.body.append(host)
+    const app = createApp(AskUserQuestion, {
+      input,
+      onAnswer: (...answer) => answers.push(answer)
+    })
+    app.mount(host)
+    mounted.push({ app, host })
+    return { answers, host }
+  }
+
+  async function enterCustomAnswer(host, value, { isComposing = false, presses = 1 } = {}) {
+    const field = host.querySelector('[data-own] input')
+    field.value = value
+    field.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+    for (let press = 0; press < presses; press += 1) {
+      const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
+      Object.defineProperty(event, 'isComposing', { value: isComposing })
+      field.dispatchEvent(event)
+    }
+    await nextTick()
+  }
+
+  it('sends a completed custom answer on Enter and settles once', async () => {
+    const { answers, host } = mount({ questions: [{ question: 'Recommendation?' }] })
+
+    await enterCustomAnswer(host, 'Use the safer option', { presses: 2 })
+
+    expect(answers).toEqual([['allow', { 'Recommendation?': 'Use the safer option' }]])
+    expect(host.querySelector('[data-ask]').dataset.state).toBe('answered')
+  })
+
+  it('keeps the card pending for an empty or whitespace-only custom answer', async () => {
+    const { answers, host } = mount({ questions: [{ question: 'Recommendation?' }] })
+
+    await enterCustomAnswer(host, '   ')
+
+    expect(answers).toEqual([])
+    expect(host.querySelector('[data-ask]').dataset.state).toBe('pending')
+  })
+
+  it('keeps a multi-question card pending until every question is complete', async () => {
+    const { answers, host } = mount({
+      questions: [{ question: 'First?' }, { question: 'Second?' }]
+    })
+
+    await enterCustomAnswer(host, 'First answer')
+
+    expect(answers).toEqual([])
+    expect(host.querySelector('[data-ask]').dataset.state).toBe('pending')
+  })
+
+  it('does not send an IME composition value on Enter', async () => {
+    const { answers, host } = mount({ questions: [{ question: 'Recommendation?' }] })
+
+    await enterCustomAnswer(host, 'in-progress input', { isComposing: true })
+
+    expect(answers).toEqual([])
+    expect(host.querySelector('[data-ask]').dataset.state).toBe('pending')
   })
 })

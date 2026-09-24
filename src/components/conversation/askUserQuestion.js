@@ -124,3 +124,13 @@ export function isComplete(questions, selectedByIndex, customByIndex) {
   if (questions.length === 0) return false
   return questions.every((_, i) => formatAnswer(selectedByIndex[i], customByIndex[i]).length > 0)
 }
+
+/* The freeform field is the only place Enter means "send this card". It is
+   deliberately stricter than the card's ordinary readiness: the focused
+   field itself must name a real answer, an unfinished IME composition must
+   stay private until it commits, and the complete multi-question form must
+   still be ready. `AskUserQuestion.vue` passes its pending state too, making
+   a second queued keypress harmless after the first one settles the card. */
+export function canSubmitCustomAnswer({ customAnswer, complete, state, isComposing }) {
+  return state === 'pending' && complete === true && isComposing !== true && String(customAnswer ?? '').trim().length > 0
+}
