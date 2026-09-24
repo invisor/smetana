@@ -108,6 +108,9 @@ pub struct Attached {
     /// falls back to the project root the same way this field would if the
     /// worker ever answered one empty.
     pub cwd: String,
+    /// The same title `session:state` carries, here for the same window
+    /// between the two that `conversation` above is here for.
+    pub title: Option<String>,
 }
 
 /// A snapshot of exactly one native Crew node. Node ids stay scoped by `root`
@@ -291,6 +294,16 @@ struct Live {
     agent: String,
     work: crate::terminal::model::SessionWork,
     started_at: String,
+    /// The automatic title, in order of arrival: the person's first words at
+    /// the spawn or on the first `Send`, then Claude Code's own `ai-title`
+    /// once its transcript carries one. Written into the `Restorable` record
+    /// whenever it changes.
+    title: Option<String>,
+    /// True once an `ai-title` has been taken, or once this session is one
+    /// no transcript will ever be read for (any harness but Claude Code).
+    /// Every `ai-title` record of a transcript carries the same text, so one
+    /// read is the whole read.
+    title_settled: bool,
 }
 
 /// A Codex addressed turn remains pending until its JSON-RPC response confirms
@@ -796,25 +809,6 @@ fn spawn_session(
     // writes the record this spawn could not — not a second `now()` call
     // that would claim the session started later than it did.
     let started_at = chrono::Utc::now().to_rfc3339();
-    // After the spawn and not before it: a record for a session that never
-    // started would be a row offering a conversation the harness never opened.
-    // The same file, the same key and the same rules the terminal worker's
-    // records are written under — a row offered back after a restart cannot
-    // tell which road made it, and must not have to.
-    if let Some(session_id) = conversation.clone() {
-        crate::terminal::restore::record(
-            Path::new(project),
-            crate::terminal::restore::Restorable {
-                session_id,
-                agent: profile.id().to_owned(),
-                cwd: cwd.to_string_lossy().into_owned(),
-                project: project.to_owned(),
-                work: work.clone(),
-                started_at: started_at.clone(),
-                title: None,
-            },
-        );
-    }
 
     // The past, before anything the child says. Appended rather than emitted:
     // nothing has attached to this session yet — it is not even in the worker's
@@ -843,6 +837,14 @@ fn spawn_session(
         agent: profile.id().to_owned(),
         work,
         started_at,
+        // The person's first words, if there were any — the opening prose a
+        // filing or an edit carries. `Bare`'s own words, when there are none
+        // here, arrive later through `Request::Send`. A harness whose own
+        // transcript can carry Claude Code's `ai-title` starts unsettled, so
+        // that title is still taken once the first turn completes; anything
+        // else keeps whatever words it opened with for good.
+        title: opening_text.as_deref().and_then(super::model::first_words),
+        title_settled: profile.id() != "claude",
     };
 
     // The brief, as the session's first turn. Into the journal before the
@@ -884,7 +886,31 @@ fn spawn_session(
             }
         }
     }
+    // After the spawn and not before it: a record for a session that never
+    // started would be a row offering a conversation the harness never opened.
+    // After the opening turn too, so the record's own title — when the
+    // person's first words gave one — is not a second, separate write.
+    record_live(&live);
     Ok(live)
+}
+
+/// The record `.smetana/agents.json` holds for this session, built from `Live`
+/// so the spawn, `note_conversation` and a title change cannot disagree about
+/// a field. A session with no conversation id has no record to write.
+fn record_live(live: &Live) {
+    let Some(session_id) = live.conversation.clone() else { return };
+    crate::terminal::restore::record(
+        Path::new(&live.project),
+        crate::terminal::restore::Restorable {
+            session_id,
+            agent: live.agent.clone(),
+            cwd: live.cwd.clone(),
+            project: live.project.clone(),
+            work: live.work.clone(),
+            started_at: live.started_at.clone(),
+            title: live.title.clone(),
+        },
+    );
 }
 
 fn write_stdin(
@@ -1788,6 +1814,7 @@ fn handle(
                         state: live.state,
                         conversation: live.conversation.clone(),
                         cwd: live.cwd.clone(),
+                        title: live.title.clone(),
                     })
                 }
                 None => Err(SessionError::NoSuchSession(id)),
@@ -1834,6 +1861,18 @@ fn handle(
                     },
                 ],
             );
+            // A `Bare` session opens with no title — `Intent::opening_words()`
+            // had nothing to give it — so the first message a person actually
+            // sends is what names the row instead. Only the first: a title
+            // already set, whichever of the two sources gave it, is never
+            // overwritten by a later message.
+            if live.title.is_none() {
+                if let Some(title) = super::model::first_words(&text) {
+                    live.title = Some(title);
+                    emit_state(app, id, live);
+                    record_live(live);
+                }
+            }
             let delivered = match live.talking.as_mut() {
                 Some(talking) => {
                     let bytes = talking.driver.send(Input::Message { text, attachments });
@@ -2276,16 +2315,47 @@ fn append(app: &AppHandle, id: SessionId, live: &mut Live, kinds: Vec<EventKind>
     refresh_state(app, id, live);
 }
 
+/// One emit for every reader of `session:state`: `refresh_state`,
+/// `note_conversation` and the first `Request::Send` that learns a `Bare`
+/// session's title, so the three cannot drift into carrying different fields
+/// on the same event.
+fn emit_state(app: &AppHandle, id: SessionId, live: &Live) {
+    let _ = app.emit(
+        "session:state",
+        StateChange {
+            id,
+            state: live.state,
+            conversation: live.conversation.clone(),
+            title: live.title.clone(),
+        },
+    );
+}
+
 fn refresh_state(app: &AppHandle, id: SessionId, live: &mut Live) {
     let state = state_of(live.journal.events(), live.child_alive);
     if state == live.state {
         return;
     }
     live.state = state;
-    let _ = app.emit(
-        "session:state",
-        StateChange { id, state, conversation: live.conversation.clone() },
-    );
+    // Claude Code's own title, taken once a turn actually settles — `Ready`
+    // or `NeedsYou` — and never chased again: every `ai-title` record of one
+    // transcript carries the same text (measured in `sessions/mod.rs`), so a
+    // second read would only cost a file open for the same answer. Gated on
+    // `title_settled` rather than on the agent directly: a Codex session (or
+    // any other harness) starts settled at the spawn and this branch never
+    // runs for it, which is the whole of why Codex keeps the person's words.
+    if !live.title_settled && matches!(state, SessionState::Ready | SessionState::NeedsYou) {
+        if let Some(conversation) = live.conversation.as_deref() {
+            let found = crate::sessions::read::transcript(Path::new(&live.cwd), conversation)
+                .and_then(|path| crate::sessions::read::ai_title_in(&path));
+            if let Some(title) = found {
+                live.title = Some(title);
+                live.title_settled = true;
+                record_live(live);
+            }
+        }
+    }
+    emit_state(app, id, live);
 }
 
 /// The id a harness picked for itself, the moment its own protocol confirms
@@ -2307,7 +2377,7 @@ fn note_conversation(app: &AppHandle, id: SessionId, live: &mut Live, conversati
     if live.conversation.is_some() {
         return;
     }
-    live.conversation = Some(conversation.clone());
+    live.conversation = Some(conversation);
     // Emitted unconditionally, unlike `refresh_state`'s own emit above: the
     // state word may not have moved at all — a fresh thread's own
     // `thread/start` reply carries no event of its own — but the id on the
@@ -2326,26 +2396,12 @@ fn note_conversation(app: &AppHandle, id: SessionId, live: &mut Live, conversati
     // holding, the same way `refresh_state`'s emit is not the only place a
     // state reaches a window either.
 
-    let _ = app.emit(
-        "session:state",
-        StateChange { id, state: live.state, conversation: live.conversation.clone() },
-    );
+    emit_state(app, id, live);
     // The record the spawn could not write, written now that there is an id
-    // to key it by — the same fields the spawn-time record would have used,
-    // taken off `Live` rather than guessed again, which is why they are kept
-    // there at all.
-    crate::terminal::restore::record(
-        Path::new(&live.project),
-        crate::terminal::restore::Restorable {
-            session_id: conversation,
-            agent: live.agent.clone(),
-            cwd: live.cwd.clone(),
-            project: live.project.clone(),
-            work: live.work.clone(),
-            started_at: live.started_at.clone(),
-            title: None,
-        },
-    );
+    // to key it by — through `record_live`, so this write and the spawn's own
+    // cannot disagree about a field, including a title already known before
+    // the id was.
+    record_live(live);
 }
 
 #[cfg(test)]

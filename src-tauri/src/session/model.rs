@@ -176,6 +176,11 @@ pub struct StateChange {
     /// neither: a fork, whose new transcript Claude Code names itself, and a
     /// machine that would not give the random bytes.
     pub conversation: Option<String>,
+    /// The automatic title the agents panel names this row by, or `None`
+    /// while the session has none. Travels on every state change for the
+    /// reason `conversation` does: a window that missed one event must still
+    /// learn the name of the row it is drawing.
+    pub title: Option<String>,
 }
 
 #[derive(Clone, Debug, thiserror::Error, serde::Serialize)]
