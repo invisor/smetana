@@ -327,6 +327,11 @@ pub enum RunError {
     BrokenConfig(String),
     #[error("{0}")]
     BadSettings(String),
+    /// Crew with its conversation panel is an explicit transport choice.  It
+    /// must fail before the run gets an actor, claim or worktree when the
+    /// configured provider cannot supply the structured runtime contract.
+    #[error("{0}")]
+    CrewUnsupported(String),
     #[error("{0}")]
     Terminal(String),
 }

@@ -42,6 +42,18 @@ paths:
 
 # The terminal: agent sessions, and one shell
 
+## Crew hand-off
+
+The terminal remains the transport for Auto, Solo and Supervised Crew while
+the conversation panel is disabled. A panel-enabled Supervised Crew is instead
+owned by `session::service`'s driven Crew package. Claude still needs a PTY for
+its interactive runtime, but that master is drained privately and is never
+rendered or interpreted; topology and logs come only from structured provider
+surfaces. A constrained bootstrap creates that runtime; the real Run brief is
+held until admission, then written once through the private PTY input. A failed
+admission kills it without delivering the real brief. Closing a Crew row therefore uses `crew_clear`, not
+`terminal_remove`.
+
 The centre's `terminal` tab (`chat` before it grew a terminal — `ProjectState::validate` migrates the
 old name on load, since files on people's disks carry it and without the substitution that tab would
 fail the closed-list check and silently become the board) runs CLI coding agents under real PTYs, one

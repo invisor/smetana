@@ -1,0 +1,12 @@
+[
+  {
+    "from": "team-lead",
+    "text": "CAPTURE-MARKER",
+    "summary": "Capture mailbox schema",
+    "timestamp": "2026-09-24T11:25:53.284Z",
+    "msgV": 1,
+    "msg_id": "fixture-message-id",
+    "type": "message",
+    "read": false
+  }
+]

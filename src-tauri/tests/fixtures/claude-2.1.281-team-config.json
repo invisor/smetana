@@ -1,0 +1,23 @@
+{
+  "name": "session-fixture-team",
+  "leadAgentId": "team-lead@session-fixture-team",
+  "leadSessionId": "fixture-lead-session",
+  "members": [
+    {
+      "agentId": "team-lead@session-fixture-team",
+      "name": "team-lead",
+      "agentType": "team-lead",
+      "backendType": "in-process",
+      "tmuxPaneId": "leader",
+      "subscriptions": []
+    },
+    {
+      "agentId": "fixture-worker@session-fixture-team",
+      "name": "fixture-worker",
+      "agentType": "general-purpose",
+      "backendType": "in-process",
+      "tmuxPaneId": "in-process",
+      "subscriptions": []
+    }
+  ]
+}

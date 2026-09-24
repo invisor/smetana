@@ -190,6 +190,96 @@ describe('the conversation store', () => {
     ])
   })
 
+  it('addresses each selected Crew child without mixing its journal or message', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    const snapshots = {
+      2: { events: [text(1, 'only worker one')], seq: 1, state: 'running', cwd: '/p' },
+      3: { events: [text(1, 'only worker two')], seq: 1, state: 'running', cwd: '/p' }
+    }
+    ipc.on('crew_attach', ({ node }) => snapshots[node])
+    ipc.on('crew_send', null)
+    await emit('crew:tree', {
+      project: '/p',
+      root: 41,
+      nodes: [
+        { id: 1, parent: null, state: 'running', canMessage: true, label: 'Lead' },
+        { id: 2, parent: 1, state: 'running', canMessage: true, label: 'Worker one' },
+        { id: 3, parent: 1, state: 'running', canMessage: true, label: 'Worker two' }
+      ]
+    })
+    await stores.conversation.attach('crew:41:2')
+    await stores.conversation.attach('crew:41:3')
+    await emit('crew:events', { root: 41, node: 2, events: [text(2, 'one live event')] })
+    await nextTick()
+
+    expect(stores.conversation.conversationFor('crew:41:2').events.map((event) => event.text)).toEqual([
+      'only worker one',
+      'one live event'
+    ])
+    expect(stores.conversation.conversationFor('crew:41:3').events.map((event) => event.text)).toEqual([
+      'only worker two'
+    ])
+
+    await stores.conversation.sendMessage('crew:41:2', 'UNIQUE-WORKER-ONE', [])
+    await stores.conversation.sendMessage('crew:41:3', 'UNIQUE-WORKER-TWO', [])
+    expect(ipc.calls('crew_send')).toEqual([
+      { root: 41, node: 2, text: 'UNIQUE-WORKER-ONE' },
+      { root: 41, node: 3, text: 'UNIQUE-WORKER-TWO' }
+    ])
+  })
+
+  it('keeps a Crew draft when its selected child ends during addressed send', async () => {
+    const { ipc, stores, emit } = await ready()
+    ipc.on('crew_attach', () => ({ events: [], seq: 0, state: 'running', cwd: '/p' }))
+    ipc.fail('crew_send', new Error('This session has ended, so the message was not delivered.'))
+    await emit('crew:tree', {
+      project: '/p',
+      root: 42,
+      nodes: [
+        { id: 2, parent: null, state: 'running', canMessage: true, label: 'Lead' },
+        { id: 3, parent: 2, state: 'running', canMessage: true, label: 'Selected child' },
+        { id: 4, parent: 2, state: 'running', canMessage: true, label: 'Neighbour' }
+      ]
+    })
+    await stores.conversation.attach('crew:42:3')
+    const held = stores.conversation.conversationFor('crew:42:3')
+    held.draft = 'do not reroute this'
+    await stores.conversation.sendMessage('crew:42:3', held.draft, [])
+
+    expect(held.draft).toBe('do not reroute this')
+    expect(ipc.calls('crew_send')).toEqual([{ root: 42, node: 3, text: 'do not reroute this' }])
+    expect(stores.conversation.conversationState.lastError.session).toBe('crew:42:3')
+  })
+
+  it('routes Crew root stop and close to Crew IPC, never a numeric session command', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('crew_stop', null)
+    ipc.on('crew_clear', null)
+
+    await stores.conversation.stopConversation('crew:71:71')
+    await stores.conversation.closeConversation('crew:71:72')
+
+    expect(ipc.calls('crew_stop')).toEqual([{ root: 71 }])
+    expect(ipc.calls('crew_clear')).toEqual([{ root: 71 }])
+    expect(ipc.calls('session_stop')).toEqual([])
+    expect(ipc.calls('session_close')).toEqual([])
+  })
+
+  it('marks only a Crew root clearable, never a child that would clear its package', async () => {
+    const { stores, emit } = await ready()
+    await stores.conversation.initConversation()
+    await emit('crew:tree', {
+      project: '/p', root: 81,
+      nodes: [
+        { id: 81, parent: null, state: 'running', canMessage: true, label: 'Lead' },
+        { id: 82, parent: 81, state: 'running', canMessage: true, label: 'Child' }
+      ]
+    })
+    const rows = stores.conversation.crewAgentsIn('/p')
+    expect(rows.find((row) => row.id === 'crew:81:81').clearable).toBe(true)
+    expect(rows.find((row) => row.id === 'crew:81:82').clearable).toBe(false)
+  })
+
   it('refuses to send nothing at all', async () => {
     const { ipc, stores } = await ready()
     ipc.on('session_send', null)

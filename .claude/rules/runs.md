@@ -7,6 +7,29 @@ paths:
 
 # Runs: a batch of the board, carried out by sessions
 
+## Driven Crew packages
+
+With `RunMode::Supervised` and `conversationPanel` enabled, a package freezes a
+`RunSession` before its first claim: profile id, executable environment and a
+structured Crew transport. `runs::service` waits for that lead's real provider
+exit through `CrewAwaitExit`; it never substitutes `NoCode` merely because the
+transport is driven. Auto, Solo and a panel-disabled Crew retain the existing
+PTY route. A failed capability/startup preflight happens before a task claim or
+worktree and is a refusal, never a hidden fallback to a provider TUI.
+
+For Claude, admission additionally precedes delivery of the Run brief: a
+non-working bootstrap initializes the native runtime, then the process receives
+its retained input once config, transcript and inbox admission succeeds. Its
+structured transcript maps `system/init` to the root's running state and a
+result to waiting (or failed for an error result); a successfully delivered root
+message also opens the next root turn. Terminal bytes never participate in logs
+or topology.
+
+The root remains the sole owner of claims, worktrees, review, merge and report.
+Provider children are display/routing nodes only; their journals survive their
+own completion and disappear together only when the root package exits or is
+cleared.
+
 A *run* is the app driving itself — read the board, start an agent session on a batch of it, wait for
 that session to end, read the board again — and it is `src-tauri/src/runs/` plus `src/stores/runs.js`
 plus `src/components/run/`. It sits on top of the other two workers rather than beside them: it owns

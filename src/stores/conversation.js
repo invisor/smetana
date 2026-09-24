@@ -21,6 +21,7 @@ import { listen } from '@tauri-apps/api/event'
    `components/agent/drivenRows.js` — see `components/agent/sessionWork.js`'s
    own header for why it lives outside every store. */
 import { workOf } from '../components/agent/sessionWork.js'
+import { crewRows } from '../components/agent/crewTree.js'
 /* The one thing this store reads out of another, and it is read inside
    `canDrive` alone: whether the person wants the conversation panel at all.
    Nothing happens at import time — `settings.js` reaches Tauri only from its
@@ -81,6 +82,46 @@ export const conversationState = reactive({
    drop below safe: `session:events` is emitted for every session of every
    project, attached or not. */
 const conversations = reactive(new Map())
+
+/* One structured snapshot per backend-owned Crew package. A Crew node is not
+   put in `started`: that array owns ordinary protocol sessions and assumes its
+   numeric id can be passed to `session_attach`. The composite key below keeps
+   the package root in the identity all the way to Vue. */
+const crews = reactive(new Map())
+
+const crewAddress = (id) => {
+  if (typeof id !== 'string') return null
+  const match = /^crew:(\d+):(\d+)$/.exec(id)
+  if (!match) return null
+  return { root: Number(match[1]), node: Number(match[2]) }
+}
+
+export const crewAgentsIn = (project) =>
+  [...crews.values()]
+    .filter((crew) => crew.project === project)
+    .flatMap((crew) =>
+      crewRows(crew.nodes).map((node) => ({
+        id: `crew:${crew.root}:${node.id}`,
+        crewRoot: crew.root,
+        crewNode: node.id,
+        project: crew.project,
+        state: statusOf(node.state),
+        elapsed: '',
+        conversation: null,
+        work: { kind: 'run' },
+        label: node.label,
+        tasks: [],
+        claimed: [],
+        /* Only a package root can be cleared. A native child has no safe
+           provider child-stop contract, so its row is readable/selectable but
+           never offers the destructive package close action. */
+        clearable: node.id === crew.root,
+        canMessage: node.canMessage,
+        depth: node.depth
+      }))
+    )
+
+export const crewConversationsIn = (project) => crewAgentsIn(project).map((row) => row.id)
 
 /* The unsent words, kept beside the conversations rather than inside them, so
    that they outlive `detach`. A journal can be taken again from the worker
@@ -336,7 +377,10 @@ export async function attach(id) {
     report(id, 'subscribing to the session events', err)
     return
   }
-  const current = invoke('session_attach', { id })
+  const address = crewAddress(id)
+  const current = address
+    ? invoke('crew_attach', address)
+    : invoke('session_attach', { id })
   attaching.set(id, current)
   try {
     const { events, seq, state, conversation, cwd } = await current
@@ -416,6 +460,8 @@ async function register() {
   try {
     made.push(await listenToEvents())
     made.push(await listenToState())
+    made.push(await listenToCrew())
+    made.push(await listenToCrewEvents())
   } catch (err) {
     for (const dispose of made) {
       /* Unsubscribing is itself an `invoke`, and can be refused in exactly the
@@ -512,6 +558,31 @@ function listenToState() {
     const held = conversations.get(id)
     if (!held) return
     held.state = state
+  })
+}
+
+/* The backend emits complete topology snapshots. Applying a snapshot rather
+   than incremental provider ids is important: provider ids never arrive here,
+   and a late node update cannot make Vue retain an orphan under a stale key. */
+function listenToCrew() {
+  return listen('crew:tree', (event) => {
+    const { project, root, nodes } = event.payload ?? {}
+    if (typeof project !== 'string' || !Number.isFinite(root) || !Array.isArray(nodes)) return
+    if (!nodes.length) {
+      crews.delete(root)
+      return
+    }
+    crews.set(root, { project, root, nodes })
+  })
+}
+
+function listenToCrewEvents() {
+  return listen('crew:events', (event) => {
+    const { root, node, events } = event.payload ?? {}
+    const id = `crew:${root}:${node}`
+    const held = conversations.get(id)
+    if (!held || !Array.isArray(events)) return
+    if (!absorb(held, events)) attach(id).catch(() => {})
   })
 }
 
@@ -755,7 +826,13 @@ export async function startConversation(project, intent = { kind: 'bare' }) {
 export async function sendMessage(id, text, attachments = []) {
   if (!String(text ?? '').trim() && attachments.length === 0) return
   try {
-    await invoke('session_send', { id, text, attachments })
+    const address = crewAddress(id)
+    if (address) {
+      if (attachments.length) throw new Error('Crew messages cannot include attachments')
+      await invoke('crew_send', { ...address, text })
+    } else {
+      await invoke('session_send', { id, text, attachments })
+    }
     conversationState.lastError = null
     /* Cleared only while it is still the words that went. A slow worker invites
        somebody to go on typing during the round trip, and an unconditional
@@ -782,6 +859,7 @@ export async function sendMessage(id, text, attachments = []) {
    a plain `deny` whatever tool it is refusing. */
 export async function answerQuestion(id, question, decision, answers = null) {
   try {
+    if (crewAddress(id)) throw new Error('Crew agents do not expose permission answers')
     await invoke('session_answer', { id, question, decision, answers })
     conversationState.lastError = null
   } catch (err) {
@@ -798,7 +876,13 @@ export async function answerQuestion(id, question, decision, answers = null) {
    session outright. */
 export async function stopConversation(id) {
   try {
-    await invoke('session_stop', { id })
+    const address = crewAddress(id)
+    if (address) {
+      if (address.node !== address.root) throw new Error('Only the Crew lead can be stopped')
+      await invoke('crew_stop', { root: address.root })
+    } else {
+      await invoke('session_stop', { id })
+    }
     conversationState.lastError = null
   } catch (err) {
     report(id, 'stopping a session', err)
@@ -817,7 +901,9 @@ export async function stopConversation(id) {
    no longer be trusted to end a session at all. */
 export async function closeConversation(id) {
   try {
-    await invoke('session_close', { id })
+    const address = crewAddress(id)
+    if (address) await invoke('crew_clear', { root: address.root })
+    else await invoke('session_close', { id })
     conversationState.lastError = null
   } catch (err) {
     report(id, 'closing a session', err)

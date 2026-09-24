@@ -65,6 +65,12 @@ pub struct CodexDriver {
     pending: std::collections::BTreeMap<u64, String>,
     interrupt_pending: bool,
     turn_start_pending: bool,
+    crew_records: Vec<Value>,
+    crew_journal_records: Vec<Value>,
+    crew_history: std::collections::BTreeMap<u64, String>,
+    crew_lists: std::collections::BTreeSet<u64>,
+    crew_sends: std::collections::BTreeSet<u64>,
+    crew_send_results: Vec<(u64, Result<(), String>)>,
     /// The last authoritative `agentMessage` completed during the active turn.
     /// Deltas, reasoning and tool output are intentionally excluded: only this
     /// whole reply can leave the person a plain-text question.
@@ -73,7 +79,7 @@ pub struct CodexDriver {
 
 impl CodexDriver {
     pub fn new(_permission: Option<crate::session::permission::PermissionTicket>) -> Self {
-        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: std::collections::VecDeque::new(), queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None, None)), bootstrapped: false, discovered: None, active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false, last_agent_message: None }
+        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: std::collections::VecDeque::new(), queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None, None)), bootstrapped: false, discovered: None, active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false, crew_records: Vec::new(), crew_journal_records: Vec::new(), crew_history: std::collections::BTreeMap::new(), crew_lists: std::collections::BTreeSet::new(), crew_sends: std::collections::BTreeSet::new(), crew_send_results: Vec::new(), last_agent_message: None }
     }
 
     /// The oldest queued message, if any, sent as the next turn. The one
@@ -140,6 +146,58 @@ impl Driver for CodexDriver {
         let mut events = Vec::new();
         for line in self.lines.feed(bytes) {
             let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
+            let lifecycle = matches!(
+                message.get("method").and_then(Value::as_str),
+                Some("thread/started" | "thread/status/changed")
+            );
+            if lifecycle {
+                self.crew_records.push(message.clone());
+            }
+            if message.get("method").is_none() {
+                if let Some(id) = message.get("id").and_then(Value::as_u64) {
+                    if self.crew_sends.remove(&id) {
+                        self.pending.remove(&id);
+                        let receipt = if let Some(error) = message.get("error") {
+                            Err(error.get("message").and_then(Value::as_str).unwrap_or("Codex rejected the addressed message").to_owned())
+                        } else if message.pointer("/result/turn/id").and_then(Value::as_str).is_some() {
+                            Ok(())
+                        } else {
+                            Err("Codex did not confirm the addressed message".into())
+                        };
+                        self.crew_send_results.push((id, receipt));
+                        continue;
+                    }
+                    if self.crew_lists.remove(&id) {
+                        self.pending.remove(&id);
+                        self.crew_records.push(message.clone());
+                        continue;
+                    }
+                    if let Some(thread_id) = self.crew_history.remove(&id) {
+                        self.pending.remove(&id);
+                        let mut record = message.clone();
+                        record["crewThreadId"] = Value::String(thread_id);
+                        self.crew_journal_records.push(record);
+                        continue;
+                    }
+                }
+            }
+            let thread_id = message
+                .pointer("/params/threadId")
+                .or_else(|| message.pointer("/params/item/threadId"))
+                .and_then(Value::as_str);
+            if let Some(thread_id) = thread_id {
+                if self.thread.as_deref().is_some_and(|lead| lead != thread_id) {
+                    self.crew_journal_records.push(message.clone());
+                    continue;
+                }
+            }
+            if message
+                .pointer("/params/item/type")
+                .and_then(Value::as_str)
+                == Some("collabAgentToolCall")
+            {
+                self.crew_records.push(message.clone());
+            }
             // A server request can use a numeric id that collides with ours.
             // It is a request because it has `method`, never a response.
             let response = if message.get("method").is_none() && (message.get("result").is_some() || message.get("error").is_some()) {
@@ -386,6 +444,56 @@ impl Driver for CodexDriver {
 
     fn outgoing(&mut self) -> Vec<Vec<u8>> { std::mem::take(&mut self.queued) }
 
+    fn crew_records(&mut self) -> Vec<Value> { std::mem::take(&mut self.crew_records) }
+
+    fn crew_journal_records(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.crew_journal_records)
+    }
+
+    fn crew_hydrate(&mut self, provider_id: &str) -> Option<Vec<u8>> {
+        if provider_id.is_empty() || self.thread.as_deref() == Some(provider_id) {
+            return None;
+        }
+        let id = self.next_id;
+        let bytes = self.request("thread/read", json!({"threadId":provider_id, "includeTurns":true}));
+        self.crew_history.insert(id, provider_id.to_owned());
+        Some(bytes)
+    }
+
+    fn crew_reconcile(&mut self) -> Option<Vec<u8>> {
+        let lead = self.thread.clone()?;
+        let id = self.next_id;
+        let bytes = self.request("thread/list", json!({"ancestorThreadId":lead}));
+        self.crew_lists.insert(id);
+        Some(bytes)
+    }
+
+    fn crew_send(&mut self, provider_id: &str, text: String) -> Result<(u64, Vec<u8>), String> {
+        if provider_id.is_empty() {
+            return Err("the selected Codex thread has ended".into());
+        }
+        // This is exactly the generated app-server `turn/start` contract for
+        // a child thread. It deliberately does not use `self.thread`: that is
+        // the lead and using it here would redirect a completed child's draft.
+        let request = crate::agents::codex_crew::addressed_turn(provider_id, &text);
+        let method = request
+            .get("method")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "the Codex addressed-turn contract is malformed".to_string())?;
+        let params = request
+            .get("params")
+            .cloned()
+            .ok_or_else(|| "the Codex addressed-turn contract has no parameters".to_string())?;
+        let id = self.next_id;
+        let bytes = self.request(method, params);
+        self.crew_sends.insert(id);
+        Ok((id, bytes))
+    }
+
+    fn crew_send_results(&mut self) -> Vec<(u64, Result<(), String>)> {
+        std::mem::take(&mut self.crew_send_results)
+    }
+
     fn startup(&mut self) -> Option<Result<(), String>> { self.startup.take() }
     fn awaits_startup(&self) -> bool { true }
 
@@ -499,7 +607,7 @@ fn tool_use_detail(kind: &str, item: &Value) -> Option<(&'static str, String)> {
 /// of that item's own status, and any `agentMessage`/`reasoning` the turn
 /// produced before it stopped — the parts of the account that are true
 /// regardless of how the turn as a whole ended.
-fn translate_history(turns: &[Value]) -> Vec<EventKind> {
+pub(crate) fn translate_history(turns: &[Value]) -> Vec<EventKind> {
     let mut events = Vec::new();
     for turn in turns {
         let Some(items) = turn.get("items").and_then(Value::as_array) else { continue };
@@ -1401,6 +1509,47 @@ mod tests {
         assert!(turn.contains("any word from git status?"), "{turn}");
     }
 
+    #[test]
+    fn an_addressed_child_turn_waits_for_its_own_rpc_receipt() {
+        let mut driver = CodexDriver::new(None);
+        driver.thread = Some("lead-thread".into());
+        let (_, bytes) = driver.crew_send("child-thread", "only this child".into()).unwrap();
+        let request = String::from_utf8(bytes).unwrap();
+        assert!(request.contains("\"threadId\":\"child-thread\""), "{request}");
+        assert!(driver.crew_send_results().is_empty(), "writing stdin is not a receipt");
+        driver.feed(br#"{"jsonrpc":"2.0","id":1,"result":{"turn":{"id":"child-turn"}}}
+"#);
+        assert_eq!(driver.crew_send_results(), vec![(1, Ok(()))]);
+        assert_eq!(driver.active_turn, None, "a child receipt must not replace the lead turn");
+    }
+
+    #[test]
+    fn an_addressed_child_rejection_is_not_reported_as_delivered() {
+        let mut driver = CodexDriver::new(None);
+        driver.thread = Some("lead-thread".into());
+        driver.crew_send("child-thread", "keep this draft".into()).unwrap();
+        driver.feed(br#"{"jsonrpc":"2.0","id":1,"error":{"message":"thread ended"}}
+"#);
+        assert_eq!(driver.crew_send_results(), vec![(1, Err("thread ended".into()))]);
+        assert_eq!(driver.active_turn, None);
+    }
+
+    #[test]
+    fn simultaneous_child_receipts_keep_their_own_request_tokens_when_reversed() {
+        let mut driver = CodexDriver::new(None);
+        driver.thread = Some("lead-thread".into());
+        let (first, _) = driver.crew_send("child-one", "one".into()).unwrap();
+        let (second, _) = driver.crew_send("child-two", "two".into()).unwrap();
+        assert_ne!(first, second);
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":{second},\"error\":{{\"message\":\"child two ended\"}}}}\n").as_bytes());
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":{first},\"result\":{{\"turn\":{{\"id\":\"one-turn\"}}}}}}\n").as_bytes());
+        assert_eq!(
+            driver.crew_send_results(),
+            vec![(second, Err("child two ended".into())), (first, Ok(()))]
+        );
+        assert_eq!(driver.active_turn, None);
+    }
+
     /// Finding 3, review pass 1 of smetana-gb7f.2: `opening` used to be a
     /// slot, so a second message arriving before the thread existed
     /// silently replaced the first — the composer's own `Ok` would have
@@ -1535,6 +1684,33 @@ mod tests {
             ),
             crate::session::model::SessionState::Ready,
             "a history with no open turn reads as ready, never as a turn forever in flight",
+        );
+    }
+
+    #[test]
+    fn a_child_thread_record_never_enters_the_lead_journal_and_hydrates_by_its_own_id() {
+        let mut driver = CodexDriver::new(None);
+        driver.thread = Some("lead".into());
+        let child = b"{\"jsonrpc\":\"2.0\",\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"child\",\"delta\":\"only child\"}}\n";
+        assert!(driver.feed(child).is_empty());
+        assert_eq!(
+            driver.crew_journal_records()[0].pointer("/params/threadId").and_then(Value::as_str),
+            Some("child")
+        );
+
+        let request = driver.crew_hydrate("child").unwrap();
+        let id = serde_json::from_slice::<Value>(&request)
+            .unwrap()
+            .get("id")
+            .and_then(Value::as_u64)
+            .unwrap();
+        let response = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"thread\":{{\"turns\":[]}}}}}}\n"
+        );
+        assert!(driver.feed(response.as_bytes()).is_empty());
+        assert_eq!(
+            driver.crew_journal_records()[0].get("crewThreadId").and_then(Value::as_str),
+            Some("child")
         );
     }
 }

@@ -42,6 +42,14 @@ pub fn path(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|dir| dir.join("settings.json"))
 }
 
+/// The RunSession transport is chosen once, before a run can touch the board.
+/// A missing settings file keeps the shipped conversation-panel default.
+pub fn conversation_panel(app: &AppHandle) -> bool {
+    path(app)
+        .map(|path| file::load(&path).0.conversation_panel)
+        .unwrap_or_else(|| model::Settings::default().conversation_panel)
+}
+
 /// Which CLI agent the app is configured to start for one kind of call, and
 /// which model it is to be asked for: a role that chose nothing inherits the
 /// table it is being asked from, whole.

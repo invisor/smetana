@@ -53,6 +53,9 @@ use super::report::{self, BatchLine, BatchOutcome, LockRelease};
 use super::summary::{self, Baseline, RunSummary};
 use super::usage::{self, Decision};
 use crate::agents::{Intent, Profile};
+use crate::agents::crew::CrewCapabilities;
+use crate::runs::session::{self, RunSession, Transport};
+use crate::session::service::SessionHandle;
 use crate::terminal::model::{Exit, SessionState};
 use crate::terminal::service::{Request as TerminalRequest, TerminalHandle};
 use crate::tracker::model::IssuePatch;
@@ -215,6 +218,15 @@ struct Active {
     released: watch::Sender<bool>,
 }
 
+/// The run loop talks to one frozen transport rather than reaching the terminal
+/// worker directly. A driven Crew implementation fills the second branch; it
+/// must never silently use the first one once selected.
+#[derive(Clone)]
+enum RunTransport {
+    Pty(TerminalHandle),
+    Driven { session: SessionHandle, run: RunSession },
+}
+
 /// Sends `Report::Ended` when the loop task ends, whichever way it ends. That
 /// is what makes "there is an entry in the map" and "a loop task is alive" the
 /// same fact rather than two that agree most of the time; the map's own comment
@@ -246,6 +258,7 @@ pub fn start(
     app: AppHandle,
     tracker: TrackerHandle,
     terminal: TerminalHandle,
+    session: SessionHandle,
     known: Vec<PathBuf>,
 ) -> RunHandle {
     let (tx, mut rx) = mpsc::channel::<Request>(8);
@@ -293,6 +306,7 @@ pub fn start(
                         &mut next_token,
                         &tracker,
                         &terminal,
+                        &session,
                         &report_tx,
                         probe.as_deref(),
                         request,
@@ -326,12 +340,82 @@ fn emit(app: &AppHandle, run: &Run) {
     let _ = app.emit("run:state", run);
 }
 
+/// Read only the provider's advertised version before a Crew package can
+/// acquire work. The dynamic half (Claude's team directory, Codex's app-server
+/// initialize reply) is checked by the driven transport before it starts its
+/// lead; this early check prevents a known-old executable from ever reaching
+/// the board loop.
+fn select_run_session(
+    app: &AppHandle,
+    settings: &RunSettings,
+    agent: &str,
+) -> Result<RunSession, RunError> {
+    let Some(profile) = crate::agents::resolve(agent) else {
+        return Err(RunError::CrewUnsupported(format!(
+            "the configured run provider '{agent}' is unavailable"
+        )));
+    };
+    let panel = crate::settings::conversation_panel(app);
+    if settings.mode != super::model::RunMode::Supervised || !panel {
+        return session::select(
+            settings.mode,
+            panel,
+            profile.label(),
+            "not checked",
+            CrewCapabilities::NONE,
+        )
+        .map_err(|error| RunError::CrewUnsupported(error.to_string()));
+    }
+    let version = provider_version(profile).map_err(RunError::CrewUnsupported)?;
+    let capabilities = match profile.id() {
+        "claude" if claude_version_supported(&version) => CrewCapabilities::ALL,
+        "codex" if codex_version_supported(&version) => CrewCapabilities::ALL,
+        "claude" => CrewCapabilities::NONE,
+        "codex" => CrewCapabilities::NONE,
+        _ => CrewCapabilities::NONE,
+    };
+    let mut selected = session::select(settings.mode, panel, profile.label(), version, capabilities)
+        .map_err(|error| RunError::CrewUnsupported(error.to_string()))?;
+    selected.profile = profile.id().to_owned();
+    Ok(selected)
+}
+
+fn provider_version(profile: &dyn Profile) -> Result<String, String> {
+    let mut command = std::process::Command::new(profile.binary());
+    command.arg("--version");
+    // Preflight must resolve the exact shell PATH the driven child receives.
+    // Finder's launchd PATH is not the user's login shell and probing it would
+    // reject a provider that the subsequently pinned spawn can run.
+    if let Some(path) = crate::shell_env::path() {
+        command.env("PATH", path);
+    }
+    let output = command.output()
+        .map_err(|error| format!("{} version could not be checked: {error}", profile.label()))?;
+    if !output.status.success() {
+        return Err(format!("{} version could not be checked", profile.label()));
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if version.is_empty() {
+        return Err(format!("{} version could not be checked", profile.label()));
+    }
+    Ok(version)
+}
+
+fn claude_version_supported(version: &str) -> bool {
+    crate::agents::claude_crew::supports_version(version)
+}
+
+fn codex_version_supported(version: &str) -> bool {
+    crate::agents::codex_crew::supports_version(version)
+}
+
 fn handle(
     app: &AppHandle,
     active: &mut HashMap<u64, Active>,
     next_token: &mut u64,
     tracker: &TrackerHandle,
     terminal: &TerminalHandle,
+    session: &SessionHandle,
     report: &mpsc::UnboundedSender<Report>,
     // Where a headless probe of the run's own harness runs — the usage gate
     // and the crash classification alike. `None` only where the platform
@@ -437,6 +521,17 @@ fn handle(
             // come to disagree.
             let (agent, _) =
                 crate::settings::role_pair(app, Some(&project), crate::agents::Role::RunLead);
+            // Freeze the transport while no task has been claimed and no
+            // worktree has been made. In particular, an unsupported Crew
+            // provider cannot fall through to the terminal TUI later in the
+            // loop: that would put two incompatible UIs over one package.
+            let run_session = match select_run_session(app, &settings, &agent) {
+                Ok(session) => session,
+                Err(error) => {
+                    let _ = tx.send(Err(error));
+                    return;
+                }
+            };
             // Beside it and read the same way, for the same reason: a run that
             // silently changed its mind about worktrees between batches would
             // leave half a night's checkouts on the disk and sweep the other
@@ -483,6 +578,8 @@ fn handle(
                 released_rx,
                 tracker.clone(),
                 terminal.clone(),
+                session.clone(),
+                run_session,
                 report.clone(),
                 stop_rx,
                 // Owned rather than borrowed: `drive` is spawned onto a task
@@ -769,6 +866,8 @@ async fn drive(
     mut released: watch::Receiver<bool>,
     tracker: TrackerHandle,
     terminal: TerminalHandle,
+    session: SessionHandle,
+    run_session: RunSession,
     report: mpsc::UnboundedSender<Report>,
     mut stop: mpsc::Receiver<()>,
     // Where a headless probe of this run's own harness runs — the gate and
@@ -777,6 +876,12 @@ async fn drive(
     // as an unreadable probe: never a reason to hold the run up.
     probe: Option<PathBuf>,
 ) {
+    // The choice was made in the worker before this task was spawned. It is
+    // intentionally not revisited when settings change during a long run.
+    let transport = match run_session.transport {
+        Transport::Pty => RunTransport::Pty(terminal),
+        Transport::DrivenCrew => RunTransport::Driven { session, run: run_session },
+    };
     let say = |run: &Run| {
         let _ = report.send(Report::State { token, run: Box::new(run.clone()) });
     };
@@ -1038,7 +1143,7 @@ async fn drive(
         }
 
         let session = match spawn_batch(
-            &terminal,
+            &transport,
             &run,
             tasks,
             &current_agent,
@@ -1060,7 +1165,7 @@ async fn drive(
         // Before anything waits on the batch: from here on the app may be
         // killed at any moment, and what the registry does not know about by
         // then is an agent nobody will ever signal.
-        let group = group_of(&terminal, session).await;
+        let group = group_of(&transport, session).await;
         account.journal.say(&journal::batch_started(
             batch_no,
             attempt.number,
@@ -1092,7 +1197,7 @@ async fn drive(
         run.advance(RunState::Working { iteration });
         say(&run);
 
-        let outcome = watch_batch(&terminal, &run, session, &account.reports, batch_no).await;
+        let outcome = watch_batch(&transport, &run, session, &account.reports, batch_no).await;
         // Read here rather than at the ending, so that a batch's account is
         // taken while it is the freshest thing on disk and every way out of the
         // match below is covered by one read instead of three.
@@ -1144,7 +1249,7 @@ async fn drive(
         // the release, so on an unanswered question the lead is still sitting
         // at its dialog when this is asked and `life` comes back `Unproven`.
         let mut life = batch_life(group.as_ref());
-        let mut terminal_ack = terminal_handoff_ready(&terminal, session).await;
+        let mut terminal_ack = terminal_handoff_ready(&transport, session).await;
         // Taken once, here, rather than inside the emptiness rule below: the
         // line on the record and the value the decision is made from have to be
         // the same snapshot, or the journal describes a board the loop did not
@@ -1209,7 +1314,7 @@ async fn drive(
                 // boundary until the group is provably quiet: until then the
                 // old actor keeps its claims and no replacement is admitted.
                 if !handoff_permitted(handoff_gate(), life, terminal_ack) {
-                    match wait_for_handoff_quiet(&terminal, session, group.as_ref(), &mut stop).await {
+                    match wait_for_handoff_quiet(&transport, session, group.as_ref(), &mut stop).await {
                         HandoffWait::Quiet { life: quiet_life, terminal_ack: quiet_ack } => {
                             life = quiet_life;
                             terminal_ack = quiet_ack;
@@ -1465,7 +1570,7 @@ async fn drive(
                     // and a claim that lands after the parking stays
                     // `in_progress`, which the next batch reads as unfinished
                     // work to recover rather than losing.
-                    remove_session(&terminal, session).await;
+                    remove_session(&transport, session).await;
                     park_claims(&tracker, &root, session, &question).await;
                     last_batch = LastBatch::Asked;
                     counted(last_batch, crashes, empties, None);
@@ -1888,7 +1993,8 @@ fn handoff_life(
         .unwrap_or(queue::BatchLife::Unproven)
 }
 
-async fn terminal_handoff_ready(terminal: &TerminalHandle, session: u64) -> bool {
+async fn terminal_handoff_ready(transport: &RunTransport, session: u64) -> bool {
+    let RunTransport::Pty(terminal) = transport else { return false };
     let (tx, rx) = oneshot::channel();
     if terminal.0.send(TerminalRequest::HandoffReady(session, tx)).await.is_err() {
         return false;
@@ -1908,13 +2014,13 @@ enum HandoffWait {
 /// Stay at the boundary while a writer may still exist. The stop request is
 /// always honoured; settings cannot start another agent until this returns.
 async fn wait_for_handoff_quiet(
-    terminal: &TerminalHandle,
+    transport: &RunTransport,
     session: u64,
     group: Option<&Proc>,
     stop: &mut mpsc::Receiver<()>,
 ) -> HandoffWait {
     if matches!(handoff_gate(), HandoffGate::WindowsJob) {
-        let terminal_ack = terminal_handoff_ready(terminal, session).await;
+        let terminal_ack = terminal_handoff_ready(transport, session).await;
         return terminal_ack
             .then_some(HandoffWait::Quiet { life: queue::BatchLife::Unproven, terminal_ack })
             .unwrap_or(HandoffWait::Unproven);
@@ -2587,7 +2693,16 @@ async fn park_claims(tracker: &TrackerHandle, root: &Path, session: u64, questio
 /// does. Awaited rather than fired off, so the parking that follows starts
 /// after the kill has gone in rather than beside it — what that kill does and
 /// does not reach is recorded at the call site.
-async fn remove_session(terminal: &TerminalHandle, session: u64) {
+async fn remove_session(transport: &RunTransport, session: u64) {
+    let RunTransport::Pty(terminal) = transport else {
+        if let RunTransport::Driven { session: driven, .. } = transport {
+            // A driven root owns its provider child processes and watcher
+            // subscriptions. `CrewClear` kills the interactive PTY (where
+            // present) and removes the package tree atomically.
+            let _ = driven.0.send(crate::session::service::Request::CrewClear(session)).await;
+        }
+        return;
+    };
     let (tx, rx) = oneshot::channel();
     if terminal.0.send(TerminalRequest::Remove(session, tx)).await.is_ok() {
         let _ = rx.await;
@@ -2624,7 +2739,7 @@ async fn may_spawn(report: &mpsc::UnboundedSender<Report>, token: u64) -> bool {
 /// condition of the moment — the same split `views/panelWidths.js` makes.
 #[allow(clippy::too_many_arguments)]
 async fn spawn_batch(
-    terminal: &TerminalHandle,
+    transport: &RunTransport,
     run: &Run,
     tasks: Option<u8>,
     agent: &str,
@@ -2650,6 +2765,26 @@ async fn spawn_batch(
             continuation,
             remove_worktrees,
         };
+    let RunTransport::Pty(terminal) = transport else {
+        let RunTransport::Driven {
+            session,
+            run: run_session,
+        } = transport
+        else {
+            unreachable!()
+        };
+        let (tx, rx) = oneshot::channel();
+        session
+            .0
+            .send(crate::session::service::Request::CrewStart(run.project.clone(), intent, run_session.profile.clone(), tx))
+            .await
+            .map_err(|_| "the driven Crew worker is not running".to_string())?;
+        return match rx.await {
+            Ok(Ok((_root, lead))) => Ok(lead),
+            Ok(Err(error)) => Err(error.to_string()),
+            Err(_) => Err("the driven Crew worker did not answer".into()),
+        };
+    };
     terminal
         .0
         .send(TerminalRequest::Create(
@@ -2685,7 +2820,8 @@ async fn spawn_batch(
 /// wait is the comment at the call site — from there on the app may be killed
 /// at any moment and the registry does not know about this agent yet — so the
 /// ceiling is `recovery::EXEC`, a second, against an ordinary cost of one poll.
-async fn group_of(terminal: &TerminalHandle, session: u64) -> Option<Proc> {
+async fn group_of(transport: &RunTransport, session: u64) -> Option<Proc> {
+    let RunTransport::Pty(terminal) = transport else { return None };
     let (tx, rx) = oneshot::channel();
     terminal.0.send(TerminalRequest::Group(session, tx)).await.ok()?;
     recovery::group(rx.await.ok()??).await
@@ -2737,13 +2873,13 @@ pub(super) enum Batch {
 /// agent having finished a task well. A question is also the only form of this
 /// a person can be told anything useful about.
 async fn watch_batch(
-    terminal: &TerminalHandle,
+    transport: &RunTransport,
     run: &Run,
     session: u64,
     reports: &Path,
     batch: u32,
 ) -> Batch {
-    let mut ended = std::pin::pin!(await_exit(terminal, session));
+    let mut ended = std::pin::pin!(await_exit(transport, session));
     // A supervised or solo run has somebody who can answer in the terminal, and
     // that is the mode's whole point — ending their run at the first question
     // would be taking it away from them. See `RunMode::unattended`.
@@ -2777,7 +2913,7 @@ async fn watch_batch(
         tokio::select! {
             exit = &mut ended => return Batch::Ended(exit),
             _ = tokio::time::sleep(ASK_POLL) => {
-                let seen = asking(terminal, run, session).await;
+                let seen = asking(transport, run, session).await;
                 if let Some(question) = asked.confirm(seen.as_deref()) {
                     return Batch::Unanswered { question };
                 }
@@ -2792,7 +2928,8 @@ async fn watch_batch(
 /// `None` for a session that is working, that has gone from the worker's map,
 /// or that is loud with nothing readable behind it — the last of those is the
 /// bell case, and it is deliberately not evidence of anything here.
-async fn asking(terminal: &TerminalHandle, run: &Run, session: u64) -> Option<String> {
+async fn asking(transport: &RunTransport, run: &Run, session: u64) -> Option<String> {
+    let RunTransport::Pty(terminal) = transport else { return None };
     let (tx, rx) = oneshot::channel();
     terminal.0.send(TerminalRequest::List(run.project.clone(), tx)).await.ok()?;
     rx.await
@@ -2807,7 +2944,20 @@ async fn asking(terminal: &TerminalHandle, run: &Run, session: u64) -> Option<St
 /// A terminal worker that is not there to answer counts as a batch that ended
 /// without a code, never as a session somebody removed: `Removed` stops the run
 /// outright, and a worker that has gone away is not a person's decision.
-async fn await_exit(terminal: &TerminalHandle, session: u64) -> Exit {
+async fn await_exit(transport: &RunTransport, session: u64) -> Exit {
+    if let RunTransport::Driven { session: driven, .. } = transport {
+        let (tx, rx) = oneshot::channel();
+        if driven
+            .0
+            .send(crate::session::service::Request::CrewAwaitExit(session, tx))
+            .await
+            .is_err()
+        {
+            return Exit::NoCode;
+        }
+        return rx.await.unwrap_or(Exit::NoCode);
+    }
+    let RunTransport::Pty(terminal) = transport else { return Exit::NoCode };
     let (tx, rx) = oneshot::channel();
     if terminal.0.send(TerminalRequest::AwaitExit(session, tx)).await.is_err() {
         return Exit::NoCode;

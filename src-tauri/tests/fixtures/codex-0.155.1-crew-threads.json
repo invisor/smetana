@@ -1,0 +1,16 @@
+{
+  "jsonrpc": "2.0",
+  "method": "thread/started",
+  "params": {
+    "thread": {
+      "id": "child-thread",
+      "sessionId": "lead-session",
+      "parentThreadId": "lead-thread",
+      "agentNickname": "reviewer",
+      "agentRole": "review",
+      "canAcceptDirectInput": true,
+      "status": "active",
+      "turns": []
+    }
+  }
+}

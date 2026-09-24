@@ -160,8 +160,11 @@ import {
   conversationFor,
   conversationState,
   conversationsIn,
+  crewAgentsIn,
+  crewConversationsIn,
   drivenSessions,
   forget,
+  initConversation,
   startConversation,
   statusOf
 } from '../stores/conversation.js'
@@ -626,6 +629,14 @@ const RIGHT_TABS = [
 onMounted(initTracker)
 onMounted(adoptInitialProject)
 onMounted(initTerminals)
+// Crew topology is emitted when a package starts. Subscribe with the desktop
+// shell, before a person can select its first row, so the Agent list never
+// depends on an already-known node to begin receiving that topology.
+onMounted(() => {
+  initConversation().catch((error) => {
+    console.error('[conversation] subscribing to Crew topology failed:', error)
+  })
+})
 /* Starts the clock the session rows' "18h ago" is measured against, and nothing
    else: the list itself is read when the tab is opened, not here. */
 onMounted(initSessions)
@@ -2761,6 +2772,11 @@ watch(lastHandover, (handover) => {
    No await — selection is local state, and TerminalView attaches to whatever
    activeId names once it is on screen. */
 function selectAgent(id) {
+  if (typeof id === 'string' && id.startsWith('crew:')) {
+    showAgentTab(id)
+    rightFocus.value = null
+    return
+  }
   /* A driven row names a conversation rather than a session of the terminal
      worker, and both halves of a click are different for it. What comes forward
      is the conversation panel, which is `showAgentTab(conversation)`; and
@@ -2896,6 +2912,11 @@ const drivenHere = computed(() =>
   drivenAgents.value.filter((session) => session.project === activePath.value)
 )
 
+/* Crew nodes are already ordered parent-before-child by the backend snapshot.
+   Keep them outside persisted `agentOrder`: a person may arrange independent
+   sessions, but cannot drag a native teammate out of its provider-owned team. */
+const crewHere = computed(() => crewAgentsIn(activePath.value))
+
 /* What every project is doing, the two kinds of session counted together: the
    rail's map with the driven sessions folded into it.
 
@@ -2931,13 +2952,14 @@ const agentArrangement = ref([])
    `stores/terminals.js` deliberately — `drivenRows.js` carries the whole of
    why. What the panel is handed is one flat list, so a driven row is dragged,
    pinned and closed by the same rules every other row is. */
-const orderedAgentRows = computed(() =>
-  orderAgents(
+const orderedAgentRows = computed(() => [
+  ...orderAgents(
     mergeAgentRows(agentRows.value, drivenHere.value),
     agentArrangement.value.length ? agentArrangement.value : project.agentOrder,
     project.pinnedAgents
-  )
-)
+  ),
+  ...crewHere.value
+])
 
 /* A drag, applied. Two writes out of one answer, and neither is derivable from
    the other: the window's own sequence, which holds every row that was on
@@ -2974,6 +2996,12 @@ function reorderAgents(rows) {
    the trace. This is the one place in the front end that ends a session
    outright; the composer's own Stop button stays on `stopConversation`. */
 function removeAgentRow(id) {
+  if (typeof id === 'string' && id.startsWith('crew:')) {
+    const [, root, node] = id.split(':')
+    if (root !== node) return
+    closeConversation(id)
+    return
+  }
   const conversation = drivenSessionOf(id)
   if (conversation !== null) {
     /* Three acts for this one, and the third is the one that is easy to miss.
@@ -3191,7 +3219,9 @@ function showAgentTab(conversation = null, path = activePath.value) {
    beside it. */
 const conversationId = computed(() => {
   const aimed = agentAim.get(activePath.value) ?? null
-  return aimed !== null && conversationsIn(activePath.value).includes(aimed) ? aimed : null
+  return aimed !== null && [...conversationsIn(activePath.value), ...crewConversationsIn(activePath.value)].includes(aimed)
+    ? aimed
+    : null
 })
 
 /* Which row of the agents panel is drawn as the selected one.
@@ -3207,7 +3237,11 @@ const conversationId = computed(() => {
    field is untouched by a driven selection, so it is still there to go back
    to. */
 const activeAgentRow = computed(() =>
-  conversationId.value !== null ? drivenRowId(conversationId.value) : terminalState.activeId
+  conversationId.value === null
+    ? terminalState.activeId
+    : typeof conversationId.value === 'string' && conversationId.value.startsWith('crew:')
+      ? conversationId.value
+      : drivenRowId(conversationId.value)
 )
 
 /* The caption of the row the panel is drawing, for its opening turn: label and
@@ -3220,6 +3254,23 @@ const conversationCaption = computed(() => {
   const row = orderedAgentRows.value.find((candidate) => candidate.id === activeAgentRow.value)
   if (!row) return ''
   return [row.label, ...row.tasks].filter(Boolean).join(' ')
+})
+
+/* A completed Crew child remains selectable because its journal is still part
+   of the package, but it has no addressed transport left. Existing driven
+   sessions omit the field and therefore retain their current composer. */
+const conversationCanMessage = computed(
+  () => orderedAgentRows.value.find((candidate) => candidate.id === activeAgentRow.value)?.canMessage ?? true
+)
+
+/* Native children support addressed sends, not provider turn interruption or
+   structured permission answers. The lead's Stop ends the package through
+   Crew IPC; ordinary driven conversations retain their existing Stop path. */
+const conversationCanStop = computed(() => {
+  const id = conversationId.value
+  if (typeof id !== 'string' || !id.startsWith('crew:')) return true
+  const [, root, node] = id.split(':')
+  return root === node
 })
 
 /* Whether that panel is on screen this moment.
@@ -7375,6 +7426,8 @@ const toastStackStyle = {
             v-else-if="conversationPanelOpen"
             :session-id="conversationId"
             :caption="conversationCaption"
+            :can-message="conversationCanMessage"
+            :can-stop="conversationCanStop"
             @open-local="onConversationLocalLink"
           />
           <TerminalView

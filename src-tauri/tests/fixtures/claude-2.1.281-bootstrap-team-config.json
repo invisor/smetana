@@ -1,0 +1,29 @@
+{
+  "name": "session-bootstrap-fixture",
+  "leadAgentId": "team-lead@session-bootstrap-fixture",
+  "leadSessionId": "fixture-lead-session",
+  "members": [
+    {
+      "agentId": "team-lead@session-bootstrap-fixture",
+      "name": "team-lead",
+      "agentType": "team-lead",
+      "backendType": "in-process",
+      "cwd": "/fixture/project",
+      "status": "working"
+    },
+    {
+      "agentId": "smetana-bootstrap@session-bootstrap-fixture",
+      "name": "smetana-bootstrap",
+      "agentType": "general-purpose",
+      "backendType": "in-process",
+      "status": "idle"
+    },
+    {
+      "agentId": "real-worker@session-bootstrap-fixture",
+      "name": "bootstrap-helper",
+      "agentType": "general-purpose",
+      "backendType": "in-process",
+      "status": "working"
+    }
+  ]
+}

@@ -9,7 +9,8 @@ use tauri::State;
 use tokio::sync::oneshot;
 
 use super::model::{Decision, Event, SessionError, SessionId};
-use super::service::{Attached, Request, SessionHandle};
+use super::crew::CrewNode;
+use super::service::{Attached, CrewAttached, Request, SessionHandle};
 use crate::agents::Intent;
 
 async fn ask<T>(
@@ -35,6 +36,59 @@ pub async fn session_start(
     intent: Intent,
 ) -> Result<SessionId, SessionError> {
     ask(&handle, |tx| Request::Start(project, intent, tx)).await?
+}
+
+/// Snapshot a Crew package's backend-owned hierarchy. Individual updates use
+/// `crew:tree`; this command closes the subscribe-before-first-event gap.
+#[tauri::command]
+pub async fn crew_tree(
+    handle: State<'_, SessionHandle>,
+    root: u64,
+) -> Result<Option<Vec<CrewNode>>, SessionError> {
+    ask(&handle, |tx| Request::CrewTree(root, tx)).await
+}
+
+#[tauri::command]
+pub async fn crew_attach(
+    handle: State<'_, SessionHandle>,
+    root: u64,
+    node: u64,
+) -> Result<CrewAttached, SessionError> {
+    ask(&handle, |tx| Request::CrewAttach(root, node, tx)).await?
+}
+
+/// Address the selected native Crew node. A failed send is intentionally an
+/// error so the composer keeps its draft; it is never retried against the lead.
+#[tauri::command]
+pub async fn crew_send(
+    handle: State<'_, SessionHandle>,
+    root: u64,
+    node: u64,
+    text: String,
+) -> Result<(), SessionError> {
+    ask(&handle, |tx| Request::CrewSend(root, node, text, tx)).await?
+}
+
+/// Stop a Crew root. The native provider owns its children, so this terminates
+/// the complete package rather than attempting an unsafe child interrupt.
+#[tauri::command]
+pub async fn crew_stop(
+    handle: State<'_, SessionHandle>,
+    root: u64,
+) -> Result<(), SessionError> {
+    ask(&handle, |tx| Request::CrewStop(root, tx)).await?
+}
+
+/// End a Crew package from its row's close control. Kept separate from
+/// `crew_stop` at the IPC boundary so the UI never mistakes a node id for an
+/// ordinary terminal session id.
+#[tauri::command]
+pub async fn crew_clear(handle: State<'_, SessionHandle>, root: u64) -> Result<(), SessionError> {
+    handle
+        .0
+        .send(Request::CrewClear(root))
+        .await
+        .map_err(|_| SessionError::Spawn("the session worker is not running".into()))
 }
 
 /// The whole conversation, the sequence number to continue from, and where the
