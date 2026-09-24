@@ -167,7 +167,7 @@ impl Driver for CodexDriver {
                 .or_else(|| message.pointer("/params/item/threadId"))
                 .and_then(Value::as_str);
             if let Some(thread_id) = thread_id {
-                if self.thread.as_deref() != Some(thread_id) {
+                if self.thread.as_deref().is_some_and(|lead| lead != thread_id) {
                     self.crew_journal_records.push(message.clone());
                     continue;
                 }
