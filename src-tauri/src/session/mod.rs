@@ -2,6 +2,7 @@
 //! paints. See `docs/superpowers/specs/2026-09-10-conversation-ui-design.md`.
 
 pub mod commands;
+pub mod crew;
 pub mod driver;
 pub mod history;
 pub mod journal;

@@ -142,6 +142,10 @@ import { watchWindowDrops } from '../../stores/windowDrops.js'
    rather than nothing at all. */
 const props = defineProps({
   sessionId: { type: [String, Number], default: null },
+  /* A finished Crew child remains readable but has no transport endpoint. The
+     parent owns this capability; hiding the composer is safer than letting a
+     send race be redirected to the lead. */
+  canMessage: { type: Boolean, default: true },
   /* What the opening turn is drawn as when it carries no words of the
      person's own — the session row's caption, "Editing smetana-abc", handed
      down by the view so that the list and the panel say the same thing. See
@@ -248,7 +252,7 @@ const waitingForAnswer = computed(() => !!question.value)
    the fix, not a second "locked" look: the draft and the attachments survive
    underneath, since `held.draft` lives in the store and `attachments` is this
    component's own ref, neither of which this `v-if` touches. */
-const composerShown = computed(() => !!held.value && !waitingForAnswer.value)
+const composerShown = computed(() => !!held.value && props.canMessage && !waitingForAnswer.value)
 
 /* The last refusal, if it is this session's — see `refusal` below for why the
    test is on the session rather than on there being one at all. */

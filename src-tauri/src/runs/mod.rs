@@ -27,6 +27,7 @@ pub mod registry;
 pub mod report;
 pub mod reports;
 pub mod service;
+pub mod session;
 pub mod setup_facts;
 pub mod summary;
 pub mod survey;

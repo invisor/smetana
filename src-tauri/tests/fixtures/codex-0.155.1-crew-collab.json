@@ -1,0 +1,16 @@
+{
+  "jsonrpc": "2.0",
+  "method": "item/completed",
+  "params": {
+    "item": {
+      "type": "collabAgentToolCall",
+      "id": "call-1",
+      "tool": "sendMessage",
+      "senderThreadId": "lead-thread",
+      "receiverThreadIds": ["child-thread"],
+      "agentsStates": {
+        "child-thread": { "status": "errored", "message": "fixture failure" }
+      }
+    }
+  }
+}

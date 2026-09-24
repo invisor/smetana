@@ -3222,6 +3222,13 @@ const conversationCaption = computed(() => {
   return [row.label, ...row.tasks].filter(Boolean).join(' ')
 })
 
+/* A completed Crew child remains selectable because its journal is still part
+   of the package, but it has no addressed transport left. Existing driven
+   sessions omit the field and therefore retain their current composer. */
+const conversationCanMessage = computed(
+  () => orderedAgentRows.value.find((candidate) => candidate.id === activeAgentRow.value)?.canMessage ?? true
+)
+
 /* Whether that panel is on screen this moment.
 
    The tab test is enough on its own: every branch of the centre above the
@@ -7375,6 +7382,7 @@ const toastStackStyle = {
             v-else-if="conversationPanelOpen"
             :session-id="conversationId"
             :caption="conversationCaption"
+            :can-message="conversationCanMessage"
             @open-local="onConversationLocalLink"
           />
           <TerminalView

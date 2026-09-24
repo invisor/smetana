@@ -111,7 +111,12 @@ const view = computed(() =>
   draft.value ? orderAgents(props.rows, draft.value, props.pinned) : props.rows
 )
 
-const movable = computed(() => view.value.length > 1)
+/* A Crew tree's order and parentage come from the provider contract. It shares
+   the panel with ordinary sessions but is not a flat persisted arrangement, so
+   a drag must not turn a child into a sibling just because both are visible. */
+const movable = computed(
+  () => view.value.length > 1 && !props.rows.some((row) => Number.isFinite(Number(row.depth)))
+)
 
 const pinnedRow = (row) => isPinned(row, props.pinned)
 
@@ -406,6 +411,10 @@ const rowStyle = (row) => ({
   gap: 'var(--space-3)',
   height: 'var(--row-h)',
   padding: '0 var(--space-5)',
+  /* Crew rows carry a backend-owned depth. Ordinary sessions omit it and keep
+     the exact flat layout; the indent is presentation only and never changes
+     selection, ordering or the stable row key. */
+  paddingLeft: `calc(var(--space-5) + ${(Math.max(0, Number(row.depth) || 0)) * 16}px)`,
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-sans)',
   background:
     row.id === props.activeId || agentKey(row) === menuFor.value

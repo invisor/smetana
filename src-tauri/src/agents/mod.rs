@@ -11,11 +11,14 @@
 //! we want done.
 
 pub mod claude;
+pub mod claude_crew;
 pub mod claude_driver;
 pub mod codex;
+pub mod codex_crew;
 pub mod codex_driver;
 pub mod codex_sessions;
 pub mod commands;
+pub mod crew;
 pub mod library;
 pub mod oneshot;
 pub mod prompt;
