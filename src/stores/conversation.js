@@ -112,7 +112,10 @@ export const crewAgentsIn = (project) =>
         label: node.label,
         tasks: [],
         claimed: [],
-        clearable: false,
+        /* Only a package root can be cleared. A native child has no safe
+           provider child-stop contract, so its row is readable/selectable but
+           never offers the destructive package close action. */
+        clearable: node.id === crew.root,
         canMessage: node.canMessage,
         depth: node.depth
       }))

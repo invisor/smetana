@@ -2997,6 +2997,8 @@ function reorderAgents(rows) {
    outright; the composer's own Stop button stays on `stopConversation`. */
 function removeAgentRow(id) {
   if (typeof id === 'string' && id.startsWith('crew:')) {
+    const [, root, node] = id.split(':')
+    if (root !== node) return
     closeConversation(id)
     return
   }

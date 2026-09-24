@@ -17,6 +17,12 @@ transport is driven. Auto, Solo and a panel-disabled Crew retain the existing
 PTY route. A failed capability/startup preflight happens before a task claim or
 worktree and is a refusal, never a hidden fallback to a provider TUI.
 
+For Claude, admission additionally precedes delivery of the Run brief: the
+interactive process is started only to establish the exact runtime and receives
+its retained input once after that succeeds. Its structured transcript maps
+`system/init` to the root's running state and a result to waiting (or failed
+for an error result); terminal bytes never participate in that state.
+
 The root remains the sole owner of claims, worktrees, review, merge and report.
 Provider children are display/routing nodes only; their journals survive their
 own completion and disappear together only when the root package exits or is

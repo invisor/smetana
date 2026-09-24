@@ -23,6 +23,12 @@ Both adapters produce the neutral provider-node tree consumed by
 thread; a Claude send is a checked mailbox update. Neither may redirect a
 failed child message to the lead.
 
+Claude's interactive lead starts without the positional Run brief. The worker
+holds that exact brief until the config carrying its generated `leadSessionId`,
+the writable inbox contract, and the structured lead transcript are admitted;
+then it writes the brief once through the private PTY input. An admission
+timeout or error kills that PTY before the brief can reach Claude.
+
 `src-tauri/src/agents/` is what the app knows about the CLI coding agents it runs, one file per
 agent, and everything harness-specific lives in it. Claude Code and Codex are supported; which one
 runs is the `agent` field in `settings.json` — or, for a project carrying its own `agents` block,

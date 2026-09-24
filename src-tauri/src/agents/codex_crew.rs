@@ -161,6 +161,38 @@ pub fn hydrated_journal(value: &Value) -> Option<(String, Vec<EventKind>)> {
     ))
 }
 
+/// Stable identities shared by a `thread/read` snapshot and later live item
+/// notifications. The worker seeds these before releasing buffered live
+/// events, so a late `item/completed` for an item already in the snapshot is
+/// not rendered twice merely because its JSON envelope differs.
+pub fn hydrated_journal_keys(value: &Value) -> Option<(String, Vec<String>)> {
+    let thread = value.get("crewThreadId")?.as_str()?.to_owned();
+    let turns = value.pointer("/result/thread/turns")?.as_array()?;
+    let mut keys = Vec::new();
+    for turn in turns {
+        if let Some(id) = turn.get("id").and_then(Value::as_str) {
+            keys.push(format!("turn:{id}"));
+        }
+        for item in turn.get("items").and_then(Value::as_array).into_iter().flatten() {
+            if let Some(id) = item.get("id").and_then(Value::as_str) {
+                keys.push(format!("item:{id}"));
+            }
+        }
+    }
+    Some((thread, keys))
+}
+
+/// A live event's provider-local identity. Deltas without an item id remain
+/// distinct stream fragments; completed items and turns use their stable ids.
+pub fn journal_key(value: &Value) -> Option<(String, String)> {
+    let thread = value.pointer("/params/threadId").or_else(|| value.pointer("/params/item/threadId")).and_then(Value::as_str)?.to_owned();
+    let method = value.get("method")?.as_str()?;
+    let key = value.pointer("/params/item/id").or_else(|| value.pointer("/params/turn/id")).and_then(Value::as_str)
+        .map(|id| if method.starts_with("turn/") { format!("turn:{id}") } else { format!("item:{id}") })
+        .unwrap_or_else(|| format!("wire:{method}:{}", value.pointer("/params/delta").and_then(Value::as_str).unwrap_or("")));
+    Some((thread, key))
+}
+
 fn completed(item: &Value) -> Vec<EventKind> {
     match item.get("type").and_then(Value::as_str) {
         Some("agentMessage") => item
@@ -344,6 +376,30 @@ mod tests {
                     text: "only child two".into()
                 }]
             ))
+        );
+    }
+
+    #[test]
+    fn hydration_and_live_completion_share_stable_item_identity() {
+        let snapshot = serde_json::json!({
+            "crewThreadId": "child-two",
+            "result": {"thread": {"turns": [{
+                "id": "turn-7",
+                "items": [{"id": "item-9", "type": "agentMessage", "text": "snapshot"}]
+            }]}}
+        });
+        let live = serde_json::json!({
+            "method": "item/completed",
+            "params": {"threadId": "child-two", "item": {
+                "id": "item-9", "type": "agentMessage", "text": "live duplicate"
+            }}
+        });
+        let (_, keys) = hydrated_journal_keys(&snapshot).expect("snapshot keys");
+        assert!(keys.contains(&"turn:turn-7".into()));
+        assert!(keys.contains(&"item:item-9".into()));
+        assert_eq!(
+            journal_key(&live),
+            Some(("child-two".into(), "item:item-9".into()))
         );
     }
 }

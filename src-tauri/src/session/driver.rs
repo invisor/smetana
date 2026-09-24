@@ -83,14 +83,14 @@ pub trait Driver: Send {
     /// Send a turn to one provider-owned native child. The worker resolves the
     /// Smetana node and checks its capability before this method is called;
     /// drivers must not substitute their lead when the selected child is gone.
-    fn crew_send(&mut self, _provider_id: &str, _text: String) -> Result<Vec<u8>, String> {
+    fn crew_send(&mut self, _provider_id: &str, _text: String) -> Result<(u64, Vec<u8>), String> {
         Err("this provider does not support addressed Crew messages".into())
     }
 
     /// Completion receipts for addressed sends. A JSON-RPC write is not a
     /// delivery: Codex confirms `turn/start` asynchronously, and the worker
     /// must preserve a draft until this receipt succeeds.
-    fn crew_send_results(&mut self) -> Vec<Result<(), String>> { Vec::new() }
+    fn crew_send_results(&mut self) -> Vec<(u64, Result<(), String>)> { Vec::new() }
 
     /// Requests produced while decoding a response. Most line protocols never
     /// need this; JSON-RPC bootstraps its thread after each prior reply.

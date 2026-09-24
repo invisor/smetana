@@ -70,7 +70,7 @@ pub struct CodexDriver {
     crew_history: std::collections::BTreeMap<u64, String>,
     crew_lists: std::collections::BTreeSet<u64>,
     crew_sends: std::collections::BTreeSet<u64>,
-    crew_send_results: Vec<Result<(), String>>,
+    crew_send_results: Vec<(u64, Result<(), String>)>,
 }
 
 impl CodexDriver {
@@ -159,7 +159,7 @@ impl Driver for CodexDriver {
                         } else {
                             Err("Codex did not confirm the addressed message".into())
                         };
-                        self.crew_send_results.push(receipt);
+                        self.crew_send_results.push((id, receipt));
                         continue;
                     }
                     if self.crew_lists.remove(&id) {
@@ -455,7 +455,7 @@ impl Driver for CodexDriver {
         Some(bytes)
     }
 
-    fn crew_send(&mut self, provider_id: &str, text: String) -> Result<Vec<u8>, String> {
+    fn crew_send(&mut self, provider_id: &str, text: String) -> Result<(u64, Vec<u8>), String> {
         if provider_id.is_empty() {
             return Err("the selected Codex thread has ended".into());
         }
@@ -474,10 +474,10 @@ impl Driver for CodexDriver {
         let id = self.next_id;
         let bytes = self.request(method, params);
         self.crew_sends.insert(id);
-        Ok(bytes)
+        Ok((id, bytes))
     }
 
-    fn crew_send_results(&mut self) -> Vec<Result<(), String>> {
+    fn crew_send_results(&mut self) -> Vec<(u64, Result<(), String>)> {
         std::mem::take(&mut self.crew_send_results)
     }
 
@@ -1468,12 +1468,13 @@ mod tests {
     fn an_addressed_child_turn_waits_for_its_own_rpc_receipt() {
         let mut driver = CodexDriver::new(None);
         driver.thread = Some("lead-thread".into());
-        let request = String::from_utf8(driver.crew_send("child-thread", "only this child".into()).unwrap()).unwrap();
+        let (_, bytes) = driver.crew_send("child-thread", "only this child".into()).unwrap();
+        let request = String::from_utf8(bytes).unwrap();
         assert!(request.contains("\"threadId\":\"child-thread\""), "{request}");
         assert!(driver.crew_send_results().is_empty(), "writing stdin is not a receipt");
         driver.feed(br#"{"jsonrpc":"2.0","id":1,"result":{"turn":{"id":"child-turn"}}}
 "#);
-        assert_eq!(driver.crew_send_results(), vec![Ok(())]);
+        assert_eq!(driver.crew_send_results(), vec![(1, Ok(()))]);
         assert_eq!(driver.active_turn, None, "a child receipt must not replace the lead turn");
     }
 
@@ -1484,7 +1485,23 @@ mod tests {
         driver.crew_send("child-thread", "keep this draft".into()).unwrap();
         driver.feed(br#"{"jsonrpc":"2.0","id":1,"error":{"message":"thread ended"}}
 "#);
-        assert_eq!(driver.crew_send_results(), vec![Err("thread ended".into())]);
+        assert_eq!(driver.crew_send_results(), vec![(1, Err("thread ended".into()))]);
+        assert_eq!(driver.active_turn, None);
+    }
+
+    #[test]
+    fn simultaneous_child_receipts_keep_their_own_request_tokens_when_reversed() {
+        let mut driver = CodexDriver::new(None);
+        driver.thread = Some("lead-thread".into());
+        let (first, _) = driver.crew_send("child-one", "one".into()).unwrap();
+        let (second, _) = driver.crew_send("child-two", "two".into()).unwrap();
+        assert_ne!(first, second);
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":{second},\"error\":{{\"message\":\"child two ended\"}}}}\n").as_bytes());
+        driver.feed(format!("{{\"jsonrpc\":\"2.0\",\"id\":{first},\"result\":{{\"turn\":{{\"id\":\"one-turn\"}}}}}}\n").as_bytes());
+        assert_eq!(
+            driver.crew_send_results(),
+            vec![(second, Err("child two ended".into())), (first, Ok(()))]
+        );
         assert_eq!(driver.active_turn, None);
     }
 

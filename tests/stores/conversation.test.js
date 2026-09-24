@@ -265,6 +265,21 @@ describe('the conversation store', () => {
     expect(ipc.calls('session_close')).toEqual([])
   })
 
+  it('marks only a Crew root clearable, never a child that would clear its package', async () => {
+    const { stores, emit } = await ready()
+    await stores.conversation.initConversation()
+    await emit('crew:tree', {
+      project: '/p', root: 81,
+      nodes: [
+        { id: 81, parent: null, state: 'running', canMessage: true, label: 'Lead' },
+        { id: 82, parent: 81, state: 'running', canMessage: true, label: 'Child' }
+      ]
+    })
+    const rows = stores.conversation.crewAgentsIn('/p')
+    expect(rows.find((row) => row.id === 'crew:81:81').clearable).toBe(true)
+    expect(rows.find((row) => row.id === 'crew:81:82').clearable).toBe(false)
+  })
+
   it('refuses to send nothing at all', async () => {
     const { ipc, stores } = await ready()
     ipc.on('session_send', null)

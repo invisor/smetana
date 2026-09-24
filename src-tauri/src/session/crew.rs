@@ -217,6 +217,19 @@ impl CrewTree {
         true
     }
 
+    /// The interactive Claude lead has no provider thread-status record. Its
+    /// structured transcript is therefore the authoritative lifecycle source
+    /// for the already-public root node. Keep this deliberately narrower than
+    /// `upsert`: a transcript must not replace the root label or ownership.
+    pub fn set_state(&mut self, id: CrewNodeId, state: CrewState) -> bool {
+        let Some(node) = self.nodes.get_mut(&id) else {
+            return false;
+        };
+        node.state = state;
+        node.can_message = !matches!(state, CrewState::Done | CrewState::Failed);
+        true
+    }
+
     pub fn node(&self, id: CrewNodeId) -> Option<&CrewNode> {
         self.nodes.get(&id)
     }

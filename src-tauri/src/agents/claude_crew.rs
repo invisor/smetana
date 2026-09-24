@@ -28,16 +28,18 @@ pub const MIN_VERSION: (u32, u32, u32) = (2, 1, 281);
 /// `ClaudeDriver`, whose `-p --input-format stream-json` protocol cannot make
 /// native teammates. The team runtime must remain interactive while Smetana
 /// observes its documented config/transcript/mailbox files.
-pub fn interactive_lead_command(launch: &Launch) -> portable_pty::CommandBuilder {
+/// Build the interactive runtime without a positional brief. Crew admission is
+/// deliberately proved from the config, transcript and inboxes first; only
+/// then does the session worker write this returned brief to the live PTY.
+/// That keeps an unsupported runtime from receiving a Run prompt (and claiming
+/// work) before Smetana can own its structured transport.
+pub fn interactive_lead_command(launch: &Launch) -> (portable_pty::CommandBuilder, Option<String>) {
     let claude = Claude;
     let mut command = claude.command_without_prompt(launch);
     command.env(TEAM_ENV, "1");
     command.arg(TEAM_FLAG);
     command.arg(TEAM_MODE);
-    if let Some(prompt) = claude.prompt_text(launch) {
-        command.arg(prompt);
-    }
-    command
+    (command, claude.prompt_text(launch))
 }
 
 pub fn supports_version(found: &str) -> bool {
@@ -275,6 +277,31 @@ pub struct TranscriptTail {
     offset: u64,
 }
 
+/// Lead-only lifecycle facts from Claude's structured JSONL.  The event
+/// journal intentionally filters its `system/init` marker for ordinary
+/// history, but a native Crew root needs that marker to leave `Starting`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeadLifecycle {
+    TurnStart,
+    Ready,
+    Failed,
+}
+
+fn lead_lifecycle(line: &str) -> Option<LeadLifecycle> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    match (
+        value.get("type").and_then(Value::as_str),
+        value.get("subtype").and_then(Value::as_str),
+    ) {
+        (Some("system"), Some("init")) => Some(LeadLifecycle::TurnStart),
+        (Some("result"), _) if value.get("is_error").and_then(Value::as_bool) == Some(true) => {
+            Some(LeadLifecycle::Failed)
+        }
+        (Some("result"), _) => Some(LeadLifecycle::Ready),
+        _ => None,
+    }
+}
+
 /// The documented hook record is the bridge between Claude's two unrelated
 /// identities: config/mailbox member `name` and child transcript `agentId`.
 /// The ids must never be compared directly. `None` is an explicit absence a
@@ -343,11 +370,22 @@ fn find_hook_name(value: &Value) -> Option<&str> {
 
 impl TranscriptTail {
     pub fn read_new(&mut self, path: &Path) -> std::io::Result<Vec<crate::session::history::Past>> {
+        self.read_new_with_lifecycle(path).map(|(events, _)| events)
+    }
+
+    /// Like [`read_new`], retaining the lead's non-rendered lifecycle markers
+    /// for the Crew root state machine. Child callers continue using the
+    /// journal-only form above.
+    pub fn read_new_with_lifecycle(
+        &mut self,
+        path: &Path,
+    ) -> std::io::Result<(Vec<crate::session::history::Past>, Vec<LeadLifecycle>)> {
         let file = fs::File::open(path)?;
         let mut reader = BufReader::new(file);
         reader.seek(SeekFrom::Start(self.offset))?;
         let now = chrono::Utc::now().to_rfc3339();
         let mut events = Vec::new();
+        let mut lifecycle = Vec::new();
         loop {
             let mut line = Vec::new();
             let bytes = reader.read_until(b'\n', &mut line)?;
@@ -356,9 +394,12 @@ impl TranscriptTail {
             }
             self.offset = self.offset.saturating_add(bytes as u64);
             let line = String::from_utf8_lossy(&line);
+            if let Some(state) = lead_lifecycle(&line) {
+                lifecycle.push(state);
+            }
             events.extend(crate::session::history::events_of(&line, &now));
         }
-        Ok(events)
+        Ok((events, lifecycle))
     }
 }
 
@@ -558,6 +599,58 @@ pub fn members(config: &Value) -> Vec<ProviderNode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::library::Skills;
+    use crate::agents::{Intent, Launch};
+
+    fn launch() -> Launch {
+        Launch {
+            profile: &Claude,
+            cwd: PathBuf::from("/tmp/project"),
+            intent: Intent::Bare,
+            skills: Skills {
+                smetana: PathBuf::from("/app/resources/smetana"),
+                superpowers: PathBuf::from("/app/resources/superpowers"),
+                superpowers_installed: false,
+            },
+            languages: crate::agents::Languages::default(),
+            agent_prompt: String::new(),
+            facts: None,
+            session_id: Some("lead-session".into()),
+            model: None,
+            worker_model: None,
+        }
+    }
+
+    #[test]
+    fn interactive_lead_holds_its_prompt_until_structured_admission() {
+        let launch = launch();
+        let expected = Claude.prompt_text(&launch).expect("bare lead has a prompt");
+        let (command, deferred) = interactive_lead_command(&launch);
+        let argv: Vec<_> = command
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(deferred.as_deref(), Some(expected.as_str()));
+        assert!(!argv.iter().any(|arg| arg == &expected));
+        assert!(argv.windows(2).any(|args| args == [TEAM_FLAG, TEAM_MODE]));
+    }
+
+    #[test]
+    fn lead_lifecycle_comes_from_structured_transcript_records() {
+        assert_eq!(
+            lead_lifecycle(r#"{"type":"system","subtype":"init"}"#),
+            Some(LeadLifecycle::TurnStart)
+        );
+        assert_eq!(
+            lead_lifecycle(r#"{"type":"result","is_error":false}"#),
+            Some(LeadLifecycle::Ready)
+        );
+        assert_eq!(
+            lead_lifecycle(r#"{"type":"result","is_error":true}"#),
+            Some(LeadLifecycle::Failed)
+        );
+    }
 
     #[test]
     fn config_members_are_structured_children_and_the_lead_is_not_duplicated() {
