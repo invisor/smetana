@@ -541,6 +541,29 @@ pub fn transcript(cwd: &Path, id: &str) -> Option<PathBuf> {
     transcript_in(&projects_root()?, cwd, id)
 }
 
+/// Claude Code's own title for one transcript, for the agents panel's row of
+/// a session that is still running. Bounded by `HEAD_LINES` the way the
+/// Sessions tab's own read is: the record sits inside the first few hundred
+/// lines of every transcript measured, and a session's file can be tens of
+/// megabytes. `None` for a file with no such record yet, a record that says
+/// nothing, and a file that is not there.
+pub fn ai_title_in(path: &Path) -> Option<String> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+    for line in reader.lines().take(HEAD_LINES).map_while(Result::ok) {
+        if !line.contains(AI_TITLE) {
+            continue;
+        }
+        if let Ok(record) = serde_json::from_str::<Record>(&line) {
+            if let Some(title) = generated_title(&record) {
+                return Some(title);
+            }
+        }
+    }
+    None
+}
+
 /// Where Claude Code keeps its transcripts. `HOME` rather than a crate, the way
 /// `agents::library`, `runs::browser` and `tracker::access` already read it.
 pub(super) fn projects_root() -> Option<PathBuf> {
@@ -986,6 +1009,31 @@ mod tests {
             listed.iter().find(|session| session.id == "ungenerated").expect("the plain session");
         assert_eq!(ungenerated.title.as_deref(), Some("Move the card to done"));
         assert_eq!(ungenerated.first_prompt, ungenerated.title, "one answer serves both here");
+    }
+
+    #[test]
+    fn the_first_ai_title_of_a_transcript_is_the_answer() {
+        let dir = temp_dir("ai-title-in");
+        let path = dir.join("s1.jsonl");
+        let text = [
+            r#"{"type":"user","message":{"role":"user","content":"hi"}}"#.to_owned(),
+            ai_title_line("Rename the panel rows"),
+            ai_title_line("Something later"),
+        ]
+        .join("\n");
+        std::fs::write(&path, text).expect("write the transcript");
+        assert_eq!(ai_title_in(&path).as_deref(), Some("Rename the panel rows"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_ai_title_and_a_missing_file_are_no_title() {
+        let dir = temp_dir("ai-title-empty");
+        let path = dir.join("s2.jsonl");
+        std::fs::write(&path, ai_title_line("   ")).expect("write the transcript");
+        assert_eq!(ai_title_in(&path), None, "a record that says nothing is no title");
+        assert_eq!(ai_title_in(&dir.join("absent.jsonl")), None, "a missing file is no title");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
