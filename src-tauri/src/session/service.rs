@@ -306,6 +306,8 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         &mut crew_ptys,
                         &mut claude_crews,
                         &mut claude_teams,
+                        &mut claude_tails,
+                        &mut claude_transcript_nodes,
                         &mut crew_leads,
                         &mut next_crew,
                         &mut next_id,
@@ -335,6 +337,27 @@ pub fn start(app: AppHandle) -> SessionHandle {
                 }
                 _ = crew_tick.tick(), if !claude_crews.is_empty() => {
                     refresh_claude_crews(&app, &mut crews, &claude_crews, &mut claude_teams, &mut claude_tails, &mut claude_transcript_nodes);
+                    // An interactive Claude lead has no pipe reader to emit a
+                    // `Chunk::Eof`. Poll its real child here so an exited root
+                    // cannot retain its team tailers or a stale Crew row.
+                    let exited: Vec<_> = crew_ptys
+                        .iter_mut()
+                        .filter_map(|(root, pty)| pty.exit_code().map(|_| *root))
+                        .collect();
+                    for root in exited {
+                        clear_crew(
+                            &app,
+                            &mut sessions,
+                            &mut crews,
+                            &mut crew_ptys,
+                            &mut claude_crews,
+                            &mut claude_teams,
+                            &mut claude_tails,
+                            &mut claude_transcript_nodes,
+                            &mut crew_leads,
+                            root,
+                        );
+                    }
                 }
             }
         }
@@ -998,6 +1021,41 @@ fn refresh_claude_crews(
     }
 }
 
+/// Remove one package through the same ownership boundary used by an explicit
+/// close and an unexpected interactive-lead exit. A Crew root owns all of its
+/// provider subscriptions: keeping a transcript cursor after its root is gone
+/// would let a later path reuse a stale node id.
+fn clear_crew(
+    app: &AppHandle,
+    sessions: &mut HashMap<SessionId, Live>,
+    crews: &mut HashMap<u64, CrewPackage>,
+    crew_ptys: &mut HashMap<u64, crate::terminal::pty::Pty>,
+    claude_crews: &mut HashSet<u64>,
+    claude_teams: &mut HashMap<u64, PathBuf>,
+    claude_tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
+    claude_transcript_nodes: &mut HashMap<(u64, PathBuf), u64>,
+    crew_leads: &mut HashMap<SessionId, u64>,
+    root: u64,
+) {
+    claude_crews.remove(&root);
+    claude_teams.remove(&root);
+    claude_tails.retain(|(crew, _), _| *crew != root);
+    claude_transcript_nodes.retain(|(crew, _), _| *crew != root);
+    if let Some(live) = sessions.get_mut(&root) {
+        if let Some(child) = live.child.as_mut() {
+            let _ = child.start_kill();
+        }
+    }
+    if let Some(mut pty) = crew_ptys.remove(&root) {
+        pty.kill();
+    }
+    crew_leads.retain(|_, lead_root| *lead_root != root);
+    if let Some(mut package) = crews.remove(&root) {
+        package.tree.clear();
+        emit_crew(app, &package);
+    }
+}
+
 fn handle(
     app: &AppHandle,
     sessions: &mut HashMap<SessionId, Live>,
@@ -1005,6 +1063,8 @@ fn handle(
     crew_ptys: &mut HashMap<u64, crate::terminal::pty::Pty>,
     claude_crews: &mut HashSet<u64>,
     claude_teams: &mut HashMap<u64, PathBuf>,
+    claude_tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
+    claude_transcript_nodes: &mut HashMap<(u64, PathBuf), u64>,
     crew_leads: &mut HashMap<SessionId, u64>,
     next_crew: &mut u64,
     next_id: &mut SessionId,
@@ -1144,21 +1204,18 @@ fn handle(
             });
         }
         Request::CrewClear(root) => {
-            claude_crews.remove(&root);
-            claude_teams.remove(&root);
-            if let Some(live) = sessions.get_mut(&root) {
-                if let Some(child) = live.child.as_mut() {
-                    let _ = child.start_kill();
-                }
-            }
-            if let Some(mut pty) = crew_ptys.remove(&root) {
-                pty.kill();
-            }
-            crew_leads.retain(|_, lead_root| *lead_root != root);
-            if let Some(mut package) = crews.remove(&root) {
-                package.tree.clear();
-                emit_crew(app, &package);
-            }
+            clear_crew(
+                app,
+                sessions,
+                crews,
+                crew_ptys,
+                claude_crews,
+                claude_teams,
+                claude_tails,
+                claude_transcript_nodes,
+                crew_leads,
+                root,
+            );
         }
         Request::Start(project, intent, tx) => {
             if !drivable(&intent) {
