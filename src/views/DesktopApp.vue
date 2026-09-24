@@ -164,6 +164,7 @@ import {
   crewConversationsIn,
   drivenSessions,
   forget,
+  initConversation,
   startConversation,
   statusOf
 } from '../stores/conversation.js'
@@ -628,6 +629,14 @@ const RIGHT_TABS = [
 onMounted(initTracker)
 onMounted(adoptInitialProject)
 onMounted(initTerminals)
+// Crew topology is emitted when a package starts. Subscribe with the desktop
+// shell, before a person can select its first row, so the Agent list never
+// depends on an already-known node to begin receiving that topology.
+onMounted(() => {
+  initConversation().catch((error) => {
+    console.error('[conversation] subscribing to Crew topology failed:', error)
+  })
+})
 /* Starts the clock the session rows' "18h ago" is measured against, and nothing
    else: the list itself is read when the tab is opened, not here. */
 onMounted(initSessions)
