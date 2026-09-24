@@ -811,6 +811,7 @@ fn spawn_session(
                 project: project.to_owned(),
                 work: work.clone(),
                 started_at: started_at.clone(),
+                title: None,
             },
         );
     }
@@ -2342,6 +2343,7 @@ fn note_conversation(app: &AppHandle, id: SessionId, live: &mut Live, conversati
             project: live.project.clone(),
             work: live.work.clone(),
             started_at: live.started_at.clone(),
+            title: None,
         },
     );
 }

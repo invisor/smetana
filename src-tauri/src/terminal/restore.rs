@@ -64,6 +64,13 @@ pub struct Restorable {
     pub project: String,
     pub work: SessionWork,
     pub started_at: String,
+    /// The automatic title the session worker has for this conversation — the
+    /// person's first words, or Claude Code's own `ai-title` once it exists —
+    /// so a row offered back after a restart is named the way the live row
+    /// was. `None` for the PTY road, which never sets one, and for a file
+    /// written before the field existed.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -201,6 +208,7 @@ mod tests {
             project: "/p".to_owned(),
             work: SessionWork::Bare,
             started_at: "2026-09-04T10:00:00Z".to_owned(),
+            title: None,
         }
     }
 
@@ -332,6 +340,28 @@ mod tests {
         std::fs::write(root.join(REGISTRY_PATH), r#"{"version":99,"sessions":[]}"#)
             .expect("write the file");
         assert!(read(&root).sessions.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_record_carries_its_title_through_the_file() {
+        let root = scratch("title");
+        let mut entry = record_for("a");
+        entry.title = Some("Rename the agents panel rows".to_owned());
+        record(&root, entry);
+        let held = read(&root);
+        assert_eq!(held.sessions[0].title.as_deref(), Some("Rename the agents panel rows"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_file_written_before_titles_existed_still_reads() {
+        let root = scratch("old-title");
+        let text = r#"{"version":1,"sessions":[{"sessionId":"a","agent":"claude","cwd":"/p","project":"/p","work":{"kind":"bare"},"startedAt":"2026-09-04T10:00:00Z"}]}"#;
+        std::fs::write(root.join(REGISTRY_PATH), text).expect("write the old file");
+        let held = read(&root);
+        assert_eq!(held.sessions.len(), 1, "an old record is still offered back");
+        assert_eq!(held.sessions[0].title, None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -1903,7 +1903,8 @@ export function installMockBackend() {
           cwd: MOCK_PROJECTS[0],
           project: payload?.project ?? MOCK_PROJECTS[0],
           work: { kind: 'editTask', id: 'bd-3c9d' },
-          startedAt: new Date(Date.now() - 19 * 3600000).toISOString()
+          startedAt: new Date(Date.now() - 19 * 3600000).toISOString(),
+          title: 'Editing bd-3c9d: the acceptance criteria'
         }
       ]
     }

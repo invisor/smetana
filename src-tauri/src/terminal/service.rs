@@ -1351,6 +1351,7 @@ fn handle(
                                 project: session.project.clone(),
                                 work: session.work.clone(),
                                 started_at: session.started_at.clone(),
+                                title: None,
                             },
                         );
                     }
@@ -1423,6 +1424,7 @@ fn handle(
                     project: session.project.clone(),
                     work: session.work.clone(),
                     started_at: session.started_at.clone(),
+                    title: None,
                 },
             );
         }
