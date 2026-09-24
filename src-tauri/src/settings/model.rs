@@ -2207,7 +2207,13 @@ fn sane_agent_names(names: &mut BTreeMap<String, String>) {
         .filter(|(id, _)| !id.is_empty() && id.len() <= MAX_ID_LEN)
         .filter_map(|(id, name)| {
             let name = name.trim();
-            (!name.is_empty() && name.len() <= MAX_AGENT_NAME_LEN)
+            // Characters and not bytes: `TITLE_CHARS`, the ceiling this one
+            // pairs with, counts characters, and a name's own ceiling on the
+            // front end (`AgentList.vue`'s `maxlength`) is UTF-16 code units —
+            // counting bytes here would cut a name of 61 or more Cyrillic
+            // characters that both of those would still accept, silently, on
+            // the next save.
+            (!name.is_empty() && name.chars().count() <= MAX_AGENT_NAME_LEN)
                 .then(|| (id.clone(), name.to_string()))
         })
         .collect();
@@ -4530,6 +4536,31 @@ mod tests {
             state.agent_names,
             BTreeMap::from([("conv-a".to_string(), "Fix the build".to_string())]),
             "a value trims, an empty or overlong one drops, and an empty key drops"
+        );
+    }
+
+    /// The ceiling is characters and not bytes: a Cyrillic name at exactly
+    /// `MAX_AGENT_NAME_LEN` characters is well past that many bytes (each
+    /// character here is two), and a byte count would have dropped it while
+    /// claiming to hold to the same 120 `TITLE_CHARS` cuts the automatic
+    /// title at.
+    #[test]
+    fn an_agent_name_is_counted_in_characters_not_bytes() {
+        let at_limit: String = "б".repeat(MAX_AGENT_NAME_LEN);
+        assert!(at_limit.len() > MAX_AGENT_NAME_LEN, "measured in bytes this already exceeds the cap");
+        let over_limit: String = "б".repeat(MAX_AGENT_NAME_LEN + 1);
+        let mut state = ProjectState {
+            agent_names: BTreeMap::from([
+                ("conv-a".into(), at_limit.clone()),
+                ("conv-b".into(), over_limit),
+            ]),
+            ..ProjectState::default()
+        };
+        state.validate();
+        assert_eq!(
+            state.agent_names,
+            BTreeMap::from([("conv-a".to_string(), at_limit)]),
+            "a name of exactly the character ceiling survives; one past it is dropped"
         );
     }
 
