@@ -35,6 +35,17 @@ pub struct CrewCapabilities {
 }
 
 impl CrewCapabilities {
+    pub const NONE: Self = Self {
+        discover_nodes: false,
+        separate_journals: false,
+        addressed_messages: false,
+    };
+    pub const ALL: Self = Self {
+        discover_nodes: true,
+        separate_journals: true,
+        addressed_messages: true,
+    };
+
     pub const fn supported(self) -> bool {
         self.discover_nodes && self.separate_journals && self.addressed_messages
     }

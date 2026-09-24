@@ -250,6 +250,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
 
         let mut sessions: HashMap<SessionId, Live> = HashMap::new();
         let mut crews: HashMap<u64, CrewPackage> = HashMap::new();
+        let mut next_crew: u64 = 1;
         let mut starting: HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>> = HashMap::new();
         let mut next_id: SessionId = 1;
 
@@ -267,6 +268,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         &app,
                         &mut sessions,
                         &mut crews,
+                        &mut next_crew,
                         &mut next_id,
                         &mut starting,
                         permission.as_ref(),
@@ -780,6 +782,7 @@ fn handle(
     app: &AppHandle,
     sessions: &mut HashMap<SessionId, Live>,
     crews: &mut HashMap<u64, CrewPackage>,
+    next_crew: &mut u64,
     next_id: &mut SessionId,
     starting: &mut HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>>,
     permission: Option<&PermissionServer>,
@@ -788,7 +791,9 @@ fn handle(
 ) {
     match request {
         Request::CrewBegin(project, label, tx) => {
-            let package = CrewPackage::new(project, label);
+            let root = *next_crew;
+            *next_crew = next_crew.saturating_add(1);
+            let package = CrewPackage::new(project, root, label);
             let root = package.root;
             emit_crew(app, &package);
             crews.insert(root, package);

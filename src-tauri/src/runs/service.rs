@@ -53,6 +53,8 @@ use super::report::{self, BatchLine, BatchOutcome, LockRelease};
 use super::summary::{self, Baseline, RunSummary};
 use super::usage::{self, Decision};
 use crate::agents::{Intent, Profile};
+use crate::agents::crew::CrewCapabilities;
+use crate::runs::session::{self, RunSession, Transport};
 use crate::session::service::SessionHandle;
 use crate::terminal::model::{Exit, SessionState};
 use crate::terminal::service::{Request as TerminalRequest, TerminalHandle};
@@ -222,7 +224,7 @@ struct Active {
 #[derive(Clone)]
 enum RunTransport {
     Pty(TerminalHandle),
-    Driven(SessionHandle),
+    Driven { session: SessionHandle, run: RunSession },
 }
 
 /// Sends `Report::Ended` when the loop task ends, whichever way it ends. That
@@ -338,6 +340,78 @@ fn emit(app: &AppHandle, run: &Run) {
     let _ = app.emit("run:state", run);
 }
 
+/// Read only the provider's advertised version before a Crew package can
+/// acquire work. The dynamic half (Claude's team directory, Codex's app-server
+/// initialize reply) is checked by the driven transport before it starts its
+/// lead; this early check prevents a known-old executable from ever reaching
+/// the board loop.
+fn select_run_session(
+    app: &AppHandle,
+    settings: &RunSettings,
+    agent: &str,
+) -> Result<RunSession, RunError> {
+    let Some(profile) = crate::agents::resolve(agent) else {
+        return Err(RunError::CrewUnsupported(format!(
+            "the configured run provider '{agent}' is unavailable"
+        )));
+    };
+    let panel = crate::settings::conversation_panel(app);
+    if settings.mode != super::model::RunMode::Supervised || !panel {
+        return session::select(
+            settings.mode,
+            panel,
+            profile.label(),
+            "not checked",
+            CrewCapabilities::NONE,
+        )
+        .map_err(|error| RunError::CrewUnsupported(error.to_string()));
+    }
+    let version = provider_version(profile).map_err(RunError::CrewUnsupported)?;
+    let capabilities = match profile.id() {
+        "claude" if claude_version_supported(&version) => CrewCapabilities::ALL,
+        "codex" if codex_version_supported(&version) => CrewCapabilities::ALL,
+        "claude" => CrewCapabilities::NONE,
+        "codex" => CrewCapabilities::NONE,
+        _ => CrewCapabilities::NONE,
+    };
+    session::select(settings.mode, panel, profile.label(), version, capabilities)
+        .map_err(|error| RunError::CrewUnsupported(error.to_string()))
+}
+
+fn provider_version(profile: &dyn Profile) -> Result<String, String> {
+    let output = std::process::Command::new(profile.binary())
+        .arg("--version")
+        .output()
+        .map_err(|error| format!("{} version could not be checked: {error}", profile.label()))?;
+    if !output.status.success() {
+        return Err(format!("{} version could not be checked", profile.label()));
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if version.is_empty() {
+        return Err(format!("{} version could not be checked", profile.label()));
+    }
+    Ok(version)
+}
+
+fn version_at_least(found: &str, minimum: (u32, u32, u32)) -> bool {
+    let mut values = found
+        .split(|character: char| !character.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse::<u32>().ok());
+    matches!(
+        (values.next(), values.next(), values.next()),
+        (Some(major), Some(minor), Some(patch)) if (major, minor, patch) >= minimum
+    )
+}
+
+fn claude_version_supported(version: &str) -> bool {
+    version_at_least(version, crate::agents::claude_crew::MIN_VERSION)
+}
+
+fn codex_version_supported(version: &str) -> bool {
+    version_at_least(version, crate::agents::codex_crew::MIN_VERSION)
+}
+
 fn handle(
     app: &AppHandle,
     active: &mut HashMap<u64, Active>,
@@ -450,6 +524,17 @@ fn handle(
             // come to disagree.
             let (agent, _) =
                 crate::settings::role_pair(app, Some(&project), crate::agents::Role::RunLead);
+            // Freeze the transport while no task has been claimed and no
+            // worktree has been made. In particular, an unsupported Crew
+            // provider cannot fall through to the terminal TUI later in the
+            // loop: that would put two incompatible UIs over one package.
+            let run_session = match select_run_session(app, &settings, &agent) {
+                Ok(session) => session,
+                Err(error) => {
+                    let _ = tx.send(Err(error));
+                    return;
+                }
+            };
             // Beside it and read the same way, for the same reason: a run that
             // silently changed its mind about worktrees between batches would
             // leave half a night's checkouts on the disk and sweep the other
@@ -497,6 +582,7 @@ fn handle(
                 tracker.clone(),
                 terminal.clone(),
                 session.clone(),
+                run_session,
                 report.clone(),
                 stop_rx,
                 // Owned rather than borrowed: `drive` is spawned onto a task
@@ -784,6 +870,7 @@ async fn drive(
     tracker: TrackerHandle,
     terminal: TerminalHandle,
     session: SessionHandle,
+    run_session: RunSession,
     report: mpsc::UnboundedSender<Report>,
     mut stop: mpsc::Receiver<()>,
     // Where a headless probe of this run's own harness runs — the gate and
@@ -792,11 +879,12 @@ async fn drive(
     // as an unreadable probe: never a reason to hold the run up.
     probe: Option<PathBuf>,
 ) {
-    // Auto, Solo and panel-off Crew begin on the unchanged PTY transport.
-    // `runs::session::select` replaces this construction before the first
-    // board/claim when supervised Crew has a conversation panel.
-    let transport = RunTransport::Pty(terminal);
-    let _driven_handle = session;
+    // The choice was made in the worker before this task was spawned. It is
+    // intentionally not revisited when settings change during a long run.
+    let transport = match run_session.transport {
+        Transport::Pty => RunTransport::Pty(terminal),
+        Transport::DrivenCrew => RunTransport::Driven { session, run: run_session },
+    };
     let say = |run: &Run| {
         let _ = report.send(Report::State { token, run: Box::new(run.clone()) });
     };

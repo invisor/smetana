@@ -18,9 +18,11 @@ pub struct CrewPackage {
 }
 
 impl CrewPackage {
-    pub fn new(project: String, label: impl Into<String>) -> Self {
+    /// The session worker allocates this id globally. A tree-local `1` for
+    /// every package would replace another package in the worker map.
+    pub fn new(project: String, root: CrewNodeId, label: impl Into<String>) -> Self {
         let mut tree = CrewTree::default();
-        let root = tree.root(label);
+        tree.root_with_id(root, label);
         Self { project, root, tree }
     }
 }
@@ -73,6 +75,14 @@ pub struct CrewTree {
 impl CrewTree {
     pub fn root(&mut self, label: impl Into<String>) -> CrewNodeId {
         let id = self.mint();
+        self.root_with_id(id, label);
+        id
+    }
+
+    /// Register a public root allocated by the session worker. Provider ids
+    /// remain private, while the root namespaces the stable Vue-facing ids.
+    pub fn root_with_id(&mut self, id: CrewNodeId, label: impl Into<String>) {
+        self.next = self.next.max(id);
         self.nodes.insert(
             id,
             CrewNode {
@@ -84,7 +94,6 @@ impl CrewTree {
                 can_message: true,
             },
         );
-        id
     }
 
     /// Bind a provider lead identity only after its structured runtime has
@@ -237,5 +246,14 @@ mod tests {
             Some(child)
         );
         assert_eq!(tree.node(child).unwrap().parent, Some(parent));
+    }
+
+    #[test]
+    fn worker_allocated_roots_do_not_collide_between_packages() {
+        let first = CrewPackage::new("/one".into(), 41, "Lead");
+        let second = CrewPackage::new("/two".into(), 42, "Lead");
+        assert_ne!(first.root, second.root);
+        assert!(first.tree.node(41).is_some());
+        assert!(second.tree.node(42).is_some());
     }
 }
