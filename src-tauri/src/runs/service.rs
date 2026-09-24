@@ -2761,7 +2761,24 @@ async fn spawn_batch(
             remove_worktrees,
         };
     let RunTransport::Pty(terminal) = transport else {
-        return Err("the selected driven Crew transport has no terminal fallback".into());
+        let RunTransport::Driven {
+            session,
+            run: _run_session,
+        } = transport
+        else {
+            unreachable!()
+        };
+        let (tx, rx) = oneshot::channel();
+        session
+            .0
+            .send(crate::session::service::Request::CrewStart(run.project.clone(), intent, tx))
+            .await
+            .map_err(|_| "the driven Crew worker is not running".to_string())?;
+        return match rx.await {
+            Ok(Ok((_root, lead))) => Ok(lead),
+            Ok(Err(error)) => Err(error.to_string()),
+            Err(_) => Err("the driven Crew worker did not answer".into()),
+        };
     };
     terminal
         .0

@@ -115,6 +115,15 @@ pub enum Request {
     /// A run transport creates a Smetana-owned Crew root before provider ids
     /// exist. Provider discovery later fills it through `CrewApply`.
     CrewBegin(String, String, oneshot::Sender<u64>),
+    /// Start a driven lead and register its Smetana-owned root in one worker
+    /// pass. It intentionally bypasses `Request::Start`'s ordinary Run
+    /// refusal: a Crew Run is not a normal conversation, but its Codex
+    /// app-server transport is still a structured protocol, never a terminal.
+    CrewStart(
+        String,
+        Intent,
+        oneshot::Sender<Result<(u64, SessionId), SessionError>>,
+    ),
     CrewTree(u64, oneshot::Sender<Option<Vec<CrewNode>>>),
     CrewApply(u64, crate::agents::crew::ProviderNode),
     CrewClear(u64),
@@ -798,6 +807,37 @@ fn handle(
             emit_crew(app, &package);
             crews.insert(root, package);
             let _ = tx.send(root);
+        }
+        Request::CrewStart(project, intent, tx) => {
+            let id = *next_id;
+            *next_id += 1;
+            let (agent, _) = crate::settings::role_model(app, Some(&project), &intent, None);
+            // Claude's native teams require its interactive runtime and are
+            // deliberately not sent through ClaudeDriver (`-p`). The caller
+            // gets an explicit refusal until that interactive transport has
+            // established its team config, rather than a deceptive TUI
+            // fallback or a fake pipe session.
+            if agent == "claude" {
+                let _ = tx.send(Err(SessionError::NotDriven(
+                    "Claude Code Crew requires the interactive agent-team transport".into(),
+                )));
+                return;
+            }
+            match spawn_session(app, id, &project, intent, permission, chunks) {
+                Ok(live) => {
+                    let package = CrewPackage::new(project, id, "Crew lead");
+                    emit_crew(app, &package);
+                    crews.insert(id, package);
+                    sessions.insert(id, live);
+                    let _ = tx.send(Ok((id, id)));
+                }
+                Err(error) => {
+                    if let Some(server) = permission {
+                        server.forget(id);
+                    }
+                    let _ = tx.send(Err(error));
+                }
+            }
         }
         Request::CrewTree(root, tx) => {
             let _ = tx.send(crews.get(&root).map(|package| package.tree.nodes()));
