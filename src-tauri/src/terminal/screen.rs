@@ -23,7 +23,7 @@ pub struct Screen {
     parser: vt100::Parser<Bell>,
 }
 
-/// The SGR presentation of a visible row's first glyph.
+/// The SGR presentation of a visible row's marker and header span.
 ///
 /// This deliberately carries only the properties Codex's transcript reader
 /// needs. The ordinary text projection stays attribute-free for quiet-state
@@ -31,16 +31,21 @@ pub struct Screen {
 /// busy again.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EntryStyle {
+    /// The first non-whitespace glyph: Codex's `•`, `◦`, or `›` marker.
     pub dim: bool,
     pub bold: bool,
     pub foreground: bool,
+    /// The first ASCII word glyph after a marker. Codex gives the `Explored`
+    /// header this bold span while leaving its own bullet dim/default.
+    pub header_dim: bool,
+    pub header_bold: bool,
+    pub header_foreground: bool,
 }
 
 impl EntryStyle {
-    /// Codex 0.146 and 0.155 draw completed tools as coloured bold bullets;
-    /// plain assistant messages remain default-colour dim bullets. This is a
-    /// renderer contract, not a classification of the English that follows.
-    pub fn is_codex_activity(self) -> bool {
+    /// Codex draws completed `Ran` and `Called` tools as coloured bold bullets.
+    /// This is a renderer contract, not a classification of English prose.
+    pub fn is_coloured_bold_marker(self) -> bool {
         self.bold && self.foreground
     }
 }
@@ -90,7 +95,7 @@ impl Screen {
     }
 }
 
-/// The SGR presentation of each visible row's first glyph.
+/// The SGR presentation of each visible row's marker and header span.
 ///
 /// `contents_formatted` emits a sparse grid with cursor positions and CRLF
 /// between adjacent rows. Cursor-position CSI commands keep the row counter
@@ -99,6 +104,7 @@ impl Screen {
 fn entry_style(formatted: &[u8], rows: usize) -> Vec<EntryStyle> {
     let mut out = vec![EntryStyle::default(); rows];
     let mut seen = vec![false; rows];
+    let mut header_seen = vec![false; rows];
     let mut row = 0;
     let mut style = EntryStyle::default();
     let mut at = 0;
@@ -157,6 +163,11 @@ fn entry_style(formatted: &[u8], rows: usize) -> Vec<EntryStyle> {
                 if !seen[row] && !byte.is_ascii_whitespace() {
                     seen[row] = true;
                     out[row] = style;
+                } else if seen[row] && !header_seen[row] && byte.is_ascii_alphanumeric() {
+                    header_seen[row] = true;
+                    out[row].header_dim = style.dim;
+                    out[row].header_bold = style.bold;
+                    out[row].header_foreground = style.foreground;
                 }
                 at += 1;
             }
@@ -187,16 +198,49 @@ mod tests {
         }
         let (assistant, assistant_style) = capture(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/codex-0.155-completed-assistant-question.ansi")));
         assert_eq!(assistant[0].trim_end(), "• Read this? Then confirm.");
-        assert_eq!(assistant_style[0], EntryStyle { dim: true, bold: false, foreground: false });
+        assert_eq!(
+            assistant_style[0],
+            EntryStyle { dim: true, bold: false, foreground: false, ..EntryStyle::default() }
+        );
         for (raw, text) in [
             (include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/codex-0.155-completed-ran-question.ansi")).as_slice(), "• Ran rg 'what?' src"),
             (include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/codex-0.155-completed-called-question.ansi")).as_slice(), "• Called server.tool({\"document\":\"what?\"})"),
-            (include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/codex-0.155-completed-explored-question.ansi")).as_slice(), "• Explored what?"),
         ] {
             let (lines, styles) = capture(raw);
             assert_eq!(lines[0].trim_end(), text);
-            assert!(styles[0].is_codex_activity(), "activity style was lost: {text}");
+            assert!(styles[0].is_coloured_bold_marker(), "activity style was lost: {text}");
         }
+        let (explored, explored_style) = capture(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/codex-0.155-completed-explored-question.ansi")));
+        assert_eq!(explored[0].trim_end(), "• Explored");
+        assert_eq!(explored[2].trim(), "└ Read what?");
+        assert_eq!(
+            explored_style[0],
+            EntryStyle {
+                dim: true,
+                bold: false,
+                foreground: false,
+                header_dim: true,
+                header_bold: true,
+                header_foreground: false,
+            }
+        );
+    }
+
+    #[test]
+    fn entry_style_reads_colour_forms_and_sparse_row_positions() {
+        fn marker(sgr: &[u8]) -> EntryStyle {
+            let mut screen = Screen::new(40, 6);
+            let mut raw = b"\x1b[4;1H".to_vec();
+            raw.extend_from_slice(sgr);
+            raw.extend_from_slice(b"\xe2\x80\xa2 header");
+            screen.feed(&raw);
+            let (_, styles) = screen.lines_with_entry_style();
+            styles[3]
+        }
+        let reset = marker(b"\x1b[1;31m\x1b[39m");
+        assert!(reset.bold && !reset.foreground, "SGR 39 did not restore the default foreground");
+        assert!(marker(b"\x1b[1;38;5;208m").is_coloured_bold_marker());
+        assert!(marker(b"\x1b[1;38;2;1;2;3m").is_coloured_bold_marker());
     }
 
     #[test]

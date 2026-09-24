@@ -896,10 +896,11 @@ fn is_turn(line: &str) -> bool {
 /// A completed turn ends at an empty composer. Its immediately preceding
 /// top-level transcript entry must be a filled assistant bullet; a later
 /// person entry or hollow working bullet means the previous reply is already
-/// stale. Codex's assistant bullet stays default-colour dim, whereas a
-/// completed tool/activity bullet is coloured and bold; that visual
-/// distinction, not the English word that follows it, fences tool output
-/// before the shared paragraph predicate sees its `?`.
+/// stale. Codex's assistant bullet stays default-colour dim. `Ran` and
+/// `Called` use a coloured bold bullet; `Explored` keeps the dim bullet but
+/// gives its header a bold span and draws a tree detail below it. Those
+/// renderer structures, not the English word that follows them, fence tool
+/// output before the shared paragraph predicate sees its `?`.
 fn completed_text_question(screen: &[String], entry_style: &[crate::terminal::screen::EntryStyle]) -> bool {
     let Some(composer) = screen.iter().rposition(|line| line.trim() == CURSOR.to_string()) else {
         return false;
@@ -913,14 +914,15 @@ fn completed_text_question(screen: &[String], entry_style: &[crate::terminal::sc
     let Some(first) = screen[turn].strip_prefix('\u{2022}').map(str::trim_start) else {
         return false;
     };
-    if entry_style.get(turn).copied().is_some_and(crate::terminal::screen::EntryStyle::is_codex_activity) {
-        return false;
-    }
-    let mut text = first.to_owned();
     let end = screen[turn + 1..composer]
         .iter()
         .position(|line| is_entry(line))
         .map_or(composer, |offset| turn + 1 + offset);
+    let style = entry_style.get(turn).copied().unwrap_or_default();
+    if style.is_coloured_bold_marker() || explored_tree(style, &screen[turn + 1..end]) {
+        return false;
+    }
+    let mut text = first.to_owned();
     for line in &screen[turn + 1..end] {
         if !text.is_empty() {
             text.push('\n');
@@ -928,6 +930,20 @@ fn completed_text_question(screen: &[String], entry_style: &[crate::terminal::sc
         text.push_str(line);
     }
     crate::session::model::text_waits_for_reply(&text)
+}
+
+/// `Explored` is the one completed Codex activity whose marker looks like an
+/// assistant's dim/default bullet. Its bold header is followed by the TUI's
+/// indented tree (`└`, `├`, or `│`), which ordinary assistant prose — even a
+/// bold introduction — does not own.
+fn explored_tree(style: crate::terminal::screen::EntryStyle, detail: &[String]) -> bool {
+    style.dim
+        && !style.foreground
+        && style.header_bold
+        && !style.header_foreground
+        && detail.iter().any(|line| {
+            matches!(line.trim_start().chars().next(), Some('\u{2514}' | '\u{251C}' | '\u{2502}'))
+        })
 }
 
 /// The whole of an option's label, head row and any rows it wrapped onto.
