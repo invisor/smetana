@@ -21,6 +21,7 @@ import { listen } from '@tauri-apps/api/event'
    `components/agent/drivenRows.js` — see `components/agent/sessionWork.js`'s
    own header for why it lives outside every store. */
 import { workOf } from '../components/agent/sessionWork.js'
+import { crewRows } from '../components/agent/crewTree.js'
 /* The one thing this store reads out of another, and it is read inside
    `canDrive` alone: whether the person wants the conversation panel at all.
    Nothing happens at import time — `settings.js` reaches Tauri only from its
@@ -81,6 +82,34 @@ export const conversationState = reactive({
    drop below safe: `session:events` is emitted for every session of every
    project, attached or not. */
 const conversations = reactive(new Map())
+
+/* One structured snapshot per backend-owned Crew package. A Crew node is not
+   put in `started`: that array owns ordinary protocol sessions and assumes its
+   numeric id can be passed to `session_attach`. The composite key below keeps
+   the package root in the identity all the way to Vue. */
+const crews = reactive(new Map())
+
+export const crewAgentsIn = (project) =>
+  [...crews.values()]
+    .filter((crew) => crew.project === project)
+    .flatMap((crew) =>
+      crewRows(crew.nodes).map((node) => ({
+        id: `crew:${crew.root}:${node.id}`,
+        crewRoot: crew.root,
+        crewNode: node.id,
+        project: crew.project,
+        state: statusOf(node.state),
+        elapsed: '',
+        conversation: null,
+        work: { kind: 'run' },
+        label: node.label,
+        tasks: [],
+        claimed: [],
+        clearable: false,
+        canMessage: node.canMessage,
+        depth: node.depth
+      }))
+    )
 
 /* The unsent words, kept beside the conversations rather than inside them, so
    that they outlive `detach`. A journal can be taken again from the worker
@@ -416,6 +445,7 @@ async function register() {
   try {
     made.push(await listenToEvents())
     made.push(await listenToState())
+    made.push(await listenToCrew())
   } catch (err) {
     for (const dispose of made) {
       /* Unsubscribing is itself an `invoke`, and can be refused in exactly the
@@ -512,6 +542,21 @@ function listenToState() {
     const held = conversations.get(id)
     if (!held) return
     held.state = state
+  })
+}
+
+/* The backend emits complete topology snapshots. Applying a snapshot rather
+   than incremental provider ids is important: provider ids never arrive here,
+   and a late node update cannot make Vue retain an orphan under a stale key. */
+function listenToCrew() {
+  return listen('crew:tree', (event) => {
+    const { project, root, nodes } = event.payload ?? {}
+    if (typeof project !== 'string' || !Number.isFinite(root) || !Array.isArray(nodes)) return
+    if (!nodes.length) {
+      crews.delete(root)
+      return
+    }
+    crews.set(root, { project, root, nodes })
   })
 }
 

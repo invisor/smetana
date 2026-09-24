@@ -160,6 +160,7 @@ import {
   conversationFor,
   conversationState,
   conversationsIn,
+  crewAgentsIn,
   drivenSessions,
   forget,
   startConversation,
@@ -2896,6 +2897,11 @@ const drivenHere = computed(() =>
   drivenAgents.value.filter((session) => session.project === activePath.value)
 )
 
+/* Crew nodes are already ordered parent-before-child by the backend snapshot.
+   Keep them outside persisted `agentOrder`: a person may arrange independent
+   sessions, but cannot drag a native teammate out of its provider-owned team. */
+const crewHere = computed(() => crewAgentsIn(activePath.value))
+
 /* What every project is doing, the two kinds of session counted together: the
    rail's map with the driven sessions folded into it.
 
@@ -2931,13 +2937,14 @@ const agentArrangement = ref([])
    `stores/terminals.js` deliberately — `drivenRows.js` carries the whole of
    why. What the panel is handed is one flat list, so a driven row is dragged,
    pinned and closed by the same rules every other row is. */
-const orderedAgentRows = computed(() =>
-  orderAgents(
+const orderedAgentRows = computed(() => [
+  ...orderAgents(
     mergeAgentRows(agentRows.value, drivenHere.value),
     agentArrangement.value.length ? agentArrangement.value : project.agentOrder,
     project.pinnedAgents
-  )
-)
+  ),
+  ...crewHere.value
+])
 
 /* A drag, applied. Two writes out of one answer, and neither is derivable from
    the other: the window's own sequence, which holds every row that was on
