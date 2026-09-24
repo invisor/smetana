@@ -365,7 +365,12 @@ mod tests {
     #[test]
     fn first_words_collapse_whitespace_and_stop_at_the_budget() {
         assert_eq!(first_words("  Rename\n\nthe   rows ").as_deref(), Some("Rename the rows"));
-        let long = "слово ".repeat(40);
+        // "café " is 5 characters wide and multibyte on its own account (the
+        // é), which is the property this test needs: repeated 48 times it is
+        // 240 characters, and the 120-character cut lands on the 24th "café
+        // " group's own space, so `nth(TITLE_CHARS)` must be counting
+        // characters rather than bytes for the boundary to land there at all.
+        let long = "café ".repeat(48);
         let title = first_words(&long).expect("a long draft still titles");
         assert_eq!(title.chars().count(), TITLE_CHARS - 1, "cut on a character boundary, trailing space trimmed");
     }

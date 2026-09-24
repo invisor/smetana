@@ -1342,6 +1342,16 @@ fn handle(
                     // everything that is not a person's own agent, so this is
                     // the whole of what decides who gets a record.
                     if let Some(session_id) = conversation {
+                        // This road never sets a title of its own — it carries
+                        // only runs and unsupported harnesses — but a resume
+                        // falling through to it reopens the very id a driven
+                        // session may have already titled, and a fresh `None`
+                        // here would erase that title rather than merely fail
+                        // to add one. `existing_title` is what tells the two
+                        // cases apart: nothing for a session that never had a
+                        // name, the name back unchanged for one that did.
+                        let title =
+                            super::restore::existing_title(Path::new(&session.project), &session_id);
                         super::restore::record(
                             Path::new(&session.project),
                             super::restore::Restorable {
@@ -1351,7 +1361,7 @@ fn handle(
                                 project: session.project.clone(),
                                 work: session.work.clone(),
                                 started_at: session.started_at.clone(),
-                                title: None,
+                                title,
                             },
                         );
                     }
@@ -1414,7 +1424,9 @@ fn handle(
             // an id to key it by: this is what puts the session in
             // `.smetana/agents.json` and offers it back in the sidebar after a
             // restart. Same fields as the spawn-time record one arm above — the
-            // only difference is when the id was known.
+            // only difference is when the id was known, and the same title
+            // guard for the same reason.
+            let title = super::restore::existing_title(Path::new(&session.project), &conversation);
             super::restore::record(
                 Path::new(&session.project),
                 super::restore::Restorable {
@@ -1424,7 +1436,7 @@ fn handle(
                     project: session.project.clone(),
                     work: session.work.clone(),
                     started_at: session.started_at.clone(),
-                    title: None,
+                    title,
                 },
             );
         }

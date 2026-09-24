@@ -2833,7 +2833,13 @@ function selectAgent(id) {
      still there to press once the agent is switched back. */
   const offered = agentRows.value.find((row) => row.id === id && row.restored)
   if (offered) {
-    const record = { id: offered.id, cwd: offered.cwd, title: null }
+    /* `offered.title` is the worker's own automatic title, carried on the
+       restored row exactly as `stores/terminals.js`'s `describeWork` put it
+       there — the record's `title`, in the record's own words. Handed to the
+       resume intent rather than left `null`, or the spawn behind this click
+       would open on no title of its own and rewrite the very record this row
+       came from without it. */
+    const record = { id: offered.id, cwd: offered.cwd, title: offered.title ?? null }
     if (!resumeRefused(record)) resumeSession(record)
     return
   }

@@ -655,6 +655,32 @@ fn spawn_claude_crew(
         .map_err(|error| SessionError::Spawn(error.to_string()))
 }
 
+/// A resume's own title, if it has one — the answer `spawn_session` seeds
+/// `Live::title` with, kept as a function of its own so it can be pinned
+/// without spawning a session at all.
+///
+/// `Intent::opening_words()` has nothing for `ResumeSession`: a reopened
+/// conversation speaks no fresh words to reduce, so left alone the title
+/// `spawn_session` would open a resume on is `None` — and `record_live`
+/// further down would then write that emptiness straight over whatever this
+/// project's own record for the same id already held, which is exactly the
+/// defect this function exists to close. The intent's own `title` is the
+/// caller's copy — the agents panel's offline row, or the Sessions tab's own
+/// read of the transcript — and `existing_title` is the fallback for a
+/// caller that sent none, reading the very record this session is about to
+/// rewrite. A fork is left out on purpose: its own transcript is one this
+/// app has not read yet, so neither source means anything for it, the same
+/// reason `Intent::work()` throws its own `fork` flag away rather than
+/// drawing a second caption from it.
+fn resume_title(intent: &Intent, project: &Path) -> Option<String> {
+    match intent {
+        Intent::ResumeSession { id, title, fork: false, .. } => {
+            title.clone().or_else(|| crate::terminal::restore::existing_title(project, id))
+        }
+        _ => None,
+    }
+}
+
 /// Start a child for this session, or say why not.
 fn spawn_session(
     app: &AppHandle,
@@ -745,6 +771,10 @@ fn spawn_session(
     // succeeded: it is what captions the row, exactly as it does one worker
     // over, so a resumed conversation is not drawn as a bare agent.
     let work = intent.work();
+    // A resume's own title — see `resume_title`'s own header for why this has
+    // to be asked at all, rather than left to the same reduction every other
+    // intent's opening words go through.
+    let resume_title = resume_title(&intent, Path::new(project));
     // The same walk the PTY worker makes for a setup session, through the one
     // function both call.
     let facts = crate::runs::setup_facts::for_intent(Path::new(project), &intent);
@@ -839,11 +869,14 @@ fn spawn_session(
         started_at,
         // The person's first words, if there were any — the opening prose a
         // filing or an edit carries. `Bare`'s own words, when there are none
-        // here, arrive later through `Request::Send`. A harness whose own
-        // transcript can carry Claude Code's `ai-title` starts unsettled, so
-        // that title is still taken once the first turn completes; anything
-        // else keeps whatever words it opened with for good.
-        title: opening_text.as_deref().and_then(super::model::first_words),
+        // here, arrive later through `Request::Send`. A resume has neither,
+        // so `resume_title` — computed above, before the intent moved into
+        // `launch` — takes precedence over a reduction that would answer
+        // `None` for it anyway. A harness whose own transcript can carry
+        // Claude Code's `ai-title` starts unsettled, so that title is still
+        // taken once the first turn completes; anything else keeps whatever
+        // words it opened with for good.
+        title: resume_title.or_else(|| opening_text.as_deref().and_then(super::model::first_words)),
         title_settled: profile.id() != "claude",
     };
 
@@ -1862,11 +1895,14 @@ fn handle(
                 ],
             );
             // A `Bare` session opens with no title — `Intent::opening_words()`
-            // had nothing to give it — so the first message a person actually
-            // sends is what names the row instead. Only the first: a title
-            // already set, whichever of the two sources gave it, is never
-            // overwritten by a later message.
-            if live.title.is_none() {
+            // had nothing to give it, being the one intent with no draft, no
+            // issue and no repository behind it — so the first message a
+            // person actually sends is what names the row instead. Only the
+            // first: a title already set, whichever of the two sources gave
+            // it, is never overwritten by a later message. See
+            // `wants_first_words_title` for why this is gated on the work
+            // rather than the title alone.
+            if wants_first_words_title(&live.title, &live.work) {
                 if let Some(title) = super::model::first_words(&text) {
                     live.title = Some(title);
                     emit_state(app, id, live);
@@ -2319,6 +2355,25 @@ fn append(app: &AppHandle, id: SessionId, live: &mut Live, kinds: Vec<EventKind>
 /// `note_conversation` and the first `Request::Send` that learns a `Bare`
 /// session's title, so the three cannot drift into carrying different fields
 /// on the same event.
+/// Whether the first `Request::Send` a session receives should be read as its
+/// title. A `Bare` session is the one intent with nothing of its own to give
+/// `first_words` at the spawn — no draft, no issue, no repository — so its
+/// first message is the only thing left to name the row by. Every button
+/// intent (`EditTask`, `ResolveTask`, `FixTask`, a conflict, a setup, a
+/// tracker repair) opens untitled too, by design, and keeps its id-in-mono
+/// caption for good: gating on the work rather than on an absent title alone
+/// is what stops a Codex session answering "yes, go ahead" to a permission
+/// prompt from being retitled by that very sentence. A resumed or forked
+/// session is `ResumeSession`, never `Bare`, so this never overwrites the
+/// title `resume_title` already seeded either.
+///
+/// Kept apart from the state it reads so it can be pinned without building a
+/// `Live` — a `Talking` inside it holds a `Box<dyn Driver>`, which nothing in
+/// this module's tests constructs.
+fn wants_first_words_title(title: &Option<String>, work: &crate::terminal::model::SessionWork) -> bool {
+    title.is_none() && matches!(work, crate::terminal::model::SessionWork::Bare)
+}
+
 fn emit_state(app: &AppHandle, id: SessionId, live: &Live) {
     let _ = app.emit(
         "session:state",
@@ -2408,6 +2463,102 @@ fn note_conversation(app: &AppHandle, id: SessionId, live: &mut Live, conversati
 mod tests {
     use super::*;
     use crate::agents::Intent;
+
+    /// A scratch project of its own per test, the same shape
+    /// `terminal::restore`'s own tests use, so a title written by one test
+    /// cannot be read back by another running in parallel.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("smetana-resume-title-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".smetana")).expect("create the project folder");
+        dir
+    }
+
+    fn resume(id: &str, title: Option<&str>, fork: bool) -> Intent {
+        Intent::ResumeSession {
+            id: id.to_owned(),
+            cwd: "/p".to_owned(),
+            title: title.map(str::to_owned),
+            fork,
+        }
+    }
+
+    #[test]
+    fn a_resumed_session_opens_on_the_title_the_caller_already_sent() {
+        let root = scratch("caller");
+        assert_eq!(
+            resume_title(&resume("a", Some("Fix the login redirect"), false), &root).as_deref(),
+            Some("Fix the login redirect")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_resumed_session_with_no_title_of_its_own_reads_the_existing_record() {
+        let root = scratch("record");
+        crate::terminal::restore::record(
+            &root,
+            crate::terminal::restore::Restorable {
+                session_id: "a".to_owned(),
+                agent: "claude".to_owned(),
+                cwd: "/p".to_owned(),
+                project: root.to_string_lossy().into_owned(),
+                work: crate::terminal::model::SessionWork::Bare,
+                started_at: "2026-09-04T10:00:00Z".to_owned(),
+                title: Some("Fix the login redirect".to_owned()),
+            },
+        );
+        assert_eq!(resume_title(&resume("a", None, false), &root).as_deref(), Some("Fix the login redirect"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_fork_seeds_no_title_from_either_source() {
+        let root = scratch("fork");
+        crate::terminal::restore::record(
+            &root,
+            crate::terminal::restore::Restorable {
+                session_id: "a".to_owned(),
+                agent: "claude".to_owned(),
+                cwd: "/p".to_owned(),
+                project: root.to_string_lossy().into_owned(),
+                work: crate::terminal::model::SessionWork::Bare,
+                started_at: "2026-09-04T10:00:00Z".to_owned(),
+                title: Some("Fix the login redirect".to_owned()),
+            },
+        );
+        assert_eq!(resume_title(&resume("a", Some("Fix the login redirect"), true), &root), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn nothing_this_road_never_started_seeds_a_title() {
+        let root = scratch("bare");
+        assert_eq!(resume_title(&Intent::Bare, &root), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_bare_session_with_no_title_yet_wants_its_first_message_as_one() {
+        use crate::terminal::model::SessionWork;
+        assert!(wants_first_words_title(&None, &SessionWork::Bare));
+    }
+
+    #[test]
+    fn a_bare_session_that_already_has_a_title_does_not_want_a_second_one() {
+        use crate::terminal::model::SessionWork;
+        assert!(!wants_first_words_title(&Some("Fix the login redirect".to_owned()), &SessionWork::Bare));
+    }
+
+    /// The regression this gate exists for: a Codex session driving a button
+    /// intent — here, editing a task — must not be retitled by the first
+    /// thing a person types in answer to a permission prompt.
+    #[test]
+    fn an_untitled_button_intent_does_not_want_the_first_message_as_a_title() {
+        use crate::terminal::model::SessionWork;
+        assert!(!wants_first_words_title(&None, &SessionWork::EditTask { id: "x-1".to_owned() }));
+    }
 
     #[test]
     fn claude_fresh_baseline_bootstraps_then_admits_one_real_brief() {
