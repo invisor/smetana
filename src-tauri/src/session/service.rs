@@ -33,7 +33,7 @@
 //! whether a session is recorded and under what name, asked from here rather
 //! than restated.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use portable_pty::CommandBuilder;
@@ -261,6 +261,9 @@ pub fn start(app: AppHandle) -> SessionHandle {
         let mut sessions: HashMap<SessionId, Live> = HashMap::new();
         let mut crews: HashMap<u64, CrewPackage> = HashMap::new();
         let mut crew_ptys: HashMap<u64, crate::terminal::pty::Pty> = HashMap::new();
+        let mut claude_crews: HashSet<u64> = HashSet::new();
+        let mut claude_teams: HashMap<u64, PathBuf> = HashMap::new();
+        let mut crew_tick = tokio::time::interval(std::time::Duration::from_millis(300));
         // Session id -> public Crew root for the special Codex lead whose
         // normal app-server stream also carries thread lifecycle records.
         let mut crew_leads: HashMap<SessionId, u64> = HashMap::new();
@@ -286,6 +289,8 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         &mut sessions,
                         &mut crews,
                         &mut crew_ptys,
+                        &mut claude_crews,
+                        &mut claude_teams,
                         &mut crew_leads,
                         &mut next_crew,
                         &mut next_id,
@@ -312,6 +317,9 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         continue;
                     };
                     question(&app, &mut sessions, asked);
+                }
+                _ = crew_tick.tick(), if !claude_crews.is_empty() => {
+                    refresh_claude_crews(&app, &mut crews, &claude_crews, &mut claude_teams);
                 }
             }
         }
@@ -869,11 +877,39 @@ fn absorb_codex_crew(
     emit_crew(app, package);
 }
 
+/// Poll the documented Claude team config. This does not touch the PTY at all:
+/// the config is the runtime's structured source for members and lifecycle.
+/// A project with two indistinguishable configs is left unchanged until one is
+/// unambiguous rather than attaching a package to its neighbour.
+fn refresh_claude_crews(
+    app: &AppHandle,
+    crews: &mut HashMap<u64, CrewPackage>,
+    roots: &HashSet<u64>,
+    teams: &mut HashMap<u64, PathBuf>,
+) {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
+    for root in roots {
+        let Some(package) = crews.get_mut(root) else { continue };
+        let candidates = crate::agents::claude_crew::teams_for_project(&home, Path::new(&package.project));
+        if candidates.len() != 1 {
+            continue;
+        }
+        let (team, config) = candidates.into_iter().next().expect("one candidate");
+        teams.insert(*root, team);
+        for node in crate::agents::claude_crew::members(&config) {
+            package.tree.upsert(*root, node);
+        }
+        emit_crew(app, package);
+    }
+}
+
 fn handle(
     app: &AppHandle,
     sessions: &mut HashMap<SessionId, Live>,
     crews: &mut HashMap<u64, CrewPackage>,
     crew_ptys: &mut HashMap<u64, crate::terminal::pty::Pty>,
+    claude_crews: &mut HashSet<u64>,
+    claude_teams: &mut HashMap<u64, PathBuf>,
     crew_leads: &mut HashMap<SessionId, u64>,
     next_crew: &mut u64,
     next_id: &mut SessionId,
@@ -908,6 +944,7 @@ fn handle(
                         emit_crew(app, &package);
                         crews.insert(id, package);
                         crew_ptys.insert(id, pty);
+                        claude_crews.insert(id);
                         let _ = tx.send(Ok((id, id)));
                     }
                     Err(error) => {
@@ -978,6 +1015,8 @@ fn handle(
             });
         }
         Request::CrewClear(root) => {
+            claude_crews.remove(&root);
+            claude_teams.remove(&root);
             if let Some(mut pty) = crew_ptys.remove(&root) {
                 pty.kill();
             }

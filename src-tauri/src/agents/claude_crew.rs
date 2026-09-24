@@ -181,6 +181,34 @@ pub fn team_config(home: &Path, team: &str) -> PathBuf {
         .join("config.json")
 }
 
+/// Locate a just-created team through the runtime's own config rather than by
+/// deriving a name from a CLI session id. Multiple candidates are deliberately
+/// returned: the session worker refuses to guess when two interactive leads
+/// have the same project cwd.
+pub fn teams_for_project(home: &Path, project: &Path) -> Vec<(PathBuf, Value)> {
+    let root = home.join(".claude").join("teams");
+    let Ok(entries) = fs::read_dir(root) else { return Vec::new() };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let team_dir = entry.path();
+            let config = fs::read(team_dir.join("config.json")).ok()?;
+            let value: Value = serde_json::from_slice(&config).ok()?;
+            let lead_here = value
+                .get("members")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|member| {
+                    member.get("agentType").and_then(Value::as_str) == Some("team-lead")
+                        && member.get("cwd").and_then(Value::as_str)
+                            .is_some_and(|cwd| Path::new(cwd) == project)
+                });
+            lead_here.then_some((team_dir, value))
+        })
+        .collect()
+}
+
 /// The child path is relative to the lead session directory. This deliberately
 /// does not reconstruct Claude's encoded-project folder name: the existing
 /// session reader already owns that provider-specific path mapping.
