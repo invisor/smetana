@@ -217,11 +217,26 @@ Picking it turns `AgentList.vue`'s caption into an `<input>` in place, at the ro
 prefilled with the current label and selected whole; `@click.stop`/`@pointerdown.stop` on the field
 keep a click inside it from selecting the row or arming the drag the row otherwise answers a press
 with. Enter commits, Esc cancels, and **losing the focus commits** — the one place this parts company
-with the tree's own draft row, which cancels on blur. The difference is deliberate: nothing under an
-agent row redraws while the field is open, where the tree redraws under a draft on every `catchUp`, so
-a name typed and then clicked away from is worth keeping rather than throwing away. A commit of the
-empty string is `withAgentName`'s business and not a special case here: the entry is removed, and the
-row's label falls back through the same three-way order this section opens with.
+with the tree's own draft row, which cancels on blur. The difference is deliberate rather than a claim
+that the row underneath stands still: a `session:state` can still repaint this row's own label while
+the field is open, exactly as it can under any other row, and `AgentList.vue`'s own header used to say
+otherwise. What actually holds is narrower and is what makes blur the right default anyway: the field
+is keyed by `agentKey` and `v-model` owns its own value regardless of what the row around it does, so
+a name typed and then clicked away from survives untouched and is worth keeping rather than throwing
+away. A commit of the empty string is `withAgentName`'s business and not a special case here: the entry
+is removed, and the row's label falls back through the same three-way order this section opens with.
+Committing the field **unchanged** — Enter or a blur over a name nobody edited — is also a no-op and
+writes nothing at all: without that check, opening the field and immediately confirming it would
+freeze whatever the row's automatic title happened to read at that moment into a permanent manual
+name, one the automatic rule could then never move again.
+
+**The opening bubble of a driven conversation never shows this name.** `conversationCaption` in
+`DesktopApp.vue` is the sentence `ConversationView` substitutes for a turn that carries none of the
+person's own words — see `.claude/rules/conversation-panel.md`'s "The opening turn" — and it stands
+for what was pressed to start the session, before anybody had a row to put a name on. So it is read
+off the rows the way `nameAgentRows` receives them, before the overlay, and not off
+`orderedAgentRows`: showing the manual name there would draw it as though it were the first thing a
+person typed into the conversation, which it is not.
 
 ## Not every session is an agent: the shell
 
