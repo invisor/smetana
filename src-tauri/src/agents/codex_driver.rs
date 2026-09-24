@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 use crate::agents::{codex::Codex, Intent, Launch};
 use crate::session::driver::{Driver, Input, LineBuffer};
-use crate::session::model::{Decision, EventKind};
+use crate::session::model::{text_waits_for_reply, Decision, EventKind};
 
 pub struct CodexDriver {
     lines: LineBuffer,
@@ -71,11 +71,15 @@ pub struct CodexDriver {
     crew_lists: std::collections::BTreeSet<u64>,
     crew_sends: std::collections::BTreeSet<u64>,
     crew_send_results: Vec<(u64, Result<(), String>)>,
+    /// The last authoritative `agentMessage` completed during the active turn.
+    /// Deltas, reasoning and tool output are intentionally excluded: only this
+    /// whole reply can leave the person a plain-text question.
+    last_agent_message: Option<String>,
 }
 
 impl CodexDriver {
     pub fn new(_permission: Option<crate::session::permission::PermissionTicket>) -> Self {
-        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: std::collections::VecDeque::new(), queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None, None)), bootstrapped: false, discovered: None, active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false, crew_records: Vec::new(), crew_journal_records: Vec::new(), crew_history: std::collections::BTreeMap::new(), crew_lists: std::collections::BTreeSet::new(), crew_sends: std::collections::BTreeSet::new(), crew_send_results: Vec::new() }
+        Self { lines: LineBuffer::new(), next_id: 1, thread: None, opening: std::collections::VecDeque::new(), queued: Vec::new(), startup: None, launch: std::sync::Mutex::new((String::new(), None, None)), bootstrapped: false, discovered: None, active_turn: None, tickets: std::collections::BTreeMap::new(), items: std::collections::BTreeMap::new(), reasoning: std::collections::BTreeMap::new(), usage: (0, 0), pending: std::collections::BTreeMap::new(), interrupt_pending: false, turn_start_pending: false, crew_records: Vec::new(), crew_journal_records: Vec::new(), crew_history: std::collections::BTreeMap::new(), crew_lists: std::collections::BTreeSet::new(), crew_sends: std::collections::BTreeSet::new(), crew_send_results: Vec::new(), last_agent_message: None }
     }
 
     /// The oldest queued message, if any, sent as the next turn. The one
@@ -111,6 +115,7 @@ impl CodexDriver {
         content.extend(attachments.into_iter().map(|path| json!({"type":"localImage", "path":path})));
         self.turn_start_pending = true;
         self.usage = (0, 0);
+        self.last_agent_message = None;
         self.request("turn/start", json!({"threadId":self.thread, "input":content}))
     }
 }
@@ -347,7 +352,10 @@ impl Driver for CodexDriver {
                 // once produced an event.
                 Some("item/completed") => if let Some(item) = message.get("params").and_then(|p| p.get("item")) {
                     match item.get("type").and_then(Value::as_str) {
-                        Some("agentMessage") => if let Some(text) = item.get("text").and_then(Value::as_str) { events.push(EventKind::Text { text: text.to_owned() }); },
+                        Some("agentMessage") => if let Some(text) = item.get("text").and_then(Value::as_str) {
+                            self.last_agent_message = Some(text.to_owned());
+                            events.push(EventKind::Text { text: text.to_owned() });
+                        },
                         Some("reasoning") => {
                             let id = item.get("id").and_then(Value::as_str).unwrap_or("");
                             let text = item.get("summary").and_then(Value::as_array).into_iter().flatten().chain(item.get("content").and_then(Value::as_array).into_iter().flatten()).filter_map(Value::as_str).filter(|text| !text.is_empty()).map(str::to_owned).collect::<Vec<_>>();
@@ -398,6 +406,11 @@ impl Driver for CodexDriver {
                         events.push(EventKind::TurnFailed { text: "Codex turn failed".into() });
                     } else if !failed {
                         events.push(EventKind::Result { tokens_in: self.usage.0, tokens_out: self.usage.1, cost_usd: None, ms: message.pointer("/params/turn/durationMs").and_then(Value::as_u64).unwrap_or(0) });
+                        if message.pointer("/params/turn/status").and_then(Value::as_str) == Some("completed")
+                            && self.last_agent_message.as_deref().is_some_and(text_waits_for_reply)
+                        {
+                            events.push(EventKind::TextQuestion);
+                        }
                     }
                     // A second message queued up behind the one that just
                     // finished — reachable only through `send`'s own defensive
@@ -1248,6 +1261,38 @@ mod tests {
         let mut driver = CodexDriver::new(None);
         assert_eq!(driver.feed(br#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"status":"failed","error":{"message":"rate limited"}}}}
 "#), vec![EventKind::TurnFailed { text: "rate limited".into() }]);
+    }
+
+    #[test]
+    fn a_completed_final_agent_message_with_a_question_marks_the_session_for_a_text_reply() {
+        let mut driver = CodexDriver::new(None);
+        let events = driver.feed(concat!(
+            r#"{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"itemId":"m","delta":"Do you confirm?"}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"m","type":"agentMessage","text":"Do you confirm the document? After that I will make the plan."}}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"status":"completed","durationMs":9}}}"#, "\n"
+        ).as_bytes());
+        assert_eq!(events, vec![
+            EventKind::TextDelta { text: "Do you confirm?".into() },
+            EventKind::Text { text: "Do you confirm the document? After that I will make the plan.".into() },
+            EventKind::Result { tokens_in: 0, tokens_out: 0, cost_usd: None, ms: 9 },
+            EventKind::TextQuestion,
+        ]);
+    }
+
+    #[test]
+    fn a_question_in_an_earlier_paragraph_or_a_failed_turn_does_not_mark_text_waiting() {
+        let mut driver = CodexDriver::new(None);
+        let earlier = driver.feed(concat!(
+            r#"{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"m","type":"agentMessage","text":"Do you confirm?\n\nI will make the plan."}}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"status":"completed","durationMs":9}}}"#, "\n"
+        ).as_bytes());
+        assert!(!earlier.contains(&EventKind::TextQuestion));
+
+        let failed = driver.feed(concat!(
+            r#"{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"m","type":"agentMessage","text":"Do you confirm?"}}}"#, "\n",
+            r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"status":"failed","durationMs":9}}}"#, "\n"
+        ).as_bytes());
+        assert!(!failed.contains(&EventKind::TextQuestion));
     }
 
     #[test]
