@@ -416,10 +416,18 @@ function claimedBy(sessionId) {
    `claimed` is the run's own list, computed here so the caption and the right
    panel cannot disagree about it and so the tracker is walked once per row
    rather than twice. Empty for everything that is not a run, and for a run that
-   has taken nothing yet. */
-function describeWork(work, sessionId) {
+   has taken nothing yet.
+
+   `title` is `null` for every PTY row: `terminal::service` never sets one
+   (`.claude/rules/terminal.md`), so the two live callers below pass nothing
+   and this stays the default. Only the third caller, the restored rows below,
+   can hand one over — a record in `.smetana/agents.json` may carry a title
+   whichever road wrote it, PTY or driven, and this function is the one place
+   all three captions are worked out, so it takes the parameter rather than
+   leaving the third caller to duplicate `captionOf`'s own call. */
+function describeWork(work, sessionId, title = null) {
   const claimed = work?.kind === 'run' && sessionId != null ? claimedBy(sessionId) : []
-  return { work: work ?? null, claimed, ...captionOf(work, claimed) }
+  return { work: work ?? null, claimed, ...captionOf(work, claimed, title) }
 }
 
 /* Agent sessions first, in the worker's own order, then whatever is still
@@ -526,7 +534,8 @@ export const agentRows = computed(() => [
        matters, but the two refusals are different sentences and a row that
        could never be cleared should not read as one that is merely asleep. */
     clearable: can(record.agent, 'clear'),
-    ...describeWork(record.work, null),
+    ...describeWork(record.work, null, record.title ?? null),
+    title: record.title ?? null,
     state: 'done',
     elapsed: 'offline',
     restored: true,

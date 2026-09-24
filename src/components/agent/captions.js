@@ -68,11 +68,28 @@ export const CAPTION = {
    other caller — a driven row, which never runs a batch — has none to hand
    over.
 
-   A run with nothing claimed yet reads as a bare agent does, and that is the
-   truth rather than a fallback — it is an agent, and there is no work to name
-   until it takes some. Work this front end has never heard of lands there too:
-   a row that says "Agent" is still a row. */
-export function captionOf(work, claimed = []) {
+   `title` is the automatic name the session worker recorded — the person's
+   first words, or Claude Code's own `ai-title` — and it outranks the intent's
+   own prose label the moment it exists: a session named "Rename the agents
+   panel rows" says more than "Editing" ever could, and the ids beside it (an
+   issue, a repository, a branch) stay exactly what `captionByKind` already
+   worked out, since a title is a name for the conversation and not for which
+   issue it touches. A run row is the one exception — `claimed` is a list of
+   ids and never a conversation, so it is never titled, and the check for it
+   moves ahead of the title's own so a titled worker cannot resurrect a label
+   the run rule set to `null` on purpose. */
+export function captionOf(work, claimed = [], title = null) {
+  const kind = work?.kind
+  if (kind === 'run' && claimed.length) return { label: null, tasks: claimed }
+  const own = captionByKind(work)
+  const named = typeof title === 'string' ? title.trim() : ''
+  return named ? { ...own, label: named } : own
+}
+
+/* The intent's own prose, before a worker's title has a chance to override
+   it — everything `captionOf` used to be, minus the run row, which is never
+   reached from here. */
+function captionByKind(work) {
   const kind = work?.kind
   // The three that are about one named issue, and so caption themselves with
   // it. What they are doing to it differs; that is the label's business.
@@ -97,6 +114,5 @@ export function captionOf(work, claimed = []) {
     const title = work.title ? String(work.title) : ''
     return { label: title ? `${CAPTION.resumeSession}: ${title}` : CAPTION.resumeSession, tasks: [] }
   }
-  if (kind === 'run' && claimed.length) return { label: null, tasks: claimed }
   return { label: CAPTION[kind] ?? CAPTION.bare, tasks: [] }
 }

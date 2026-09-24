@@ -541,6 +541,51 @@ pub fn transcript(cwd: &Path, id: &str) -> Option<PathBuf> {
     transcript_in(&projects_root()?, cwd, id)
 }
 
+/// Claude Code's own title for one transcript, for the agents panel's row of
+/// a session that is still running. Bounded by `HEAD_LINES` the way the
+/// Sessions tab's own read is: the record sits inside the first few hundred
+/// lines of every transcript measured, and a session's file can be tens of
+/// megabytes. `None` for a file with no such record yet, a record that says
+/// nothing, and a file that is not there.
+pub fn ai_title_in(path: &Path) -> Option<String> {
+    // The same bounded reader `scan_forward` reads the head with, and for its
+    // own reason: `BufRead::lines()` grows its buffer to the length of the
+    // line, so a multi-megabyte tool result ahead of the record this is
+    // looking for would be read into memory whole, and `lines()`'s own
+    // `Result` fails silently on the first byte that is not valid UTF-8 —
+    // `map_while(Result::ok)` reads that as end of file rather than as one
+    // bad line, which stops the scan on the first non-UTF-8 byte in the
+    // *whole* transcript. `next_line` never grows past `MAX_LINE` and never
+    // stops on one bad line, only holds less of it.
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024);
+    let mut index = 0usize;
+    while let Ok(Some(line)) = next_line(&mut reader, &mut buf, MAX_LINE) {
+        // A truncated line cannot be parsed as JSON — only its start survived
+        // — so it is skipped rather than handed to the parser, the same
+        // guard `scan_forward` keeps. And a line is only decoded and only
+        // asked about at all once it might carry the marker, which is what
+        // keeps this a substring check over most of the head rather than a
+        // parse of every line in it.
+        if !line.truncated {
+            let text = String::from_utf8_lossy(&buf);
+            if text.contains(AI_TITLE) {
+                if let Ok(record) = serde_json::from_str::<Record>(&text) {
+                    if let Some(title) = generated_title(&record) {
+                        return Some(title);
+                    }
+                }
+            }
+        }
+        index += 1;
+        if index >= HEAD_LINES {
+            break;
+        }
+    }
+    None
+}
+
 /// Where Claude Code keeps its transcripts. `HOME` rather than a crate, the way
 /// `agents::library`, `runs::browser` and `tracker::access` already read it.
 pub(super) fn projects_root() -> Option<PathBuf> {
@@ -986,6 +1031,72 @@ mod tests {
             listed.iter().find(|session| session.id == "ungenerated").expect("the plain session");
         assert_eq!(ungenerated.title.as_deref(), Some("Move the card to done"));
         assert_eq!(ungenerated.first_prompt, ungenerated.title, "one answer serves both here");
+    }
+
+    #[test]
+    fn the_first_ai_title_of_a_transcript_is_the_answer() {
+        let dir = temp_dir("ai-title-in");
+        let path = dir.join("s1.jsonl");
+        let text = [
+            r#"{"type":"user","message":{"role":"user","content":"hi"}}"#.to_owned(),
+            ai_title_line("Rename the panel rows"),
+            ai_title_line("Something later"),
+        ]
+        .join("\n");
+        std::fs::write(&path, text).expect("write the transcript");
+        assert_eq!(ai_title_in(&path).as_deref(), Some("Rename the panel rows"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_ai_title_and_a_missing_file_are_no_title() {
+        let dir = temp_dir("ai-title-empty");
+        let path = dir.join("s2.jsonl");
+        std::fs::write(&path, ai_title_line("   ")).expect("write the transcript");
+        assert_eq!(ai_title_in(&path), None, "a record that says nothing is no title");
+        assert_eq!(ai_title_in(&dir.join("absent.jsonl")), None, "a missing file is no title");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `BufRead::lines()` fails the whole read on the first byte that is not
+    /// valid UTF-8, and `map_while(Result::ok)` turns that failure into a
+    /// silent end of file — so a transcript whose `ai-title` sits behind one
+    /// bad line would answer `None` for a title that is genuinely there.
+    /// `next_line` reads bytes rather than `str`, so a line like this one
+    /// still counts as a line and the scan carries on past it.
+    #[test]
+    fn an_ai_title_behind_a_line_that_is_not_valid_utf8_is_still_found() {
+        let dir = temp_dir("ai-title-bad-utf8");
+        let path = dir.join("s3.jsonl");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"");
+        bytes.push(0xff);
+        bytes.push(0xfe);
+        bytes.extend_from_slice(b"\"}}\n");
+        bytes.extend_from_slice(ai_title_line("Found past the bad line").as_bytes());
+        bytes.push(b'\n');
+        std::fs::write(&path, &bytes).expect("write the transcript");
+        assert_eq!(ai_title_in(&path).as_deref(), Some("Found past the bad line"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half of the same guard: a line longer than `MAX_LINE` is
+    /// read past rather than held whole, exactly as `scan_forward`'s own
+    /// forward pass reads past one — `next_line` marks it `truncated` and
+    /// this function skips it rather than handing half a JSON object to the
+    /// parser, and the reader still lands on the line after it.
+    #[test]
+    fn an_ai_title_behind_a_line_longer_than_the_cap_is_still_found() {
+        let dir = temp_dir("ai-title-over-long");
+        let path = dir.join("s4.jsonl");
+        let long = format!(
+            r#"{{"type":"user","message":{{"role":"user","content":"{}"}}}}"#,
+            "x".repeat(MAX_LINE * 2)
+        );
+        let text = [long, ai_title_line("Found past the long line")].join("\n");
+        std::fs::write(&path, text).expect("write the transcript");
+        assert_eq!(ai_title_in(&path).as_deref(), Some("Found past the long line"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

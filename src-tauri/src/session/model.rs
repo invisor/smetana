@@ -176,6 +176,11 @@ pub struct StateChange {
     /// neither: a fork, whose new transcript Claude Code names itself, and a
     /// machine that would not give the random bytes.
     pub conversation: Option<String>,
+    /// The automatic title the agents panel names this row by, or `None`
+    /// while the session has none. Travels on every state change for the
+    /// reason `conversation` does: a window that missed one event must still
+    /// learn the name of the row it is drawing.
+    pub title: Option<String>,
 }
 
 #[derive(Clone, Debug, thiserror::Error, serde::Serialize)]
@@ -230,6 +235,23 @@ pub enum SessionError {
     /// here so the next reader auditing this split does not re-derive it.
     #[error("{0}")]
     NotDriven(String),
+}
+
+/// How long an automatic title may be, in characters. A row is one line and
+/// clips with an ellipsis; this only keeps a pasted page out of the record and
+/// off the wire on every state change.
+pub const TITLE_CHARS: usize = 120;
+
+/// The automatic title a session opens with: the first thing the person said,
+/// on one line, cut to [`TITLE_CHARS`]. `None` when they said nothing, so the
+/// row keeps its intent caption rather than going blank.
+pub fn first_words(text: &str) -> Option<String> {
+    let line = crate::sessions::model::one_line(text);
+    let cut = match line.char_indices().nth(TITLE_CHARS) {
+        Some((at, _)) => line[..at].trim_end().to_owned(),
+        None => line,
+    };
+    (!cut.is_empty()).then_some(cut)
 }
 
 /// The whole of what a session's state is: a fold over its journal.
@@ -339,6 +361,25 @@ pub fn is_open_question(events: &[Event], question: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_words_collapse_whitespace_and_stop_at_the_budget() {
+        assert_eq!(first_words("  Rename\n\nthe   rows ").as_deref(), Some("Rename the rows"));
+        // "café " is 5 characters wide and multibyte on its own account (the
+        // é), which is the property this test needs: repeated 48 times it is
+        // 240 characters, and the 120-character cut lands on the 24th "café
+        // " group's own space, so `nth(TITLE_CHARS)` must be counting
+        // characters rather than bytes for the boundary to land there at all.
+        let long = "café ".repeat(48);
+        let title = first_words(&long).expect("a long draft still titles");
+        assert_eq!(title.chars().count(), TITLE_CHARS - 1, "cut on a character boundary, trailing space trimmed");
+    }
+
+    #[test]
+    fn nothing_said_is_no_title() {
+        assert_eq!(first_words(""), None);
+        assert_eq!(first_words(" \n\t "), None);
+    }
 
     fn ev(seq: u64, kind: EventKind) -> Event {
         Event { seq, at: "2026-09-10T12:00:00Z".into(), kind }

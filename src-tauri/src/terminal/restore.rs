@@ -64,6 +64,13 @@ pub struct Restorable {
     pub project: String,
     pub work: SessionWork,
     pub started_at: String,
+    /// The automatic title the session worker has for this conversation — the
+    /// person's first words, or Claude Code's own `ai-title` once it exists —
+    /// so a row offered back after a restart is named the way the live row
+    /// was. `None` for the PTY road, which never sets one, and for a file
+    /// written before the field existed.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -93,6 +100,20 @@ pub fn forget(held: &mut Registry, session_id: &str) -> bool {
     let before = held.sessions.len();
     held.sessions.retain(|kept| kept.session_id != session_id);
     held.sessions.len() != before
+}
+
+/// The title an existing record already carries for this session, if there is
+/// one — read before a caller who has no fresher title of its own is about to
+/// write a record under the same id, so that write does not clobber it.
+///
+/// A resume never speaks its own opening words (`Intent::opening_words()` is
+/// empty for `ResumeSession`), so without this a plain resume — on either
+/// road, and whichever one recorded the title in the first place — would
+/// overwrite a session's title with `None` the moment it reopened, which is
+/// the one case this file exists to survive. It costs one read of the
+/// registry already paid for by every other record write here.
+pub fn existing_title(root: &Path, session_id: &str) -> Option<String> {
+    read(root).sessions.into_iter().find(|entry| entry.session_id == session_id)?.title
 }
 
 /// A missing file, an unreadable one, a malformed one and one written under
@@ -201,6 +222,7 @@ mod tests {
             project: "/p".to_owned(),
             work: SessionWork::Bare,
             started_at: "2026-09-04T10:00:00Z".to_owned(),
+            title: None,
         }
     }
 
@@ -332,6 +354,56 @@ mod tests {
         std::fs::write(root.join(REGISTRY_PATH), r#"{"version":99,"sessions":[]}"#)
             .expect("write the file");
         assert!(read(&root).sessions.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_record_carries_its_title_through_the_file() {
+        let root = scratch("title");
+        let mut entry = record_for("a");
+        entry.title = Some("Rename the agents panel rows".to_owned());
+        record(&root, entry);
+        let held = read(&root);
+        assert_eq!(held.sessions[0].title.as_deref(), Some("Rename the agents panel rows"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn existing_title_is_what_a_resumed_record_carries_forward() {
+        let root = scratch("existing-title");
+        let mut entry = record_for("a");
+        entry.title = Some("Fix the login redirect".to_owned());
+        record(&root, entry);
+        assert_eq!(existing_title(&root, "a").as_deref(), Some("Fix the login redirect"));
+        // Writing the record again without a title of its own, the way a
+        // resume that reached this road with none does, must not clobber it:
+        // the caller is expected to read `existing_title` first and carry it
+        // into the fresh write, which is the whole of what this guards.
+        let mut resumed = record_for("a");
+        resumed.title = existing_title(&root, "a");
+        record(&root, resumed);
+        let held = read(&root);
+        assert_eq!(held.sessions[0].title.as_deref(), Some("Fix the login redirect"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn existing_title_is_none_for_a_session_with_no_record_and_for_one_that_never_had_a_title() {
+        let root = scratch("existing-title-none");
+        assert_eq!(existing_title(&root, "nobody"), None);
+        record(&root, record_for("a"));
+        assert_eq!(existing_title(&root, "a"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_file_written_before_titles_existed_still_reads() {
+        let root = scratch("old-title");
+        let text = r#"{"version":1,"sessions":[{"sessionId":"a","agent":"claude","cwd":"/p","project":"/p","work":{"kind":"bare"},"startedAt":"2026-09-04T10:00:00Z"}]}"#;
+        std::fs::write(root.join(REGISTRY_PATH), text).expect("write the old file");
+        let held = read(&root);
+        assert_eq!(held.sessions.len(), 1, "an old record is still offered back");
+        assert_eq!(held.sessions[0].title, None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

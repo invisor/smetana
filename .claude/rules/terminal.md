@@ -159,6 +159,28 @@ failure — no shell, a five-second timeout, unrecognisable output — falls bac
 The bug is invisible in development, which is why it is a module rather than a line: `npm run tauri
 dev` starts the binary from a terminal, so the process already has the full `PATH`.
 
+## What a row is called
+
+A driven row's prose label, in order: a person's own name (not yet built — smetana-b9se); the
+worker's automatic **title**, replacing the caption's prose while the mono identifiers stay put; the
+intent's own caption otherwise (`components/agent/captions.js`). A run row is never titled.
+
+**Three ways the title is set.** `session::model::first_words` (whitespace collapsed, cut to
+`TITLE_CHARS`/120 on a character boundary) reduces `Intent::opening_words()` at the spawn, or — for a
+`Bare` session alone, gated by `wants_first_words_title` and never a button intent — the first
+`Request::Send`. A resume seeds instead from `resume_title`: the intent's own `title`, or the
+project's existing record for that id; never for a fork. Claude Code's own `ai-title` is taken once,
+on `Ready`/`NeedsYou` (`refresh_state`, `sessions::read::ai_title_in`), and replaces either source for
+good (`Live::title_settled`); Codex keeps its words.
+
+**The wire and the file.** `Restorable.title`, `Attached.title`, `StateChange.title` — `record_live`
+builds every write from `Live`, and both of the PTY road's writes call `existing_title` first so a
+resume that falls through to it cannot clobber a title the driven road already gave the same id.
+`stores/conversation.js`'s `noteTitle` never writes a `null` back over a known value.
+
+**Untouched**: the Sessions tab's own `generated_title`, run rows, and the PTY road's own titling,
+which only ever carries a title forward.
+
 ## Not every session is an agent: the shell
 
 `SessionWork::Shell` is the one entry in that enum with no `Intent` behind it, no profile and nothing
