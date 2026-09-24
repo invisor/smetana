@@ -408,10 +408,34 @@ const openMenu = (row, event) => {
   menu.value?.open(event, agentKey(row))
 }
 
+/* Pairs with `MAX_AGENT_NAME_LEN` in `src-tauri/src/settings/model.rs`,
+   written out a second time for the reason every doubled ceiling in this app
+   is: Rust validates on save, this is what stops the field accepting more
+   than a save would keep. Both sides count **characters** rather than bytes,
+   and that still leaves the two not quite the same measure: `maxlength` is
+   UTF-16 code units, which equals the character count for ordinary text and
+   is *stricter* for anything outside the Basic Multilingual Plane, where one
+   character is a surrogate pair and costs two. So the field is never the
+   generous half of the pair — at worst it clips a name of rare characters a
+   little short of what Rust would still have accepted — and Rust's own
+   `chars().count()` stays the real ceiling for everything this field lets
+   through. */
+const AGENT_NAME_MAX = 120
+
 /* The row whose caption is a field right now, by `agentKey`, and the text in
    it. One at a time: opening a second closes the first without saving, the
    way the tree's draft row does — `startRename` simply overwrites both refs,
    and the field that was standing unmounts as the new one mounts.
+
+   `renameFrom` is what the field opened with, clipped to `AGENT_NAME_MAX`
+   the same way the prefill itself is (see `startRename`), and held apart
+   from `row.label`: `commitRename` compares the draft against this rather
+   than against the row's *current* label, because the row is not otherwise
+   static while the field is open — a fresh automatic title can still arrive
+   underneath it — and comparing against a title that changed after the
+   field was opened would let an untouched Enter save whatever the title
+   happened to become in the meantime, which is exactly the freeze the no-op
+   check exists to prevent.
 
    `renameField` is written by the input's own `:ref` function below, and it
    has to be a **function** rather than the plain `ref="renameField"` string
@@ -428,12 +452,21 @@ const openMenu = (row, event) => {
    its inlined production shape), which throws on the first mount because
    `renameField.value` is still `null`. */
 const renaming = ref(null)
+const renameFrom = ref('')
 const renameDraft = ref('')
 const renameField = ref(null)
 
 const startRename = (row) => {
   renaming.value = agentKey(row)
-  renameDraft.value = row.label ?? ''
+  // By code point (`Array.from`) and not by index, so a surrogate pair is
+  // never split — and clipped here rather than left to `maxlength`, which
+  // only holds a person's own typing to the cap and does nothing to a value
+  // set programmatically: a resumed row's caption is "Resume session:
+  // <title>" and a title can run to 120 characters on its own, so the raw
+  // label can already be past `AGENT_NAME_MAX` before anybody has touched
+  // the field.
+  renameFrom.value = Array.from(row.label ?? '').slice(0, AGENT_NAME_MAX).join('')
+  renameDraft.value = renameFrom.value
   nextTick(() => {
     renameField.value?.focus()
     renameField.value?.select()
@@ -450,20 +483,22 @@ const startRename = (row) => {
    which is the tree's own reason for the opposite rule turned around: nothing
    there is mid-edit until a person deliberately starts one.
 
-   Committing exactly what was already there is a no-op and emits nothing at
-   all, compared after trimming so trailing whitespace typed by accident does
-   not count as a change. Without this, pressing Enter on a field opened and
-   left untouched would still emit `withAgentName`'s write — freezing
-   whatever the row's automatic title happened to say at that moment into a
-   permanent manual name, one the automatic rule could then never move again.
-   An empty commit that *is* a change from what was there is still the
-   caller's business: `withAgentName` removes the entry and the automatic
-   title (or the intent's caption) shows again. */
+   Committing exactly what the field opened with is a no-op and emits
+   nothing at all, compared after trimming so trailing whitespace typed by
+   accident does not count as a change — against `renameFrom`, the clipped
+   text the field opened on, and never against `row.label` read fresh: the
+   row can have a new automatic title by the time Enter is pressed, and
+   comparing against that would let an untouched field still commit,
+   freezing whatever the title had become in the meantime into a permanent
+   manual name the automatic rule could then never move again. An empty
+   commit that *is* a change from what was there is still the caller's
+   business: `withAgentName` removes the entry and the automatic title (or
+   the intent's caption) shows again. */
 const commitRename = () => {
   const row = props.rows.find((one) => agentKey(one) === renaming.value)
   if (row) {
     const name = renameDraft.value.trim()
-    if (name !== (row.label ?? '')) emit('rename', { conversation: row.conversation, name: renameDraft.value })
+    if (name !== renameFrom.value) emit('rename', { conversation: row.conversation, name: renameDraft.value })
   }
   renaming.value = null
 }
@@ -471,13 +506,17 @@ const cancelRename = () => {
   renaming.value = null
 }
 
-/* IME composition sends its own Enter to confirm a candidate — the field
+/* IME composition sends its own Enter to confirm a candidate, and the field
    must not read that as "commit the name" while somebody is still choosing
-   the characters they meant to type. `event.isComposing` is what tells the
-   two apart; a `keydown.enter` bound with `.prevent` alone cannot, since it
-   fires for both. */
+   the characters they meant to type. `event.isComposing` is the documented
+   signal, but WebKit fires the confirming Enter's `keydown` *after* its own
+   `compositionend`, by which point `isComposing` has already gone back to
+   `false` — so that flag alone misses exactly the keystroke it exists to
+   catch on that engine. `keyCode === 229` is the older, still-live signal
+   for the same event on every engine, kept for no better reason than that
+   nothing newer replaced it. */
 const onRenameEnter = (event) => {
-  if (event.isComposing) return
+  if (event.isComposing || event.keyCode === 229) return
   event.preventDefault()
   commitRename()
 }
@@ -582,15 +621,6 @@ const idsStyle = {
   textOverflow: 'ellipsis'
 }
 const labelStyle = { overflow: 'hidden', textOverflow: 'ellipsis' }
-/* Pairs with `MAX_AGENT_NAME_LEN` in `src-tauri/src/settings/model.rs`,
-   written out a second time for the reason every doubled ceiling in this app
-   is: Rust validates on save, this is what stops the field accepting more
-   than a save would keep. A character count and not a byte count on both
-   sides — `maxlength` is UTF-16 code units, which is looser for anything
-   outside Latin text, so the field stays the generous half of the pair and
-   Rust's own count is still the real ceiling. */
-const AGENT_NAME_MAX = 120
-
 /* The field that stands in for the caption while a row is being renamed.
    Every value a `var(--token)` reference, and the height is `--control-h-sm`
    rather than `--row-h` — a full-height field would touch the row's own top
