@@ -96,6 +96,17 @@ const crewAddress = (id) => {
   return { root: Number(match[1]), node: Number(match[2]) }
 }
 
+/* A Crew node's own `starting` is not `statusOf`'s — it is `CrewState::Starting`
+   (`src-tauri/src/session/crew.rs`), a background worker being spun up with
+   work already handed to it (`pendingInit` in `agents/codex_crew.rs`, which
+   counts `Starting` beside `Running` as active; `claude_crew`'s own fallback
+   is the same shape). That is nothing like a driven session's `starting`,
+   which is a blank journal waiting on a person who has not typed a word yet —
+   a Crew node in this state is already working, so it stays `running` and
+   goes on lighting its project's rail tile `live` rather than fading to a
+   quiet `ready` the moment its worker is still coming up. */
+const crewStatusOf = (state) => (state === 'starting' ? 'running' : statusOf(state))
+
 export const crewAgentsIn = (project) =>
   [...crews.values()]
     .filter((crew) => crew.project === project)
@@ -105,7 +116,7 @@ export const crewAgentsIn = (project) =>
         crewRoot: crew.root,
         crewNode: node.id,
         project: crew.project,
-        state: statusOf(node.state),
+        state: crewStatusOf(node.state),
         elapsed: '',
         conversation: null,
         work: { kind: 'run' },
@@ -213,15 +224,29 @@ function hold(id) {
    exit code to read and `state_of` has already decided which of the two endings
    this was.
 
-   `starting` is a session that has not spoken yet, which is a live thing and so
-   `running`; `exited` is a turn that was closed when the child went, which is
-   an ordinary end and so `done`. `ready`, `running`, `needs-you` and `failed`
-   are already this system's words and pass through. So does a word this front
-   end has never heard of, which `status/status.js` answers with a generated
-   colour and a two-letter code — the honest outcome for a state added to Rust
-   and not yet to this list. */
+   `starting` is a session that has not spoken yet — a blank journal under
+   `--input-format stream-json`, waiting on the person's first message, with
+   nothing of its own to do — and so `ready` rather than `running`: nobody is
+   working, and a badge that spins for a page nobody has typed a word to yet
+   is the defect smetana-d3yk was filed over. `exited` is a turn that was
+   closed when the child went, which is an ordinary end and so `done`. `ready`,
+   `running`, `needs-you` and `failed` are already this system's words and
+   pass through. So does a word this front end has never heard of, which
+   `status/status.js` answers with a generated colour and a two-letter code —
+   the honest outcome for a state added to Rust and not yet to this list.
+
+   `terminals.js`'s own `starting` is a different word for a different wait
+   and stays `running` there: it names a PTY session before its first output,
+   which lasts about a second and is genuinely a process already at work —
+   nothing like the open-ended silence a driven session sits in before a
+   person has said anything at all.
+
+   A Crew node's `starting` does not reach this function either — see
+   `crewStatusOf` below, right beside `crewAgentsIn` — for the same shape of
+   reason: it is a background worker already handed its work and being spun
+   up, not a session waiting on a person's first word. */
 export function statusOf(state) {
-  if (state === 'starting') return 'running'
+  if (state === 'starting') return 'ready'
   if (state === 'exited') return 'done'
   return state
 }

@@ -387,18 +387,15 @@ const errorStyle = {
          tab either, where it would be a fact about an agent filed under the
          app.
 
-         The description says what each position gives rather than naming the
-         panel twice, since the switch's own two positions cannot: on is the
-         app's own reading of a session — a file it names opened by a click, a
-         link handed to the browser, a picture drawn rather than spelled out —
-         and off is not "no interface", it is the terminal tab every agent
-         opened in before the panel existed, which is a preference and not a
-         downgrade. "An agent you start" rather than "every agent", for the
-         distinction the standing instruction row below draws as carefully: a
-         run's batches open in a terminal whichever way this switch is set. -->
+         The description leads with what the switch is rather than what each
+         position gives, since "Smetana UI" alone does not say what it names.
+         The second sentence still carries the off position — the terminal tab
+         every agent opened in before the panel existed — because the switch
+         is unreadable without it. The third keeps the same effective-on-next-
+         session fact the row always carried. -->
     <SettingsRow
-      label="Conversation panel"
-      description="Shows an agent you start in the app's own view of a session: its replies drawn as text, a file it names opened with a click, a link opened in your browser, a picture shown rather than spelled out as a path. With it off, that agent opens in a terminal tab instead — the plain view, the way it worked before, which some people prefer. Takes effect on the next session started."
+      label="Smetana UI"
+      description="Smetana's own interface for working with an agent. With it off, an agent you start opens in a terminal tab instead. Takes effect on the next session started."
     >
       <Switch
         :model-value="props.conversationPanel"
