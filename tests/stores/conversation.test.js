@@ -280,6 +280,22 @@ describe('the conversation store', () => {
     expect(rows.find((row) => row.id === 'crew:81:82').clearable).toBe(false)
   })
 
+  /* A Crew node's own `starting` is a worker already handed its work and
+     being spun up (`CrewState::Starting`), not a driven session's blank
+     journal waiting on a person — so it must stay `running` and keep lighting
+     the project rail tile `live`, unlike `statusOf('starting')` itself. */
+  it('reads a Crew node still starting up as running, not ready', async () => {
+    const { stores, emit } = await ready()
+    await stores.conversation.initConversation()
+    await emit('crew:tree', {
+      project: '/p', root: 91,
+      nodes: [{ id: 91, parent: null, state: 'starting', canMessage: false, label: 'Lead' }]
+    })
+
+    const rows = stores.conversation.crewAgentsIn('/p')
+    expect(rows.find((row) => row.id === 'crew:91:91').state).toBe('running')
+  })
+
   it('refuses to send nothing at all', async () => {
     const { ipc, stores } = await ready()
     ipc.on('session_send', null)
