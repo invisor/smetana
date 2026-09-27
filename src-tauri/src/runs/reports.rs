@@ -361,8 +361,13 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::runs::model::StopReason;
     use crate::runs::report::{render, BatchLine, BatchOutcome, BatchTask, RunReport};
     use crate::runs::summary::{TaskLine, Tasks};
+
+    /// Which ending each fixture report carries — irrelevant to every test in
+    /// this file, so one value stands for all of them.
+    const REASON: StopReason = StopReason::QueueEmpty;
 
     fn line(id: &str) -> TaskLine {
         TaskLine { id: id.into(), title: format!("{id} title") }
@@ -391,6 +396,7 @@ mod tests {
             scope: "the queue",
             finished: "2026-08-12 14:31",
             seconds: 8040,
+            stop_reason: &REASON,
             tasks,
             batches,
             journal: None,

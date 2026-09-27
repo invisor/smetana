@@ -1892,8 +1892,15 @@ async fn finish(
         (Some(base), Some((issues, _))) => Some(summary::diff(base, &issues, &run.settings.scope)),
         _ => None,
     };
-    let report =
-        write_report(root, run, seconds, tasks.as_ref(), &account.batches, account.journal.path());
+    let report = write_report(
+        root,
+        run,
+        &reason,
+        seconds,
+        tasks.as_ref(),
+        &account.batches,
+        account.journal.path(),
+    );
     // The journal's own last line, and the one place the two records name each
     // other: the document carries the journal's path in its footer, and this
     // carries the document's.
@@ -2213,6 +2220,10 @@ fn handed_back(dir: &Path, n: u32) -> bool {
 fn write_report(
     root: &Path,
     run: &Run,
+    // Why the run is stopping — `finish`'s own reason, passed by reference
+    // rather than taken off `run.state` because it is written here a moment
+    // before `advance` puts it there.
+    reason: &StopReason,
     seconds: u64,
     tasks: Option<&summary::Tasks>,
     batches: &[BatchLine],
@@ -2235,6 +2246,7 @@ fn write_report(
         scope: &scope,
         finished: &finished,
         seconds,
+        stop_reason: reason,
         tasks,
         batches,
         journal,
@@ -3289,12 +3301,14 @@ mod tests {
         assert!(continuation.is_none(), "a stopped handoff never starts a replacement");
         assert_eq!(claims[0].status, "in_progress", "the live child's claim is untouched");
 
+        let stop_reason = StopReason::Cancelled;
         let html = report::render(&report::RunReport {
             title: "Run",
             project: "project",
             scope: "queue",
             finished: "now",
             seconds: 9,
+            stop_reason: &stop_reason,
             tasks: None,
             batches: &account.batches,
             journal: account.journal.path(),
