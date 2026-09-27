@@ -240,6 +240,41 @@ describe('parseMarkdown blocks', () => {
       expect(paragraph.type).toBe('paragraph')
       expect(paragraph.children.some((c) => c.type === 'image')).toBe(true)
     })
+
+    /* The reported bug, smetana-yb0i: every screenshot an agent attaches on
+       macOS lives under `~/Library/Application Support/…`, and a bare address
+       with a space in it used to stay unmatched text, brackets and all. */
+    it('reads a bare block image address that carries a space, the shape a macOS attachment path has', () => {
+      expect(
+        parseMarkdown('![shot](/Users/x/Library/Application Support/a.png)')
+      ).toEqual([{ type: 'image', src: '/Users/x/Library/Application Support/a.png', alt: 'shot' }])
+    })
+
+    it('reads the same address in the CommonMark angle-bracket form, brackets stripped', () => {
+      expect(
+        parseMarkdown('![shot](</Users/x/Library/Application Support/a.png>)')
+      ).toEqual([{ type: 'image', src: '/Users/x/Library/Application Support/a.png', alt: 'shot' }])
+    })
+
+    /* Review pass 1 on smetana-yb0i: reading the address to the *last* `)` on
+       the line — the fix's first draft — swallowed a caption an agent wrote
+       right after its own figure. A stray, unbalanced `)` has to end the
+       address rather than being read as part of it. */
+    it('does not swallow a parenthetical caption after the figure into its own address', () => {
+      const [paragraph] = parseMarkdown('![shot](x.png) (see above)')
+      expect(paragraph.type).toBe('paragraph')
+      expect(paragraph.children[0]).toEqual({ type: 'image', src: 'x.png', alt: 'shot' })
+      expect(paragraph.children.map((c) => c.value ?? '').join('')).toContain(' (see above)')
+    })
+
+    /* A single level of balanced parens inside the address is still read as
+       part of it, whole — the shape a macOS attachment path takes when
+       Smetana itself de-duplicates a name (`shot (1).png`). */
+    it('reads a block image address with one level of balanced parens in it', () => {
+      expect(
+        parseMarkdown('![s](/Users/x/Application Support/shot (1).png)')
+      ).toEqual([{ type: 'image', src: '/Users/x/Application Support/shot (1).png', alt: 's' }])
+    })
   })
 
   it('is empty for empty input, and for whitespace', () => {
@@ -409,6 +444,81 @@ describe('parseInline', () => {
       { type: 'text', value: 'see ' },
       { type: 'image', src: './a.png', alt: 'a' },
       { type: 'text', value: ' there' }
+    ])
+  })
+
+  /* smetana-yb0i: an inline image beside a sentence, with the same space in
+     its address a macOS attachment path carries — text before and after the
+     figure must survive untouched. */
+  it('reads an inline image whose address carries a space, keeping the text around it', () => {
+    expect(parseInline('see ![shot](/Users/x/Application Support/a.png) here')).toEqual([
+      { type: 'text', value: 'see ' },
+      { type: 'image', src: '/Users/x/Application Support/a.png', alt: 'shot' },
+      { type: 'text', value: ' here' }
+    ])
+  })
+
+  /* The same grammar reaches the inline link, not only the image: `classifyLink`
+     already escapes a space when it builds a `file://` href
+     (`links.test.js`'s own "escapes a character a URI cannot carry raw"), and
+     this is what proves `markdown.js` hands it an address with the space
+     still in it rather than one already cut at the first one. */
+  it('reads an inline link whose address carries a space as a local link, not text', () => {
+    expect(parseInline('[a file](/Users/x/Application Support/a.txt)')).toEqual([
+      {
+        type: 'link',
+        local: true,
+        path: '/Users/x/Application Support/a.txt',
+        targetKind: 'file',
+        head: '',
+        tail: 'a file'
+      }
+    ])
+  })
+
+  /* The inline form is deliberately narrower than the block one: the address
+     is read only up to the *first* `)`, so two of these sharing one line
+     never swallow each other — a bracket-shaped ordinary sentence stays text,
+     and a second image on the same line keeps its own address. */
+  it('does not let an inline address swallow past its own closing paren into a second one', () => {
+    expect(
+      parseInline(
+        '![a](/Users/x/Application Support/a.png) and ![b](/Users/x/Application Support/b.png)'
+      )
+    ).toEqual([
+      { type: 'image', src: '/Users/x/Application Support/a.png', alt: 'a' },
+      { type: 'text', value: ' and ' },
+      { type: 'image', src: '/Users/x/Application Support/b.png', alt: 'b' }
+    ])
+    expect(parseInline('[a](b) and (c)')).toEqual([{ type: 'text', value: '[a](b) and (c)' }])
+    expect(parseInline('[note] (see below)')).toEqual([
+      { type: 'text', value: '[note] (see below)' }
+    ])
+  })
+
+  /* The same balanced-parens address, read inline rather than alone on its
+     own line — pinned separately from the block case, since the two forms
+     are read by two different regexes that have to agree on this shape. */
+  it('reads an inline image address with one level of balanced parens in it', () => {
+    expect(parseInline('see ![s](/Users/x/Application Support/shot (1).png) here')).toEqual([
+      { type: 'text', value: 'see ' },
+      { type: 'image', src: '/Users/x/Application Support/shot (1).png', alt: 's' },
+      { type: 'text', value: ' here' }
+    ])
+  })
+
+  /* The CommonMark angle-bracket form reaches the inline link too, the same
+     alternative `IMAGE_LINE`'s own comment names. */
+  it('reads an inline link address in the angle-bracket form', () => {
+    expect(parseInline('[a file](</Users/x/Application Support/a.txt>)')).toEqual([
+      {
+        type: 'link',
+        local: true,
+        path: '/Users/x/Application Support/a.txt',
+        targetKind: 'file',
+        head: '',
+        tail: 'a file'
+      }
     ])
   })
 

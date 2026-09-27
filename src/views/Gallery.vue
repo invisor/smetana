@@ -1967,8 +1967,17 @@ const MARKDOWN_FIGURE_PAIR_SAMPLE = [
    button checkable at all: that control exists only for a figure `image_read`
    answered for, never for a `data:` source or a validated inline `<svg>`
    (`MarkdownFigure.vue`'s own header), so the raster and vector samples above
-   can never draw one. */
-const MARKDOWN_FIGURE_PATH_SAMPLE = '![A screenshot on disk](./assets/fig-path-demo.png)'
+   can never draw one.
+
+   The name carries a space on purpose (smetana-yb0i): every real screenshot
+   an agent attaches on macOS lives under
+   `~/Library/Application Support/com.invisor.smetana/attachments/…`, a path
+   with a space in its own folder name, and `markdown.js`'s `IMAGE_LINE` used
+   to stop reading the address at that first space and leave the whole line
+   as literal text. `mockBackend.js`'s `image_read` fixture answers any name
+   that does not start with `missing`, this one included, so drawing this
+   sample as a figure rather than a paragraph is what checks the fix here. */
+const MARKDOWN_FIGURE_PATH_SAMPLE = '![A screenshot on disk](./assets/fig path demo.png)'
 
 /* `data-state="loading"` has no markdown spelling — nothing in a task's prose
    ever asks for it, since it is the shape a figure holds for the moment
