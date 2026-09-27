@@ -1105,6 +1105,7 @@ async fn drive(
             settings_path.as_deref(),
             matches!(last_batch, LastBatch::Limited),
             &mut released,
+            &mut settings_changed,
             probe.as_deref(),
         )
         .await
@@ -2368,6 +2369,27 @@ async fn wait_for_failover(
     }
 }
 
+/// The gate's own reading of the person's thresholds, with "Run anyway"
+/// applied on top. Pulled out so the poll at the top of `headroom`'s loop and
+/// the paused wait below it ask the identical question — the wait's "did the
+/// limits actually move" check has to compare against the same reading the
+/// gate itself would make, or the two could disagree about what "changed"
+/// means.
+///
+/// A released run stops looking at its pause threshold, and at nothing else:
+/// the reduced band still applies, because taking fewer tasks is not what
+/// anybody pressed the button to escape. Done by moving the threshold rather
+/// than by ignoring the answer, so the hold in `usage::gate` keeps working —
+/// it reaches the hold whatever `pause_at` says, which is what makes "Run
+/// anyway" unable to override a spent allowance.
+fn effective_limits(settings_path: Option<&Path>, released: &watch::Receiver<bool>) -> usage::Limits {
+    let mut limits = crate::settings::subscription_at(settings_path);
+    if *released.borrow() {
+        limits.pause_at = usage::OFF;
+    }
+    limits
+}
+
 /// Wait until there is allowance enough to run a batch, and answer with how
 /// many tasks that batch may take.
 ///
@@ -2391,6 +2413,11 @@ async fn headroom(
     settings_path: Option<&Path>,
     after_limited: bool,
     released: &mut watch::Receiver<bool>,
+    // A settings save wakes a paused run out of its ten-minute poll: somebody
+    // watching a paused run and lowering (or turning off) the gate wants that
+    // run to go on, not to sit out the rest of a sleep that started before
+    // they touched it.
+    settings_changed: &mut watch::Receiver<u64>,
     // Where the probe runs, carried straight through to `ask` on every turn
     // of the poll below.
     probe: Option<&Path>,
@@ -2409,16 +2436,7 @@ async fn headroom(
         // Inside the loop rather than above it: a run paused overnight is
         // exactly the run whose thresholds somebody is most likely to come and
         // move, and the poll is where that has to be noticed.
-        let mut limits = crate::settings::subscription_at(settings_path);
-        // A released run stops looking at its pause threshold, and at nothing
-        // else: the reduced band still applies, because taking fewer tasks is
-        // not what anybody pressed the button to escape. Done by moving the
-        // threshold rather than by ignoring the answer, so the hold below keeps
-        // working — `gate` reaches it whatever `pause_at` says, which is what
-        // makes "Run anyway" unable to override a spent allowance.
-        if *released.borrow() {
-            limits.pause_at = usage::OFF;
-        }
+        let limits = effective_limits(settings_path, released);
         let (reading, decision) = ask(profile, limits, after_limited, probe.map(Path::to_path_buf)).await;
         journal.say(&journal::gate(reading.as_ref(), &decision));
         match decision {
@@ -2429,26 +2447,8 @@ async fn headroom(
                 let spent = usage::held(reading.as_ref(), after_limited);
                 run.advance(RunState::Paused { pct, resets, spent });
                 say(run);
-                tokio::select! {
-                    _ = tokio::time::sleep(usage::POLL) => {}
-                    _ = stop.recv() => return None,
-                    // The press has to reach a run that is ten minutes into a
-                    // sleep, or it would read as having done nothing at all.
-                    //
-                    // The error is guarded rather than ignored, and the guard
-                    // is what keeps this arm from being a spin: `changed()` on
-                    // a channel whose sender is gone resolves at once and for
-                    // ever, so an ignored error would send the loop straight
-                    // back to a 60-second probe, over and over. It cannot
-                    // happen — the sender lives in the worker's entry for this
-                    // run, and that entry outlives this task by construction —
-                    // and a run whose entry has gone is over in any case, which
-                    // is what this answers.
-                    changed = released.changed() => {
-                        if changed.is_err() {
-                            return None;
-                        }
-                    }
+                if !wait_paused(stop, released, settings_changed, settings_path, limits).await {
+                    return None;
                 }
             }
             decision => {
@@ -2460,6 +2460,68 @@ async fn headroom(
                 };
                 return Some(usage::cap(run.settings.max_parallel_tasks, &decision));
             }
+        }
+    }
+}
+
+/// Wait out one turn of a pause, unless something ends it early — a stop, a
+/// "Run anyway" press, or a settings save that actually moves the limits this
+/// pause was gated on. That last condition is smetana-39to's whole fix, and
+/// it is a condition rather than an unconditional wake: `settings.json` also
+/// holds per-project UI state — the selected task, panel widths, open tabs —
+/// that the front end saves on a debounce as somebody clicks around, and
+/// every one of those saves calls `notify_run_settings_changed` too. Waking
+/// unconditionally would spawn the probe CLI (`usage::PROBE_TIMEOUT`, up to
+/// 60s) and write a fresh gate line to the journal on every such click, which
+/// floods the very record whose ten-minute cadence is what "tells a night
+/// spent waiting from a night spent hung". So a wake that finds the limits
+/// unchanged goes back to waiting **out the same deadline** rather than
+/// restarting a fresh `usage::POLL`, and only a wake that actually moves them
+/// sends the loop round to a new turn — which re-probes the harness and
+/// writes that turn's own gate line, same as an ordinary ten-minute tick.
+///
+/// Both channels are read defensively rather than because either is expected
+/// to close. `settings_changed`'s sender is the process-wide static in
+/// `settings/mod.rs` and never drops; `released`'s lives in the worker's own
+/// entry for this run, which outlives this task by construction. But the
+/// press has to reach a run that is minutes into a sleep, or it would read as
+/// having done nothing at all, and the guard is what keeps either arm from
+/// being a spin rather than a case either channel is expected to hit:
+/// `changed()` on a channel whose sender is gone resolves at once and for
+/// ever, so an ignored error would send the loop straight back to a
+/// 60-second probe, over and over.
+///
+/// `true` means the caller should go straight round to a fresh turn of the
+/// poll — thresholds and the limit are asked again at once; `false` means a
+/// stop arrived and the caller ends the run.
+async fn wait_paused(
+    stop: &mut mpsc::Receiver<()>,
+    released: &mut watch::Receiver<bool>,
+    settings_changed: &mut watch::Receiver<u64>,
+    settings_path: Option<&Path>,
+    // The reading `ask` was just given — what this pause is gated on. A wake
+    // that leaves `effective_limits` equal to this is a save about something
+    // else entirely.
+    gated_on: usage::Limits,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + usage::POLL;
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep_until(deadline) => return true,
+            _ = stop.recv() => return false,
+            changed = released.changed() => {
+                if changed.is_err() {
+                    return false;
+                }
+            }
+            changed = settings_changed.changed() => {
+                if changed.is_err() {
+                    return false;
+                }
+            }
+        }
+        if effective_limits(settings_path, released) != gated_on {
+            return true;
         }
     }
 }
@@ -3717,5 +3779,163 @@ mod tests {
         active.get_mut(&2).expect("the entry").run.settings.live_check = false;
 
         assert_eq!(browser_candidates(&active), Vec::<String>::new());
+    }
+
+    // smetana-39to: a paused run wakes on a settings save rather than sitting
+    // out the rest of `usage::POLL` — but only when the save actually moves
+    // the numbers the pause is gated on, since `settings.json` also holds
+    // per-project UI state saved on a debounce as somebody clicks around.
+    // None of these tests waits for the real ten-minute deadline: a settings,
+    // stop or release signal sent before `wait_paused` is awaited resolves
+    // its own branch long before the sleep could, the same race
+    // `wait_for_failover`'s callers already lean on, and the one test that
+    // must observe a wait *not* ending uses a short wall-clock timeout
+    // instead, the same technique `vcs::run`'s "outstays its ceiling" tests
+    // use.
+
+    fn write_settings(path: &Path, pause_at: u8, reduced_at: u8) {
+        std::fs::write(path, format!(r#"{{"version":1,"subscription":{{"pauseAt":{pause_at},"reducedAt":{reduced_at}}}}}"#))
+            .expect("write a settings.json fixture");
+    }
+
+    #[test]
+    fn effective_limits_with_no_settings_path_is_the_shipped_default() {
+        let (_tx, released) = watch::channel(false);
+        assert_eq!(effective_limits(None, &released), usage::Limits::default());
+    }
+
+    #[test]
+    fn effective_limits_reads_a_saved_threshold_off_disk() {
+        let dir = tempfile::tempdir().expect("temp settings dir");
+        let path = dir.path().join("settings.json");
+        // Both on `SUBSCRIPTION_STEPS` and with the band comfortably open
+        // between them, so `SubscriptionSettings::validate` leaves the pair
+        // exactly as written rather than closing a band or falling back to
+        // either shipped number.
+        write_settings(&path, 80, 60);
+        let (_tx, released) = watch::channel(false);
+
+        assert_eq!(effective_limits(Some(&path), &released), usage::Limits { pause_at: 80, reduced_at: 60 });
+    }
+
+    #[test]
+    fn run_anyway_forces_the_pause_threshold_off_whatever_the_file_says() {
+        let dir = tempfile::tempdir().expect("temp settings dir");
+        let path = dir.path().join("settings.json");
+        write_settings(&path, 80, 60);
+        let (_tx, released) = watch::channel(true);
+
+        assert_eq!(
+            effective_limits(Some(&path), &released),
+            usage::Limits { pause_at: usage::OFF, reduced_at: 60 },
+            "the reduced band must survive a release; only the pause threshold is overridden"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_settings_save_that_moves_the_gate_wakes_a_paused_run_before_the_poll_is_up() {
+        let dir = tempfile::tempdir().expect("temp settings dir");
+        let path = dir.path().join("settings.json");
+        write_settings(&path, 0, 50); // the threshold this pause was gated on has since been turned off
+
+        let (_stop_tx, mut stop) = mpsc::channel::<()>(1);
+        let (_released_tx, mut released) = watch::channel(false);
+        let (settings_tx, mut settings_changed) = watch::channel(0u64);
+        let gated_on = usage::Limits { pause_at: usage::PAUSE_THRESHOLD, reduced_at: usage::REDUCED_THRESHOLD };
+
+        settings_tx.send(1).expect("the run's own receiver is still open");
+
+        let waited = tokio::time::timeout(
+            Duration::from_millis(200),
+            wait_paused(&mut stop, &mut released, &mut settings_changed, Some(&path), gated_on),
+        )
+        .await
+        .expect("a save that moved the gate must end the wait promptly, not at the ten-minute deadline");
+
+        assert!(waited, "the loop should go straight round to a fresh turn, not end the run");
+    }
+
+    #[tokio::test]
+    async fn a_settings_save_that_leaves_the_gate_unchanged_does_not_end_the_wait() {
+        let dir = tempfile::tempdir().expect("temp settings dir");
+        let path = dir.path().join("settings.json");
+        write_settings(&path, usage::PAUSE_THRESHOLD, usage::REDUCED_THRESHOLD);
+
+        let (stop_tx, mut stop) = mpsc::channel::<()>(1);
+        let (_released_tx, mut released) = watch::channel(false);
+        let (settings_tx, mut settings_changed) = watch::channel(0u64);
+        let gated_on = usage::Limits { pause_at: usage::PAUSE_THRESHOLD, reduced_at: usage::REDUCED_THRESHOLD };
+
+        // Stands in for the debounced save of a panel width or a selected
+        // task: the file changed, but not in either of the two fields the
+        // gate reads.
+        settings_tx.send(1).expect("the run's own receiver is still open");
+
+        let waited = tokio::time::timeout(
+            Duration::from_millis(200),
+            wait_paused(&mut stop, &mut released, &mut settings_changed, Some(&path), gated_on),
+        )
+        .await;
+        assert!(
+            waited.is_err(),
+            "a save that left the gate's own numbers alone must not spend a fresh probe or gate line"
+        );
+
+        // The wait is still live and still answerable — end it the ordinary
+        // way instead of leaving it to the real ten-minute deadline.
+        stop_tx.send(()).await.expect("the receiver is still open");
+        assert!(
+            !wait_paused(&mut stop, &mut released, &mut settings_changed, Some(&path), gated_on).await,
+            "the stop already queued should end the wait"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_closed_settings_channel_ends_the_run_rather_than_spinning() {
+        let (_stop_tx, mut stop) = mpsc::channel::<()>(1);
+        let (_released_tx, mut released) = watch::channel(false);
+        let (settings_tx, mut settings_changed) = watch::channel(0u64);
+
+        // The sender is the process-wide static in `settings/mod.rs` and
+        // never actually drops; dropping it here is a defensive case rather
+        // than one that happens in practice, and the guard is what keeps it
+        // from being a spin if it ever did.
+        drop(settings_tx);
+
+        assert!(
+            !wait_paused(&mut stop, &mut released, &mut settings_changed, None, usage::Limits::default()).await,
+            "a closed channel must read as the run being over, not as license to spin"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stop_still_wakes_a_paused_run() {
+        let (stop_tx, mut stop) = mpsc::channel::<()>(1);
+        let (_released_tx, mut released) = watch::channel(false);
+        let (_settings_tx, mut settings_changed) = watch::channel(0u64);
+
+        stop_tx.send(()).await.expect("the receiver is still open");
+
+        assert!(
+            !wait_paused(&mut stop, &mut released, &mut settings_changed, None, usage::Limits::default()).await,
+            "stop must still end a paused run exactly as before"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_anyway_still_wakes_a_paused_run() {
+        let (_stop_tx, mut stop) = mpsc::channel::<()>(1);
+        let (released_tx, mut released) = watch::channel(false);
+        let (_settings_tx, mut settings_changed) = watch::channel(0u64);
+        // Forcing the pause threshold off is itself a move of the gate's own
+        // numbers, so "Run anyway" needs no exception in `wait_paused` at all.
+        let gated_on = usage::Limits::default();
+
+        released_tx.send(true).expect("the run's own receiver is still open");
+
+        assert!(
+            wait_paused(&mut stop, &mut released, &mut settings_changed, None, gated_on).await,
+            "\"Run anyway\" must still send the loop straight round for another turn"
+        );
     }
 }
