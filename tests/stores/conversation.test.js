@@ -840,10 +840,10 @@ describe('the conversation store', () => {
      system's and pass through, a word from a Rust that has moved on ahead of
      this list included. */
   describe('the state in the status vocabulary', () => {
-    it('draws a session that has not spoken yet as live', async () => {
+    it('draws a session that has not spoken yet as ready', async () => {
       const { stores } = await ready()
 
-      expect(stores.conversation.statusOf('starting')).toBe('running')
+      expect(stores.conversation.statusOf('starting')).toBe('ready')
     })
 
     it('draws an ordinary end as done', async () => {

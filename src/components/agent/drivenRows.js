@@ -226,12 +226,13 @@ export function mergeAgentCounts(counts, sessions) {
    The map's own rule is copied rather than reached for, because the store keeps
    it inside a computed: a session waiting on somebody is `loud`, one working is
    `live`, and anything else leaves the project as it found it. `running` alone
-   is the live word here and that is the translation being exact rather than
-   thin — the store counts raw `running` *and* `starting`, and `statusOf` folds
-   both of those into `running` before this file sees them. A session that has
-   spoken and is waiting on nobody is `ready`, which the store's own `idle`
-   reads as too, and which counts for neither: a project is not "live" because
-   an agent is sitting there with nothing to do.
+   is the live word here, and it is only ever the word for a session actually
+   doing something — `statusOf` answers `ready` for a session that has not
+   spoken yet, so a freshly started driven agent with an empty journal does not
+   light its project's tile until it is actually asked to do something.
+   A session that has spoken and is waiting on nobody is also `ready`, which the
+   store's own `idle` reads as too, and which counts for neither: a project is
+   not "live" because an agent is sitting there with nothing to do.
 
    A fresh map with fresh rows, never the store's own objects: that map is a
    computed and writing into it would be a second author of a derived value. The
