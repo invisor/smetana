@@ -77,13 +77,30 @@ const TASK = /^\[([ xX])\]\s+(.*)$/
    that path runs through `~/Library/Application Support/…` — a folder name
    with a space in it on every machine, so every screenshot an agent attaches
    there used to reach this line unmatched and sit on screen as literal text,
-   brackets and all. Since the line is anchored at both ends, the address is
-   read as everything up to the *last* `)` in the line rather than the
-   first — a block image's own address may contain a `)` of its own and still
-   be read whole, unlike the inline form below. The CommonMark `<address>`
-   form is accepted alongside it, one alternative in the regex: angle
-   brackets stripped, anything but `>` and a newline allowed inside. */
-const IMAGE_LINE = /^ {0,3}!\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|([\s\S]+))\)\s*$/
+   brackets and all.
+
+   **The address is CommonMark's own destination grammar, not "everything up
+   to the last `)`".** An earlier version of this line read the address as
+   everything before the *last* close paren on the line, on the reasoning
+   that the line is anchored at both ends anyway — but a caption an agent
+   writes after its own figure, `![shot](x.png) (see above)`, is a real
+   sentence this parser has to give back too, and reading to the last `)`
+   swallowed both the trailing `(see above)` and its own space into the
+   picture's `src`. The address below instead allows any run of characters
+   that are not a bare paren, plus **one level** of balanced parens read as a
+   unit (`\(…\)` with nothing but non-parens inside) — `/x/shot (1).png` and
+   the score of a football match written into a file name both still parse
+   whole, but the moment a `)` shows up with no `(` of its own beside it, the
+   address ends there and whatever follows is somebody's prose, not the
+   picture's own name. This is also why `INLINE` below borrows the identical
+   alternative: the two forms have to agree on what counts as one address, or
+   a line that is a block by this rule could still read differently inline.
+
+   The CommonMark `<address>` form is accepted alongside it, one alternative
+   in the regex: angle brackets stripped, anything but `>` and a newline
+   allowed inside — this one is unambiguous regardless of parens, since its
+   own brackets say exactly where it ends. */
+const IMAGE_LINE = /^ {0,3}!\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|((?:[^()\n]|\([^()\n]*\))+?))\s*\)\s*$/
 
 /* A definition list's `dd` line. Never matched on its own — only a term line
    immediately above one turns a run of these into a `dl`; met without a term
@@ -189,14 +206,13 @@ function parseBlocks(lines, depth = 0) {
 
     const imageLine = IMAGE_LINE.exec(line)
     if (imageLine) {
-      /* The angle-bracket branch (`imageLine[2]`) is exact, nothing to trim —
-         `<…>` names its own boundary. The bare branch (`imageLine[3]`) is
-         greedy against the last `)` in the line, which can leave a run of
-         trailing whitespace inside the capture that the regex's own `\s*`
-         never gets a chance to eat (the greedy match already satisfies the
-         rest of the pattern before backtracking that far), so it is trimmed
-         here instead. */
-      const src = imageLine[2] !== undefined ? imageLine[2] : imageLine[3].trim()
+      /* The bare branch's own repetition (`imageLine[3]`) is lazy, so no
+         `.trim()` is needed here: a lazy repeat stops growing the moment the
+         rest of the pattern already matches, and the `\s*` right after it
+         absorbs a run of trailing whitespace before the group would ever
+         have to grow to include it — the same reason `INLINE`'s own image
+         and link entries below need none either. */
+      const src = imageLine[2] ?? imageLine[3]
       blocks.push({ type: 'image', src, alt: imageLine[1] })
       i++
       continue
@@ -460,12 +476,19 @@ function takeDefinitionList(lines, start) {
    The image and link addresses below accept a literal space, for the same
    reason `IMAGE_LINE` above does: the address is the one an agent's own
    attachment path actually has, `~/Library/Application Support/…` on macOS
-   included. Unlike the block form, an inline address is read only up to the
-   *first* `)` — a path with a `)` inside it is not supported here, since two
-   of these can share one line and there would be no other way to tell where
-   the first one ends — and the same CommonMark `<address>` alternative is
-   accepted here too, one alternative in each regex, exactly as `IMAGE_LINE`
-   takes it.
+   included. They use `IMAGE_LINE`'s own balanced-parens grammar rather than
+   reading to the first `)` outright — any run of non-paren characters, plus
+   one level of a fully balanced `\(…\)` read as a single unit — so
+   `/x/shot (1).png` still parses whole inline too. What still ends the
+   address is the first *unbalanced* `)`, the one with no `(` of its own
+   beside it: two of these can share a line, `![a](/x/a.png) and ![b](/x/b.png)`,
+   and there is no way to tell where the first one's address ends other than
+   stopping there, so a stray `)` a person or an agent writes right after a
+   figure — `![shot](x.png) (see above)` — still closes the address rather
+   than swallowing the caption behind it. `IMAGE_LINE`'s own CommonMark
+   `<address>` alternative is accepted here too, one alternative in each
+   regex, unambiguous regardless of parens since its own brackets say where
+   it ends.
 
    Two guards that are not decoration. The closers of `**` and `__` refuse a
    third marker, so `**a *b***` closes on the outer pair and the emphasis inside
@@ -484,11 +507,19 @@ const INLINE = [
      span is fenced by more than a few. Past ten the run is not an opener at
      all and falls through to plain text, markers included. */
   [/^(`{1,10})([\s\S]*?[^`])\1(?!`)/, (m) => ({ type: 'code', value: m[2] })],
+  /* Unlike `IMAGE_LINE`'s bare branch, this one's address group is lazy
+     (`+?`), not greedy, so no `.trim()` is needed on `m[3]`: a lazy repeat
+     stops expanding the moment the rest of the pattern already matches, and
+     `\s*\)` right after it matches trailing whitespace on its own before the
+     group would ever have to grow to include it. */
   [
-    /^!\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|([^)]+?))\s*\)/,
+    /^!\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|((?:[^()\n]|\([^()\n]*\))+?))\s*\)/,
     (m) => ({ type: 'image', src: m[2] ?? m[3], alt: m[1] })
   ],
-  [/^\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|([^)]+?))\s*\)/, (m) => link(m[2] ?? m[3], m[1])],
+  [
+    /^\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|((?:[^()\n]|\([^()\n]*\))+?))\s*\)/,
+    (m) => link(m[2] ?? m[3], m[1])
+  ],
   [/^<(https?:\/\/[^>\s]+)>/i, (m) => link(m[1], m[1], { verbatim: true })],
   [/^\*\*([\s\S]+?)\*\*(?!\*)/, (m) => ({ type: 'strong', children: parseInline(m[1]) })],
   [

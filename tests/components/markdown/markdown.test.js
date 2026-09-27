@@ -255,6 +255,26 @@ describe('parseMarkdown blocks', () => {
         parseMarkdown('![shot](</Users/x/Library/Application Support/a.png>)')
       ).toEqual([{ type: 'image', src: '/Users/x/Library/Application Support/a.png', alt: 'shot' }])
     })
+
+    /* Review pass 1 on smetana-yb0i: reading the address to the *last* `)` on
+       the line — the fix's first draft — swallowed a caption an agent wrote
+       right after its own figure. A stray, unbalanced `)` has to end the
+       address rather than being read as part of it. */
+    it('does not swallow a parenthetical caption after the figure into its own address', () => {
+      const [paragraph] = parseMarkdown('![shot](x.png) (see above)')
+      expect(paragraph.type).toBe('paragraph')
+      expect(paragraph.children[0]).toEqual({ type: 'image', src: 'x.png', alt: 'shot' })
+      expect(paragraph.children.map((c) => c.value ?? '').join('')).toContain(' (see above)')
+    })
+
+    /* A single level of balanced parens inside the address is still read as
+       part of it, whole — the shape a macOS attachment path takes when
+       Smetana itself de-duplicates a name (`shot (1).png`). */
+    it('reads a block image address with one level of balanced parens in it', () => {
+      expect(
+        parseMarkdown('![s](/Users/x/Application Support/shot (1).png)')
+      ).toEqual([{ type: 'image', src: '/Users/x/Application Support/shot (1).png', alt: 's' }])
+    })
   })
 
   it('is empty for empty input, and for whitespace', () => {
@@ -473,6 +493,17 @@ describe('parseInline', () => {
     expect(parseInline('[a](b) and (c)')).toEqual([{ type: 'text', value: '[a](b) and (c)' }])
     expect(parseInline('[note] (see below)')).toEqual([
       { type: 'text', value: '[note] (see below)' }
+    ])
+  })
+
+  /* The same balanced-parens address, read inline rather than alone on its
+     own line — pinned separately from the block case, since the two forms
+     are read by two different regexes that have to agree on this shape. */
+  it('reads an inline image address with one level of balanced parens in it', () => {
+    expect(parseInline('see ![s](/Users/x/Application Support/shot (1).png) here')).toEqual([
+      { type: 'text', value: 'see ' },
+      { type: 'image', src: '/Users/x/Application Support/shot (1).png', alt: 's' },
+      { type: 'text', value: ' here' }
     ])
   })
 
