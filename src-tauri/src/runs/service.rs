@@ -1105,6 +1105,7 @@ async fn drive(
             settings_path.as_deref(),
             matches!(last_batch, LastBatch::Limited),
             &mut released,
+            &mut settings_changed,
             probe.as_deref(),
         )
         .await
@@ -2391,6 +2392,11 @@ async fn headroom(
     settings_path: Option<&Path>,
     after_limited: bool,
     released: &mut watch::Receiver<bool>,
+    // A settings save wakes a paused run out of its ten-minute poll: somebody
+    // watching a paused run and lowering (or turning off) the gate wants that
+    // run to go on, not to sit out the rest of a sleep that started before
+    // they touched it.
+    settings_changed: &mut watch::Receiver<u64>,
     // Where the probe runs, carried straight through to `ask` on every turn
     // of the poll below.
     probe: Option<&Path>,
@@ -2429,26 +2435,8 @@ async fn headroom(
                 let spent = usage::held(reading.as_ref(), after_limited);
                 run.advance(RunState::Paused { pct, resets, spent });
                 say(run);
-                tokio::select! {
-                    _ = tokio::time::sleep(usage::POLL) => {}
-                    _ = stop.recv() => return None,
-                    // The press has to reach a run that is ten minutes into a
-                    // sleep, or it would read as having done nothing at all.
-                    //
-                    // The error is guarded rather than ignored, and the guard
-                    // is what keeps this arm from being a spin: `changed()` on
-                    // a channel whose sender is gone resolves at once and for
-                    // ever, so an ignored error would send the loop straight
-                    // back to a 60-second probe, over and over. It cannot
-                    // happen — the sender lives in the worker's entry for this
-                    // run, and that entry outlives this task by construction —
-                    // and a run whose entry has gone is over in any case, which
-                    // is what this answers.
-                    changed = released.changed() => {
-                        if changed.is_err() {
-                            return None;
-                        }
-                    }
+                if !wait_paused(stop, released, settings_changed).await {
+                    return None;
                 }
             }
             decision => {
@@ -2461,6 +2449,33 @@ async fn headroom(
                 return Some(usage::cap(run.settings.max_parallel_tasks, &decision));
             }
         }
+    }
+}
+
+/// Wait out one turn of a pause, unless something ends it early — a stop, a
+/// "Run anyway" press, or a settings save. The settings branch is what
+/// answers smetana-39to: without it, a threshold turned off while a run sat
+/// paused only took effect on the next scheduled wake, up to `usage::POLL`
+/// later, which read on screen as a run that had never started. Modelled on
+/// `wait_for_failover`'s own shape, including its treatment of a closed
+/// channel: `changed()` failing means the sender is gone, which happens only
+/// when the run's own entry in the worker's map is gone, so it is read the
+/// same as a stop rather than left to spin the loop with no sleep at all.
+///
+/// `true` means the caller should go straight round to the next turn of the
+/// poll — thresholds and the limit are asked again at once, without waiting
+/// out the rest of the sleep; `false` means a stop arrived and the caller
+/// ends the run.
+async fn wait_paused(
+    stop: &mut mpsc::Receiver<()>,
+    released: &mut watch::Receiver<bool>,
+    settings_changed: &mut watch::Receiver<u64>,
+) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep(usage::POLL) => true,
+        _ = stop.recv() => false,
+        changed = released.changed() => changed.is_ok(),
+        changed = settings_changed.changed() => changed.is_ok(),
     }
 }
 
@@ -3717,5 +3732,71 @@ mod tests {
         active.get_mut(&2).expect("the entry").run.settings.live_check = false;
 
         assert_eq!(browser_candidates(&active), Vec::<String>::new());
+    }
+
+    // smetana-39to: a paused run wakes on a settings save rather than sitting
+    // out the rest of `usage::POLL`. None of these tests waits for that sleep
+    // to finish — `usage::POLL` is ten minutes — because a settings, stop or
+    // release signal sent before the `select!` is awaited resolves its own
+    // branch long before the sleep could, the same race `wait_for_failover`'s
+    // callers already lean on.
+
+    #[tokio::test]
+    async fn a_settings_save_wakes_a_paused_run_before_the_poll_is_up() {
+        let (_stop_tx, mut stop) = mpsc::channel::<()>(1);
+        let (_released_tx, mut released) = watch::channel(false);
+        let (settings_tx, mut settings_changed) = watch::channel(0u64);
+
+        settings_tx.send(1).expect("the run's own receiver is still open");
+
+        assert!(
+            wait_paused(&mut stop, &mut released, &mut settings_changed).await,
+            "a settings change should send the loop straight round for another turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_closed_settings_channel_ends_the_run_rather_than_spinning() {
+        let (_stop_tx, mut stop) = mpsc::channel::<()>(1);
+        let (_released_tx, mut released) = watch::channel(false);
+        let (settings_tx, mut settings_changed) = watch::channel(0u64);
+
+        // The sender lives in the worker's entry for this run; dropping it here
+        // stands in for that entry being gone, which is the only way this
+        // channel closes in practice.
+        drop(settings_tx);
+
+        assert!(
+            !wait_paused(&mut stop, &mut released, &mut settings_changed).await,
+            "a closed channel must read as the run being over, not as license to spin"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stop_still_wakes_a_paused_run() {
+        let (stop_tx, mut stop) = mpsc::channel::<()>(1);
+        let (_released_tx, mut released) = watch::channel(false);
+        let (_settings_tx, mut settings_changed) = watch::channel(0u64);
+
+        stop_tx.send(()).await.expect("the receiver is still open");
+
+        assert!(
+            !wait_paused(&mut stop, &mut released, &mut settings_changed).await,
+            "stop must still end a paused run exactly as before"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_anyway_still_wakes_a_paused_run() {
+        let (_stop_tx, mut stop) = mpsc::channel::<()>(1);
+        let (released_tx, mut released) = watch::channel(false);
+        let (_settings_tx, mut settings_changed) = watch::channel(0u64);
+
+        released_tx.send(true).expect("the run's own receiver is still open");
+
+        assert!(
+            wait_paused(&mut stop, &mut released, &mut settings_changed).await,
+            "\"Run anyway\" must still send the loop straight round for another turn"
+        );
     }
 }
