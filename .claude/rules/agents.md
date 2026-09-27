@@ -23,14 +23,26 @@ Both adapters produce the neutral provider-node tree consumed by
 thread; a Claude send is a checked mailbox update. Neither may redirect a
 failed child message to the lead.
 
-Claude's interactive lead starts without the positional Run brief. Claude only
-creates its Agent Team files after an interactive turn, so the worker first
-writes a constrained bootstrap that may initialize the native runtime but may
-not read the board, claim a task, create a worktree, inspect project files, or
-do task work. The exact Run brief stays held until config carrying its generated
-`leadSessionId`, writable inboxes, and structured lead transcript are admitted;
-then it is written once. An admission timeout or error kills the PTY without
-delivering that real brief.
+Claude's interactive lead starts without the positional Run brief. Its team
+config appears the instant the runtime starts — holding only the team-lead,
+before any prompt has been sent — but the *teammate* needs an interactive
+turn: the model has to read one and decide to create it before
+`smetana-bootstrap`, its inbox, the lead's own `subagents/` directory and its
+transcript exist. So the worker first writes a constrained bootstrap that may
+initialize the native runtime but may not read the board, claim a task,
+create a worktree, inspect project files, or do task work. The exact Run
+brief stays held until that teammate, `subagents/`, `inboxes/` and the lead's
+own structured transcript are all admitted — addressed by Smetana's own
+`--session-id`, never by the runtime's own generated `leadSessionId`, which
+names a session of Claude's own choosing and never Smetana's (two live
+probes, 2026-09-27, Claude Code 2.1.281, caught the two disagreeing every
+time) — then the brief is written once. Any one of those still missing during
+admission is read as "not yet ready" and the loop waits for the next tick
+rather than refusing; only a real contradiction (a config with no name, one
+that has moved to another directory, or `preflight` failing once the full
+file set is already present) fails admission outright, and a 90-second
+timeout with nothing admitted kills the PTY without ever delivering that real
+brief.
 
 `src-tauri/src/agents/` is what the app knows about the CLI coding agents it runs, one file per
 agent, and everything harness-specific lives in it. Claude Code and Codex are supported; which one
