@@ -2369,20 +2369,6 @@ async fn wait_for_failover(
     }
 }
 
-/// Wait until there is allowance enough to run a batch, and answer with how
-/// many tasks that batch may take.
-///
-/// `None` means a stop arrived while it waited. The ending itself is not made
-/// here, deliberately: the caller ends the run through `finish`, which is the
-/// single place a run reaches `Stopped` and therefore the single place one gets
-/// a report written for it.
-///
-/// The wait is a state rather than a sleep, which is what puts it in the scope
-/// bar and what lets the stop button reach it: a run with no session in flight
-/// stops the moment it is asked, and a paused one has none. The poll is
-/// interruptible for the same reason the crash backoff is, only more so — ten
-/// minutes of silence after pressing stop would read as the button having done
-/// nothing at all.
 /// The gate's own reading of the person's thresholds, with "Run anyway"
 /// applied on top. Pulled out so the poll at the top of `headroom`'s loop and
 /// the paused wait below it ask the identical question — the wait's "did the
@@ -2404,6 +2390,20 @@ fn effective_limits(settings_path: Option<&Path>, released: &watch::Receiver<boo
     limits
 }
 
+/// Wait until there is allowance enough to run a batch, and answer with how
+/// many tasks that batch may take.
+///
+/// `None` means a stop arrived while it waited. The ending itself is not made
+/// here, deliberately: the caller ends the run through `finish`, which is the
+/// single place a run reaches `Stopped` and therefore the single place one gets
+/// a report written for it.
+///
+/// The wait is a state rather than a sleep, which is what puts it in the scope
+/// bar and what lets the stop button reach it: a run with no session in flight
+/// stops the moment it is asked, and a paused one has none. The poll is
+/// interruptible for the same reason the crash backoff is, only more so — ten
+/// minutes of silence after pressing stop would read as the button having done
+/// nothing at all.
 async fn headroom(
     run: &mut Run,
     say: &impl Fn(&Run),
