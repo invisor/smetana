@@ -67,8 +67,23 @@ const TASK = /^\[([ xX])\]\s+(.*)$/
 /* A line that is nothing but an image is a block of its own — the illustration
    this document is attaching — while the same syntax beside other words on a
    line is part of a sentence and stays inline (see `INLINE` below). Anchored
-   at both ends so `![a](b) and more text` does not match. */
-const IMAGE_LINE = /^ {0,3}!\[([^\]]*)\]\(\s*(\S+?)\s*\)\s*$/
+   at both ends so `![a](b) and more text` does not match.
+
+   The address may carry a literal space, and that is not a hand-typed
+   corner case: it is the shape the app itself hands an agent for every
+   attachment it ever draws a figure for. `PICTURES` in
+   `src-tauri/src/agents/prompt.rs` asks an agent to write
+   `![what it is](/absolute/path.png)`, a bare absolute path, and on macOS
+   that path runs through `~/Library/Application Support/…` — a folder name
+   with a space in it on every machine, so every screenshot an agent attaches
+   there used to reach this line unmatched and sit on screen as literal text,
+   brackets and all. Since the line is anchored at both ends, the address is
+   read as everything up to the *last* `)` in the line rather than the
+   first — a block image's own address may contain a `)` of its own and still
+   be read whole, unlike the inline form below. The CommonMark `<address>`
+   form is accepted alongside it, one alternative in the regex: angle
+   brackets stripped, anything but `>` and a newline allowed inside. */
+const IMAGE_LINE = /^ {0,3}!\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|([\s\S]+))\)\s*$/
 
 /* A definition list's `dd` line. Never matched on its own — only a term line
    immediately above one turns a run of these into a `dl`; met without a term
@@ -174,7 +189,15 @@ function parseBlocks(lines, depth = 0) {
 
     const imageLine = IMAGE_LINE.exec(line)
     if (imageLine) {
-      blocks.push({ type: 'image', src: imageLine[2], alt: imageLine[1] })
+      /* The angle-bracket branch (`imageLine[2]`) is exact, nothing to trim —
+         `<…>` names its own boundary. The bare branch (`imageLine[3]`) is
+         greedy against the last `)` in the line, which can leave a run of
+         trailing whitespace inside the capture that the regex's own `\s*`
+         never gets a chance to eat (the greedy match already satisfies the
+         rest of the pattern before backtracking that far), so it is trimmed
+         here instead. */
+      const src = imageLine[2] !== undefined ? imageLine[2] : imageLine[3].trim()
+      blocks.push({ type: 'image', src, alt: imageLine[1] })
       i++
       continue
     }
@@ -434,6 +457,16 @@ function takeDefinitionList(lines, start) {
    load it, and the acceptance criteria's own example (`./a.png`) is a relative
    path with no scheme at all — the scheme gate belongs to `link` alone.
 
+   The image and link addresses below accept a literal space, for the same
+   reason `IMAGE_LINE` above does: the address is the one an agent's own
+   attachment path actually has, `~/Library/Application Support/…` on macOS
+   included. Unlike the block form, an inline address is read only up to the
+   *first* `)` — a path with a `)` inside it is not supported here, since two
+   of these can share one line and there would be no other way to tell where
+   the first one ends — and the same CommonMark `<address>` alternative is
+   accepted here too, one alternative in each regex, exactly as `IMAGE_LINE`
+   takes it.
+
    Two guards that are not decoration. The closers of `**` and `__` refuse a
    third marker, so `**a *b***` closes on the outer pair and the emphasis inside
    it survives; without that the non-greedy match closes early and the last
@@ -451,8 +484,11 @@ const INLINE = [
      span is fenced by more than a few. Past ten the run is not an opener at
      all and falls through to plain text, markers included. */
   [/^(`{1,10})([\s\S]*?[^`])\1(?!`)/, (m) => ({ type: 'code', value: m[2] })],
-  [/^!\[([^\]]*)\]\(\s*(\S+?)\s*\)/, (m) => ({ type: 'image', src: m[2], alt: m[1] })],
-  [/^\[([^\]]*)\]\(\s*(\S+?)\s*\)/, (m) => link(m[2], m[1])],
+  [
+    /^!\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|([^)]+?))\s*\)/,
+    (m) => ({ type: 'image', src: m[2] ?? m[3], alt: m[1] })
+  ],
+  [/^\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|([^)]+?))\s*\)/, (m) => link(m[2] ?? m[3], m[1])],
   [/^<(https?:\/\/[^>\s]+)>/i, (m) => link(m[1], m[1], { verbatim: true })],
   [/^\*\*([\s\S]+?)\*\*(?!\*)/, (m) => ({ type: 'strong', children: parseInline(m[1]) })],
   [

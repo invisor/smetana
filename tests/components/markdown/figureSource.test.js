@@ -18,6 +18,18 @@ describe('isAllowedFigureSrc', () => {
     expect(isAllowedFigureSrc('/Users/ada/fig.png')).toBe(true)
   })
 
+  /* smetana-yb0i fixed `markdown.js`'s own address grammar, not this module:
+     a macOS attachment path (`~/Library/Application Support/…`) has no
+     scheme, so it was never this gate that refused it — pinned here so a
+     future change to this file does not reopen the question by accident.
+     `isPathFigureSrc` beside it is what sends a source like this to
+     `image_read` rather than treating it as a `data:` URI. */
+  it('accepts an absolute path with a space in it, the macOS attachments folder shape', () => {
+    const src = '/Users/x/Library/Application Support/com.invisor.smetana/attachments/a.png'
+    expect(isAllowedFigureSrc(src)).toBe(true)
+    expect(isPathFigureSrc(src)).toBe(true)
+  })
+
   it('does not mistake a Windows drive letter for a one-letter scheme', () => {
     expect(isAllowedFigureSrc('C:\\Users\\ada\\fig.png')).toBe(true)
   })
