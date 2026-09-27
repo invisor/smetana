@@ -20,6 +20,7 @@
 
 use serde::Deserialize;
 
+use crate::runs::model::StopReason;
 use crate::runs::queue::Leftover;
 use crate::runs::summary::{TaskLine, Tasks};
 
@@ -157,6 +158,12 @@ pub struct RunReport<'a> {
     pub scope: &'a str,
     pub finished: &'a str,
     pub seconds: u64,
+    /// Why the run is not running any more — `finish`'s own `StopReason`, the
+    /// same value the journal writes as `{reason:?}` and `stopReason.js` turns
+    /// into a sentence of its own on the run bar. Not an `Option`: `finish` is
+    /// the only writer of this document and it never runs before a run has a
+    /// reason, so a placeholder here would only be a state nothing produces.
+    pub stop_reason: &'a StopReason,
     pub tasks: Option<&'a Tasks>,
     pub batches: &'a [BatchLine],
     /// Where this run's journal is — the file `journal.rs` wrote a line to at
@@ -332,6 +339,16 @@ pub fn render(report: &RunReport) -> String {
     cell(&mut out, "total", &human(report.seconds), "");
     out.push_str("</div>");
 
+    // How the run itself ended, unconditionally: a run that stopped before its
+    // first batch — the case a failed preflight left as four zeros and a shrug
+    // — still owes a person the reason, and it is written here whether or not
+    // the board below can say anything at all. Reuses `.outcome`, the class a
+    // batch card's own ending already sets, so the stylesheet grows no rule
+    // for it.
+    out.push_str("<p class=\"outcome\">");
+    out.push_str(&stop_reason_line(report.stop_reason));
+    out.push_str("</p>");
+
     // The lead's own plain-language account of the run, one paragraph per
     // batch that gave one, in batch order. It stands before `closed` because
     // it is the sentence the Reports tab draws for this document, and it
@@ -435,6 +452,60 @@ pub fn render(report: &RunReport) -> String {
     }
     out.push_str("</div></body></html>");
     out
+}
+
+/// One sentence naming how the run itself ended — Rust's one place for the
+/// words, where before this change the whole vocabulary lived only in
+/// `stopReason.js`, and a run that failed its preflight shipped a document
+/// with nothing in it about why.
+///
+/// Every variant gets its own sentence, and the test below holds both halves
+/// of that: none is empty and none repeats another's words. `Preflight`'s
+/// `detail` and `NeedsAnswer`'s `question` are text the app or the harness
+/// wrote, going into a document a person opens, so both go through `escape`
+/// the same as every other borrowed string that reaches this file — `journal`
+/// prints `{reason:?}` for a reader who already knows the machinery, which is
+/// a different job and stays untouched.
+fn stop_reason_line(reason: &StopReason) -> String {
+    match reason {
+        StopReason::QueueEmpty => {
+            "The run ended with nothing ready and nothing left unfinished.".into()
+        }
+        StopReason::BatchDone => "The run took its one batch and finished it.".into(),
+        StopReason::NoProgress => "The run stopped: a whole batch ran and moved neither what \
+                                    was ready nor what was unfinished."
+            .into(),
+        StopReason::MaxIterations => {
+            "The run stopped after reaching its limit on how many batches it may run.".into()
+        }
+        StopReason::Crashed { attempts } => format!(
+            "The run stopped: its session exited non-zero {attempts} time{} in a row.",
+            if *attempts == 1 { "" } else { "s" }
+        ),
+        StopReason::Unreadable => {
+            "The run stopped: the tracker could not be read twice running.".into()
+        }
+        StopReason::Cancelled => {
+            "Somebody pressed stop, and the batch already in flight was allowed to finish.".into()
+        }
+        StopReason::SessionRemoved => "The run stopped mid-batch: its agent session was removed \
+                                        from the agents panel."
+            .into(),
+        // The `&ldquo;`/`&rdquo;` pair matches `outcome`'s own `Unanswered` arm
+        // below, so the same ending is quoted the same way wherever it appears
+        // in this document.
+        StopReason::NeedsAnswer { question } => format!(
+            "The run stopped at a question it had nobody to answer: &ldquo;{}&rdquo;",
+            escape(question)
+        ),
+        StopReason::NothingDone { batches } => format!(
+            "The run stopped: {} in a row came back having done nothing at all.",
+            if *batches == 1 { "one batch".to_string() } else { format!("{batches} batches") }
+        ),
+        StopReason::Preflight { detail } => {
+            format!("The run could not start: {}.", escape(detail))
+        }
+    }
 }
 
 /// What the run saw end the batch, in a sentence, under every batch card and
@@ -864,6 +935,10 @@ mod tests {
         }
     }
 
+    /// The ordinary ending, so a test about anything else is not also a test
+    /// about how a run stopped.
+    const DEFAULT_REASON: StopReason = StopReason::QueueEmpty;
+
     fn report<'a>(seconds: u64, tasks: Option<&'a Tasks>, batches: &'a [BatchLine]) -> RunReport<'a> {
         RunReport {
             title: "Run report",
@@ -871,6 +946,7 @@ mod tests {
             scope: "the queue",
             finished: "2026-08-12 14:31",
             seconds,
+            stop_reason: &DEFAULT_REASON,
             tasks,
             batches,
             journal: None,
@@ -981,6 +1057,89 @@ mod tests {
                 "and the run's own half stands beside it for {outcome:?}: {html}"
             );
         }
+    }
+
+    /// The whole `StopReason` vocabulary, one representative value per
+    /// variant — `Crashed`, `NeedsAnswer`, `NothingDone` and `Preflight` all
+    /// carry a payload, so each gets a value rather than standing for a shape.
+    fn stop_reasons() -> Vec<StopReason> {
+        vec![
+            StopReason::QueueEmpty,
+            StopReason::BatchDone,
+            StopReason::NoProgress,
+            StopReason::MaxIterations,
+            StopReason::Crashed { attempts: 3 },
+            StopReason::Unreadable,
+            StopReason::Cancelled,
+            StopReason::SessionRemoved,
+            StopReason::NeedsAnswer { question: "Trust this folder?".into() },
+            StopReason::NothingDone { batches: 2 },
+            StopReason::Preflight { detail: "npm install exited 127".into() },
+        ]
+    }
+
+    #[test]
+    fn a_run_that_never_reached_a_batch_still_says_why_it_stopped() {
+        // smetana-2s3r: a run that fell over in the preflight left a document
+        // of four zeros and a shrug — the reason was known, sitting in
+        // `journal::ended` and in the run bar, and said nowhere in the one
+        // document meant to outlive both. `tasks: None` is the unreadable
+        // board this ending always carries, and the sentence is still there.
+        let reason = StopReason::Preflight {
+            detail: "the session could not be started: <runtime> did not \"init\" & exit".into(),
+        };
+        let html = render(&RunReport { stop_reason: &reason, ..report(22, None, &[]) });
+
+        assert!(html.contains("could not start"), "{html}");
+        // The detail travels word for word, escaped like every other borrowed
+        // string that reaches this document.
+        assert!(
+            html.contains("&lt;runtime&gt; did not &quot;init&quot; &amp; exit"),
+            "the detail is carried verbatim, escaped rather than dropped: {html}"
+        );
+        assert!(!html.contains("<runtime>"), "an unescaped angle bracket would not be a document");
+    }
+
+    #[test]
+    fn every_stop_reason_gets_its_own_sentence_and_none_is_empty() {
+        let mut seen = std::collections::HashSet::new();
+        for reason in stop_reasons() {
+            let sentence = stop_reason_line(&reason);
+            assert!(!sentence.trim().is_empty(), "no ending goes unsaid: {reason:?}");
+            assert!(
+                seen.insert(sentence.clone()),
+                "two endings sharing one sentence read as one ending: {reason:?} -> {sentence}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_stop_reason_stands_after_the_counters_and_before_the_task_sections() {
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
+        let reason = StopReason::NoProgress;
+        let html = render(&RunReport {
+            stop_reason: &reason,
+            ..report(600, Some(&tasks), &[batch(1)])
+        });
+
+        let strip_total = html
+            .find("<span class=\"cell-label\">total</span>")
+            .expect("the strip's last cell");
+        let reason_at = html.find("moved neither what was ready").expect("the reason line");
+        let closed_at = html.find("<div class=\"sec\"><span>closed</span>").expect("closed");
+        assert!(strip_total < reason_at, "the reason follows the counters: {html}");
+        assert!(reason_at < closed_at, "and stands before the task sections: {html}");
+    }
+
+    #[test]
+    fn the_stop_reason_prints_even_when_the_board_could_not_be_read() {
+        // The board's own dashes must never be the whole of what a person
+        // reads — see `a_report_with_no_diff_says_so_rather_than_showing_zero`
+        // — and neither must an unreadable board silence the one sentence that
+        // never depended on it in the first place.
+        let reason = StopReason::Unreadable;
+        let html = render(&RunReport { stop_reason: &reason, ..report(600, None, &[]) });
+        assert!(html.contains("could not be read twice running"), "{html}");
     }
 
     #[test]

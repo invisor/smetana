@@ -676,6 +676,17 @@ and it is **never** rendered as "0 closed, 0 parked", the same rule `projectByte
 document as having left no account of itself rather than drawn as an empty row, while its tasks still
 appear from the board.
 
+**One sentence, right under the strip's four counters and before either task section, names how the
+run itself ended** (smetana-2s3r). A run that fell over before its first batch used to leave a
+document of `closed 0 · parked 0 · batches 0 · total 22s` and nothing else — the reason was sitting in
+`journal::ended` (`{reason:?}`, machine words) and on the run bar (`stopReason.js`), and said nowhere
+in the one document meant to outlive both. `report::stop_reason_line` is Rust's one place for the
+words, one sentence per `StopReason` variant, printed unconditionally — even over `tasks: None`, where
+every section below it stays silent. `Preflight`'s `detail` and `NeedsAnswer`'s `question` are carried
+verbatim through `escape`, the same rule every other borrowed string in this file follows. It reuses
+`.outcome`, the class a batch card's own ending already draws with, so the line costs the stylesheet
+nothing new to keep in step across the three mirrors this file's own header names.
+
 **A batch in the document carries two halves, and only one of them is the agent's** (smetana-pmj).
 The other is `report::BatchOutcome`: what the loop saw end the batch, drawn under every batch card
 whether or not a file was written. It has to be, because the two fail together — an agent killed
