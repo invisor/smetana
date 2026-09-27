@@ -80,6 +80,17 @@ const UNREACHABLE: &str =
 /// than the app.
 const SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How long a Claude Crew lead's structured runtime — its team config, the
+/// bootstrap teammate, `subagents/`, `inboxes/` and the lead's own transcript
+/// — has to admit before the real Run brief is refused and the PTY killed.
+/// The old 10-second budget could not survive its own arithmetic: two live
+/// probes (2026-09-27, Claude Code 2.1.281) measured ~4s to the TUI's own
+/// readiness, ~4s more for the first model turn to answer an empty prompt,
+/// and a teammate spawn is a second process plus another model turn on top of
+/// that. 90 seconds leaves real headroom above the worst of those, rather
+/// than a budget the runtime could not clear even when healthy.
+const CLAUDE_CREW_ADMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
 /// The answer to `session_attach`: the whole conversation so far, the number
 /// events arriving after it continue from, and where the session stands.
 ///
@@ -133,6 +144,12 @@ struct ClaudeAdmission {
     started: std::time::Instant,
     gate: ClaudePromptGate,
     reply: oneshot::Sender<Result<(u64, SessionId), SessionError>>,
+    /// Whichever of `claude_crew::WAIT_NO_*` was last true. Missing a
+    /// structured file during admission is "not yet ready", not a failure
+    /// (`refresh_claude_crews` below), so this is what the timeout message
+    /// names instead of a single phrase for every cause. Starts at
+    /// `WAIT_NO_TEAM_CONFIG`, the true state until the first tick finds one.
+    wait_reason: String,
 }
 
 /// The two explicit inputs to a native Claude Crew lead. `take_real` is a
@@ -447,10 +464,12 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         let _ = admission.reply.send(Err(SessionError::Spawn(reason)));
                     }
                     let timed_out: Vec<_> = claude_starting.iter()
-                        .filter_map(|(root, admission)| (admission.started.elapsed() >= std::time::Duration::from_secs(10)).then_some(*root))
+                        .filter_map(|(root, admission)| (admission.started.elapsed() >= CLAUDE_CREW_ADMISSION_TIMEOUT).then_some(*root))
                         .collect();
                     for root in timed_out {
                         let admission = claude_starting.remove(&root).expect("timed out Claude start exists");
+                        let expected_session = claude_expected_sessions.get(&root).cloned().unwrap_or_default();
+                        log::info!("[crew] root {root}: admission timed out waiting on: {} (expected session {expected_session})", admission.wait_reason);
                         clear_crew(
                             &app, &mut sessions, &mut crews, &mut crew_ptys, &mut claude_crews,
                             &mut claude_teams, &mut claude_team_baselines, &mut claude_expected_sessions, &mut claude_bootstrap_members, &mut claude_starting,
@@ -458,7 +477,9 @@ pub fn start(app: AppHandle) -> SessionHandle {
                             &mut crew_leads, &mut crew_waiters, &mut crew_exits, &mut crew_send_waiters,
                             root, crate::terminal::model::Exit::NoCode, false,
                         );
-                        let _ = admission.reply.send(Err(SessionError::Spawn("Claude Crew runtime did not establish an exact team config, transcript, and inbox contract within 10 seconds".into())));
+                        let _ = admission.reply.send(Err(SessionError::Spawn(
+                            crate::agents::claude_crew::admission_timeout_message(&admission.wait_reason),
+                        )));
                     }
                     // An interactive Claude lead has no pipe reader to emit a
                     // `Chunk::Eof`. Poll its real child here so an exited root
@@ -1267,19 +1288,31 @@ fn refresh_claude_crews(
     for root in roots {
         let Some(package) = crews.get_mut(root) else { continue };
         let Some(expected_session) = expected_sessions.get(root) else { continue };
+        let team_already_known = teams.contains_key(root);
         let candidates = if let Some(team) = teams.get(root) {
+            // The directory itself is the binding once found (see below);
+            // `leadSessionId` never entered it, and re-reading it here is
+            // only to notice the directory going away or being replaced.
             crate::agents::claude_crew::teams_for_project(&home, Path::new(&package.project))
                 .into_iter()
-                .filter(|(candidate, config)| candidate == team && config.get("leadSessionId").and_then(serde_json::Value::as_str) == Some(expected_session.as_str()))
+                .filter(|(candidate, _config)| candidate == team)
                 .collect()
         } else {
             crate::agents::claude_crew::teams_for_lead(
                 crate::agents::claude_crew::teams_for_project(&home, Path::new(&package.project)),
-                expected_session,
                 baselines.get(root).unwrap_or(&HashSet::new()),
             )
         };
         if candidates.len() != 1 {
+            // Zero candidates: the runtime has not created a directory for
+            // this launch yet. More than one: two same-cwd launches are
+            // ambiguous and this loop waits for one to resolve rather than
+            // guess, per `teams_for_lead`'s own contract.
+            if !team_already_known {
+                if let Some(admission) = starting.get_mut(root) {
+                    admission.wait_reason = crate::agents::claude_crew::WAIT_NO_TEAM_CONFIG.into();
+                }
+            }
             continue;
         }
         let (team, config) = candidates.into_iter().next().expect("one candidate");
@@ -1303,21 +1336,71 @@ fn refresh_claude_crews(
             continue;
         }
         teams.insert(*root, team.clone());
-        // The bootstrap name is used only to capture its provider-issued id
-        // during admission. Thereafter topology and transcript routing exclude
-        // that exact id, never a display label.
-        if starting.contains_key(root) && !bootstrap_members.contains_key(root) {
-            let Some(bootstrap) = crate::agents::claude_crew::bootstrap_member_id(&config) else {
-                package.tree.fail_node(*root);
-                admission_failures.push((
-                    *root,
-                    "Claude Crew bootstrap teammate is absent from the admitted runtime".into(),
-                ));
+        if !team_already_known {
+            log::info!("[crew] root {root}: found team config at {} (expected session {expected_session})", team.display());
+        }
+        // Bootstrap membership, `subagents/`, `inboxes/`, the bootstrap's own
+        // inbox file and `preflight` are one atomic readiness decision while
+        // starting — `claude_crew::admission_step`, pure and shared with its
+        // own unit tests, so this loop and a test drive the identical rule
+        // rather than two copies that can drift. An already-admitted package
+        // keeps the inline checks below instead: those never change once
+        // admission has completed, and duplicating that stability inside the
+        // pure function would only give it a second caller to reason about.
+        let (subagents, lead_transcript) = if starting.contains_key(root) {
+            match crate::agents::claude_crew::admission_step(&home, &team, &config, expected_session) {
+                crate::agents::claude_crew::AdmissionStep::Waiting(reason) => {
+                    if let Some(admission) = starting.get_mut(root) {
+                        admission.wait_reason = reason.into();
+                    }
+                    emit_crew(app, package);
+                    continue;
+                }
+                crate::agents::claude_crew::AdmissionStep::Failed(message) => {
+                    package.tree.fail_node(*root);
+                    admission_failures.push((*root, message));
+                    emit_crew(app, package);
+                    continue;
+                }
+                crate::agents::claude_crew::AdmissionStep::Ready { bootstrap, subagents, lead_transcript } => {
+                    if !bootstrap_members.contains_key(root) {
+                        bootstrap_members.insert(*root, bootstrap.clone());
+                        log::info!("[crew] root {root}: bootstrap teammate {bootstrap} joined (expected session {expected_session})");
+                    }
+                    (subagents, lead_transcript)
+                }
+            }
+        } else {
+            // Addressed by our own `--session-id`, never by the config's own
+            // `leadSessionId` — the two never name the same session (see
+            // `claude_crew::lead_subagents`'s own comment for the measurement).
+            let Some(subagents) = crate::agents::claude_crew::lead_subagents(&home, expected_session) else {
                 emit_crew(app, package);
                 continue;
             };
-            bootstrap_members.insert(*root, bootstrap);
-        }
+            let Some(lead_session_dir) = subagents.parent() else {
+                package.tree.fail_node(*root);
+                emit_crew(app, package);
+                continue;
+            };
+            if let Err(error) = crate::agents::claude_crew::preflight(
+                "2.1.281",
+                &team,
+                lead_session_dir,
+            ) {
+                package.tree.fail_node(*root);
+                log::warn!("[crew] root {root}: Claude runtime preflight failed: {error}");
+                emit_crew(app, package);
+                continue;
+            }
+            let Some(lead_transcript) = crate::agents::claude_crew::lead_transcript(&home, expected_session) else {
+                package.tree.fail_node(*root);
+                log::warn!("[crew] root {root}: lead transcript is unavailable");
+                emit_crew(app, package);
+                continue;
+            };
+            (subagents, lead_transcript)
+        };
         let bootstrap = bootstrap_members.get(root).map(String::as_str);
         // Keep the inert helper private through admission and while it is
         // still idle afterwards. A provider-owned status transition to real
@@ -1333,43 +1416,6 @@ fn refresh_claude_crews(
         for node in crate::agents::claude_crew::members_excluding(&config, hidden_bootstrap) {
             package.apply(node);
         }
-        let Some(subagents) = crate::agents::claude_crew::lead_subagents(&home, &config) else {
-            emit_crew(app, package);
-            continue;
-        };
-        let Some(lead_session_dir) = subagents.parent() else {
-            package.tree.fail_node(*root);
-            if starting.contains_key(root) {
-                admission_failures.push((*root, "Claude Crew lead transcript directory is invalid".into()));
-            }
-            emit_crew(app, package);
-            continue;
-        };
-        // Version selection happened before the run entered the board loop;
-        // this is the runtime half: the actual config, transcript directory,
-        // and writable member inboxes supplied by this interactive lead.
-        if let Err(error) = crate::agents::claude_crew::preflight(
-            "2.1.281",
-            &team,
-            lead_session_dir,
-        ) {
-            package.tree.fail_node(*root);
-            log::warn!("[crew] Claude runtime preflight failed: {error}");
-            if starting.contains_key(root) {
-                admission_failures.push((*root, error.to_string()));
-            }
-            emit_crew(app, package);
-            continue;
-        }
-        let Some(lead_transcript) = crate::agents::claude_crew::lead_transcript(&home, &config) else {
-            package.tree.fail_node(*root);
-            log::warn!("[crew] Claude lead transcript is unavailable");
-            if starting.contains_key(root) {
-                admission_failures.push((*root, "Claude Crew lead transcript is unavailable".into()));
-            }
-            emit_crew(app, package);
-            continue;
-        };
         match lead_tails.entry(*root).or_default().read_new_with_lifecycle(&lead_transcript) {
             Ok((events, lifecycle)) => {
                 // This first read advances past only the constrained
@@ -1432,6 +1478,7 @@ fn refresh_claude_crews(
                 pty.write(&input);
                 package.tree.set_state(package.root, CrewState::Running);
             }
+            log::info!("[crew] root {root}: admission complete (expected session {expected_session})");
             let _ = admission.reply.send(Ok((*root, *root)));
         }
         let Ok(entries) = std::fs::read_dir(&subagents) else {
@@ -1606,12 +1653,14 @@ fn handle(
                     .map(PathBuf::from)
                     .map(|home| crate::agents::claude_crew::team_dirs(&home))
                     .unwrap_or_default();
+                log::info!("[crew] root {id}: expecting Claude Code session {lead_session}");
                 match spawn_claude_crew(app, &project, intent, agent, lead_session.clone()) {
                     Ok((mut pty, prompt)) => {
-                        // Team config/inboxes do not exist until Claude has
-                        // received an interactive turn. This constrained
-                        // bootstrap creates only that provider runtime; the
-                        // real Run brief remains in `ClaudeAdmission`.
+                        // The teammate, its inbox, `subagents/` and the lead's
+                        // own transcript do not exist until Claude has read an
+                        // interactive turn. This constrained bootstrap creates
+                        // only that provider runtime; the real Run brief
+                        // remains in `ClaudeAdmission`.
                         let mut gate = ClaudePromptGate::new(prompt);
                         pty.write(&gate.bootstrap());
                         let package = CrewPackage::new(project, id, "Crew lead");
@@ -1625,6 +1674,7 @@ fn handle(
                             started: std::time::Instant::now(),
                             gate,
                             reply: tx,
+                            wait_reason: crate::agents::claude_crew::WAIT_NO_TEAM_CONFIG.into(),
                         });
                     }
                     Err(error) => {
@@ -2562,21 +2612,23 @@ mod tests {
 
     #[test]
     fn claude_fresh_baseline_bootstraps_then_admits_one_real_brief() {
+        // Our own --session-id, passed on the command line. The runtime's own
+        // `leadSessionId` below is deliberately a different, unrelated
+        // string throughout — the two never agree in practice (see
+        // `claude_crew::teams_for_lead`'s own comment), so nothing in this
+        // sequence may depend on them matching.
         let expected_session = "exact-lead-session";
         let baseline = HashSet::new();
         let mut gate = ClaudePromptGate::new(Some("REAL-RUN-BRIEF".into()));
 
         // A fresh baseline has no team config yet, and the real prompt is not
         // a legal PTY input before the non-working bootstrap is sent.
-        assert!(crate::agents::claude_crew::teams_for_lead(Vec::new(), expected_session, &baseline).is_empty());
+        assert!(crate::agents::claude_crew::teams_for_lead(Vec::new(), &baseline).is_empty());
         assert_eq!(gate.take_real(), None);
-        let bootstrap = gate.bootstrap();
-        assert!(String::from_utf8_lossy(&bootstrap).contains("MUST NOT read the board"));
-        assert!(!String::from_utf8_lossy(&bootstrap).contains("REAL-RUN-BRIEF"));
+        let bootstrap_input = gate.bootstrap();
+        assert!(String::from_utf8_lossy(&bootstrap_input).contains("MUST NOT read the board"));
+        assert!(!String::from_utf8_lossy(&bootstrap_input).contains("REAL-RUN-BRIEF"));
 
-        // Model the newly-created provider files. The exact generated lead
-        // session, not a same-cwd neighbour, must pass config, journal and
-        // inbox admission before the real brief is obtainable.
         let root = std::env::temp_dir().join(format!(
             "smetana-claude-bootstrap-{}",
             std::process::id()
@@ -2584,15 +2636,58 @@ mod tests {
         let home = root.join("home");
         let team = home.join(".claude/teams/session-new");
         let lead_dir = home.join(".claude/projects/encoded-project").join(expected_session);
+        std::fs::create_dir_all(&team).unwrap();
+
+        // Step 1: the config Claude writes the instant its interactive
+        // runtime starts — the team-lead alone, before any prompt has been
+        // answered. `teams_for_lead` finds it by cwd and launch window, not
+        // by the config's own (unrelated) `leadSessionId`, and
+        // `admission_step` — the same function `refresh_claude_crews` calls
+        // for a starting package — reads it as not yet ready rather than as
+        // a failure.
+        std::fs::write(
+            team.join("config.json"),
+            r#"{"name":"session-new","leadSessionId":"claude-generated-unrelated-id","members":[{"name":"team-lead","agentType":"team-lead","cwd":"/project"}]}"#,
+        )
+        .unwrap();
+        let candidates = crate::agents::claude_crew::teams_for_lead(
+            crate::agents::claude_crew::teams_for_project(&home, Path::new("/project")),
+            &baseline,
+        );
+        assert_eq!(candidates.len(), 1, "the lone lead is already a candidate");
+        let (_, lead_only_config) = &candidates[0];
+        assert_eq!(
+            crate::agents::claude_crew::admission_step(&home, &team, lead_only_config, expected_session),
+            crate::agents::claude_crew::AdmissionStep::Waiting(crate::agents::claude_crew::WAIT_NO_BOOTSTRAP),
+            "the model has not read the bootstrap turn yet: not a failure, just not ready"
+        );
+
+        // Step 2: the model reads the bootstrap turn and creates the
+        // teammate, `subagents/` and `inboxes/` — but has not yet written the
+        // teammate's own inbox *file* inside `inboxes/`. `admission_step`
+        // still waits rather than refusing (review pass 1's finding: a
+        // missing inbox file must not fail admission outright).
         std::fs::create_dir_all(team.join("inboxes")).unwrap();
         std::fs::create_dir_all(lead_dir.join("subagents")).unwrap();
         std::fs::write(
             team.join("config.json"),
-            format!(
-                r#"{{"name":"session-new","leadSessionId":"{expected_session}","members":[{{"name":"team-lead","agentType":"team-lead","cwd":"/project"}},{{"name":"smetana-bootstrap","agentType":"general-purpose"}}]}}"#
-            ),
+            r#"{"name":"session-new","leadSessionId":"claude-generated-unrelated-id","members":[{"name":"team-lead","agentType":"team-lead","cwd":"/project"},{"name":"smetana-bootstrap","agentType":"general-purpose","agentId":"smetana-bootstrap@session-new"}]}"#,
         )
         .unwrap();
+        let candidates = crate::agents::claude_crew::teams_for_lead(
+            crate::agents::claude_crew::teams_for_project(&home, Path::new("/project")),
+            &baseline,
+        );
+        assert_eq!(candidates.len(), 1);
+        let (_, with_teammate_config) = &candidates[0];
+        assert_eq!(
+            crate::agents::claude_crew::admission_step(&home, &team, with_teammate_config, expected_session),
+            crate::agents::claude_crew::AdmissionStep::Waiting(crate::agents::claude_crew::WAIT_NO_BOOTSTRAP_INBOX),
+        );
+
+        // Step 3: the inbox file and the lead's own transcript — addressed
+        // by *our* `--session-id`, never the config's own `leadSessionId` —
+        // exist too, and admission is `Ready`.
         std::fs::write(team.join("inboxes/smetana-bootstrap.json"), "[]").unwrap();
         std::fs::write(
             lead_dir.parent().unwrap().join(format!("{expected_session}.jsonl")),
@@ -2601,16 +2696,19 @@ mod tests {
         .unwrap();
         let candidates = crate::agents::claude_crew::teams_for_lead(
             crate::agents::claude_crew::teams_for_project(&home, Path::new("/project")),
-            expected_session,
             &baseline,
         );
-        assert_eq!(
-            candidates.len(),
-            1
-        );
+        assert_eq!(candidates.len(), 1);
         let (_, config) = &candidates[0];
-        assert!(crate::agents::claude_crew::preflight("2.1.281", &team, &lead_dir).is_ok());
-        assert!(crate::agents::claude_crew::lead_transcript(&home, config).is_some());
+        assert_eq!(
+            crate::agents::claude_crew::admission_step(&home, &team, config, expected_session),
+            crate::agents::claude_crew::AdmissionStep::Ready {
+                bootstrap: "smetana-bootstrap@session-new".into(),
+                subagents: lead_dir.join("subagents"),
+                lead_transcript: lead_dir.parent().unwrap().join(format!("{expected_session}.jsonl")),
+            },
+            "the full contract is admitted on the pass everything exists"
+        );
         assert_eq!(gate.take_real(), Some(b"REAL-RUN-BRIEF\n".to_vec()));
         assert_eq!(gate.take_real(), None, "the admitted brief is exactly once");
         let _ = std::fs::remove_dir_all(root);

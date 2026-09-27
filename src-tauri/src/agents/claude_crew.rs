@@ -25,10 +25,16 @@ pub const TEAM_MODE: &str = "in-process";
 pub const MIN_VERSION: (u32, u32, u32) = (2, 1, 281);
 pub const BOOTSTRAP_MEMBER_NAME: &str = "smetana-bootstrap";
 
-/// Claude creates its native Team files only after it receives interactive
-/// work. This deliberately inert first turn asks it to establish that runtime
-/// and nothing else, allowing the real Run brief to stay behind capability
-/// admission. It is not a rendered-TUI command or a navigation sequence.
+/// Claude creates its native team config the moment the interactive runtime
+/// starts — holding only the team-lead — before any prompt has been sent; two
+/// live probes (2026-09-27, Claude Code 2.1.281) caught `config.json` on disk
+/// in the same second as the process launch. What actually needs an
+/// interactive turn is the *teammate*: the model has to read one before
+/// `smetana-bootstrap` (or any other member), its inbox, and the lead's own
+/// `subagents/`/transcript files exist. This deliberately inert first turn
+/// asks for exactly that and nothing else, allowing the real Run brief to
+/// stay behind capability admission. It is not a rendered-TUI command or a
+/// navigation sequence.
 pub const BOOTSTRAP_PROMPT: &str = "Initialize a native Claude Agent Team runtime now: create one inert teammate named smetana-bootstrap and tell it only to reply READY. Reply READY once the structured team config, lead transcript, and teammate inboxes exist. You and that teammate MUST NOT read the board, claim tasks, create worktrees, inspect or modify project files, run project commands, review code, merge, or perform any task work. This is transport initialization only.";
 
 pub fn bootstrap_input() -> Vec<u8> {
@@ -109,6 +115,36 @@ pub enum PreflightError {
     AddressedMessages(String),
 }
 
+/// The six things `session::service::refresh_claude_crews` waits on before a
+/// Claude Crew lead is admitted, in the order a fresh launch actually clears
+/// them (2026-09-27 measurements: the config with the lone lead lands inside
+/// the same second as the spawn; the teammate, its inbox, `subagents/` and the
+/// lead's own transcript follow only once the model has read the bootstrap
+/// turn). None of these being absent is a failure on its own — the admission
+/// loop simply waits for the next tick — but the *last* one still missing when
+/// the 90-second timeout fires is what [`admission_timeout_message`] names.
+/// `WAIT_NO_BOOTSTRAP_INBOX` is the narrowest of the six: `inboxes/` itself
+/// can exist a tick or more before Claude has written the bootstrap
+/// teammate's own `<name>.json` inside it, and `preflight`'s `OpenOptions`
+/// read cannot tell that ordinary race from a real one — so it is checked for
+/// ahead of `preflight`, the same way `WAIT_NO_INBOXES_DIR` already is.
+pub const WAIT_NO_TEAM_CONFIG: &str = "the team config never appeared";
+pub const WAIT_NO_BOOTSTRAP: &str = "the bootstrap teammate never joined";
+pub const WAIT_NO_SUBAGENTS_DIR: &str = "no subagents directory";
+pub const WAIT_NO_INBOXES_DIR: &str = "no inboxes directory";
+pub const WAIT_NO_BOOTSTRAP_INBOX: &str = "the bootstrap teammate has no inbox yet";
+pub const WAIT_NO_LEAD_TRANSCRIPT: &str = "no lead transcript";
+
+/// The sentence a refused `CrewStart` reply carries when admission times out.
+/// `reason` is whichever of the five constants above the admission loop last
+/// recorded, so a person reads what was actually still missing rather than
+/// one fixed phrase for every cause.
+pub fn admission_timeout_message(reason: &str) -> String {
+    format!(
+        "the session could not be started: Claude Crew runtime did not establish an exact team config, transcript, and inbox contract within 90 seconds ({reason})"
+    )
+}
+
 /// Verify the static part before a run leaves its queue and the dynamic part
 /// immediately after the interactive lead establishes its own runtime files.
 /// `team_dir` and `lead_session_dir` are provider-owned locations learned from
@@ -183,6 +219,102 @@ pub fn preflight(
     Ok(())
 }
 
+/// The first non-lead, non-finished member in `config` whose own inbox file
+/// does not exist yet, or `None` when every relevant member already has one.
+/// Mirrors `preflight`'s own member loop, but asks only whether the path
+/// **exists** rather than opening it — existence is what distinguishes the
+/// ordinary "Claude has not written this file yet" race from a real problem.
+/// A path that exists but is the wrong kind, or cannot be opened for
+/// writing, answers `None` here and is left for `preflight` to refuse as the
+/// contradiction it actually is; masking that behind another tick of waiting
+/// would turn a real fault into a timeout with no message worth reading.
+fn member_inbox_missing(team_dir: &Path, config: &Value) -> Option<String> {
+    config
+        .get("members")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find_map(|member| {
+            if member.get("agentType").and_then(Value::as_str) == Some("team-lead") {
+                return None;
+            }
+            if matches!(
+                member.get("status").and_then(Value::as_str),
+                Some("left" | "completed" | "failed")
+            ) {
+                return None;
+            }
+            let name = member.get("name").and_then(Value::as_str)?;
+            (!inbox(team_dir, name).exists()).then(|| name.to_owned())
+        })
+}
+
+/// What one admission tick decides about a Claude Crew lead, once
+/// `refresh_claude_crews` has already found the team directory and config
+/// for *this* launch. Finding that directory in the first place, and
+/// confirming its config still names it, stay that caller's own: both run
+/// identically for a starting package and an already-admitted one, so moving
+/// them in here would only give the two a second copy to drift against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AdmissionStep {
+    /// Missing exactly one of the `WAIT_NO_*` things above. Not a failure —
+    /// the caller is meant to try again on the next tick.
+    Waiting(&'static str),
+    /// Every structured file this app can address by our own `--session-id`
+    /// is present and open. The three fields are what admission still has to
+    /// hand off before the Run brief can be written.
+    Ready {
+        bootstrap: String,
+        subagents: PathBuf,
+        lead_transcript: PathBuf,
+    },
+    /// A contradiction rather than ordinary startup timing: every file
+    /// `preflight` and the checks ahead of it look for was already confirmed
+    /// present by the point it ran, so an error here means something is
+    /// genuinely wrong rather than merely not yet written.
+    Failed(String),
+}
+
+/// The whole of one admission tick's readiness decision, pure so a test can
+/// drive it tick by tick without a worker, a `AppHandle` or a real Claude
+/// process behind it. `refresh_claude_crews` calls this only while a package
+/// is still in `starting`; an already-admitted package keeps its own,
+/// unchanged health checks, which is deliberate — see this type's own
+/// comment for why they do not share this function.
+pub fn admission_step(
+    home: &Path,
+    team_dir: &Path,
+    config: &Value,
+    expected_session: &str,
+) -> AdmissionStep {
+    let Some(bootstrap) = bootstrap_member_id(config) else {
+        return AdmissionStep::Waiting(WAIT_NO_BOOTSTRAP);
+    };
+    let Some(subagents) = lead_subagents(home, expected_session) else {
+        return AdmissionStep::Waiting(WAIT_NO_SUBAGENTS_DIR);
+    };
+    let Some(lead_session_dir) = subagents.parent() else {
+        return AdmissionStep::Failed("Claude Crew lead transcript directory is invalid".into());
+    };
+    if !team_dir.join("inboxes").is_dir() {
+        return AdmissionStep::Waiting(WAIT_NO_INBOXES_DIR);
+    }
+    if member_inbox_missing(team_dir, config).is_some() {
+        return AdmissionStep::Waiting(WAIT_NO_BOOTSTRAP_INBOX);
+    }
+    // Version selection happened before the run entered the board loop; this
+    // is the runtime half, and by this point subagents/, inboxes/ and every
+    // relevant member's own inbox file have all been confirmed present, so an
+    // error here is the contradiction this type's own doc comment describes.
+    if let Err(error) = preflight("2.1.281", team_dir, lead_session_dir) {
+        return AdmissionStep::Failed(error.to_string());
+    }
+    let Some(lead_transcript) = lead_transcript(home, expected_session) else {
+        return AdmissionStep::Waiting(WAIT_NO_LEAD_TRANSCRIPT);
+    };
+    AdmissionStep::Ready { bootstrap, subagents, lead_transcript }
+}
+
 fn version_at_least(found: &str, minimum: (u32, u32, u32)) -> bool {
     let mut numbers = found
         .split(|ch: char| !ch.is_ascii_digit())
@@ -249,21 +381,24 @@ pub fn team_dirs(home: &Path) -> HashSet<PathBuf> {
         .unwrap_or_default()
 }
 
-/// Narrow candidates to the exact lead Claude was told to create. The config's
-/// `leadSessionId` is the runtime's structured binding between our
-/// `--session-id` and its generated team name; cwd alone cannot distinguish
-/// two concurrent Crew packages.
+/// Narrow candidates to the ones the runtime created for *this* launch.
+/// `leadSessionId` cannot bind a candidate to our own `--session-id`: two live
+/// probes (2026-09-27, Claude Code 2.1.281) showed Claude mints that field
+/// itself, independently of the id this app passed on `--session-id` — the
+/// two never matched in either probe. `baseline` is what stands in for that
+/// binding instead: every team directory that already existed before this
+/// launch's interactive lead was spawned, so anything new since is a
+/// candidate. cwd alone still cannot distinguish two concurrent Crew packages
+/// in the same project; a caller seeing more than one new candidate here is
+/// meant to wait for one to resolve rather than guess between them (see
+/// `refresh_claude_crews` in `session::service`).
 pub fn teams_for_lead(
     candidates: Vec<(PathBuf, Value)>,
-    expected_session: &str,
     baseline: &HashSet<PathBuf>,
 ) -> Vec<(PathBuf, Value)> {
     candidates
         .into_iter()
-        .filter(|(team, config)| {
-            !baseline.contains(team)
-                && config.get("leadSessionId").and_then(Value::as_str) == Some(expected_session)
-        })
+        .filter(|(team, _config)| !baseline.contains(team))
         .collect()
 }
 
@@ -336,11 +471,14 @@ pub fn subagent_start_from_file(path: &Path) -> std::io::Result<Option<(String, 
     Ok(None)
 }
 
-/// Resolve the provider-owned lead session id in config to its actual
-/// transcript directory. This searches only the documented project/session
-/// layout; no TUI or guessed encoded project path is involved.
-pub fn lead_subagents(home: &Path, config: &Value) -> Option<PathBuf> {
-    let session = config.get("leadSessionId")?.as_str()?;
+/// The lead's own subagents directory, addressed by *our* `--session-id`
+/// rather than by the runtime's `leadSessionId`. The two never agree
+/// (see [`teams_for_lead`]'s own comment for the measurement): the lead's
+/// transcript directory is written under the id this app actually passed on
+/// `--session-id`, not under whatever Claude generated for the config. This
+/// searches only the documented project/session layout; no TUI or guessed
+/// encoded project path is involved.
+pub fn lead_subagents(home: &Path, session: &str) -> Option<PathBuf> {
     let projects = home.join(".claude").join("projects");
     let entries = fs::read_dir(projects).ok()?;
     entries.flatten().find_map(|entry| {
@@ -351,10 +489,11 @@ pub fn lead_subagents(home: &Path, config: &Value) -> Option<PathBuf> {
 
 /// The interactive lead's structured JSONL transcript. Claude keeps the lead
 /// record beside (rather than inside) its `<session>/subagents` directory.
-/// This is the same provider-owned `leadSessionId` used for child discovery;
-/// no terminal byte is used as a substitute when the file is absent.
-pub fn lead_transcript(home: &Path, config: &Value) -> Option<PathBuf> {
-    let session = config.get("leadSessionId")?.as_str()?;
+/// This is addressed by the same `--session-id` [`lead_subagents`] above
+/// uses, never by the config's own `leadSessionId` — see that function's
+/// comment for why the two do not name the same session; no terminal byte is
+/// used as a substitute when the file is absent.
+pub fn lead_transcript(home: &Path, session: &str) -> Option<PathBuf> {
     let projects = home.join(".claude").join("projects");
     fs::read_dir(projects).ok()?.flatten().find_map(|entry| {
         let path = entry.path().join(format!("{session}.jsonl"));
@@ -788,28 +927,152 @@ mod tests {
     }
 
     #[test]
-    fn lead_session_selects_its_exact_new_config_among_stale_and_concurrent_teams() {
+    fn lead_session_excludes_only_directories_that_existed_before_the_launch() {
+        // leadSessionId plays no part in the selection any more (see
+        // `teams_for_lead`'s own comment): both the stale and the new
+        // directory below name unrelated, Claude-generated ids, and the
+        // baseline is what tells them apart instead.
         let stale = PathBuf::from("/teams/stale");
         let ours = PathBuf::from("/teams/ours");
-        let other = PathBuf::from("/teams/other");
         let baseline = HashSet::from([stale.clone()]);
         let candidates = vec![
-            (stale, serde_json::json!({"leadSessionId":"lead-a"})),
-            (ours.clone(), serde_json::json!({"leadSessionId":"lead-a"})),
-            (other, serde_json::json!({"leadSessionId":"lead-b"})),
+            (stale, serde_json::json!({"leadSessionId":"unrelated-a"})),
+            (ours.clone(), serde_json::json!({"leadSessionId":"unrelated-b"})),
         ];
-        let selected = teams_for_lead(candidates, "lead-a", &baseline);
+        let selected = teams_for_lead(candidates, &baseline);
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].0, ours);
     }
 
     #[test]
-    fn lead_session_never_adopts_a_concurrent_config_with_another_id() {
+    fn two_directories_new_since_the_baseline_are_both_returned_to_wait_on() {
+        // Ambiguity between two concurrent same-cwd launches is the caller's
+        // to resolve by waiting — `teams_for_lead` itself only excludes what
+        // was already there, so it hands back both rather than guessing.
         let candidates = vec![
             (PathBuf::from("/teams/a"), serde_json::json!({"leadSessionId":"lead-a"})),
             (PathBuf::from("/teams/b"), serde_json::json!({"leadSessionId":"lead-b"})),
         ];
-        assert!(teams_for_lead(candidates, "lead-c", &HashSet::new()).is_empty());
+        assert_eq!(teams_for_lead(candidates, &HashSet::new()).len(), 2);
+    }
+
+    #[test]
+    fn lead_subagents_and_transcript_are_found_by_our_own_session_id_not_leadsessionid() {
+        let root = std::env::temp_dir().join(format!(
+            "smetana-claude-crew-lead-paths-{}",
+            std::process::id()
+        ));
+        let home = root.join("home");
+        let session = "smetana-own-session-id";
+        let lead_dir = home
+            .join(".claude/projects/encoded-project")
+            .join(session);
+        fs::create_dir_all(lead_dir.join("subagents")).unwrap();
+        fs::write(
+            lead_dir.parent().unwrap().join(format!("{session}.jsonl")),
+            "{}",
+        )
+        .unwrap();
+        assert_eq!(lead_subagents(&home, session), Some(lead_dir.join("subagents")));
+        assert_eq!(
+            lead_transcript(&home, session),
+            Some(lead_dir.parent().unwrap().join(format!("{session}.jsonl")))
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn admission_timeout_message_names_the_specific_missing_element() {
+        let message = admission_timeout_message(WAIT_NO_INBOXES_DIR);
+        assert!(message.contains("90 seconds"));
+        assert!(message.contains(WAIT_NO_INBOXES_DIR));
+    }
+
+    #[test]
+    fn admission_step_waits_through_each_missing_piece_then_admits() {
+        let root = std::env::temp_dir().join(format!(
+            "smetana-claude-crew-admission-step-{}",
+            std::process::id()
+        ));
+        let home = root.join("home");
+        let team = home.join(".claude/teams/session-new");
+        let session = "exact-lead-session";
+        let lead_dir = home.join(".claude/projects/encoded-project").join(session);
+        fs::create_dir_all(&team).unwrap();
+
+        // Pass 1: the config Claude writes the instant its runtime starts —
+        // the team-lead alone. The model has not read the bootstrap turn yet.
+        let lead_only: Value = serde_json::from_str(
+            r#"{"name":"session-new","leadSessionId":"unrelated","members":[{"name":"team-lead","agentType":"team-lead","cwd":"/project"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            admission_step(&home, &team, &lead_only, session),
+            AdmissionStep::Waiting(WAIT_NO_BOOTSTRAP)
+        );
+
+        // Pass 2: the teammate is in config, `subagents/` and `inboxes/`
+        // exist, but Claude has not yet written the teammate's own inbox
+        // file inside `inboxes/` — a missing FILE, not the directory. This is
+        // the exact race review pass 1 found failing admission outright.
+        // `preflight` re-reads `config.json` off disk on its own, so the
+        // fixture has to be written there too, not only held in memory.
+        fs::create_dir_all(team.join("inboxes")).unwrap();
+        fs::create_dir_all(lead_dir.join("subagents")).unwrap();
+        let with_teammate_json = r#"{"name":"session-new","leadSessionId":"unrelated","members":[{"name":"team-lead","agentType":"team-lead","cwd":"/project"},{"name":"smetana-bootstrap","agentType":"general-purpose","agentId":"smetana-bootstrap@session-new"}]}"#;
+        fs::write(team.join("config.json"), with_teammate_json).unwrap();
+        let with_teammate: Value = serde_json::from_str(with_teammate_json).unwrap();
+        assert_eq!(
+            admission_step(&home, &team, &with_teammate, session),
+            AdmissionStep::Waiting(WAIT_NO_BOOTSTRAP_INBOX)
+        );
+
+        // Pass 3: the inbox file and the lead's own transcript exist too —
+        // the full set, and admission succeeds.
+        fs::write(team.join("inboxes/smetana-bootstrap.json"), "[]").unwrap();
+        fs::write(
+            lead_dir.parent().unwrap().join(format!("{session}.jsonl")),
+            r#"{"type":"system","subtype":"init"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            admission_step(&home, &team, &with_teammate, session),
+            AdmissionStep::Ready {
+                bootstrap: "smetana-bootstrap@session-new".into(),
+                subagents: lead_dir.join("subagents"),
+                lead_transcript: lead_dir.parent().unwrap().join(format!("{session}.jsonl")),
+            }
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn admission_step_fails_on_an_inbox_that_exists_but_is_the_wrong_kind() {
+        let root = std::env::temp_dir().join(format!(
+            "smetana-claude-crew-admission-step-failed-{}",
+            std::process::id()
+        ));
+        let home = root.join("home");
+        let team = home.join(".claude/teams/session-new");
+        let session = "exact-lead-session";
+        let lead_dir = home.join(".claude/projects/encoded-project").join(session);
+        fs::create_dir_all(team.join("inboxes")).unwrap();
+        fs::create_dir_all(lead_dir.join("subagents")).unwrap();
+        let config: Value = serde_json::from_str(
+            r#"{"name":"session-new","leadSessionId":"unrelated","members":[{"name":"team-lead","agentType":"team-lead","cwd":"/project"},{"name":"smetana-bootstrap","agentType":"general-purpose","agentId":"smetana-bootstrap@session-new"}]}"#,
+        )
+        .unwrap();
+        // The inbox path exists, so `member_inbox_missing`'s plain `exists()`
+        // reads it as present and this reaches `preflight` — whose own
+        // `OpenOptions::write` refuses a directory. Present but broken is a
+        // genuine contradiction, never another tick of waiting.
+        fs::create_dir_all(inbox(&team, "smetana-bootstrap")).unwrap();
+        assert!(matches!(
+            admission_step(&home, &team, &config, session),
+            AdmissionStep::Failed(_)
+        ));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
