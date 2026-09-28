@@ -328,6 +328,33 @@ describe('the conversation store', () => {
     expect(rows.find((row) => row.id === 'crew:91:91').state).toBe('running')
   })
 
+  /* smetana-fie0: `crew:events` only ever carries journal events, and `absorb`
+     only ever appends them, so nothing on that wire ever moves `held.state`
+     once a panel has attached. Without this, the badge at the top of an open
+     Crew conversation froze at whatever `crew_attach`'s one-time snapshot
+     said while the very same node's row in the agents panel went on updating
+     from every `crew:tree` — a running lead with a `ready` badge over it. */
+  it('moves an open Crew conversation\'s own state with the tree, not only the row', async () => {
+    const { ipc, stores, emit } = await ready()
+    ipc.on('crew_attach', () => ({ events: [], seq: 0, state: 'starting', cwd: '/p' }))
+    await emit('crew:tree', {
+      project: '/p', root: 51,
+      nodes: [{ id: 51, parent: null, state: 'starting', canMessage: false, label: 'Crew lead' }]
+    })
+    await stores.conversation.attach('crew:51:51')
+    expect(stores.conversation.conversationFor('crew:51:51').state).toBe('starting')
+
+    await emit('crew:tree', {
+      project: '/p', root: 51,
+      nodes: [{ id: 51, parent: null, state: 'waiting', canMessage: true, label: 'Crew lead' }]
+    })
+
+    expect(stores.conversation.conversationFor('crew:51:51').state).toBe('waiting')
+    expect(stores.conversation.crewAgentsIn('/p').find((row) => row.id === 'crew:51:51').state).toBe(
+      'waiting'
+    )
+  })
+
   it('refuses to send nothing at all', async () => {
     const { ipc, stores } = await ready()
     ipc.on('session_send', null)

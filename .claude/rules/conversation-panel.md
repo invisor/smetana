@@ -66,6 +66,29 @@ records being collapsed into `sessionWork.js` and `captions.js`. `Opening` carri
 knows — the person's own words, when there are any — and leaves the wording of everything else to the
 side that already owns it.
 
+**A Claude Crew lead's own journal is a different object, and smetana-fie0 is the task that noticed
+its opening turn was never written into it.** A Crew root's conversation lives in
+`session::crew::CrewPackage::journals`, keyed by the Smetana-owned node id — a separate journal from
+the ordinary `Live::journal` `spawn_session` builds for every ordinary session — and `crew_attach`
+reads only from there (`session::service::Request::CrewAttach`). `crew_root_opening` is what writes
+the wordless pair (`TurnStart { by: Person }`, `Opening { text: None, attachments: [] }`) into that
+journal, and **both** Crew leads call it, at the one seam each has for it: Claude's interactive lead is
+spawned without its Run brief at all (`.claude/rules/agents.md`'s "Native Crew transports"), so
+`admit_claude_crew` calls it once admission has proven the runtime and is about to write the brief to
+the PTY; Codex's `CrewPackage` and its ordinary session are stood up together in one pass, with no
+held-back brief and no polling tick, so `Request::CrewStart`'s Codex arm calls it the moment its
+`CrewPackage` exists. One helper rather than two copies is the fix for the actual defect this task
+found: before it, neither path wrote a first turn into `CrewPackage::journals` at all, so a lead
+already visibly running (blue in the agents panel, the footer counting it) opened its own conversation
+panel on the empty state — the row said one thing and the panel said another, on both harnesses. The
+brief itself is still not drawn: Claude Code records it back into the lead's own transcript as an
+ordinary `user` record once it is submitted, indistinguishable there from a person typing it, and
+`drop_sent_brief_echo` filters the one match back out before it ever reaches `package.append` — folding
+both sides through `normalize_brief_text` first, since a composer's own line-ending normalisation or a
+trailing newline on either side would otherwise read the identical words as two unrelated messages and
+let the whole brief through as a second bubble. The brief already has its row, the wordless `Opening`
+above, and would otherwise appear a second time in full.
+
 ## The fourth inline-style exception
 
 `src/styles/sm-prose.css`, scoped entirely under `.sm-prose`, is the **fourth** declared exception to
