@@ -280,6 +280,38 @@ describe('the conversation store', () => {
     expect(rows.find((row) => row.id === 'crew:81:82').clearable).toBe(false)
   })
 
+  /* smetana-m5ch: the rail's map and the footer's counter both need every
+     project's Crew rows at once, not only the active project's — `crewAgents`
+     is the all-projects export `crewAgentsIn` narrows down from, rather than
+     a second walk of `crews` built apart from it. */
+  it('carries Crew rows for every project in one export, not only the active one', async () => {
+    const { stores, emit } = await ready()
+    await stores.conversation.initConversation()
+    await emit('crew:tree', {
+      project: '/p',
+      root: 101,
+      nodes: [{ id: 101, parent: null, state: 'running', canMessage: true, label: 'Lead' }]
+    })
+    await emit('crew:tree', {
+      project: '/other',
+      root: 102,
+      nodes: [{ id: 102, parent: null, state: 'running', canMessage: true, label: 'Lead' }]
+    })
+
+    const ids = stores.conversation.crewAgents.value.map((row) => row.id)
+    expect(ids).toEqual(expect.arrayContaining(['crew:101:101', 'crew:102:102']))
+    expect(stores.conversation.crewAgents.value.find((row) => row.id === 'crew:101:101').project).toBe(
+      '/p'
+    )
+    expect(stores.conversation.crewAgents.value.find((row) => row.id === 'crew:102:102').project).toBe(
+      '/other'
+    )
+
+    /* `crewAgentsIn` still narrows the same export to one project, which is
+       what the agents panel reads. */
+    expect(stores.conversation.crewAgentsIn('/p').map((row) => row.id)).toEqual(['crew:101:101'])
+  })
+
   /* A Crew node's own `starting` is a worker already handed its work and
      being spun up (`CrewState::Starting`), not a driven session's blank
      journal waiting on a person — so it must stay `running` and keep lighting
