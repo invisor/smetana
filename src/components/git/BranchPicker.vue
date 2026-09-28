@@ -47,6 +47,7 @@ import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import {
   BRANCH_FILTER_LABEL,
+  FETCH_LABEL,
   LOCAL_SIDE,
   NO_BRANCH_MATCHES,
   PICKER_KEY_HINT,
@@ -104,10 +105,15 @@ const props = defineProps({
   /* The right-hand end of the footer: what picking here applies to. The words
      are the caller's — this component has no idea how many repositories a
      review will touch — and an empty string simply leaves that end blank. */
-  scope: { type: String, default: '' }
+  scope: { type: String, default: '' },
+  /* Whether origin is being fetched right now, for the button in the filter
+     row. A prop and never a state of this component's own, the same shape as
+     `selected` and `side`: this component has no idea what a fetch is, only
+     that a caller wants its one button turning and refused while one is out. */
+  fetching: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['select', 'side', 'close'])
+const emit = defineEmits(['select', 'side', 'close', 'fetch'])
 
 const query = ref('')
 const cursor = ref(0)
@@ -385,6 +391,21 @@ const footerEndStyle = {
         :style="inputStyle"
         :placeholder="BRANCH_FILTER_LABEL"
         :aria-label="BRANCH_FILTER_LABEL"
+      />
+      <!-- Origin's freshness is only as good as the last fetch, and picking a
+           branch is not the only reason somebody opens this list: the button
+           reaches the remote whichever side is on screen, since a fetch is
+           about the repositories rather than about which rows are showing.
+           `GitPanel.vue`'s own idiom for "still going" — the glyph turns and
+           the button is refused while it does — borrowed through `spin`
+           rather than redrawn here. -->
+      <IconButton
+        :icon="fetching ? 'loader-circle' : 'refresh-cw'"
+        :label="FETCH_LABEL"
+        size="sm"
+        :spin="fetching"
+        :disabled="fetching"
+        @click="emit('fetch')"
       />
       <!-- Which side the list is showing. A radio pair and not two switches:
            exactly one is lit at any moment, `IconButton`'s `selected` is what

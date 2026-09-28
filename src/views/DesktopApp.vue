@@ -36,9 +36,12 @@ import {
   canReview,
   fetchFailures,
   fetchTargets,
+  mergeFetching,
   reportPath,
   reviewForm,
-  reviewPairs
+  reviewPairs,
+  settleFailed,
+  settleFetching
 } from '../components/git/reviewRows.js'
 /* One of the two words `layout.branchSide` is allowed to be. The window sends
    the side it was put on and this side writes it down; normalising here rather
@@ -1764,6 +1767,14 @@ async function openReviewChanges(branch = null) {
          switch projects — so it goes into `layout` beside the panel widths and
          not into the project's own state. */
       if (name === 'branch-side') layout.branchSide = normalizeSide(payload?.side)
+      /* A press of the branch list's own fetch button — the second of the
+         window's three doors into a fetch, beside this opening and beside
+         `startReview`'s own late one. `payload.repoId` is the row it was
+         pressed for, or `null` for the project's rule, which reaches every
+         repository. */
+      if (name === 'fetch') {
+        refreshReviewOrigin(path, payload?.repoId ? [payload.repoId] : reviewRepoIds())
+      }
     }
   })
   /* Neither of these is waited for, and neither is on the way to anything the
@@ -1775,6 +1786,74 @@ async function openReviewChanges(branch = null) {
       if (activePath.value === path) reviewHome.value = home
     })
     .catch(() => {})
+  await loadReviewRemotes(path)
+  /* The window's own opening, and the first of its three doors into a fetch.
+     Deliberately not awaited: the window is already up, drawing whatever
+     `loadReviewRemotes` above just found, and this is a second sweep
+     underneath it rather than something the opening waits on. It ignores
+     `git.autoFetch` and the five-minute throttle the same way `startReview`'s
+     own fetch does — opening the window is a person's own action, not the app
+     acting on its own, and the setting is about the second of those. Every
+     repository of the project, and not `fetchTargets(form)`: at the moment
+     this window opens the pair may still be empty. */
+  refreshReviewOrigin(path, reviewRepoIds())
+}
+
+/* Every repository of this project, by path — what "the whole project" means
+   for a fetch that runs before a pair is ever picked, since `fetchTargets`
+   only knows a pair and there may be none yet. Read fresh on every call
+   rather than cached, the same reason `vcsState.repos` itself is read fresh
+   everywhere else in this window: a repository added mid-visit belongs in the
+   next fetch. */
+const reviewRepoIds = () => vcsState.repos.map((repo) => repo?.path).filter(Boolean)
+
+/* Fetch, in every repository handed to it, then a fresh read of what origin
+   has — the shape `startReview`'s own late fetch already has, pulled out so
+   the window's other two doors into a fetch (opening, and the branch list's
+   own button) can take it without a pair to read `fetchTargets` from.
+
+   Parallel, the same as `startReview`'s and for the same reason: these are
+   network calls of up to a minute each and none of them writes anything
+   another reads, and `fetchIn` already holds one call in flight per
+   repository and joins it — two presses inside a minute cost one fetch, not
+   two.
+
+   No toast and no call to `startReview`'s own: the window is open and already
+   draws `Fetching origin for N repositories.` and then `Fetch failed for …`
+   in its own notes block (`reviewNotes` in `reviewRows.js`), so a toast behind
+   it would say the same sentence twice. `reviewStarting` is untouched —
+   opening the window and pressing its own fetch button must both leave it
+   usable while the network is out, which is what the notes block and the
+   list's own spinner are for.
+
+   **Both fields are set operations over this call's own `targets`, never a
+   wholesale assignment**, because the window's three doors into a fetch can
+   each be mid-flight at once — the opening, a press on one row, a press on
+   the project's rule, and `startReview`'s own late one, all keyed by the very
+   same two fields. `reviewFetching.value = targets` once meant "this is now
+   the whole of what is fetching", so a second call landing while a first was
+   still out (two rows pressed inside a minute of each other) stopped the
+   first row's spinner the moment it finished, over a repository the second
+   call had never touched; and `reviewFetchFailed.value = fetchFailures(...)`
+   meant a call that touched only one repository could erase a `Fetch failed
+   for …` line about a repository nobody had asked about again. `mergeFetching`
+   and `settleFetching` add and remove only `targets`; `settleFailed` drops
+   `targets` from what has already failed and folds in only this call's own
+   answer — see their own header in `reviewRows.js`.
+
+   Every step after the one `await` is guarded the way `loadReviewRemotes`'s
+   own loop already guards itself: a later opening, a project switched under
+   the call, or the window closed while the fetch was out are none of them
+   worth writing a state nobody is reading any more. */
+async function refreshReviewOrigin(path, repoIds) {
+  const targets = (repoIds ?? []).filter(Boolean)
+  if (!targets.length) return
+  reviewFetching.value = mergeFetching(reviewFetching.value, targets)
+  const reached = await Promise.all(targets.map((repo) => fetchIn(repo)))
+  if (activePath.value !== path || !openDialogs.has('review-changes')) return
+  reviewFetchFailed.value = settleFailed(reviewFetchFailed.value, targets, reached)
+  reviewFetching.value = settleFetching(reviewFetching.value, targets)
+  if (activePath.value !== path || !openDialogs.has('review-changes')) return
   await loadReviewRemotes(path)
 }
 
@@ -1797,30 +1876,38 @@ async function startReview(form) {
   const path = activePath.value
   if (!path || !canReview(form) || reviewStarting.value) return
   reviewStarting.value = true
-  reviewFetchFailed.value = []
-  /* The repositories origin could not be reached in, by path, and the one
-     answer three readers are drawn from: the sentence under the table, the
-     toast that outlives the window, and the intent. It is declared out here
-     rather than inside the branch below because the intent is built after it
-     — a review where nothing had to be fetched simply carries none. */
+  /* The repositories origin could not be reached in on **this** press, by
+     path — the one answer three readers are drawn from: the sentence under
+     the table, the toast that outlives the window, and the intent. It is
+     declared out here rather than inside the branch below because the intent
+     is built after it — a review where nothing had to be fetched simply
+     carries none. It is deliberately not what `reviewFetchFailed.value` ends
+     up holding: that field is the window's whole history and this is only
+     what the press just found, the same split `refreshReviewOrigin` keeps
+     between its own `reached` and the field it folds into. */
   let missed = []
   try {
     const targets = fetchTargets(form)
     if (targets.length) {
-      reviewFetching.value = targets
+      /* Set operations over `targets` alone, and for the reason
+         `refreshReviewOrigin` states in full: pressing Review does not get to
+         overwrite what the window's other two doors into a fetch are doing or
+         have already found — a row's own fetch still out, or a fetch failure
+         about a repository this press never touches. */
+      reviewFetching.value = mergeFetching(reviewFetching.value, targets)
       /* Together rather than one after another, unlike the origin lists above:
          these are network calls of up to a minute each and none of them writes
          anything the next one reads. The store keeps one in flight per
          repository, which is the only sharing there is between them. */
       const reached = await Promise.all(targets.map((repo) => fetchIn(repo)))
-      reviewFetching.value = []
+      reviewFetching.value = settleFetching(reviewFetching.value, targets)
       missed = fetchFailures(targets, reached)
       /* One list of paths, read by all three: the window keys a row by it and
          renders the names itself, the intent carries it because that is how the
          prompt lists a pair's repository, and the toast below names them the
          way `[project].repos` does. There is no arrangement of them in which
          the person and the agent are told about different repositories. */
-      reviewFetchFailed.value = missed
+      reviewFetchFailed.value = settleFailed(reviewFetchFailed.value, targets, reached)
       if (missed.length) {
         sayFileMenu({
           tone: 'info',

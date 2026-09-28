@@ -127,8 +127,16 @@ const props = defineProps({
    preference belongs to the app window: this is a window of its own and writes
    nothing to disk. It is a result of its own rather than part of `submit` —
    somebody may look at the origin side and close the window without reviewing
-   anything, and that is still a choice they made. */
-const emit = defineEmits(['close', 'submit', 'branch-side'])
+   anything, and that is still a choice they made.
+
+   `fetch` is the third: a press of the branch list's own button, carrying
+   which repository it was pressed for — `picker.value.repoId`, or `null` for
+   the project's rule, the same scope `pickerScope` already draws in the
+   list's own footer. This window does no fetch of its own and knows nothing
+   of Tauri; the app window is what turns this into `fetchIn` calls and a
+   re-read of the origin lists, through the same channel `submit` and
+   `branch-side` already answer on. */
+const emit = defineEmits(['close', 'submit', 'branch-side', 'fetch'])
 
 /* The glyph sizes, which are the one kind of number this file is allowed to
    hold: the design system's own units, exactly as every other component here
@@ -317,6 +325,18 @@ const pickerFetchedAt = computed(() => {
     (props.repos ?? []).map((repo) => repo?.path),
     props.fetchedAt
   )
+})
+
+/* Whether the list's own fetch button should be drawn turning. One repository
+   answers for itself; the project's rule answers for the whole project, since
+   a press there reaches every repository below and the button has to say so
+   while any one of them is still out — the same scope `pickerFetchedAt`
+   already answers by, read the other way round. */
+const pickerFetching = computed(() => {
+  const fetching = props.fetching ?? []
+  const at = picker.value?.repoId
+  if (at) return fetching.includes(at)
+  return (props.repos ?? []).some((repo) => fetching.includes(repo?.path))
 })
 
 const pickerPair = computed(() => pairOf(review.value, picker.value?.repoId ?? null))
@@ -815,9 +835,11 @@ const out = () => {
         :selected-origin="Boolean(pickerSide?.remote)"
         :side="shownSide"
         :scope="scope"
+        :fetching="pickerFetching"
         @select="pick"
         @side="chooseSide"
         @close="closePicker"
+        @fetch="emit('fetch', { repoId: picker.repoId ?? null })"
       />
 
       <div v-else :style="{ display: 'flex', flexDirection: 'column' }">

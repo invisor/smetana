@@ -402,7 +402,13 @@ const EMITS = [
      window can keep it in `layout.branchSide`. It travels for `draft`'s reason
      one preference over — a choice about how a list is read outlives the window
      it was made in, and only the side that is still there can hold it. */
-  'branch-side'
+  'branch-side',
+  /* The review window's third: a press of the branch list's own fetch button,
+     carrying which repository it was for. The window does no fetch of its own
+     and knows nothing of Tauri, so this is what the button needs — the app
+     window turns it into `fetchIn` calls and a re-read of the origin lists,
+     the same act `openReviewChanges` already does on the way in. */
+  'fetch'
 ]
 
 /* And the four that deliberately do not travel: `new-task`'s images, answered
