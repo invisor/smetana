@@ -175,7 +175,12 @@ impl ClaudePromptGate {
         self.bootstrap_sent
             .then(|| self.real_prompt.take())
             .flatten()
-            .map(|prompt| format!("{prompt}\n").into_bytes())
+            // `\r`, not `\n`: by the time admission is `Ready` the bootstrap
+            // turn has already been submitted, which only happens once the
+            // TUI has switched to raw mode (see `claude_crew::bootstrap_input`
+            // and `needs_enter_nudge`'s own comments), so a single carriage
+            // return here is guaranteed to land where LF never would.
+            .map(|prompt| format!("{prompt}\r").into_bytes())
     }
 }
 
@@ -1288,6 +1293,21 @@ fn refresh_claude_crews(
     for root in roots {
         let Some(package) = crews.get_mut(root) else { continue };
         let Some(expected_session) = expected_sessions.get(root) else { continue };
+        // Retry Enter on the interactive lead's own PTY until its structured
+        // transcript proves the turn already began — independent of team
+        // discovery below, since the lead may still be sitting on the
+        // bootstrap turn before any team directory exists at all. See
+        // `claude_crew::needs_enter_nudge` for why a bare `\r` is safe to
+        // write on every tick rather than once, and why nothing is written
+        // once admission has actually completed.
+        if crate::agents::claude_crew::needs_enter_nudge(
+            starting.contains_key(root),
+            crate::agents::claude_crew::lead_transcript(&home, expected_session).is_some(),
+        ) {
+            if let Some(pty) = crew_ptys.get_mut(root) {
+                pty.write(b"\r");
+            }
+        }
         let team_already_known = teams.contains_key(root);
         let candidates = if let Some(team) = teams.get(root) {
             // The directory itself is the binding once found (see below);
@@ -2709,7 +2729,7 @@ mod tests {
             },
             "the full contract is admitted on the pass everything exists"
         );
-        assert_eq!(gate.take_real(), Some(b"REAL-RUN-BRIEF\n".to_vec()));
+        assert_eq!(gate.take_real(), Some(b"REAL-RUN-BRIEF\r".to_vec()));
         assert_eq!(gate.take_real(), None, "the admitted brief is exactly once");
         let _ = std::fs::remove_dir_all(root);
     }

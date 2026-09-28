@@ -37,8 +37,38 @@ pub const BOOTSTRAP_MEMBER_NAME: &str = "smetana-bootstrap";
 /// navigation sequence.
 pub const BOOTSTRAP_PROMPT: &str = "Initialize a native Claude Agent Team runtime now: create one inert teammate named smetana-bootstrap and tell it only to reply READY. Reply READY once the structured team config, lead transcript, and teammate inboxes exist. You and that teammate MUST NOT read the board, claim tasks, create worktrees, inspect or modify project files, run project commands, review code, merge, or perform any task work. This is transport initialization only.";
 
+/// No line terminator of any kind. A live probe (2026-09-28, Claude Code
+/// 2.1.283) measured the interactive TUI's own input contract: LF is read as
+/// a newline inside the composer rather than as Enter, and a `\r` written
+/// before the runtime has switched the terminal to raw mode is turned into
+/// LF by the pty line discipline (ICRNL) — so neither terminator sends this
+/// turn at the moment it is written. The text still goes on the PTY right
+/// after spawn, since it was measured to sit buffered in the composer until
+/// the TUI is ready for it; what actually submits it is the repeated bare
+/// `\r` `refresh_claude_crews` writes on each tick — see `needs_enter_nudge`
+/// below and `.claude/rules/agents.md`'s "Native Crew transports".
 pub fn bootstrap_input() -> Vec<u8> {
-    format!("{BOOTSTRAP_PROMPT}\n").into_bytes()
+    BOOTSTRAP_PROMPT.as_bytes().to_vec()
+}
+
+/// Whether one admission tick should write another bare `\r` into the Claude
+/// Crew lead's PTY. The interactive TUI submits a buffered turn only once it
+/// has switched the terminal to raw mode — a fact this app cannot observe
+/// directly (`.claude/rules/terminal.md` forbids decoding the screen) — so
+/// instead of a fixed delay tuned to one machine, admission retries Enter on
+/// every tick until the lead's own structured transcript proves the turn
+/// already began. That makes the retry self-correcting rather than a second
+/// timing constant: a `\r` arriving before raw mode is turned into a harmless
+/// extra newline in the still-empty composer by the pty line discipline
+/// (ICRNL); one landing on an empty raw-mode field does nothing; the first to
+/// land once raw mode is active is the one that actually sends it. Once
+/// `lead_transcript` answers `Some` the turn has started and nothing is
+/// written again, and once admission itself has completed
+/// (`admission_pending` false) nothing is written either, whatever the
+/// transcript says — a completed admission has already delivered the real
+/// Run brief and a stray `\r` at that point would be typed into it instead.
+pub fn needs_enter_nudge(admission_pending: bool, lead_transcript_exists: bool) -> bool {
+    admission_pending && !lead_transcript_exists
 }
 
 /// The only supported Claude Crew lead line. It is deliberately separate from
@@ -814,6 +844,27 @@ mod tests {
             model: None,
             worker_model: None,
         }
+    }
+
+    #[test]
+    fn bootstrap_input_carries_no_line_terminator() {
+        let input = bootstrap_input();
+        assert!(!input.ends_with(b"\n"));
+        assert!(!input.ends_with(b"\r"));
+        assert_eq!(input, BOOTSTRAP_PROMPT.as_bytes());
+    }
+
+    #[test]
+    fn enter_nudge_writes_until_the_transcript_proves_the_turn_began() {
+        // No transcript yet: keep retrying Enter.
+        assert!(needs_enter_nudge(true, false));
+        // The transcript exists: the turn already began, stop.
+        assert!(!needs_enter_nudge(true, true));
+        // Admission itself is over, whatever the transcript says: the real
+        // Run brief has already been delivered, and nothing should be typed
+        // into it after the fact.
+        assert!(!needs_enter_nudge(false, false));
+        assert!(!needs_enter_nudge(false, true));
     }
 
     #[test]
