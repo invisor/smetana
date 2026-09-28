@@ -1288,16 +1288,32 @@ fn codex_hydration_requests(
         .collect()
 }
 
+/// The wordless pair every Crew root's own opening turn is, shared between
+/// the two ways a lead reaches admission so they cannot draw two different
+/// first bubbles: `admit_claude_crew` below, once Claude's interactive
+/// runtime is admitted, and `Request::CrewStart`'s Codex arm, which has no
+/// held-back brief and no polling tick and so writes it the moment its
+/// `CrewPackage` exists. `by: Actor::Person` and a wordless `Opening` go into
+/// the root's journal before the brief reaches the child at all, since the
+/// harness never echoes a turn back and there is no wire moment after this
+/// one to mark it with. `text: None` is what every wordless intent already
+/// carries (`Intent::opening_words()`) — a Run's own brief is deliberately
+/// not one of them (`.claude/rules/conversation-panel.md`, "The opening
+/// turn") — and the panel draws the row's own caption in its place.
+fn crew_root_opening(package: &mut CrewPackage) -> Option<Vec<Event>> {
+    package.append(
+        package.root,
+        vec![
+            EventKind::TurnStart { by: super::model::Actor::Person },
+            EventKind::Opening { text: None, attachments: Vec::new() },
+        ],
+    )
+}
+
 /// The lead's own opening turn, written once admission has a Run brief ready
 /// to send — exactly like the ordinary driven road's `spawn_session`, which
 /// appends the identical pair before a session's first turn reaches its
-/// child. `by: Actor::Person` and a wordless `Opening` go into the root's
-/// journal *before* the brief reaches the child's stdin, since the harness
-/// never echoes a turn back and there is no wire moment after this one to
-/// mark it with. `text: None` is what every wordless intent already carries
-/// (`Intent::opening_words()`) — a Run's own brief is deliberately not one of
-/// them (`.claude/rules/conversation-panel.md`, "The opening turn") — and the
-/// panel draws the row's own caption in its place.
+/// child.
 ///
 /// Returns `None` when the gate has no real prompt left to take — the
 /// ordinary answer on every tick but the one where `starting.remove(root)`
@@ -1313,21 +1329,37 @@ fn admit_claude_crew(
     root: u64,
 ) -> Option<(Vec<u8>, Option<Vec<Event>>)> {
     let input = gate.take_real()?;
-    let events = package.append(
-        package.root,
-        vec![
-            EventKind::TurnStart { by: super::model::Actor::Person },
-            EventKind::Opening { text: None, attachments: Vec::new() },
-        ],
-    );
+    let events = crew_root_opening(package);
     // Kept so the transcript read above can recognise this same text coming
     // back out of the lead's own transcript and filter it rather than draw it
-    // a second time as an ordinary `UserMessage`.
+    // a second time as an ordinary `UserMessage`. Normalised at the same
+    // seam `drop_sent_brief_echo` normalises its own side at, so the two
+    // compare on the same footing regardless of which one actually carries
+    // the difference.
     if let Some(prompt) = gate.sent_prompt() {
-        sent_briefs.insert(root, prompt.to_owned());
+        sent_briefs.insert(root, normalize_brief_text(prompt));
     }
     package.tree.set_state(package.root, CrewState::Running);
     Some((input, events))
+}
+
+/// Fold a Run brief's text to the shape it is compared in, on both sides of
+/// `drop_sent_brief_echo`.
+///
+/// The gate's own copy is `prompt::build`'s composed string, verbatim; the
+/// transcript's is whatever Claude Code's interactive composer made of it
+/// once submitted, and `session::history::events_of`'s `human_text` returns
+/// that content exactly as written — no trim of its own, and no opinion about
+/// line endings. Two differences are plausible between the two without the
+/// words themselves differing at all: a composer normalising a bracketed
+/// paste's line endings (`.claude/rules/agents.md`'s "Claude TUI input
+/// contract"), and either side carrying a trailing newline or blank line the
+/// other does not. An exact `==` on either raw string would then read the
+/// pair as unrelated and let the whole brief through as a second bubble —
+/// exactly the failure this filter exists to prevent — so both sides fold
+/// CRLF to LF and trim before they are ever compared.
+fn normalize_brief_text(text: &str) -> String {
+    text.replace("\r\n", "\n").trim().to_owned()
 }
 
 /// Drop the Run brief's own echo out of a batch of freshly read lead events.
@@ -1338,16 +1370,19 @@ fn admit_claude_crew(
 /// has no way to tell the two apart, and has no reason to: everywhere else in
 /// this app, a `user` record *is* somebody typing. Here it already has a row,
 /// the wordless `Opening` `admit_claude_crew` wrote before this exact text
-/// ever reached the child's stdin, so the one `UserMessage` whose text matches
-/// what was sent is removed instead of reaching the journal twice. Matched at
-/// most once — the entry is taken out of `sent_briefs` on the first hit — so a
-/// person who later types the identical sentence to the lead is never
-/// silently swallowed.
+/// ever reached the child's stdin, so the one `UserMessage` whose text
+/// matches what was sent — both folded through `normalize_brief_text` — is
+/// removed instead of reaching the journal twice. Matched at most once — the
+/// entry is taken out of `sent_briefs` on the first hit — so a person who
+/// later types the identical sentence to the lead is never silently
+/// swallowed.
 fn drop_sent_brief_echo(kinds: Vec<EventKind>, sent_briefs: &mut HashMap<u64, String>, root: u64) -> Vec<EventKind> {
     kinds
         .into_iter()
         .filter(|kind| match kind {
-            EventKind::UserMessage { text, .. } if sent_briefs.get(&root).is_some_and(|sent| sent == text) => {
+            EventKind::UserMessage { text, .. }
+                if sent_briefs.get(&root).is_some_and(|sent| *sent == normalize_brief_text(text)) =>
+            {
                 sent_briefs.remove(&root);
                 false
             }
@@ -1811,7 +1846,18 @@ fn handle(
             match spawn_session(app, id, &project, intent, permission, chunks, Some(agent)) {
                 Ok(live) => {
                     let waits = live.talking.as_ref().is_some_and(|talking| talking.driver.awaits_startup());
-                    let package = CrewPackage::new(project, id, "Crew lead");
+                    let mut package = CrewPackage::new(project, id, "Crew lead");
+                    // Codex's own lead is stood up in one pass rather than
+                    // admitted asynchronously — no held-back brief, no
+                    // polling tick — so its opening turn is written right
+                    // here, the one seam `admit_claude_crew` reaches at
+                    // admission instead. `crew_root_opening` is the shared
+                    // half: the same wordless pair, in the same journal, so
+                    // the two Crew leads cannot draw two different first
+                    // bubbles.
+                    if let Some(events) = crew_root_opening(&mut package) {
+                        emit_crew_events(app, id, package.root, events);
+                    }
                     emit_crew(app, &package);
                     crews.insert(id, package);
                     crew_leads.insert(id, id);
@@ -2840,6 +2886,32 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Review pass 1 of smetana-fie0: the Codex Crew lead's own root
+    /// conversation opened empty too, because its opening turn lived only in
+    /// the ordinary `Live::journal` `spawn_session` builds and never in the
+    /// `CrewPackage::journals` `crew_attach`/`crew:events` actually serve.
+    /// `crew_root_opening` is the shared fix — the seam both
+    /// `Request::CrewStart`'s Codex arm and `admit_claude_crew` now call, so
+    /// there is one place, not two, that can draw the wordless first bubble
+    /// wrong. The Codex arm itself is `handle()`, which needs a real
+    /// `AppHandle` to spawn and reply through and so is not exercised here
+    /// (this file's own header: no unit test for the worker's I/O and
+    /// orchestration) — this pins the shared helper it calls instead.
+    #[test]
+    fn crew_root_opening_writes_the_same_wordless_pair_both_leads_share() {
+        let mut package = CrewPackage::new("/project".into(), 12, "Crew lead");
+        let events = crew_root_opening(&mut package).expect("a fresh root accepts the opening turn");
+        assert_eq!(
+            events.iter().map(|event| &event.kind).collect::<Vec<_>>(),
+            vec![
+                &EventKind::TurnStart { by: crate::session::model::Actor::Person },
+                &EventKind::Opening { text: None, attachments: Vec::new() },
+            ],
+        );
+        let (snapshot, _, _) = package.snapshot(package.root).expect("the root's own journal");
+        assert_eq!(snapshot.len(), 2, "written to the package's own journal, not left unattached");
+    }
+
     /// smetana-fie0's acceptance criterion: admission writes `TurnStart` and
     /// `Opening` to the root's own journal exactly once, before the Run brief
     /// ever reaches the lead's stdin — the same pair `spawn_session`'s driven
@@ -2905,6 +2977,37 @@ mod tests {
             filtered,
             vec![EventKind::UserMessage { text: "REAL-RUN-BRIEF".into(), attachments: Vec::new() }],
             "only the first occurrence is the brief's own echo"
+        );
+    }
+
+    /// Review pass 1 of smetana-fie0: an exact `==` on the raw strings would
+    /// read a composer's own line-ending normalisation, or a trailing
+    /// newline on either side, as two unrelated messages and let the whole
+    /// brief through as a second bubble. `admit_claude_crew` stores the
+    /// gate's prompt through `normalize_brief_text`, and `drop_sent_brief_echo`
+    /// folds the transcript's own text the same way, so the two still agree
+    /// even when the raw bytes do not.
+    #[test]
+    fn a_brief_with_a_trailing_newline_still_matches_its_own_echo() {
+        let mut package = CrewPackage::new("/project".into(), 7, "Crew lead");
+        let mut gate = ClaudePromptGate::new(Some("REAL-RUN-BRIEF\n".into()));
+        gate.bootstrap();
+        let mut sent_briefs = HashMap::new();
+        admit_claude_crew(&mut package, &mut gate, &mut sent_briefs, 7)
+            .expect("admission with a real prompt to take");
+        assert_eq!(
+            sent_briefs.get(&7).map(String::as_str),
+            Some("REAL-RUN-BRIEF"),
+            "the trailing newline is folded away at the point it is stored"
+        );
+
+        // The transcript's own record carries the identical words with a
+        // different line ending — a CRLF a bracketed paste can leave behind.
+        let kinds = vec![EventKind::UserMessage { text: "REAL-RUN-BRIEF\r\n".into(), attachments: Vec::new() }];
+        let filtered = drop_sent_brief_echo(kinds, &mut sent_briefs, 7);
+        assert!(
+            filtered.is_empty(),
+            "a trailing newline or a folded CRLF must not make the brief show up as a bubble"
         );
     }
 
