@@ -18,6 +18,17 @@ import { isParked, READY } from './parked.js'
    other card gets. */
 const CLOSED = 'closed'
 
+/* bd's own word for a task whose work is reviewed and waiting only on the
+   merge — a stored status, not a computed one, and the front end's one copy
+   of it beside `CLOSED` and `LOCKED`. `snapshot` in `runs/queue.rs` puts such
+   an issue in `unfinished` and answers `Run(RecoverUnfinished)` for it, so
+   running it does not redo the work: it carries the branch the rest of the
+   way to the merge. The row's label says that rather than "Run this", which
+   this module deliberately does not import `HELD` from `run/readyPromote.js`
+   for — the two never meet, so there is nothing to gain by pulling that
+   module in for one word. */
+const READY_TO_MERGE = 'ready_to_merge'
+
 /* The three a person is given, and no more. bd has eleven statuses in this
    build and most of them are an agent's business: `in_progress` is claimed by
    whoever starts work, `hooked` says an agent owns the molecule, `deferred`
@@ -64,20 +75,25 @@ export const statusOptions = (bdStatus) => {
    greyed Run row, which carries `scopeBusyReason`'s whole sentence — the reason
    moved out of the card's play tooltip, where it used to grow to fit, and into
    the row itself. A done card does not draw that row at all any more, so the
-   measurement's binding case is the busy open card and nothing else; the
+   measurement's binding case is the busy card on `ready_to_merge` — whose row
+   reads "Finish merge — …" rather than "Run this — …" — and nothing else; the
    longest a done menu can get is "Follow-up task", which is nowhere near this
    ceiling and buys no part of it.
 
    Measured through CoreText at `--text-sm` (12px) in the system sans, which is
    what `--font-sans` resolves to in the webview: "Run this — a run over task
    smetana-hth is already going" is 315px, and 337px for a 14-character issue
-   id. `ContextMenu` spends 70px of its width on chrome before the label —
-   2×`--border-w`, 2×`--space-2` of panel padding, 2×`--space-4` of row padding,
-   the 14px icon column, the 14px gutter mirroring it and the two `--space-4`
-   gaps around the label — so 424 leaves the label 354px. That covers every id
-   up to about 14 characters with room to spare for the other two webviews'
-   fonts, where Segoe UI and Noto Sans have their own metrics and none of this
-   could be measured from here.
+   id — this module's own measurement before `READY_TO_MERGE` existed.
+   "Finish merge" runs about 22px longer than "Run this" in the same font, so
+   "Finish merge — a run over task <14-char id> is already going" comes to
+   about 359px, past what the old ceiling left the label. `ContextMenu` spends
+   70px of its width on chrome before the label — 2×`--border-w`,
+   2×`--space-2` of panel padding, 2×`--space-4` of row padding, the 14px icon
+   column, the 14px gutter mirroring it and the two `--space-4` gaps around
+   the label — so 446 leaves the label 376px. That covers every id up to
+   about 14 characters with the same margin the old ceiling kept for the
+   other two webviews' fonts, where Segoe UI and Noto Sans have their own
+   metrics and none of this could be measured from here.
 
    Compact needs no number of its own: density shrinks the space scale and
    leaves `--text-sm` alone, so the chrome costs 60px there instead of 70 and
@@ -94,14 +110,14 @@ export const statusOptions = (bdStatus) => {
 
    Costing nothing on a narrow board: the panel is fixed-position, right-aligned
    to the trigger and clamped to the window by `EDGE`, so it opens leftwards
-   over the card and only a window under ~440px could not hold it — and only
+   over the card and only a window under ~460px could not hold it — and only
    with the long row on it, since anything shorter never reaches the ceiling.
    That clamp is also what lets the copy in the Task & details header open at
    all: the right column's minimum is 240px (`RIGHT_MIN` in
    `views/panelWidths.js`), so the menu is wider than the panel it hangs in and
    simply opens leftwards over the board, the same as a card in the last
    column. */
-export const MENU_W = 424
+export const MENU_W = 446
 
 /* The card's play used to interpolate its reason into a tooltip, which grows to
    whatever it holds. A menu row grows too — `ContextMenu` sizes itself by its
@@ -110,8 +126,16 @@ export const MENU_W = 424
    the rest from. So the ceiling is measured rather than guessed against the
    longest sentence `runScopes.js` composes, and `MENU_W` above is where that
    measurement is written down. The fragment is lowercase, which is why it
-   joins with a dash rather than as a second sentence. */
-const runLabel = (reason) => (reason ? `Run this — ${reason}` : 'Run this')
+   joins with a dash rather than as a second sentence.
+
+   The verb itself depends on the card: a `ready_to_merge` card's work is
+   already reviewed, and running it only carries the branch to the merge
+   (`READY_TO_MERGE` above), so the row reads "Finish merge" there rather than
+   the "Run this" every other runnable status draws. */
+const runLabel = (reason, bdStatus) => {
+  const verb = bdStatus === READY_TO_MERGE ? 'Finish merge' : 'Run this'
+  return reason ? `${verb} — ${reason}` : verb
+}
 
 /* Whether this card sits in the Done column, which is the one place this menu
    is a different menu.
@@ -207,8 +231,12 @@ export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy, pare
       ? []
       : [{
           kind: 'run',
-          label: runLabel(runBlockedReason),
-          icon: 'play',
+          label: runLabel(runBlockedReason, bdStatus),
+          /* `git-merge` names the merge a `ready_to_merge` card's run is
+             actually carrying out; every other runnable status keeps `play`,
+             since `kind` stays `run` for both and the caller's `runTask(id)`
+             is untouched. */
+          icon: bdStatus === READY_TO_MERGE ? 'git-merge' : 'play',
           /* Two different refusals, deliberately drawn the same. There is
              nothing to run on a blocked card, and nothing to run *now* while
              the scope is busy — but only the second has words, so the first is

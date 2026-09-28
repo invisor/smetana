@@ -17,7 +17,7 @@ describe('MENU_W', () => {
        the placement maths and clip every long row silently. The measurement
        behind the value is in the module's own comment. */
     expect(typeof MENU_W).toBe('number')
-    expect(MENU_W).toBe(424)
+    expect(MENU_W).toBe(446)
   })
 })
 
@@ -72,6 +72,38 @@ describe('taskMenuItems', () => {
     const items = taskMenuItems({ ...base, runnable: false })
     for (const kind of ['ask-agent', 'follow-up', 'lock', 'move', 'delete']) {
       expect(find(items, kind).disabled).toBeFalsy()
+    }
+  })
+
+  it('names the run row Finish merge on a ready_to_merge card, with the merge glyph', () => {
+    // Such a card's work is reviewed; running it carries the branch to the
+    // merge rather than redoing anything (runs/queue.rs's RecoverUnfinished).
+    const items = taskMenuItems({ ...base, bdStatus: 'ready_to_merge' })
+    expect(find(items, 'run')).toMatchObject({
+      label: 'Finish merge',
+      icon: 'git-merge',
+      disabled: false
+    })
+  })
+
+  it('greys Finish merge and says why, in the row rather than in a tooltip', () => {
+    const items = taskMenuItems({
+      ...base,
+      bdStatus: 'ready_to_merge',
+      runBlockedReason: 'a run over task smetana-hth is already going'
+    })
+    expect(find(items, 'run')).toMatchObject({
+      disabled: true,
+      label: 'Finish merge — a run over task smetana-hth is already going'
+    })
+  })
+
+  it('keeps Run this and the play glyph on every other runnable status', () => {
+    for (const bdStatus of ['open', 'in_progress', 'pinned', 'deferred', 'hooked']) {
+      expect(find(taskMenuItems({ ...base, bdStatus }), 'run')).toMatchObject({
+        label: 'Run this',
+        icon: 'play'
+      })
     }
   })
 
