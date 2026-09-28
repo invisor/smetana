@@ -44,6 +44,30 @@ file set is already present) fails admission outright, and a 90-second
 timeout with nothing admitted kills the PTY without ever delivering that real
 brief.
 
+**Writing either turn is not the same as sending it, and a live measurement
+(2026-09-28, Claude Code 2.1.283) is what settled how the two differ.** The
+constrained bootstrap goes onto the PTY as bare text, with no terminator at
+all: LF is read as a newline inside the interactive composer rather than as
+Enter, so the probe's own line sat visibly in the input field with no turn
+ever starting. A `\r` fares no better at that moment — before the runtime has
+switched the terminal to raw mode, the pty's own line discipline (ICRNL)
+turns it into the identical LF, so trying `\r` at the same instant is not a
+fix, only the same failure by another route. What actually starts the turn is
+a bare `\r` arriving *after* raw mode, which nothing this app is allowed to
+detect directly (decoding the TUI's own screen is exactly what this module
+refuses to do). So `refresh_claude_crews` writes a lone `\r` on every
+300 ms admission tick instead of once — self-correcting rather than a second
+timing constant tuned to one machine: a `\r` that lands before raw mode only
+adds a harmless blank line to the still-empty composer, one landing on an
+empty raw-mode field does nothing, and the first to land once raw mode is
+active is the one that submits the buffered text. The retry stops the moment
+`claude_crew::lead_transcript` for this launch's own `--session-id` answers
+`Some` — the transcript existing is the proof the turn already began — and
+`needs_enter_nudge` is the pure rule sitting beside `admission_step` that
+says so. The real Run brief is written once admission is `Ready`, by which
+point the lead is guaranteed already in raw mode, so `ClaudePromptGate::take_real`
+sends it as `{prompt}\r` rather than repeating the tick.
+
 `src-tauri/src/agents/` is what the app knows about the CLI coding agents it runs, one file per
 agent, and everything harness-specific lives in it. Claude Code and Codex are supported; which one
 runs is the `agent` field in `settings.json` — or, for a project carrying its own `agents` block,
