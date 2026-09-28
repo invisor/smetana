@@ -24,10 +24,26 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
 use crate::terminal::model::SessionWork;
+
+/// Guards every read-modify-write of the registry file. `terminal_forget` is an
+/// async command, so `drop_record` can run for several rows of the same project
+/// at once — closing a batch of offline rows in the agents panel is the
+/// ordinary case this exists for — and the worker's own spawn writes the same
+/// file concurrently with the runtime. Without a lock the read each call takes
+/// is stale by the time it writes, and only the last write to land survives: a
+/// classic lost update, not a corrupt file. `std::sync::Mutex` rather than a
+/// tokio one: nothing here awaits, the critical section is a couple of small
+/// synchronous file operations, and a std mutex held across no `.await` never
+/// blocks the runtime. The guard protects nothing but the file's own
+/// consistency — there is no `()` worth reading — so a poisoned lock (a panic
+/// mid-write, which none of this code is expected to do) is recovered from
+/// rather than left to fail every write after it.
+static REGISTRY_LOCK: Mutex<()> = Mutex::new(());
 
 /// The shape of the file. A file claiming anything else was written by another
 /// app version and is not ours to reason about.
@@ -190,16 +206,20 @@ fn write_all(temp: &Path, text: &str) -> std::io::Result<()> {
     file.sync_all()
 }
 
-/// Read, remember, write. The whole of what the worker does at a spawn.
+/// Read, remember, write, under the registry lock — see `REGISTRY_LOCK`. The
+/// whole of what the worker does at a spawn.
 pub fn record(root: &Path, entry: Restorable) {
+    let _guard = REGISTRY_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut held = read(root);
     remember(&mut held, entry);
     write(root, &held);
 }
 
-/// Read, forget, write — and write nothing when there was nothing to forget,
-/// which is the ordinary case for every session this file has no record of.
+/// Read, forget, write, under the same lock — and write nothing when there
+/// was nothing to forget, which is the ordinary case for every session this
+/// file has no record of.
 pub fn drop_record(root: &Path, session_id: &str) {
+    let _guard = REGISTRY_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut held = read(root);
     if forget(&mut held, session_id) {
         write(root, &held);
@@ -337,6 +357,39 @@ mod tests {
         let held = read(&root);
         assert_eq!(held.sessions.len(), 1);
         assert_eq!(held.sessions[0].session_id, "b");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn concurrent_drops_do_not_lose_an_update() {
+        // "Close other agents" in the agents panel calls `terminal_forget` for
+        // every offline row at once, and `terminal_forget` is an async
+        // command: without a shared lock, N racing read-modify-write cycles
+        // leave N-1 records behind, a lost update rather than a crash. This
+        // pins the fix directly, at a scale that reliably reproduces the race
+        // when the lock is missing.
+        const COUNT: usize = 16;
+        let root = scratch("concurrent-drop");
+        for n in 0..COUNT {
+            record(&root, record_for(&format!("s{n}")));
+        }
+        assert_eq!(read(&root).sessions.len(), COUNT, "every record was written");
+
+        let handles: Vec<_> = (0..COUNT)
+            .map(|n| {
+                let root = root.clone();
+                std::thread::spawn(move || drop_record(&root, &format!("s{n}")))
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("a dropping thread panicked");
+        }
+
+        assert!(
+            read(&root).sessions.is_empty(),
+            "every concurrently dropped record should be gone: {:?}",
+            read(&root).sessions
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
