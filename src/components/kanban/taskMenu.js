@@ -19,14 +19,13 @@ import { isParked, READY } from './parked.js'
 const CLOSED = 'closed'
 
 /* bd's own word for a task whose work is reviewed and waiting only on the
-   merge — a stored status, not a computed one, and the front end's one copy
-   of it beside `CLOSED` and `LOCKED`. `snapshot` in `runs/queue.rs` puts such
-   an issue in `unfinished` and answers `Run(RecoverUnfinished)` for it, so
-   running it does not redo the work: it carries the branch the rest of the
-   way to the merge. The row's label says that rather than "Run this", which
-   this module deliberately does not import `HELD` from `run/readyPromote.js`
-   for — the two never meet, so there is nothing to gain by pulling that
-   module in for one word. */
+   merge — a stored status, not a computed one. This module's own copy of it,
+   like `CLOSED` and `LOCKED` above: `HELD` in `run/readyPromote.js` is
+   another, and the two never meet, so there is nothing to gain by importing
+   one for the other. `snapshot` in `runs/queue.rs` puts such an issue in
+   `unfinished` and answers `Run(RecoverUnfinished)` for it — running it
+   carries the branch to the merge rather than redoing the work, hence
+   "Finish merge" below. */
 const READY_TO_MERGE = 'ready_to_merge'
 
 /* The three a person is given, and no more. bd has eleven statuses in this
