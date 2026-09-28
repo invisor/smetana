@@ -4159,6 +4159,20 @@ const selectFromBoard = (id) => {
   project.rightTab = 'task'
 }
 
+/* A choice made in the search palette is the one path where the person has no
+   other way to see what they picked: the palette closes over it, and the board
+   itself may not be drawing that card at all — a closed task, or one in a column
+   today's board does not show, both findable there and nowhere else. So this is
+   the one caller that also opens the right column when it is collapsed to a
+   rail. A board card click does not carry the same expansion, deliberately: the
+   card itself stays visible as the highlighted row, and forcing a panel open
+   that somebody collapsed on purpose would be answering a click nobody made
+   about the panel at all. */
+const selectFromSearch = (id) => {
+  selectFromBoard(id)
+  layout.rightCollapsed = false
+}
+
 /* Copying a task's id, for the card on the board and for the inspector's
    header both. It lives here rather than in either component because exactly
    one file under `src/components/` imports a store, and it is `TerminalView`:
@@ -7144,7 +7158,7 @@ const toastStackStyle = {
       :semantic-ids="searchState.ids"
       :answered="searchState.answered"
       @close="closePalette"
-      @select="selectFromBoard"
+      @select="selectFromSearch"
       @semantic="searchSemantic"
       @reset="clearSemantic"
     />
