@@ -71,6 +71,77 @@ pub fn needs_enter_nudge(admission_pending: bool, lead_transcript_exists: bool) 
     admission_pending && !lead_transcript_exists
 }
 
+/// Put the Run brief in a file of its own and answer the one line the lead
+/// is actually sent: where to read it. The interactive composer takes any
+/// input that arrives in one burst for a paste — measured 2026-09-28 on
+/// 2.1.283 with a 3.3 KB brief: all but its last line came back wrapped in
+/// `<pasted_content>`, the tail arrived as typed text, and the lead refused
+/// to act on a run it took for pasted material. Bracketed paste gives the
+/// same wrapper, so the brief is not typed at all: a single short line is.
+///
+/// The file is `<project>/.smetana/crew/<session>.md`, beside the run
+/// journals and reports, and it is left there after the run for the same
+/// reason they are.
+pub fn stage_brief(project: &Path, session: &str, brief: &str) -> std::io::Result<String> {
+    let dir = project.join(".smetana").join("crew");
+    fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{session}.md"));
+    fs::write(&path, brief)?;
+    Ok(format!(
+        "Your instructions for this run are in {}. Read the whole file and carry it out as my request.",
+        path.display()
+    ))
+}
+
+/// Whether the Run brief has actually been submitted to the lead, read from
+/// the lead's own transcript. What admission types is `stage_brief`'s line,
+/// written without a terminator for the same reason `bootstrap_input` is — a
+/// live probe (2026-09-28, Claude Code 2.1.283) measured that a brief with
+/// its `\r` in the same write sits in the composer unsent, and the lead goes
+/// idle after READY — so admission keeps pressing Enter until this answers
+/// `true`.
+///
+/// Two shapes count, because admission lands while the bootstrap turn is
+/// usually still running: a brief submitted to an idle lead is an ordinary
+/// `user` record, and one submitted mid-turn is a `queued_command`
+/// attachment instead, which `session::history::events_of` never reads.
+/// `brief` is compared trimmed and with CRLF folded to LF, on both sides.
+///
+/// Only records past byte `from` are read — the transcript's length when the
+/// text was typed — so a person sending the same short answer twice is not
+/// taken as delivered by the first one.
+pub fn brief_in_transcript(transcript: &Path, brief: &str, from: u64) -> bool {
+    let normalize = |text: &str| text.replace("\r\n", "\n").trim().to_owned();
+    let brief = normalize(brief);
+    let Ok(mut file) = fs::File::open(transcript) else { return false };
+    if file.seek(SeekFrom::Start(from)).is_err() {
+        return false;
+    }
+    BufReader::new(file).lines().map_while(Result::ok).any(|line| {
+        let Ok(record) = serde_json::from_str::<Value>(&line) else { return false };
+        let text = match record.get("type").and_then(Value::as_str) {
+            Some("user") => match record.pointer("/message/content") {
+                Some(Value::String(text)) => Some(text.clone()),
+                Some(Value::Array(parts)) => Some(
+                    parts
+                        .iter()
+                        .filter_map(|part| part.get("text").and_then(Value::as_str))
+                        .collect::<String>(),
+                ),
+                _ => None,
+            },
+            Some("attachment")
+                if record.pointer("/attachment/type").and_then(Value::as_str)
+                    == Some("queued_command") =>
+            {
+                record.pointer("/attachment/prompt").and_then(Value::as_str).map(str::to_owned)
+            }
+            _ => None,
+        };
+        text.is_some_and(|text| normalize(&text) == brief)
+    })
+}
+
 /// The only supported Claude Crew lead line. It is deliberately separate from
 /// `ClaudeDriver`, whose `-p --input-format stream-json` protocol cannot make
 /// native teammates. The team runtime must remain interactive while Smetana
@@ -84,6 +155,13 @@ pub fn interactive_lead_command(launch: &Launch) -> (portable_pty::CommandBuilde
     command.env(TEAM_ENV, "1");
     command.arg(TEAM_FLAG);
     command.arg(TEAM_MODE);
+    // The lead's TUI is never shown, so its question dialog is one nobody
+    // can see or answer: a run from Ready to merge sat for minutes on an
+    // `AskUserQuestion` about a dirty checkout (2026-09-28). Without the
+    // tool the lead asks in prose, which reaches the panel through its
+    // transcript, and the person answers from the composer (`CrewSend`).
+    command.arg("--disallowedTools");
+    command.arg(super::claude::ASK_USER_QUESTION_TOOL);
     (command, claude.prompt_text(launch))
 }
 
@@ -423,6 +501,15 @@ pub fn transcript(lead_session_dir: &Path, internal_agent_id: &str) -> PathBuf {
 #[derive(Default)]
 pub struct TranscriptTail {
     offset: u64,
+    /// Tokens spent since the lead's last turn ended, handed out on the next
+    /// `Ready`. An interactive transcript has no `result` record to carry a
+    /// turn's total, so it is summed off the assistant records' own `usage`.
+    spent: (u64, u64),
+    /// Claude Code writes each content block of one API response as its own
+    /// record, all carrying that response's `usage`; counting it once per
+    /// `message.id` is what keeps a thinking block beside its text from
+    /// doubling the figure.
+    last_message: Option<String>,
 }
 
 /// Lead-only lifecycle facts from Claude's structured JSONL.  The event
@@ -431,7 +518,9 @@ pub struct TranscriptTail {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeadLifecycle {
     TurnStart,
-    Ready,
+    /// The turn ended, with what it spent — cached input included, the same
+    /// reading `claude_driver`'s own `Result` takes.
+    Ready { tokens_in: u64, tokens_out: u64 },
     Failed,
 }
 
@@ -445,9 +534,33 @@ fn lead_lifecycle(line: &str) -> Option<LeadLifecycle> {
         (Some("result"), _) if value.get("is_error").and_then(Value::as_bool) == Some(true) => {
             Some(LeadLifecycle::Failed)
         }
-        (Some("result"), _) => Some(LeadLifecycle::Ready),
+        (Some("result"), _) => Some(LeadLifecycle::Ready {
+            tokens_in: usage_in(&value, "/usage"),
+            tokens_out: value.pointer("/usage/output_tokens").and_then(Value::as_u64).unwrap_or(0),
+        }),
+        // The interactive lead's transcript carries neither of the two
+        // records above — they are stream-json's — so without these a
+        // lead stayed "thinking" for good once admitted, even while it sat
+        // waiting on a person's answer (measured 2026-09-28, 2.1.283). A
+        // turn ends on the assistant record whose `stop_reason` is
+        // `end_turn`; anything the lead is handed next — a person's words,
+        // a teammate's message, a tool's result — is a `user` record.
+        (Some("assistant"), _)
+            if value.pointer("/message/stop_reason").and_then(Value::as_str) == Some("end_turn") =>
+        {
+            Some(LeadLifecycle::Ready { tokens_in: 0, tokens_out: 0 })
+        }
+        (Some("user"), _) => Some(LeadLifecycle::TurnStart),
         _ => None,
     }
+}
+
+/// Every input token under `at`, cached ones included.
+fn usage_in(value: &Value, at: &str) -> u64 {
+    ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]
+        .iter()
+        .filter_map(|field| value.pointer(&format!("{at}/{field}")).and_then(Value::as_u64))
+        .sum()
 }
 
 /// The documented hook record is the bridge between Claude's two unrelated
@@ -546,8 +659,33 @@ impl TranscriptTail {
             }
             self.offset = self.offset.saturating_add(bytes as u64);
             let line = String::from_utf8_lossy(&line);
+            if let Ok(record) = serde_json::from_str::<Value>(&line) {
+                let id = record.pointer("/message/id").and_then(Value::as_str);
+                if record.get("type").and_then(Value::as_str) == Some("assistant")
+                    && id.is_some_and(|id| self.last_message.as_deref() != Some(id))
+                {
+                    self.last_message = id.map(str::to_owned);
+                    self.spent.0 += usage_in(&record, "/message/usage");
+                    self.spent.1 += record
+                        .pointer("/message/usage/output_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                }
+            }
             if let Some(state) = lead_lifecycle(&line) {
-                lifecycle.push(state);
+                lifecycle.push(match state {
+                    // A `result` record reports its own total; an interactive
+                    // turn's is what was summed above.
+                    LeadLifecycle::Ready { tokens_in: 0, tokens_out: 0 } => {
+                        let (tokens_in, tokens_out) = std::mem::take(&mut self.spent);
+                        LeadLifecycle::Ready { tokens_in, tokens_out }
+                    }
+                    LeadLifecycle::Ready { .. } => {
+                        self.spent = (0, 0);
+                        state
+                    }
+                    other => other,
+                });
             }
             events.extend(crate::session::history::events_of(&line, &now));
         }
@@ -834,6 +972,50 @@ mod tests {
     }
 
     #[test]
+    fn stage_brief_writes_the_brief_and_types_one_short_line_pointing_at_it() {
+        let project = std::env::temp_dir().join(format!("smetana-stage-brief-{}", std::process::id()));
+        let brief = "# Run brief\n\nLine one.\n\n".repeat(200);
+
+        let line = stage_brief(&project, "lead-session", &brief).unwrap();
+
+        let path = project.join(".smetana").join("crew").join("lead-session.md");
+        assert_eq!(fs::read_to_string(&path).unwrap(), brief);
+        assert!(line.contains(&path.display().to_string()), "{line}");
+        assert!(!line.contains('\n') && !line.contains('\r'), "one line, no terminator: {line}");
+        assert!(line.len() < 300, "short enough not to be taken for a paste: {}", line.len());
+        let _ = fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn brief_in_transcript_accepts_a_user_record_or_a_mid_turn_queued_command() {
+        let dir = std::env::temp_dir().join(format!(
+            "smetana-brief-in-transcript-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lead.jsonl");
+        let brief = "# Run brief\n\nDo the work.";
+
+        assert!(!brief_in_transcript(&path, brief, 0), "no transcript yet");
+
+        let bootstrap = serde_json::json!({"type": "user", "message": {"role": "user", "content": BOOTSTRAP_PROMPT}});
+        fs::write(&path, format!("{bootstrap}\nnot json\n")).unwrap();
+        assert!(!brief_in_transcript(&path, brief, 0), "only the bootstrap turn so far");
+
+        let queued = serde_json::json!({"type": "attachment", "attachment": {"type": "queued_command", "prompt": brief, "commandMode": "prompt"}});
+        fs::write(&path, format!("{bootstrap}\n{queued}\n")).unwrap();
+        assert!(brief_in_transcript(&path, brief, 0), "submitted mid-turn");
+
+        let user = serde_json::json!({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "# Run brief\r\n\r\nDo the work.\n"}]}});
+        fs::write(&path, format!("{bootstrap}\n{user}\n")).unwrap();
+        assert!(brief_in_transcript(&path, brief, 0), "submitted to an idle lead");
+        let already = fs::metadata(&path).unwrap().len();
+        assert!(!brief_in_transcript(&path, brief, already), "an earlier identical message does not count");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn enter_nudge_writes_until_the_transcript_proves_the_turn_began() {
         // No transcript yet: keep retrying Enter.
         assert!(needs_enter_nudge(true, false));
@@ -859,6 +1041,10 @@ mod tests {
         assert_eq!(deferred.as_deref(), Some(expected.as_str()));
         assert!(!argv.iter().any(|arg| arg == &expected));
         assert!(argv.windows(2).any(|args| args == [TEAM_FLAG, TEAM_MODE]));
+        assert!(
+            argv.windows(2).any(|args| args == ["--disallowedTools", "AskUserQuestion"]),
+            "a question dialog in a TUI nobody sees would stall the run: {argv:?}"
+        );
     }
 
     #[test]
@@ -868,13 +1054,56 @@ mod tests {
             Some(LeadLifecycle::TurnStart)
         );
         assert_eq!(
-            lead_lifecycle(r#"{"type":"result","is_error":false}"#),
-            Some(LeadLifecycle::Ready)
+            lead_lifecycle(r#"{"type":"result","is_error":false,"usage":{"input_tokens":3,"cache_read_input_tokens":40,"output_tokens":7}}"#),
+            Some(LeadLifecycle::Ready { tokens_in: 43, tokens_out: 7 })
         );
         assert_eq!(
             lead_lifecycle(r#"{"type":"result","is_error":true}"#),
             Some(LeadLifecycle::Failed)
         );
+        // The interactive TUI's own transcript shapes.
+        assert_eq!(
+            lead_lifecycle(r#"{"type":"assistant","message":{"stop_reason":"end_turn","content":[]}}"#),
+            Some(LeadLifecycle::Ready { tokens_in: 0, tokens_out: 0 })
+        );
+        assert_eq!(
+            lead_lifecycle(r#"{"type":"assistant","message":{"stop_reason":"tool_use","content":[]}}"#),
+            None
+        );
+        assert_eq!(
+            lead_lifecycle(r#"{"type":"user","message":{"role":"user","content":"yes, merge it"}}"#),
+            Some(LeadLifecycle::TurnStart)
+        );
+    }
+
+    #[test]
+    fn an_interactive_turn_ends_with_its_usage_counted_once_per_response() {
+        let dir = std::env::temp_dir().join(format!("smetana-lead-usage-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lead.jsonl");
+        let usage = r#""usage":{"input_tokens":2,"cache_read_input_tokens":100,"cache_creation_input_tokens":10,"output_tokens":5}"#;
+        let lines = [
+            r#"{"type":"user","message":{"role":"user","content":"go"}}"#.to_owned(),
+            format!(r#"{{"type":"assistant","message":{{"id":"m1","stop_reason":"tool_use",{usage},"content":[]}}}}"#),
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result"}]}}"#.to_owned(),
+            // One response written as two records — thinking, then text.
+            format!(r#"{{"type":"assistant","message":{{"id":"m2","stop_reason":"end_turn",{usage},"content":[]}}}}"#),
+            format!(r#"{{"type":"assistant","message":{{"id":"m2","stop_reason":"end_turn",{usage},"content":[]}}}}"#),
+        ];
+        fs::write(&path, lines.join("\n") + "\n").unwrap();
+
+        let mut tail = TranscriptTail::default();
+        let (_, lifecycle) = tail.read_new_with_lifecycle(&path).unwrap();
+        assert_eq!(
+            lifecycle,
+            vec![
+                LeadLifecycle::TurnStart,
+                LeadLifecycle::TurnStart,
+                LeadLifecycle::Ready { tokens_in: 224, tokens_out: 10 },
+                LeadLifecycle::Ready { tokens_in: 0, tokens_out: 0 },
+            ]
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

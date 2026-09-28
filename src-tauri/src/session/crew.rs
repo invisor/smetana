@@ -62,6 +62,25 @@ impl CrewPackage {
         )
     }
 
+    /// Close the node's open turn with a `Result`, so the panel stops drawing
+    /// it as still thinking. Only a turn this journal actually opened is
+    /// closed — a lead turn a teammate's message started has no `TurnStart`
+    /// here, and a `Result` under it would draw a stray "done" line. `ms` is
+    /// measured from that `TurnStart`.
+    pub fn close_turn(&mut self, node: CrewNodeId, tokens_in: u64, tokens_out: u64) -> Option<Vec<Event>> {
+        let (events, _) = self.journals.get(&node)?.snapshot();
+        let opened = events.iter().rev().find_map(|event| match event.kind {
+            EventKind::TurnStart { .. } => Some(Some(event.at.clone())),
+            EventKind::Result { .. } | EventKind::TurnFailed { .. } => Some(None),
+            _ => None,
+        })??;
+        let ms = chrono::DateTime::parse_from_rfc3339(&opened)
+            .ok()
+            .and_then(|at| (chrono::Utc::now() - at.with_timezone(&chrono::Utc)).num_milliseconds().try_into().ok())
+            .unwrap_or(0);
+        self.append(node, vec![EventKind::Result { tokens_in, tokens_out, cost_usd: None, ms }])
+    }
+
     /// A successfully addressed root message starts a new lead turn even when
     /// Claude's transcript has not yet emitted its next `system/init`. Native
     /// child messages deliberately do not change the root's lifecycle.
@@ -312,6 +331,18 @@ impl CrewTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn close_turn_closes_only_a_turn_this_journal_opened() {
+        let mut package = CrewPackage::new("/project".into(), 1, "Crew lead");
+        assert!(package.close_turn(1, 5, 6).is_none(), "nothing is open yet");
+
+        package.record_message(1, "merge it".into());
+        let closed = package.close_turn(1, 5, 6).expect("the person's turn is open");
+        assert!(matches!(closed[0].kind, EventKind::Result { tokens_in: 5, tokens_out: 6, cost_usd: None, .. }));
+
+        assert!(package.close_turn(1, 7, 8).is_none(), "a turn is closed once");
+    }
 
     fn worker(id: &str, parent: Option<&str>, state: ProviderState) -> ProviderNode {
         ProviderNode {

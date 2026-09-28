@@ -64,9 +64,21 @@ active is the one that submits the buffered text. The retry stops the moment
 `claude_crew::lead_transcript` for this launch's own `--session-id` answers
 `Some` — the transcript existing is the proof the turn already began — and
 `needs_enter_nudge` is the pure rule sitting beside `admission_step` that
-says so. The real Run brief is written once admission is `Ready`, by which
-point the lead is guaranteed already in raw mode, so `ClaudePromptGate::take_real`
-sends it as `{prompt}\r` rather than repeating the tick.
+says so. The real Run brief is written once admission is `Ready` — also
+without a terminator, and the same retry presses Enter until
+`claude_crew::brief_in_transcript` finds it. Raw mode is not enough: a
+multi-line brief with its `\r` in the same write was measured (2026-09-28,
+2.1.283) to sit in the composer unsent while the lead answered READY and went
+idle — the hang a Crew run from Ready to merge showed. Admission usually lands
+mid-turn, so the brief arrives as a `queued_command` attachment rather than a
+`user` record, and the check accepts both. What is typed is not the brief itself
+but one line naming the file `claude_crew::stage_brief` wrote it to
+(`<project>/.smetana/crew/<session>.md`): a 3.3 KB brief arriving in one burst
+was taken for a paste, wrapped in `<pasted_content>`, and the lead refused to
+act on it. The same Enter retry covers a person's message to the lead from
+the panel (`CrewSend`), which used to end in an LF and never send. And the lead
+runs with `--disallowedTools AskUserQuestion`: its question dialog would be
+drawn in a TUI nobody sees, so it asks in prose, which the panel shows.
 
 `src-tauri/src/agents/` is what the app knows about the CLI coding agents it runs, one file per
 agent, and everything harness-specific lives in it. Claude Code and Codex are supported; which one

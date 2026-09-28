@@ -289,7 +289,16 @@ pub fn human_text(record: &Record) -> Option<String> {
         }
     }
     let content = record.message.as_ref()?.content.as_ref()?;
-    let text = strip_envelopes(&message_text(content));
+    let raw = message_text(content);
+    // A teammate's message to a Crew lead — its `idle_notification` above
+    // all, which every native team's bootstrap sends — is written as a plain
+    // `user` record with no `origin` at all (measured 2026-09-28, 2.1.284),
+    // so only its envelope tells it from a person. The tag carries
+    // attributes, which is why it is not one of `ENVELOPES`.
+    if raw.contains("<teammate-message ") {
+        return None;
+    }
+    let text = strip_envelopes(&raw);
     (!text.trim().is_empty()).then_some(text)
 }
 
@@ -534,6 +543,14 @@ mod tests {
     fn a_subagents_prompt_is_not_something_the_person_said() {
         let mut record = user(serde_json::json!("Review this diff"));
         record.is_sidechain = Some(true);
+        assert_eq!(human_text(&record), None);
+    }
+
+    #[test]
+    fn a_teammates_message_to_the_lead_is_not_something_the_person_said() {
+        let record = user(serde_json::json!(
+            "Another Claude session sent a message:\n<teammate-message teammate_id=\"smetana-bootstrap\" color=\"blue\">\n{\"type\":\"idle_notification\",\"result\":\"READY\"}\n</teammate-message>\n\nThis came from another Claude session."
+        ));
         assert_eq!(human_text(&record), None);
     }
 
