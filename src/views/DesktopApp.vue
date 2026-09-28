@@ -1006,7 +1006,8 @@ const configErrorText = computed(() =>
    `unfinished` whatever they wait on, so `next_action` answers
    `Run(RecoverUnfinished)` rather than `Stop(QueueEmpty)` — a `ready_to_merge`
    task waiting on a sibling that has not merged is an ordinary shape here, and
-   "Run this" on it is how the run is asked to merge it. Greying those was this
+   "Finish merge" on it (`taskMenu.js`'s own row, renamed from "Run this" for
+   this status alone) is how the run is asked to merge it. Greying those was this
    clause's first draft and the cost would have been a dead row with no words
    at all, since the blocked refusal is deliberately silent (`taskMenu.js`) and
    neither the Ready-to-merge column nor Running says anything about a
