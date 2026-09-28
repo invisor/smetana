@@ -159,11 +159,20 @@ struct ClaudeAdmission {
 struct ClaudePromptGate {
     bootstrap_sent: bool,
     real_prompt: Option<String>,
+    /// The plain text handed to the one caller of `take_real`, kept beside it
+    /// rather than only inside the bytes that went to the PTY. Claude Code
+    /// records the brief back into the lead's own transcript as an ordinary
+    /// `user` record — indistinguishable there from a person's own words —
+    /// and `refresh_claude_crews` needs the exact string to recognise that
+    /// echo and filter it back out, since the brief already has a row: the
+    /// wordless `Opening` admission writes before this text ever reaches the
+    /// child's stdin.
+    sent: Option<String>,
 }
 
 impl ClaudePromptGate {
     fn new(real_prompt: Option<String>) -> Self {
-        Self { bootstrap_sent: false, real_prompt }
+        Self { bootstrap_sent: false, real_prompt, sent: None }
     }
 
     fn bootstrap(&mut self) -> Vec<u8> {
@@ -172,15 +181,20 @@ impl ClaudePromptGate {
     }
 
     fn take_real(&mut self) -> Option<Vec<u8>> {
-        self.bootstrap_sent
-            .then(|| self.real_prompt.take())
-            .flatten()
-            // `\r`, not `\n`: by the time admission is `Ready` the bootstrap
-            // turn has already been submitted, which only happens once the
-            // TUI has switched to raw mode (see `claude_crew::bootstrap_input`
-            // and `needs_enter_nudge`'s own comments), so a single carriage
-            // return here is guaranteed to land where LF never would.
-            .map(|prompt| format!("{prompt}\r").into_bytes())
+        let prompt = self.bootstrap_sent.then(|| self.real_prompt.take()).flatten()?;
+        self.sent = Some(prompt.clone());
+        // `\r`, not `\n`: by the time admission is `Ready` the bootstrap
+        // turn has already been submitted, which only happens once the
+        // TUI has switched to raw mode (see `claude_crew::bootstrap_input`
+        // and `needs_enter_nudge`'s own comments), so a single carriage
+        // return here is guaranteed to land where LF never would.
+        Some(format!("{prompt}\r").into_bytes())
+    }
+
+    /// The exact text `take_real` last sent, or `None` before that or once the
+    /// worker has already filtered the one echo it is watching for.
+    fn sent_prompt(&self) -> Option<&str> {
+        self.sent.as_deref()
     }
 }
 
@@ -372,6 +386,10 @@ pub fn start(app: AppHandle) -> SessionHandle {
         let mut claude_tails: HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail> = HashMap::new();
         let mut claude_lead_tails: HashMap<u64, crate::agents::claude_crew::TranscriptTail> = HashMap::new();
         let mut claude_transcript_nodes: HashMap<(u64, PathBuf), u64> = HashMap::new();
+        // The Run brief's own text, kept per root from the moment it is
+        // written to the lead's stdin until the same words are read back out
+        // of its transcript exactly once — see `ClaudePromptGate::sent_prompt`.
+        let mut claude_sent_briefs: HashMap<u64, String> = HashMap::new();
         let mut crew_tick = tokio::time::interval(std::time::Duration::from_millis(300));
         // Session id -> public Crew root for the special Codex lead whose
         // normal app-server stream also carries thread lifecycle records.
@@ -424,6 +442,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         &mut claude_tails,
                         &mut claude_lead_tails,
                         &mut claude_transcript_nodes,
+                        &mut claude_sent_briefs,
                         &mut crew_leads,
                         &mut crew_waiters,
                         &mut crew_exits,
@@ -456,13 +475,13 @@ pub fn start(app: AppHandle) -> SessionHandle {
                 }
                 _ = crew_tick.tick(), if !claude_crews.is_empty() => {
                     let mut admission_failures = Vec::new();
-                    refresh_claude_crews(&app, &mut crews, &mut crew_ptys, &claude_crews, &mut claude_teams, &claude_team_baselines, &claude_expected_sessions, &mut claude_bootstrap_members, &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes, &mut claude_starting, &mut admission_failures);
+                    refresh_claude_crews(&app, &mut crews, &mut crew_ptys, &claude_crews, &mut claude_teams, &claude_team_baselines, &claude_expected_sessions, &mut claude_bootstrap_members, &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes, &mut claude_starting, &mut claude_sent_briefs, &mut admission_failures);
                     for (root, reason) in admission_failures {
                         let Some(admission) = claude_starting.remove(&root) else { continue };
                         clear_crew(
                             &app, &mut sessions, &mut crews, &mut crew_ptys, &mut claude_crews,
                             &mut claude_teams, &mut claude_team_baselines, &mut claude_expected_sessions, &mut claude_bootstrap_members, &mut claude_starting,
-                            &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes,
+                            &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes, &mut claude_sent_briefs,
                             &mut crew_leads, &mut crew_waiters, &mut crew_exits, &mut crew_send_waiters,
                             root, crate::terminal::model::Exit::NoCode, false,
                         );
@@ -478,7 +497,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         clear_crew(
                             &app, &mut sessions, &mut crews, &mut crew_ptys, &mut claude_crews,
                             &mut claude_teams, &mut claude_team_baselines, &mut claude_expected_sessions, &mut claude_bootstrap_members, &mut claude_starting,
-                            &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes,
+                            &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes, &mut claude_sent_briefs,
                             &mut crew_leads, &mut crew_waiters, &mut crew_exits, &mut crew_send_waiters,
                             root, crate::terminal::model::Exit::NoCode, false,
                         );
@@ -509,6 +528,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                             &mut claude_tails,
                             &mut claude_lead_tails,
                             &mut claude_transcript_nodes,
+                            &mut claude_sent_briefs,
                             &mut crew_leads,
                             &mut crew_waiters,
                             &mut crew_exits,
@@ -1268,6 +1288,74 @@ fn codex_hydration_requests(
         .collect()
 }
 
+/// The lead's own opening turn, written once admission has a Run brief ready
+/// to send — exactly like the ordinary driven road's `spawn_session`, which
+/// appends the identical pair before a session's first turn reaches its
+/// child. `by: Actor::Person` and a wordless `Opening` go into the root's
+/// journal *before* the brief reaches the child's stdin, since the harness
+/// never echoes a turn back and there is no wire moment after this one to
+/// mark it with. `text: None` is what every wordless intent already carries
+/// (`Intent::opening_words()`) — a Run's own brief is deliberately not one of
+/// them (`.claude/rules/conversation-panel.md`, "The opening turn") — and the
+/// panel draws the row's own caption in its place.
+///
+/// Returns `None` when the gate has no real prompt left to take — the
+/// ordinary answer on every tick but the one where `starting.remove(root)`
+/// actually found this admission, which is the caller's own guarantee that
+/// this runs at most once per root. Kept separate from `refresh_claude_crews`
+/// so it can be proved directly, with no `AppHandle` and no PTY: the caller
+/// alone is responsible for writing `input` to the child and for publishing
+/// `events` through `emit_crew_events`.
+fn admit_claude_crew(
+    package: &mut CrewPackage,
+    gate: &mut ClaudePromptGate,
+    sent_briefs: &mut HashMap<u64, String>,
+    root: u64,
+) -> Option<(Vec<u8>, Option<Vec<Event>>)> {
+    let input = gate.take_real()?;
+    let events = package.append(
+        package.root,
+        vec![
+            EventKind::TurnStart { by: super::model::Actor::Person },
+            EventKind::Opening { text: None, attachments: Vec::new() },
+        ],
+    );
+    // Kept so the transcript read above can recognise this same text coming
+    // back out of the lead's own transcript and filter it rather than draw it
+    // a second time as an ordinary `UserMessage`.
+    if let Some(prompt) = gate.sent_prompt() {
+        sent_briefs.insert(root, prompt.to_owned());
+    }
+    package.tree.set_state(package.root, CrewState::Running);
+    Some((input, events))
+}
+
+/// Drop the Run brief's own echo out of a batch of freshly read lead events.
+///
+/// Claude Code writes the brief back into the lead's transcript as an
+/// ordinary `user` record the moment it is submitted, indistinguishable there
+/// from a person's own words — `session::history::events_of`'s `human_text`
+/// has no way to tell the two apart, and has no reason to: everywhere else in
+/// this app, a `user` record *is* somebody typing. Here it already has a row,
+/// the wordless `Opening` `admit_claude_crew` wrote before this exact text
+/// ever reached the child's stdin, so the one `UserMessage` whose text matches
+/// what was sent is removed instead of reaching the journal twice. Matched at
+/// most once — the entry is taken out of `sent_briefs` on the first hit — so a
+/// person who later types the identical sentence to the lead is never
+/// silently swallowed.
+fn drop_sent_brief_echo(kinds: Vec<EventKind>, sent_briefs: &mut HashMap<u64, String>, root: u64) -> Vec<EventKind> {
+    kinds
+        .into_iter()
+        .filter(|kind| match kind {
+            EventKind::UserMessage { text, .. } if sent_briefs.get(&root).is_some_and(|sent| sent == text) => {
+                sent_briefs.remove(&root);
+                false
+            }
+            _ => true,
+        })
+        .collect()
+}
+
 /// Poll the documented Claude team config. This does not touch the PTY at all:
 /// the config is the runtime's structured source for members and lifecycle.
 /// The config must carry the UUID passed to this root's `--session-id`; cwd and
@@ -1287,6 +1375,7 @@ fn refresh_claude_crews(
     lead_tails: &mut HashMap<u64, crate::agents::claude_crew::TranscriptTail>,
     transcript_nodes: &mut HashMap<(u64, PathBuf), u64>,
     starting: &mut HashMap<u64, ClaudeAdmission>,
+    sent_briefs: &mut HashMap<u64, String>,
     admission_failures: &mut Vec<(u64, String)>,
 ) {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
@@ -1442,7 +1531,18 @@ fn refresh_claude_crews(
                 // bootstrap/READY exchange. It is provider initialization,
                 // not the Run itself, so must not become root journal rows.
                 if !starting.contains_key(root) {
-                    let kinds = events.into_iter().map(|(kind, _)| kind).collect();
+                    // The Run brief itself surfaces here exactly once, the
+                    // first time the lead's transcript is read past it:
+                    // Claude Code records it as an ordinary `user` record,
+                    // indistinguishable from a person's own words. It already
+                    // has a row — the wordless `Opening` admission wrote
+                    // before this text ever reached stdin — so the matching
+                    // echo is dropped rather than drawn a second time.
+                    let kinds = drop_sent_brief_echo(
+                        events.into_iter().map(|(kind, _)| kind).collect(),
+                        sent_briefs,
+                        *root,
+                    );
                     if let Some(events) = package.append(package.root, kinds) {
                         emit_crew_events(app, *root, package.root, events);
                     }
@@ -1491,12 +1591,14 @@ fn refresh_claude_crews(
         }
         if let Some(mut admission) = starting.remove(root) {
             let pty = crew_ptys.get_mut(root).expect("admitted Claude lead owns its PTY");
-            if let Some(input) = admission.gate.take_real() {
+            if let Some((input, events)) = admit_claude_crew(package, &mut admission.gate, sent_briefs, *root) {
+                if let Some(events) = events {
+                    emit_crew_events(app, *root, package.root, events);
+                }
                 // Only the admitted interactive runtime receives the Run
                 // prompt. Removing the pending admission makes delivery
                 // exactly-once even as later config polls continue.
                 pty.write(&input);
-                package.tree.set_state(package.root, CrewState::Running);
             }
             log::info!("[crew] root {root}: admission complete (expected session {expected_session})");
             let _ = admission.reply.send(Ok((*root, *root)));
@@ -1584,6 +1686,7 @@ fn clear_crew(
     claude_tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
     claude_lead_tails: &mut HashMap<u64, crate::agents::claude_crew::TranscriptTail>,
     claude_transcript_nodes: &mut HashMap<(u64, PathBuf), u64>,
+    claude_sent_briefs: &mut HashMap<u64, String>,
     crew_leads: &mut HashMap<SessionId, u64>,
     crew_waiters: &mut HashMap<u64, Vec<oneshot::Sender<crate::terminal::model::Exit>>>,
     crew_exits: &mut HashMap<u64, crate::terminal::model::Exit>,
@@ -1601,6 +1704,7 @@ fn clear_crew(
     claude_tails.retain(|(crew, _), _| *crew != root);
     claude_lead_tails.remove(&root);
     claude_transcript_nodes.retain(|(crew, _), _| *crew != root);
+    claude_sent_briefs.remove(&root);
     if let Some(live) = sessions.get_mut(&root) {
         if let Some(child) = live.child.as_mut() {
             let _ = child.start_kill();
@@ -1643,6 +1747,7 @@ fn handle(
     claude_tails: &mut HashMap<(u64, PathBuf), crate::agents::claude_crew::TranscriptTail>,
     claude_lead_tails: &mut HashMap<u64, crate::agents::claude_crew::TranscriptTail>,
     claude_transcript_nodes: &mut HashMap<(u64, PathBuf), u64>,
+    claude_sent_briefs: &mut HashMap<u64, String>,
     crew_leads: &mut HashMap<SessionId, u64>,
     crew_waiters: &mut HashMap<u64, Vec<oneshot::Sender<crate::terminal::model::Exit>>>,
     crew_exits: &mut HashMap<u64, crate::terminal::model::Exit>,
@@ -1841,7 +1946,7 @@ fn handle(
             let admitted = !claude_starting.contains_key(&root);
             clear_crew(
                 app, sessions, crews, crew_ptys, claude_crews, claude_teams, claude_team_baselines, claude_expected_sessions, claude_bootstrap_members, claude_starting, claude_tails,
-                claude_lead_tails, claude_transcript_nodes, crew_leads, crew_waiters, crew_exits, crew_send_waiters, root,
+                claude_lead_tails, claude_transcript_nodes, claude_sent_briefs, crew_leads, crew_waiters, crew_exits, crew_send_waiters, root,
                 crate::terminal::model::Exit::Removed, admitted,
             );
             let _ = tx.send(Ok(()));
@@ -1862,6 +1967,7 @@ fn handle(
                 claude_tails,
                 claude_lead_tails,
                 claude_transcript_nodes,
+                claude_sent_briefs,
                 crew_leads,
                 crew_waiters,
                 crew_exits,
@@ -2732,6 +2838,74 @@ mod tests {
         assert_eq!(gate.take_real(), Some(b"REAL-RUN-BRIEF\r".to_vec()));
         assert_eq!(gate.take_real(), None, "the admitted brief is exactly once");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// smetana-fie0's acceptance criterion: admission writes `TurnStart` and
+    /// `Opening` to the root's own journal exactly once, before the Run brief
+    /// ever reaches the lead's stdin — the same pair `spawn_session`'s driven
+    /// road appends for every other intent.
+    #[test]
+    fn admission_writes_the_opening_turn_to_the_root_journal_exactly_once() {
+        let mut package = CrewPackage::new("/project".into(), 7, "Crew lead");
+        let mut gate = ClaudePromptGate::new(Some("REAL-RUN-BRIEF".into()));
+        gate.bootstrap();
+        let mut sent_briefs = HashMap::new();
+
+        let admitted = admit_claude_crew(&mut package, &mut gate, &mut sent_briefs, 7);
+        let (input, events) = admitted.expect("the first admission has a real prompt to take");
+        assert_eq!(input, b"REAL-RUN-BRIEF\r");
+        let events = events.expect("the root journal accepted the opening turn");
+        assert_eq!(
+            events.iter().map(|event| &event.kind).collect::<Vec<_>>(),
+            vec![
+                &EventKind::TurnStart { by: crate::session::model::Actor::Person },
+                &EventKind::Opening { text: None, attachments: Vec::new() },
+            ],
+        );
+        assert_eq!(sent_briefs.get(&7).map(String::as_str), Some("REAL-RUN-BRIEF"));
+
+        // A later tick finds no second real prompt to take — the same
+        // exactly-once guarantee `take_real` already proves above — so
+        // nothing is appended a second time even if a caller asked again.
+        assert!(admit_claude_crew(&mut package, &mut gate, &mut sent_briefs, 7).is_none());
+        let (events, _, _) = package.snapshot(package.root).expect("the root's own journal");
+        assert_eq!(events.len(), 2, "the opening turn was written exactly once: {events:?}");
+    }
+
+    /// smetana-fie0's second acceptance criterion: the brief's own `user`
+    /// record, read back out of the lead's transcript, must not become a
+    /// second `UserMessage` beside the wordless `Opening` admission already
+    /// wrote for it.
+    #[test]
+    fn the_brief_read_back_from_the_transcript_never_becomes_a_user_message() {
+        let mut sent_briefs = HashMap::new();
+        sent_briefs.insert(7, "REAL-RUN-BRIEF".to_owned());
+        let kinds = vec![
+            EventKind::UserMessage { text: "REAL-RUN-BRIEF".into(), attachments: Vec::new() },
+            EventKind::Text { text: "Reading the board.".into() },
+        ];
+        let filtered = drop_sent_brief_echo(kinds, &mut sent_briefs, 7);
+        assert_eq!(filtered, vec![EventKind::Text { text: "Reading the board.".into() }]);
+        assert!(sent_briefs.get(&7).is_none(), "the echo is matched at most once");
+    }
+
+    /// A person's own words to the lead are never mistaken for the echo, even
+    /// when they happen to arrive in the same batch a brief was just matched
+    /// out of — `drop_sent_brief_echo` only ever removes one occurrence.
+    #[test]
+    fn a_second_identical_message_after_the_brief_is_never_swallowed() {
+        let mut sent_briefs = HashMap::new();
+        sent_briefs.insert(7, "REAL-RUN-BRIEF".to_owned());
+        let kinds = vec![
+            EventKind::UserMessage { text: "REAL-RUN-BRIEF".into(), attachments: Vec::new() },
+            EventKind::UserMessage { text: "REAL-RUN-BRIEF".into(), attachments: Vec::new() },
+        ];
+        let filtered = drop_sent_brief_echo(kinds, &mut sent_briefs, 7);
+        assert_eq!(
+            filtered,
+            vec![EventKind::UserMessage { text: "REAL-RUN-BRIEF".into(), attachments: Vec::new() }],
+            "only the first occurrence is the brief's own echo"
+        );
     }
 
     #[test]

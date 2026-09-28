@@ -66,7 +66,45 @@ records being collapsed into `sessionWork.js` and `captions.js`. `Opening` carri
 knows — the person's own words, when there are any — and leaves the wording of everything else to the
 side that already owns it.
 
-## The fourth inline-style exception
+**A Claude Crew lead's own journal is a different object, and smetana-fie0 is the task that noticed
+its opening turn was never written into it.** A Crew root's conversation lives in
+`session::crew::CrewPackage::journals`, keyed by the Smetana-owned node id — a separate journal from
+the ordinary `Live::journal` `spawn_session` builds for every ordinary session — and `crew_attach`
+reads only from there (`session::service::Request::CrewAttach`). Claude's interactive lead is spawned
+without its Run brief at all (`.claude/rules/agents.md`'s "Native Crew transports"): the brief is held
+until the runtime's structured config, transcript and mailbox files prove admission, and only then
+written to the PTY. Before that fix, nothing in `refresh_claude_crews`'s admission tick ever appended
+a `TurnStart`/`Opening` pair to the root's own journal, so a lead already visibly running (blue in the
+agents panel, the footer counting it) opened its own conversation panel on the empty state — the row
+said one thing and the panel said another. `admit_claude_crew` is where that pair is written now,
+right before the brief reaches the PTY and exactly once, mirroring `spawn_session`'s own order for
+every other intent; `text: None` for the identical reason `Intent::Run` carries no words of its own
+into `opening_words()` elsewhere. The brief itself is still not drawn: Claude Code records it back
+into the lead's own transcript as an ordinary `user` record once it is submitted, indistinguishable
+there from a person typing it, and `drop_sent_brief_echo` filters the one exact match back out before
+it ever reaches `package.append` — the brief already has its row, the wordless `Opening` above, and
+would otherwise appear a second time in full.
+
+**Codex's Crew lead writes its own `Opening` the ordinary way, inside `spawn_session` itself, because
+its `CrewPackage` and its ordinary session are stood up together in the same `Request::CrewStart` arm**
+rather than admitted asynchronously the way Claude's interactive runtime is — there is no held-back
+brief and no polling tick standing between the spawn and the first prompt reaching the child.
+**Whether that write ever reaches the panel is a narrower question than "already writes Opening"
+answers, and this task could not settle it without a live run.** `spawn_session` appends `TurnStart`
+and `Opening` straight into `Live::journal`, the ordinary per-session journal `session_attach` serves
+— not `CrewPackage::journals`, which `crew_attach` and `crew:events` serve instead, and which starts
+empty (`CrewPackage::new`). The only bridge between the two is `absorb`'s `Chunk::Data` arm, which
+mirrors whatever `Driver::feed` decodes out of *this chunk*'s bytes into `package.append(package.root,
+…)` (`crew_leads.get(&id)`, `session/service.rs`) — bytes arriving over the app-server's own stdout,
+never the two events `spawn_session` wrote synchronously beforehand and never sent anywhere. Nothing
+in this file's own reading of `codex_driver.rs::feed` turns the client's own outgoing `turn/start`
+request back into a decoded event, which is the ordinary shape of a request/response protocol rather
+than an echo. If that reading holds, the Codex Crew lead's own root conversation opens on the same
+empty state Claude's did before this task's fix, by the same mechanical cause — a wordless first turn
+living in a journal nothing here reads — and reaches it a different way. This is left as a finding
+rather than a fix: the instruction for this task was to leave `spawn_session`'s own Codex behaviour
+alone, and confirming a live panel's first paint either way is exactly the live-run verification this
+section's own history says a screen this app cannot decode requires.
 
 `src/styles/sm-prose.css`, scoped entirely under `.sm-prose`, is the **fourth** declared exception to
 "inline style objects, never CSS classes" (CLAUDE.md, Styling), beside `files/editor/theme.js`,

@@ -592,7 +592,16 @@ function listenToState() {
 
 /* The backend emits complete topology snapshots. Applying a snapshot rather
    than incremental provider ids is important: provider ids never arrive here,
-   and a late node update cannot make Vue retain an orphan under a stale key. */
+   and a late node update cannot make Vue retain an orphan under a stale key.
+
+   **This is also the only place an open Crew conversation's own `held.state`
+   moves after `attach`.** `crew:events` only ever carries journal events, and
+   `absorb` only ever appends them — nothing about a node's lifecycle rides on
+   that wire — so without this, a panel already attached to a running lead
+   would freeze at whatever `crew_attach`'s one-time snapshot said, while the
+   very same node's row in the agents panel (`crewAgentsIn`, above) went on
+   moving with every tree update. Read through the identical `crewStatusOf`
+   that row already uses, so the badge and the row can never disagree. */
 function listenToCrew() {
   return listen('crew:tree', (event) => {
     const { project, root, nodes } = event.payload ?? {}
@@ -602,6 +611,10 @@ function listenToCrew() {
       return
     }
     crews.set(root, { project, root, nodes })
+    for (const node of nodes) {
+      const held = conversations.get(`crew:${root}:${node.id}`)
+      if (held) held.state = crewStatusOf(node.state)
+    }
   })
 }
 
