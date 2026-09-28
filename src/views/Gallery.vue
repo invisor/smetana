@@ -1757,6 +1757,7 @@ const pickerChoice = ref({ name: 'main', origin: false })
 const pickerSide = ref('local')
 const pickerSideBare = ref('origin')
 const pickerSideNarrow = ref('local')
+const pickerSideFetching = ref('local')
 
 /* git's own sentence, verbatim from a repository where a second worktree held
    the branch — which is exactly what a run's provisioning phase leaves behind,
@@ -5943,6 +5944,25 @@ const menuTargetStyle = {
             :side="pickerSideNarrow"
             scope="1 repository"
             @side="pickerSideNarrow = $event"
+            @close="() => {}"
+          />
+        </div>
+        <!-- Origin being checked: the filter row's new button turns and is
+             refused, `loader-circle` at `--attn-live` in place of `refresh-cw`,
+             and the rest of the list is untouched underneath it — a fetch is
+             about the repositories, not about which rows the two toggles are
+             showing. -->
+        <div :style="{ width: '720px' }">
+          <BranchPicker
+            :branches="PICKER_BRANCHES.slice(0, 5)"
+            :repos="6"
+            :fetched-at="PICKER_NOW - 120"
+            :now="PICKER_NOW"
+            selected="main"
+            :side="pickerSideFetching"
+            scope="Applies to 6 repositories"
+            fetching
+            @side="pickerSideFetching = $event"
             @close="() => {}"
           />
         </div>

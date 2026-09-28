@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BRANCH_FILTER_LABEL,
   BRANCH_SIDES,
+  FETCH_LABEL,
   PICKER_KEY_HINT,
   SIDE_TOGGLES,
   branchCountLabel,
@@ -387,5 +388,13 @@ describe('the words the component draws', () => {
       expect(label[0]).toBe(label[0].toUpperCase())
       expect(label.slice(1)).toBe(label.slice(1).toLowerCase())
     }
+  })
+
+  /* The same sentence `GitPanel.vue`'s own fetch button carries, so a person
+     reading the two panels meets one word for one act rather than two. */
+  it('names the fetch button with the words the Git panel already uses', () => {
+    expect(typeof FETCH_LABEL).toBe('string')
+    expect(FETCH_LABEL.length).toBeGreaterThan(0)
+    expect(FETCH_LABEL).toBe('Check the remote')
   })
 })

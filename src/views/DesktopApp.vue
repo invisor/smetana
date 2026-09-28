@@ -1764,6 +1764,14 @@ async function openReviewChanges(branch = null) {
          switch projects — so it goes into `layout` beside the panel widths and
          not into the project's own state. */
       if (name === 'branch-side') layout.branchSide = normalizeSide(payload?.side)
+      /* A press of the branch list's own fetch button — the second of the
+         window's three doors into a fetch, beside this opening and beside
+         `startReview`'s own late one. `payload.repoId` is the row it was
+         pressed for, or `null` for the project's rule, which reaches every
+         repository. */
+      if (name === 'fetch') {
+        refreshReviewOrigin(path, payload?.repoId ? [payload.repoId] : reviewRepoIds())
+      }
     }
   })
   /* Neither of these is waited for, and neither is on the way to anything the
@@ -1775,6 +1783,59 @@ async function openReviewChanges(branch = null) {
       if (activePath.value === path) reviewHome.value = home
     })
     .catch(() => {})
+  await loadReviewRemotes(path)
+  /* The window's own opening, and the first of its three doors into a fetch.
+     Deliberately not awaited: the window is already up, drawing whatever
+     `loadReviewRemotes` above just found, and this is a second sweep
+     underneath it rather than something the opening waits on. It ignores
+     `git.autoFetch` and the five-minute throttle the same way `startReview`'s
+     own fetch does — opening the window is a person's own action, not the app
+     acting on its own, and the setting is about the second of those. Every
+     repository of the project, and not `fetchTargets(form)`: at the moment
+     this window opens the pair may still be empty. */
+  refreshReviewOrigin(path, reviewRepoIds())
+}
+
+/* Every repository of this project, by path — what "the whole project" means
+   for a fetch that runs before a pair is ever picked, since `fetchTargets`
+   only knows a pair and there may be none yet. Read fresh on every call
+   rather than cached, the same reason `vcsState.repos` itself is read fresh
+   everywhere else in this window: a repository added mid-visit belongs in the
+   next fetch. */
+const reviewRepoIds = () => vcsState.repos.map((repo) => repo?.path).filter(Boolean)
+
+/* Fetch, in every repository handed to it, then a fresh read of what origin
+   has — the shape `startReview`'s own late fetch already has, pulled out so
+   the window's other two doors into a fetch (opening, and the branch list's
+   own button) can take it without a pair to read `fetchTargets` from.
+
+   Parallel, the same as `startReview`'s and for the same reason: these are
+   network calls of up to a minute each and none of them writes anything
+   another reads, and `fetchIn` already holds one call in flight per
+   repository and joins it — two presses inside a minute cost one fetch, not
+   two.
+
+   No toast and no call to `startReview`'s own: the window is open and already
+   draws `Fetching origin for N repositories.` and then `Fetch failed for …`
+   in its own notes block (`reviewNotes` in `reviewRows.js`), so a toast behind
+   it would say the same sentence twice. `reviewStarting` is untouched —
+   opening the window and pressing its own fetch button must both leave it
+   usable while the network is out, which is what the notes block and the
+   list's own spinner are for.
+
+   Every step after the one `await` is guarded the way `loadReviewRemotes`'s
+   own loop already guards itself: a later opening, a project switched under
+   the call, or the window closed while the fetch was out are none of them
+   worth writing a state nobody is reading any more. */
+async function refreshReviewOrigin(path, repoIds) {
+  const targets = (repoIds ?? []).filter(Boolean)
+  if (!targets.length) return
+  reviewFetching.value = targets
+  const reached = await Promise.all(targets.map((repo) => fetchIn(repo)))
+  if (activePath.value !== path || !openDialogs.has('review-changes')) return
+  reviewFetchFailed.value = fetchFailures(targets, reached)
+  reviewFetching.value = []
+  if (activePath.value !== path || !openDialogs.has('review-changes')) return
   await loadReviewRemotes(path)
 }
 

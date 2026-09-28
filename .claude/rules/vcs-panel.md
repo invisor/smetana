@@ -2252,6 +2252,27 @@ rather than as *not there*, which falls through to the local answer. When each r
 rides out of that same loop, keyed by path, and dates both the `origin` rows in the list and the
 sentence a row draws over a fetch that failed.
 
+**A fetch into this project's repositories now happens three times, and only one of the three waits on
+a branch being picked.** `refreshReviewOrigin(path, repoIds)` in `DesktopApp.vue` is the one function
+behind two of them. Opening the window is the first: `openReviewChanges` calls it, unawaited, once its
+own first `loadReviewRemotes` above has drawn what is already on disk — against every repository of the
+project rather than `fetchTargets(form)`, since at the moment a window opens there may be no pair to
+read a target from at all. The branch list's own filter row carries the second — a `refresh-cw` button
+(`BranchPicker.vue`, `branchPicker.js`'s `FETCH_LABEL`, the same words `GitPanel.vue`'s own fetch button
+carries) that turns to `loader-circle` and is refused while a fetch is out, reported up through a
+`fetch` result the same channel `submit` and `branch-side` already answer on. A press against the
+project's own rule reaches every repository; a press against one row's own list reaches only that row's
+— the same scope `origin · fetched …` is already dated by. Neither of the first two asks
+`git.autoFetch` or waits out its five-minute throttle: both are a person's own action, opening a window
+or pressing a button, and the setting is about the app fetching on its own account. `startReview`'s own
+late fetch, described below, is the third and the only one still gated on a pair existing —
+`fetchTargets(form)` reads a checked side that by definition exists by the time Review is pressed. All
+three share `fetchIn`'s one call in flight per repository, so two of them landing within a minute of
+each other cost one fetch and not two — and only the third's own failure reaches the toast corner: the
+first two are answered entirely inside the window's own notes block (`Fetching origin for N
+repositories.`, then `Fetch failed for …`), since the window is already open and a toast would say the
+same sentence twice over it.
+
 **The form is held in the component and seeded from the prop rather than driven by it.** Every prop of
 a dialog window arrives over IPC and is re-announced whenever anything else about the window changes,
 so a driven form would put a round trip between picking a branch and seeing it, and would throw away a
@@ -2286,6 +2307,12 @@ neither;
 the shape `DiffView`'s column captions took for the compare window, one component over.
 
 ### What Review does, in the order it has to happen in
+
+**This is the third of the window's three doors into a fetch, and the only one gated on a pair.** The
+other two — the window opening, and a press of the branch list's own button — are described above,
+beside where the origin lists come from, and neither of them waits for a side to be checked: both run
+against every repository of the project through the same `refreshReviewOrigin`, since `fetchTargets`
+below has nothing to read a target from until a branch exists.
 
 **The fetch is first and is not optional.** A side reading `origin/main` is only as current as the last
 fetch, so without one the report would be about a commit nobody asked about — and nothing on screen

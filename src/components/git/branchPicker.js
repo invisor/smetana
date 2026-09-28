@@ -95,6 +95,15 @@ export const SIDE_TOGGLES = [
   { side: ORIGIN_SIDE, icon: 'cloud', label: 'Show branches on origin' }
 ]
 
+/* The fetch button's label, the same words `GitPanel.vue`'s own fetch button
+   carries (`tracking.js`'s `fetchAction`) — one sentence for one act, whichever
+   panel it is pressed in. It says what the press does rather than which side it
+   is about, since the button sits above both: the list this component draws is
+   already one side at a time, and a fetch here reaches origin in every
+   repository the caller hands it, not only the one the list happens to be
+   showing. */
+export const FETCH_LABEL = 'Check the remote'
+
 /* Which side a list opens on: the side of what is already picked, then the side
    the person last chose, then local.
 

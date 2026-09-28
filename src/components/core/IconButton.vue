@@ -100,7 +100,18 @@ const props = defineProps({
   selected: { type: Boolean, default: false },
   /* Whether the button explains itself on hover — see the note above for the
      one caller that says no. `label` is untouched by it. */
-  hint: { type: Boolean, default: true }
+  hint: { type: Boolean, default: true },
+  /* Whether the glyph turns — `GitPanel.vue`'s own idiom for "still going",
+     borrowed rather than reinvented: `loader-circle` at `--attn-live` turning at
+     `--dur-pulse`. It is on the glyph and never on the box around it, and it
+     overrides the disabled dimming above rather than being dimmed by it — a
+     spinner drawn muted reads as stopped, which is the one thing it must not
+     say while a caller has it turning. There is no caller-supplied icon size or
+     colour to fight here: every icon button of a given `size` is already one
+     glyph size, and this is the one property `Icon` has no slot to reach on its
+     own (`core/Icon.vue`'s header — a `.vue` file cannot forward extra style
+     into a child it renders without a prop of its own for it). */
+  spin: { type: Boolean, default: false }
 })
 
 const { hover, active, handlers } = useInteractive(toRef(props, 'disabled'))
@@ -174,6 +185,16 @@ const style = computed(() => ({
   transition: 'var(--transition-control)',
   padding: 0
 }))
+
+/* `GitPanel.vue`'s own spin, token for token: the one turning glyph this
+   system draws is `--attn-live` at `--dur-pulse`, so a second spinner in a
+   second colour never enters the vocabulary. `undefined` and not `{}` while
+   still — an empty style object is still a style, and `Icon`'s own root
+   already carries one of its own that a caller's binding merges onto rather
+   than replaces. */
+const iconStyle = computed(() =>
+  props.spin ? { color: 'var(--attn-live)', animation: 'sm-spin var(--dur-pulse) linear infinite' } : undefined
+)
 </script>
 
 <template>
@@ -189,7 +210,7 @@ const style = computed(() => ({
       @mousedown="onMousedown"
       v-bind="buttonAttrs"
     >
-      <Icon :name="icon" :size="glyphSize" />
+      <Icon :name="icon" :size="glyphSize" :style="iconStyle" />
     </button>
   </Tooltip>
 </template>
