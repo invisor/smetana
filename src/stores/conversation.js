@@ -102,35 +102,48 @@ const crewAddress = (id) => {
    counts `Starting` beside `Running` as active; `claude_crew`'s own fallback
    is the same shape). That is nothing like a driven session's `starting`,
    which is a blank journal waiting on a person who has not typed a word yet —
-   a Crew node in this state is already working, so it stays `running` and
-   goes on lighting its project's rail tile `live` rather than fading to a
-   quiet `ready` the moment its worker is still coming up. */
+   a Crew node in this state is already working, so it stays `running` rather
+   than fading to a quiet `ready` the moment its worker is still coming up.
+   That word is what actually reaches the rail: `crewAgents` below is folded
+   into `DesktopApp.vue`'s `mergeProjectStates`, the same map the PTY and the
+   driven sessions light their tiles through, so a root still starting up
+   keeps its project's dot pulsing live instead of reading idle everywhere but
+   the agents list (smetana-m5ch fixed the gap between this word and that
+   map). */
 const crewStatusOf = (state) => (state === 'starting' ? 'running' : statusOf(state))
 
-export const crewAgentsIn = (project) =>
-  [...crews.values()]
-    .filter((crew) => crew.project === project)
-    .flatMap((crew) =>
-      crewRows(crew.nodes).map((node) => ({
-        id: `crew:${crew.root}:${node.id}`,
-        crewRoot: crew.root,
-        crewNode: node.id,
-        project: crew.project,
-        state: crewStatusOf(node.state),
-        elapsed: '',
-        conversation: null,
-        work: { kind: 'run' },
-        label: node.label,
-        tasks: [],
-        claimed: [],
-        /* Only a package root can be cleared. A native child has no safe
-           provider child-stop contract, so its row is readable/selectable but
-           never offers the destructive package close action. */
-        clearable: node.id === crew.root,
-        canMessage: node.canMessage,
-        depth: node.depth
-      }))
-    )
+/* Every Crew row of every project, the shape `crewAgentsIn` below used to
+   build on its own before smetana-m5ch. The rail's map and the footer's
+   counter both need every project's Crew nodes at once — the same split
+   `drivenAgents`/`drivenHere` already draw in `DesktopApp.vue` — so this is
+   the one computed the rail folds in, and `crewAgentsIn` narrows it to the
+   agents panel's own project rather than building a second copy of the
+   walk. */
+export const crewAgents = computed(() =>
+  [...crews.values()].flatMap((crew) =>
+    crewRows(crew.nodes).map((node) => ({
+      id: `crew:${crew.root}:${node.id}`,
+      crewRoot: crew.root,
+      crewNode: node.id,
+      project: crew.project,
+      state: crewStatusOf(node.state),
+      elapsed: '',
+      conversation: null,
+      work: { kind: 'run' },
+      label: node.label,
+      tasks: [],
+      claimed: [],
+      /* Only a package root can be cleared. A native child has no safe
+         provider child-stop contract, so its row is readable/selectable but
+         never offers the destructive package close action. */
+      clearable: node.id === crew.root,
+      canMessage: node.canMessage,
+      depth: node.depth
+    }))
+  )
+)
+
+export const crewAgentsIn = (project) => crewAgents.value.filter((row) => row.project === project)
 
 export const crewConversationsIn = (project) => crewAgentsIn(project).map((row) => row.id)
 

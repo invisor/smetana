@@ -164,6 +164,7 @@ import {
   conversationFor,
   conversationState,
   conversationsIn,
+  crewAgents,
   crewAgentsIn,
   crewConversationsIn,
   drivenSessions,
@@ -3015,16 +3016,24 @@ const drivenHere = computed(() =>
    sessions, but cannot drag a native teammate out of its provider-owned team. */
 const crewHere = computed(() => crewAgentsIn(activePath.value))
 
-/* What every project is doing, the two kinds of session counted together: the
-   rail's map with the driven sessions folded into it.
+/* What every project is doing, the three kinds of session counted together:
+   the rail's map with the driven sessions and the Crew nodes folded into it.
 
    Every project and not only this one, because that is the whole of what the
    rail is for — the projects somebody is *not* looking at, one of which may
    have a conversation waiting on them. `panelSummary` a few hundred lines down
    reads this same merged map rather than the store's, so the tile's tooltip and
    the panel header's line cannot end up saying two different things about the
-   project in front. */
-const agentStates = computed(() => mergeProjectStates(projectStates.value, drivenAgents.value))
+   project in front.
+
+   `crewAgents` is every project's Crew rows, the same all-projects shape
+   `drivenAgents` already is — before smetana-m5ch this merge only ever saw
+   PTY and driven sessions, so a project whose only agent was a running Crew
+   lead read `idle` here, on the rail's dot and on the panel header's line
+   both, while the agents panel's own `crewAgentsIn` already knew better. */
+const agentStates = computed(() =>
+  mergeProjectStates(projectStates.value, [...drivenAgents.value, ...crewAgents.value])
+)
 
 /* The agents panel in the order the person put it in. bd's board and the
    settings meet in `orderColumns` a few hundred lines down; this is the same
@@ -6802,8 +6811,20 @@ const stateHeadline = computed(() =>
    for the reason the store gives for deriving one from the other: they sit a
    gap apart in the same bar and say the same noun, so a driven session counted
    in one and not in the other is two numbers disagreeing in front of
-   somebody. */
-const agentsActive = computed(() => mergeLiveAgentCount(liveAgentCount.value, drivenHere.value))
+   somebody.
+
+   `crewHere` is folded into this count and deliberately not into the sentence
+   above: a Crew node only ever exists under a run this project is carrying
+   out, so `stateHeadline`'s own `runs?.some(...)` check already answers
+   "Run under way" before `row.live` is ever read, and counting Crew nodes a
+   second time into `agentCounts` would spend effort on a branch the sentence
+   never reaches while one is live. The raw number here has no such run-shaped
+   escape hatch — it is what the footer's own count says regardless of the
+   sentence beside it — so it is the one of the pair a Crew lead actually has
+   to move (smetana-m5ch). */
+const agentsActive = computed(() =>
+  mergeLiveAgentCount(liveAgentCount.value, [...drivenHere.value, ...crewHere.value])
+)
 
 /* Which runs have stopped, as a value that changes exactly when one does —
    `configFreshness.js`'s shape, and for the same reason: `upsert` writes a run
