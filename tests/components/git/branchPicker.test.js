@@ -11,6 +11,7 @@ import {
   matchingBranches,
   normalizeSide,
   openingSide,
+  originSideBranches,
   pickerRows,
   repoCountLabel,
   shortAge,
@@ -287,6 +288,55 @@ describe('the list itself', () => {
 
   it('a filter that matches nothing is an empty list and not a broken one', () => {
     expect(pickerRows(all, { query: 'nothing-is-called-this' })).toEqual([])
+  })
+})
+
+describe('the origin side of the list', () => {
+  /* smetana-m44m: the branch that started this — on `origin`, absent from the
+     local list `remote` is keyed the same way it arrives on the wire, plain
+     names with `origin/` already off. */
+  const remote = {
+    frontend: ['main', 'feature/change-gemstone-pair-menu-order-NXC-262'],
+    infra: ['main', 'release/7']
+  }
+
+  it('unions the repositories it is asked about, with no branch said twice', () => {
+    expect(originSideBranches(remote, ['frontend', 'infra']).map((b) => b.name)).toEqual([
+      'feature/change-gemstone-pair-menu-order-NXC-262',
+      'main',
+      'release/7'
+    ])
+  })
+
+  it('answers alphabetically, and not in the order any one repository arrived in', () => {
+    const out = { one: ['zeta', 'alpha'], two: ['mid'] }
+
+    expect(originSideBranches(out, ['one', 'two']).map((b) => b.name)).toEqual([
+      'alpha',
+      'mid',
+      'zeta'
+    ])
+  })
+
+  it('a repository nobody has fetched into contributes nothing and forbids nothing', () => {
+    expect(originSideBranches(remote, ['frontend', 'nobody-asked-yet']).map((b) => b.name)).toEqual([
+      'feature/change-gemstone-pair-menu-order-NXC-262',
+      'main'
+    ])
+    expect(originSideBranches({}, ['frontend'])).toEqual([])
+  })
+
+  it('one repository is the whole list scoped to it, and no other repository leaks in', () => {
+    expect(originSideBranches(remote, ['infra']).map((b) => b.name)).toEqual(['main', 'release/7'])
+  })
+
+  it('an empty list of repositories is an empty union', () => {
+    expect(originSideBranches(remote, [])).toEqual([])
+    expect(originSideBranches(remote, undefined)).toEqual([])
+  })
+
+  it('returns rows pickerRows and matchingBranches can read, and nothing more', () => {
+    expect(originSideBranches(remote, ['infra'])).toEqual([{ name: 'main' }, { name: 'release/7' }])
   })
 })
 
