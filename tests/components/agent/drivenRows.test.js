@@ -21,6 +21,29 @@ const offline = (id) => ({ id, conversation: id, state: 'done', restored: true }
    words, with the elapsed time already worked out. */
 const driven = (id, state = 'running', project = '/p') => ({ id, project, state })
 
+/* A Crew row as `crewAgents`/`crewAgentsIn` in `stores/conversation.js` hand
+   one over — already reduced through `crewStatusOf`, so `state` here is never
+   `needs-you`, only `running`, `done` or `failed`. Both merges below read a
+   row by `project` and `state` alone, the same two fields a driven row
+   carries, which is the whole point: a Crew row needs no shape of its own to
+   reach the rail or the footer (smetana-m5ch). */
+const crewRow = (id, state = 'running', project = '/p') => ({
+  id: `crew:1:${id}`,
+  crewRoot: 1,
+  crewNode: id,
+  project,
+  state,
+  elapsed: '',
+  conversation: null,
+  work: { kind: 'run' },
+  label: 'Lead',
+  tasks: [],
+  claimed: [],
+  clearable: true,
+  canMessage: true,
+  depth: 0
+})
+
 describe('a driven conversation among the agents', () => {
   describe('the id a row is known by', () => {
     it('carries a prefix, so two workers counting from 1 cannot collide', () => {
@@ -237,6 +260,15 @@ describe('a driven conversation among the agents', () => {
     it('counts a state nobody has heard of', () => {
       expect(mergeLiveAgentCount(0, [driven(1, 'thinking')])).toBe(1)
     })
+
+    /* smetana-m5ch: a Crew lead and its workers are each their own session, so
+       a package of three running nodes adds three to the footer's count, not
+       one for the whole package. */
+    it('counts every Crew node of the active project as its own session', () => {
+      expect(
+        mergeLiveAgentCount(1, [crewRow(1, 'running'), crewRow(2, 'running'), crewRow(3, 'done')])
+      ).toBe(3)
+    })
   })
 
   describe('the sentence beside it', () => {
@@ -292,6 +324,26 @@ describe('a driven conversation among the agents', () => {
       mergeProjectStates(states, [driven(1, 'needs-you')])
 
       expect(states['/p']).toEqual({ state: 'live', live: 1, loud: 0 })
+    })
+
+    /* smetana-m5ch: a running Crew root — the lead — lights its project's
+       tile exactly as a running driven session does, in a project the rail
+       had never heard of before. */
+    it('lights a project whose only agent is a Crew node', () => {
+      expect(mergeProjectStates({}, [crewRow(1, 'running', '/fresh')])['/fresh']).toEqual({
+        state: 'live',
+        live: 1,
+        loud: 0
+      })
+    })
+
+    /* And in a project the rail is already watching, a Crew node does not
+       drown out a conversation waiting on somebody — `loud` still wins over
+       `live`, driven or Crew alike. */
+    it('keeps a project loud when a conversation is waiting on somebody beside a running Crew node', () => {
+      const merged = mergeProjectStates(states, [driven(1, 'needs-you'), crewRow(1, 'running')])
+
+      expect(merged['/p']).toEqual({ state: 'loud', live: 2, loud: 1 })
     })
   })
 })

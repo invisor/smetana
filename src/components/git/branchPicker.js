@@ -7,14 +7,27 @@
    component is boxes, tokens and events; the filtering, the order, the meta
    line and the counter are all here.
 
-   **`origin` is a prefix and not a second side.** The window this is built for
-   used to ask the question twice — a branch in one dropdown, `local`/`origin`
-   in another beside it — and a person picking `origin/main` had to say `main`
-   in one control and `origin` in the other, in either order, with neither
-   control saying what the other held. One list answers both at once, and it
-   still does: what leaves this module is a name and a flag together, taken from
+   **`origin` is a prefix on the row and not a second control.** The window this
+   is built for used to ask the question twice — a branch in one dropdown,
+   `local`/`origin` in another beside it — and a person picking `origin/main`
+   had to say `main` in one control and `origin` in the other, in either order,
+   with neither control saying what the other held. Picking a row is still one
+   movement: what leaves this module is a name and a flag together, taken from
    the one row a finger landed on, so there is no second half of an answer left
    anywhere for the first half to disagree with.
+
+   **The two sides are two different lists, and this module draws whichever one
+   it is handed.** `origin`'s rows were the local branches with the prefix
+   painted over them at first, which answered a different question than the one
+   asked: a branch that lived only on this machine drew an `origin/` row the
+   server could not match, and a branch that lived only on the server never
+   drew a row at all — smetana-m44m, a branch on `origin` with 665 names typed
+   into a project whose local list held 348. `ReviewChangesDialog.vue`'s
+   `pickerBranches` now chooses between the local list and `originSideBranches`
+   below, over `remote`, before either ever reaches here — the swap happens once,
+   above this module, and `pickerRows` and `branchCountLabel` read whatever list
+   they were given without knowing which side it came from or how large the
+   other one is.
 
    **The list shows one side at a time, and the pair of toggles that says which
    is not that second control coming back.** Every branch used to be drawn
@@ -231,6 +244,47 @@ export function branchMeta(branch, options = {}) {
   return pieces.filter(Boolean).join(SEPARATOR)
 }
 
+/* The `origin` side of the list: what `origin` is known to hold across the
+   given repositories, deduplicated and alphabetical — the order
+   `vcs_remote_branches` already answers in and the Git panel's own Origin tab
+   already draws in.
+
+   `remote` is `ReviewChangesDialog.vue`'s prop of the same name, keyed by
+   repository path to the plain names `vcs_remote_branches` answered for it —
+   `origin/` already off, as everywhere else this app reads that field.
+   `repoPaths` is the repositories the open list is about: every repository of
+   the project for the rule, or the one path of a row that keeps a pair of its
+   own. A path absent from `remote` is a repository whose list has not landed
+   yet, and it contributes nothing to the union and forbids nothing either —
+   "not known" is not "not there", the reading `reviewRows.js`'s `hasBranch`
+   already gives the same field.
+
+   Sorted rather than left in `remote`'s own per-repository order, because a
+   union of several repositories has no single arrival order to keep: two
+   repositories can answer the same fetch a `Promise.all` apart, and a list
+   that read `feature/a, feature/c, feature/b` because the second repository's
+   answer landed first would be a different list on every run of the same
+   window.
+
+   The name is deliberately not `branchTree.js`'s `originBranches` — that one
+   answers a different question for a different reader, one repository's own
+   `origin` annotated against that same repository's local branches for the
+   Git panel's Origin tab (`hasLocal`, `current`). This one answers across
+   several repositories at once and returns plain `{ name }` records, which is
+   the whole of what `pickerRows` and `branchMeta` read for an origin row: the
+   staleness of the side is `fetchedAt`, a fact about the repository rather
+   than about one branch, so there is no `at` to carry here the way a local
+   branch's record carries one. */
+export function originSideBranches(remote, repoPaths) {
+  const names = new Set()
+  for (const path of list(repoPaths)) {
+    for (const name of list(remote?.[path])) {
+      if (typeof name === 'string' && name) names.add(name)
+    }
+  }
+  return [...names].sort().map((name) => ({ name }))
+}
+
 /* The branches a filter leaves, matched on the name as a substring and without
    regard to case.
 
@@ -283,17 +337,17 @@ export function pickerRows(branches, options = {}) {
 
 /* The counter at the right of the filter row: `4 of 41`.
 
-   It counts **branches**, which the list shows one row of at a time, so the two
-   numbers happen to agree — and the branch is still what is meant. The side is
-   a filter over how a branch is drawn and not over which branches there are, so
-   this counter must not halve when `cloud` is pressed: `41 of 41` is the count
-   of things there are to choose between, and there are as many of them on
-   either side. It said the same thing when a branch was two rows, where a row
-   count would have opened at `82 of 82` on a project of 41 branches; both
-   readings answer to `matchingBranches`, and that is what has not moved.
+   It counts **branches of the side that is showing**, and the two sides are
+   free to disagree about how many there are, because they are two different
+   lists: `origin` may hold names this machine has no local twin for and a
+   local branch nobody has ever pushed has no `origin` row to be. A project
+   with 348 local branches and 665 on `origin` reads `… of 348` on one side and
+   `… of 665` on the other, and that is the two lists being honest rather than
+   this counter forgetting how to add — `matchingBranches` is the same rule
+   over whichever list it was handed, which is what has not moved.
 
    The second number is the whole list rather than the filtered one — that is
-   the point of it, since a filter that matches nothing and a project with no
+   the point of it, since a filter that matches nothing and a side with no
    branches at all look identical without it. */
 export function branchCountLabel(shown, total) {
   const of = Number.isFinite(total) ? Math.max(0, Math.trunc(total)) : 0

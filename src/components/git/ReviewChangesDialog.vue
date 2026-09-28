@@ -45,7 +45,7 @@ import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import Modal from '../overlays/Modal.vue'
 import BranchPicker from './BranchPicker.vue'
-import { LOCAL_SIDE, normalizeSide, openingSide } from './branchPicker.js'
+import { LOCAL_SIDE, ORIGIN_SIDE, normalizeSide, openingSide, originSideBranches } from './branchPicker.js'
 import { repoLabel, repoPath } from './repoLabel.js'
 import {
   PICK_HEAD,
@@ -296,11 +296,25 @@ const ready = computed(() => canReview(review.value) && !props.busy)
 
 /* ---- the branch list ----------------------------------------------------- */
 
-/* Which branches the open list holds. The project's rule offers the whole
-   project's answer; a row's own pair offers that row's repository alone, which
-   is `target_branches` filtered rather than a second read per row. */
+/* Which branches the open list holds — the side on screen decides which list
+   this is, and `BranchPicker.vue` itself never finds out: `origin` and
+   `local` are two different lists here, chosen once above it, and not the one
+   list with a prefix painted over half of it (smetana-m44m). Repository scope
+   still divides the same way it always did: the project's rule offers the
+   whole project's answer, and a row's own pair offers that row's repository
+   alone.
+
+   `originSideBranches` reads it off `remote` — the map `loadReviewRemotes`
+   fills one repository at a time — so a repository whose fetch has not landed
+   yet contributes nothing to the union, and the picker updates on its own the
+   moment that map gains an entry: this is an ordinary computed over a prop,
+   with no reopening required. */
 const pickerBranches = computed(() => {
   const at = picker.value?.repoId
+  if (shownSide.value === ORIGIN_SIDE) {
+    const paths = at ? [at] : (props.repos ?? []).map((repo) => repo?.path)
+    return originSideBranches(props.remote, paths)
+  }
   if (!at) return props.branches ?? []
   /* Scoped by the repository's own name, and nothing at all for one the project
      no longer lists: `branchesIn` empties each record's `missing_in` because the

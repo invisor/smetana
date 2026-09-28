@@ -20,11 +20,15 @@
    knows nothing about that window: it is a block in a flow, and where it is
    drawn is the caller's business.
 
-   **`origin` is a prefix and not a second side.** There were two dropdowns
-   here, one for the name and one for `local`/`origin`, which is four controls
-   on a row that asks two questions. There is one list now, and what comes out
-   of it is a name plus a flag saying which of the two it was — one movement,
-   with no second control to agree with.
+   **`origin` is a prefix on the row and not a second control.** There were two
+   dropdowns here, one for the name and one for `local`/`origin`, which is four
+   controls on a row that asks two questions. There is one list now, and what
+   comes out of it is a name plus a flag saying which of the two it was — one
+   movement, with no second control to agree with. Which list that one is — the
+   project's local branches, or what `origin` is known to hold
+   (`branchPicker.js`'s `originSideBranches`) — is the caller's to decide: this
+   component only ever draws the `branches` prop it is handed, for the side its
+   `side` prop names, and knows nothing about where either list came from.
 
    **What the list holds is one side at a time**, chosen by the two toggles in
    the filter row: a branch drawn twice over is 472 rows on a repository of 236,
