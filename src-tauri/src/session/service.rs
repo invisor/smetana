@@ -2835,10 +2835,9 @@ mod tests {
         );
 
         // Step 2: the model reads the bootstrap turn and creates the
-        // teammate, `subagents/` and `inboxes/` — but has not yet written the
-        // teammate's own inbox *file* inside `inboxes/`. `admission_step`
-        // still waits rather than refusing (review pass 1's finding: a
-        // missing inbox file must not fail admission outright).
+        // teammate, `subagents/` and `inboxes/`, with no inbox *file* for the
+        // teammate — Claude 2.1.283 writes none until a message is addressed
+        // to it. Only the lead's transcript is still missing.
         std::fs::create_dir_all(team.join("inboxes")).unwrap();
         std::fs::create_dir_all(lead_dir.join("subagents")).unwrap();
         std::fs::write(
@@ -2854,13 +2853,12 @@ mod tests {
         let (_, with_teammate_config) = &candidates[0];
         assert_eq!(
             crate::agents::claude_crew::admission_step(&home, &team, with_teammate_config, expected_session),
-            crate::agents::claude_crew::AdmissionStep::Waiting(crate::agents::claude_crew::WAIT_NO_BOOTSTRAP_INBOX),
+            crate::agents::claude_crew::AdmissionStep::Waiting(crate::agents::claude_crew::WAIT_NO_LEAD_TRANSCRIPT),
         );
 
-        // Step 3: the inbox file and the lead's own transcript — addressed
-        // by *our* `--session-id`, never the config's own `leadSessionId` —
-        // exist too, and admission is `Ready`.
-        std::fs::write(team.join("inboxes/smetana-bootstrap.json"), "[]").unwrap();
+        // Step 3: the lead's own transcript — addressed by *our*
+        // `--session-id`, never the config's own `leadSessionId` — exists
+        // too, and admission is `Ready` with the teammate still inbox-less.
         std::fs::write(
             lead_dir.parent().unwrap().join(format!("{expected_session}.jsonl")),
             r#"{"type":"system","subtype":"init"}"#,

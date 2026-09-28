@@ -145,24 +145,25 @@ pub enum PreflightError {
     AddressedMessages(String),
 }
 
-/// The six things `session::service::refresh_claude_crews` waits on before a
+/// The five things `session::service::refresh_claude_crews` waits on before a
 /// Claude Crew lead is admitted, in the order a fresh launch actually clears
 /// them (2026-09-27 measurements: the config with the lone lead lands inside
-/// the same second as the spawn; the teammate, its inbox, `subagents/` and the
-/// lead's own transcript follow only once the model has read the bootstrap
+/// the same second as the spawn; the teammate, `subagents/`, `inboxes/` and
+/// the lead's own transcript follow only once the model has read the bootstrap
 /// turn). None of these being absent is a failure on its own — the admission
 /// loop simply waits for the next tick — but the *last* one still missing when
 /// the 90-second timeout fires is what [`admission_timeout_message`] names.
-/// `WAIT_NO_BOOTSTRAP_INBOX` is the narrowest of the six: `inboxes/` itself
-/// can exist a tick or more before Claude has written the bootstrap
-/// teammate's own `<name>.json` inside it, and `preflight`'s `OpenOptions`
-/// read cannot tell that ordinary race from a real one — so it is checked for
-/// ahead of `preflight`, the same way `WAIT_NO_INBOXES_DIR` already is.
+///
+/// A teammate's own `inboxes/<name>.json` is deliberately not among them.
+/// Claude Code 2.1.283 writes one only when a message is first addressed to
+/// that member (measured 2026-09-28: the bootstrap teammate joined the config
+/// and `inboxes/` held `team-lead.json` alone for the whole 90 seconds), so
+/// waiting for it failed every Claude Crew run; [`append_message`] creates a
+/// missing inbox itself instead.
 pub const WAIT_NO_TEAM_CONFIG: &str = "the team config never appeared";
 pub const WAIT_NO_BOOTSTRAP: &str = "the bootstrap teammate never joined";
 pub const WAIT_NO_SUBAGENTS_DIR: &str = "no subagents directory";
 pub const WAIT_NO_INBOXES_DIR: &str = "no inboxes directory";
-pub const WAIT_NO_BOOTSTRAP_INBOX: &str = "the bootstrap teammate has no inbox yet";
 pub const WAIT_NO_LEAD_TRANSCRIPT: &str = "no lead transcript";
 
 /// The sentence a refused `CrewStart` reply carries when admission times out.
@@ -216,6 +217,9 @@ pub fn preflight(
     }
     // A configured member's actual inbox is the only writable contract. Do
     // not pre-create it: that would masquerade as a provider runtime surface.
+    // A missing one is ordinary — Claude writes it on the first addressed
+    // message, and so does `append_message` — but one that exists and cannot
+    // be opened for writing is a real contradiction.
     for member in config
         .get("members")
         .and_then(Value::as_array)
@@ -238,6 +242,9 @@ pub fn preflight(
             continue;
         };
         let path = inbox(&team_dir, &name);
+        if !path.exists() {
+            continue;
+        }
         OpenOptions::new()
             .read(true)
             .write(true)
@@ -247,36 +254,6 @@ pub fn preflight(
             })?;
     }
     Ok(())
-}
-
-/// The first non-lead, non-finished member in `config` whose own inbox file
-/// does not exist yet, or `None` when every relevant member already has one.
-/// Mirrors `preflight`'s own member loop, but asks only whether the path
-/// **exists** rather than opening it — existence is what distinguishes the
-/// ordinary "Claude has not written this file yet" race from a real problem.
-/// A path that exists but is the wrong kind, or cannot be opened for
-/// writing, answers `None` here and is left for `preflight` to refuse as the
-/// contradiction it actually is; masking that behind another tick of waiting
-/// would turn a real fault into a timeout with no message worth reading.
-fn member_inbox_missing(team_dir: &Path, config: &Value) -> Option<String> {
-    config
-        .get("members")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .find_map(|member| {
-            if member.get("agentType").and_then(Value::as_str) == Some("team-lead") {
-                return None;
-            }
-            if matches!(
-                member.get("status").and_then(Value::as_str),
-                Some("left" | "completed" | "failed")
-            ) {
-                return None;
-            }
-            let name = member.get("name").and_then(Value::as_str)?;
-            (!inbox(team_dir, name).exists()).then(|| name.to_owned())
-        })
 }
 
 /// What one admission tick decides about a Claude Crew lead, once
@@ -329,13 +306,10 @@ pub fn admission_step(
     if !team_dir.join("inboxes").is_dir() {
         return AdmissionStep::Waiting(WAIT_NO_INBOXES_DIR);
     }
-    if member_inbox_missing(team_dir, config).is_some() {
-        return AdmissionStep::Waiting(WAIT_NO_BOOTSTRAP_INBOX);
-    }
     // Version selection happened before the run entered the board loop; this
-    // is the runtime half, and by this point subagents/, inboxes/ and every
-    // relevant member's own inbox file have all been confirmed present, so an
-    // error here is the contradiction this type's own doc comment describes.
+    // is the runtime half, and by this point subagents/ and inboxes/ have both
+    // been confirmed present, so an error here is the contradiction this
+    // type's own doc comment describes.
     if let Err(error) = preflight("2.1.281", team_dir, lead_session_dir) {
         return AdmissionStep::Failed(error.to_string());
     }
@@ -598,7 +572,8 @@ pub fn inbox(team_dir: &Path, member_name: &str) -> PathBuf {
 /// malformed inbox, and rechecks the exact bytes after the lock and before the
 /// atomic replacement. A changed inbox is retried a bounded number of times;
 /// a persistent race is reported to the composer and is never redirected to a
-/// lead or sibling.
+/// lead or sibling. A member with no inbox file yet reads as an empty one, and
+/// the send creates it — Claude itself does not write it until then.
 pub fn append_message(
     team_dir: &Path,
     member_name: &str,
@@ -684,7 +659,11 @@ fn member_can_message(team_dir: &Path, member_name: &str) -> Result<bool, Mailbo
 }
 
 fn read_mailbox(path: &Path) -> Result<Vec<u8>, MailboxError> {
-    let bytes = fs::read(path).map_err(|error| MailboxError::Read(error.to_string()))?;
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => b"[]".to_vec(),
+        Err(error) => return Err(MailboxError::Read(error.to_string())),
+    };
     if !matches!(serde_json::from_slice::<Value>(&bytes), Ok(Value::Array(_))) {
         return Err(MailboxError::Corrupt);
     }
@@ -1063,9 +1042,9 @@ mod tests {
         );
 
         // Pass 2: the teammate is in config, `subagents/` and `inboxes/`
-        // exist, but Claude has not yet written the teammate's own inbox
-        // file inside `inboxes/` — a missing FILE, not the directory. This is
-        // the exact race review pass 1 found failing admission outright.
+        // exist, and `inboxes/` holds no file for the teammate — Claude
+        // 2.1.283 writes none until a message is addressed to it. That is not
+        // something to wait for; only the lead's transcript is still missing.
         // `preflight` re-reads `config.json` off disk on its own, so the
         // fixture has to be written there too, not only held in memory.
         fs::create_dir_all(team.join("inboxes")).unwrap();
@@ -1075,12 +1054,11 @@ mod tests {
         let with_teammate: Value = serde_json::from_str(with_teammate_json).unwrap();
         assert_eq!(
             admission_step(&home, &team, &with_teammate, session),
-            AdmissionStep::Waiting(WAIT_NO_BOOTSTRAP_INBOX)
+            AdmissionStep::Waiting(WAIT_NO_LEAD_TRANSCRIPT)
         );
 
-        // Pass 3: the inbox file and the lead's own transcript exist too —
-        // the full set, and admission succeeds.
-        fs::write(team.join("inboxes/smetana-bootstrap.json"), "[]").unwrap();
+        // Pass 3: the lead's own transcript exists too — the full set, still
+        // with no teammate inbox file, and admission succeeds.
         fs::write(
             lead_dir.parent().unwrap().join(format!("{session}.jsonl")),
             r#"{"type":"system","subtype":"init"}"#,
@@ -1114,10 +1092,10 @@ mod tests {
             r#"{"name":"session-new","leadSessionId":"unrelated","members":[{"name":"team-lead","agentType":"team-lead","cwd":"/project"},{"name":"smetana-bootstrap","agentType":"general-purpose","agentId":"smetana-bootstrap@session-new"}]}"#,
         )
         .unwrap();
-        // The inbox path exists, so `member_inbox_missing`'s plain `exists()`
-        // reads it as present and this reaches `preflight` — whose own
-        // `OpenOptions::write` refuses a directory. Present but broken is a
-        // genuine contradiction, never another tick of waiting.
+        // The inbox path exists, so `preflight` tries to open it — and its
+        // `OpenOptions::write` refuses a directory. A missing inbox is
+        // ordinary; one present but broken is a genuine contradiction, never
+        // another tick of waiting.
         fs::create_dir_all(inbox(&team, "smetana-bootstrap")).unwrap();
         assert!(matches!(
             admission_step(&home, &team, &config, session),
@@ -1161,6 +1139,28 @@ mod tests {
         assert_eq!(entries[0].version, 1);
         assert_eq!(entries[0].kind, "message");
         assert!(!entries[0].read);
+    }
+
+    #[test]
+    fn addressed_send_creates_an_inbox_claude_has_not_written_yet() {
+        let root = std::env::temp_dir().join(format!(
+            "smetana-claude-crew-mailbox-missing-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(root.join("inboxes")).unwrap();
+        fs::write(
+            root.join("config.json"),
+            r#"{"members":[{"name":"worker","agentId":"worker@team","agentType":"general-purpose"}]}"#,
+        )
+        .unwrap();
+        let path = inbox(&root, "worker");
+        assert!(!path.exists());
+        append_message(&root, "worker", "team-lead", "first message", "first").unwrap();
+        let entries: Vec<MailboxMessage> =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].text, "first message");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1224,6 +1224,10 @@ mod tests {
             include_str!("../../tests/fixtures/claude-2.1.281-team-config.json"),
         )
         .unwrap();
+        assert!(
+            preflight("2.1.281", &team, &lead).is_ok(),
+            "a teammate with no inbox file yet is not a missing capability"
+        );
         fs::write(inbox(&team, "fixture-worker"), "[]").unwrap();
         assert!(preflight("2.1.281", &team, &lead).is_ok());
         assert!(matches!(
