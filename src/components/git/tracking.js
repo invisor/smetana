@@ -139,6 +139,14 @@ export function pushAction(tracking, actions) {
 
 const FETCHING = 'Asking the remote what it has…'
 
+/* The check's own label, the same in both states — pressing it means the same
+   thing whichever state it answers in, so there is one sentence rather than
+   two that would otherwise have to agree by hand. `branchPicker.js` re-exports
+   this rather than declaring its own: `BranchPicker.vue`'s filter row carries
+   the identical fetch button, and a person reading either panel has to meet
+   one name for one act, not two spellings kept in step by nobody. */
+export const FETCH_LABEL = 'Check the remote'
+
 /* The third of the controls at the right end of the Branches tab row — where
    all three are drawn, the caption above them carrying a chevron, a word and a
    count and nothing else — and the only one of them that is about the
@@ -163,6 +171,6 @@ const FETCHING = 'Asking the remote what it has…'
    refusal but the same call saying it is still running — the same word the
    spinner on the control is saying. */
 export function fetchAction(fetching) {
-  if (fetching) return { allowed: false, reason: FETCHING, label: 'Check the remote' }
-  return { allowed: true, reason: null, label: 'Check the remote' }
+  if (fetching) return { allowed: false, reason: FETCHING, label: FETCH_LABEL }
+  return { allowed: true, reason: null, label: FETCH_LABEL }
 }

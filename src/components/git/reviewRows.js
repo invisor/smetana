@@ -427,6 +427,58 @@ export function fetchFailures(targets, reached) {
   return list(targets).filter((_, at) => !verdicts[at])
 }
 
+/* `reviewFetching` and `reviewFetchFailed` in `DesktopApp.vue` answer for the
+   **whole window** — every repository a fetch has ever touched since it opened
+   — and the window now has three doors into a fetch that can each be mid-flight
+   at once: the opening itself, a press of the branch list's own button on one
+   row or on the project's rule, and `startReview`'s own late one. Each of those
+   calls `fetchIn` for its own `targets` alone, so the two fields cannot be
+   replaced wholesale by any one caller's answer — a later call's `[]` would
+   stop another call's spinner while its fetch is still out, and its own success
+   would erase a `Fetch failed for …` line about a repository nobody has asked
+   about again.
+
+   The three functions below are set operations over `targets`, and every
+   caller updates both fields through them rather than by assignment: a call
+   adds its own targets to what is fetching, and on the way out takes only its
+   own targets back out and folds only its own answer into what has failed.
+   What another call is doing, or has already found, is untouched — the same
+   discipline `loadReviewRemotes`'s own guard keeps for a different field. */
+const asSet = (value) => new Set(list(value).filter(Boolean))
+
+/* A fetch starting: `targets` join whatever the window already has in flight.
+   Two calls whose targets overlap — the project's rule and one of its own
+   rows, pressed a moment apart — cost one entry each, not two, since this is
+   a set and not a queue. */
+export function mergeFetching(current, targets) {
+  const merged = asSet(current)
+  for (const target of list(targets)) merged.add(target)
+  return [...merged]
+}
+
+/* A fetch finishing: this call's own `targets` come back out of what is
+   fetching, and nothing another call put there is touched — a second fetch
+   still out when the first lands must go on spinning. */
+export function settleFetching(current, targets) {
+  const drop = asSet(targets)
+  return list(current).filter((path) => !drop.has(path))
+}
+
+/* A fetch finishing, the failed half: this call's own `targets` are dropped
+   from what has already failed — they have just answered again, one way or
+   the other — and this call's own new failures, `fetchFailures(targets,
+   reached)`, are folded back in. A repository outside `targets` that failed
+   under an earlier call is neither one, so it survives untouched: the note in
+   the window still names it until somebody's fetch actually reaches it. */
+export function settleFailed(current, targets, reached) {
+  const drop = asSet(targets)
+  /* `kept` excludes every path in `targets` by construction, and
+     `fetchFailures` never answers outside `targets`, so the two never
+     overlap — nothing here needs to deduplicate the join. */
+  const kept = list(current).filter((path) => !drop.has(path))
+  return [...kept, ...fetchFailures(targets, reached)]
+}
+
 /* The branches of one repository, out of the project-wide answer.
 
    `target_branches` is asked once for the whole project and says which

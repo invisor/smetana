@@ -14,6 +14,7 @@ import {
   hasBranch,
   isManual,
   isOverride,
+  mergeFetching,
   missingRepos,
   oldestFetch,
   overrideIds,
@@ -28,6 +29,8 @@ import {
   reviewPairs,
   rowStatus,
   ruleCaption,
+  settleFailed,
+  settleFetching,
   sideLabel,
   tableSummary,
   withOverride,
@@ -553,6 +556,75 @@ describe('fetchFailures', () => {
   it('reads a missing verdict as a repository that was not reached', () => {
     expect(fetchFailures(['/p', '/p/admin'], [true])).toEqual(['/p/admin'])
     expect(fetchFailures(['/p'], null)).toEqual(['/p'])
+  })
+})
+
+/* The window's three doors into a fetch — opening it, a press of the branch
+   list's own button, and `startReview`'s own late one — can each be mid-flight
+   at once, and every one of them updates `reviewFetching` and
+   `reviewFetchFailed` through these rather than by replacing either field
+   wholesale. A wholesale write is exactly the defect these pin: a second call
+   landing while a first is still out must not stop the first's spinner or
+   erase the first's own failure. */
+describe('mergeFetching', () => {
+  it('adds targets to what is already fetching', () => {
+    expect(mergeFetching(['/p'], ['/p/admin'])).toEqual(['/p', '/p/admin'])
+  })
+
+  it('does not duplicate a target two calls both name', () => {
+    expect(mergeFetching(['/p', '/p/admin'], ['/p/admin'])).toEqual(['/p', '/p/admin'])
+  })
+
+  it('tolerates nothing already fetching and nothing missing', () => {
+    expect(mergeFetching(null, ['/p'])).toEqual(['/p'])
+    expect(mergeFetching(['/p'], null)).toEqual(['/p'])
+  })
+})
+
+describe('settleFetching', () => {
+  it('drops only the targets this call named', () => {
+    expect(settleFetching(['/p', '/p/admin'], ['/p'])).toEqual(['/p/admin'])
+  })
+
+  /* The whole point: a second fetch still out when the first lands must go on
+     spinning, so the first call's own settle never touches it. */
+  it('leaves another call’s own target fetching', () => {
+    expect(settleFetching(['/p', '/p/admin'], ['/p/admin'])).toEqual(['/p'])
+  })
+
+  it('is a no-op over a target that was never in the list', () => {
+    expect(settleFetching(['/p'], ['/p/shared'])).toEqual(['/p'])
+  })
+})
+
+describe('settleFailed', () => {
+  /* Scenario A of the finding this pins: both repositories fail together, then
+     a second call reaches only one of them. The other's failure must survive
+     that second call untouched. */
+  it('keeps a failure about a repository the call did not touch', () => {
+    const afterBoth = settleFailed([], ['/p', '/p/admin'], [false, false])
+    expect(afterBoth).toEqual(['/p', '/p/admin'])
+    const afterOne = settleFailed(afterBoth, ['/p'], [true])
+    expect(afterOne).toEqual(['/p/admin'])
+  })
+
+  /* Scenario B: two presses overlap, each on its own repository, and each
+     settles the other's target not at all. */
+  it('composes two overlapping calls without either erasing the other', () => {
+    let failed = []
+    failed = settleFailed(failed, ['/p'], [true])
+    expect(failed).toEqual([])
+    failed = settleFailed(failed, ['/p/admin'], [false])
+    expect(failed).toEqual(['/p/admin'])
+  })
+
+  it('drops a target that has just answered, win or lose', () => {
+    expect(settleFailed(['/p'], ['/p'], [true])).toEqual([])
+    expect(settleFailed(['/p'], ['/p'], [false])).toEqual(['/p'])
+  })
+
+  it('tolerates nothing already failed', () => {
+    expect(settleFailed(null, ['/p'], [false])).toEqual(['/p'])
   })
 })
 

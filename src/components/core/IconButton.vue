@@ -103,14 +103,18 @@ const props = defineProps({
   hint: { type: Boolean, default: true },
   /* Whether the glyph turns — `GitPanel.vue`'s own idiom for "still going",
      borrowed rather than reinvented: `loader-circle` at `--attn-live` turning at
-     `--dur-pulse`. It is on the glyph and never on the box around it, and it
-     overrides the disabled dimming above rather than being dimmed by it — a
-     spinner drawn muted reads as stopped, which is the one thing it must not
-     say while a caller has it turning. There is no caller-supplied icon size or
-     colour to fight here: every icon button of a given `size` is already one
-     glyph size, and this is the one property `Icon` has no slot to reach on its
-     own (`core/Icon.vue`'s header — a `.vue` file cannot forward extra style
-     into a child it renders without a prop of its own for it). */
+     `--dur-pulse`. It is on the glyph and never on the box around it. The
+     colour is set on the icon itself, the same `var(--attn-live)` literal
+     `GitPanel.vue`'s own spinner carries, and it still sits under whatever
+     `opacity` the wrapping `<button>` is drawn at — a spinning glyph is
+     refused (`disabled`) for as long as it turns, the same shape
+     `GitPanel.vue`'s own does, and that dimming is left alone rather than
+     fought: two controls turning at two different strengths would be a second
+     idiom, not one borrowed whole. There is no caller-supplied icon size or
+     colour to fight here otherwise: every icon button of a given `size` is
+     already one glyph size, and this is the one property `Icon` has no slot to
+     reach on its own (`core/Icon.vue`'s header — a `.vue` file cannot forward
+     extra style into a child it renders without a prop of its own for it). */
   spin: { type: Boolean, default: false }
 })
 

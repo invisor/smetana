@@ -16,6 +16,10 @@ import {
   shortAge,
   stepCursor
 } from '../../../src/components/git/branchPicker.js'
+/* `branchPicker.js`'s `FETCH_LABEL` is a re-export of this module's own — the
+   shared source the finding below checks against, rather than a second
+   literal that would go on passing after the two drifted apart. */
+import { fetchAction } from '../../../src/components/git/tracking.js'
 
 /* The whole of what the branch picker's list holds, which is the whole of why
    this module exists: `BranchPicker.vue` is a `.vue` file and no test in this
@@ -391,10 +395,14 @@ describe('the words the component draws', () => {
   })
 
   /* The same sentence `GitPanel.vue`'s own fetch button carries, so a person
-     reading the two panels meets one word for one act rather than two. */
+     reading the two panels meets one word for one act rather than two. Checked
+     against `tracking.js`'s own `fetchAction` — the function that actually
+     labels the Git panel's button — rather than a second literal here, which
+     would go on passing the day the two drifted apart. */
   it('names the fetch button with the words the Git panel already uses', () => {
     expect(typeof FETCH_LABEL).toBe('string')
     expect(FETCH_LABEL.length).toBeGreaterThan(0)
-    expect(FETCH_LABEL).toBe('Check the remote')
+    expect(fetchAction(false).label).toBe(FETCH_LABEL)
+    expect(fetchAction(true).label).toBe(FETCH_LABEL)
   })
 })
