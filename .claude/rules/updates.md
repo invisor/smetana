@@ -47,7 +47,9 @@ be the larger fault.
 ## The state travels whole, and the command is what a late window reads
 
 `UpdateState` is one tagged value — `idle`, `checking`, `available`, `downloading`, `ready`,
-`failed` — with `replacing` on `available` and `downloading` and `notice` on `ready`, and never a set of flags a window has to reassemble. A tag is also what keeps a state this
+`failed` — with `replacing` on `available` and `downloading`, `version` on `downloading` (always sent,
+so a replacing download can name both releases) and `notice` on `ready`, and never a set of flags a
+window has to reassemble. A tag is also what keeps a state this
 front end has never heard of from silently reading as one it has: an unknown `kind` matches nothing,
 where a missing boolean is indistinguishable from `false`.
 
@@ -71,7 +73,7 @@ the button on About and the recheck an install makes all run from there. The ver
 is remembered as `replacing`; a feed that still names it returns the machine to `ready` with nothing
 downloaded (the comparison of versions, not a refused check, is what stops the same bytes being
 fetched twice), and a different one is downloaded, with `replacing` carried on `available` and
-`downloading` so About can name what is being replaced. The old bytes stay in `staged` until the new
+`downloading` so About can name both versions for the whole download. The old bytes stay in `staged` until the new
 ones are verified, and a flow that ends without a newer download — nothing newer, or a check or
 download that broke — comes back to `ready` on the old version, with the failure as its `notice`,
 instead of `failed`, which would strand verified bytes in a state that offers no install. `checking`,
@@ -97,11 +99,16 @@ Reaching `ready` is something the module does by itself. Leaving `ready` is only
 nobody asked for loses them.
 
 **The install asks the feed again first**, after the dev-build, nothing-ready and run-gate checks
-and before it touches the bundle. The same version, no answer, or an error installs what is staged —
+and before it touches the bundle, with the run gate asked a second time after the recheck and
+immediately before the bytes are taken, since the recheck is a network round trip in which a run may
+have started. The same version, no answer, or an error installs what is staged —
 a verified copy newer than the running one beats insisting on a network. A different version does not
 install: the machine goes `checking` and on into the download, and the command answers
 `UpdateError::NewerVersion { version }` (`newer_version` on the wire). That is an outcome, not a
-failed install, and About says a newer version was found and to press again once it is ready. The
+failed install, and **About does not show it as a refusal**: `shownRefusal` in `update.js` drops
+`newer_version`, because a sentence held by the window would sit there red and stale after the new
+version was ready. The state line is the message — "Smetana 0.1.2 is newer than the downloaded
+0.1.1; downloading it", then the new `ready` — and the press is made again once it appears. The
 button is gone meanwhile, since `downloading` offers nothing to press. The comparison is inequality:
 the feed decides which release is latest, and there is no version-ordering dependency in the tree.
 

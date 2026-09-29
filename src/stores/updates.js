@@ -106,7 +106,9 @@ export async function checkForUpdate() {
    There is nothing to adopt on success: the app is on its way out. The state
    stays `ready` on a refusal, which is Rust's decision and the right one — what
    was downloaded is still downloaded and the press is still there to make
-   again. */
+   again. The exception is a `newer_version` rejection, which is not a refusal:
+   the feed had a newer release, nothing was installed and the machine has moved
+   on to downloading it, which arrives as an ordinary state event. */
 export async function installUpdate() {
   await invoke('updates_install')
 }

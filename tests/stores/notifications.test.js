@@ -466,6 +466,31 @@ describe('the bell and an update that is waiting', () => {
     ])
   })
 
+  it('speaks again for the newer version that replaced a dismissed one', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    ipc.on('updates_state', { kind: 'ready', version: '0.1.1', notice: null })
+
+    await stores.updates.initUpdates()
+    stores.notifications.dismiss('update:0.1.1')
+    expect(stores.notifications.notificationsState.items).toEqual([])
+
+    // A newer release is found from ready: the card stays away while it is
+    // fetched, and the version that arrives is a fresh statement.
+    await emit('updates:state', { kind: 'checking' })
+    await emit('updates:state', {
+      kind: 'downloading',
+      version: '0.1.2',
+      received: 1,
+      total: 2,
+      replacing: '0.1.1'
+    })
+    expect(stores.notifications.notificationsState.items).toEqual([])
+    await emit('updates:state', { kind: 'ready', version: '0.1.2', notice: null })
+    expect(stores.notifications.notificationsState.items.map((item) => item.id)).toEqual([
+      'update:0.1.2'
+    ])
+  })
+
   it('says nothing at all where there is nobody to ask', async () => {
     // A browser: `mockBackend.js` answers this read with null rather than
     // refusing it, so nothing reaches the console either.

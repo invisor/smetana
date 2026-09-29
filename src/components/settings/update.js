@@ -105,10 +105,14 @@ export function updateLine(state) {
     const total = counted(state.total)
     const share = percent(received, total)
     const replacing = replacedVersion(state)
-    /* The download itself does not carry the new version — only the one it
-       replaces — so a replacing download names that one. */
+    const version = typeof state.version === 'string' && state.version ? state.version : null
+    /* A download that replaces a downloaded version names both, for as long as
+       it lasts. `version` is always on the wire, but a build that omitted it
+       still gets a truthful sentence rather than "undefined". */
     const lead = replacing
-      ? `A version newer than the downloaded ${replacing} was found; downloading it — `
+      ? version
+        ? `Smetana ${version} is newer than the downloaded ${replacing}; downloading it — `
+        : `A version newer than the downloaded ${replacing} was found; downloading it — `
       : 'Downloading — '
     if (total === null) return `${lead}${formatBytes(received)} so far.`
     return `${lead}${formatBytes(received)} of ${formatBytes(total)}${share === null ? '' : ` (${share}%)`}.`
@@ -162,6 +166,19 @@ export function updateAction(state) {
   return null
 }
 
+/* What a rejected press on Install should leave standing on the row, or `null`
+   for nothing. `newer_version` is the one rejection that is not a refusal: the
+   press found a newer release than the downloaded one, installed nothing and
+   started fetching it. The message for that is the state line (downloading with
+   both versions, then ready on the new one), which moves with the machine — a
+   sentence held by the window would still be there, stale and red, after the
+   download had finished. */
+export function shownRefusal(err) {
+  if (!err) return null
+  if (err.kind === 'newer_version') return null
+  return err
+}
+
 /* Why an install did not happen, in words, from `UpdateError`'s `{kind, detail}`
    — the same shape `runFailure` in `DesktopApp.vue` reads and for the same
    reason: a refusal that cannot say what is in the way sends somebody to guess.
@@ -185,14 +202,6 @@ export function installRefusal(err) {
     return projects
       ? `A run is going in ${projects}. Installing restarts the app, which would end it.`
       : 'A run is going. Installing restarts the app, which would end it.'
-  }
-  if (err.kind === 'newer_version') {
-    /* Not a failure: the press found a newer release than the downloaded one
-       and started fetching it instead of installing the older. */
-    const version = typeof detail?.version === 'string' && detail.version ? detail.version : null
-    return version
-      ? `A newer version, ${version}, was found and is being downloaded. Install it once it is ready.`
-      : 'A newer version was found and is being downloaded. Install it once it is ready.'
   }
   if (err.kind === 'nothing_ready') return 'There is no downloaded update to install.'
   if (err.kind === 'development_build') return 'A development build does not replace itself.'

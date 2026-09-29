@@ -157,8 +157,15 @@ pub enum UpdateState {
     },
     /// `total` is `None` until the server says how long the body is; some do
     /// not, and a bar with no end is a truer drawing than one invented.
-    /// `replacing` is carried over from `Available`.
-    Downloading { received: u64, total: Option<u64>, replacing: Option<String> },
+    /// `version` is the release being fetched and `replacing` the downloaded one
+    /// it will replace, both carried over from `Available`, so a window can
+    /// name both for as long as the download lasts. `version` is always sent.
+    Downloading {
+        version: String,
+        received: u64,
+        total: Option<u64>,
+        replacing: Option<String>,
+    },
     /// Downloaded, verified and waiting for somebody to press install.
     ///
     /// `notice` is a sentence about a later, failed attempt to find or fetch a
@@ -327,8 +334,9 @@ impl Machine {
 
     /// The first byte is about to be asked for.
     pub fn downloading(&mut self) {
-        if let UpdateState::Available { replacing, .. } = &self.state {
+        if let UpdateState::Available { version, replacing, .. } = &self.state {
             self.state = UpdateState::Downloading {
+                version: version.clone(),
                 received: 0,
                 total: None,
                 replacing: replacing.clone(),
@@ -685,7 +693,7 @@ pub async fn updates_install(
     if let Some(update) = recheck(&app).await {
         let staged_version = updates.with(|held| held.machine.ready_version().map(String::from));
         if let Some(staged_version) = staged_version {
-            if is_newer(&staged_version, &update.version) {
+            if differs(&staged_version, &update.version) {
                 let version = update.version.clone();
                 if updates.with(|held| held.machine.check()) {
                     announce(&app, &updates.state());
@@ -701,6 +709,12 @@ pub async fn updates_install(
     if !updates.with(|held| held.machine.installable() && held.staged.is_some()) {
         return Err(UpdateError::NothingReady);
     }
+    // And the run gate again: the recheck is a network round trip, and a run
+    // started during it was not there when the first gate looked. The restart
+    // below would kill it, so the last look comes immediately before the bytes
+    // are taken. The first gate stays, so a live run is refused without paying
+    // for the round trip.
+    gate(&live_runs(&runs).await?)?;
 
     // Taken out for the blocking call and put back if it fails, and the state
     // is deliberately left at `ready` either way. An install that did not
@@ -732,9 +746,10 @@ pub async fn updates_install(
 }
 
 /// Whether the feed's release is a different one from the downloaded copy. A
-/// plain inequality and not an ordering: the feed is the authority on which
-/// release is latest, and this app carries no version-comparison dependency.
-fn is_newer(staged: &str, feed: &str) -> bool {
+/// plain inequality and not an ordering, so the name says no more than that:
+/// the feed decides what is latest, and `semver` is only a transitive
+/// dependency here, not one this crate declares.
+fn differs(staged: &str, feed: &str) -> bool {
     staged != feed
 }
 
@@ -814,12 +829,12 @@ mod tests {
             }
         );
         machine.downloading();
-        assert_eq!(*machine.state(), UpdateState::Downloading { received: 0, total: None, replacing: None });
+        assert_eq!(*machine.state(), UpdateState::Downloading { version: "0.2.0".into(), received: 0, total: None, replacing: None });
         machine.received(400, Some(1000));
         machine.received(600, Some(1000));
         assert_eq!(
             *machine.state(),
-            UpdateState::Downloading { received: 1000, total: Some(1000), replacing: None }
+            UpdateState::Downloading { version: "0.2.0".into(), received: 1000, total: Some(1000), replacing: None }
         );
         machine.ready();
         assert_eq!(*machine.state(), UpdateState::Ready { version: "0.2.0".into(), notice: None });
@@ -857,7 +872,7 @@ mod tests {
         machine.found("0.2.0".into(), None, None);
         machine.downloading();
         assert!(!machine.check(), "and a download is going");
-        assert_eq!(*machine.state(), UpdateState::Downloading { received: 0, total: None, replacing: None });
+        assert_eq!(*machine.state(), UpdateState::Downloading { version: "0.2.0".into(), received: 0, total: None, replacing: None });
     }
 
     /// The narrowest window of the four refusals, and the reason it is a
@@ -880,7 +895,7 @@ mod tests {
             "and the refusal leaves the flow exactly where it was"
         );
         machine.downloading();
-        assert_eq!(*machine.state(), UpdateState::Downloading { received: 0, total: None, replacing: None });
+        assert_eq!(*machine.state(), UpdateState::Downloading { version: "0.2.0".into(), received: 0, total: None, replacing: None });
     }
 
     fn ready(version: &str) -> Machine {
@@ -941,6 +956,7 @@ mod tests {
         assert_eq!(
             *machine.state(),
             UpdateState::Downloading {
+                version: "0.1.2".into(),
                 received: 0,
                 total: None,
                 replacing: Some("0.1.1".into())
@@ -997,9 +1013,9 @@ mod tests {
     }
 
     #[test]
-    fn only_a_different_version_from_the_feed_counts_as_newer() {
-        assert!(!is_newer("0.1.1", "0.1.1"));
-        assert!(is_newer("0.1.1", "0.1.2"));
+    fn only_a_different_version_from_the_feed_counts_as_differing() {
+        assert!(!differs("0.1.1", "0.1.1"));
+        assert!(differs("0.1.1", "0.1.2"));
     }
 
     #[test]
@@ -1052,12 +1068,12 @@ mod tests {
         machine.found("0.2.0".into(), None, None);
         machine.downloading();
         machine.received(64, None);
-        assert_eq!(*machine.state(), UpdateState::Downloading { received: 64, total: None, replacing: None });
+        assert_eq!(*machine.state(), UpdateState::Downloading { version: "0.2.0".into(), received: 64, total: None, replacing: None });
         machine.received(64, Some(512));
         machine.received(64, None);
         assert_eq!(
             *machine.state(),
-            UpdateState::Downloading { received: 192, total: Some(512), replacing: None },
+            UpdateState::Downloading { version: "0.2.0".into(), received: 192, total: Some(512), replacing: None },
             "a length once known is not forgotten by a callback that omits it"
         );
     }
@@ -1128,12 +1144,22 @@ mod tests {
                 r#"{"kind":"available","version":"0.2.0","notes":null,"date":"2026-08-23","replacing":"0.1.9"}"#,
             ),
             (
-                UpdateState::Downloading { received: 8, total: Some(16), replacing: None },
-                r#"{"kind":"downloading","received":8,"total":16,"replacing":null}"#,
+                UpdateState::Downloading {
+                    version: "0.2.0".into(),
+                    received: 8,
+                    total: Some(16),
+                    replacing: None,
+                },
+                r#"{"kind":"downloading","version":"0.2.0","received":8,"total":16,"replacing":null}"#,
             ),
             (
-                UpdateState::Downloading { received: 8, total: None, replacing: Some("0.1.9".into()) },
-                r#"{"kind":"downloading","received":8,"total":null,"replacing":"0.1.9"}"#,
+                UpdateState::Downloading {
+                    version: "0.2.0".into(),
+                    received: 8,
+                    total: None,
+                    replacing: Some("0.1.9".into()),
+                },
+                r#"{"kind":"downloading","version":"0.2.0","received":8,"total":null,"replacing":"0.1.9"}"#,
             ),
             (
                 UpdateState::Ready { version: "0.2.0".into(), notice: None },

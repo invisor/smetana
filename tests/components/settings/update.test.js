@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   UNAVAILABLE,
   installRefusal,
+  shownRefusal,
   readyVersion,
   updateAction,
   updateKind,
@@ -18,10 +19,16 @@ const MIB = 1024 * 1024
 const IDLE = { kind: 'idle' }
 const CHECKING = { kind: 'checking' }
 const AVAILABLE = { kind: 'available', version: '0.2.0', notes: null, date: '2026-08-20' }
-const DOWNLOADING = { kind: 'downloading', received: 12 * MIB, total: 48 * MIB }
+const DOWNLOADING = {
+  kind: 'downloading',
+  version: '0.2.0',
+  received: 12 * MIB,
+  total: 48 * MIB,
+  replacing: null
+}
 const READY = { kind: 'ready', version: '0.2.0' }
 const AVAILABLE_NEWER = { ...AVAILABLE, version: '0.1.2', replacing: '0.1.1' }
-const DOWNLOADING_NEWER = { ...DOWNLOADING, replacing: '0.1.1' }
+const DOWNLOADING_NEWER = { ...DOWNLOADING, version: '0.1.2', replacing: '0.1.1' }
 const READY_KEPT = {
   kind: 'ready',
   version: '0.1.1',
@@ -136,13 +143,25 @@ describe('the sentence under the label', () => {
     )
   })
 
-  it('says a newer version is being downloaded, and which one it replaces', () => {
+  it('names both versions through the whole of a replacing download', () => {
     expect(updateLine(DOWNLOADING_NEWER)).toBe(
-      'A version newer than the downloaded 0.1.1 was found; downloading it — 12.0 MiB of 48.0 MiB (25%).'
+      'Smetana 0.1.2 is newer than the downloaded 0.1.1; downloading it — 12.0 MiB of 48.0 MiB (25%).'
     )
     expect(updateLine({ ...DOWNLOADING_NEWER, total: null })).toBe(
-      'A version newer than the downloaded 0.1.1 was found; downloading it — 12.0 MiB so far.'
+      'Smetana 0.1.2 is newer than the downloaded 0.1.1; downloading it — 12.0 MiB so far.'
     )
+  })
+
+  it('still draws a replacing download that arrived without its version', () => {
+    const { version, ...bare } = DOWNLOADING_NEWER
+    expect(version).toBe('0.1.2')
+    expect(updateLine(bare)).toBe(
+      'A version newer than the downloaded 0.1.1 was found; downloading it — 12.0 MiB of 48.0 MiB (25%).'
+    )
+  })
+
+  it('keeps the plain download line even though the version is always sent', () => {
+    expect(updateLine(DOWNLOADING)).toBe('Downloading — 12.0 MiB of 48.0 MiB (25%).')
   })
 
   it('says the newer version could not be downloaded when ready fell back', () => {
@@ -245,13 +264,21 @@ describe('why an install did not happen', () => {
     )
   })
 
-  it('says a newer version was found and is downloading, and to press again', () => {
-    expect(installRefusal({ kind: 'newer_version', detail: { version: '0.1.2' } })).toBe(
-      'A newer version, 0.1.2, was found and is being downloaded. Install it once it is ready.'
-    )
-    expect(installRefusal({ kind: 'newer_version', detail: {} })).toBe(
-      'A newer version was found and is being downloaded. Install it once it is ready.'
-    )
+  it('leaves no refusal standing for a newer version, which is not one', () => {
+    // The state line says it and moves on with the download; a held sentence
+    // would still be there, stale, once the new version was ready.
+    expect(shownRefusal({ kind: 'newer_version', detail: { version: '0.1.2' } })).toBe(null)
+    expect(shownRefusal(null)).toBe(null)
+  })
+
+  it('keeps every other rejection as a refusal to show', () => {
+    const gate = { kind: 'run_live', detail: { projects: 'smetana' } }
+    expect(shownRefusal(gate)).toBe(gate)
+    expect(shownRefusal({ kind: 'install', detail: 'permission denied' })).toEqual({
+      kind: 'install',
+      detail: 'permission denied'
+    })
+    expect(shownRefusal('the channel broke')).toBe('the channel broke')
   })
 
   it('says a development build does not replace itself', () => {

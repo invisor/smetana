@@ -35,7 +35,8 @@ const props = defineProps({
      the window rather than by the state, because it is the answer to a press
      and not a state the machine is in: `updates.rs` deliberately leaves the
      machine at `ready` through a refusal, since what was downloaded is still
-     downloaded. */
+     downloaded. It is never a newer-version answer (`shownRefusal` drops it):
+     that one moves the machine to `downloading`, which the state line says. */
   updateRefusal: { type: [Object, String], default: null }
 })
 
