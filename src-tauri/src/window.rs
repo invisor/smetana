@@ -1692,11 +1692,24 @@ pub fn persist_geometry(app: &AppHandle) {
             if latest.load(Ordering::SeqCst) != mine {
                 return;
             }
-            if let Err(err) = app.save_window_state(FLAGS) {
-                // No reason to crash: the window on screen does not change
-                // because of it, and lost geometry costs one inconvenience at
-                // the next launch.
-                log::warn!("could not save the window geometry: {err}");
+            // On the main thread, and not here. The plugin's `save_window_state`
+            // holds its cache lock while it reads the window's size, position
+            // and state, and on macOS each of those getters from another
+            // thread waits for the main thread. The main thread meanwhile
+            // handles the next `Resized`/`Moved` in the plugin's own handler,
+            // which takes that same lock: a deadlock, and a display change is a
+            // burst of exactly those events. Run on the main thread, the
+            // getters answer in place and nothing waits on anything.
+            let saver = app.clone();
+            if let Err(err) = app.run_on_main_thread(move || {
+                if let Err(err) = saver.save_window_state(FLAGS) {
+                    // No reason to crash: the window on screen does not change
+                    // because of it, and lost geometry costs one inconvenience
+                    // at the next launch.
+                    log::warn!("could not save the window geometry: {err}");
+                }
+            }) {
+                log::warn!("could not schedule the window geometry save: {err}");
             }
         });
     });
