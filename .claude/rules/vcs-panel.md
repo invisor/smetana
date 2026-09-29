@@ -135,10 +135,13 @@ back, that glyph is the first thing to go. Each section has **its own empty stat
 different things** — no git on this machine (naming what was looked for), no repository in this
 folder, nothing uncommitted in this repository: one blank area for all three would be a panel saying
 nothing three different ways. Freshness is window focus (`catchUp`), the project switch
-(`projects.js`, after the new layout has landed, since the remembered repository lives in it) and
-the refresh button in the panel header. **No watcher, and do not add one**: a third watcher
+(`projects.js`, after the new layout has landed, since the remembered repository lives in it), the
+refresh button in the panel header, and an agent of the active project ending its turn (a row's state
+leaving `running`, `components/agent/turnEnded.js`, watched in `DesktopApp.vue` and answered with the
+same `catchUp`) — an agent working in this window never takes focus away, so without that fourth
+moment its commit would leave the list stale. **No watcher, and do not add one**: a third watcher
 subsystem would fire on every write inside `node_modules` and `target`, and the price of the sweep
-is named — while an agent works, this list is as stale as the file tree beside it.
+is named — while an agent is still running, this list is as stale as the file tree beside it.
 
 ### A change row's own menu
 
