@@ -47,7 +47,7 @@ be the larger fault.
 ## The state travels whole, and the command is what a late window reads
 
 `UpdateState` is one tagged value — `idle`, `checking`, `available`, `downloading`, `ready`,
-`failed` — and never a set of flags a window has to reassemble. A tag is also what keeps a state this
+`failed` — with `replacing` on `available` and `downloading` and `notice` on `ready`, and never a set of flags a window has to reassemble. A tag is also what keeps a state this
 front end has never heard of from silently reading as one it has: an unknown `kind` matches nothing,
 where a missing boolean is indistinguishable from `false`.
 
@@ -65,12 +65,20 @@ failed finds a machine that is no longer downloading. **`failed` is the one exce
 unguarded deliberately**: there is only ever one flow in flight, so a failure always belongs to the
 state the machine is in, and a failure nobody is told about is the one thing worse than a failure. A
 reader taking the guard rule literally would expect a failing flow to be swallowed once its own state
-has moved, which is the opposite of what happens. `check` is accepted from `idle` and `failed`
-only. `ready` refuses because a check from there would fetch the same release again over the one
-being offered; `available` refuses for the sharper reason that it lasts only the two statements
-between finding a release and asking for its first byte, and a second flow started in that window
-would have its transitions swallowed by the first one's guards. Nothing ever rests in `available`, so
-refusing from it costs nothing and buys "only one flow is ever in flight".
+has moved, which is the opposite of what happens. `check` is accepted from `idle`, `failed` and
+`ready`. From `ready` it is how a downloaded version gets replaced by a newer one: the daily check,
+the button on About and the recheck an install makes all run from there. The version that was ready
+is remembered as `replacing`; a feed that still names it returns the machine to `ready` with nothing
+downloaded (the comparison of versions, not a refused check, is what stops the same bytes being
+fetched twice), and a different one is downloaded, with `replacing` carried on `available` and
+`downloading` so About can name what is being replaced. The old bytes stay in `staged` until the new
+ones are verified, and a flow that ends without a newer download — nothing newer, or a check or
+download that broke — comes back to `ready` on the old version, with the failure as its `notice`,
+instead of `failed`, which would strand verified bytes in a state that offers no install. `checking`,
+`available` and `downloading` refuse: `available` for the sharp reason that it lasts only the two
+statements between finding a release and asking for its first byte, and a second flow started in that
+window would have its transitions swallowed by the first one's guards. Nothing ever rests in
+`available`, so refusing from it costs nothing and buys "only one flow is ever in flight".
 
 `FIRST_CHECK_DELAY` is a minute, `CHECK_INTERVAL` a day, `PROGRESS_TICK` 250ms — an event per
 downloaded chunk would be a progress bar drawn more often than the screen refreshes, and the count
@@ -87,6 +95,15 @@ in prose.
 Reaching `ready` is something the module does by itself. Leaving `ready` is only ever
 `updates_install`, because the app holds unsaved editor buffers and live terminals, and a relaunch
 nobody asked for loses them.
+
+**The install asks the feed again first**, after the dev-build, nothing-ready and run-gate checks
+and before it touches the bundle. The same version, no answer, or an error installs what is staged —
+a verified copy newer than the running one beats insisting on a network. A different version does not
+install: the machine goes `checking` and on into the download, and the command answers
+`UpdateError::NewerVersion { version }` (`newer_version` on the wire). That is an outcome, not a
+failed install, and About says a newer version was found and to press again once it is ready. The
+button is gone meanwhile, since `downloading` offers nothing to press. The comparison is inequality:
+the feed decides which release is latest, and there is no version-ordering dependency in the tree.
 
 ## The run gate, and why a relaunch is destructive rather than rude
 
@@ -253,7 +270,8 @@ this file's; do not re-sync it by putting the claim back into README.
 ## The front end, in one paragraph
 
 The wire vocabulary is a pair that has to move together: the six state tags and their fields, the
-five `UpdateError` kinds under `{kind, detail}`, the event name and the three command names, against
+six `UpdateError` kinds (`nothing_ready`, `newer_version`, `run_live`, `runs`,
+`development_build`, `install`) under `{kind, detail}`, the event name and the three command names, against
 `KINDS` and `installRefusal` in `components/settings/update.js`, the command names in
 `stores/updates.js`, and `mockBackend.js`. A renamed state tag does not draw the wrong thing — it
 becomes `update.js`'s seventh kind, `unavailable`, which is also what a browser's `null` comes to, so

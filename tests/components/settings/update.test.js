@@ -20,6 +20,13 @@ const CHECKING = { kind: 'checking' }
 const AVAILABLE = { kind: 'available', version: '0.2.0', notes: null, date: '2026-08-20' }
 const DOWNLOADING = { kind: 'downloading', received: 12 * MIB, total: 48 * MIB }
 const READY = { kind: 'ready', version: '0.2.0' }
+const AVAILABLE_NEWER = { ...AVAILABLE, version: '0.1.2', replacing: '0.1.1' }
+const DOWNLOADING_NEWER = { ...DOWNLOADING, replacing: '0.1.1' }
+const READY_KEPT = {
+  kind: 'ready',
+  version: '0.1.1',
+  notice: 'could not download the newer version: connection reset'
+}
 const FAILED = { kind: 'failed', message: 'Could not check for updates: the feed timed out.' }
 
 describe('which of the states this is', () => {
@@ -123,6 +130,32 @@ describe('the sentence under the label', () => {
     )
   })
 
+  it('names both versions while a newer one replaces the downloaded one', () => {
+    expect(updateLine(AVAILABLE_NEWER)).toBe(
+      'Smetana 0.1.2 is newer than the downloaded 0.1.1; downloading it.'
+    )
+  })
+
+  it('says a newer version is being downloaded, and which one it replaces', () => {
+    expect(updateLine(DOWNLOADING_NEWER)).toBe(
+      'A version newer than the downloaded 0.1.1 was found; downloading it — 12.0 MiB of 48.0 MiB (25%).'
+    )
+    expect(updateLine({ ...DOWNLOADING_NEWER, total: null })).toBe(
+      'A version newer than the downloaded 0.1.1 was found; downloading it — 12.0 MiB so far.'
+    )
+  })
+
+  it('says the newer version could not be downloaded when ready fell back', () => {
+    expect(updateLine(READY_KEPT)).toBe(
+      'Smetana 0.1.1 is downloaded and ready. Installing restarts the app. ' +
+        'Could not download the newer version: connection reset.'
+    )
+    expect(updateLine({ ...READY_KEPT, notice: 'Already ended.' })).toContain('Already ended.')
+    expect(updateLine({ ...READY_KEPT, notice: '' })).toBe(
+      'Smetana 0.1.1 is downloaded and ready. Installing restarts the app.'
+    )
+  })
+
   it('shows the failure in Rust’s own words', () => {
     expect(updateLine(FAILED)).toBe('Could not check for updates: the feed timed out.')
   })
@@ -163,6 +196,19 @@ describe('the control the row offers', () => {
     expect(updateAction(DOWNLOADING)).toBe(null)
   })
 
+  it('offers no install while a newer version replaces the downloaded one', () => {
+    expect(updateAction(AVAILABLE_NEWER)).toBe(null)
+    expect(updateAction(DOWNLOADING_NEWER)).toBe(null)
+  })
+
+  it('keeps the install when a newer download failed and ready fell back', () => {
+    expect(updateAction(READY_KEPT)).toEqual({
+      verb: 'install',
+      label: 'Install and restart',
+      disabled: false
+    })
+  })
+
   it('offers the install, and never draws it dead on a guess', () => {
     // The run gate is Rust's to answer: this window cannot see a run in a
     // project nobody is looking at, so a control disabled here would be wrong
@@ -196,6 +242,15 @@ describe('why an install did not happen', () => {
   it('says there is nothing to install when the state moved under the press', () => {
     expect(installRefusal({ kind: 'nothing_ready' })).toBe(
       'There is no downloaded update to install.'
+    )
+  })
+
+  it('says a newer version was found and is downloading, and to press again', () => {
+    expect(installRefusal({ kind: 'newer_version', detail: { version: '0.1.2' } })).toBe(
+      'A newer version, 0.1.2, was found and is being downloaded. Install it once it is ready.'
+    )
+    expect(installRefusal({ kind: 'newer_version', detail: {} })).toBe(
+      'A newer version was found and is being downloaded. Install it once it is ready.'
     )
   })
 
