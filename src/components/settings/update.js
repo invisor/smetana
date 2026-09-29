@@ -71,6 +71,13 @@ function percent(received, total) {
   return Math.min(100, Math.floor((received / total) * 100))
 }
 
+/* The version a download in flight is replacing, or `null`. `Available` and
+   `Downloading` carry it (`replacing` in `updates.rs`) when the release was found
+   from `ready`; an empty string is treated as absent, as `readyVersion` does. */
+function replacedVersion(state) {
+  return typeof state.replacing === 'string' && state.replacing ? state.replacing : null
+}
+
 /* The line under the label: what is happening, in one sentence.
 
    Sentence case throughout, and the version is named wherever there is one —
@@ -83,6 +90,12 @@ export function updateLine(state) {
   if (kind === 'checking') return 'Looking for a new version…'
   if (kind === 'available') {
     const version = typeof state.version === 'string' && state.version ? state.version : null
+    const replacing = replacedVersion(state)
+    if (replacing) {
+      return version
+        ? `Smetana ${version} is newer than the downloaded ${replacing}; downloading it.`
+        : `A version newer than the downloaded ${replacing} was found; downloading it.`
+    }
     return version
       ? `Smetana ${version} was found; the download is starting.`
       : 'A new version was found; the download is starting.'
@@ -91,14 +104,31 @@ export function updateLine(state) {
     const received = counted(state.received) ?? 0
     const total = counted(state.total)
     const share = percent(received, total)
-    if (total === null) return `Downloading — ${formatBytes(received)} so far.`
-    return `Downloading — ${formatBytes(received)} of ${formatBytes(total)}${share === null ? '' : ` (${share}%)`}.`
+    const replacing = replacedVersion(state)
+    const version = typeof state.version === 'string' && state.version ? state.version : null
+    /* A download that replaces a downloaded version names both, for as long as
+       it lasts. `version` is always on the wire, but a build that omitted it
+       still gets a truthful sentence rather than "undefined". */
+    const lead = replacing
+      ? version
+        ? `Smetana ${version} is newer than the downloaded ${replacing}; downloading it — `
+        : `A version newer than the downloaded ${replacing} was found; downloading it — `
+      : 'Downloading — '
+    if (total === null) return `${lead}${formatBytes(received)} so far.`
+    return `${lead}${formatBytes(received)} of ${formatBytes(total)}${share === null ? '' : ` (${share}%)`}.`
   }
   if (kind === 'ready') {
     const version = readyVersion(state)
-    return version
+    const base = version
       ? `Smetana ${version} is downloaded and ready. Installing restarts the app.`
       : 'A new version is downloaded and ready. Installing restarts the app.'
+    /* Why a newer version did not come while this one waited (Rust's words,
+       lowercase at the start and with no full stop). The downloaded one is
+       still installable, so this is a second sentence and not a replacement. */
+    const notice = typeof state.notice === 'string' ? state.notice.trim() : ''
+    if (!notice) return base
+    const sentence = notice.charAt(0).toUpperCase() + notice.slice(1)
+    return `${base} ${/[.!?]$/.test(sentence) ? sentence : `${sentence}.`}`
   }
   if (kind === 'failed') {
     /* Rust's own words, which are already written for a person and already
@@ -136,6 +166,19 @@ export function updateAction(state) {
   return null
 }
 
+/* What a rejected press on Install should leave standing on the row, or `null`
+   for nothing. `newer_version` is the one rejection that is not a refusal: the
+   press found a newer release than the downloaded one, installed nothing and
+   started fetching it. The message for that is the state line (downloading with
+   both versions, then ready on the new one), which moves with the machine — a
+   sentence held by the window would still be there, stale and red, after the
+   download had finished. */
+export function shownRefusal(err) {
+  if (!err) return null
+  if (err.kind === 'newer_version') return null
+  return err
+}
+
 /* Why an install did not happen, in words, from `UpdateError`'s `{kind, detail}`
    — the same shape `runFailure` in `DesktopApp.vue` reads and for the same
    reason: a refusal that cannot say what is in the way sends somebody to guess.
@@ -151,7 +194,7 @@ export function installRefusal(err) {
   if (!err) return null
   /* A channel that broke rather than a refusal that was made: `invoke` rejects
      with whatever it was given, and not every failure on the way to Rust is one
-     of the five below. */
+     of the six below. */
   if (typeof err === 'string') return err
   const detail = err.detail
   if (err.kind === 'run_live') {

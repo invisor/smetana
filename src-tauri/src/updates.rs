@@ -146,12 +146,32 @@ pub enum UpdateState {
     /// design, and still worth being a state: it is the only place the notes
     /// and the date travel, and it is what a window shows in the seconds
     /// before the first byte arrives.
-    Available { version: String, notes: Option<String>, date: Option<String> },
+    ///
+    /// `replacing` is the version already downloaded and waiting, when this
+    /// release is a newer one found from `ready`; `None` for a first download.
+    Available {
+        version: String,
+        notes: Option<String>,
+        date: Option<String>,
+        replacing: Option<String>,
+    },
     /// `total` is `None` until the server says how long the body is; some do
     /// not, and a bar with no end is a truer drawing than one invented.
-    Downloading { received: u64, total: Option<u64> },
+    /// `version` is the release being fetched and `replacing` the downloaded one
+    /// it will replace, both carried over from `Available`, so a window can
+    /// name both for as long as the download lasts. `version` is always sent.
+    Downloading {
+        version: String,
+        received: u64,
+        total: Option<u64>,
+        replacing: Option<String>,
+    },
     /// Downloaded, verified and waiting for somebody to press install.
-    Ready { version: String },
+    ///
+    /// `notice` is a sentence about a later, failed attempt to find or fetch a
+    /// newer version while this one waited. The downloaded version is still
+    /// here and still installable; the notice only says why nothing newer came.
+    Ready { version: String, notice: Option<String> },
     /// A check or a download that did not finish, in words. A check from here
     /// is accepted, which is what makes this recoverable rather than terminal.
     Failed { message: String },
@@ -167,6 +187,12 @@ pub enum UpdateError {
     /// between the press and its arrival here.
     #[error("there is no downloaded update to install")]
     NothingReady,
+    /// The feed offered a version newer than the downloaded one at the moment
+    /// of the press. Nothing was installed and the app is not restarting: the
+    /// newer version is being downloaded and the press is to be made again once
+    /// it is ready. An outcome rather than a failure.
+    #[error("a newer version, {version}, was found and is being downloaded")]
+    NewerVersion { version: String },
     /// The gate. `projects` is the list, joined, because a refusal that cannot
     /// say where the run is leaves somebody hunting through their projects for
     /// it.
@@ -203,6 +229,12 @@ pub struct Machine {
     /// `Ready` must, so it is remembered here rather than threaded back through
     /// the download.
     version: Option<String>,
+    /// The version that was `ready` when a check started from there. It is what
+    /// a newer release replaces, what "the same release again" is compared
+    /// against, and where the machine returns to when the flow ends without a
+    /// newer release being downloaded. `None` for a flow that began from `idle`
+    /// or `failed`.
+    replacing: Option<String>,
 }
 
 impl Machine {
@@ -212,55 +244,103 @@ impl Machine {
 
     /// Whether a check may start, and the start of it if so.
     ///
-    /// **Two of the six states accept, and each of the other four is a flow
-    /// already in hand.** `checking` and `downloading` are the obvious two.
-    /// `ready` is refused because a check from there would find the same
-    /// release and fetch it again, throwing away the one the person is being
-    /// offered. `available` is refused for the sharpest reason of the four: it
-    /// is the state a check sits in for the two statements between finding a
-    /// release and asking for its first byte, and a second check accepted in
-    /// that window would spawn a second flow whose guards then swallow every
-    /// transition the first one makes — while the first download runs to
-    /// completion anyway and overwrites what the second one staged. Nothing
-    /// ever rests in `available`, so refusing from it costs nothing and is what
-    /// makes "only one flow is ever in flight" structural rather than a matter
-    /// of timing.
+    /// **Three of the six states accept: `idle`, `failed` and `ready`.** The
+    /// other three are a flow already in hand. `checking` and `downloading` are
+    /// the obvious two. `available` is the sharpest: it is the state a check
+    /// sits in for the two statements between finding a release and asking for
+    /// its first byte, and a second check accepted in that window would spawn a
+    /// second flow whose guards then swallow every transition the first one
+    /// makes — while the first download runs to completion anyway and overwrites
+    /// what the second one staged. Nothing ever rests in `available`, so
+    /// refusing from it costs nothing and is what makes "only one flow is ever
+    /// in flight" structural rather than a matter of timing.
+    ///
+    /// `ready` accepts, so that what waits to be installed can be replaced by
+    /// something newer: the daily check, the button on About and the recheck an
+    /// install makes all run from here. The version that was ready is
+    /// remembered as `replacing`. Fetching the same release twice is prevented
+    /// by comparing versions, not by refusing the check: [`Machine::found`]
+    /// returns to `ready` on the same version without a download, and only a
+    /// different one is fetched. The downloaded copy is kept, outside this
+    /// struct, until the newer one has arrived and been verified, and any flow
+    /// that ends without one — nothing newer, or a failure — comes back to
+    /// `ready` on the version that was waiting.
     ///
     /// `failed` accepts, which is the whole of "a later check can still
     /// succeed from there".
     pub fn check(&mut self) -> bool {
-        match self.state {
+        match &self.state {
             UpdateState::Idle | UpdateState::Failed { .. } => {
+                self.state = UpdateState::Checking;
+                self.version = None;
+                self.replacing = None;
+                true
+            }
+            UpdateState::Ready { version, .. } => {
+                self.replacing = Some(version.clone());
                 self.state = UpdateState::Checking;
                 self.version = None;
                 true
             }
             UpdateState::Checking
             | UpdateState::Available { .. }
-            | UpdateState::Downloading { .. }
-            | UpdateState::Ready { .. } => false,
+            | UpdateState::Downloading { .. } => false,
+        }
+    }
+
+    /// Back to `ready` on the version that was waiting, if a flow started from
+    /// there; `None` when there was none.
+    fn back_to_ready(&mut self, notice: Option<String>) -> bool {
+        match self.replacing.take() {
+            Some(version) => {
+                self.state = UpdateState::Ready { version, notice };
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The version that is downloaded and waiting, if the machine is in `ready`.
+    pub fn ready_version(&self) -> Option<&str> {
+        match &self.state {
+            UpdateState::Ready { version, .. } => Some(version),
+            _ => None,
         }
     }
 
     /// The check answered, and there is nothing newer.
     pub fn nothing_new(&mut self) {
-        if matches!(self.state, UpdateState::Checking) {
+        if matches!(self.state, UpdateState::Checking) && !self.back_to_ready(None) {
             self.state = UpdateState::Idle;
         }
     }
 
-    /// The check answered with a release.
-    pub fn found(&mut self, version: String, notes: Option<String>, date: Option<String>) {
-        if matches!(self.state, UpdateState::Checking) {
-            self.version = Some(version.clone());
-            self.state = UpdateState::Available { version, notes, date };
+    /// The check answered with a release. Answers whether it has to be
+    /// downloaded: `false` when it is the very version already waiting in
+    /// `ready`, in which case the machine is back there and nothing is fetched.
+    pub fn found(&mut self, version: String, notes: Option<String>, date: Option<String>) -> bool {
+        if !matches!(self.state, UpdateState::Checking) {
+            return false;
         }
+        if self.replacing.as_deref() == Some(version.as_str()) {
+            self.back_to_ready(None);
+            return false;
+        }
+        self.version = Some(version.clone());
+        let replacing = self.replacing.clone();
+        self.state = UpdateState::Available { version, notes, date, replacing };
+        true
     }
 
     /// The first byte is about to be asked for.
     pub fn downloading(&mut self) {
-        if matches!(self.state, UpdateState::Available { .. }) {
-            self.state = UpdateState::Downloading { received: 0, total: None };
+        if let UpdateState::Available { version, replacing, .. } = &self.state {
+            self.state = UpdateState::Downloading {
+                version: version.clone(),
+                received: 0,
+                total: None,
+                replacing: replacing.clone(),
+            };
         }
     }
 
@@ -268,7 +348,7 @@ impl Machine {
     /// each time rather than once, since it is `None` until the response
     /// headers have been read.
     pub fn received(&mut self, chunk: usize, size: Option<u64>) {
-        if let UpdateState::Downloading { received, total } = &mut self.state {
+        if let UpdateState::Downloading { received, total, .. } = &mut self.state {
             *received += chunk as u64;
             if size.is_some() {
                 *total = size;
@@ -282,7 +362,8 @@ impl Machine {
     pub fn ready(&mut self) {
         if matches!(self.state, UpdateState::Downloading { .. }) {
             let version = self.version.clone().unwrap_or_default();
-            self.state = UpdateState::Ready { version };
+            self.replacing = None;
+            self.state = UpdateState::Ready { version, notice: None };
         }
     }
 
@@ -290,7 +371,21 @@ impl Machine {
     /// only ever one flow in flight, so a failure always belongs to the state
     /// the machine is in — and a failure nobody is told about is the one thing
     /// worse than a failure.
+    ///
+    /// One flow is not a failure of the machine: a check or a download that
+    /// began from `ready` and broke leaves the downloaded version where it was,
+    /// so the machine returns to `ready` on it with the message as its notice.
+    /// Going to `failed` instead would strand verified bytes in a state that
+    /// offers no install.
     pub fn failed(&mut self, message: String) {
+        let in_flow = matches!(
+            self.state,
+            UpdateState::Checking | UpdateState::Available { .. } | UpdateState::Downloading { .. }
+        );
+        if in_flow && self.back_to_ready(Some(message.clone())) {
+            return;
+        }
+        self.replacing = None;
         self.state = UpdateState::Failed { message };
     }
 
@@ -421,14 +516,32 @@ async fn pursue(app: AppHandle, updates: Updates) {
         return announce(&app, &state);
     };
 
+    fetch(app, updates, update).await;
+}
+
+/// Everything after a check has found a release: hand it to the machine, and
+/// download it unless it is the version already waiting in `ready`. Shared by
+/// [`pursue`] and by the recheck `updates_install` makes, which has found the
+/// release itself. The machine must already be `checking`.
+///
+/// A release that is the version already downloaded returns the machine to
+/// `ready` and fetches nothing — that comparison is what stops the same bytes
+/// being pulled twice, now that a check is accepted from `ready`. A different
+/// one is downloaded, and only replaces `staged` once the plugin has verified
+/// it: a download that breaks leaves the old bytes exactly where they were.
+async fn fetch(app: AppHandle, updates: Updates, update: tauri_plugin_updater::Update) {
     // `Date`'s own display is ISO 8601, which is what the About row wants and
     // what `time` would otherwise be a dependency for.
     let date = update.date.map(|stamp| stamp.date().to_string());
-    let state = updates.with(|held| {
-        held.machine.found(update.version.clone(), update.body.clone(), date);
-        held.machine.state().clone()
+    let (state, needed) = updates.with(|held| {
+        let needed = held.machine.found(update.version.clone(), update.body.clone(), date);
+        (held.machine.state().clone(), needed)
     });
     announce(&app, &state);
+    if !needed {
+        return;
+    }
+    let newer = matches!(state, UpdateState::Available { replacing: Some(_), .. });
 
     let state = updates.with(|held| {
         held.machine.downloading();
@@ -454,7 +567,14 @@ async fn pursue(app: AppHandle, updates: Updates) {
         .await;
     let bytes = match downloaded {
         Ok(bytes) => bytes,
-        Err(err) => return fail(&app, &updates, because("could not download the update", err)),
+        Err(err) => {
+            let doing = if newer {
+                "could not download the newer version"
+            } else {
+                "could not download the update"
+            };
+            return fail(&app, &updates, because(doing, err));
+        }
     };
 
     let state = updates.with(|held| {
@@ -563,6 +683,39 @@ pub async fn updates_install(
     }
     gate(&live_runs(&runs).await?)?;
 
+    // Ask the feed again before replacing the bundle: a release may have been
+    // published since the one waiting here was downloaded, and installing the
+    // older one would land the person on a version the next launch immediately
+    // wants to leave. A newer one is fetched and the press is declined; the
+    // same one, no answer, or an error installs what is staged — a downloaded,
+    // signature-checked copy newer than the running one is worth more than
+    // insisting on a network the person may not have.
+    if let Some(update) = recheck(&app).await {
+        let staged_version = updates.with(|held| held.machine.ready_version().map(String::from));
+        if let Some(staged_version) = staged_version {
+            if differs(&staged_version, &update.version) {
+                let version = update.version.clone();
+                if updates.with(|held| held.machine.check()) {
+                    announce(&app, &updates.state());
+                    let (app, updates) = (app.clone(), updates.inner().clone());
+                    tauri::async_runtime::spawn(async move { fetch(app, updates, update).await });
+                    return Err(UpdateError::NewerVersion { version });
+                }
+            }
+        }
+    }
+    // The machine may have moved during the recheck (a scheduled check landing
+    // on the same moment), so what there is to install is asked again.
+    if !updates.with(|held| held.machine.installable() && held.staged.is_some()) {
+        return Err(UpdateError::NothingReady);
+    }
+    // And the run gate again: the recheck is a network round trip, and a run
+    // started during it was not there when the first gate looked. The restart
+    // below would kill it, so the last look comes immediately before the bytes
+    // are taken. The first gate stays, so a live run is refused without paying
+    // for the round trip.
+    gate(&live_runs(&runs).await?)?;
+
     // Taken out for the blocking call and put back if it fails, and the state
     // is deliberately left at `ready` either way. An install that did not
     // happen has not stopped the update being downloaded and waiting — the
@@ -590,6 +743,34 @@ pub async fn updates_install(
     }
     app.request_restart();
     Ok(())
+}
+
+/// Whether the feed's release is a different one from the downloaded copy. A
+/// plain inequality and not an ordering, so the name says no more than that:
+/// the feed decides what is latest, and `semver` is only a transitive
+/// dependency here, not one this crate declares.
+fn differs(staged: &str, feed: &str) -> bool {
+    staged != feed
+}
+
+/// One more look at the feed, for the install. Every failure to look is `None`,
+/// the same as a feed with nothing in it, because the caller's answer to both
+/// is to install what it has.
+async fn recheck(app: &AppHandle) -> Option<tauri_plugin_updater::Update> {
+    let updater = match app.updater() {
+        Ok(updater) => updater,
+        Err(err) => {
+            log::warn!("{}", because("could not recheck for updates before installing", err));
+            return None;
+        }
+    };
+    match updater.check().await {
+        Ok(found) => found,
+        Err(err) => {
+            log::warn!("{}", because("could not recheck for updates before installing", err));
+            None
+        }
+    }
 }
 
 /// An install that did not happen: put the bytes back, say so in the log, and
@@ -644,18 +825,19 @@ mod tests {
                 version: "0.2.0".into(),
                 notes: Some("notes".into()),
                 date: Some("2026-08-23".into()),
+                replacing: None,
             }
         );
         machine.downloading();
-        assert_eq!(*machine.state(), UpdateState::Downloading { received: 0, total: None });
+        assert_eq!(*machine.state(), UpdateState::Downloading { version: "0.2.0".into(), received: 0, total: None, replacing: None });
         machine.received(400, Some(1000));
         machine.received(600, Some(1000));
         assert_eq!(
             *machine.state(),
-            UpdateState::Downloading { received: 1000, total: Some(1000) }
+            UpdateState::Downloading { version: "0.2.0".into(), received: 1000, total: Some(1000), replacing: None }
         );
         machine.ready();
-        assert_eq!(*machine.state(), UpdateState::Ready { version: "0.2.0".into() });
+        assert_eq!(*machine.state(), UpdateState::Ready { version: "0.2.0".into(), notice: None });
         assert!(machine.installable());
     }
 
@@ -668,7 +850,7 @@ mod tests {
         machine.found("1.4.1".into(), None, None);
         machine.downloading();
         machine.ready();
-        assert_eq!(*machine.state(), UpdateState::Ready { version: "1.4.1".into() });
+        assert_eq!(*machine.state(), UpdateState::Ready { version: "1.4.1".into(), notice: None });
     }
 
     #[test]
@@ -690,7 +872,7 @@ mod tests {
         machine.found("0.2.0".into(), None, None);
         machine.downloading();
         assert!(!machine.check(), "and a download is going");
-        assert_eq!(*machine.state(), UpdateState::Downloading { received: 0, total: None });
+        assert_eq!(*machine.state(), UpdateState::Downloading { version: "0.2.0".into(), received: 0, total: None, replacing: None });
     }
 
     /// The narrowest window of the four refusals, and the reason it is a
@@ -708,23 +890,139 @@ mod tests {
                 version: "0.2.0".into(),
                 notes: Some("notes".into()),
                 date: None,
+                replacing: None,
             },
             "and the refusal leaves the flow exactly where it was"
         );
         machine.downloading();
-        assert_eq!(*machine.state(), UpdateState::Downloading { received: 0, total: None });
+        assert_eq!(*machine.state(), UpdateState::Downloading { version: "0.2.0".into(), received: 0, total: None, replacing: None });
     }
 
-    /// A check with an update already waiting would find the same release and
-    /// fetch it again, throwing away the one being offered.
-    #[test]
-    fn a_check_is_refused_with_an_update_waiting_to_be_installed() {
+    fn ready(version: &str) -> Machine {
         let mut machine = checking();
-        machine.found("0.2.0".into(), None, None);
+        assert!(machine.found(version.into(), None, None));
         machine.downloading();
         machine.ready();
-        assert!(!machine.check());
-        assert_eq!(*machine.state(), UpdateState::Ready { version: "0.2.0".into() });
+        assert_eq!(
+            *machine.state(),
+            UpdateState::Ready { version: version.into(), notice: None }
+        );
+        machine
+    }
+
+    /// The feed still says what is already downloaded: back to `ready` on the
+    /// same version, and never through `downloading`.
+    #[test]
+    fn a_check_from_ready_that_finds_the_same_version_downloads_nothing() {
+        let mut machine = ready("0.1.1");
+        assert!(machine.check(), "a downloaded update does not stop a check");
+        assert_eq!(*machine.state(), UpdateState::Checking);
+        assert!(!machine.installable(), "nothing is offered while the feed is asked");
+        assert!(!machine.found("0.1.1".into(), None, None), "the same release is not fetched twice");
+        assert_eq!(
+            *machine.state(),
+            UpdateState::Ready { version: "0.1.1".into(), notice: None }
+        );
+        assert!(machine.installable());
+    }
+
+    #[test]
+    fn a_check_from_ready_that_finds_nothing_returns_to_ready() {
+        let mut machine = ready("0.1.1");
+        assert!(machine.check());
+        machine.nothing_new();
+        assert_eq!(
+            *machine.state(),
+            UpdateState::Ready { version: "0.1.1".into(), notice: None }
+        );
+    }
+
+    #[test]
+    fn a_newer_version_found_from_ready_replaces_the_one_waiting() {
+        let mut machine = ready("0.1.1");
+        assert!(machine.check());
+        assert!(machine.found("0.1.2".into(), Some("notes".into()), None));
+        assert_eq!(
+            *machine.state(),
+            UpdateState::Available {
+                version: "0.1.2".into(),
+                notes: Some("notes".into()),
+                date: None,
+                replacing: Some("0.1.1".into()),
+            }
+        );
+        assert!(!machine.check(), "the newer download is a flow in hand");
+        machine.downloading();
+        assert_eq!(
+            *machine.state(),
+            UpdateState::Downloading {
+                version: "0.1.2".into(),
+                received: 0,
+                total: None,
+                replacing: Some("0.1.1".into())
+            }
+        );
+        assert!(!machine.installable(), "downloading offers nothing to press");
+        machine.received(10, Some(10));
+        machine.ready();
+        assert_eq!(
+            *machine.state(),
+            UpdateState::Ready { version: "0.1.2".into(), notice: None }
+        );
+        assert!(machine.check(), "and the next check replaces nothing stale");
+        assert!(!machine.found("0.1.2".into(), None, None));
+    }
+
+    #[test]
+    fn a_newer_download_that_breaks_leaves_the_old_version_ready_with_a_notice() {
+        let mut machine = ready("0.1.1");
+        assert!(machine.check());
+        assert!(machine.found("0.1.2".into(), None, None));
+        machine.downloading();
+        machine.received(5, Some(10));
+        machine.failed("could not download the newer version: connection reset".into());
+        assert_eq!(
+            *machine.state(),
+            UpdateState::Ready {
+                version: "0.1.1".into(),
+                notice: Some("could not download the newer version: connection reset".into()),
+            }
+        );
+        assert!(machine.installable(), "the downloaded copy is still installable");
+    }
+
+    #[test]
+    fn a_check_from_ready_that_breaks_leaves_the_version_ready_with_a_notice() {
+        let mut machine = ready("0.1.1");
+        assert!(machine.check());
+        machine.failed("could not check for updates: offline".into());
+        assert_eq!(
+            *machine.state(),
+            UpdateState::Ready {
+                version: "0.1.1".into(),
+                notice: Some("could not check for updates: offline".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_failure_from_a_flow_that_replaced_nothing_is_still_failed() {
+        let mut machine = checking();
+        machine.failed("no".into());
+        assert_eq!(*machine.state(), UpdateState::Failed { message: "no".into() });
+    }
+
+    #[test]
+    fn only_a_different_version_from_the_feed_counts_as_differing() {
+        assert!(!differs("0.1.1", "0.1.1"));
+        assert!(differs("0.1.1", "0.1.2"));
+    }
+
+    #[test]
+    fn a_newer_version_refusal_travels_with_its_version() {
+        let json = serde_json::to_string(&UpdateError::NewerVersion { version: "0.1.2".into() })
+            .expect("the refusal must serialize");
+        assert_eq!(json, r#"{"kind":"newer_version","detail":{"version":"0.1.2"}}"#);
     }
 
     /// A failure is not the end of the story: the next check runs from there.
@@ -770,12 +1068,12 @@ mod tests {
         machine.found("0.2.0".into(), None, None);
         machine.downloading();
         machine.received(64, None);
-        assert_eq!(*machine.state(), UpdateState::Downloading { received: 64, total: None });
+        assert_eq!(*machine.state(), UpdateState::Downloading { version: "0.2.0".into(), received: 64, total: None, replacing: None });
         machine.received(64, Some(512));
         machine.received(64, None);
         assert_eq!(
             *machine.state(),
-            UpdateState::Downloading { received: 192, total: Some(512) },
+            UpdateState::Downloading { version: "0.2.0".into(), received: 192, total: Some(512), replacing: None },
             "a length once known is not forgotten by a callback that omits it"
         );
     }
@@ -841,16 +1139,35 @@ mod tests {
                     version: "0.2.0".into(),
                     notes: None,
                     date: Some("2026-08-23".into()),
+                    replacing: Some("0.1.9".into()),
                 },
-                r#"{"kind":"available","version":"0.2.0","notes":null,"date":"2026-08-23"}"#,
+                r#"{"kind":"available","version":"0.2.0","notes":null,"date":"2026-08-23","replacing":"0.1.9"}"#,
             ),
             (
-                UpdateState::Downloading { received: 8, total: Some(16) },
-                r#"{"kind":"downloading","received":8,"total":16}"#,
+                UpdateState::Downloading {
+                    version: "0.2.0".into(),
+                    received: 8,
+                    total: Some(16),
+                    replacing: None,
+                },
+                r#"{"kind":"downloading","version":"0.2.0","received":8,"total":16,"replacing":null}"#,
             ),
             (
-                UpdateState::Ready { version: "0.2.0".into() },
-                r#"{"kind":"ready","version":"0.2.0"}"#,
+                UpdateState::Downloading {
+                    version: "0.2.0".into(),
+                    received: 8,
+                    total: None,
+                    replacing: Some("0.1.9".into()),
+                },
+                r#"{"kind":"downloading","version":"0.2.0","received":8,"total":null,"replacing":"0.1.9"}"#,
+            ),
+            (
+                UpdateState::Ready { version: "0.2.0".into(), notice: None },
+                r#"{"kind":"ready","version":"0.2.0","notice":null}"#,
+            ),
+            (
+                UpdateState::Ready { version: "0.2.0".into(), notice: Some("no".into()) },
+                r#"{"kind":"ready","version":"0.2.0","notice":"no"}"#,
             ),
             (
                 UpdateState::Failed { message: "no".into() },

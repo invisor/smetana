@@ -51,6 +51,7 @@ import {
 } from '../stores/app.js'
 import { clearStorage, surveyStorage } from '../stores/attachments.js'
 import { checkForUpdate, initUpdates, installUpdate, updatesState } from '../stores/updates.js'
+import { shownRefusal } from '../components/settings/update.js'
 
 /* The query string's two overrides, passed down rather than read here so that
    `App.vue` stays the one place that knows about them. They win over what the
@@ -571,9 +572,12 @@ watch(
 /* The two presses on the About tab. Checking never fails — Rust answers with
    the state that stopped it — so there is nothing to catch and nothing to say.
 
-   Installing is the opposite: every way it can decline is a refusal carrying its
-   reason, the run gate above all, and on success it does not return in any
-   useful sense because the app is on its way out. The refusal is cleared at the
+   Installing is the opposite: nearly every way it can decline is a refusal
+   carrying its reason, the run gate above all, and on success it does not return
+   in any useful sense because the app is on its way out. The exception is
+   `newer_version` — the press found a newer release and started fetching it —
+   which `shownRefusal` drops: the state line says it and moves on with the
+   download. The refusal is cleared at the
    start of the press rather than left standing, so a second press after a run
    has ended does not read as having been refused again. */
 const check = () => {
@@ -586,7 +590,7 @@ const install = async () => {
   try {
     await installUpdate()
   } catch (err) {
-    updateRefusal.value = err
+    updateRefusal.value = shownRefusal(err)
   }
 }
 
