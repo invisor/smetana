@@ -91,6 +91,7 @@ import IconButton from '../components/core/IconButton.vue'
 import { CommandPalette, ConversationView, TaskSearchButton, TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import { agentKey, conversationsOf, orderAgents } from '../components/agent/agentOrder.js'
+import { turnEnded } from '../components/agent/turnEnded.js'
 import { closableOthers } from '../components/agent/agentMenu.js'
 import { nameAgentRows, withAgentName } from '../components/agent/agentName.js'
 /* What a driven conversation is in the three places this file counts agents:
@@ -3509,7 +3510,8 @@ const catchUp = async () => {
      a third watcher subsystem with its own lifecycle would fire on every write
      inside `node_modules` and `target`. The price is named rather than
      discovered: while an agent works, this list is as stale as the tree beside
-     it, until focus returns or the refresh button is pressed. */
+     it, until the agent ends its turn, focus returns or the refresh button is
+     pressed. */
   loadRepos(activePath.value)
   /* And the one thing in that panel the disk cannot answer: whether anybody
      else has pushed. It goes out from here rather than from the store itself
@@ -3574,6 +3576,31 @@ const catchUp = async () => {
 
 onMounted(() => window.addEventListener('focus', catchUp))
 onUnmounted(() => window.removeEventListener('focus', catchUp))
+
+/* The fourth moment this app catches up with the world: an agent of the active
+   project ended its turn. An agent working inside this window never takes focus
+   away, so none of the other three fires when it commits or edits the tree.
+   The rows are the ones the panel draws (PTY and driven together), compared by
+   key and state through `turnEnded`. The remembered map is dropped on a project
+   switch, before anything is compared, so equal keys of two projects
+   (`conversation:1` in both) cannot pair up. Nothing happens while an agent is
+   still running. */
+let lastAgentStates = new Map()
+watch(
+  () => settings.activeProject,
+  () => {
+    lastAgentStates = new Map()
+  },
+  { flush: 'sync' }
+)
+watch(
+  () => new Map(orderedAgentRows.value.map((row) => [agentKey(row), row.state])),
+  (next) => {
+    const before = lastAgentStates
+    lastAgentStates = next
+    if (turnEnded(before, next)) catchUp()
+  }
+)
 
 /* Window focus is not enough on its own for the one thing in this window that
    the disk cannot answer.

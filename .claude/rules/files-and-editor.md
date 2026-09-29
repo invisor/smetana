@@ -222,8 +222,9 @@ sent forward as fresh costs somebody's work.
 
 Freshness comes from window focus, not from a watcher: a second watcher subsystem in Rust, with its
 own lifecycle and error reporting, costs more than the sweep in `catchUp` (`DesktopApp.vue`), which
-re-lists the open directories and re-stats the open tabs whenever the window is focused — plus the
-refresh button next to the project list.
+re-lists the open directories and re-stats the open tabs whenever the window is focused or an agent
+of the active project ends its turn (`turnEnded.js`) — plus the refresh button next to the project
+list.
 
 **A folder that sweep cannot find any more is folded away rather than reported**, and it is the one
 place where a refused read changes this store instead of only speaking about itself. An expanded
