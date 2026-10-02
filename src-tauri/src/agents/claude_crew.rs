@@ -17,6 +17,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::crew::{ProviderNode, ProviderState};
+use crate::session::history::Scope;
 use super::{claude::Claude, Launch};
 
 pub const TEAM_ENV: &str = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS";
@@ -621,6 +622,8 @@ pub struct TranscriptTail {
     /// `message.id` is what keeps a thinking block beside its text from
     /// doubling the figure.
     last_message: Option<String>,
+    /// Whose file this cursor reads; see [`Scope`].
+    scope: Scope,
 }
 
 /// Lead-only lifecycle facts from Claude's structured JSONL.  The event
@@ -745,13 +748,19 @@ fn find_hook_name(value: &Value) -> Option<&str> {
 }
 
 impl TranscriptTail {
+    /// A cursor over a teammate's own transcript, which is a sidechain from
+    /// its first record to its last.
+    pub fn child() -> Self {
+        Self { scope: Scope::Child, ..Self::default() }
+    }
+
     pub fn read_new(&mut self, path: &Path) -> std::io::Result<Vec<crate::session::history::Past>> {
         self.read_new_with_lifecycle(path).map(|(events, _)| events)
     }
 
-    /// Like [`read_new`], retaining the lead's non-rendered lifecycle markers
-    /// for the Crew root state machine. Child callers continue using the
-    /// journal-only form above.
+    /// Like [`read_new`], retaining the non-rendered lifecycle markers for the
+    /// Crew state machine: the lead's for the root, a teammate's own for its
+    /// node.
     pub fn read_new_with_lifecycle(
         &mut self,
         path: &Path,
@@ -798,7 +807,7 @@ impl TranscriptTail {
                     other => other,
                 });
             }
-            events.extend(crate::session::history::events_of(&line, &now));
+            events.extend(crate::session::history::events_in(self.scope, &line, &now));
         }
         Ok((events, lifecycle))
     }
@@ -1036,7 +1045,10 @@ pub fn members_excluding(config: &Value, excluded_provider: Option<&str>) -> Vec
                 Some("left") | Some("completed") => ProviderState::Done,
                 Some("failed") => ProviderState::Failed,
                 Some("working" | "active") => ProviderState::Running,
-                _ => ProviderState::Starting,
+                // Claude Code 2.1.28x writes no `status` for a member at
+                // all, so the config says nothing about its lifecycle; the
+                // member's own transcript does.
+                _ => ProviderState::Unknown,
             };
             Some(ProviderNode {
                 id,
@@ -1290,7 +1302,7 @@ mod tests {
             vec![ProviderNode {
                 id: "fixture-worker@session-fixture-team".into(),
                 parent: None,
-                state: ProviderState::Starting,
+                state: ProviderState::Unknown,
                 label: Some("fixture-worker".into()),
                 can_message: true,
             }]
@@ -1673,5 +1685,43 @@ mod tests {
                 "fixture-worker".into()
             ))
         );
+    }
+
+    #[test]
+    fn a_child_tail_reads_the_sidechain_journal_and_its_lifecycle() {
+        let path = std::env::temp_dir().join(format!("smetana-child-tail-{}.jsonl", std::process::id()));
+        let lines = [
+            r#"{"type":"user","isSidechain":true,"message":{"role":"user","content":"<teammate-message teammate_id=\"team-lead\">Build it.</teammate-message>"}}"#,
+            r#"{"type":"assistant","isSidechain":true,"message":{"id":"m1","stop_reason":"tool_use","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"a.rs"}}]}}"#,
+            r#"{"type":"assistant","isSidechain":true,"message":{"id":"m2","stop_reason":"end_turn","content":[{"type":"text","text":"Done."}]}}"#,
+        ];
+        fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+        let mut tail = TranscriptTail::child();
+        let (events, lifecycle) = tail.read_new_with_lifecycle(&path).unwrap();
+        assert_eq!(events.len(), 3, "the brief, the tool call and the closing text");
+        assert!(matches!(events[0].0, crate::session::model::EventKind::UserMessage { .. }));
+        assert_eq!(
+            lifecycle,
+            vec![
+                LeadLifecycle::TurnStart,
+                LeadLifecycle::Ready { tokens_in: 0, tokens_out: 0 }
+            ]
+        );
+        let mut lead = TranscriptTail::default();
+        assert!(lead.read_new(&path).unwrap().is_empty(), "the lead scope still drops the sidechain");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_member_without_status_has_an_unknown_state_and_an_explicit_one_still_applies() {
+        let mut config = serde_json::json!({"members": [
+            {"agentId": "a@t", "name": "a"},
+            {"agentId": "b@t", "name": "b", "status": "working"},
+        ]});
+        let nodes = members_excluding(&config, None);
+        assert_eq!(nodes[0].state, ProviderState::Unknown);
+        assert_eq!(nodes[1].state, ProviderState::Running);
+        config["members"][0]["status"] = "idle".into();
+        assert_eq!(members_excluding(&config, None)[0].state, ProviderState::Waiting);
     }
 }

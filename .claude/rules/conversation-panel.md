@@ -24,6 +24,34 @@ Completed children remain readable but lose their composer capability. Only a
 Crew root offers Stop; native child permission/interrupt verbs are hidden, and
 row close routes to Crew cleanup rather than terminal/session commands.
 
+**A child's journal is read without the sidechain filter.** A teammate's own
+transcript (`<session>/subagents/agent-*.jsonl`) is marked `isSidechain: true`
+on every record, because the whole file is the sidechain. `history::events_of`
+drops such a record, rightly, in a lead's or an ordinary session's transcript,
+where it is a subagent's turn reported inline. So the reader takes a
+`history::Scope`: `TranscriptTail::child()` reads in `Scope::Child`, where the
+flag is the norm and a `user` record wrapped in `<teammate-message
+teammate_id="team-lead">` is the lead's words to that child (the brief, review
+notes, a stop) and is drawn as a person's turn with the envelope removed. The
+lead's tail and `history::read_file` stay in `Scope::Conversation`; lifting the
+filter globally would draw every subagent's turn inside a resumed
+conversation. Any new child-tail cursor must be built with `child()`: a
+default-built one reads the wrong scope and comes back empty, silently.
+
+**A child's state comes from its own transcript, and a config without `status`
+overwrites nothing.** Claude Code 2.1.28x writes no `members[].status`, so
+`members_excluding` answers `ProviderState::Unknown` for such a member and
+`CrewTree::upsert` keeps the state the tree already holds (`Starting` only for
+a node seen for the first time); an explicit `status` still applies. The
+lifecycle is the one `lead_lifecycle` reads for the lead, read through
+`read_new_with_lifecycle` on the child's cursor: a `user` record is
+`TurnStart` (`Running`), an `assistant` record with `stop_reason: end_turn` is
+`Ready` (`Waiting`, and `close_turn`), and a child's tokens are not counted
+into any report. `Done` for a Claude teammate still comes only with the
+package's cleanup, since nothing documented says a teammate left. Hook records
+(`SubagentStop`, `TeammateIdle`) are deliberately not used: they exist only
+where the user's settings install those hooks.
+
 `.claude/rules/terminal.md` is where a driven session's *identity* is decided — which harness, which
 id, which tab it is drawn under. This file is the other half: what the panel that shows one actually
 puts on screen, and what the epic that built it (`smetana-qix9`) decided against on the way there.

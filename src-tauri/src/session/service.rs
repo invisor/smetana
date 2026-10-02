@@ -1709,7 +1709,7 @@ fn refresh_claude_crews(
                         // bootstrap exchange. If the exact member later goes
                         // working, its public node begins at that boundary
                         // instead of replaying READY as task output.
-                        if let Err(error) = tails.entry(key).or_default().read_new(&path) {
+                        if let Err(error) = tails.entry(key).or_insert_with(crate::agents::claude_crew::TranscriptTail::child).read_new(&path) {
                             log::warn!("[crew] hidden Claude bootstrap {} could not be tailed: {error}", path.display());
                         }
                         continue;
@@ -1725,12 +1725,31 @@ fn refresh_claude_crews(
             };
             let Some(node) = node else { continue };
             transcript_nodes.insert(key.clone(), node);
-            let tail = tails.entry(key).or_default();
-            match tail.read_new(&path) {
-                Ok(events) => {
+            let tail = tails.entry(key).or_insert_with(crate::agents::claude_crew::TranscriptTail::child);
+            match tail.read_new_with_lifecycle(&path) {
+                Ok((events, lifecycle)) => {
                     let kinds = events.into_iter().map(|(kind, _)| kind).collect();
                     if let Some(events) = package.append(node, kinds) {
                         emit_crew_events(app, *root, node, events);
+                    }
+                    // The teammate's own transcript is its lifecycle: the
+                    // config carries no status on 2.1.28x. Tokens are the
+                    // lead's report to count, so a child's are not.
+                    for state in lifecycle {
+                        match state {
+                            crate::agents::claude_crew::LeadLifecycle::TurnStart => {
+                                package.tree.set_state(node, CrewState::Running);
+                            }
+                            crate::agents::claude_crew::LeadLifecycle::Ready { tokens_in, tokens_out } => {
+                                package.tree.set_state(node, CrewState::Waiting);
+                                if let Some(events) = package.close_turn(node, tokens_in, tokens_out) {
+                                    emit_crew_events(app, *root, node, events);
+                                }
+                            }
+                            crate::agents::claude_crew::LeadLifecycle::Failed => {
+                                package.tree.fail_node(node);
+                            }
+                        }
                     }
                 }
                 Err(error) => {
