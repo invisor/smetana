@@ -1134,7 +1134,6 @@ async fn drive(
                 }
             }
         }
-        previous = Some(now);
 
         // A failover decision is made only where no attempt is live. The
         // primary was fixed above; the policy is deliberately re-read here so
@@ -1182,6 +1181,16 @@ async fn drive(
                 continue;
             }
         }
+
+        // The progress baseline moves only now, where a batch is certain to
+        // start. The two failover waits above `continue` without one, and a
+        // baseline advanced before them would be this lap's own snapshot: the
+        // next lap, finding the board unchanged by the wait, would compare it
+        // with itself and stop with `NoProgress` on a run that had decided to
+        // go on and was only waiting for an agent. Left alone, `previous` is
+        // still the board the last batch started from, and the decision is
+        // made against that.
+        previous = Some(now);
 
         let profile = crate::agents::resolve(&current_agent);
 

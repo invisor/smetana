@@ -801,7 +801,10 @@ read, so the four-read list is unchanged), runs `next_action` against the same
 sets `previous`. A `continue` after the sleep would have compared this lap's
 snapshot with itself and answered `NoProgress`; the one `continue` in the block
 is the unreadable-board case, where `rested_after` already prevents a second
-pause. `journal::started` records `pause=min-max` or `pause=none`.
+pause. `previous` is set only after the failover
+choice, where a batch is certain to start: the two failover waits `continue`, and a
+baseline set before them would be the lap's own snapshot, so the unchanged board
+after the wait would answer `NoProgress` (smetana-lutm). `journal::started` records `pause=min-max` or `pause=none`.
 
 The rule on the front end is `components/run/batchPause.js` (defaults 10 and 30,
 the bounds, `min <= max`, and the bar's words); `RunModal.vue` draws the two
