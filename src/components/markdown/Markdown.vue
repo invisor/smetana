@@ -316,8 +316,8 @@ function isCodeCopied(index) {
           :aria-label="isCodeCopied(index) ? 'Copied' : 'Copy code'"
           @click="copyCode(index, group.block.text)"
         >
-          <Icon name="copy" data-icon="copy" />
-          <Icon name="check" data-icon="check" />
+          <Icon v-if="isCodeCopied(index)" name="check" data-icon="check" />
+          <Icon v-else name="copy" data-icon="copy" />
           <span>{{ isCodeCopied(index) ? 'Copied' : 'Copy' }}</span>
         </button>
         <pre><code>{{ group.block.text }}<span v-if="edgeHere(index)" data-edge></span></code></pre>

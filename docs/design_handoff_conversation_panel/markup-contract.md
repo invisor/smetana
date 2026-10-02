@@ -174,8 +174,7 @@ Decisions worth knowing:
 <figure data-code data-lang="bash">
   <figcaption>bash</figcaption>
   <button type="button" data-copy data-state="idle" aria-label="Copy code">
-    <svg data-icon="copy" …></svg>
-    <svg data-icon="check" …></svg>
+    <svg data-icon="copy" …></svg>  <!-- one icon at a time: "check" while data-state="copied" -->
     <span>Copy</span>
   </button>
   <pre><code>xcrun notarytool submit …</code></pre>
