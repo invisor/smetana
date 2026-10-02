@@ -337,6 +337,28 @@ function isCodeCopied(index) {
         />
       </blockquote>
 
+      <details v-else-if="group.block.type === 'details'" data-disclosure>
+        <summary>
+          <MarkdownInline
+            v-if="group.block.summary"
+            :nodes="group.block.summary"
+            :root="root"
+            @open="emit('open', $event)"
+            @open-local="emit('open-local', $event)"
+          />
+          <template v-else>Details</template>
+        </summary>
+        <Markdown
+          :blocks="group.block.blocks"
+          :root="root"
+          :base="effectiveBase"
+          :streaming="edgeHere(index)"
+          @open="emit('open', $event)"
+          @open-local="emit('open-local', $event)"
+          @open-image="emit('open-image', $event)"
+        />
+      </details>
+
       <component
         :is="group.block.ordered ? 'ol' : 'ul'"
         v-else-if="group.block.type === 'list'"

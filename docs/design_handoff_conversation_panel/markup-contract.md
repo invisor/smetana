@@ -281,6 +281,20 @@ disclosure marker is ours: two borders rotated 45°, rotating to 45° again on
 `[open]` over `--dur-fast`. The platform triangle is hidden
 (`list-style:none` + `::-webkit-details-marker{display:none}`).
 
+**Disclosure** — a `<details>` block an agent or a person wrote in markdown,
+the one HTML block the parser recognises:
+
+```html
+<details data-disclosure>
+  <summary>Full prompt text</summary>
+  <p>…</p>
+</details>
+```
+
+Same chevron and hidden platform marker as Reasoning, folded by default, but
+**not** dimmed: font size and colour are inherited, since this is content the
+author chose to fold rather than the agent's working.
+
 ---
 
 ## 7 · Illustrations
@@ -403,7 +417,7 @@ summary article div span time button`
 Attributes: `class` (`sm-prose` only), `data-turn data-attachments data-task
 data-checked data-align data-wide data-table-scroll data-code data-lang
 data-copy data-state data-path data-kind data-head data-tail data-figure
-data-figures data-placeholder data-activity data-mark data-edge data-reasoning
+data-figures data-placeholder data-activity data-mark data-edge data-reasoning data-disclosure
 data-icon data-expand data-session`, plus `href src alt width height type
 role aria-label aria-hidden open datetime` and the SVG geometry/presentation
 attributes needed by an agent-drawn diagram.

@@ -597,6 +597,7 @@ describe('the invariant', () => {
         if (b.type === 'rule') return ''
         if (b.type === 'image') return b.alt
         if (b.type === 'quote') return visible(b.blocks)
+        if (b.type === 'details') return `${b.summary ? flatten(b.summary) : ''} ${visible(b.blocks)}`
         if (b.type === 'list') return b.items.map((i) => visible(i.blocks)).join(' ')
         if (b.type === 'table') return [...b.head, ...b.rows.flat()].map(flatten).join(' ')
         if (b.type === 'dl') {
@@ -690,6 +691,34 @@ describe('the invariant', () => {
     for (const word of words(SOURCE)) expect(shown).toContain(word)
   })
 
+  /* The tags are construct markers, like a quote's `>`, so they are taken out
+     of the source before comparing; every other word of summary and body must
+     still be on screen. */
+  it('shows every word of a details block, summary and body', () => {
+    const source = [
+      '<details> <summary>Full prompt text</summary>',
+      '',
+      '```sh',
+      'echo </details>',
+      '```',
+      'Full text lies in /tmp/worker-prompt.log. </details>'
+    ].join('\n')
+    const shown = visible(parseMarkdown(source))
+    const bare = source.replace(/<\/?(details|summary)>/g, ' ')
+    for (const word of words(bare)) expect(shown).toContain(word)
+  })
+
+  it('leaves any other HTML tag as literal text', () => {
+    for (const line of ['a<br>b', 'press <kbd>Ctrl</kbd>', '<details open>', 'x <sub>2</sub>']) {
+      expect(parseMarkdown(line)).toEqual([
+        { type: 'paragraph', children: [{ type: 'text', value: line }] }
+      ])
+    }
+    expect(parseMarkdown('<details open>\nbody\n</details>').map((b) => b.type)).toEqual([
+      'paragraph'
+    ])
+  })
+
   it('shows every word of what it does not understand', () => {
     const shown = visible(parseMarkdown(UNSUPPORTED))
     for (const word of words(UNSUPPORTED)) expect(shown).toContain(word)
@@ -739,6 +768,26 @@ describe('input written by a machine', () => {
     expect(nodes.map((n) => n.value).join('')).toBe(source)
   })
 
+  /* One pairing pass per call, so an opener on every line costs the same as
+     any other line. The rescan this replaced took about nine seconds over this
+     input; a bound of a second leaves wide headroom for a slow machine. */
+  it('does not go quadratic over a run of unclosed details openers', () => {
+    const source = Array.from({ length: 20000 }, () => '<details>').join('\n')
+    const started = Date.now()
+    const tree = parseMarkdown(source)
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(tree.map((b) => b.type)).toEqual(['paragraph'])
+    expect(tree[0].children[0].value).toBe(source)
+  })
+
+  it('does not go quadratic when one closing line ends a run of openers', () => {
+    const source = Array.from({ length: 20000 }, () => '<details>').join('\n') + '\n</details>'
+    const started = Date.now()
+    const tree = parseMarkdown(source)
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(tree.at(-1).type).toBe('details')
+  })
+
   it('clamps how deep a quote nests, and draws the markers past the clamp', () => {
     const source = '>'.repeat(10000) + ' x'
     const tree = parseMarkdown(source)
@@ -769,5 +818,135 @@ describe('input written by a machine', () => {
     /* And the invariant under the clamp: every item is still on screen, the
        ones past it as the characters they are. */
     expect(shown(tree).split('x').length - 1).toBe(items)
+  })
+})
+
+describe('parseMarkdown details', () => {
+  const text = (value) => [{ type: 'text', value }]
+  const para = (value) => ({ type: 'paragraph', children: text(value) })
+
+  it('reads a details block with a summary on its own line', () => {
+    expect(parseMarkdown('<details>\n<summary>Heading</summary>\n\nparagraph text\n</details>')).toEqual([
+      { type: 'details', summary: text('Heading'), blocks: [para('paragraph text')] }
+    ])
+  })
+
+  it('reads a summary on the opening line the same way', () => {
+    expect(parseMarkdown('<details> <summary>x</summary>\nbody\n</details>')).toEqual([
+      { type: 'details', summary: text('x'), blocks: [para('body')] }
+    ])
+  })
+
+  it('gives a null summary when there is none', () => {
+    expect(parseMarkdown('<details>\nbody\n</details>')).toEqual([
+      { type: 'details', summary: null, blocks: [para('body')] }
+    ])
+  })
+
+  it('keeps a fence in the body, and a closing tag inside it does not close the block', () => {
+    const [block] = parseMarkdown('<details>\n```\n</details>\nmore\n```\ntail\n</details>')
+    expect(block.type).toBe('details')
+    expect(block.blocks).toEqual([{ type: 'code', lang: null, text: '</details>\nmore' }, para('tail')])
+  })
+
+  it('closes on a closing tag at the end of a prose line and keeps the rest of the line', () => {
+    expect(parseMarkdown('<details>\nintro\n\nTail of a sentence. </details>')).toEqual([
+      { type: 'details', summary: null, blocks: [para('intro'), para('Tail of a sentence.')] }
+    ])
+  })
+
+  it('leaves an unclosed block as the paragraphs it was before', () => {
+    expect(parseMarkdown('<details>\n<summary>x</summary>\n\ntext')).toEqual([
+      para('<details>\n<summary>x</summary>'),
+      para('text')
+    ])
+  })
+
+  it('starts a block right under a prose line', () => {
+    expect(parseMarkdown('prose\n<details>\nbody\n</details>').map((b) => b.type)).toEqual([
+      'paragraph',
+      'details'
+    ])
+  })
+
+  it('does not count a line holding its own opening tag as a closing line', () => {
+    const [outer, ...more] = parseMarkdown('<details>\na\n<details>x</details>\nb\n</details>')
+    expect(more).toEqual([])
+    expect(outer.blocks).toEqual([para('a\n<details>x</details>\nb')])
+  })
+
+  it('gives a null summary for an empty or blank one', () => {
+    for (const tag of ['<summary></summary>', '<summary>  </summary>']) {
+      expect(parseMarkdown(`<details> ${tag}\nbody\n</details>`)[0].summary).toBeNull()
+      expect(parseMarkdown(`<details>\n${tag}\nbody\n</details>`)[0].summary).toBeNull()
+    }
+  })
+
+  /* An opener with no closing line is not a block start, so the text around it
+     parses exactly as it did before this construct existed. */
+  it('keeps an unclosed opener inside the paragraph above it', () => {
+    expect(parseMarkdown('prose\n<details>\nbody')).toEqual([para('prose\n<details>\nbody')])
+  })
+
+  it('keeps an unclosed opener under a list item as it was', () => {
+    const before = parseMarkdown('- item\n  more\n<details>')
+    expect(before.map((b) => b.type)).toEqual(['list', 'paragraph'])
+    expect(before[1]).toEqual(para('<details>'))
+  })
+
+  it('still splits the paragraph above a closed opener', () => {
+    expect(parseMarkdown('- item\n  more\n\nprose\n<details>\nbody\n</details>').map((b) => b.type)).toEqual([
+      'list',
+      'paragraph',
+      'details'
+    ])
+  })
+
+  it('does not take a four-space fence line as closing a fence', () => {
+    const [block, ...more] = parseMarkdown('<details>\n```\n    ```\n</details>\n```\n</details>')
+    expect(more).toEqual([])
+    expect(block.blocks).toEqual([{ type: 'code', lang: null, text: '    ```\n</details>' }])
+  })
+
+  it('does not take a four-space fence line as opening one', () => {
+    const [block, ...more] = parseMarkdown('<details>\n    ```\n```\n</details>\n```\n</details>')
+    expect(more).toEqual([])
+    expect(block.blocks).toEqual([
+      para('    ```'),
+      { type: 'code', lang: null, text: '</details>' }
+    ])
+  })
+
+  it('treats an indented opener as body text, directly or past a list item', () => {
+    for (const source of ['<details>\ntext\n    <details>\n</details>', '<details>\n- item\n    <details>\n</details>']) {
+      const [block, ...more] = parseMarkdown(source)
+      expect(more).toEqual([])
+      expect(block.type).toBe('details')
+    }
+  })
+
+  it('does not let a fence in a nested list item close the outer block', () => {
+    const source = '<details>\n- a\n  - b\n    ```\n    </details>\n    ```\n</details>'
+    const [outer, ...more] = parseMarkdown(source)
+    expect(more).toEqual([])
+    expect(outer.type).toBe('details')
+    const inner = outer.blocks[0].items[0].blocks[1].items[0].blocks
+    expect(inner).toEqual([para('b'), { type: 'code', lang: null, text: '</details>' }])
+  })
+
+  it('does not let an inner block in a nested list item close the outer one', () => {
+    const source = '<details>\n- a\n  - b\n    <details>\n    c\n    </details>\n</details>'
+    const [outer, ...more] = parseMarkdown(source)
+    expect(more).toEqual([])
+    expect(outer.type).toBe('details')
+    const inner = outer.blocks[0].items[0].blocks[1].items[0].blocks
+    expect(inner.map((b) => b.type)).toEqual(['paragraph', 'details'])
+    expect(inner[1].blocks).toEqual([para('c')])
+  })
+
+  it('nests one block in another', () => {
+    const [outer] = parseMarkdown('<details>\n<details>\ninner\n</details>\nafter\n</details>')
+    expect(outer.blocks.map((b) => b.type)).toEqual(['details', 'paragraph'])
+    expect(outer.blocks[0].blocks).toEqual([para('inner')])
   })
 })

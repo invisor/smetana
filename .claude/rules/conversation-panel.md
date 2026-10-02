@@ -184,6 +184,19 @@ invites a click it will not honour is worse than no control. `ul[data-task] > li
 draw the box and the tick as plain shapes off `--border-strong` and `--text-secondary`, and a checked
 item drops to `--text-muted` — done is quiet, the same idiom `data-attention="quiet"` uses elsewhere.
 
+## Exactly one HTML tag is recognised: `<details>`
+
+`markdown.js` keeps every HTML tag as literal text, because "no source character disappears" and
+`v-html` never appearing are the two things that make it safe to put between a person and the only
+copy of a description. `<details>` with an optional `<summary>` is the single exception, and it is
+a parser construct rather than a sanitised pass-through: an agent wrapped a full prompt in GitHub's
+disclosure, and both tags drawn as text made the reply unreadable. The tags are construct markers
+(like a quote's `>`), a closing tag may end a prose line, and a block with no closing tag stays text
+because it is usually a reply still streaming. Lowercase and attribute-free only. Every other tag
+(`<br>`, `<kbd>`, `<sub>`) stays text on purpose: each one added is a new thing to render and to
+get wrong, and this one earned its place by being seen in the wild. It draws as
+`details[data-disclosure]`, deliberately not muted like Reasoning.
+
 ## Tables are ruled, not zebra-striped
 
 `sm-prose.css` section 8 states this one directly: zebra striping fills a second alternating rhythm

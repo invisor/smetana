@@ -733,34 +733,29 @@
   animation:sm-pulse var(--dur-pulse) var(--ease-in-out) infinite;
 }
 
-/* Reasoning: the agent working something out, not the agent speaking. Folded
-   by default and dimmed at every moment — by colour and size, not by opacity,
-   so it still clears the contrast floor when open. */
-.sm-prose details[data-reasoning]{
-  border-left:var(--border-w) solid var(--prose-rule);
-  padding-left:var(--space-5);
-  font-size:var(--text-sm);
-  color:var(--text-muted);
-}
-.sm-prose details[data-reasoning] > summary{
+/* Two disclosures share one marker, one hover and one open indent: Reasoning,
+   the agent working something out rather than speaking, and a disclosure the
+   author wrote (`<details>` in markdown). Only Reasoning is dimmed — see the
+   rules after this block; the author's own folded content keeps the size and
+   colour of the prose around it. */
+.sm-prose details:is([data-reasoning],[data-disclosure]) > summary{
   display:flex;
   align-items:center;
   gap:var(--space-3);
   min-height:var(--row-h);
   list-style:none;
   cursor:default;
-  color:var(--text-secondary);
   user-select:none;
 }
-.sm-prose details[data-reasoning] > summary::-webkit-details-marker{ display:none }
-.sm-prose details[data-reasoning] > summary:hover{ color:var(--text-primary) }
-.sm-prose details[data-reasoning] > summary:focus-visible{
+.sm-prose details:is([data-reasoning],[data-disclosure]) > summary::-webkit-details-marker{ display:none }
+.sm-prose details:is([data-reasoning],[data-disclosure]) > summary:hover{ color:var(--text-primary) }
+.sm-prose details:is([data-reasoning],[data-disclosure]) > summary:focus-visible{
   outline:var(--border-w-strong) solid var(--focus-ring);
   outline-offset:var(--space-1);
   border-radius:var(--radius-2);
 }
 /* Our own disclosure marker: two borders, rotated. */
-.sm-prose details[data-reasoning] > summary::before{
+.sm-prose details:is([data-reasoning],[data-disclosure]) > summary::before{
   content:"";
   flex:none;
   width:var(--prose-chevron);
@@ -771,17 +766,26 @@
   transform:rotate(-45deg);
   transition:transform var(--dur-fast) var(--ease-out);
 }
-.sm-prose details[data-reasoning][open] > summary::before{ transform:rotate(45deg) }
+.sm-prose details:is([data-reasoning],[data-disclosure])[open] > summary::before{ transform:rotate(45deg) }
+.sm-prose details:is([data-reasoning],[data-disclosure])[open] > :where(p,ul,ol,pre,figure){
+  margin-top:var(--space-4);
+}
+
+/* Reasoning only: folded by default and dimmed at every moment — by colour and
+   size, not by opacity, so it still clears the contrast floor when open. */
+.sm-prose details[data-reasoning]{
+  border-left:var(--border-w) solid var(--prose-rule);
+  padding-left:var(--space-5);
+  font-size:var(--text-sm);
+  color:var(--text-muted);
+}
+.sm-prose details[data-reasoning] > summary{ color:var(--text-secondary) }
 .sm-prose details[data-reasoning] > summary > time{
   margin-left:auto;
   font-family:var(--font-mono);
   font-size:var(--text-xs);
   color:var(--text-muted);
 }
-.sm-prose details[data-reasoning][open] > :where(p,ul,ol,pre,figure){
-  margin-top:var(--space-4);
-}
-
 
 /* 12 · ILLUSTRATIONS =======================================================
    Two accepted forms, and the difference between them is the answer to the

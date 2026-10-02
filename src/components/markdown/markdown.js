@@ -7,13 +7,14 @@
 
    The invariant every branch below is written to keep: **no character of the
    source disappears.** Anything unrecognised — an unclosed fence, a stray
-   asterisk, a malformed table, a reference link, an HTML tag — comes back as
-   ordinary text, so the worst outcome for an unsupported construct is the
-   panel as it looked before this module existed. That is what makes it safe
-   to put between a person and the only copy of a task's description, and it
-   does not soften for a *recognised* construct's own content — only for the
-   marker characters whose entire job is to say what the construct is, and
-   which carry no information once it is known: a heading's closing `#`, a
+   asterisk, a malformed table, a reference link, an HTML tag (all but one,
+   below) — comes back as ordinary text, so the worst outcome for an
+   unsupported construct is the panel as it looked before this module
+   existed. That is what makes it safe to put between a person and the only
+   copy of a task's description, and it does not soften for a *recognised*
+   construct's own content — only for the marker characters whose entire job
+   is to say what the construct is, and which carry no information once it is
+   known: a heading's closing `#`, a
    quote's leading `>`, a table's `|`. A table row with more cells than its
    header is not a marker going missing, it is a person's words the parser
    read and must not drop — `takeTable` widens the whole table to its widest
@@ -29,6 +30,17 @@
    and the honest answer is to leave them unreached rather than invent a
    syntax nobody typed. A stray `<kbd>` or `<small>` in a source string is an
    HTML tag, already out of scope, and stays literal text like any other one.
+
+   Exactly one HTML block is recognised: `<details>` with an optional
+   `<summary>`, as a `details` node (`takeDetails`). Its tags are construct
+   markers and are not in the visible text, like a quote's `>`; a `<details>`
+   with no closing tag, or with attributes, stays text. Every other tag is
+   literal text, there is no `v-html` and no sanitiser. One accepted
+   limitation: pairing reads fences and openers at 0-3 indent and lets only a
+   line indented 0-3 close, which is what keeps a nested list item's fence or
+   inner block from ending the outer one; it does not look inside a quote, so
+   a closing tag inside a fence that sits in a quote (a `> ` fence, then
+   `> </details>`) still closes the block.
    `del` has a real, common markdown spelling (`~~text~~`, GFM's own) and gets
    a node; `kbd` and `small` do not, and no branch below produces either.
 
@@ -58,6 +70,19 @@ import { classifyLink, splitPath } from './links.js'
    its hash, which is what a closing sequence is. */
 const HEADING = /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/
 const FENCE = /^ {0,3}(`{3,}|~{3,})\s*(\S*)\s*$/
+/* The one HTML block this module recognises. Lowercase, no attributes: a
+   `<details open>` line matches nothing here and stays text. */
+const DETAILS_OPEN = /^ {0,3}<details>(?:\s*<summary>(.*?)<\/summary>)?\s*$/
+const SUMMARY_LINE = /^\s*<summary>(.*?)<\/summary>\s*$/
+const DETAILS_CLOSE = /<\/details>\s*$/
+/* A line carrying its own opening tag is never a closing line, even when it
+   ends with `</details>`: `<details>x</details>` is text, not the end of
+   somebody's block. */
+const DETAILS_ANY_OPEN = /<details>/
+/* Only a line indented 0-3 can close a block at this level: anything inside a
+   nested list item sits at 4 or more, and a body is re-paired after its own
+   indent is stripped, so a deeper closer is never this level's. */
+const CLOSER_INDENT = /^ {0,3}\S/
 const RULE = /^ {0,3}([-*_])\s*(?:\1\s*){2,}$/
 const QUOTE = /^ {0,3}> ?(.*)$/
 const BULLET = /^(\s*)([-*+])(\s+)(.*)$/
@@ -139,6 +164,7 @@ export function parseMarkdown(text) {
 
 function parseBlocks(lines, depth = 0) {
   const nested = depth < MAX_BLOCK_DEPTH
+  const pairs = pairDetails(lines)
   const blocks = []
   let i = 0
   while (i < lines.length) {
@@ -179,6 +205,17 @@ function parseBlocks(lines, depth = 0) {
         children: parseInline(heading[2])
       })
       i++
+      continue
+    }
+
+    /* Ahead of the quote, the list, the table and the paragraph, on purpose:
+       an opener that has a closing line is a block wherever it turns up, and
+       the paragraph below would otherwise take it whole. An opener `pairs`
+       has no closer for falls through and is text. */
+    if (nested && pairs.has(i)) {
+      const [details, next] = takeDetails(lines, i, depth, pairs.get(i))
+      blocks.push(details)
+      i = next
       continue
     }
 
@@ -236,7 +273,7 @@ function parseBlocks(lines, depth = 0) {
         delimiterCells.length === headerCells.length &&
         delimiterCells.every((cell) => ALIGN_CELL.test(cell))
       ) {
-        const [table, next] = takeTable(lines, i, headerCells, delimiterCells)
+        const [table, next] = takeTable(lines, i, headerCells, delimiterCells, pairs)
         blocks.push(table)
         i = next
         continue
@@ -244,7 +281,7 @@ function parseBlocks(lines, depth = 0) {
     }
 
     if (DEFINITION.test(lines[i + 1] || '') && !DEFINITION.test(line)) {
-      const [dl, next] = takeDefinitionList(lines, i)
+      const [dl, next] = takeDefinitionList(lines, i, pairs)
       blocks.push(dl)
       i = next
       continue
@@ -255,7 +292,9 @@ function parseBlocks(lines, depth = 0) {
        here *is* a block starter — a quote marker drawn as text — and a loop that
        consulted `startsBlock` first would take nothing and never advance. */
     const body = [lines[i++]]
-    while (i < lines.length && lines[i].trim() && !startsBlock(lines[i])) body.push(lines[i++])
+    while (i < lines.length && lines[i].trim() && !startsBlock(lines, i, pairs)) {
+      body.push(lines[i++])
+    }
     blocks.push({ type: 'paragraph', children: parseInline(body.join('\n')) })
   }
   return blocks
@@ -269,16 +308,82 @@ function parseBlocks(lines, depth = 0) {
    turns up, not only when a blank line happens to precede it. Tables and
    definition lists are deliberately left out — see the table branch above for
    why a table needs a blank line ahead of it to be read as one. */
-function startsBlock(line) {
+function startsBlock(lines, i, pairs) {
+  const line = lines[i]
   return (
     FENCE.test(line) ||
     RULE.test(line) ||
     HEADING.test(line) ||
     IMAGE_LINE.test(line) ||
     QUOTE.test(line) ||
+    pairs.has(i) ||
     BULLET.test(line) ||
     ORDERED.test(line)
   )
+}
+
+/* Which `<details>` opener closes where: a map from the opener's line index to
+   its closing line's, built in one forward pass per `parseBlocks` call so that
+   neither the block branch nor `startsBlock` ever scans ahead — an unclosed
+   opener on every line would otherwise make each of them rescan to the end.
+   Fence contents are skipped (a code block may quote `</details>`), openers
+   are paired with the nearest closer by a stack so an inner block does not end
+   the outer one, and an opener left on the stack at the end has no entry: it
+   is usually a reply still streaming in, and stays text exactly as before. */
+function pairDetails(lines) {
+  const pairs = new Map()
+  const open = []
+  let fenceClose = null
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (fenceClose) {
+      if (fenceClose.test(line)) fenceClose = null
+      continue
+    }
+    const fence = FENCE.exec(line)
+    if (fence) {
+      const mark = fence[1][0] === '`' ? '`' : '~'
+      fenceClose = new RegExp(`^ {0,3}${mark}{${fence[1].length},}\\s*$`)
+    } else if (DETAILS_OPEN.test(line)) {
+      open.push(i)
+    } else if (
+      open.length &&
+      CLOSER_INDENT.test(line) &&
+      DETAILS_CLOSE.test(line) &&
+      !DETAILS_ANY_OPEN.test(line)
+    ) {
+      pairs.set(open.pop(), i)
+    }
+  }
+  return pairs
+}
+
+/* The `<details>` block from `start` to its closing line `close`, which
+   `pairDetails` found. A closing tag at the end of a prose line is cut off and
+   the rest of that line stays as the last body line. */
+function takeDetails(lines, start, depth, close) {
+  const open = DETAILS_OPEN.exec(lines[start])
+  const body = lines.slice(start + 1, close)
+  const rest = lines[close].replace(DETAILS_CLOSE, '').trimEnd()
+  if (rest.trim()) body.push(rest)
+
+  let summary = open[1] ?? null
+  if (summary === null) {
+    const at = body.findIndex((l) => l.trim())
+    const found = at >= 0 ? SUMMARY_LINE.exec(body[at]) : null
+    if (found) {
+      summary = found[1]
+      body.splice(at, 1)
+    }
+  }
+  return [
+    {
+      type: 'details',
+      summary: summary === null || !summary.trim() ? null : parseInline(summary),
+      blocks: parseBlocks(body, depth + 1)
+    },
+    close + 1
+  ]
 }
 
 function takeList(lines, start, depth = 0) {
@@ -410,10 +515,10 @@ function columnAlign(cell) {
    there is nothing there to lose; a column with nothing in the alignment
    row gets `null`, which is the same "no opinion" `columnAlign` already
    returns for a plain `---`. */
-function takeTable(lines, start, headerCells, delimiterCells) {
+function takeTable(lines, start, headerCells, delimiterCells, pairs) {
   const rows = []
   let i = start + 2
-  while (i < lines.length && lines[i].trim() && !startsBlock(lines[i])) {
+  while (i < lines.length && lines[i].trim() && !startsBlock(lines, i, pairs)) {
     rows.push(splitTableRow(lines[i]))
     i++
   }
@@ -434,13 +539,13 @@ function takeTable(lines, start, headerCells, delimiterCells) {
    into a definition list of its own — checked here, and not in `startsBlock`,
    because unlike a table or a list a lone `: ` line carries nothing that
    marks it as the *start* of anything; only the term above it does. */
-function takeDefinitionList(lines, start) {
+function takeDefinitionList(lines, start, pairs) {
   const dl = { type: 'dl', items: [] }
   let i = start
   while (
     i + 1 < lines.length &&
     lines[i].trim() &&
-    !startsBlock(lines[i]) &&
+    !startsBlock(lines, i, pairs) &&
     !DEFINITION.test(lines[i]) &&
     DEFINITION.test(lines[i + 1])
   ) {
