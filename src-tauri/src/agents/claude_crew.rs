@@ -677,8 +677,12 @@ fn usage_in(value: &Value, at: &str) -> u64 {
         .sum()
 }
 
-/// The documented hook record is the bridge between Claude's two unrelated
+/// The fallback source of the bridge between Claude's two unrelated
 /// identities: config/mailbox member `name` and child transcript `agentId`.
+/// The primary source is the `.meta.json` beside the transcript
+/// ([`subagent_meta_from_file`]), which needs no user hook; this hook record
+/// exists only where the user's settings install a `SubagentStart` hook, and
+/// still serves versions that wrote no `.meta.json`.
 /// The ids must never be compared directly. `None` is an explicit absence a
 /// runtime preflight can refuse, never an invitation to attach the first file.
 pub fn subagent_start_identity(line: &str) -> Option<(String, String)> {
@@ -687,6 +691,39 @@ pub fn subagent_start_identity(line: &str) -> Option<(String, String)> {
     let hook_name = find_hook_name(&value)?;
     let member = hook_name.strip_prefix("SubagentStart:")?.trim();
     (!member.is_empty()).then_some((internal, member.to_owned()))
+}
+
+/// Identity from the `agent-<internal>.meta.json` that Claude Code writes
+/// beside every child transcript, independent of any hook. `file_name` is the
+/// meta file's name and supplies `<internal>`; `name` is the member name in
+/// `config.json`. A file with no `name` (a Task-tool subagent) or with another
+/// team's `teamName` yields `None`, so it never acquires a node.
+pub fn subagent_meta_identity(
+    file_name: &str,
+    contents: &str,
+    team: &str,
+) -> Option<(String, String)> {
+    let internal = file_name
+        .strip_prefix("agent-")?
+        .strip_suffix(".meta.json")?;
+    if internal.is_empty() {
+        return None;
+    }
+    let value: Value = serde_json::from_str(contents).ok()?;
+    let name = value.get("name").and_then(Value::as_str)?.trim();
+    if name.is_empty() || value.get("teamName").and_then(Value::as_str)? != team {
+        return None;
+    }
+    Some((internal.to_owned(), name.to_owned()))
+}
+
+/// Reads the `.meta.json` next to a child transcript. A missing or unreadable
+/// file is an ordinary `None`: the caller falls back to the hook record.
+pub fn subagent_meta_from_file(transcript: &Path, team: &str) -> Option<(String, String)> {
+    let stem = transcript.file_stem()?.to_str()?;
+    let meta = transcript.with_file_name(format!("{stem}.meta.json"));
+    let contents = fs::read_to_string(&meta).ok()?;
+    subagent_meta_identity(meta.file_name()?.to_str()?, &contents, team)
 }
 
 pub fn subagent_start_from_file(path: &Path) -> std::io::Result<Option<(String, String)>> {
@@ -1685,6 +1722,42 @@ mod tests {
                 "fixture-worker".into()
             ))
         );
+    }
+
+    #[test]
+    fn meta_json_yields_internal_id_and_member_name() {
+        let meta = r#"{"agentType":"w","name":"kl17-backend","taskKind":"in_process_teammate","teamName":"session-6f22fd87"}"#;
+        assert_eq!(
+            subagent_meta_identity("agent-abc123.meta.json", meta, "session-6f22fd87"),
+            Some(("abc123".into(), "kl17-backend".into()))
+        );
+    }
+
+    #[test]
+    fn meta_json_without_a_name_or_for_another_team_yields_none() {
+        let task = r#"{"agentType":"Explore","description":"look"}"#;
+        assert_eq!(subagent_meta_identity("agent-a608.meta.json", task, "t"), None);
+        let other = r#"{"name":"w","teamName":"other"}"#;
+        assert_eq!(subagent_meta_identity("agent-a608.meta.json", other, "t"), None);
+        let bare = r#"{"name":"w"}"#;
+        assert_eq!(subagent_meta_identity("agent-a608.meta.json", bare, "t"), None);
+    }
+
+    #[test]
+    fn a_transcript_with_a_meta_json_and_no_hook_record_gets_an_identity() {
+        let dir = std::env::temp_dir().join(format!("smetana-meta-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("agent-xyz.jsonl");
+        fs::write(&transcript, "{\"type\":\"user\",\"isSidechain\":true}\n").unwrap();
+        assert_eq!(subagent_start_from_file(&transcript).unwrap(), None);
+        assert_eq!(subagent_meta_from_file(&transcript, "t"), None);
+        fs::write(dir.join("agent-xyz.meta.json"), r#"{"name":"w","teamName":"t"}"#).unwrap();
+        assert_eq!(
+            subagent_meta_from_file(&transcript, "t"),
+            Some(("xyz".into(), "w".into()))
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

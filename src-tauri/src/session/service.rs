@@ -1693,11 +1693,19 @@ fn refresh_claude_crews(
             let node = match transcript_nodes.get(&key).copied() {
                 Some(node) => Some(node),
                 None => {
-                    let provider = crate::agents::claude_crew::subagent_start_from_file(&path)
-                        .ok()
-                        .flatten()
+                    // The `.meta.json` beside the transcript is the primary
+                    // source and needs no user hook; the SubagentStart hook
+                    // record is the fallback for a file without one.
+                    let identity = crate::agents::claude_crew::team_name(&config)
+                        .and_then(|team| crate::agents::claude_crew::subagent_meta_from_file(&path, &team))
+                        .or_else(|| {
+                            crate::agents::claude_crew::subagent_start_from_file(&path)
+                                .ok()
+                                .flatten()
+                        });
+                    let provider = identity
                         .and_then(|(internal, name)| {
-                        // The hook maps a member name to a private internal
+                        // The identity maps a member name to a private internal
                         // transcript id. Confirm the path is for that exact
                         // id before it can acquire a Smetana node.
                         (crate::agents::claude_crew::transcript(&subagents, &internal) == path)
