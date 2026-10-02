@@ -36,10 +36,11 @@
    markers and are not in the visible text, like a quote's `>`; a `<details>`
    with no closing tag, or with attributes, stays text. Every other tag is
    literal text, there is no `v-html` and no sanitiser. One accepted
-   limitation: pairing sees fences and nested openers at any indent, so a list
-   item's fence or inner block cannot close the outer one, but it does not
-   look inside a quote, so a closing tag inside a fence that sits in a quote
-   (a `> ` fence, then `> </details>`) still closes the block.
+   limitation: pairing reads fences and openers at 0-3 indent and lets only a
+   line indented 0-3 close, which is what keeps a nested list item's fence or
+   inner block from ending the outer one; it does not look inside a quote, so
+   a closing tag inside a fence that sits in a quote (a `> ` fence, then
+   `> </details>`) still closes the block.
    `del` has a real, common markdown spelling (`~~text~~`, GFM's own) and gets
    a node; `kbd` and `small` do not, and no branch below produces either.
 
@@ -78,13 +79,10 @@ const DETAILS_CLOSE = /<\/details>\s*$/
    ends with `</details>`: `<details>x</details>` is text, not the end of
    somebody's block. */
 const DETAILS_ANY_OPEN = /<details>/
-/* The same two shapes at any indent, for `pairDetails` alone. A body is
-   re-paired after its own indent is stripped, so at the level that matters the
-   0-3 rule above still holds; at the level above, a fence or an inner block
-   inside a nested list item must still be seen, or its closing tag would end
-   the outer block and its text would be lost. */
-const FENCE_ANY = /^\s*(`{3,}|~{3,})\s*(\S*)\s*$/
-const DETAILS_OPEN_ANY = /^\s*<details>(?:\s*<summary>.*?<\/summary>)?\s*$/
+/* Only a line indented 0-3 can close a block at this level: anything inside a
+   nested list item sits at 4 or more, and a body is re-paired after its own
+   indent is stripped, so a deeper closer is never this level's. */
+const CLOSER_INDENT = /^ {0,3}\S/
 const RULE = /^ {0,3}([-*_])\s*(?:\1\s*){2,}$/
 const QUOTE = /^ {0,3}> ?(.*)$/
 const BULLET = /^(\s*)([-*+])(\s+)(.*)$/
@@ -342,18 +340,19 @@ function pairDetails(lines) {
       if (fenceClose.test(line)) fenceClose = null
       continue
     }
-    const fence = FENCE_ANY.exec(line)
+    const fence = FENCE.exec(line)
     if (fence) {
       const mark = fence[1][0] === '`' ? '`' : '~'
-      fenceClose = new RegExp(`^\\s*${mark}{${fence[1].length},}\\s*$`)
-    } else if (DETAILS_OPEN_ANY.test(line)) {
-      /* Deeper openers take part in the pairing so their closers are used up,
-         but only a 0-3 indent opener gets an entry: that is the one this
-         level may draw as a block. */
-      open.push(DETAILS_OPEN.test(line) ? i : -1)
-    } else if (open.length && DETAILS_CLOSE.test(line) && !DETAILS_ANY_OPEN.test(line)) {
-      const opener = open.pop()
-      if (opener >= 0) pairs.set(opener, i)
+      fenceClose = new RegExp(`^ {0,3}${mark}{${fence[1].length},}\\s*$`)
+    } else if (DETAILS_OPEN.test(line)) {
+      open.push(i)
+    } else if (
+      open.length &&
+      CLOSER_INDENT.test(line) &&
+      DETAILS_CLOSE.test(line) &&
+      !DETAILS_ANY_OPEN.test(line)
+    ) {
+      pairs.set(open.pop(), i)
     }
   }
   return pairs

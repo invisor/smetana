@@ -902,6 +902,29 @@ describe('parseMarkdown details', () => {
     ])
   })
 
+  it('does not take a four-space fence line as closing a fence', () => {
+    const [block, ...more] = parseMarkdown('<details>\n```\n    ```\n</details>\n```\n</details>')
+    expect(more).toEqual([])
+    expect(block.blocks).toEqual([{ type: 'code', lang: null, text: '    ```\n</details>' }])
+  })
+
+  it('does not take a four-space fence line as opening one', () => {
+    const [block, ...more] = parseMarkdown('<details>\n    ```\n```\n</details>\n```\n</details>')
+    expect(more).toEqual([])
+    expect(block.blocks).toEqual([
+      para('    ```'),
+      { type: 'code', lang: null, text: '</details>' }
+    ])
+  })
+
+  it('treats an indented opener as body text, directly or past a list item', () => {
+    for (const source of ['<details>\ntext\n    <details>\n</details>', '<details>\n- item\n    <details>\n</details>']) {
+      const [block, ...more] = parseMarkdown(source)
+      expect(more).toEqual([])
+      expect(block.type).toBe('details')
+    }
+  })
+
   it('does not let a fence in a nested list item close the outer block', () => {
     const source = '<details>\n- a\n  - b\n    ```\n    </details>\n    ```\n</details>'
     const [outer, ...more] = parseMarkdown(source)
