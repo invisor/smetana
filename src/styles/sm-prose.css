@@ -783,6 +783,42 @@
 }
 
 
+/* A disclosure the author wrote (`<details>` in markdown). Same marker and
+   hover as Reasoning above, but nothing is muted: size and colour inherit,
+   because this is content somebody chose to fold, not the agent thinking. */
+.sm-prose details[data-disclosure] > summary{
+  display:flex;
+  align-items:center;
+  gap:var(--space-3);
+  min-height:var(--row-h);
+  list-style:none;
+  cursor:default;
+  user-select:none;
+}
+.sm-prose details[data-disclosure] > summary::-webkit-details-marker{ display:none }
+.sm-prose details[data-disclosure] > summary:hover{ color:var(--text-primary) }
+.sm-prose details[data-disclosure] > summary:focus-visible{
+  outline:var(--border-w-strong) solid var(--focus-ring);
+  outline-offset:var(--space-1);
+  border-radius:var(--radius-2);
+}
+.sm-prose details[data-disclosure] > summary::before{
+  content:"";
+  flex:none;
+  width:var(--prose-chevron);
+  height:var(--prose-chevron);
+  margin-left:var(--space-1);
+  border-right:var(--border-w-strong) solid currentColor;
+  border-bottom:var(--border-w-strong) solid currentColor;
+  transform:rotate(-45deg);
+  transition:transform var(--dur-fast) var(--ease-out);
+}
+.sm-prose details[data-disclosure][open] > summary::before{ transform:rotate(45deg) }
+.sm-prose details[data-disclosure][open] > :where(p,ul,ol,pre,figure){
+  margin-top:var(--space-4);
+}
+
+
 /* 12 · ILLUSTRATIONS =======================================================
    Two accepted forms, and the difference between them is the answer to the
    dark-theme failure case:

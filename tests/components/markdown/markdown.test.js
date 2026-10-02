@@ -597,6 +597,7 @@ describe('the invariant', () => {
         if (b.type === 'rule') return ''
         if (b.type === 'image') return b.alt
         if (b.type === 'quote') return visible(b.blocks)
+        if (b.type === 'details') return `${b.summary ? flatten(b.summary) : ''} ${visible(b.blocks)}`
         if (b.type === 'list') return b.items.map((i) => visible(i.blocks)).join(' ')
         if (b.type === 'table') return [...b.head, ...b.rows.flat()].map(flatten).join(' ')
         if (b.type === 'dl') {
@@ -690,6 +691,34 @@ describe('the invariant', () => {
     for (const word of words(SOURCE)) expect(shown).toContain(word)
   })
 
+  /* The tags are construct markers, like a quote's `>`, so they are taken out
+     of the source before comparing; every other word of summary and body must
+     still be on screen. */
+  it('shows every word of a details block, summary and body', () => {
+    const source = [
+      '<details> <summary>Full prompt text</summary>',
+      '',
+      '```sh',
+      'echo </details>',
+      '```',
+      'Full text lies in /tmp/worker-prompt.log. </details>'
+    ].join('\n')
+    const shown = visible(parseMarkdown(source))
+    const bare = source.replace(/<\/?(details|summary)>/g, ' ')
+    for (const word of words(bare)) expect(shown).toContain(word)
+  })
+
+  it('leaves any other HTML tag as literal text', () => {
+    for (const line of ['a<br>b', 'press <kbd>Ctrl</kbd>', '<details open>', 'x <sub>2</sub>']) {
+      expect(parseMarkdown(line)).toEqual([
+        { type: 'paragraph', children: [{ type: 'text', value: line }] }
+      ])
+    }
+    expect(parseMarkdown('<details open>\nbody\n</details>').map((b) => b.type)).toEqual([
+      'paragraph'
+    ])
+  })
+
   it('shows every word of what it does not understand', () => {
     const shown = visible(parseMarkdown(UNSUPPORTED))
     for (const word of words(UNSUPPORTED)) expect(shown).toContain(word)
@@ -769,5 +798,60 @@ describe('input written by a machine', () => {
     /* And the invariant under the clamp: every item is still on screen, the
        ones past it as the characters they are. */
     expect(shown(tree).split('x').length - 1).toBe(items)
+  })
+})
+
+describe('parseMarkdown details', () => {
+  const text = (value) => [{ type: 'text', value }]
+  const para = (value) => ({ type: 'paragraph', children: text(value) })
+
+  it('reads a details block with a summary on its own line', () => {
+    expect(parseMarkdown('<details>\n<summary>Заголовок</summary>\n\nабзац\n</details>')).toEqual([
+      { type: 'details', summary: text('Заголовок'), blocks: [para('абзац')] }
+    ])
+  })
+
+  it('reads a summary on the opening line the same way', () => {
+    expect(parseMarkdown('<details> <summary>x</summary>\nbody\n</details>')).toEqual([
+      { type: 'details', summary: text('x'), blocks: [para('body')] }
+    ])
+  })
+
+  it('gives a null summary when there is none', () => {
+    expect(parseMarkdown('<details>\nbody\n</details>')).toEqual([
+      { type: 'details', summary: null, blocks: [para('body')] }
+    ])
+  })
+
+  it('keeps a fence in the body, and a closing tag inside it does not close the block', () => {
+    const [block] = parseMarkdown('<details>\n```\n</details>\nmore\n```\ntail\n</details>')
+    expect(block.type).toBe('details')
+    expect(block.blocks).toEqual([{ type: 'code', lang: null, text: '</details>\nmore' }, para('tail')])
+  })
+
+  it('closes on a closing tag at the end of a prose line and keeps the rest of the line', () => {
+    expect(parseMarkdown('<details>\nintro\n\nХвост фразы. </details>')).toEqual([
+      { type: 'details', summary: null, blocks: [para('intro'), para('Хвост фразы.')] }
+    ])
+  })
+
+  it('leaves an unclosed block as the paragraphs it was before', () => {
+    expect(parseMarkdown('<details>\n<summary>x</summary>\n\ntext')).toEqual([
+      para('<details>\n<summary>x</summary>'),
+      para('text')
+    ])
+  })
+
+  it('starts a block right under a prose line', () => {
+    expect(parseMarkdown('prose\n<details>\nbody\n</details>').map((b) => b.type)).toEqual([
+      'paragraph',
+      'details'
+    ])
+  })
+
+  it('nests one block in another', () => {
+    const [outer] = parseMarkdown('<details>\n<details>\ninner\n</details>\nafter\n</details>')
+    expect(outer.blocks.map((b) => b.type)).toEqual(['details', 'paragraph'])
+    expect(outer.blocks[0].blocks).toEqual([para('inner')])
   })
 })

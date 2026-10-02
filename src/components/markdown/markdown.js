@@ -7,8 +7,8 @@
 
    The invariant every branch below is written to keep: **no character of the
    source disappears.** Anything unrecognised — an unclosed fence, a stray
-   asterisk, a malformed table, a reference link, an HTML tag — comes back as
-   ordinary text, so the worst outcome for an unsupported construct is the
+   asterisk, a malformed table, a reference link, an HTML tag (all but one,
+   below) — comes back as ordinary text, so the worst outcome for an unsupported construct is the
    panel as it looked before this module existed. That is what makes it safe
    to put between a person and the only copy of a task's description, and it
    does not soften for a *recognised* construct's own content — only for the
@@ -29,6 +29,12 @@
    and the honest answer is to leave them unreached rather than invent a
    syntax nobody typed. A stray `<kbd>` or `<small>` in a source string is an
    HTML tag, already out of scope, and stays literal text like any other one.
+
+   Exactly one HTML block is recognised: `<details>` with an optional
+   `<summary>`, as a `details` node (`takeDetails`). Its tags are construct
+   markers and are not in the visible text, like a quote's `>`; a `<details>`
+   with no closing tag, or with attributes, stays text. Every other tag is
+   literal text, there is no `v-html` and no sanitiser.
    `del` has a real, common markdown spelling (`~~text~~`, GFM's own) and gets
    a node; `kbd` and `small` do not, and no branch below produces either.
 
@@ -58,6 +64,11 @@ import { classifyLink, splitPath } from './links.js'
    its hash, which is what a closing sequence is. */
 const HEADING = /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/
 const FENCE = /^ {0,3}(`{3,}|~{3,})\s*(\S*)\s*$/
+/* The one HTML block this module recognises. Lowercase, no attributes: a
+   `<details open>` line matches nothing here and stays text. */
+const DETAILS_OPEN = /^ {0,3}<details>(?:\s*<summary>(.*?)<\/summary>)?\s*$/
+const SUMMARY_LINE = /^\s*<summary>(.*?)<\/summary>\s*$/
+const DETAILS_CLOSE = /<\/details>\s*$/
 const RULE = /^ {0,3}([-*_])\s*(?:\1\s*){2,}$/
 const QUOTE = /^ {0,3}> ?(.*)$/
 const BULLET = /^(\s*)([-*+])(\s+)(.*)$/
@@ -190,6 +201,17 @@ function parseBlocks(lines, depth = 0) {
        blocks). Checking image/table/dl first here would instead try to read
        `> | a | b |` as a table row with the quote marker baked into its first
        cell. */
+    /* Before the table and the paragraph, in that order on purpose: a
+       `<details>` line has no pipe in it, but the paragraph below would take
+       it whole. Quote and list are above because their marker is checked first
+       on every line anyway. */
+    const details = nested && DETAILS_OPEN.test(line) ? takeDetails(lines, i, depth) : null
+    if (details) {
+      blocks.push(details[0])
+      i = details[1]
+      continue
+    }
+
     if (QUOTE.test(line) && nested) {
       const body = []
       while (i < lines.length && QUOTE.test(lines[i])) body.push(QUOTE.exec(lines[i++])[1])
@@ -276,9 +298,70 @@ function startsBlock(line) {
     HEADING.test(line) ||
     IMAGE_LINE.test(line) ||
     QUOTE.test(line) ||
+    DETAILS_OPEN.test(line) ||
     BULLET.test(line) ||
     ORDERED.test(line)
   )
+}
+
+/* A `<details>` block, or null when there is no closing line — an unclosed one
+   is usually a reply still streaming in, and everything stays text exactly as
+   before. The closing tag is searched outside fences (a code block may quote
+   `</details>`) and with nesting counted, so an inner block does not end the
+   outer one. A closing tag at the end of a prose line is cut off and the rest
+   of that line stays as the last body line. */
+function takeDetails(lines, start, depth) {
+  const open = DETAILS_OPEN.exec(lines[start])
+  const body = []
+  let fenceClose = null
+  let level = 1
+  let i = start + 1
+  let closed = false
+  for (; i < lines.length; i++) {
+    const line = lines[i]
+    if (fenceClose) {
+      if (fenceClose.test(line)) fenceClose = null
+      body.push(line)
+      continue
+    }
+    const fence = FENCE.exec(line)
+    if (fence) {
+      fenceClose = new RegExp(`^ {0,3}${fence[1][0] === '`' ? '`' : '~'}{${fence[1].length},}\\s*$`)
+      body.push(line)
+      continue
+    }
+    if (DETAILS_OPEN.test(line)) level++
+    if (DETAILS_CLOSE.test(line)) {
+      level--
+      if (level === 0) {
+        const rest = line.replace(DETAILS_CLOSE, '').trimEnd()
+        if (rest.trim()) body.push(rest)
+        closed = true
+        i++
+        break
+      }
+    }
+    body.push(line)
+  }
+  if (!closed) return null
+
+  let summary = open[1] ?? null
+  if (summary === null) {
+    const at = body.findIndex((l) => l.trim())
+    const found = at >= 0 ? SUMMARY_LINE.exec(body[at]) : null
+    if (found) {
+      summary = found[1]
+      body.splice(at, 1)
+    }
+  }
+  return [
+    {
+      type: 'details',
+      summary: summary === null ? null : parseInline(summary),
+      blocks: parseBlocks(body, depth + 1)
+    },
+    i
+  ]
 }
 
 function takeList(lines, start, depth = 0) {
