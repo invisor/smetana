@@ -44,7 +44,7 @@ use super::driver;
 use super::journal::BUDGET;
 use super::model::EventKind;
 use crate::agents::claude_driver::one_event;
-use crate::sessions::model::{human_text, Record};
+use crate::sessions::model::{human_text, message_text, Record};
 
 /// One event of history, and the moment the transcript says it happened.
 ///
@@ -61,11 +61,60 @@ pub type Past = (EventKind, String);
 /// clock rather than an empty string, so that every event in a journal has a
 /// time on it.
 pub fn events_of(line: &str, at: &str) -> Vec<Past> {
-    let Ok(value) = serde_json::from_str::<Value>(line) else { return Vec::new() };
-    events_of_value(&value, at)
+    events_in(Scope::Conversation, line, at)
 }
 
-fn events_of_value(value: &Value, at: &str) -> Vec<Past> {
+/// Whose file a record was read from, which decides what a `isSidechain` flag
+/// means.
+///
+/// In a session's own transcript a sidechain record is a subagent's turn
+/// reported inline, and drawing it would put every subagent's work into the
+/// conversation. In a teammate's or subagent's *own* transcript every record
+/// carries that flag, because the whole file is the sidechain, and it is the
+/// only thing there is to draw.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Scope {
+    /// A lead's or an ordinary session's transcript: sidechain records are
+    /// dropped.
+    #[default]
+    Conversation,
+    /// A Crew teammate's own transcript: sidechain is the norm, and the
+    /// lead's `<teammate-message>` envelopes are the words addressed to it.
+    Child,
+}
+
+/// [`events_of`] for a record read from a file of the given [`Scope`].
+pub fn events_in(scope: Scope, line: &str, at: &str) -> Vec<Past> {
+    let Ok(value) = serde_json::from_str::<Value>(line) else { return Vec::new() };
+    events_of_value(scope, &value, at)
+}
+
+/// The words the team lead addressed to this teammate, envelope removed, or
+/// `None` when the text carries no such envelope. Several envelopes in one
+/// record are joined by a blank line.
+fn lead_words(raw: &str) -> Option<String> {
+    const OPEN: &str = "<teammate-message ";
+    const CLOSE: &str = "</teammate-message>";
+    let mut words: Vec<&str> = Vec::new();
+    let mut rest = raw;
+    while let Some(start) = rest.find(OPEN) {
+        let after = &rest[start..];
+        let Some(tag_end) = after.find('>') else { break };
+        let from_lead = after[..tag_end].contains("teammate_id=\"team-lead\"");
+        let body = &after[tag_end + 1..];
+        let (inner, next) = match body.find(CLOSE) {
+            Some(end) => (&body[..end], &body[end + CLOSE.len()..]),
+            None => (body, ""),
+        };
+        if from_lead && !inner.trim().is_empty() {
+            words.push(inner.trim());
+        }
+        rest = next;
+    }
+    (!words.is_empty()).then(|| words.join("\n\n"))
+}
+
+fn events_of_value(scope: Scope, value: &Value, at: &str) -> Vec<Past> {
     // Every field is optional, so this fails only for a line that is not an
     // object at all — an array, a bare number — and such a line has no record
     // in it for either half below to read.
@@ -74,11 +123,27 @@ fn events_of_value(value: &Value, at: &str) -> Vec<Past> {
     // `human_text` refuses one already; the assistant half would not, and a
     // panel replaying every subagent's text inline would be a conversation
     // nobody had.
-    if record.is_sidechain == Some(true) {
+    if scope == Scope::Conversation && record.is_sidechain == Some(true) {
         return Vec::new();
     }
     let at = record.timestamp.clone().unwrap_or_else(|| at.to_owned());
     let mut kinds: Vec<EventKind> = Vec::new();
+    if scope == Scope::Child {
+        // The lead's words to this teammate: the brief, review notes, a stop.
+        // `human_text` refuses them twice over (a sidechain, a teammate
+        // envelope), which is right in the lead's journal and wrong here.
+        if record.is_user() && record.is_meta != Some(true) {
+            let raw = record
+                .message
+                .as_ref()
+                .and_then(|message| message.content.as_ref())
+                .map(message_text)
+                .unwrap_or_default();
+            if let Some(text) = lead_words(&raw) {
+                kinds.push(EventKind::UserMessage { text, attachments: Vec::new() });
+            }
+        }
+    }
     // The person's own words, which the live stream never carries: the worker
     // journals a turn when it sends one, so the driver has never had to know
     // what one looks like coming back.
@@ -350,5 +415,41 @@ mod tests {
         std::fs::write(&path, format!("{}\n", TRANSCRIPT.join("\n"))).expect("write the fixture");
         assert_eq!(read_file(&path, AT).expect("read it back"), replay());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const SIDECHAIN_TEXT: &str = r#"{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"Reading the schema."}]}}"#;
+    const LEAD_MESSAGE: &str = r#"{"type":"user","isSidechain":true,"message":{"role":"user","content":"<teammate-message teammate_id=\"team-lead\" summary=\"brief\">Implement the backend slice.</teammate-message>"}}"#;
+
+    fn child_kinds(line: &str) -> Vec<EventKind> {
+        events_in(Scope::Child, line, AT).into_iter().map(|(kind, _)| kind).collect()
+    }
+
+    #[test]
+    fn a_sidechain_record_is_dropped_in_the_lead_scope_and_read_in_the_child_scope() {
+        assert!(kinds(SIDECHAIN_TEXT).is_empty());
+        assert_eq!(child_kinds(SIDECHAIN_TEXT), vec![EventKind::Text { text: "Reading the schema.".into() }]);
+    }
+
+    #[test]
+    fn the_leads_envelope_is_a_person_turn_to_the_child_and_nothing_to_the_lead() {
+        assert!(kinds(LEAD_MESSAGE).is_empty());
+        assert_eq!(
+            child_kinds(LEAD_MESSAGE),
+            vec![EventKind::UserMessage {
+                text: "Implement the backend slice.".into(),
+                attachments: Vec::new()
+            }]
+        );
+    }
+
+    #[test]
+    fn another_sender_envelope_and_a_tool_result_are_handled_in_the_child_scope() {
+        let peer = r#"{"type":"user","isSidechain":true,"message":{"role":"user","content":"<teammate-message teammate_id=\"other\">hi</teammate-message>"}}"#;
+        assert!(child_kinds(peer).is_empty());
+        let result = r#"{"type":"user","isSidechain":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"one\ntwo"}]}}"#;
+        assert_eq!(
+            child_kinds(result),
+            vec![EventKind::ToolResult { id: "t1".into(), ok: true, summary: "2 lines".into() }]
+        );
     }
 }

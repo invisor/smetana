@@ -18,6 +18,10 @@ pub struct ProviderNode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderState {
+    /// The provider's own record does not say. Never a public state: the tree
+    /// keeps what it already knows of a node and shows `Starting` only for one
+    /// it sees for the first time.
+    Unknown,
     Starting,
     Running,
     Waiting,
