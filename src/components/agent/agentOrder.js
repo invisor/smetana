@@ -102,8 +102,8 @@ export function newestFirst(rows) {
    on. That is the whole reason the two lists are separate fields rather than
    one: a drag rewrites the order and leaves the pins alone, pinning rewrites
    the pins and leaves the order alone, and an unpinned row therefore drops back
-   into the place the order still remembers for it instead of landing at the
-   top.
+   into the place the order still remembers for it instead of being treated as a
+   row the order has never seen.
 
    The base sort is applied every time, so there is no "hand back the same
    array" shortcut any more: the caller that needs to tell a drag that changed

@@ -79,13 +79,6 @@ describe('a driven conversation among the agents', () => {
   describe('what such a row offers', () => {
     const row = drivenAgentRow({ id: 3, state: 'needs-you', elapsed: '4m' })
 
-    /* **The exception rather than the rule**, and the test below is the rule: a
-       driven session is recorded under a conversation id like any other, and
-       two cases still carry none — a session's first frame, before the id has
-       come back from the worker, and a fork for good, whose new transcript
-       Claude Code names itself. `row` is built with none, so this is what
-       either of those offers: a pin refused with nothing to remember it by,
-       which is true of them. */
     it('carries startedAt as a number, and null when it is unknown', () => {
       expect(drivenAgentRow({ id: 3, state: 'running', elapsed: '1m', startedAt: 1_700_000_000_000 }).startedAt).toBe(
         1_700_000_000_000
@@ -93,6 +86,13 @@ describe('a driven conversation among the agents', () => {
       expect(row.startedAt).toBeNull()
     })
 
+    /* **The exception rather than the rule**, and the test below is the rule: a
+       driven session is recorded under a conversation id like any other, and
+       two cases still carry none — a session's first frame, before the id has
+       come back from the worker, and a fork for good, whose new transcript
+       Claude Code names itself. `row` is built with none, so this is what
+       either of those offers: a pin refused with nothing to remember it by,
+       which is true of them. */
     it('carries no conversation id, which is what Pin refuses on', () => {
       expect(row.conversation).toBe(null)
     })

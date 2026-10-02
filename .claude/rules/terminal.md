@@ -1136,7 +1136,7 @@ Two fields of `ProjectState` keep it, `agent_order` and `pinned_agents`, beside 
 `tab_order` and per project for their reason. **Two and not one**, because they are rewritten by
 different gestures: a drag rewrites the order and leaves the pins alone, pinning rewrites the pins and
 leaves the order alone — which is what lets an unpinned row drop back into the place the order still
-remembers for it instead of landing at the top. Both are listed in the front end's `project` defaults
+remembers for it instead of being treated as a row the order has never seen. Both are listed in the front end's `project` defaults
 (`src/stores/settings.js`) as well, and that is not decoration: `applySection` is
 `Object.assign(target, defaults, stored)`, so a key missing there is a key the defaults layer cannot
 clear, and one project's pinned agents would still be sitting at the top of the panel after somebody
