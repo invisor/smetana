@@ -94,6 +94,117 @@ pub fn stage_brief(project: &Path, session: &str, brief: &str) -> std::io::Resul
     ))
 }
 
+/// The longest message typed into the lead's composer as it is. Above this,
+/// or with any `\n` in it, the message goes through a file instead.
+///
+/// The TUI's exact rule for taking a burst of input for a paste is not known.
+/// What is measured (2.1.283): short single-line messages and the brief's
+/// ~120-byte pointer line arrive as typed text, while a 1.9 KB message and a
+/// 3.3 KB brief arrive wrapped in `<pasted_content>`. 1024 bytes is the tty
+/// input queue (macOS TTYHOG), past which the head of a burst is lost
+/// outright. 200 sits far below both, so a message this short is never in
+/// doubt.
+pub const MAX_TYPED_MESSAGE_BYTES: usize = 200;
+
+/// How a person's message to the Claude Crew lead reaches its composer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    /// Written to the PTY as it is.
+    Typed,
+    /// Put in a file; the PTY gets one pointer line (`stage_message`).
+    Staged,
+}
+
+/// `Typed` only for a message with no line break that is no longer than
+/// [`MAX_TYPED_MESSAGE_BYTES`]; everything else is `Staged`.
+pub fn message_delivery(text: &str) -> Delivery {
+    if text.contains('\n') || text.len() > MAX_TYPED_MESSAGE_BYTES {
+        Delivery::Staged
+    } else {
+        Delivery::Typed
+    }
+}
+
+/// Put a person's message in `<project>/.smetana/crew/<session>-message-<n>.md`
+/// and answer the one line typed to the lead instead of it. `n` counts from 1
+/// per session and is the first number whose file does not exist yet, so two
+/// messages never overwrite each other and the brief's `<session>.md` is never
+/// touched. Files stay after the run, like the brief's.
+///
+/// The wording differs from `stage_brief`'s on purpose: the lead must not take
+/// a message for a new Run brief to carry out.
+pub fn stage_message(project: &Path, session: &str, text: &str) -> std::io::Result<String> {
+    let dir = project.join(".smetana").join("crew");
+    fs::create_dir_all(&dir)?;
+    let mut n = 1u64;
+    let path = loop {
+        let path = dir.join(format!("{session}-message-{n}.md"));
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                file.write_all(text.as_bytes())?;
+                break path;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(error) => return Err(error),
+        }
+    };
+    Ok(format!(
+        "My message to you is in {}. Read the whole file; it is what I am saying to you now.",
+        path.display()
+    ))
+}
+
+/// The text of the first record past byte `from` of the lead's transcript that
+/// a person (here: Smetana, the only writer to that PTY) could have sent: a
+/// `user` record that is not a sidechain, meta or teammate record, whose
+/// `origin.kind` is `human` or absent, or a `queued_command`. The bootstrap
+/// prompt, which Smetana also types, is skipped, since an admission-time brief
+/// is read from byte 0.
+///
+/// This is the safety valve for the Enter retry: when the text sent was
+/// changed on its way (wrapped, cut), `brief_in_transcript` never matches, and
+/// without this the retry would write `\r` for ever.
+pub fn human_record_after(transcript: &Path, from: u64) -> Option<String> {
+    let mut file = fs::File::open(transcript).ok()?;
+    file.seek(SeekFrom::Start(from)).ok()?;
+    let bootstrap = BOOTSTRAP_PROMPT.trim();
+    BufReader::new(file).lines().map_while(Result::ok).find_map(|line| {
+        let record: Value = serde_json::from_str(&line).ok()?;
+        let text = match record.get("type").and_then(Value::as_str)? {
+            "user" => {
+                if record.get("isSidechain").and_then(Value::as_bool) == Some(true)
+                    || record.get("isMeta").and_then(Value::as_bool) == Some(true)
+                {
+                    return None;
+                }
+                if let Some(kind) = record.pointer("/origin/kind").and_then(Value::as_str) {
+                    if kind != "human" {
+                        return None;
+                    }
+                }
+                match record.pointer("/message/content")? {
+                    Value::String(text) => text.clone(),
+                    Value::Array(parts) => parts
+                        .iter()
+                        .filter_map(|part| part.get("text").and_then(Value::as_str))
+                        .collect::<String>(),
+                    _ => return None,
+                }
+            }
+            "attachment"
+                if record.pointer("/attachment/type").and_then(Value::as_str)
+                    == Some("queued_command") =>
+            {
+                record.pointer("/attachment/prompt").and_then(Value::as_str)?.to_owned()
+            }
+            _ => return None,
+        };
+        let trimmed = text.trim();
+        (!trimmed.is_empty() && !trimmed.contains("<teammate-message ") && trimmed != bootstrap)
+            .then(|| text)
+    })
+}
+
 /// Whether the Run brief has actually been submitted to the lead, read from
 /// the lead's own transcript. What admission types is `stage_brief`'s line,
 /// written without a terminator for the same reason `bootstrap_input` is — a
@@ -996,6 +1107,67 @@ mod tests {
         assert!(!line.contains('\n') && !line.contains('\r'), "one line, no terminator: {line}");
         assert!(line.len() < 300, "short enough not to be taken for a paste: {}", line.len());
         let _ = fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn message_delivery_types_only_short_single_line_text() {
+        assert_eq!(message_delivery("\u{41f}\u{440}\u{43e}\u{432}\u{435}\u{440}\u{44f}\u{439}"), Delivery::Typed);
+        assert_eq!(message_delivery(&"a".repeat(MAX_TYPED_MESSAGE_BYTES)), Delivery::Typed);
+        assert_eq!(MAX_TYPED_MESSAGE_BYTES, 200);
+        assert_eq!(message_delivery(&"a".repeat(201)), Delivery::Staged);
+        assert_eq!(message_delivery("a\nb"), Delivery::Staged);
+    }
+
+    #[test]
+    fn stage_message_numbers_files_and_leaves_the_brief_alone() {
+        let project = std::env::temp_dir().join(format!("smetana-stage-message-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&project);
+        let brief_line = stage_brief(&project, "lead", "THE BRIEF").unwrap();
+        let first = "first\nmessage ".repeat(100);
+        let second = "second";
+
+        let line_one = stage_message(&project, "lead", &first).unwrap();
+        let line_two = stage_message(&project, "lead", second).unwrap();
+
+        let dir = project.join(".smetana").join("crew");
+        assert_eq!(fs::read_to_string(dir.join("lead-message-1.md")).unwrap(), first);
+        assert_eq!(fs::read_to_string(dir.join("lead-message-2.md")).unwrap(), second);
+        assert_eq!(fs::read_to_string(dir.join("lead.md")).unwrap(), "THE BRIEF");
+        assert!(line_one.contains("lead-message-1.md") && line_two.contains("lead-message-2.md"));
+        assert!(!line_one.contains("first") && !line_one.contains('\n') && !line_one.contains('\r'), "{line_one}");
+        assert!(line_one.len() < MAX_TYPED_MESSAGE_BYTES + 100, "the pointer is short: {}", line_one.len());
+        assert!(!line_one.starts_with("Your instructions"), "not worded as a brief: {line_one}");
+        assert_ne!(
+            line_one.split(" is in ").next(),
+            brief_line.split(" are in ").next(),
+            "the opening words differ from the brief's"
+        );
+        assert!(!brief_line.contains("My message to you"), "{brief_line}");
+        let _ = fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn human_record_after_sees_a_mismatched_record_but_not_noise() {
+        let dir = std::env::temp_dir().join(format!("smetana-human-after-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lead.jsonl");
+        let bootstrap = serde_json::json!({"type": "user", "message": {"role": "user", "content": BOOTSTRAP_PROMPT}});
+        let tool_result = serde_json::json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "x"}]}});
+        let teammate = serde_json::json!({"type": "user", "message": {"role": "user", "content": "<teammate-message teammate_id=\"a\">hi</teammate-message>"}});
+        let task = serde_json::json!({"type": "user", "origin": {"kind": "task-notification"}, "message": {"role": "user", "content": "done"}});
+        fs::write(&path, format!("{bootstrap}\n{tool_result}\n{teammate}\n{task}\n")).unwrap();
+        assert_eq!(human_record_after(&path, 0), None);
+
+        let wrapped = serde_json::json!({"type": "user", "origin": {"kind": "human"}, "message": {"role": "user", "content": "<pasted_content id=\"1\">x</pasted_content id=\"1\">"}});
+        fs::write(&path, format!("{bootstrap}\n{tool_result}\n{wrapped}\n")).unwrap();
+        assert!(human_record_after(&path, 0).unwrap().starts_with("<pasted_content"));
+        let all = fs::metadata(&path).unwrap().len();
+        assert_eq!(human_record_after(&path, all), None, "nothing past the end");
+
+        let queued = serde_json::json!({"type": "attachment", "attachment": {"type": "queued_command", "prompt": "other"}});
+        fs::write(&path, format!("{queued}\n")).unwrap();
+        assert_eq!(human_record_after(&path, 0).as_deref(), Some("other"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
