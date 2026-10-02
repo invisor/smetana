@@ -1082,6 +1082,32 @@ mod tests {
     }
 
     #[test]
+    fn a_wait_for_an_agent_between_two_batches_does_not_make_the_board_look_stuck() {
+        // Batch one started from `first` and closed `a`; the loop decides to run
+        // batch two, then waits for an agent. The baseline is still `first`
+        // (it moves only when a batch starts), so the unchanged board after the
+        // wait is progress against it.
+        let first = snap(&["a", "b"], &[]);
+        let after_batch_one = snap(&["b", "c"], &[]);
+        let before_wait =
+            next_action(&after_batch_one, Some(&first), 1, 20, LastBatch::Completed, false);
+        assert_eq!(before_wait, Action::Run(RunReason::ReadyWork));
+        let after_wait =
+            next_action(&after_batch_one, Some(&first), 2, 20, LastBatch::Completed, false);
+        assert_eq!(after_wait, Action::Run(RunReason::ReadyWork));
+        // The old behaviour, for contrast: the baseline advanced before the wait.
+        assert_eq!(
+            next_action(&after_batch_one, Some(&after_batch_one), 2, 20, LastBatch::Completed, false),
+            Action::Stop(StopReason::NoProgress)
+        );
+        // A queue emptied during the wait still ends the run as empty.
+        assert_eq!(
+            next_action(&snap(&[], &[]), Some(&first), 2, 20, LastBatch::Completed, false),
+            Action::Stop(StopReason::QueueEmpty)
+        );
+    }
+
+    #[test]
     fn the_iteration_cap_is_a_backstop() {
         assert_eq!(
             next_action(&snap(&["a"], &[]), None, 20, 20, LastBatch::Completed, false),
