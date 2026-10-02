@@ -136,7 +136,7 @@
     <h3>The three commands</h3>
     <figure data-code data-lang="bash">
       <figcaption>bash</figcaption>
-      <button type="button" data-copy data-state="idle" aria-label="Copy code"><svg data-icon="copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="14" height="14" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg><svg data-icon="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg><span>Copy</span></button>
+      <button type="button" data-copy data-state="idle" aria-label="Copy code"><svg data-icon="copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="14" height="14" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg><span>Copy</span></button>
       <pre><code>xcrun notarytool submit target/release/bundle/macos/Smetana.app.zip --keychain-profile "AC_PASSWORD" --wait --timeout 30m
 xcrun stapler staple target/release/bundle/macos/Smetana.app
 codesign -dv --verbose=2 target/release/bundle/macos/Smetana.app</code></pre>
@@ -168,7 +168,7 @@ codesign -dv --verbose=2 target/release/bundle/macos/Smetana.app</code></pre>
     <h6>Version pin</h6>
     <figure data-code data-lang="rust">
       <figcaption>rust</figcaption>
-      <button type="button" data-copy data-state="idle" aria-label="Copy code"><svg data-icon="copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="14" height="14" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg><svg data-icon="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg><span>Copy</span></button>
+      <button type="button" data-copy data-state="idle" aria-label="Copy code"><svg data-icon="copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="14" height="14" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg><span>Copy</span></button>
       <pre><code>pub const EXPECTED_BD_VERSION: &amp;str = "1.1.2";</code></pre>
     </figure>
 
@@ -267,7 +267,18 @@ codesign -dv --verbose=2 target/release/bundle/macos/Smetana.app</code></pre>
     ? root.setAttribute('data-density', 'compact') : root.removeAttribute('data-density');
   turn.onchange = e => e.target.value
     ? prose.setAttribute('data-turn-style', e.target.value) : prose.removeAttribute('data-turn-style');
-  // The copy control: the app owns this behaviour, the stylesheet owns every state.
+  // The copy control: the app owns this behaviour, including which one icon is drawn.
+  // The stylesheet only sizes it; there is one svg per button and the handler swaps it.
+  const ICONS = {
+    copy: ['1.75', '<rect x="8" y="8" width="14" height="14" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>'],
+    check: ['2', '<path d="M20 6 9 17l-5-5"></path>'],
+  };
+  const setIcon = (b, name) => {
+    const svg = b.querySelector('svg');
+    svg.setAttribute('data-icon', name);
+    svg.setAttribute('stroke-width', ICONS[name][0]);
+    svg.innerHTML = ICONS[name][1];
+  };
   prose.addEventListener('click', ev => {
     const b = ev.target.closest('button[data-copy]');
     if (!b) return;
@@ -275,8 +286,9 @@ codesign -dv --verbose=2 target/release/bundle/macos/Smetana.app</code></pre>
     navigator.clipboard && navigator.clipboard.writeText(pre.textContent);
     b.dataset.state = 'copied';
     b.querySelector('span').textContent = 'Copied';
+    setIcon(b, 'check');
     clearTimeout(b._t);
-    b._t = setTimeout(() => { b.dataset.state = 'idle'; b.querySelector('span').textContent = 'Copy'; }, 1600);
+    b._t = setTimeout(() => { b.dataset.state = 'idle'; b.querySelector('span').textContent = 'Copy'; setIcon(b, 'copy'); }, 1600);
   });
 </script>
 </body>

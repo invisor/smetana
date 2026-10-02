@@ -174,7 +174,7 @@ Decisions worth knowing:
 <figure data-code data-lang="bash">
   <figcaption>bash</figcaption>
   <button type="button" data-copy data-state="idle" aria-label="Copy code">
-    <svg data-icon="copy" …></svg>  <!-- one icon at a time: "check" while data-state="copied" -->
+    <svg data-icon="copy" …></svg>
     <span>Copy</span>
   </button>
   <pre><code>xcrun notarytool submit …</code></pre>
@@ -196,8 +196,8 @@ Decisions worth knowing:
 - States: resting (muted) → hover (`--surface-hover`, hairline appears) →
   active (`--surface-active`) → focus-visible (2px `--focus-ring`, inset offset
   so the clipped figure cannot eat it) → **copied**: the app sets
-  `data-state="copied"` and swaps the label to "Copied"; CSS swaps the glyph to
-  the tick. The confirmation is the control changing — no toast, no colour
+  `data-state="copied"`, swaps the label to "Copied" and renders the check icon
+  in place of the copy icon (one `svg` at a time, never both). The confirmation is the control changing — no toast, no colour
   flash. Revert after `1600ms`.
 
 ---
