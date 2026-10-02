@@ -773,6 +773,41 @@ told `Cancelled`, while the loop may have got as far as finding the queue empty 
 rewriting the reason under them would put a different run's story on the bar. Neither property the
 map rests on moves: the stop is still immediate, and an entry still leaves in exactly one place.
 
+## The pause between autopilot batches
+
+Autopilot alone waits between batches (`RunSettings::batch_pause_min` /
+`batch_pause_max`, whole minutes, `0 <= min <= max <= 720`, both `None` outside
+`Auto` and refused by `validate` if sent anywhere else, or one without the
+other). The loop takes it after `next_action` has answered `Run` and before the
+failover choice and the limit gate, once per logical batch boundary
+(`rested_after` is keyed by `run.batches`, because the waits below `continue`
+round the loop without a batch having run): never before the first batch, never
+before a continuation, and after a crashed or empty batch on top of the crash
+backoff, with no exception. The limit gate's own `Paused` is a separate wait
+and the two run one after the other; neither is taken from the other.
+
+It is a state, `RunState::Resting { until, minutes }` (serde kind `resting`),
+for the reason `Paused` is one, and it is **not** `Paused`: that is the
+subscription's allowance and carries "Run anyway", this is the person's own
+setting and has nothing to release. The wait is a `select!` on `stop`, so Stop
+ends the run as `Cancelled` at once. The draw is `runs/rest.rs::pick`, pure,
+taking its randomness as an argument (no `rand` crate; `clock_rng` is splitmix64
+off the clock). `0`/`0` sets no state and writes the skipped line. The board
+read the decision came from is **not** re-read after the pause; a run that rests
+for half an hour goes on with the decision it made before it.
+
+The rule on the front end is `components/run/batchPause.js` (defaults 10 and 30,
+the bounds, `min <= max`, and the bar's words); `RunModal.vue` draws the two
+fields under "How many at once" in autopilot only and disables Run on an invalid
+pair. It is remembered per project in `project.runSettings` as
+`batchPauseMin`/`batchPauseMax`, written only by a run that sent them (so a Solo
+or Crew run keeps what was remembered), and mirrored by `RunDefaults` in
+`settings/model.rs`, whose validation replaces a bad pair with 10/30 whole.
+`RunBar.vue` draws `resting` with the `pause` glyph, `Pausing — next batch in N
+min` and an `until HH:MM` detail, with no release button. None of the eight
+places that compare against `stopped` read it as stopped, since each compares
+for that one tag.
+
 ## The journal: what the loop decided, while it was deciding it
 
 The report above is about the **work**, and there was nothing at all about the
@@ -784,12 +819,14 @@ August is the measurement: six batches in two hours, four of which did nothing,
 and a day later it could not be settled off the disk whether those four were
 counted as `LastBatch::Completed` or as `Crashed`, nor which `StopReason` ended
 the run — both readings fit everything that survived. `journal.rs` closes
-exactly that question, and its list of lines is **closed at nine**: the run's
+exactly that question, and its list of lines is **closed at ten**: the run's
 own settings, every preflight command and health check with its outcome, every
 board read with the ids in it, every answer from the spend gate with the
 percentages behind it, every `next_action` with the `LastBatch` it came out of,
-every batch's start and ending, the two counters after each batch, and the
-ending with the document it was written into.
+every batch's start and ending, the two counters after each batch, the
+ending with the document it was written into, and the pause an autopilot run
+takes before a batch (`journal::rested`: the interval, the minutes drawn and
+the moment it ends — or `minutes=0 skipped` for a drawn zero).
 
 Closed means whole, in both directions. A run makes **four** board reads and all
 four are on the record, each marked and each written down when it fails as well

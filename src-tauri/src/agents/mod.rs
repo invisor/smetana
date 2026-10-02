@@ -1844,6 +1844,8 @@ mod tests {
                 min_priority: Some(2),
                 max_parallel_tasks: (!matches!(mode, crate::runs::model::RunMode::Solo))
                     .then_some(3),
+                batch_pause_min: None,
+                batch_pause_max: None,
                 live_check: true,
                 file_findings: true,
             },

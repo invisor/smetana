@@ -3284,6 +3284,8 @@ mod tests {
                 create_target: false,
                 min_priority: None,
                 max_parallel_tasks: None,
+                batch_pause_min: None,
+                batch_pause_max: None,
                 live_check: false,
                 file_findings: false,
             },

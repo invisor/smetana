@@ -1097,6 +1097,15 @@ pub struct RunDefaults {
     /// default, and nothing in the current front end can tell absent from null.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_priority: Option<u8>,
+    /// The autopilot pause between batches, in minutes: the interval a run
+    /// draws from. Remembered on its own and not as an `Option`, because a
+    /// pair always has a meaning — the shipped 10 and 30 — where a floor
+    /// without a choice does not. Plain numbers also mean a build older than
+    /// this one, which ignores keys it does not know, reads the file unharmed,
+    /// and `#[serde(default)]` on the struct is what lets this build read a
+    /// file written before the pair existed without losing the section.
+    pub batch_pause_min: u16,
+    pub batch_pause_max: u16,
     pub live_check: bool,
     pub file_findings: bool,
 }
@@ -1107,6 +1116,8 @@ impl Default for RunDefaults {
             mode: "auto".into(),
             target_branch: None,
             min_priority: None,
+            batch_pause_min: BATCH_PAUSE_MIN_DEFAULT,
+            batch_pause_max: BATCH_PAUSE_MAX_DEFAULT,
             live_check: true,
             file_findings: true,
         }
@@ -1124,6 +1135,15 @@ const RUN_MODES: [&str; 3] = ["auto", "supervised", "solo"];
 /// bd's priority scale. Anything outside it would silently take everything or
 /// nothing.
 const MAX_PRIORITY: u8 = 4;
+
+/// The pause between autopilot batches: the shipped interval and the ceiling on
+/// either end of it, in minutes. Written a second time in
+/// `src/components/run/batchPause.js`, which owns the rule on the front end, and
+/// in `runs::model` for the run itself — the same doubling as `RUN_MODES`, for
+/// the same reason: this file has to survive what the other must refuse.
+const BATCH_PAUSE_MIN_DEFAULT: u16 = 10;
+const BATCH_PAUSE_MAX_DEFAULT: u16 = 30;
+const BATCH_PAUSE_CEILING: u16 = 720;
 
 /// The attachment-storage thresholds the bell announces, in MiB. Written out a
 /// second time in `src/components/notifications/notifications.js`, which owns
@@ -1853,6 +1873,16 @@ impl RunDefaults {
         // a real answer, where a 2 from here would be an invention.
         if self.min_priority.is_some_and(|floor| floor > MAX_PRIORITY) {
             self.min_priority = None;
+        }
+        // The pair is replaced whole, and never clamped: a 40 over a 30 is a
+        // hand edit that went wrong, and keeping one half of it would be
+        // guessing which half was meant. The shipped interval is a real answer
+        // where a clamped number would be an invention.
+        if self.batch_pause_min > self.batch_pause_max
+            || self.batch_pause_max > BATCH_PAUSE_CEILING
+        {
+            self.batch_pause_min = BATCH_PAUSE_MIN_DEFAULT;
+            self.batch_pause_max = BATCH_PAUSE_MAX_DEFAULT;
         }
     }
 }
@@ -4626,6 +4656,42 @@ mod tests {
         )
         .expect("deserializes");
         assert_eq!(old.run_settings.expect("kept").min_priority, None);
+    }
+
+    #[test]
+    fn a_file_without_the_batch_pause_reads_as_ten_and_thirty() {
+        // Written by hand the way every file on disk before the pause existed
+        // looks: the section is there and the pair is not, and the section must
+        // survive with the shipped interval rather than be lost.
+        let old: ProjectState = serde_json::from_str(
+            r#"{"runSettings":{"mode":"supervised","liveCheck":false,"fileFindings":true}}"#,
+        )
+        .expect("deserializes");
+        let kept = old.run_settings.expect("kept");
+        assert_eq!((kept.batch_pause_min, kept.batch_pause_max), (10, 30));
+        assert_eq!(kept.mode, "supervised");
+        assert!(!kept.live_check);
+    }
+
+    #[test]
+    fn a_batch_pause_pair_survives_the_round_trip_and_a_bad_one_is_replaced() {
+        let with = |min, max| {
+            let mut run = RunDefaults { batch_pause_min: min, batch_pause_max: max, ..RunDefaults::default() };
+            run.validate();
+            (run.batch_pause_min, run.batch_pause_max)
+        };
+        assert_eq!(with(2, 5), (2, 5));
+        assert_eq!(with(7, 7), (7, 7), "a fixed pause is a pair");
+        assert_eq!(with(0, 0), (0, 0), "no pause is a pair");
+        assert_eq!(with(0, 720), (0, 720));
+        assert_eq!(with(40, 30), (10, 30), "backwards is replaced, not sorted");
+        assert_eq!(with(10, 721), (10, 30), "over the ceiling is replaced, not clamped");
+
+        let json = serde_json::to_string(&RunDefaults { batch_pause_min: 3, batch_pause_max: 4, ..RunDefaults::default() })
+            .expect("serializes");
+        assert!(json.contains("\"batchPauseMin\":3"), "{json}");
+        let back: RunDefaults = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!((back.batch_pause_min, back.batch_pause_max), (3, 4));
     }
 
     #[test]
