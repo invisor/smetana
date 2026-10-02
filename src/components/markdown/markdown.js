@@ -10,10 +10,11 @@
    asterisk, a malformed table, a reference link, an HTML tag (all but one,
    below) — comes back as ordinary text, so the worst outcome for an
    unsupported construct is the panel as it looked before this module
-   existed. That is what makes it safe to put between a person and the only copy of a task's description, and it
-   does not soften for a *recognised* construct's own content — only for the
-   marker characters whose entire job is to say what the construct is, and
-   which carry no information once it is known: a heading's closing `#`, a
+   existed. That is what makes it safe to put between a person and the only
+   copy of a task's description, and it does not soften for a *recognised*
+   construct's own content — only for the marker characters whose entire job
+   is to say what the construct is, and which carry no information once it is
+   known: a heading's closing `#`, a
    quote's leading `>`, a table's `|`. A table row with more cells than its
    header is not a marker going missing, it is a person's words the parser
    read and must not drop — `takeTable` widens the whole table to its widest
@@ -35,9 +36,10 @@
    markers and are not in the visible text, like a quote's `>`; a `<details>`
    with no closing tag, or with attributes, stays text. Every other tag is
    literal text, there is no `v-html` and no sanitiser. One accepted
-   limitation: fences are tracked only at the start of a line, so a closing
-   tag inside a fence that sits in a quote (a `> ` fence, then `> </details>`)
-   still closes the block.
+   limitation: pairing sees fences and nested openers at any indent, so a list
+   item's fence or inner block cannot close the outer one, but it does not
+   look inside a quote, so a closing tag inside a fence that sits in a quote
+   (a `> ` fence, then `> </details>`) still closes the block.
    `del` has a real, common markdown spelling (`~~text~~`, GFM's own) and gets
    a node; `kbd` and `small` do not, and no branch below produces either.
 
@@ -76,6 +78,13 @@ const DETAILS_CLOSE = /<\/details>\s*$/
    ends with `</details>`: `<details>x</details>` is text, not the end of
    somebody's block. */
 const DETAILS_ANY_OPEN = /<details>/
+/* The same two shapes at any indent, for `pairDetails` alone. A body is
+   re-paired after its own indent is stripped, so at the level that matters the
+   0-3 rule above still holds; at the level above, a fence or an inner block
+   inside a nested list item must still be seen, or its closing tag would end
+   the outer block and its text would be lost. */
+const FENCE_ANY = /^\s*(`{3,}|~{3,})\s*(\S*)\s*$/
+const DETAILS_OPEN_ANY = /^\s*<details>(?:\s*<summary>.*?<\/summary>)?\s*$/
 const RULE = /^ {0,3}([-*_])\s*(?:\1\s*){2,}$/
 const QUOTE = /^ {0,3}> ?(.*)$/
 const BULLET = /^(\s*)([-*+])(\s+)(.*)$/
@@ -285,7 +294,9 @@ function parseBlocks(lines, depth = 0) {
        here *is* a block starter — a quote marker drawn as text — and a loop that
        consulted `startsBlock` first would take nothing and never advance. */
     const body = [lines[i++]]
-    while (i < lines.length && lines[i].trim() && !startsBlock(lines, i, pairs)) body.push(lines[i++])
+    while (i < lines.length && lines[i].trim() && !startsBlock(lines, i, pairs)) {
+      body.push(lines[i++])
+    }
     blocks.push({ type: 'paragraph', children: parseInline(body.join('\n')) })
   }
   return blocks
@@ -331,13 +342,18 @@ function pairDetails(lines) {
       if (fenceClose.test(line)) fenceClose = null
       continue
     }
-    const fence = FENCE.exec(line)
+    const fence = FENCE_ANY.exec(line)
     if (fence) {
-      fenceClose = new RegExp(`^ {0,3}${fence[1][0] === '`' ? '`' : '~'}{${fence[1].length},}\\s*$`)
-    } else if (DETAILS_OPEN.test(line)) {
-      open.push(i)
+      const mark = fence[1][0] === '`' ? '`' : '~'
+      fenceClose = new RegExp(`^\\s*${mark}{${fence[1].length},}\\s*$`)
+    } else if (DETAILS_OPEN_ANY.test(line)) {
+      /* Deeper openers take part in the pairing so their closers are used up,
+         but only a 0-3 indent opener gets an entry: that is the one this
+         level may draw as a block. */
+      open.push(DETAILS_OPEN.test(line) ? i : -1)
     } else if (open.length && DETAILS_CLOSE.test(line) && !DETAILS_ANY_OPEN.test(line)) {
-      pairs.set(open.pop(), i)
+      const opener = open.pop()
+      if (opener >= 0) pairs.set(opener, i)
     }
   }
   return pairs

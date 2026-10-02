@@ -902,6 +902,25 @@ describe('parseMarkdown details', () => {
     ])
   })
 
+  it('does not let a fence in a nested list item close the outer block', () => {
+    const source = '<details>\n- a\n  - b\n    ```\n    </details>\n    ```\n</details>'
+    const [outer, ...more] = parseMarkdown(source)
+    expect(more).toEqual([])
+    expect(outer.type).toBe('details')
+    const inner = outer.blocks[0].items[0].blocks[1].items[0].blocks
+    expect(inner).toEqual([para('b'), { type: 'code', lang: null, text: '</details>' }])
+  })
+
+  it('does not let an inner block in a nested list item close the outer one', () => {
+    const source = '<details>\n- a\n  - b\n    <details>\n    c\n    </details>\n</details>'
+    const [outer, ...more] = parseMarkdown(source)
+    expect(more).toEqual([])
+    expect(outer.type).toBe('details')
+    const inner = outer.blocks[0].items[0].blocks[1].items[0].blocks
+    expect(inner.map((b) => b.type)).toEqual(['paragraph', 'details'])
+    expect(inner[1].blocks).toEqual([para('c')])
+  })
+
   it('nests one block in another', () => {
     const [outer] = parseMarkdown('<details>\n<details>\ninner\n</details>\nafter\n</details>')
     expect(outer.blocks.map((b) => b.type)).toEqual(['details', 'paragraph'])
