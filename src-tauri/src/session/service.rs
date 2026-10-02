@@ -1450,7 +1450,22 @@ fn refresh_claude_crews(
         if let Some(brief) = sent_briefs.get_mut(root).filter(|brief| !brief.submitted) {
             let submitted = crate::agents::claude_crew::lead_transcript(&home, expected_session)
                 .is_some_and(|transcript| crate::agents::claude_crew::brief_in_transcript(&transcript, &brief.text, brief.from));
+            // Anything of ours that reached the transcript but does not match
+            // what was typed (the TUI wrapped or cut it) also ends the retry:
+            // nobody but Smetana types into this PTY, so a new human record
+            // is our message. Without this a mismatch retries `\r` for ever.
+            let mismatch = (!submitted)
+                .then(|| crate::agents::claude_crew::lead_transcript(&home, expected_session))
+                .flatten()
+                .and_then(|transcript| crate::agents::claude_crew::human_record_after(&transcript, brief.from));
             if submitted {
+                brief.submitted = true;
+            } else if let Some(found) = mismatch {
+                log::warn!(
+                    "Claude Crew root {root}: the lead's transcript has a human record that does not match what was typed (typed {:?}, found {:?}); no more Enter retries",
+                    brief.text.chars().take(40).collect::<String>(),
+                    found.trim().chars().take(40).collect::<String>(),
+                );
                 brief.submitted = true;
             } else if let Some(pty) = crew_ptys.get_mut(root) {
                 pty.write(b"\r");
@@ -1963,11 +1978,34 @@ fn handle(
                     // message is handed to the same Enter retry the brief
                     // uses (`SentBrief`), which also filters its echo — the
                     // row `record_crew_message` draws is the only one.
+                    // A long or multi-line message is taken by the TUI for a
+                    // paste (wrapped in `<pasted_content>`, and cut at the
+                    // tty queue's 1024 bytes), so it goes through a file and
+                    // only the pointer line is typed — see
+                    // `claude_crew::message_delivery`. That line is also what
+                    // the transcript echo is matched against.
+                    let typed = match crate::agents::claude_crew::message_delivery(&text) {
+                        crate::agents::claude_crew::Delivery::Typed => Ok(text.clone()),
+                        crate::agents::claude_crew::Delivery::Staged => {
+                            match claude_expected_sessions.get(&root) {
+                                Some(session) => crate::agents::claude_crew::stage_message(Path::new(&package.project), session, &text)
+                                    .map_err(|error| SessionError::Spawn(format!("the message could not be saved for the lead: {error}"))),
+                                None => Err(SessionError::NoSuchSession(root)),
+                            }
+                        }
+                    };
+                    let typed = match typed {
+                        Ok(typed) => typed,
+                        Err(error) => {
+                            let _ = tx.send(Err(error));
+                            return;
+                        }
+                    };
                     let delivered = crew_ptys.get_mut(&root).is_some_and(|pty| {
                         if pty.exit_code().is_some() {
                             false
                         } else {
-                            pty.write(text.as_bytes());
+                            pty.write(typed.as_bytes());
                             true
                         }
                     });
@@ -1977,7 +2015,7 @@ fn handle(
                             .and_then(|(home, session)| crate::agents::claude_crew::lead_transcript(Path::new(&home), session))
                             .and_then(|transcript| std::fs::metadata(transcript).ok())
                             .map_or(0, |meta| meta.len());
-                        claude_sent_briefs.insert(root, SentBrief { text: normalize_brief_text(&text), submitted: false, from });
+                        claude_sent_briefs.insert(root, SentBrief { text: normalize_brief_text(&typed), submitted: false, from });
                         record_crew_message(app, crews, root, node, text);
                         Ok(())
                     } else {
