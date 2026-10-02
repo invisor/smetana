@@ -768,6 +768,26 @@ describe('input written by a machine', () => {
     expect(nodes.map((n) => n.value).join('')).toBe(source)
   })
 
+  /* One pairing pass per call, so an opener on every line costs the same as
+     any other line. The rescan this replaced took about nine seconds over this
+     input; a bound of a second leaves wide headroom for a slow machine. */
+  it('does not go quadratic over a run of unclosed details openers', () => {
+    const source = Array.from({ length: 20000 }, () => '<details>').join('\n')
+    const started = Date.now()
+    const tree = parseMarkdown(source)
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(tree.map((b) => b.type)).toEqual(['paragraph'])
+    expect(tree[0].children[0].value).toBe(source)
+  })
+
+  it('does not go quadratic when one closing line ends a run of openers', () => {
+    const source = Array.from({ length: 20000 }, () => '<details>').join('\n') + '\n</details>'
+    const started = Date.now()
+    const tree = parseMarkdown(source)
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(tree.at(-1).type).toBe('details')
+  })
+
   it('clamps how deep a quote nests, and draws the markers past the clamp', () => {
     const source = '>'.repeat(10000) + ' x'
     const tree = parseMarkdown(source)
@@ -806,8 +826,8 @@ describe('parseMarkdown details', () => {
   const para = (value) => ({ type: 'paragraph', children: text(value) })
 
   it('reads a details block with a summary on its own line', () => {
-    expect(parseMarkdown('<details>\n<summary>Заголовок</summary>\n\nабзац\n</details>')).toEqual([
-      { type: 'details', summary: text('Заголовок'), blocks: [para('абзац')] }
+    expect(parseMarkdown('<details>\n<summary>Heading</summary>\n\nparagraph text\n</details>')).toEqual([
+      { type: 'details', summary: text('Heading'), blocks: [para('paragraph text')] }
     ])
   })
 
@@ -830,8 +850,8 @@ describe('parseMarkdown details', () => {
   })
 
   it('closes on a closing tag at the end of a prose line and keeps the rest of the line', () => {
-    expect(parseMarkdown('<details>\nintro\n\nХвост фразы. </details>')).toEqual([
-      { type: 'details', summary: null, blocks: [para('intro'), para('Хвост фразы.')] }
+    expect(parseMarkdown('<details>\nintro\n\nTail of a sentence. </details>')).toEqual([
+      { type: 'details', summary: null, blocks: [para('intro'), para('Tail of a sentence.')] }
     ])
   })
 
@@ -844,6 +864,39 @@ describe('parseMarkdown details', () => {
 
   it('starts a block right under a prose line', () => {
     expect(parseMarkdown('prose\n<details>\nbody\n</details>').map((b) => b.type)).toEqual([
+      'paragraph',
+      'details'
+    ])
+  })
+
+  it('does not count a line holding its own opening tag as a closing line', () => {
+    const [outer, ...more] = parseMarkdown('<details>\na\n<details>x</details>\nb\n</details>')
+    expect(more).toEqual([])
+    expect(outer.blocks).toEqual([para('a\n<details>x</details>\nb')])
+  })
+
+  it('gives a null summary for an empty or blank one', () => {
+    for (const tag of ['<summary></summary>', '<summary>  </summary>']) {
+      expect(parseMarkdown(`<details> ${tag}\nbody\n</details>`)[0].summary).toBeNull()
+      expect(parseMarkdown(`<details>\n${tag}\nbody\n</details>`)[0].summary).toBeNull()
+    }
+  })
+
+  /* An opener with no closing line is not a block start, so the text around it
+     parses exactly as it did before this construct existed. */
+  it('keeps an unclosed opener inside the paragraph above it', () => {
+    expect(parseMarkdown('prose\n<details>\nbody')).toEqual([para('prose\n<details>\nbody')])
+  })
+
+  it('keeps an unclosed opener under a list item as it was', () => {
+    const before = parseMarkdown('- item\n  more\n<details>')
+    expect(before.map((b) => b.type)).toEqual(['list', 'paragraph'])
+    expect(before[1]).toEqual(para('<details>'))
+  })
+
+  it('still splits the paragraph above a closed opener', () => {
+    expect(parseMarkdown('- item\n  more\n\nprose\n<details>\nbody\n</details>').map((b) => b.type)).toEqual([
+      'list',
       'paragraph',
       'details'
     ])
