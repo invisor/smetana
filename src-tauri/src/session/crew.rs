@@ -129,7 +129,7 @@ pub enum CrewState {
 impl From<ProviderState> for CrewState {
     fn from(value: ProviderState) -> Self {
         match value {
-            ProviderState::Starting => Self::Starting,
+            ProviderState::Unknown | ProviderState::Starting => Self::Starting,
             ProviderState::Running => Self::Running,
             ProviderState::Waiting => Self::Waiting,
             ProviderState::Done => Self::Done,
@@ -198,6 +198,13 @@ impl CrewTree {
         if !self.nodes.contains_key(&root) {
             return None;
         }
+        // A record that does not know the state must not overwrite one that
+        // something else (a child's own transcript) has already established.
+        let known_state = self
+            .provider
+            .get(&incoming.id)
+            .and_then(|id| self.nodes.get(id))
+            .map(|node| node.state);
         let id = self.provider.get(&incoming.id).copied().unwrap_or_else(|| {
             let id = self.mint();
             self.provider.insert(incoming.id.clone(), id);
@@ -210,7 +217,10 @@ impl CrewTree {
             .and_then(|provider| self.provider.get(provider).copied())
             .filter(|parent| *parent != id)
             .or(Some(root));
-        let state = CrewState::from(incoming.state);
+        let state = match (incoming.state, known_state) {
+            (ProviderState::Unknown, Some(known)) => known,
+            (incoming, _) => CrewState::from(incoming),
+        };
         let label = incoming.label.unwrap_or_else(|| "Background agent".into());
         self.nodes.insert(
             id,
@@ -352,6 +362,24 @@ mod tests {
             label: Some(id.into()),
             can_message: true,
         }
+    }
+
+    #[test]
+    fn an_unknown_state_keeps_what_the_tree_knows_and_starts_a_new_node() {
+        let mut tree = CrewTree::default();
+        let root = tree.root("Lead");
+        let id = tree.upsert(root, worker("child", None, ProviderState::Waiting)).unwrap();
+        assert_eq!(
+            tree.upsert(root, worker("child", None, ProviderState::Unknown)),
+            Some(id)
+        );
+        assert_eq!(tree.node(id).unwrap().state, CrewState::Waiting);
+
+        let fresh = tree.upsert(root, worker("fresh", None, ProviderState::Unknown)).unwrap();
+        assert_eq!(tree.node(fresh).unwrap().state, CrewState::Starting);
+
+        tree.upsert(root, worker("child", None, ProviderState::Running));
+        assert_eq!(tree.node(id).unwrap().state, CrewState::Running, "a known state still applies");
     }
 
     #[test]
