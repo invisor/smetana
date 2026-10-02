@@ -498,9 +498,15 @@ pub const MAX_PARALLEL: u8 = 8;
 
 /// The ceiling on either end of the pause between autopilot batches, in
 /// minutes: twelve hours, which is a bound on a typo and not a statement about
-/// what a night is. Written again in `settings::model` and in
-/// `src/components/run/batchPause.js`.
+/// what a night is. `settings::model` imports it, so Rust has one copy;
+/// `src/components/run/batchPause.js` is the other.
 pub const BATCH_PAUSE_CEILING: u16 = 720;
+
+/// The interval a dialog opens on and a damaged stored pair falls back to, in
+/// minutes. One Rust home for both ends; the front end's twin is
+/// `BATCH_PAUSE_DEFAULTS` in `batchPause.js`.
+pub const BATCH_PAUSE_MIN_DEFAULT: u16 = 10;
+pub const BATCH_PAUSE_MAX_DEFAULT: u16 = 30;
 
 impl RunSettings {
     /// The three rules that are not the dialog's to keep. `Solo` means the agent

@@ -789,12 +789,19 @@ and the two run one after the other; neither is taken from the other.
 It is a state, `RunState::Resting { until, minutes }` (serde kind `resting`),
 for the reason `Paused` is one, and it is **not** `Paused`: that is the
 subscription's allowance and carries "Run anyway", this is the person's own
-setting and has nothing to release. The wait is a `select!` on `stop`, so Stop
-ends the run as `Cancelled` at once. The draw is `runs/rest.rs::pick`, pure,
+setting and has nothing to release. The wait (`rest::wait`) sleeps in slices of at most a minute against the wall
+clock, so a laptop that slept notices on waking that `until` has passed, and a
+`stop` ends it on any slice as `Cancelled`. The draw is `runs/rest.rs::pick`, pure,
 taking its randomness as an argument (no `rand` crate; `clock_rng` is splitmix64
-off the clock). `0`/`0` sets no state and writes the skipped line. The board
-read the decision came from is **not** re-read after the pause; a run that rests
-for half an hour goes on with the decision it made before it.
+off the clock). `0`/`0` sets no state and writes the skipped line. The pause
+sits between the decision and the batch, so the decision is **made again after
+it**: the loop reads the board fresh (journalled as the ordinary decision
+read, so the four-read list is unchanged), runs `next_action` against the same
+"before" snapshot the first answer used, stops if that says stop, and only then
+sets `previous`. A `continue` after the sleep would have compared this lap's
+snapshot with itself and answered `NoProgress`; the one `continue` in the block
+is the unreadable-board case, where `rested_after` already prevents a second
+pause. `journal::started` records `pause=min-max` or `pause=none`.
 
 The rule on the front end is `components/run/batchPause.js` (defaults 10 and 30,
 the bounds, `min <= max`, and the bar's words); `RunModal.vue` draws the two
@@ -803,8 +810,8 @@ pair. It is remembered per project in `project.runSettings` as
 `batchPauseMin`/`batchPauseMax`, written only by a run that sent them (so a Solo
 or Crew run keeps what was remembered), and mirrored by `RunDefaults` in
 `settings/model.rs`, whose validation replaces a bad pair with 10/30 whole.
-`RunBar.vue` draws `resting` with the `pause` glyph, `Pausing — next batch in N
-min` and an `until HH:MM` detail, with no release button. None of the eight
+`RunBar.vue` draws `resting` with the `pause` glyph, `Pausing N min before the
+next batch` and an `until HH:MM` detail, with no release button. None of the eight
 places that compare against `stopped` read it as stopped, since each compares
 for that one tag.
 

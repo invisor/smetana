@@ -173,13 +173,19 @@ pub fn stamp(now: DateTime<Local>, token: u64, line: &str) -> String {
 pub fn started(run: &Run, max_iterations: u32) -> String {
     format!(
         "start project={} scope={:?} mode={:?} target={} max-iterations={max_iterations} \
-         max-tasks={} min-priority={}",
+         max-tasks={} min-priority={} pause={}",
         run.project,
         run.settings.scope,
         run.settings.mode,
         run.settings.target_branch,
         opt(run.settings.max_parallel_tasks),
         opt(run.settings.min_priority),
+        // Written even when there is none: a run with no pause and one that
+        // never reached a second batch look the same in the rest of the file.
+        match (run.settings.batch_pause_min, run.settings.batch_pause_max) {
+            (Some(min), Some(max)) => format!("{min}-{max}"),
+            _ => "none".to_string(),
+        },
     )
 }
 
@@ -482,7 +488,7 @@ pub fn rested(batch: u32, min: u16, max: u16, minutes: u16, until: Option<DateTi
     match until {
         Some(until) => format!(
             "pause before batch {batch} range={min}-{max} minutes={minutes} until={}",
-            until.to_rfc3339()
+            until.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         ),
         None => format!("pause before batch {batch} range={min}-{max} minutes=0 skipped"),
     }
@@ -639,6 +645,12 @@ mod tests {
         assert!(line.contains("max-iterations=40"), "{line}");
         assert!(line.contains("max-tasks=3"), "{line}");
         assert!(line.contains("min-priority=2"), "{line}");
+        assert!(line.contains("pause=none"), "a run with no pause says so: {line}");
+
+        let mut paused = run();
+        paused.settings.batch_pause_min = Some(10);
+        paused.settings.batch_pause_max = Some(30);
+        assert!(started(&paused, 40).contains("pause=10-30"));
     }
 
     #[test]
@@ -916,7 +928,7 @@ mod tests {
         let until = chrono::Utc.with_ymd_and_hms(2026, 8, 29, 4, 30, 0).unwrap();
         assert_eq!(
             rested(3, 10, 30, 17, Some(until)),
-            "pause before batch 3 range=10-30 minutes=17 until=2026-08-29T04:30:00+00:00"
+            "pause before batch 3 range=10-30 minutes=17 until=2026-08-29T04:30:00Z"
         );
     }
 

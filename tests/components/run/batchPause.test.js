@@ -80,10 +80,10 @@ describe('pausePayload', () => {
 })
 
 describe('the resting words', () => {
-  const state = { kind: 'resting', until: '2026-10-02T12:30:00+00:00', minutes: 17 }
+  const state = { kind: 'resting', until: '2026-10-02T12:30:00Z', minutes: 17 }
 
   it('says how many minutes the pause is', () => {
-    expect(restLabel(state)).toBe('Pausing — next batch in 17 min')
+    expect(restLabel(state)).toBe('Pausing 17 min before the next batch')
   })
 
   it('says nothing for any other state', () => {

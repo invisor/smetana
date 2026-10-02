@@ -9,6 +9,8 @@ use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::runs::model::{BATCH_PAUSE_CEILING, BATCH_PAUSE_MAX_DEFAULT, BATCH_PAUSE_MIN_DEFAULT};
+
 /// The file's schema version. It grows when an old file can no longer be read as is.
 pub const CURRENT_VERSION: u32 = 1;
 /// How many projects we remember: the map must not grow forever from one-off visits.
@@ -1135,15 +1137,6 @@ const RUN_MODES: [&str; 3] = ["auto", "supervised", "solo"];
 /// bd's priority scale. Anything outside it would silently take everything or
 /// nothing.
 const MAX_PRIORITY: u8 = 4;
-
-/// The pause between autopilot batches: the shipped interval and the ceiling on
-/// either end of it, in minutes. Written a second time in
-/// `src/components/run/batchPause.js`, which owns the rule on the front end, and
-/// in `runs::model` for the run itself — the same doubling as `RUN_MODES`, for
-/// the same reason: this file has to survive what the other must refuse.
-const BATCH_PAUSE_MIN_DEFAULT: u16 = 10;
-const BATCH_PAUSE_MAX_DEFAULT: u16 = 30;
-const BATCH_PAUSE_CEILING: u16 = 720;
 
 /// The attachment-storage thresholds the bell announces, in MiB. Written out a
 /// second time in `src/components/notifications/notifications.js`, which owns

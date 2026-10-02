@@ -1047,8 +1047,6 @@ async fn drive(
             }
             Action::Run(_) => {}
         }
-        previous = Some(now);
-
         // The person's own pause between two batches, after the decision to go
         // on and before anything that could start one — the failover choice and
         // the limit gate below are separate waits with their own meaning and run
@@ -1067,7 +1065,10 @@ async fn drive(
                     account.journal.say(&journal::rested(run.batches + 1, min, max, 0, None));
                 } else {
                     let until = chrono::Utc::now() + chrono::Duration::minutes(i64::from(minutes));
-                    run.advance(RunState::Resting { until: until.to_rfc3339(), minutes });
+                    run.advance(RunState::Resting {
+                        until: until.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                        minutes,
+                    });
                     say(&run);
                     account.journal.say(&journal::rested(
                         run.batches + 1,
@@ -1078,16 +1079,62 @@ async fn drive(
                     ));
                     // Interruptible for the reason the crash backoff is: a stop
                     // that waited out the pause would look like it did nothing.
-                    tokio::select! {
-                        _ = tokio::time::sleep(Duration::from_secs(u64::from(minutes) * 60)) => {}
-                        _ = stop.recv() => {
-                            finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
+                    if !rest::wait(until, chrono::Utc::now, &mut stop).await {
+                        finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
+                        return;
+                    }
+                    // The decision above is up to twelve hours old. A sibling run
+                    // or the person may have emptied the queue meanwhile, and a
+                    // batch started on that board would be judged against it
+                    // too: `did_nothing` would see a changed board and count an
+                    // empty batch as completed. So the board is read again and
+                    // the decision made again, against the same "before" the
+                    // first one used — `previous` is still the snapshot from the
+                    // batch before and is only replaced below.
+                    run.advance(RunState::Deciding);
+                    say(&run);
+                    let Some((issues, source)) = fresh_board(&tracker, &root).await else {
+                        // `continue` is safe here and only here: `rested_after`
+                        // is already set, so the lap that follows takes no
+                        // second pause for this boundary, and `previous` is
+                        // untouched.
+                        unreadable += 1;
+                        account.journal.say(&journal::unreadable_board(
+                            journal::Read::Decision,
+                            Some(unreadable),
+                        ));
+                        if unreadable >= 2 {
+                            finish(&mut run, StopReason::Unreadable, &say, &account, &root, &tracker).await;
                             return;
                         }
+                        continue;
+                    };
+                    unreadable = 0;
+                    now = queue::snapshot(&issues, &run.settings.scope, run.settings.min_priority);
+                    account.journal.say(&journal::board(journal::Read::Decision, &now, source));
+                    let again = queue::next_action(
+                        &now,
+                        previous.as_ref(),
+                        iteration,
+                        MAX_ITERATIONS,
+                        last_batch,
+                        once,
+                    );
+                    account.journal.say(&journal::decision(
+                        &again,
+                        last_batch,
+                        iteration,
+                        previous.as_ref(),
+                        &now,
+                    ));
+                    if let Action::Stop(reason) = again {
+                        finish(&mut run, reason, &say, &account, &root, &tracker).await;
+                        return;
                     }
                 }
             }
         }
+        previous = Some(now);
 
         // A failover decision is made only where no attempt is live. The
         // primary was fixed above; the policy is deliberately re-read here so

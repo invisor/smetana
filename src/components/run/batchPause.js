@@ -61,11 +61,11 @@ export function pausePayload(min, max) {
 
 /* `Resting { until, minutes }` on the Rust side, serialised as kind `resting`.
    The words are the bar's label and its detail line: how long it was told to
-   wait and when that ends, since a quiet run is indistinguishable from a hung
+   wait (a fixed length, so the sentence stays true as time passes) and when that ends, since a quiet run is indistinguishable from a hung
    one. */
 export function restLabel(state) {
   if (state?.kind !== 'resting') return null
-  return `Pausing — next batch in ${state.minutes} min`
+  return `Pausing ${state.minutes} min before the next batch`
 }
 
 export function restDetail(state, locale) {
