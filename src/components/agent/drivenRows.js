@@ -98,7 +98,15 @@ export function drivenSessionOf(rowId) {
    for the second before the worker answers; this row exists only because
    `session_start` already has, so there is a session behind it to stop and the
    cross is live from the first frame. */
-export function drivenAgentRow({ id, state, elapsed, conversation = null, work, title = null }) {
+export function drivenAgentRow({
+  id,
+  state,
+  elapsed,
+  startedAt = null,
+  conversation = null,
+  work,
+  title = null
+}) {
   return {
     id: drivenRowId(id),
     conversation,
@@ -108,32 +116,26 @@ export function drivenAgentRow({ id, state, elapsed, conversation = null, work, 
     title,
     ...captionOf(work, [], title),
     state,
-    elapsed
+    elapsed,
+    /* Epoch milliseconds, the one unit every row of the panel carries it in, or
+       `null`; `agentOrder.js` sorts by it. */
+    startedAt: Number.isFinite(startedAt) ? startedAt : null
   }
 }
 
-/* The panel's rows, both kinds, in the order the panel puts them before the
-   person's own is applied on top.
+/* The panel's rows, both kinds, before the order is applied on top.
 
-   Driven rows go after the live sessions and the starts, where a newly started
-   agent belongs — at the end, which is where somebody who has never dragged
-   anything looks for the one they have just pressed a button for — but **in
-   front of the rows a previous run of the app left behind.** That is the
-   terminal store's own rule about those, written where it builds them: they are
-   the project's past, and the agents somebody is actually watching keep the top
-   of the column. Appending blindly would have put a live conversation
-   underneath yesterday's offline record, which is the one arrangement that rule
-   refuses. The restored rows are the tail of the list by construction, so the
-   first of them is where these go in.
+   Where a driven row stands is no longer this function's business: every row
+   carries `startedAt` and `orderAgents` sorts the whole list newest first, so a
+   live conversation lands above an offline record from an earlier run by its
+   time alone. Driven rows are simply added to the list.
 
    The whole list is then handed to `orderAgents` at once: a drag can carry a
    driven row past a PTY one, the panel being one flat zone, and these are not a
    fourth group with a rule of their own.
 
-   With no driven session the rows come back by reference, which is the contract
-   `moveAgent` and `orderAgents` already keep on this road: the caller's next
-   step is `orderAgents`, which leans on identity to tell "never arranged" from
-   "arranged, and this is what it came to".
+   With no driven session the rows come back by reference, as the plain
+   no-change answer.
 
    **An offer standing behind a live conversation is dropped**, and that is the
    half of this merge that is not about adding anything. `.smetana/agents.json`
@@ -158,9 +160,7 @@ export function mergeAgentRows(rows, sessions) {
   const list = held.size
     ? (rows ?? []).filter((row) => !(row?.restored && held.has(row.conversation)))
     : (rows ?? [])
-  const past = list.findIndex((row) => row?.restored)
-  const at = past === -1 ? list.length : past
-  return [...list.slice(0, at), ...driven, ...list.slice(at)]
+  return [...list, ...driven]
 }
 
 /* The states in which a driven session is over.

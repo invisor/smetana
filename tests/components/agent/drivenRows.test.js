@@ -86,6 +86,13 @@ describe('a driven conversation among the agents', () => {
        Claude Code names itself. `row` is built with none, so this is what
        either of those offers: a pin refused with nothing to remember it by,
        which is true of them. */
+    it('carries startedAt as a number, and null when it is unknown', () => {
+      expect(drivenAgentRow({ id: 3, state: 'running', elapsed: '1m', startedAt: 1_700_000_000_000 }).startedAt).toBe(
+        1_700_000_000_000
+      )
+      expect(row.startedAt).toBeNull()
+    })
+
     it('carries no conversation id, which is what Pin refuses on', () => {
       expect(row.conversation).toBe(null)
     })
@@ -176,17 +183,19 @@ describe('a driven conversation among the agents', () => {
   })
 
   describe('the two kinds of session in one list', () => {
-    it('puts a conversation under the live rows and above the offline ones', () => {
+    /* Position is the sort's business now (`orderAgents`, by `startedAt`); the
+       merge only adds. */
+    it('adds the conversations after the rows it was handed', () => {
       const rows = [live(1, 'a1'), offline('9f1c')]
 
       expect(mergeAgentRows(rows, [driven(1)]).map((row) => row.id)).toEqual([
         1,
-        `${DRIVEN_PREFIX}1`,
-        '9f1c'
+        '9f1c',
+        `${DRIVEN_PREFIX}1`
       ])
     })
 
-    it('puts it at the end when the project has nothing offline', () => {
+    it('adds it after the live rows when the project has nothing offline', () => {
       const rows = [live(1, 'a1'), live(2, 'a2')]
 
       expect(mergeAgentRows(rows, [driven(5)]).map((row) => row.id)).toEqual([
@@ -217,8 +226,8 @@ describe('a driven conversation among the agents', () => {
 
       expect(mergeAgentRows(rows, [resumed]).map((row) => row.id)).toEqual([
         1,
-        `${DRIVEN_PREFIX}2`,
-        'other'
+        'other',
+        `${DRIVEN_PREFIX}2`
       ])
     })
 
@@ -229,8 +238,8 @@ describe('a driven conversation among the agents', () => {
       const rows = [offline('9f1c')]
 
       expect(mergeAgentRows(rows, [driven(2)]).map((row) => row.id)).toEqual([
-        `${DRIVEN_PREFIX}2`,
-        '9f1c'
+        '9f1c',
+        `${DRIVEN_PREFIX}2`
       ])
     })
 

@@ -120,7 +120,7 @@ watch(
 /* The order under the pointer, and only while the pointer holds it. Idle, this
    is null and the panel draws exactly what it was given — the drawn order is
    the caller's, the same way the tab row's is. The draft is applied through
-   `orderAgents`, so an agent started mid-drag appears at the end instead of
+   `orderAgents`, so an agent started mid-drag appears at the top instead of
    vanishing, and so the pinned block stays in front however the draft was
    dragged: a row cannot be dropped above it, and a pinned row cannot be dropped
    out of it. `held` is the key of the row being dragged. */

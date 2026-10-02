@@ -9,9 +9,16 @@
    **One flat zone.** Any row may be dragged past any other: a live session, one
    still starting, an offline record. That was asked directly and answered
    directly — whether a process stands behind a row is not the person's
-   question. The consequence is taken knowingly: a new agent appears at the end
-   of the list and may well sit below yesterday's rows. That is what "the order
-   belongs to the person" means.
+   question.
+
+   **The base order is newest first.** What nobody has arranged is drawn by
+   start time, latest on top: a start ticket above everything (it is the
+   freshest by construction), then rows by `startedAt` descending, then rows
+   with no time in the order they arrived. An agent started now therefore
+   appears at the top of the flat zone, under the pinned block and above the
+   dragged order, and never sinks below yesterday's rows. Offline records fall
+   below every live row without a rule of their own: no session survives a
+   restart, so a record is always from an earlier launch and its time is older.
 
    The one thing that does not move is the leading block of pinned rows, and
    that is the shape `tabOrder.js` already has for the board and the Agent tab.
@@ -51,13 +58,32 @@ export function isPinned(row, pinned) {
   return Boolean(id) && (pinned ?? []).includes(id)
 }
 
+/* The base order of the flat zone: start tickets first, then rows by `startedAt`
+   (epoch milliseconds) descending, then rows with no time in arrival order.
+   Stable, so equal times keep the order the rows came in. A new array always;
+   the input is never mutated. */
+export function newestFirst(rows) {
+  const tier = (row) => (row?.starting ? 0 : Number.isFinite(row?.startedAt) ? 1 : 2)
+  return (rows ?? [])
+    .map((row, at) => ({ row, at }))
+    .sort((a, b) => {
+      const ta = tier(a.row)
+      const tb = tier(b.row)
+      if (ta !== tb) return ta - tb
+      if (ta === 1 && a.row.startedAt !== b.row.startedAt) return b.row.startedAt - a.row.startedAt
+      return a.at - b.at
+    })
+    .map(({ row }) => row)
+}
+
 /* The rows in the order they are to be drawn.
 
    A stored order is a hint, never the truth. A row is not conjured into the
    panel by a line in a settings file, and an agent started since the last drag
    has to appear even though no stored order names it. So: rows the stored order
-   knows are drawn in its sequence, and the rest go after them in the panel's
-   own order — which is what makes a newly started agent appear at the end. Ids
+   knows are drawn in its sequence, and the rest go in front of them in the
+   base order, newest first, which is what makes a newly started agent appear at
+   the top of the flat zone, in front of the rows the stored order knows. Ids
    in the stored order that match nothing are simply passed over here, so a
    conversation that is not on screen today is never the reason a row goes
    missing.
@@ -77,17 +103,16 @@ export function isPinned(row, pinned) {
    one: a drag rewrites the order and leaves the pins alone, pinning rewrites
    the pins and leaves the order alone, and an unpinned row therefore drops back
    into the place the order still remembers for it instead of landing at the
-   end.
+   top.
 
-   With nothing stored and nothing pinned the rows come back by reference, which
-   the caller leans on the way it leans on `moveColumn`'s: it is how "this
-   project has never been arranged" is told from "arranged, and this is what it
-   came to". */
+   The base sort is applied every time, so there is no "hand back the same
+   array" shortcut any more: the caller that needs to tell a drag that changed
+   nothing from one that did compares the drawn keys before and after, which is
+   what `AgentList.vue`'s `sameOrder` does. */
 export function orderAgents(rows, stored, pinned) {
-  const list = Array.isArray(rows) ? rows : []
+  const list = newestFirst(Array.isArray(rows) ? rows : [])
   const sequence = Array.isArray(stored) ? stored : []
   const pins = Array.isArray(pinned) ? pinned : []
-  if (!sequence.length && !pins.length) return rows
 
   const rank = new Map()
   for (const id of sequence) if (!rank.has(id)) rank.set(id, rank.size)
@@ -98,7 +123,7 @@ export function orderAgents(rows, stored, pinned) {
     const fresh = []
     for (const row of list) (rank.has(agentKey(row)) ? known : fresh).push(row)
     known.sort((a, b) => rank.get(agentKey(a)) - rank.get(agentKey(b)))
-    out = [...known, ...fresh]
+    out = [...fresh, ...known]
   }
   if (!pins.length) return out
 

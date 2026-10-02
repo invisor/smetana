@@ -2990,6 +2990,8 @@ const drivenAgents = computed(() =>
     project: session.project,
     state: statusOf(session.state),
     elapsed: formatElapsed(agentClock.value - session.startedAt),
+    /* Epoch milliseconds, as the store records it, so the panel can sort by it. */
+    startedAt: session.startedAt,
     /* The two fields that travel whole rather than being translated: the name
        the row is keyed by and the offer it stands in front of, and what the
        session was started for. Neither is this file's to word — the first is
@@ -3049,8 +3051,8 @@ const agentStates = computed(() =>
    the worker's session number starts at 1 again on the next launch, so an order
    kept under it would hand yesterday's place to a stranger. But such a row is
    still dragged like any other, and with the file as the only memory it would
-   snap back to the end of the list the instant the pointer was released, since
-   `orderAgents` puts what it has never heard of last. So this window keeps the
+   snap back to the front of the list (where `orderAgents` puts what it has
+   never heard of) the instant the pointer was released. So this window keeps the
    whole drawn sequence — conversation ids and this window's own keys alike —
    and the file keeps the half of it that means anything tomorrow. It is
    emptied on a project switch for the reason everything else per project is:

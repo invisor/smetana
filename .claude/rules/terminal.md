@@ -1095,8 +1095,20 @@ it, so asking the worker to end one would answer `noSession` about an id it has 
 **The order belongs to the person.** Any row in the agents panel may be dragged past any other — a
 live session, one still starting, an offline record — and that flatness was asked for directly and
 answered directly: whether a process stands behind a row is not the question somebody is arranging
-this list to answer. The consequence is taken knowingly rather than worked around: an agent started
-now appears at the end of the list and may well sit below yesterday's rows.
+this list to answer.
+
+**The base order is newest first.** Every row carries `startedAt` (epoch milliseconds, or `null`:
+`agentRows` parses the PTY session's and the offline record's RFC 3339 strings, the driven row gets
+the number from the `started` entry, a start ticket has none), and `agentOrder.js`'s `newestFirst`
+sorts the flat zone by it: start tickets on top, then time descending, then rows with no time in
+arrival order, stably. An agent started now appears at the top of the flat zone, under the pinned
+block. Offline rows end up below every live one with no rule of their own, since no session survives
+a restart and a record is always from an earlier launch. A stored (dragged) order still holds for the
+rows it knows, but a row it has never heard of goes **in front** of them, in the base order, and not
+behind. `orderAgents` therefore no longer hands back the same array when nothing is stored;
+`AgentList.vue` compares the drawn keys before and after a drag, and that is what keeps a drag that
+changed nothing from writing anything. Crew rows are not part of this: they are appended after
+`orderAgents` in `DesktopApp.vue`.
 
 Above the flat part sits a leading block of **pinned** rows, which is the shape `shell/tabOrder.js`
 already has for the board and the Agent tab; the difference is who decides membership, a person here
@@ -1124,7 +1136,7 @@ Two fields of `ProjectState` keep it, `agent_order` and `pinned_agents`, beside 
 `tab_order` and per project for their reason. **Two and not one**, because they are rewritten by
 different gestures: a drag rewrites the order and leaves the pins alone, pinning rewrites the pins and
 leaves the order alone — which is what lets an unpinned row drop back into the place the order still
-remembers for it instead of landing at the end. Both are listed in the front end's `project` defaults
+remembers for it instead of landing at the top. Both are listed in the front end's `project` defaults
 (`src/stores/settings.js`) as well, and that is not decoration: `applySection` is
 `Object.assign(target, defaults, stored)`, so a key missing there is a key the defaults layer cannot
 clear, and one project's pinned agents would still be sitting at the top of the panel after somebody
