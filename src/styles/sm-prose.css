@@ -600,9 +600,6 @@
   height:var(--prose-icon);
   flex:none;
 }
-.sm-prose button[data-copy] > svg[data-icon="check"]{ display:none }
-.sm-prose button[data-copy][data-state="copied"] > svg[data-icon="copy"]{ display:none }
-.sm-prose button[data-copy][data-state="copied"] > svg[data-icon="check"]{ display:block }
 
 
 /* 10 · LINKS ===============================================================
