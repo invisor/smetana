@@ -430,14 +430,23 @@ function describeWork(work, sessionId, title = null) {
   return { work: work ?? null, claimed, ...captionOf(work, claimed, title) }
 }
 
+/* An RFC 3339 string as epoch milliseconds, or `null` when absent or unreadable.
+   The one unit every row carries its start in; a string beside a number would
+   compare falsely without complaint. */
+const epochOf = (value) => {
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) ? ms : null
+}
+
 /* Agent sessions first, in the worker's own order, then whatever is still
    starting. The shells are not here at all: this list is the agents panel, and
    a shell is not an agent — it has no work, no state anybody draws and nothing
    to say about itself. It is on screen as a centre tab and nowhere else.
 
-   A new session always takes the highest id, so a start belongs at the bottom
-   both before and after it lands, and the row a person is watching does not
-   move under them when it becomes real.
+   The order here is the worker's (oldest first) and is not the order drawn:
+   every row carries `startedAt`, epoch milliseconds or `null` for a start
+   ticket, and `components/agent/agentOrder.js` sorts the panel newest first
+   from it, a start ticket on top.
 
    A row carries what the panel draws and nothing else. It used to carry the
    process name — `claude-7` — and the pending question too, for the block the
@@ -480,7 +489,8 @@ export const agentRows = computed(() => [
     clearable: can(session.agent, 'clear'),
     ...describeWork(session.work, session.id),
     state: toUiState(session),
-    elapsed: formatElapsed(now.value - Date.parse(session.startedAt))
+    elapsed: formatElapsed(now.value - Date.parse(session.startedAt)),
+    startedAt: epochOf(session.startedAt)
   })),
   ...visibleStarts().map((ticket) => ({
     id: ticket.id,
@@ -499,6 +509,9 @@ export const agentRows = computed(() => [
     ...describeWork(ticket.work, null),
     state: 'running',
     elapsed: 'starting',
+    /* No time: a ticket is the freshest row by construction, and the order
+       puts `starting` first without one. */
+    startedAt: null,
     starting: true
   })),
   /* And last, the sessions the app was holding when it was closed. They sit
@@ -538,6 +551,7 @@ export const agentRows = computed(() => [
     title: record.title ?? null,
     state: 'done',
     elapsed: 'offline',
+    startedAt: epochOf(record.startedAt),
     restored: true,
     cwd: record.cwd
   }))

@@ -24,9 +24,10 @@ import { reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
 export const sessionsState = reactive({
-  /* Newest first — the opposite of `agentRows`, and right here: this list is
-     historical, "recent sessions" reads literally, and there is no second copy
-     of it on screen in the other order to disagree with. */
+  /* Newest first. `agentRows` in the terminal store is still oldest first, but
+     the agents panel as drawn is newest first too (`agentOrder.js` sorts it),
+     so the two agree on screen; this list is historical and "recent sessions"
+     reads literally. */
   sessions: [],
   /* Whose sessions these are, and the project of the last call — one field
      serving both, since a call always claims the list it is about to replace.

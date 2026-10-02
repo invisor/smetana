@@ -4,6 +4,7 @@ import {
   conversationsOf,
   isPinned,
   moveAgent,
+  newestFirst,
   orderAgents,
   togglePin
 } from '../../../src/components/agent/agentOrder.js'
@@ -11,14 +12,25 @@ import {
 /* A live row: the worker's own counter for an id, and the conversation id the
    app chose at the spawn beside it. The two are deliberately unalike, since
    telling them apart is the whole subject of this file. */
-const live = (id, conversation) => ({ id, conversation, state: 'running' })
+const live = (id, conversation, startedAt = null) => ({
+  id,
+  conversation,
+  state: 'running',
+  startedAt
+})
 /* A row with no conversation id — a run's batch, a fork, a harness that cannot
    be told one. It sits in the order and reaches no file. */
 const keyless = (id) => ({ id, conversation: null, state: 'running' })
 /* A start ticket: this window's own id, no conversation, gone in a second. */
 const starting = (id) => ({ id, conversation: null, starting: true, state: 'running' })
 /* And a row off `.smetana/agents.json`, whose id *is* its conversation id. */
-const offline = (conversation) => ({ id: conversation, conversation, restored: true, state: 'done' })
+const offline = (conversation, startedAt = null) => ({
+  id: conversation,
+  conversation,
+  restored: true,
+  state: 'done',
+  startedAt
+})
 
 describe('what a row is known by', () => {
   it('is the conversation id when there is one', () => {
@@ -36,13 +48,16 @@ describe('what a row is known by', () => {
 })
 
 describe('the panel\'s order', () => {
-  /* The state every project is in until somebody drags something, and the
-     reference is what says so: the caller tells "never arranged" from
-     "arranged, and this is what it came to" without comparing contents. */
-  it('gives back the very rows it was handed when nothing is stored', () => {
-    const rows = [live(1, 'a'), live(2, 'b')]
-    expect(orderAgents(rows, [], [])).toBe(rows)
-    expect(orderAgents(rows, null, null)).toBe(rows)
+  /* The base sort runs every time, so the old "same array back" shortcut is
+     gone. What "a drag that changed nothing writes nothing" rests on now is
+     `AgentList.vue` comparing drawn keys before and after: ordering the same
+     rows twice must give the same keys. */
+  it('is stable: ordering an already ordered list changes no key', () => {
+    const rows = [live(1, 'a', 30), live(2, 'b', 20), offline('c', 10)]
+    const once = orderAgents(rows, [], [])
+    const twice = orderAgents(once, [], [])
+    expect(twice.map(agentKey)).toEqual(once.map(agentKey))
+    expect(orderAgents(rows, null, null).map(agentKey)).toEqual(['a', 'b', 'c'])
   })
 
   it('draws the rows in the stored sequence', () => {
@@ -50,12 +65,23 @@ describe('the panel\'s order', () => {
     expect(orderAgents(rows, ['c', 'a', 'b'], []).map((row) => row.id)).toEqual([3, 1, 2])
   })
 
-  /* An agent started since the last drag has to appear, and the end is the only
-     honest place for it: the neighbours it would have been slotted between have
-     been moved by hand. */
-  it('puts a row the stored order has never heard of at the end', () => {
-    const rows = [live(1, 'a'), live(2, 'b'), live(3, 'c')]
-    expect(orderAgents(rows, ['c', 'a'], []).map((row) => row.id)).toEqual([3, 1, 2])
+  /* An agent started since the last drag has to appear, and the top of the flat
+     zone is where it goes: it is the newest, and the neighbours it would have
+     been slotted between have been moved by hand. */
+  it('puts a row the stored order has never heard of in front of the known ones', () => {
+    const rows = [live(1, 'a', 10), live(2, 'b', 20), live(3, 'c', 30)]
+    expect(orderAgents(rows, ['c', 'a'], []).map((row) => row.id)).toEqual([2, 3, 1])
+  })
+
+  it('puts a fresh row first and keeps three stored conversations in their sequence', () => {
+    const stored = ['c', 'a', 'b']
+    const rows = [live(1, 'a', 10), live(2, 'b', 20), live(3, 'c', 30), live(4, 'd', 40)]
+    expect(orderAgents(rows, stored, []).map((row) => row.id)).toEqual([4, 3, 1, 2])
+  })
+
+  it('orders several fresh rows among themselves newest first', () => {
+    const rows = [live(1, 'a', 10), live(2, 'x', 20), live(3, 'y', 30)]
+    expect(orderAgents(rows, ['a'], []).map((row) => row.id)).toEqual([3, 2, 1])
   })
 
   /* Passed over rather than pruned: the sessions of yesterday are offered back
@@ -71,11 +97,54 @@ describe('the panel\'s order', () => {
      session like anything else, and a row with no conversation holds its place
      by its own id for as long as this window lives. */
   it('orders live rows, starts and offline records in one list', () => {
-    const rows = [live(1, 'a'), starting('start-1'), offline('b')]
+    const rows = [live(1, 'a', 30), starting('start-1'), offline('b', 10)]
     expect(orderAgents(rows, ['b', 'start-1', 'a'], []).map((row) => row.id)).toEqual([
       'b',
       'start-1',
       1
+    ])
+    expect(orderAgents(rows, [], []).map((row) => row.id)).toEqual(['start-1', 1, 'b'])
+  })
+})
+
+describe('the base order, newest first', () => {
+  it('puts starts first, then by time descending, then rows with no time in arrival order', () => {
+    const rows = [
+      keyless(1),
+      live(2, 'a', 10),
+      starting('start-1'),
+      live(3, 'b', 30),
+      keyless(4),
+      live(5, 'c', 20)
+    ]
+    expect(newestFirst(rows).map((row) => row.id)).toEqual(['start-1', 3, 5, 2, 1, 4])
+  })
+
+  it('keeps arrival order for equal times and does not mutate its input', () => {
+    const rows = [live(1, 'a', 10), live(2, 'b', 10), live(3, 'c', 10)]
+    const copy = [...rows]
+    expect(newestFirst(rows).map((row) => row.id)).toEqual([1, 2, 3])
+    expect(rows).toEqual(copy)
+  })
+
+  /* No live session outlives a restart, so every record is older than every
+     live row; pinned here with real times rather than left to hope. */
+  it('keeps every offline row below every live row, newest first within each block', () => {
+    const yesterday = Date.parse('2026-10-01T09:00:00Z')
+    const today = Date.parse('2026-10-02T09:00:00Z')
+    const rows = [
+      offline('o1', yesterday),
+      live(1, 'l1', today),
+      offline('o2', yesterday + 5000),
+      live(2, 'l2', today + 5000),
+      starting('start-1')
+    ]
+    expect(orderAgents(rows, [], []).map((row) => row.id)).toEqual([
+      'start-1',
+      2,
+      1,
+      'o2',
+      'o1'
     ])
   })
 })

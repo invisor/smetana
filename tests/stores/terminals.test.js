@@ -281,6 +281,7 @@ describe('agent rows', () => {
       expect(row.tasks).toEqual([])
       expect(row.state).toBe('running')
       expect(row.elapsed).toBe('18m')
+      expect(row.startedAt).toBe(Date.parse('2026-08-03T10:00:00Z'))
     } finally {
       vi.useRealTimers()
     }
@@ -831,6 +832,7 @@ describe('starting a session', () => {
     const row = stores.terminals.agentRows.value.at(-1)
     expect(row.elapsed).toBe('starting')
     expect(row.starting).toBe(true)
+    expect(row.startedAt).toBeNull()
     expect(stores.terminals.terminalState.activeId).toBe(row.id)
 
     answer(session({ id: 9 }))
@@ -1472,6 +1474,7 @@ describe('the sessions a project offers back after a restart', () => {
       id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
       restored: true,
       elapsed: 'offline',
+      startedAt: Date.parse('2026-09-03T10:00:00Z'),
       cwd: '/p/.worktrees/smetana-0cj',
       /* The record's key *is* the conversation id, so the row comes back under
          the very name the live row carried — which is what lets a pin outlive
