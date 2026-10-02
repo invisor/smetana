@@ -16,6 +16,8 @@ import Tooltip from '../core/Tooltip.vue'
 import { needsCutting, pickBranch } from './branchChoice.js'
 import { readyPromoteNote } from './readyPromote.js'
 import { runTitle } from './runScopes.js'
+import Input from '../core/Input.vue'
+import { pauseFrom, pausePayload, validatePause } from './batchPause.js'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -145,6 +147,10 @@ const mode = ref('auto')
 const branch = ref('')
 const priority = ref(2)
 const parallel = ref(3)
+/* Raw field values, text as often as numbers: a number input hands back what
+   was typed, and `batchPause.js` is what says whether that is minutes. */
+const pauseMin = ref(10)
+const pauseMax = ref(30)
 const createBranch = ref(false)
 const liveCheck = ref(true)
 const fileFindings = ref(true)
@@ -223,6 +229,9 @@ watch(
     parallel.value = Math.min(Math.max(props.defaultParallel || 1, 1), PARALLEL_MAX)
     liveCheck.value = props.liveCheckAvailable && !props.liveCheckBlocked && (kept.liveCheck ?? true)
     fileFindings.value = kept.fileFindings ?? true
+    const pause = pauseFrom(kept)
+    pauseMin.value = pause.min
+    pauseMax.value = pause.max
   },
   { immediate: true }
 )
@@ -298,7 +307,14 @@ const takes = computed(() => {
     : `${n} task${n === 1 ? ' is' : 's are'} ready.`
 })
 
+/* Autopilot's alone: the other two modes run one batch, so there is no gap
+   between batches to put a pause in. */
+const hasPause = computed(() => mode.value === 'auto')
+const pauseErrors = computed(() => validatePause(pauseMin.value, pauseMax.value))
+const pauseOk = computed(() => !hasPause.value || Object.keys(pauseErrors.value).length === 0)
+
 const confirm = () => {
+  const pause = hasPause.value ? pausePayload(pauseMin.value, pauseMax.value) : null
   emit('confirm', {
     scope:
       props.scope?.kind === 'queue'
@@ -312,6 +328,10 @@ const confirm = () => {
        same reason as the floor above, and RunSettings::validate refuses a
        number that comes anyway. */
     max_parallel_tasks: mode.value === 'solo' ? null : parallel.value,
+    /* Null outside autopilot, the same shape and the same reason as the two
+       above; RunSettings::validate refuses a number that comes anyway. */
+    batch_pause_min: pause?.min ?? null,
+    batch_pause_max: pause?.max ?? null,
     live_check: liveCheck.value,
     file_findings: fileFindings.value
   })
@@ -412,6 +432,9 @@ const LIVE_CHECK_LABEL = 'Check each task for real before closing it'
 const liveCheckOff = computed(
   () => locked.value || !props.liveCheckAvailable || props.liveCheckBlocked !== ''
 )
+
+const pairStyle = { display: 'flex', gap: 'var(--space-4)' }
+const pairCellStyle = { display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', flex: 1, minWidth: 0 }
 
 const takesStyle = {
   fontSize: 'var(--text-xs)',
@@ -525,6 +548,41 @@ const errorStyle = {
         <Dropdown v-model="parallel" :options="PARALLEL" :disabled="locked" />
       </div>
 
+      <!-- Autopilot's alone: see `hasPause`. Two numbers of minutes, and the run
+           picks one out of the interval, ends included, before each batch but
+           the first. -->
+      <div v-if="hasPause" :style="row">
+        <span :style="labelStyle">Pause between batches, min</span>
+        <div :style="pairStyle">
+          <div :style="pairCellStyle">
+            <span :style="noteStyle">From</span>
+            <Input
+              v-model="pauseMin"
+              type="number"
+              mono
+              :invalid="Boolean(pauseErrors.min)"
+              :disabled="locked"
+            />
+          </div>
+          <div :style="pairCellStyle">
+            <span :style="noteStyle">To</span>
+            <Input
+              v-model="pauseMax"
+              type="number"
+              mono
+              :invalid="Boolean(pauseErrors.max)"
+              :disabled="locked"
+            />
+          </div>
+        </div>
+        <span v-if="pauseErrors.min || pauseErrors.max" :style="errorStyle">
+          {{ pauseErrors.min || pauseErrors.max }}
+        </span>
+        <span v-else :style="noteStyle">
+          A random number of minutes in this range, both ends included. 0 and 0 means no pause.
+        </span>
+      </div>
+
       <!-- The queue's alone: see `hasFloor`. -->
       <div v-if="hasFloor" :style="row">
         <span :style="labelStyle">Take tasks</span>
@@ -572,7 +630,7 @@ const errorStyle = {
     </div>
     <template #footer>
       <Button variant="ghost" :disabled="busy" @click="$emit('close')">Cancel</Button>
-      <Button variant="primary" :disabled="locked || !branch" @click="confirm">
+      <Button variant="primary" :disabled="locked || !branch || !pauseOk" @click="confirm">
         {{ busy ? 'Starting…' : 'Run' }}
       </Button>
     </template>

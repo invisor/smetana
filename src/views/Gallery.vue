@@ -6267,6 +6267,13 @@ const menuTargetStyle = {
           :run="runFixture({ kind: 'paused', pct: 92, resets: 'Aug 11 at 5:59pm (Europe/Moscow)' })"
           @stop="() => {}"
         />
+        <!-- The person's own pause between two autopilot batches: the pause
+             glyph, the minutes it was dealt and when it ends, and no "Run
+             anyway", because there is no threshold to release. -->
+        <RunBar
+          :run="runFixture({ kind: 'resting', until: '2026-10-02T23:42:00+00:00', minutes: 17 }, { batches: 2 })"
+          @stop="() => {}"
+        />
         <!-- The same pause where the harness said nothing about a reset. A bare
              line would read as a hang. -->
         <RunBar :run="runFixture({ kind: 'paused', pct: 92, resets: null })" @stop="() => {}" />

@@ -99,6 +99,19 @@ pub struct RunSettings {
     /// the same prompt.
     #[serde(default)]
     pub max_parallel_tasks: Option<u8>,
+    /// The interval, in whole minutes, an autopilot run draws its pause between
+    /// two batches from: one number out of `[min, max]`, ends included, before
+    /// every batch but the first.
+    ///
+    /// `None` outside `Auto`, for the reason `max_parallel_tasks` is `None` in
+    /// `Solo`: Crew runs one batch and Solo one task, so there is no gap
+    /// between batches for a number to describe, and a field sent and ignored is
+    /// one somebody starts honouring again in six months. The two travel as a
+    /// pair — `validate` refuses one without the other.
+    #[serde(default)]
+    pub batch_pause_min: Option<u16>,
+    #[serde(default)]
+    pub batch_pause_max: Option<u16>,
     pub live_check: bool,
     /// Whether a finding may become a `deferred` issue at all. Off means
     /// everything goes to the digest — see the `running-tasks` skill.
@@ -206,6 +219,20 @@ pub enum RunState {
     /// two are indistinguishable from the outside otherwise: both carry a
     /// percentage and a reset, and both arrive as `Decision::Pause`.
     Paused { pct: u8, resets: Option<String>, spent: bool },
+    /// The person's own pause between two autopilot batches, drawn at random
+    /// from the interval chosen in the dialog and waited out here.
+    ///
+    /// A state for the reason `Paused` is one: a run that has gone quiet for
+    /// twenty minutes is indistinguishable from one that hung, and Stop has to
+    /// reach it at once, which it can because there is no session in flight.
+    /// It is not `Paused`, which is the subscription's allowance and carries
+    /// the "Run anyway" release; this one is nobody's limit and has nothing to
+    /// release.
+    ///
+    /// `until` is an RFC 3339 moment and `minutes` is the number the draw came
+    /// to, which is what the bar says — the remaining time would be a clock the
+    /// bar has to tick, and the end moment is already beside it.
+    Resting { until: String, minutes: u16 },
     /// The current harness is limited but its known reset is close enough that
     /// preserving its session is better than handing work to another harness.
     WaitingForAgent { agent: String, pct: u8, resets: Option<String> },
@@ -469,6 +496,18 @@ impl RepeatedQuestion {
 /// it exists at all so that a number nobody could honour cannot reach a prompt.
 pub const MAX_PARALLEL: u8 = 8;
 
+/// The ceiling on either end of the pause between autopilot batches, in
+/// minutes: twelve hours, which is a bound on a typo and not a statement about
+/// what a night is. `settings::model` imports it, so Rust has one copy;
+/// `src/components/run/batchPause.js` is the other.
+pub const BATCH_PAUSE_CEILING: u16 = 720;
+
+/// The interval a dialog opens on and a damaged stored pair falls back to, in
+/// minutes. One Rust home for both ends; the front end's twin is
+/// `BATCH_PAUSE_DEFAULTS` in `batchPause.js`.
+pub const BATCH_PAUSE_MIN_DEFAULT: u16 = 10;
+pub const BATCH_PAUSE_MAX_DEFAULT: u16 = 30;
+
 impl RunSettings {
     /// The three rules that are not the dialog's to keep. `Solo` means the agent
     /// does the work itself instead of delegating, which is a coherent thing to
@@ -507,6 +546,31 @@ impl RunSettings {
                 return Err(RunError::BadSettings(format!(
                     "between 1 and {MAX_PARALLEL} agents at once, not {agents}"
                 )));
+            }
+        }
+        // The pause is autopilot's alone: only there is there more than one
+        // batch to put a gap between.
+        match (self.batch_pause_min, self.batch_pause_max) {
+            (None, None) => {}
+            (Some(min), Some(max)) => {
+                if !matches!(self.mode, RunMode::Auto) {
+                    return Err(RunError::BadSettings(
+                        "a pause between batches belongs to autopilot; the other modes run one \
+                         batch"
+                            .into(),
+                    ));
+                }
+                if min > max || max > BATCH_PAUSE_CEILING {
+                    return Err(RunError::BadSettings(format!(
+                        "a pause of {min} to {max} minutes: the range runs from 0 to \
+                         {BATCH_PAUSE_CEILING} and the minimum may not pass the maximum"
+                    )));
+                }
+            }
+            _ => {
+                return Err(RunError::BadSettings(
+                    "a pause between batches needs both its minimum and its maximum".into(),
+                ));
             }
         }
         Ok(())
@@ -676,6 +740,8 @@ mod tests {
             create_target: false,
             min_priority,
             max_parallel_tasks,
+            batch_pause_min: None,
+            batch_pause_max: None,
             live_check: true,
             file_findings: true,
         }
@@ -736,6 +802,41 @@ mod tests {
             let bare = RunSettings { max_parallel_tasks: None, ..settings(mode, RunScope::Queue) };
             assert!(bare.validate().is_ok());
         }
+    }
+
+    #[test]
+    fn a_batch_pause_belongs_to_autopilot_alone() {
+        let with = |mode, min, max| RunSettings {
+            batch_pause_min: min,
+            batch_pause_max: max,
+            ..settings(mode, RunScope::Queue)
+        };
+        assert!(with(RunMode::Auto, Some(10), Some(30)).validate().is_ok());
+        assert!(with(RunMode::Auto, Some(0), Some(0)).validate().is_ok(), "no pause is a pause");
+        assert!(with(RunMode::Auto, Some(5), Some(5)).validate().is_ok(), "a fixed pause is one too");
+        assert!(with(RunMode::Auto, None, None).validate().is_ok());
+        assert!(with(RunMode::Supervised, Some(10), Some(30)).validate().is_err());
+        let solo = RunSettings {
+            batch_pause_min: Some(10),
+            batch_pause_max: Some(30),
+            ..settings(RunMode::Solo, RunScope::Task { id: "a-1".into() })
+        };
+        assert!(solo.validate().is_err());
+        assert!(with(RunMode::Supervised, None, None).validate().is_ok());
+    }
+
+    #[test]
+    fn a_batch_pause_outside_its_rule_is_refused() {
+        let with = |min, max| RunSettings {
+            batch_pause_min: min,
+            batch_pause_max: max,
+            ..settings(RunMode::Auto, RunScope::Queue)
+        };
+        assert!(with(Some(31), Some(30)).validate().is_err(), "backwards");
+        assert!(with(Some(0), Some(BATCH_PAUSE_CEILING)).validate().is_ok());
+        assert!(with(Some(0), Some(BATCH_PAUSE_CEILING + 1)).validate().is_err());
+        assert!(with(Some(10), None).validate().is_err(), "half a pair");
+        assert!(with(None, Some(30)).validate().is_err(), "the other half");
     }
 
     #[test]

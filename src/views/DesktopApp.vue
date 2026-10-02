@@ -2390,10 +2390,18 @@ const startTheRun = async (chosen) => {
        would drop somebody's choice back to the config default every time they
        ran a single task from a card. */
     const floor = chosen.min_priority ?? project.runSettings?.minPriority
+    /* The pause pair follows the same rule as the floor: it is in the payload
+       only for an autopilot run, so a Solo or Crew run keeps what was
+       remembered rather than writing its absence over it. */
+    const pauseMin = chosen.batch_pause_min ?? project.runSettings?.batchPauseMin
+    const pauseMax = chosen.batch_pause_max ?? project.runSettings?.batchPauseMax
     project.runSettings = {
       mode: chosen.mode,
       targetBranch: chosen.target_branch,
       ...(floor == null ? {} : { minPriority: floor }),
+      ...(pauseMin == null || pauseMax == null
+        ? {}
+        : { batchPauseMin: pauseMin, batchPauseMax: pauseMax }),
       liveCheck: chosen.live_check,
       fileFindings: chosen.file_findings
     }

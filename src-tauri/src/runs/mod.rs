@@ -26,6 +26,7 @@ pub mod recovery;
 pub mod registry;
 pub mod report;
 pub mod reports;
+pub mod rest;
 pub mod service;
 pub mod session;
 pub mod setup_facts;

@@ -9,10 +9,11 @@
 //! `LastBatch::Completed` or as `Crashed`, and which `StopReason` finally
 //! ended the run, were both consistent with everything that survived, and
 //! nothing could tell them apart. This module is the answer to exactly that
-//! question, and its line list is closed at the nine things that could not be
-//! answered then.
+//! question, and its line list is closed at ten: the nine things that could not
+//! be answered then, and the pause between batches, which waits for minutes with
+//! nothing else on the record to say why.
 //!
-//! **Closed means whole, in both directions.** The nine cover every event of
+//! **Closed means whole, in both directions.** The ten cover every event of
 //! the kind they name and not a sample of it: a run makes four board reads, so
 //! all four are here — the one a decision is made from, the resync that settles
 //! an empty queue, the one after a batch that says whether the batch moved
@@ -172,13 +173,19 @@ pub fn stamp(now: DateTime<Local>, token: u64, line: &str) -> String {
 pub fn started(run: &Run, max_iterations: u32) -> String {
     format!(
         "start project={} scope={:?} mode={:?} target={} max-iterations={max_iterations} \
-         max-tasks={} min-priority={}",
+         max-tasks={} min-priority={} pause={}",
         run.project,
         run.settings.scope,
         run.settings.mode,
         run.settings.target_branch,
         opt(run.settings.max_parallel_tasks),
         opt(run.settings.min_priority),
+        // Written even when there is none: a run with no pause and one that
+        // never reached a second batch look the same in the rest of the file.
+        match (run.settings.batch_pause_min, run.settings.batch_pause_max) {
+            (Some(min), Some(max)) => format!("{min}-{max}"),
+            _ => "none".to_string(),
+        },
     )
 }
 
@@ -469,6 +476,24 @@ pub fn ended(reason: &StopReason, seconds: u64, report: Option<&str>) -> String 
     format!("end reason={reason:?} seconds={seconds} report={}", report.unwrap_or("none"))
 }
 
+/// 10. The pause an autopilot run takes before a batch: the interval it was
+/// drawn from, the number of minutes it came to and the moment it ends. A run
+/// that waits twenty minutes with nothing written down is the quiet one nobody
+/// can tell from a hang, so this is the line that says it was asked to.
+///
+/// A drawn zero is a pause that was skipped, and the line says so rather than
+/// writing nothing: a run with a pause configured and no line would read as one
+/// that forgot.
+pub fn rested(batch: u32, min: u16, max: u16, minutes: u16, until: Option<DateTime<chrono::Utc>>) -> String {
+    match until {
+        Some(until) => format!(
+            "pause before batch {batch} range={min}-{max} minutes={minutes} until={}",
+            until.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        ),
+        None => format!("pause before batch {batch} range={min}-{max} minutes=0 skipped"),
+    }
+}
+
 /// A list of ids as one field. Empty stays `[]` rather than disappearing: a
 /// missing field reads as a fact nobody looked up.
 fn ids(ids: &[String]) -> String {
@@ -533,6 +558,8 @@ mod tests {
                 create_target: false,
                 min_priority: Some(2),
                 max_parallel_tasks: Some(3),
+                batch_pause_min: None,
+                batch_pause_max: None,
                 live_check: false,
                 file_findings: true,
             },
@@ -618,6 +645,12 @@ mod tests {
         assert!(line.contains("max-iterations=40"), "{line}");
         assert!(line.contains("max-tasks=3"), "{line}");
         assert!(line.contains("min-priority=2"), "{line}");
+        assert!(line.contains("pause=none"), "a run with no pause says so: {line}");
+
+        let mut paused = run();
+        paused.settings.batch_pause_min = Some(10);
+        paused.settings.batch_pause_max = Some(30);
+        assert!(started(&paused, 40).contains("pause=10-30"));
     }
 
     #[test]
@@ -888,5 +921,21 @@ mod tests {
             ended(&StopReason::QueueEmpty, 60, None).ends_with("report=none"),
             "a report that could not be written is named as absent"
         );
+    }
+
+    #[test]
+    fn a_pause_names_its_interval_its_draw_and_its_end() {
+        let until = chrono::Utc.with_ymd_and_hms(2026, 8, 29, 4, 30, 0).unwrap();
+        assert_eq!(
+            rested(3, 10, 30, 17, Some(until)),
+            "pause before batch 3 range=10-30 minutes=17 until=2026-08-29T04:30:00Z"
+        );
+    }
+
+    #[test]
+    fn a_drawn_zero_is_written_down_as_skipped() {
+        let line = rested(2, 0, 0, 0, None);
+        assert!(line.contains("minutes=0 skipped"), "{line}");
+        assert!(line.contains("range=0-0"), "{line}");
     }
 }

@@ -389,3 +389,7 @@ gtk = "0.18"
 # **nothing at all**. `tempfile` 3.27.0 is already in `Cargo.lock` under
 # `tauri-plugin-updater`, and a dev-dependency reaches no shipped binary.
 tempfile = "3"
+# Virtual time for the run loop's waits: `start_paused` lets a test that waits
+# twenty minutes finish at once. It is a feature of a crate already compiled in,
+# and a dev-dependency reaches no shipped binary.
+tokio = { version = "1", features = ["test-util"] }

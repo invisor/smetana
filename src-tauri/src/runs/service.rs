@@ -48,6 +48,7 @@ use super::model::{
 use super::preflight;
 use super::queue::{self, Action, LastBatch, QueueSnapshot};
 use super::recovery;
+use super::rest;
 use super::registry::{self, Proc};
 use super::report::{self, BatchLine, BatchOutcome, LockRelease};
 use super::summary::{self, Baseline, RunSummary};
@@ -956,6 +957,11 @@ async fn drive(
     let mut empties: u32 = 0;
     let mut unreadable: u32 = 0;
     let mut last_batch = LastBatch::Completed;
+    // The batch count the pause was last taken for. `continue` sends the loop
+    // round again from the failover and limit waits below without a batch
+    // having run, and a pause taken on every lap would be several for one gap;
+    // keyed by the count, it is one per boundary whatever came between.
+    let mut rested_after: u32 = 0;
     // Batches ended by an unanswered question, counted in a row: the first
     // costs its batch, the same question again costs the run. Loop state like
     // `last_batch`, because the loop is the only thing that sees every ending.
@@ -1040,6 +1046,93 @@ async fn drive(
                 return;
             }
             Action::Run(_) => {}
+        }
+        // The person's own pause between two batches, after the decision to go
+        // on and before anything that could start one — the failover choice and
+        // the limit gate below are separate waits with their own meaning and run
+        // after this one, never in place of it. Not before the first batch
+        // (`run.batches` is still 0), and not before a continuation, which is the
+        // same logical batch handed to another harness rather than a new one.
+        if run.batches > 0 && continuation.is_none() && rested_after != run.batches {
+            rested_after = run.batches;
+            if let (Some(min), Some(max)) =
+                (run.settings.batch_pause_min, run.settings.batch_pause_max)
+            {
+                let minutes = rest::pick(min, max, rest::clock_rng());
+                if minutes == 0 {
+                    // Written down rather than skipped silently: a run with a
+                    // pause configured and no line reads as one that forgot.
+                    account.journal.say(&journal::rested(run.batches + 1, min, max, 0, None));
+                } else {
+                    let until = chrono::Utc::now() + chrono::Duration::minutes(i64::from(minutes));
+                    run.advance(RunState::Resting {
+                        until: until.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                        minutes,
+                    });
+                    say(&run);
+                    account.journal.say(&journal::rested(
+                        run.batches + 1,
+                        min,
+                        max,
+                        minutes,
+                        Some(until),
+                    ));
+                    // Interruptible for the reason the crash backoff is: a stop
+                    // that waited out the pause would look like it did nothing.
+                    if !rest::wait(until, chrono::Utc::now, &mut stop).await {
+                        finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
+                        return;
+                    }
+                    // The decision above is up to twelve hours old. A sibling run
+                    // or the person may have emptied the queue meanwhile, and a
+                    // batch started on that board would be judged against it
+                    // too: `did_nothing` would see a changed board and count an
+                    // empty batch as completed. So the board is read again and
+                    // the decision made again, against the same "before" the
+                    // first one used — `previous` is still the snapshot from the
+                    // batch before and is only replaced below.
+                    run.advance(RunState::Deciding);
+                    say(&run);
+                    let Some((issues, source)) = fresh_board(&tracker, &root).await else {
+                        // `continue` is safe here and only here: `rested_after`
+                        // is already set, so the lap that follows takes no
+                        // second pause for this boundary, and `previous` is
+                        // untouched.
+                        unreadable += 1;
+                        account.journal.say(&journal::unreadable_board(
+                            journal::Read::Decision,
+                            Some(unreadable),
+                        ));
+                        if unreadable >= 2 {
+                            finish(&mut run, StopReason::Unreadable, &say, &account, &root, &tracker).await;
+                            return;
+                        }
+                        continue;
+                    };
+                    unreadable = 0;
+                    now = queue::snapshot(&issues, &run.settings.scope, run.settings.min_priority);
+                    account.journal.say(&journal::board(journal::Read::Decision, &now, source));
+                    let again = queue::next_action(
+                        &now,
+                        previous.as_ref(),
+                        iteration,
+                        MAX_ITERATIONS,
+                        last_batch,
+                        once,
+                    );
+                    account.journal.say(&journal::decision(
+                        &again,
+                        last_batch,
+                        iteration,
+                        previous.as_ref(),
+                        &now,
+                    ));
+                    if let Action::Stop(reason) = again {
+                        finish(&mut run, reason, &say, &account, &root, &tracker).await;
+                        return;
+                    }
+                }
+            }
         }
         previous = Some(now);
 
@@ -3057,6 +3150,8 @@ mod tests {
             create_target: false,
             min_priority: None,
             max_parallel_tasks: Some(2),
+            batch_pause_min: None,
+            batch_pause_max: None,
             live_check: true,
             file_findings: true,
         }
