@@ -85,6 +85,13 @@ export const terminalState = reactive({
    the session that just left `needs-you` was the last loud one in its project. */
 const marks = reactive(new Map())
 
+/* The states in which an agent counts as running: it works or it waits on a
+   person. `idle` (the UI's `ready`) is deliberately absent, and so is anything
+   this list has not heard of. `projectStates` and `liveAgentCount` both read
+   it, and a state added to one place cannot miss the other. */
+const WORKING = ['running', 'starting']
+const COUNTED = new Set([...WORKING, 'needs-you'])
+
 /* The one fact a project's tile draws, per project path: `loud` if something is
    waiting on somebody there, `live` if something is working, `idle` otherwise.
 
@@ -107,13 +114,6 @@ const marks = reactive(new Map())
    leave the button somebody pressed with no visible effect. `idle` counts as
    neither — it is a live process with nothing to say, which `toUiState` reads
    as `ready` and the design system reads as quiet. */
-/* The states in which an agent counts as running: it works or it waits on a
-   person. `idle` (the UI's `ready`) is deliberately absent, and so is anything
-   this list has not heard of. `projectStates` and `liveAgentCount` both read
-   it, and a state added to one place cannot miss the other. */
-const WORKING = ['running', 'starting']
-const COUNTED = new Set([...WORKING, 'needs-you'])
-
 export const projectStates = computed(() => {
   const out = {}
   for (const mark of marks.values()) {
