@@ -94,9 +94,19 @@ pub async fn image_read(base: String, src: String) -> Result<Attachment, Attachm
             // form is tried first (a file really named `a%20b.png` keeps
             // opening) and the decoded one only when nothing is there. An
             // invalid sequence or a second miss keeps the original error.
-            let decoded = (err.kind() == std::io::ErrorKind::NotFound && src.contains('%'))
-                .then(|| urlencoding::decode(&src).ok().map(|d| resolve(&base, &d)))
-                .flatten();
+            let decoded = if err.kind() == std::io::ErrorKind::NotFound && src.contains('%') {
+                urlencoding::decode(&src).ok().map(|d| d.into_owned())
+            } else {
+                None
+            };
+            // The gate runs a second time on purpose: `%5C%5Chost` passed it
+            // as written and only becomes a UNC path here, and stat-ing that
+            // is a connection to the share. Refused as `NetworkPath` with the
+            // decoded text, the honest name for what was asked.
+            if let Some(text) = decoded.as_deref().filter(|text| is_network_path(text)) {
+                return Err(AttachmentError::NetworkPath(text.to_owned()));
+            }
+            let decoded = decoded.map(|text| resolve(&base, &text));
             match decoded.and_then(|path| std::fs::metadata(&path).ok().map(|meta| (path, meta))) {
                 Some((path, meta)) => {
                     resolved = path;
@@ -336,5 +346,18 @@ mod tests {
             other => panic!("expected Io, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_network_path_hidden_behind_percent_encoding_is_refused_not_stat_ed() {
+        for src in ["%5C%5Chost%5Cp.png", "%2F%2Fhost/p.png"] {
+            let err = image_read("/anywhere".into(), src.into()).await;
+            match err {
+                Err(AttachmentError::NetworkPath(text)) => {
+                    assert!(text.starts_with("\\\\") || text.starts_with("//"), "{text}")
+                }
+                other => panic!("expected NetworkPath for {src}, got {other:?}"),
+            }
+        }
     }
 }
