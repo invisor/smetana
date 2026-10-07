@@ -85,9 +85,38 @@ pub async fn image_read(base: String, src: String) -> Result<Attachment, Attachm
     if is_network_path(&src) {
         return Err(AttachmentError::NetworkPath(src));
     }
-    let resolved = resolve(&base, &src);
-    let label = resolved.display().to_string();
-    let meta = std::fs::metadata(&resolved).map_err(|err| AttachmentError::Io(format!("{label}: {err}")))?;
+    let mut resolved = resolve(&base, &src);
+    let mut label = resolved.display().to_string();
+    let meta = match std::fs::metadata(&resolved) {
+        Ok(meta) => meta,
+        Err(err) => {
+            // CommonMark writes a space in an address as `%20`, so the literal
+            // form is tried first (a file really named `a%20b.png` keeps
+            // opening) and the decoded one only when nothing is there. An
+            // invalid sequence or a second miss keeps the original error.
+            let decoded = if err.kind() == std::io::ErrorKind::NotFound && src.contains('%') {
+                urlencoding::decode(&src).ok().map(|d| d.into_owned())
+            } else {
+                None
+            };
+            // The gate runs a second time on purpose: `%5C%5Chost` passed it
+            // as written and only becomes a UNC path here, and stat-ing that
+            // is a connection to the share. Refused as `NetworkPath` with the
+            // decoded text, the honest name for what was asked.
+            if let Some(text) = decoded.as_deref().filter(|text| is_network_path(text)) {
+                return Err(AttachmentError::NetworkPath(text.to_owned()));
+            }
+            let decoded = decoded.map(|text| resolve(&base, &text));
+            match decoded.and_then(|path| std::fs::metadata(&path).ok().map(|meta| (path, meta))) {
+                Some((path, meta)) => {
+                    resolved = path;
+                    label = resolved.display().to_string();
+                    meta
+                }
+                None => return Err(AttachmentError::Io(format!("{label}: {err}"))),
+            }
+        }
+    };
     // A folder is an ordinary thing for a written-by-hand path to name by
     // mistake, and reading one answers with the operating system's own
     // wording about directories; the refusal a person can act on is the one
@@ -241,5 +270,94 @@ mod tests {
 
         assert!(matches!(err, Err(AttachmentError::NotAnImage(_))), "{err:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_percent_encoded_absolute_source_finds_the_decoded_file() {
+        let dir = scratch("pct-absolute");
+        std::fs::create_dir(dir.join("garage decor")).unwrap();
+        std::fs::write(dir.join("garage decor").join("a.png"), PNG).unwrap();
+        let src = format!("{}/garage%20decor/a.png", dir.display());
+
+        let record = image_read("/anywhere".into(), src).await.expect("the decoded form is read");
+
+        assert_eq!(record.path, dir.join("garage decor").join("a.png").to_string_lossy());
+        assert_eq!(record.name, "a.png");
+        assert_eq!(record.mime, "image/png");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_percent_encoded_relative_source_resolves_against_the_base() {
+        let dir = scratch("pct-relative");
+        std::fs::create_dir(dir.join("garage decor")).unwrap();
+        std::fs::write(dir.join("garage decor").join("a.png"), PNG).unwrap();
+
+        let record = image_read(dir.to_string_lossy().into_owned(), "./garage%20decor/a.png".into())
+            .await
+            .expect("the decoded relative form is read");
+
+        assert_eq!(record.path, dir.join("./garage decor/a.png").to_string_lossy());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_file_literally_named_with_a_percent_sequence_is_read_undecoded() {
+        let dir = scratch("pct-literal");
+        std::fs::write(dir.join("a%20b.png"), PNG).unwrap();
+        // The decoded twin exists too: the literal form must still win.
+        std::fs::write(dir.join("a b.png"), b"just text").unwrap();
+        let src = dir.join("a%20b.png").to_string_lossy().into_owned();
+
+        let record = image_read("/anywhere".into(), src.clone()).await.expect("the literal name is read");
+
+        assert_eq!(record.path, src);
+        assert_eq!(record.name, "a%20b.png");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn when_neither_form_exists_the_error_carries_the_literal_path() {
+        let dir = scratch("pct-missing");
+
+        let err = image_read(dir.to_string_lossy().into_owned(), "no%20pe.png".into()).await;
+
+        match err {
+            Err(AttachmentError::Io(message)) => {
+                assert!(message.contains("no%20pe.png"), "{message}");
+                assert!(message.contains("No such file"), "{message}");
+            }
+            other => panic!("expected Io, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_percent_sequence_does_not_panic_and_stays_not_found() {
+        let dir = scratch("pct-invalid");
+
+        let err = image_read(dir.to_string_lossy().into_owned(), "/tmp/%zz.png".into()).await;
+
+        match err {
+            Err(AttachmentError::Io(message)) => {
+                assert!(message.contains("%zz.png"), "{message}");
+                assert!(message.contains("No such file"), "{message}");
+            }
+            other => panic!("expected Io, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_network_path_hidden_behind_percent_encoding_is_refused_not_stat_ed() {
+        for src in ["%5C%5Chost%5Cp.png", "%2F%2Fhost/p.png"] {
+            let err = image_read("/anywhere".into(), src.into()).await;
+            match err {
+                Err(AttachmentError::NetworkPath(text)) => {
+                    assert!(text.starts_with("\\\\") || text.starts_with("//"), "{text}")
+                }
+                other => panic!("expected NetworkPath for {src}, got {other:?}"),
+            }
+        }
     }
 }

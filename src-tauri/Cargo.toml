@@ -104,6 +104,11 @@ toml_edit = "0.25"
 # already here for Tauri's own sake, so the added weight is the crate itself.
 trash = "5"
 
+# Percent-decoding for a figure's `src`: an agent writes `garage%20decor` in a
+# markdown image address and the file on disk is `garage decor`. Already in the
+# lock as a dependency of `trash`, so declaring it here adds no package.
+urlencoding = "2"
+
 # What stops the machine falling asleep under a run. A run is the app driving
 # itself for hours, usually at night, with nobody touching the keyboard or the
 # mouse — which is precisely what an idle timer reads as "nobody is here", and
