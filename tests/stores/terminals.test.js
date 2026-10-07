@@ -1821,17 +1821,39 @@ describe('the live agent count in the status footer', () => {
     expect(stores.terminals.liveAgentCount.value).toBe(0)
   })
 
-  /* The one state it would be tempting to drop, and the reason the rule is "not
-     exited" rather than "running": an agent waiting for an answer is why
-     somebody is looking at this bar at all, and a counter that fell by one on a
-     demand for attention would point away from it. */
-  it('an agent waiting for a person still counts', async () => {
+  /* The one state it would be tempting to drop, and the reason the rule is
+     "works or waits" rather than "running": an agent waiting for an answer is
+     why somebody is looking at this bar at all, and a counter that fell by one
+     on a demand for attention would point away from it. The `idle` one beside
+     it is the opposite case — a process with nothing to do is not running
+     (smetana-snz8). */
+  it('an agent waiting for a person still counts, and an idle one does not', async () => {
     const { stores, emit, nextTick } = await ready()
     await emit('terminal:state', session({ state: 'needs-you' }))
     await emit('terminal:state', session({ id: 2, state: 'idle' }))
     await nextTick()
 
+    expect(stores.terminals.liveAgentCount.value).toBe(1)
+  })
+
+  it('counts running and starting sessions, and nothing in a state it has not heard of', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 2, state: 'starting' }))
+    await emit('terminal:state', session({ id: 3, state: 'thinking' }))
+    await emit('terminal:state', session({ id: 4, state: 'idle' }))
+    await nextTick()
+
     expect(stores.terminals.liveAgentCount.value).toBe(2)
+  })
+
+  it('reads nothing over a project where every agent is idle', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ state: 'idle' }))
+    await emit('terminal:state', session({ id: 2, state: 'idle' }))
+    await nextTick()
+
+    expect(stores.terminals.liveAgentCount.value).toBe(0)
+    expect(stores.terminals.agentCounts.value).toEqual({ loud: 0, live: 0 })
   })
 
   /* Starts count from the moment their row is drawn — a spawn takes about a
@@ -1873,13 +1895,12 @@ describe('the live agent count in the status footer', () => {
   })
 
   /* The counter and the list, tied together in one assertion, because what the
-     bar promises is the list minus the rows that have finished and the two are
-     only equal through `toUiState`: `exited` is the one session state it maps
-     onto `done` and `failed`, and the counter skips exactly that state. A
-     seventh state mapped onto a finished-looking row tomorrow would move the
-     list and leave the counter behind, silently, and the arithmetic here is the
-     only thing that would notice. */
-  it('the count is the list minus the rows that have finished', async () => {
+     bar promises is the rows that are working or waiting. The two meet through
+     `toUiState`: `idle` becomes `ready`, `exited` becomes `done`/`failed`, and
+     the counter reads the raw states those come from. A state mapped onto a
+     different row tomorrow would move the list and leave the counter behind,
+     silently, and the arithmetic here is the only thing that would notice. */
+  it('the count is the rows that are running or waiting', async () => {
     const { ipc, stores, emit, nextTick } = await ready()
     ipc.on('terminal_create', () => new Promise(() => {}))
 
@@ -1898,9 +1919,9 @@ describe('the live agent count in the status footer', () => {
     expect(stores.terminals.terminalState.sessions).toHaveLength(6)
     expect(rows.map((r) => r.state)).toEqual(['running', 'done', 'failed', 'needs-you', 'ready', 'running'])
     expect(stores.terminals.liveAgentCount.value).toBe(
-      rows.filter((r) => r.state !== 'done' && r.state !== 'failed').length
+      rows.filter((r) => r.state === 'running' || r.state === 'needs-you').length
     )
-    expect(stores.terminals.liveAgentCount.value).toBe(4)
+    expect(stores.terminals.liveAgentCount.value).toBe(3)
   })
 })
 
@@ -1916,7 +1937,7 @@ describe('the agent counts behind the headline', () => {
     await emit('terminal:state', session({ id: 4, state: 'idle' }))
     await nextTick()
 
-    expect(stores.terminals.agentCounts.value).toEqual({ loud: 2, live: 2 })
+    expect(stores.terminals.agentCounts.value).toEqual({ loud: 2, live: 1 })
   })
 
   /* The whole of the blocking defect this computed exists for. A shell rings
@@ -1946,8 +1967,9 @@ describe('the agent counts behind the headline', () => {
   /* The tie to the counter, asserted as arithmetic rather than as two numbers
      that happen to match today: the live sentence is only ever drawn when
      nothing is waiting, and in that case it must read exactly what the `bot`
-     counter one gap away reads, tooltip and all. An idle agent — a `ready` row,
-     one sitting at its prompt between turns — is the case that had them apart. */
+     counter one gap away reads, tooltip and all. Both count what works or
+     waits, so the two idle sessions here are in neither and the running one
+     and the start ticket are in both. */
   it('the live half equals the status footer counter whenever nothing is waiting', async () => {
     const { ipc, stores, emit, nextTick } = await ready()
     ipc.on('terminal_create', () => new Promise(() => {}))
@@ -1960,7 +1982,27 @@ describe('the agent counts behind the headline', () => {
 
     expect(stores.terminals.agentCounts.value.loud).toBe(0)
     expect(stores.terminals.agentCounts.value.live).toBe(stores.terminals.liveAgentCount.value)
-    expect(stores.terminals.liveAgentCount.value).toBe(4)
+    expect(stores.terminals.liveAgentCount.value).toBe(2)
+  })
+
+  /* The rail's tile is the third reader of the same rule. Its map holds no start
+     tickets, so the counter is that row's `live + loud` plus the tickets, for
+     any mix of states (smetana-snz8). */
+  it('the counter is the rail row plus the start tickets, for any mix of states', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    ipc.on('terminal_create', () => new Promise(() => {}))
+    const states = ['running', 'starting', 'idle', 'needs-you', 'exited', 'thinking']
+    for (const [i, state] of states.entries()) {
+      await emit('terminal:state', session({ id: i + 2, state, exitCode: state === 'exited' ? 0 : null }))
+    }
+    await emit('terminal:state', session({ id: 1, state: 'idle' }))
+    await nextTick()
+    stores.terminals.createSession('/p', { kind: 'bare' })
+
+    const row = stores.terminals.projectStates.value['/p']
+    expect(stores.terminals.liveAgentCount.value).toBe(row.live + row.loud + 1)
+    expect(stores.terminals.agentCounts.value.live).toBe(row.live + 1)
+    expect(stores.terminals.agentCounts.value.loud).toBe(row.loud)
   })
 
   /* And with somebody waiting, the two are allowed to differ — the counter

@@ -85,6 +85,13 @@ export const terminalState = reactive({
    the session that just left `needs-you` was the last loud one in its project. */
 const marks = reactive(new Map())
 
+/* The states in which an agent counts as running: it works or it waits on a
+   person. `idle` (the UI's `ready`) is deliberately absent, and so is anything
+   this list has not heard of. `projectStates` and `liveAgentCount` both read
+   it, and a state added to one place cannot miss the other. */
+const WORKING = ['running', 'starting']
+const COUNTED = new Set([...WORKING, 'needs-you'])
+
 /* The one fact a project's tile draws, per project path: `loud` if something is
    waiting on somebody there, `live` if something is working, `idle` otherwise.
 
@@ -113,7 +120,7 @@ export const projectStates = computed(() => {
     if (mark.kind === SHELL_WORK) continue
     const row = (out[mark.project] ??= { state: 'idle', live: 0, loud: 0 })
     if (mark.state === 'needs-you') row.loud += 1
-    else if (mark.state === 'running' || mark.state === 'starting') row.live += 1
+    else if (WORKING.includes(mark.state)) row.live += 1
   }
   for (const row of Object.values(out)) {
     row.state = row.loud ? 'loud' : row.live ? 'live' : 'idle'
@@ -557,44 +564,46 @@ export const agentRows = computed(() => [
   }))
 ])
 
-/* How many of this project's agents are alive — the status footer's agents
-   counter, and the list above minus the rows that have finished.
+/* How many of this project's agents are *running* — the status footer's agents
+   counter. An agent is running when it works (`running`, `starting`) or waits
+   on a person (`needs-you`); an `idle` process, which `toUiState` reads as
+   `ready`, is not. That is the rule `projectStates` above applies to the
+   rail's tile, spelled once in `COUNTED` and read by both, so the number, the
+   footer's sentence and the tile agree by construction. It used to count every
+   state but `exited`, and a project whose tile was grey read "7 agents
+   running" over seven sessions sitting at a prompt (smetana-snz8).
 
-   `exited` is the one state that does not count. A session that fell over
-   yesterday is still a row somebody may want to read, which is why it stays in
-   the list at all, but counting it as running is how a number in the bar stops
-   meaning anything. Every other state counts, `needs-you` among them: an agent
-   waiting for an answer is the reason a person is looking at this bar, and a
-   counter that dropped by one the moment attention was demanded would be
-   pointing away from the thing it exists to point at.
+   A positive list rather than the exclusion of `exited`: for this counter the
+   rule is "works or waits", and a state nobody has heard of is not in it.
+   `exited` is out as a consequence and not as a special case. `needs-you`
+   stays in: an agent waiting for an answer is the reason a person is looking at
+   this bar, and a counter that dropped the moment attention was demanded would
+   be pointing away from the thing it exists to point at.
 
    Starts count as well, through the same `visibleStarts` the rows use rather
    than a second copy of the rule — a spawn takes about a second, the row is
    drawn for that second, and a counter that waited for the worker would
-   disagree with the list beside it for exactly as long.
+   disagree with the list beside it for exactly as long. The rail's map holds no
+   tickets, which is why it is not the source of this number.
 
    Sessions come through `agentSessions` for the same reason and not through
    `terminalState.sessions`: that list holds the person's own shells too, and a
    shell is not an agent — it has no row in the panel this number is read
    against, so counting one would put the bar and the list one apart with
    nothing on screen to explain the difference. This is the same exclusion
-   `agentRows` makes, through the same function deliberately: the two are one
-   sentence in the product — "how many agents are running" and "which agents are
-   running" — and a second spelling of "not a shell" here is exactly how they
-   would come to disagree. That is not hypothetical. This counter and the shell
-   sessions arrived on two branches at once and merged without a textual
-   conflict, each correct alone, and the number was wrong the moment they met.
+   `agentRows` makes, through the same function deliberately: a second spelling
+   of "not a shell" here is exactly how they would come to disagree. That is not
+   hypothetical. This counter and the shell sessions arrived on two branches at
+   once and merged without a textual conflict, each correct alone, and the
+   number was wrong the moment they met.
 
    Deliberately a count and not `agentRows.value.length`: the rows carry
    captions and elapsed times, `now` ticks every thirty seconds, and this number
    has no business being recomputed by the clock. That is also what keeps
-   `terminalState.restored` out of it for free, and it must stay out: this
-   counter is how many agents are *running*, and none of those is — a footer
-   reading one over a freshly launched app with nothing started in it would be
-   the number ceasing to mean anything, which is the same objection `exited`
-   already answers one paragraph up. */
+   `terminalState.restored` out of it for free, and it must stay out: none of
+   those is running. */
 export const liveAgentCount = computed(
-  () => agentSessions().filter((s) => s.state !== 'exited').length + visibleStarts().length
+  () => agentSessions().filter((s) => COUNTED.has(s.state)).length + visibleStarts().length
 )
 
 /* The same agents, split the way the status footer's headline needs them: how
@@ -620,10 +629,11 @@ export const liveAgentCount = computed(
    `live` is the counter minus the waiting ones rather than a filter of its own,
    which is what keeps the sentence and the counter beside it in agreement by
    construction. They sit about one gap apart in the same bar and say the same
-   noun, so any second spelling of "alive" here is a pair of numbers that
+   noun, so any second spelling of "running" here is a pair of numbers that
    disagree in front of somebody — the failure this file already carries a
-   paragraph about, one merge too late. The subtraction is exact today, every
-   `needs-you` session being one of the non-exited ones the counter adds up; the
+   paragraph about, one merge too late. So `live` is what is working, `ready`
+   sessions being in neither half. The subtraction is exact today, every
+   `needs-you` session being one of the counted ones the counter adds up; the
    clamp is there so that if that ever stops being true the sentence goes quiet
    instead of announcing "-1 agents running". */
 export const agentCounts = computed(() => {
