@@ -165,12 +165,12 @@ export function mergeAgentRows(rows, sessions) {
 
 /* The states in which a driven session is over.
 
-   The pair is exactly what the terminal store's counter leaves out, arrived at
-   from the other end: there a session is counted unless its raw state is
-   `exited`, and `toUiState` turns that one raw state into these two words by
+   `toUiState` turns the PTY's one raw `exited` state into these two words by
    reading the exit code. A driven session has no exit code — `state_of` has
-   already decided which of the two endings it was — so the same exclusion has
-   to be spelled as the pair.
+   already decided which of the two endings it was — so the same ending has to
+   be spelled as the pair. This is not the footer counter's list: that one is
+   positive (see `COUNTED` below) and answers "is it running", where this
+   answers "is it over".
 
    A closed list of the dead states rather than of the live ones, which is
    `agentMenu.js`'s choice one file over and the same reason: a word added to
@@ -187,31 +187,43 @@ export function mergeAgentRows(rows, sessions) {
    this does not reach for — it is that file's own concern, not this task's. */
 export const ENDED = ['done', 'failed']
 
-const liveCount = (sessions) => (sessions ?? []).filter((s) => !ENDED.includes(s.state)).length
+/* The states in which a driven or Crew session counts as running: it works
+   (`running`) or waits on a person (`needs-you`). `ready` — a process with
+   nothing to do — is not in it, nor is Crew's `waiting` (the turn is closed and
+   the teammate waits), nor a state nobody has heard of. The rule is positive on
+   purpose: it is the one `stores/terminals.js` applies to PTY sessions and
+   `mergeProjectStates` below applies to the rail's tile, and `ENDED` above is
+   the answer to a different question (can it still be sent to). A word added to
+   `SessionState` is not counted until somebody decides it is running. */
+const WORKING = ['running']
+const COUNTED = [...WORKING, 'needs-you']
+
+const liveCount = (sessions) => (sessions ?? []).filter((s) => COUNTED.includes(s.state)).length
 
 const loudCount = (sessions) => (sessions ?? []).filter((s) => s.state === 'needs-you').length
 
 /* The footer's agents counter, with the driven sessions of the same project
-   added to it. `needs-you` counts, as it does on the terminal's side: an agent
-   waiting on an answer is the reason somebody is reading this bar. */
+   added to it. It counts what is running — working or waiting on a person —
+   and not what merely stays open: seven `ready` sessions are a project whose
+   tile is grey, and the number beside the robot reads nothing. */
 export function mergeLiveAgentCount(count, sessions) {
   return (count ?? 0) + liveCount(sessions)
 }
 
 /* The same agents split the way `components/shell/headline.js` needs them.
 
-   `live` stays "alive but not waiting", which is the shape the terminal store
+   `live` stays "running but not waiting", which is the shape the terminal store
    hands over, so the driven sessions are added the same way they are counted
    above and the loud ones taken back out. The clamp is the store's own and is
    kept for its reason: the subtraction is exact today — a `needs-you` session
-   is one of the live ones by construction — and if that ever stops being true
-   the sentence goes quiet instead of announcing "-1 agents running".
+   is one of the counted ones by construction — and if that ever stops being
+   true the sentence goes quiet instead of announcing "-1 agents running".
 
    The sentence and the counter beside it are one thing to a person reading the
    bar, so both are merged here rather than one of them: a driven session
    counted in the number and not in the words would be two readings of the same
    project an inch apart, which is the failure the store already carries a
-   paragraph about. */
+   paragraph about. `live + loud` of this is what the rail's tile counts too. */
 export function mergeAgentCounts(counts, sessions) {
   const loud = loudCount(sessions)
   const live = liveCount(sessions)
@@ -245,7 +257,7 @@ export function mergeProjectStates(states, sessions) {
   for (const session of sessions ?? []) {
     const row = (out[session.project] ??= { state: 'idle', live: 0, loud: 0 })
     if (session.state === 'needs-you') row.loud += 1
-    else if (session.state === 'running') row.live += 1
+    else if (WORKING.includes(session.state)) row.live += 1
   }
   for (const row of Object.values(out)) {
     row.state = row.loud ? 'loud' : row.live ? 'live' : 'idle'

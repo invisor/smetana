@@ -263,11 +263,22 @@ describe('a driven conversation among the agents', () => {
       expect(mergeLiveAgentCount(0, [driven(1, 'done'), driven(2, 'failed')])).toBe(0)
     })
 
-    /* A state added to Rust and not yet to this front end reads as a live
-       agent, which is the softer way to be wrong: a number one too high beats a
-       working agent that stopped being counted. */
-    it('counts a state nobody has heard of', () => {
-      expect(mergeLiveAgentCount(0, [driven(1, 'thinking')])).toBe(1)
+    /* A session with nothing to do is not running: its project's tile is grey
+       and the number says the same (smetana-snz8). */
+    it('leaves out a conversation that is ready', () => {
+      expect(mergeLiveAgentCount(0, [driven(1, 'ready'), driven(2, 'ready')])).toBe(0)
+      expect(mergeLiveAgentCount(0, [driven(1, 'running'), driven(2, 'needs-you')])).toBe(2)
+    })
+
+    /* The rule is positive — works or waits — so a state added to Rust and not
+       yet to this front end is not counted until somebody decides it is. */
+    it('does not count a state nobody has heard of', () => {
+      expect(mergeLiveAgentCount(0, [driven(1, 'thinking')])).toBe(0)
+    })
+
+    /* Crew's `waiting` is a closed turn with the teammate idle. */
+    it('counts a Crew node that works and not one that waits', () => {
+      expect(mergeLiveAgentCount(0, [crewRow(1, 'running'), crewRow(2, 'waiting')])).toBe(1)
     })
 
     /* smetana-m5ch: a Crew lead and its workers are each their own session, so
@@ -281,10 +292,37 @@ describe('a driven conversation among the agents', () => {
   })
 
   describe('the sentence beside it', () => {
-    it('adds the waiting ones to the loud half and the rest to the live half', () => {
+    /* A `ready` conversation is in neither half: only what works or waits is
+       running. */
+    it('adds the waiting ones to the loud half, the working ones to the live half, and drops the ready', () => {
       expect(
-        mergeAgentCounts({ loud: 1, live: 1 }, [driven(1, 'needs-you'), driven(2, 'ready')])
+        mergeAgentCounts({ loud: 1, live: 1 }, [
+          driven(1, 'needs-you'),
+          driven(2, 'running'),
+          driven(3, 'ready')
+        ])
       ).toEqual({ loud: 2, live: 2 })
+    })
+
+    /* The footer's number is the rail's `live + loud` for the project, and the
+       sentence's live half is the rail's `live`, for any mix of sessions. */
+    it('agrees with the footer counter and the rail row for any mix of states', () => {
+      const sessions = [
+        driven(1, 'running'),
+        driven(2, 'needs-you'),
+        driven(3, 'ready'),
+        driven(4, 'done'),
+        driven(5, 'thinking'),
+        crewRow(6, 'running'),
+        crewRow(7, 'waiting'),
+        crewRow(8, 'failed')
+      ]
+      const row = mergeProjectStates({}, sessions)['/p']
+      const counts = mergeAgentCounts({ loud: 0, live: 0 }, sessions)
+
+      expect(mergeLiveAgentCount(0, sessions)).toBe(row.live + row.loud)
+      expect(counts).toEqual({ loud: row.loud, live: row.live })
+      expect(row).toEqual({ state: 'loud', live: 2, loud: 1 })
     })
 
     it('says nothing of its own about a project with no conversation', () => {
