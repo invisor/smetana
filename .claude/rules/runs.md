@@ -809,7 +809,11 @@ setting and has nothing to release. The wait (`rest::wait`) sleeps in slices of 
 clock, so a laptop that slept notices on waking that `until` has passed, and a
 `stop` ends it on any slice as `Cancelled`. The draw is `runs/rest.rs::pick`, pure,
 taking its randomness as an argument (no `rand` crate; `clock_rng` is splitmix64
-off the clock). `0`/`0` sets no state and writes the skipped line. The pause
+off the clock). `rest::wait` takes a `tick` callback, called after each slice
+that did not end the pause with the whole minutes elapsed by the same wall clock
+(so a laptop that slept gets one call with the real figure, not one per missed
+minute); the loop passes a closure writing `journal::resting`, and nothing
+reaches the run bar or a terminal tab. `0`/`0` sets no state and writes the skipped line. The pause
 sits between the decision and the batch, so the decision is **made again after
 it**: the loop reads the board fresh (journalled as the ordinary decision
 read, so the four-read list is unchanged), runs `next_action` against the same
@@ -845,14 +849,18 @@ August is the measurement: six batches in two hours, four of which did nothing,
 and a day later it could not be settled off the disk whether those four were
 counted as `LastBatch::Completed` or as `Crashed`, nor which `StopReason` ended
 the run — both readings fit everything that survived. `journal.rs` closes
-exactly that question, and its list of lines is **closed at ten**: the run's
+exactly that question, and its list holds **ten kinds of line**: the run's
 own settings, every preflight command and health check with its outcome, every
 board read with the ids in it, every answer from the spend gate with the
 percentages behind it, every `next_action` with the `LastBatch` it came out of,
 every batch's start and ending, the two counters after each batch, the
 ending with the document it was written into, and the pause an autopilot run
 takes before a batch (`journal::rested`: the interval, the minutes drawn and
-the moment it ends — or `minutes=0 skipped` for a drawn zero).
+the moment it ends — or `minutes=0 skipped` for a drawn zero). While that pause lasts it also writes
+one line a minute (`journal::resting`, `elapsed=K of M minutes`, K from 1 to
+M-1), which is up to 719 lines for the 720-minute maximum in the journal and the
+app log both — accepted deliberately, so the "few dozen per run" no longer holds
+for an autopilot run with a long pause.
 
 Closed means whole, in both directions. A run makes **four** board reads and all
 four are on the record, each marked and each written down when it fails as well

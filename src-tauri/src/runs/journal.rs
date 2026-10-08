@@ -9,12 +9,12 @@
 //! `LastBatch::Completed` or as `Crashed`, and which `StopReason` finally
 //! ended the run, were both consistent with everything that survived, and
 //! nothing could tell them apart. This module is the answer to exactly that
-//! question, and its line list is closed at ten: the nine things that could not
-//! be answered then, and the pause between batches, which waits for minutes with
-//! nothing else on the record to say why.
+//! question, and its line list holds ten kinds of line: the nine things that could
+//! not be answered then, and the pause between batches, which waits for minutes
+//! with nothing else on the record to say why.
 //!
-//! **Closed means whole, in both directions.** The ten cover every event of
-//! the kind they name and not a sample of it: a run makes four board reads, so
+//! **Closed means whole, in both directions.** The ten kinds cover every event
+//! of the kind they name and not a sample of it: a run makes four board reads, so
 //! all four are here — the one a decision is made from, the resync that settles
 //! an empty queue, the one after a batch that says whether the batch moved
 //! anything, and the run's last — and each of them is written down when it
@@ -42,7 +42,11 @@
 //! when the run starts and every line is written and flushed as it happens,
 //! because the run this exists for is the one that died: a journal assembled at
 //! the end is empty in precisely the case somebody goes looking for it. The
-//! cost is a write and a flush per event, which is a few dozen per run.
+//! cost is a write and a flush per event, which is a few dozen per run — and
+//! one more per minute of every pause between batches (`resting`), up to 719 for
+//! the longest, 720 minutes, in the journal and in the app log alike. That was
+//! accepted deliberately: a pause that goes quiet for twelve hours is the one
+//! nobody can tell from a hang.
 //!
 //! **A journal that cannot be opened never stops a run.** The file is a record
 //! of the work and not the work, so a full disk, a read-only project folder or
@@ -494,6 +498,15 @@ pub fn rested(batch: u32, min: u16, max: u16, minutes: u16, until: Option<DateTi
     }
 }
 
+/// The progress of a pause, once a minute while it lasts: how many whole minutes
+/// have passed and how many the pause was drawn at. Part of kind 10 rather than
+/// an eleventh kind — `rested` opens the pause, this reports on it, and the
+/// board read after it ends it. `minutes` is the `minutes=` of the `rested` line,
+/// `elapsed` runs from 1 to `minutes - 1`, and a skipped pause writes none.
+pub fn resting(batch: u32, elapsed: u16, minutes: u16) -> String {
+    format!("pause before batch {batch} elapsed={elapsed} of {minutes} minutes")
+}
+
 /// A list of ids as one field. Empty stays `[]` rather than disappearing: a
 /// missing field reads as a fact nobody looked up.
 fn ids(ids: &[String]) -> String {
@@ -930,6 +943,11 @@ mod tests {
             rested(3, 10, 30, 17, Some(until)),
             "pause before batch 3 range=10-30 minutes=17 until=2026-08-29T04:30:00Z"
         );
+    }
+
+    #[test]
+    fn a_pause_in_progress_names_the_minutes_gone_and_the_minutes_drawn() {
+        assert_eq!(resting(3, 5, 17), "pause before batch 3 elapsed=5 of 17 minutes");
     }
 
     #[test]

@@ -23,19 +23,40 @@ const SLICE: Duration = Duration::from_secs(60);
 /// The clock is an argument so a test under paused tokio time can supply one that
 /// moves with the virtual clock — `Utc::now` does not, and would never reach
 /// `until`. The loop passes `Utc::now`.
+///
+/// `tick` is called after each slice that did not end the pause, with the whole
+/// minutes that have passed since `wait` began, read off the same `now` as the
+/// remainder. It is the journal's once-a-minute line, and it is deliberately not
+/// monotonic: a laptop that slept through forty minutes gets one call saying
+/// forty, not forty calls for the minutes nobody was awake to see. There is no
+/// call for minute zero (the line that opened the pause says that) and none for
+/// the last (the pause has ended by then, and the board read that follows says
+/// so), which makes a seventeen-minute pause tick sixteen times at most.
 pub async fn wait(
     until: DateTime<Utc>,
     now: impl Fn() -> DateTime<Utc>,
     stop: &mut mpsc::Receiver<()>,
+    mut tick: impl FnMut(u16),
 ) -> bool {
+    let began = now();
     loop {
         let left = (until - now()).to_std().unwrap_or(Duration::ZERO);
         if left.is_zero() {
             return true;
         }
+        // Biased towards the stop: when a stop and the end of a slice land on
+        // the same instant, the stop wins and no tick is written after it.
         tokio::select! {
-            _ = tokio::time::sleep(left.min(SLICE)) => {}
+            biased;
             _ = stop.recv() => return false,
+            _ = tokio::time::sleep(left.min(SLICE)) => {}
+        }
+        let current = now();
+        if current < until {
+            let elapsed = (current - began).num_minutes().clamp(0, i64::from(u16::MAX)) as u16;
+            if elapsed > 0 {
+                tick(elapsed);
+            }
         }
     }
 }
@@ -130,7 +151,7 @@ mod tests {
         let now = virtual_clock();
         let until = now() + chrono::Duration::minutes(20);
         let began = tokio::time::Instant::now();
-        assert!(wait(until, &now, &mut stop).await, "a pause that ran out lets the run go on");
+        assert!(wait(until, &now, &mut stop, |_| {}).await, "a pause that ran out lets the run go on");
         assert!(began.elapsed() >= Duration::from_secs(20 * 60), "{:?}", began.elapsed());
         assert!(began.elapsed() < Duration::from_secs(20 * 60 + 61));
     }
@@ -145,7 +166,7 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(5 * 60)).await;
             let _ = tx.send(()).await;
         });
-        assert!(!wait(until, &now, &mut stop).await, "stop must end the pause");
+        assert!(!wait(until, &now, &mut stop, |_| {}).await, "stop must end the pause");
         assert!(began.elapsed() < Duration::from_secs(5 * 60 + 1), "{:?}", began.elapsed());
     }
 
@@ -154,7 +175,7 @@ mod tests {
         let (_keep, mut stop) = mpsc::channel::<()>(1);
         let now = virtual_clock();
         let began = tokio::time::Instant::now();
-        assert!(wait(now() - chrono::Duration::minutes(1), &now, &mut stop).await);
+        assert!(wait(now() - chrono::Duration::minutes(1), &now, &mut stop, |_| {}).await);
         assert_eq!(began.elapsed(), Duration::ZERO);
     }
 
@@ -167,7 +188,46 @@ mod tests {
         let at = Utc::now();
         let now = move || at + chrono::Duration::from_std(began.elapsed()).unwrap() * 60;
         let until = at + chrono::Duration::minutes(20);
-        assert!(wait(until, &now, &mut stop).await);
+        assert!(wait(until, &now, &mut stop, |_| {}).await);
         assert!(began.elapsed() <= Duration::from_secs(60), "{:?}", began.elapsed());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn every_minute_but_the_first_and_the_last_ticks_once_in_order() {
+        let (_keep, mut stop) = mpsc::channel::<()>(1);
+        let now = virtual_clock();
+        let until = now() + chrono::Duration::minutes(20);
+        let mut seen = Vec::new();
+        assert!(wait(until, &now, &mut stop, |elapsed| seen.push(elapsed)).await);
+        assert_eq!(seen, (1..=19).collect::<Vec<u16>>());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_at_minute_five_leaves_no_tick_after_it() {
+        let (tx, mut stop) = mpsc::channel::<()>(1);
+        let now = virtual_clock();
+        let until = now() + chrono::Duration::minutes(20);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(4 * 60 + 30)).await;
+            let _ = tx.send(()).await;
+        });
+        // The stop lands inside the fifth minute, so four ticks happened and
+        // none can follow it.
+        let mut seen = Vec::new();
+        assert!(!wait(until, &now, &mut stop, |elapsed| seen.push(elapsed)).await);
+        assert_eq!(seen, vec![1, 2, 3, 4]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_clock_that_jumped_ahead_does_not_tick_for_each_skipped_minute() {
+        let (_keep, mut stop) = mpsc::channel::<()>(1);
+        let began = tokio::time::Instant::now();
+        let at = Utc::now();
+        // Ten wall minutes per virtual minute, against a pause of 40.
+        let now = move || at + chrono::Duration::from_std(began.elapsed()).unwrap() * 10;
+        let until = at + chrono::Duration::minutes(40);
+        let mut seen = Vec::new();
+        assert!(wait(until, &now, &mut stop, |elapsed| seen.push(elapsed)).await);
+        assert_eq!(seen, vec![10, 20, 30], "one call per slice with the real elapsed time");
     }
 }

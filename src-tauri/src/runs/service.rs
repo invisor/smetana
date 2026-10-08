@@ -1090,7 +1090,15 @@ async fn drive(
                     ));
                     // Interruptible for the reason the crash backoff is: a stop
                     // that waited out the pause would look like it did nothing.
-                    if !rest::wait(until, chrono::Utc::now, &mut stop).await {
+                    // A line a minute while it lasts, so the journal and the app
+                    // log show a pause that is alive rather than one that hung.
+                    let batch = run.batches + 1;
+                    let journal = &account.journal;
+                    if !rest::wait(until, chrono::Utc::now, &mut stop, |elapsed| {
+                        journal.say(&journal::resting(batch, elapsed, minutes));
+                    })
+                    .await
+                    {
                         finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
                         return;
                     }
