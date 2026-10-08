@@ -847,6 +847,14 @@ committed copy of that plugin, 668 K of markdown under MIT, with its own `LICENS
 committed rather than downloaded because 668 K of text is not 128 MB of binary, and committing makes
 the build hermetic.
 
+**`Intent::ReviewBranch` carries a choice of reviewer.** Beside `pairs`, `report` and `fetch_failed` it has
+`agent: Option<String>` and `model: Option<String>`, both `#[serde(default)]` so an intent written
+before them still starts. `settings::resolve_role_model` takes the pair from the intent whole when
+`agent` is in `IDS` (the role rule is not applied again; an empty model becomes `None`, no flag); an unknown id, a `model`
+longer than `MAX_ID_LEN`, or no `agent` at all is no choice and resolves by the role table as before. Both start roads
+go through that resolver. The prompt does not print either field. `agents_installed` (command) lists
+the ids from `agents::installed`, which the run failover reuses.
+
 The vendored copy is stripped of its `hooks/` directory, the one exclusion that changes behaviour
 rather than size. Superpowers ships a `SessionStart` hook injecting "you MUST invoke" into every
 session the plugin is loaded into; through `--plugin-dir` that would impose the process on "+ New

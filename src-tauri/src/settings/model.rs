@@ -50,7 +50,7 @@ const RIGHT_TABS: [&str; 2] = ["task", "sessions"];
 const BRANCH_TABS: [&str; 2] = ["local", "origin"];
 /// The centre has no closed list of tabs and never will: file tabs come from
 /// the project. So we check sanity rather than membership.
-const MAX_ID_LEN: usize = 200;
+pub(crate) const MAX_ID_LEN: usize = 200;
 const MAX_PATH_LEN: usize = 4096;
 /// How long a standing instruction may be, **in bytes** — `String::len`, the
 /// unit `forget_if_junk` measures in too. Worth saying out loud, because it is

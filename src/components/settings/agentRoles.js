@@ -53,7 +53,7 @@ export const HARNESS_CHOOSES = 'Agent chooses'
    these five is that. Each says what the sessions in it will do, in the voice
    the Languages and Run limits groups are written in.
 
-   The Branch review row is the one to check against the code rather than
+   The Code review row is the one to check against the code rather than
    against a description of it: a review is **started from the `review-changes`
    dialog**, never from the compare window, which starts no agent at all. The
    two are deliberately separate — `.claude/rules/vcs-panel.md`, "Compare shows
@@ -86,7 +86,7 @@ export const ROLE_ROWS = [
   },
   {
     role: 'reviewBranch',
-    label: 'Branch review',
+    label: 'Code review',
     description:
       'This agent takes a reference branch and the branch under review, in one repository or several at once, and writes a report on the difference. Started from Review this branch on a branch row, or New review in the + menu.'
   }

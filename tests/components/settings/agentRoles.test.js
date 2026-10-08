@@ -57,7 +57,7 @@ describe('the rows', () => {
       'Tasks',
       'Code',
       'Run lead',
-      'Branch review'
+      'Code review'
     ])
   })
 

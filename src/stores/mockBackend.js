@@ -341,7 +341,22 @@ const DIALOG_PROPS = {
     },
     fetching: [],
     fetchFailed: [],
-    busy: false
+    busy: false,
+    /* `reviewAgent.js`'s rows for the two harnesses `agents_installed` answers
+       with here, so the dev server draws the Reviewed by block. */
+    reviewers: [
+      {
+        id: 'claude',
+        label: 'Claude Code',
+        model: 'opus',
+        models: [
+          { id: 'opus', label: 'Opus' },
+          { id: 'sonnet', label: 'Sonnet' }
+        ]
+      },
+      { id: 'codex', label: 'Codex', model: '', models: [{ id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' }] }
+    ],
+    reviewer: 'claude'
   }
 }
 
@@ -1331,6 +1346,9 @@ export function installMockBackend() {
        dropdowns off this list, so without them `?view=gallery` and
        `?view=settings&tab=agents` would show ten empty pickers, which reads as
        a load that failed rather than as anything anybody decided. */
+    /* Both harnesses, so the dev server draws the review window's choice of
+       reviewer. */
+    if (command === 'agents_installed') return ['claude', 'codex']
     if (command === 'agents_catalog') {
       return [
         {

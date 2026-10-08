@@ -1158,7 +1158,8 @@ async fn drive(
         // primary was fixed above; the policy is deliberately re-read here so
         // a save can change an already-waiting run without changing its lead.
         let policy = crate::settings::run_failover_at(settings_path.as_deref());
-        let installed = installed_agents();
+        let installed: Vec<String> =
+            crate::agents::installed(crate::shell_env::path()).into_iter().map(str::to_owned).collect();
         let probes = failover_probes(&installed, probe.clone()).await;
         let boundary = if continuation.is_some() { Boundary::ForcedHandoff } else { Boundary::NewBatch };
         match failover::select(
@@ -2438,18 +2439,6 @@ async fn ask(
         .unwrap_or(None);
     let decision = usage::gate(read.as_ref(), limits, after_limited);
     (read, decision)
-}
-
-/// Installed profiles only. The list is global by design; a project picks its
-/// primary but does not own a second, divergent reserve order.
-fn installed_agents() -> Vec<String> {
-    let path = crate::shell_env::path();
-    crate::agents::IDS
-        .iter()
-        .filter_map(|id| crate::agents::resolve(id).map(|profile| (*id, profile)))
-        .filter(|(_, profile)| crate::agents::on_path(profile.binary(), path))
-        .map(|(id, _)| id.to_owned())
-        .collect()
 }
 
 /// Read every installed allowance before choosing. A failure is intentionally

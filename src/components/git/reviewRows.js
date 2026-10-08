@@ -575,7 +575,13 @@ export const WAITING_FOR_BRANCH = 'waiting for a branch'
 export const RULE_CAPTION = 'base → to check · applies to every repository below'
 export const RULE_CAPTION_EMPTY = 'the repositories that have it will fill in below'
 
-export function ruleCaption(form) {
+/* A project of one repository draws no table under the pair, so a caption about
+   the rows below would be about nothing; it says only what the two fields are,
+   with or without a branch to check. */
+export const RULE_CAPTION_SINGLE = 'base → to check'
+
+export function ruleCaption(form, options = {}) {
+  if (options.single) return RULE_CAPTION_SINGLE
   return form?.head ? RULE_CAPTION : RULE_CAPTION_EMPTY
 }
 
@@ -613,15 +619,19 @@ export function tableSummary(form) {
    In busy it is what is happening instead, because the button that said so has
    just gone quiet and the sentence is the only thing left saying why. With no
    branch to check it is `0 pairs`, which is the honest reading of a form nobody
-   has filled in — and the number the disabled button is about. */
+   has filled in — and the number the disabled button is about.
+
+   `single` is a project of one repository: there is no table to count rows of,
+   so the pair and override counts are left out and only the busy sentence and
+   the notes count remain. */
 export function footerSummary(form, options = {}) {
-  const { busy = false, notes = 0 } = options
+  const { busy = false, notes = 0, single = false } = options
   const rows = list(form?.repoIds).length
-  if (busy) return `starting the review session · ${count(rows, 'pair', 'pairs')}`
-  if (!form?.head) return '0 pairs'
-  const parts = [count(rows, 'pair', 'pairs')]
+  if (busy) return single ? 'starting the review session' : `starting the review session · ${count(rows, 'pair', 'pairs')}`
+  if (!form?.head) return single ? '' : '0 pairs'
+  const parts = single ? [] : [count(rows, 'pair', 'pairs')]
   const differ = overrideIds(form).length
-  if (differ) parts.push(count(differ, 'override', 'overrides'))
+  if (differ && !single) parts.push(count(differ, 'override', 'overrides'))
   if (notes) parts.push(count(notes, 'note', 'notes'))
   return parts.join(' · ')
 }

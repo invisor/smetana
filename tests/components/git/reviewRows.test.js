@@ -29,6 +29,7 @@ import {
   reviewPairs,
   rowStatus,
   ruleCaption,
+  RULE_CAPTION_SINGLE,
   settleFailed,
   settleFetching,
   sideLabel,
@@ -855,5 +856,23 @@ describe('reportPath', () => {
 
   it('pads a single-digit month, day, hour and minute', () => {
     expect(reportPath('x', new Date(2026, 0, 2, 3, 4))).toBe('.smetana/reviews/2026-01-02-0304-x')
+  })
+})
+
+describe('a project of one repository', () => {
+  it('captions the pair without a sentence about repositories below', () => {
+    expect(ruleCaption({ head: { ref: 'x', remote: false } }, { single: true })).toBe(RULE_CAPTION_SINGLE)
+    expect(ruleCaption({ head: null }, { single: true })).toBe(RULE_CAPTION_SINGLE)
+  })
+  it('keeps the caption for a project of several repositories', () => {
+    expect(ruleCaption({ head: { ref: 'x', remote: false } })).toBe(RULE_CAPTION)
+  })
+  it('does not count pairs in the footer', () => {
+    const form = { head: { ref: 'x', remote: false }, repoIds: ['/p'], overrides: {} }
+    expect(footerSummary(form, { single: true })).toBe('')
+    expect(footerSummary(form, { single: true, notes: 2 })).toBe('2 notes')
+    expect(footerSummary(form, { single: true, busy: true })).toBe('starting the review session')
+    expect(footerSummary({ head: null, repoIds: ['/p'] }, { single: true })).toBe('')
+    expect(footerSummary(form)).toBe('1 pair')
   })
 })
