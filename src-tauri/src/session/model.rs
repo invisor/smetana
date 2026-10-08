@@ -8,6 +8,15 @@ use std::collections::BTreeMap;
 
 pub type SessionId = u64;
 
+/// The name a driven run's session carries in bd's audit trail, the twin of
+/// `terminal::model::run_actor` and a different string on purpose: this
+/// worker's ids and the terminal worker's both count from 1, so one format
+/// over both would let two live runs share a name, and bd's `--claim` is a
+/// mutual exclusion only between *different* actors.
+pub fn driven_run_actor(session: SessionId) -> String {
+    format!("smetana-run-driven-{session}")
+}
+
 /// Whose turn produced this.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -361,6 +370,12 @@ pub fn is_open_question(events: &[Event], question: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_driven_runs_actor_cannot_collide_with_a_pty_runs() {
+        assert_eq!(driven_run_actor(3), "smetana-run-driven-3");
+        assert_ne!(driven_run_actor(3), crate::terminal::model::run_actor(3));
+    }
 
     #[test]
     fn first_words_collapse_whitespace_and_stop_at_the_budget() {

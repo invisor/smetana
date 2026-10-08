@@ -44,8 +44,10 @@ paths:
 
 ## Crew hand-off
 
-The terminal remains the transport for Auto, Solo and Supervised Crew while
-the conversation panel is disabled. A panel-enabled Supervised Crew is instead
+The terminal remains the transport for Auto, and for Solo and Supervised Crew
+while the conversation panel is disabled. A panel-enabled Solo run is an
+ordinary driven session started through `Request::RunStart`, with the run
+environment shared from `pty::run_environment`. A panel-enabled Supervised Crew is instead
 owned by `session::service`'s driven Crew package. Claude still needs a PTY for
 its interactive runtime, but that master is drained privately and is never
 rendered or interpreted; topology and logs come only from structured provider

@@ -31,6 +31,9 @@ import { syncRunCards } from './notifications.js'
    project's. */
 import { chime } from '../chime.js'
 import { settings } from './settings.js'
+/* A Solo run with the panel on has its lead in the conversation store, not the
+   terminal one; `adoptIfDriven` below is the one place that hands it over. */
+import { adoptRunSession } from './conversation.js'
 /* The rule that turns `state × empty` into which of two offers a project
    without a file gets. Pure and outside this store for the reason every file
    of that family is; kept behind the project check below rather than read
@@ -244,6 +247,16 @@ export async function loadBrowserTools(project) {
   }
 }
 
+/* The one fact about a run this window cannot derive: which worker its session
+   belongs to. A PTY session reaches the agents panel through `terminals.js`'s
+   own list; a driven one is nobody's until adopted. Called before the
+   active-project guard on purpose, because `started` is every project's. */
+function adoptIfDriven(run) {
+  if (run?.transport === 'driven' && run.session != null) {
+    adoptRunSession(run.project, run.session)
+  }
+}
+
 /* Start one. The settings object is passed through untouched — it is the
    shape Rust deserializes, snake_case included, and translating it here would
    put the field names in two places. Throws what the worker refused with, so
@@ -256,6 +269,7 @@ export async function startRun(project, runSettings) {
      later reached for one inside this function. What arrives here is one run's
      configuration, bound for Rust, and the two are not the same thing at all. */
   const run = await invoke('run_start', { project, settings: runSettings })
+  adoptIfDriven(run)
   if (runsState.project === project) {
     /* Every stopped run is cleared on any new start, whatever its scope: the
        footer is about what the project is doing now, and a stopped run's
@@ -313,6 +327,7 @@ export async function initRuns() {
   await listen('run:state', (event) => {
     const run = event.payload
     if (!run) return
+    adoptIfDriven(run)
     /* The noise, before anything asks which project this is (smetana-0t0). The
        worker emits `run:state` for every project it is running, and a sound is
        the one delivery addressed to somebody who is not looking at the screen:

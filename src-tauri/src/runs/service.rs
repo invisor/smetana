@@ -164,11 +164,14 @@ enum Report {
     /// not be read still has an actor worth writing down.
     Started {
         token: u64,
-        session: u64,
         group: Option<Proc>,
         batch: u32,
         attempt: u32,
         agent: String,
+        /// The bd actor the batch claims under, derived by the loop from the
+        /// transport (`actor_of`) rather than guessed by the worker from a
+        /// bare session number.
+        actor: String,
     },
     /// May another batch go out? The worker's answer *is* the decision — see
     /// `may_spawn`.
@@ -220,8 +223,10 @@ struct Active {
 }
 
 /// The run loop talks to one frozen transport rather than reaching the terminal
-/// worker directly. A driven Crew implementation fills the second branch; it
-/// must never silently use the first one once selected.
+/// worker directly. `Driven` serves both driven transports (a Crew package and
+/// an ordinary Solo session); which request each arm sends is decided by
+/// `run.transport`, never by the variant alone. It must never silently use the
+/// PTY branch once selected.
 #[derive(Clone)]
 enum RunTransport {
     Pty(TerminalHandle),
@@ -358,14 +363,18 @@ fn select_run_session(
     };
     let panel = crate::settings::conversation_panel(app);
     if settings.mode != super::model::RunMode::Supervised || !panel {
-        return session::select(
+        let mut selected = session::select(
             settings.mode,
             panel,
             profile.label(),
             "not checked",
             CrewCapabilities::NONE,
         )
-        .map_err(|error| RunError::CrewUnsupported(error.to_string()));
+        .map_err(|error| RunError::CrewUnsupported(error.to_string()))?;
+        // The id and not `select`'s label: a Solo lead on the driven road is
+        // pinned by it, and `resolve` knows no label.
+        selected.profile = profile.id().to_owned();
+        return Ok(selected);
     }
     let version = provider_version(profile).map_err(RunError::CrewUnsupported)?;
     let capabilities = match profile.id() {
@@ -548,7 +557,9 @@ fn handle(
 
             let token = *next_token;
             *next_token += 1;
-            let run = Run::new(token, project.clone(), settings).with_primary(agent.clone());
+            let run = Run::new(token, project.clone(), settings)
+                .with_primary(agent.clone())
+                .with_transport(run_session.transport);
             let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
             // False for every run, whatever any earlier press said: a release
             // is given to the runs that were alive when it happened, and this
@@ -632,14 +643,14 @@ fn record(active: &HashMap<u64, Active>, report: &Report) {
     };
     let root = Path::new(&project);
     match report {
-        Report::Started { session, group, batch, attempt, agent, .. } => {
+        Report::Started { group, batch, attempt, agent, actor, .. } => {
             recovery::note_attempt(
                 root,
                 token,
                 *batch,
                 *attempt,
                 agent.clone(),
-                crate::terminal::model::run_actor(*session),
+                actor.clone(),
                 group.clone(),
             );
         }
@@ -881,7 +892,7 @@ async fn drive(
     // intentionally not revisited when settings change during a long run.
     let transport = match run_session.transport {
         Transport::Pty => RunTransport::Pty(terminal),
-        Transport::DrivenCrew => RunTransport::Driven { session, run: run_session },
+        Transport::DrivenCrew | Transport::Driven => RunTransport::Driven { session, run: run_session },
     };
     let say = |run: &Run| {
         let _ = report.send(Report::State { token, run: Box::new(run.clone()) });
@@ -1274,7 +1285,7 @@ async fn drive(
             attempt.number,
             &current_agent,
             session,
-            &crate::terminal::model::run_actor(session),
+            &actor_of(&transport, session),
             group.as_ref(),
             tasks,
             // What this batch may take from rather than what it was handed —
@@ -1284,11 +1295,11 @@ async fn drive(
         ));
         let _ = report.send(Report::Started {
             token,
-            session,
             group: group.clone(),
             batch: batch_no,
             attempt: attempt.number,
             agent: current_agent.clone(),
+            actor: actor_of(&transport, session),
         });
 
         run.working_in(session);
@@ -1332,7 +1343,7 @@ async fn drive(
         // that every batch now pays the resync a silent one used to pay alone,
         // about two seconds at the one moment in a run when nothing at all is
         // waiting on it.
-        let actor = crate::terminal::model::run_actor(session);
+        let actor = actor_of(&transport, session);
         // Split the pair the moment it arrives: everything below wants the
         // issues, and only the journal line wants where they came from.
         let (after, after_source) = match fresh_board(&tracker, &root).await {
@@ -1674,7 +1685,7 @@ async fn drive(
                     // `in_progress`, which the next batch reads as unfinished
                     // work to recover rather than losing.
                     remove_session(&transport, session).await;
-                    park_claims(&tracker, &root, session, &question).await;
+                    park_claims(&tracker, &transport, &root, session, &question).await;
                     last_batch = LastBatch::Asked;
                     counted(last_batch, crashes, empties, None);
                     continue;
@@ -1690,7 +1701,7 @@ async fn drive(
                     // nothing yet, so there is usually nobody left to race —
                     // and killing would take away the very terminal the
                     // person is being sent to.
-                    park_claims(&tracker, &root, session, &question).await;
+                    park_claims(&tracker, &transport, &root, session, &question).await;
                     let reason = StopReason::NeedsAnswer { question };
                     finish(&mut run, reason, &say, &account, &root, &tracker).await;
                     return;
@@ -2845,8 +2856,14 @@ async fn fresh_board(
 /// lock takes it out of `open`, only an `open` issue is claimable, and every
 /// merge in the project after that waits for a person to put it back
 /// (smetana-dgv).
-async fn park_claims(tracker: &TrackerHandle, root: &Path, session: u64, question: &str) {
-    let actor = crate::terminal::model::run_actor(session);
+async fn park_claims(
+    tracker: &TrackerHandle,
+    transport: &RunTransport,
+    root: &Path,
+    session: u64,
+    question: &str,
+) {
+    let actor = actor_of(transport, session);
     let Some((issues, _)) = fresh_board(tracker, root).await else { return };
     for id in queue::claimed_by(&issues, &actor) {
         let patch = IssuePatch {
@@ -2871,11 +2888,20 @@ async fn park_claims(tracker: &TrackerHandle, root: &Path, session: u64, questio
 /// does not reach is recorded at the call site.
 async fn remove_session(transport: &RunTransport, session: u64) {
     let RunTransport::Pty(terminal) = transport else {
-        if let RunTransport::Driven { session: driven, .. } = transport {
-            // A driven root owns its provider child processes and watcher
-            // subscriptions. `CrewClear` kills the interactive PTY (where
-            // present) and removes the package tree atomically.
-            let _ = driven.0.send(crate::session::service::Request::CrewClear(session)).await;
+        if let RunTransport::Driven { session: driven, run } = transport {
+            if run.transport == Transport::Driven {
+                // The cross on the row: `Close` ends the child and the loop
+                // reads the reaping as `Removed`.
+                let (tx, rx) = oneshot::channel();
+                if driven.0.send(crate::session::service::Request::Close(session, tx)).await.is_ok() {
+                    let _ = rx.await;
+                }
+            } else {
+                // A driven root owns its provider child processes and watcher
+                // subscriptions. `CrewClear` kills the interactive PTY (where
+                // present) and removes the package tree atomically.
+                let _ = driven.0.send(crate::session::service::Request::CrewClear(session)).await;
+            }
         }
         return;
     };
@@ -2949,6 +2975,22 @@ async fn spawn_batch(
         else {
             unreachable!()
         };
+        if run_session.transport == Transport::Driven {
+            // An ordinary driven session, no Crew package. Pinned to the
+            // batch's own agent exactly as the PTY route pins it, so a
+            // confirmed allowance handoff reaches this road too.
+            let (tx, rx) = oneshot::channel();
+            session
+                .0
+                .send(crate::session::service::Request::RunStart(run.project.clone(), intent, agent.to_string(), tx))
+                .await
+                .map_err(|_| "the session worker is not running".to_string())?;
+            return match rx.await {
+                Ok(Ok(id)) => Ok(id),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => Err("the session worker did not answer".into()),
+            };
+        }
         let (tx, rx) = oneshot::channel();
         session
             .0
@@ -2982,6 +3024,17 @@ async fn spawn_batch(
         Ok(Ok(session)) => Ok(session.id),
         Ok(Err(err)) => Err(err.to_string()),
         Err(_) => Err("the terminal worker did not answer".to_string()),
+    }
+}
+
+/// The bd actor this batch's session claims under, by the worker the id
+/// belongs to. The loop is the one party that knows the transport, so it
+/// derives the name and hands it on (`Report::Started::actor`) rather than
+/// letting the worker guess from a bare number.
+fn actor_of(transport: &RunTransport, session: u64) -> String {
+    match transport {
+        RunTransport::Pty(_) => crate::terminal::model::run_actor(session),
+        RunTransport::Driven { .. } => crate::session::model::driven_run_actor(session),
     }
 }
 
@@ -3121,14 +3174,13 @@ async fn asking(transport: &RunTransport, run: &Run, session: u64) -> Option<Str
 /// without a code, never as a session somebody removed: `Removed` stops the run
 /// outright, and a worker that has gone away is not a person's decision.
 async fn await_exit(transport: &RunTransport, session: u64) -> Exit {
-    if let RunTransport::Driven { session: driven, .. } = transport {
+    if let RunTransport::Driven { session: driven, run } = transport {
         let (tx, rx) = oneshot::channel();
-        if driven
-            .0
-            .send(crate::session::service::Request::CrewAwaitExit(session, tx))
-            .await
-            .is_err()
-        {
+        let request = match run.transport {
+            Transport::Driven => crate::session::service::Request::AwaitExit(session, tx),
+            _ => crate::session::service::Request::CrewAwaitExit(session, tx),
+        };
+        if driven.0.send(request).await.is_err() {
             return Exit::NoCode;
         }
         return rx.await.unwrap_or(Exit::NoCode);
@@ -3163,6 +3215,21 @@ mod tests {
             batch_pause_max: None,
             live_check: true,
             file_findings: true,
+        }
+    }
+
+    #[test]
+    fn the_actor_follows_the_transport() {
+        let (tx, _rx) = mpsc::channel(1);
+        let pty = RunTransport::Pty(TerminalHandle(tx));
+        assert_eq!(actor_of(&pty, 3), "smetana-run-3");
+        let (stx, _srx) = mpsc::channel(1);
+        for transport in [Transport::Driven, Transport::DrivenCrew] {
+            let driven = RunTransport::Driven {
+                session: SessionHandle(stx.clone()),
+                run: RunSession { profile: "claude".into(), provider: "Claude Code".into(), transport },
+            };
+            assert_eq!(actor_of(&driven, 3), "smetana-run-driven-3", "{transport:?}");
         }
     }
 

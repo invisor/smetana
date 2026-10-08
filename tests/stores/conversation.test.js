@@ -1059,4 +1059,57 @@ describe('the conversation store', () => {
       expect(chime).toHaveBeenCalledWith('sound-2', { unlessFocused: false })
     })
   })
+
+  describe('a run session the worker started', () => {
+    it('adopting it lists it under its project, captioned as a run', async () => {
+      const { stores } = await ready()
+      stores.conversation.adoptRunSession('/p', 7)
+
+      expect(stores.conversation.conversationsIn('/p')).toEqual([7])
+      expect(stores.conversation.conversationsIn('/q')).toEqual([])
+      const [row] = stores.conversation.drivenSessions.value
+      expect(row.work).toEqual({ kind: 'run' })
+      expect(row.state).toBe('starting')
+      expect(stores.conversation.lastDrivenRunStart.value).toEqual({ id: 7, project: '/p' })
+    })
+
+    it('announces the project with the id, so a view can ignore another project\'s run', async () => {
+      const { stores } = await ready()
+      stores.conversation.adoptRunSession('/a', 7)
+      stores.conversation.adoptRunSession('/b', 8)
+
+      expect(stores.conversation.lastDrivenRunStart.value).toEqual({ id: 8, project: '/b' })
+      expect(stores.conversation.conversationsIn('/a')).toEqual([7])
+      expect(stores.conversation.conversationsIn('/b')).toEqual([8])
+    })
+
+    it('attaches once on the first adopt, so the record takes the snapshot\'s state', async () => {
+      const { ipc, stores } = await ready({ events: [], seq: 0, state: 'running' })
+      stores.conversation.adoptRunSession('/p', 7)
+      stores.conversation.adoptRunSession('/p', 7)
+      await vi.waitFor(() => expect(stores.conversation.drivenSessions.value[0].state).toBe('running'))
+
+      expect(ipc.calls('session_attach')).toEqual([{ id: 7 }])
+    })
+
+    it('adopting the same run session twice keeps one record', async () => {
+      const { stores } = await ready()
+      stores.conversation.adoptRunSession('/p', 7)
+      stores.conversation.adoptRunSession('/p', 7)
+
+      expect(stores.conversation.conversationsIn('/p')).toEqual([7])
+    })
+
+    it('a state change that arrives before the adopt still lands on the record once adopted', async () => {
+      const { emit, stores } = await ready()
+      await stores.conversation.initConversation()
+      await emit('session:state', { id: 7, state: 'running', conversation: null, title: null })
+      stores.conversation.adoptRunSession('/p', 7)
+      // The adopt's own attach lands first; the change after it must still move the record.
+      await vi.waitFor(() => expect(stores.conversation.drivenSessions.value[0].state).toBe('ready'))
+      await emit('session:state', { id: 7, state: 'needs-you', conversation: null, title: null })
+
+      expect(stores.conversation.drivenSessions.value[0].state).toBe('needs-you')
+    })
+  })
 })

@@ -9,10 +9,16 @@ use crate::agents::crew::CrewCapabilities;
 
 use super::model::RunMode;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Transport {
+    #[default]
     Pty,
     DrivenCrew,
+    /// An ordinary driven session, the road `+ New agent` takes, for a Solo
+    /// run with the panel on. No Crew package and no capability check:
+    /// `session::service::driver_for` is the gate, and both profiles pass it.
+    Driven,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,9 +48,8 @@ impl std::fmt::Display for UnsupportedCrew {
     }
 }
 
-/// The one selection point between the run loop and its transport. Auto and
-/// Solo intentionally remain on their existing PTY route; a disabled panel
-/// leaves supervised Crew there too.
+/// The one selection point between the run loop and its transport. Auto stays
+/// on its PTY route; a disabled panel leaves Solo and supervised Crew there too.
 pub fn select(
     mode: RunMode,
     conversation_panel: bool,
@@ -54,6 +59,13 @@ pub fn select(
 ) -> Result<RunSession, UnsupportedCrew> {
     let provider = provider.into();
     let version = version.into();
+    if mode == RunMode::Solo && conversation_panel {
+        return Ok(RunSession {
+            profile: provider.clone(),
+            provider,
+            transport: Transport::Driven,
+        });
+    }
     if mode != RunMode::Supervised || !conversation_panel {
         return Ok(RunSession {
             profile: provider.clone(),
@@ -111,17 +123,39 @@ mod tests {
             Transport::Pty
         );
         assert_eq!(
-            select(RunMode::Solo, true, "Claude Code", "2.1.281", ALL)
-                .unwrap()
-                .transport,
-            Transport::Pty
-        );
-        assert_eq!(
             select(RunMode::Supervised, false, "Claude Code", "2.1.281", ALL)
                 .unwrap()
                 .transport,
             Transport::Pty
         );
+    }
+
+    #[test]
+    fn solo_with_the_panel_enabled_selects_an_ordinary_driven_session() {
+        // No capability check: ordinary drivers are gated by `driver_for`,
+        // and `NONE` must not refuse what the Crew check would.
+        let selected =
+            select(RunMode::Solo, true, "Claude Code", "not checked", CrewCapabilities::NONE).unwrap();
+        assert_eq!(selected.transport, Transport::Driven);
+        assert_eq!(
+            select(RunMode::Solo, false, "Claude Code", "not checked", CrewCapabilities::NONE)
+                .unwrap()
+                .transport,
+            Transport::Pty
+        );
+        assert_eq!(
+            select(RunMode::Auto, true, "Codex", "not checked", CrewCapabilities::NONE)
+                .unwrap()
+                .transport,
+            Transport::Pty
+        );
+    }
+
+    #[test]
+    fn the_transport_travels_as_snake_case() {
+        assert_eq!(serde_json::to_string(&Transport::Driven).unwrap(), "\"driven\"");
+        assert_eq!(serde_json::to_string(&Transport::DrivenCrew).unwrap(), "\"driven_crew\"");
+        assert_eq!(serde_json::to_string(&Transport::Pty).unwrap(), "\"pty\"");
     }
 
     #[test]
