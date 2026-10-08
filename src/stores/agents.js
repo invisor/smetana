@@ -65,6 +65,21 @@ export async function refreshCodexModels() {
   }
 }
 
+/* Which harnesses are on the login shell's PATH right now. Not cached and not
+   read at startup, unlike the catalogue above: a build's harnesses cannot
+   change while the app runs, but what is installed can, and the one reader —
+   the review window's choice of reviewer — asks when it opens. A failure is
+   an empty list, which draws no choice at all: the safe direction, since Rust
+   resolves the settings' pair when the intent names nobody. */
+export async function installedAgents() {
+  try {
+    const ids = await invoke('agents_installed')
+    return Array.isArray(ids) ? ids.filter((id) => typeof id === 'string' && id) : []
+  } catch {
+    return []
+  }
+}
+
 /* Whether this harness can be asked for this verb — one of `resume`, `fork`,
    `clear`, `usage`, `batch`, `oneshot`, which are the fields
    `agents::Capabilities` carries.

@@ -1331,6 +1331,9 @@ export function installMockBackend() {
        dropdowns off this list, so without them `?view=gallery` and
        `?view=settings&tab=agents` would show ten empty pickers, which reads as
        a load that failed rather than as anything anybody decided. */
+    /* Both harnesses, so the dev server draws the review window's choice of
+       reviewer. */
+    if (command === 'agents_installed') return ['claude', 'codex']
     if (command === 'agents_catalog') {
       return [
         {

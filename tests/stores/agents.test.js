@@ -139,6 +139,15 @@ describe('the agent catalogue', () => {
     expect(agents.agents.value.map((row) => row.id)).toEqual(['claude', 'codex'])
   })
 
+  it('installedAgents answers the ids Rust names and nothing on a failure', async () => {
+    const { agents, ipc } = await loadCatalogue()
+
+    ipc.on('agents_installed', ['codex'])
+    expect(await agents.installedAgents()).toEqual(['codex'])
+    ipc.fail('agents_installed', new Error('no worker'))
+    expect(await agents.installedAgents()).toEqual([])
+  })
+
   it('answers what a harness can do, and refuses what it cannot', async () => {
     const { agents } = await loadCatalogue()
 

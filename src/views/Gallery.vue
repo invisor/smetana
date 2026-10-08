@@ -2345,7 +2345,7 @@ const galleryAgent = ref('claude')
    harness and a model, since it always has both. Tasks names the other harness
    and one of its own models, which is what a role that overrode the default
    looks like — and it is the row whose model list has to be the other harness's.
-   Code names a harness and no model, the half state. Run lead and Branch review
+   Code names a harness and no model, the half state. Run lead and Code review
    are untouched, which is "Same as default" in both fields and the state every
    settings file on a person's disk is in right now. */
 const galleryAgentModel = ref('opus')
