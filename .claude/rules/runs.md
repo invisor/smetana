@@ -13,8 +13,24 @@ With `RunMode::Supervised` and `conversationPanel` enabled, a package freezes a
 `RunSession` before its first claim: profile id, executable environment and a
 structured Crew transport. `runs::service` waits for that lead's real provider
 exit through `CrewAwaitExit`; it never substitutes `NoCode` merely because the
-transport is driven. Auto, Solo and a panel-disabled Crew retain the existing
-PTY route. A failed capability/startup preflight happens before a task claim or
+transport is driven. Auto and a panel-disabled Crew retain the existing PTY
+route. A panel-enabled Solo run is instead an *ordinary* driven session
+(`Transport::Driven`, `Request::RunStart`/`AwaitExit`/`Close`): the same road
+`+ New agent` takes, with no Crew package, tree or admission. Solo has one task
+and no `bypassPermissions`, so it is a session the person talks to and answers
+permission requests in; the Crew transport was not reused because Claude's is an
+interactive runtime with a 90-second admission Solo has nothing to wait for, and
+Codex's turns on `multi_agent`, against Solo's own "do it yourself" line. Without
+the panel Solo stays on its PTY. `Run::transport` (`pty`, `driven_crew`,
+`driven`) says which worker `Run::session` belongs to, since the terminal worker
+and the session worker both count ids from 1. A driven run claims as
+`smetana-run-driven-<id>` (`session::model::driven_run_actor`) so it cannot
+share a name with a PTY run; `actor_of` in `runs/service.rs` is the one place
+that picks, and `Report::Started::actor` carries the answer to the registry. The
+driven spawn gets the run environment (`terminal::pty::run_environment` and
+`agent_path`) but no `SMETANA_SESSION` mark. A driven Crew lead does not get it
+yet. The front end learns of the session from `run:state`
+(`adoptRunSession`). A failed capability/startup preflight happens before a task claim or
 worktree and is a refusal, never a hidden fallback to a provider TUI.
 
 For Claude, admission additionally precedes delivery of the Run brief: a

@@ -1252,6 +1252,7 @@ export function installMockBackend() {
             file_findings: true
           },
           state: { kind: 'working', iteration: 0 },
+          transport: 'pty',
           session: 7,
           /* The same id, because a run that is working is working in it. The
              two only part company at the ending, where `session` is cleared and

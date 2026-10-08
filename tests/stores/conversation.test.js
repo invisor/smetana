@@ -1059,4 +1059,36 @@ describe('the conversation store', () => {
       expect(chime).toHaveBeenCalledWith('sound-2', { unlessFocused: false })
     })
   })
+
+  describe('a run session the worker started', () => {
+    it('adopting it lists it under its project, captioned as a run', async () => {
+      const { stores } = await ready()
+      stores.conversation.adoptRunSession('/p', 7)
+
+      expect(stores.conversation.conversationsIn('/p')).toEqual([7])
+      expect(stores.conversation.conversationsIn('/q')).toEqual([])
+      const [row] = stores.conversation.drivenSessions.value
+      expect(row.work).toEqual({ kind: 'run' })
+      expect(row.state).toBe('starting')
+      expect(stores.conversation.lastDrivenRunStart.value).toBe(7)
+    })
+
+    it('adopting the same run session twice keeps one record', async () => {
+      const { stores } = await ready()
+      stores.conversation.adoptRunSession('/p', 7)
+      stores.conversation.adoptRunSession('/p', 7)
+
+      expect(stores.conversation.conversationsIn('/p')).toEqual([7])
+    })
+
+    it('a state change that arrives before the adopt still lands on the record once adopted', async () => {
+      const { emit, stores } = await ready()
+      await stores.conversation.initConversation()
+      await emit('session:state', { id: 7, state: 'running', conversation: null, title: null })
+      stores.conversation.adoptRunSession('/p', 7)
+      await emit('session:state', { id: 7, state: 'needs-you', conversation: null, title: null })
+
+      expect(stores.conversation.drivenSessions.value[0].state).toBe('needs-you')
+    })
+  })
 })

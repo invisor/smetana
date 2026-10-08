@@ -90,8 +90,9 @@ pub struct Batch {
     pub attempt: u32,
     #[serde(default)]
     pub agent: String,
-    /// `smetana-run-<session-id>` — `terminal::model::run_actor`'s answer, and
-    /// the string an issue's assignee carries.
+    /// `smetana-run-<session-id>` for a PTY batch, `smetana-run-driven-<session-id>`
+    /// for a driven one — whichever the loop handed `Report::Started` — and the
+    /// string an issue's assignee carries.
     pub actor: String,
     pub group: Option<Proc>,
 }

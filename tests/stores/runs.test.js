@@ -620,4 +620,31 @@ describe('the sound a finished run makes', () => {
 
     expect(chime).toHaveBeenCalledWith('sound-1', { unlessFocused: false })
   })
+
+  it('a driven run hands its session to the conversation store, a PTY run does not', async () => {
+    const { emit, ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    await stores.runs.initRuns()
+    await stores.runs.loadConfig('/p')
+
+    await emit('run:state', { ...TASK_RUN, transport: 'driven', session: 7 })
+    expect(stores.conversation.conversationsIn('/p')).toEqual([7])
+
+    await emit('run:state', { ...TASK_RUN, token: 3, transport: 'pty', session: 8 })
+    expect(stores.conversation.conversationsIn('/p')).toEqual([7])
+
+    await emit('run:state', { ...TASK_RUN, token: 4, transport: 'driven', session: null })
+    expect(stores.conversation.conversationsIn('/p')).toEqual([7])
+  })
+
+  it('starting a driven run adopts the session the answer names', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    ipc.on('run_start', { ...TASK_RUN, transport: 'driven', session: 8 })
+    await stores.runs.loadConfig('/p')
+
+    await stores.runs.startRun('/p', TASK_RUN.settings)
+
+    expect(stores.conversation.conversationsIn('/p')).toEqual([8])
+  })
 })

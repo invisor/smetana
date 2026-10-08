@@ -271,6 +271,11 @@ pub struct Run {
     #[serde(default)]
     pub attempt: u32,
     pub state: RunState,
+    /// Which worker the id in `session` belongs to. The terminal worker and
+    /// the session worker both count from 1, so without this the front end
+    /// could not tell a run's PTY session from a driven one.
+    #[serde(default)]
+    pub transport: super::session::Transport,
     /// The session working right now. `None` between batches, and `None` once
     /// the run has stopped — a row pointing at a dead session is worse than no
     /// row, which is the same reasoning that keeps sessions out of settings.
@@ -587,6 +592,7 @@ impl Run {
             agent: String::new(),
             attempt: 0,
             state: RunState::Preflight,
+            transport: super::session::Transport::Pty,
             session: None,
             last_session: None,
             batches: 0,
@@ -602,6 +608,12 @@ impl Run {
     pub fn with_primary(mut self, agent: String) -> Self {
         self.primary_agent = agent.clone();
         self.agent = agent;
+        self
+    }
+
+    /// Which worker this run's lead session lives in; see `Run::transport`.
+    pub fn with_transport(mut self, transport: super::session::Transport) -> Self {
+        self.transport = transport;
         self
     }
 
@@ -745,6 +757,20 @@ mod tests {
             live_check: true,
             file_findings: true,
         }
+    }
+
+    #[test]
+    fn a_run_carries_the_transport_its_lead_runs_on() {
+        use super::super::session::Transport;
+        let run = Run::new(1, "/p".into(), settings(RunMode::Solo, RunScope::Queue))
+            .with_transport(Transport::Driven);
+        assert_eq!(serde_json::to_value(&run).unwrap()["transport"], "driven");
+        let plain = Run::new(1, "/p".into(), settings(RunMode::Solo, RunScope::Queue));
+        assert_eq!(serde_json::to_value(&plain).unwrap()["transport"], "pty");
+        let mut value = serde_json::to_value(&plain).unwrap();
+        value.as_object_mut().unwrap().remove("transport");
+        let back: Run = serde_json::from_value(value).unwrap();
+        assert_eq!(back.transport, Transport::Pty, "a registry written before the field defaults to pty");
     }
 
     #[test]
