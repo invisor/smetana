@@ -118,6 +118,19 @@ fn resolve_role_model(
     intent: &crate::agents::Intent,
     chosen: Option<&str>,
 ) -> (String, Option<String>) {
+    // A review that names its harness has already resolved the settings'
+    // defaults in the window; applying the role rule again would be a second
+    // opinion. An id this build does not ship, or a slug too long to be a
+    // model, is a damaged intent and takes the table instead.
+    if let crate::agents::Intent::ReviewBranch { agent: Some(agent), model, .. } = intent {
+        if crate::agents::IDS.contains(&agent.as_str()) {
+            let model = model
+                .as_deref()
+                .filter(|m| !m.is_empty() && m.len() <= model::MAX_ID_LEN)
+                .map(str::to_owned);
+            return (agent.clone(), model);
+        }
+    }
     let (mut agent, mut model) = table;
     let chosen = match intent {
         crate::agents::Intent::SignIn { agent, .. } => Some(agent.as_str()),
@@ -294,6 +307,59 @@ mod tests {
 
     fn sign_in(agent: &str) -> Intent {
         Intent::SignIn { agent: agent.into(), variant: SignInVariant::Browser }
+    }
+
+    fn review(agent: Option<&str>, model: Option<&str>) -> Intent {
+        Intent::ReviewBranch {
+            pairs: vec![],
+            report: ".smetana/reviews/x".into(),
+            fetch_failed: vec![],
+            agent: agent.map(str::to_owned),
+            model: model.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_review_runs_on_the_harness_and_model_it_names() {
+        let table = ("claude".to_owned(), "opus".to_owned());
+        assert_eq!(
+            resolve_role_model(table, &review(Some("codex"), Some("gpt-5.6-sol")), None),
+            ("codex".to_owned(), Some("gpt-5.6-sol".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_review_naming_a_harness_and_no_model_lets_the_harness_choose() {
+        let table = ("claude".to_owned(), "opus".to_owned());
+        assert_eq!(resolve_role_model(table, &review(Some("claude"), None), None), ("claude".to_owned(), None));
+    }
+
+    #[test]
+    fn a_review_without_a_choice_still_takes_the_table() {
+        let table = ("claude".to_owned(), "opus".to_owned());
+        assert_eq!(
+            resolve_role_model(table, &review(None, None), None),
+            ("claude".to_owned(), Some("opus".to_owned()))
+        );
+    }
+
+    #[test]
+    fn an_unknown_harness_in_a_review_falls_back_to_the_table() {
+        let table = ("claude".to_owned(), "opus".to_owned());
+        assert_eq!(
+            resolve_role_model(table, &review(Some("gemini"), Some("x")), None),
+            ("claude".to_owned(), Some("opus".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_review_model_past_the_length_bound_never_reaches_argv() {
+        let table = ("claude".to_owned(), "opus".to_owned());
+        let long = "m".repeat(201);
+        assert_eq!(
+            resolve_role_model(table, &review(Some("claude"), Some(&long)), None),
+            ("claude".to_owned(), None)
+        );
     }
 
     #[test]

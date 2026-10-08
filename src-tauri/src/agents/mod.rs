@@ -445,6 +445,16 @@ pub enum Intent {
         /// written before this field existed must still start a session.
         #[serde(default)]
         fetch_failed: Vec<String>,
+        /// The harness the person picked in the review window, when the window
+        /// offered one — it does so only with more than one installed. `None`
+        /// is "the settings decide", which is the whole history before this
+        /// field and still the case for a project with one harness.
+        #[serde(default)]
+        agent: Option<String>,
+        /// The model picked beside it; `None` passes no flag and the harness
+        /// chooses. Read only when `agent` is `Some`.
+        #[serde(default)]
+        model: Option<String>,
     },
     /// One batch of a run. Started by `runs::service`, never by a person
     /// directly — which is why it carries the whole of what the run was asked
@@ -1261,6 +1271,17 @@ pub fn on_path(binary: &str, path_var: Option<&str>) -> bool {
         .any(|dir| dir.join(binary).is_file())
 }
 
+/// Every shipped harness whose binary is on `path_var`, in `IDS` order — the
+/// order `pick` substitutes in. One answer for the run failover's reserve
+/// list and for the review window's choice of reviewer, so the two cannot
+/// disagree about what "installed" means.
+pub fn installed(path_var: Option<&str>) -> Vec<&'static str> {
+    IDS.iter()
+        .copied()
+        .filter(|id| resolve(id).is_some_and(|profile| on_path(profile.binary(), path_var)))
+        .collect()
+}
+
 /// The profile to actually run: the configured one when it is installed,
 /// otherwise the first one that is. Returning something other than what was
 /// asked for is not silent — `Session.agent` carries the name of whatever ran,
@@ -1651,7 +1672,7 @@ mod tests {
         }"#;
         let intent: Intent = serde_json::from_str(json).expect("deserializes");
         match intent {
-            Intent::ReviewBranch { pairs, report, fetch_failed } => {
+            Intent::ReviewBranch { pairs, report, fetch_failed, .. } => {
                 // The payload above is the shape this intent shipped in, with
                 // no `fetchFailed` in it at all, and it still has to start a
                 // session: `serde(default)` is what makes that true and this
@@ -1707,6 +1728,33 @@ mod tests {
     }
 
     #[test]
+    fn installed_names_only_the_profiles_whose_binary_is_on_the_path_in_ids_order() {
+        let dir = std::env::temp_dir().join(format!("smetana-installed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Only Codex's binary exists in this fake PATH.
+        std::fs::write(dir.join(resolve("codex").unwrap().binary()), b"").unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        assert_eq!(installed(Some(&path)), vec!["codex"]);
+        std::fs::write(dir.join(resolve("claude").unwrap().binary()), b"").unwrap();
+        assert_eq!(installed(Some(&path)), vec!["claude", "codex"]);
+        assert!(installed(None).is_empty(), "no PATH at all means nothing is installed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_review_intent_written_before_the_choice_still_parses() {
+        let json = r#"{"kind":"reviewBranch","pairs":[],"report":"r"}"#;
+        let intent: Intent = serde_json::from_str(json).unwrap();
+        assert!(matches!(intent, Intent::ReviewBranch { agent: None, model: None, .. }));
+        let json = r#"{"kind":"reviewBranch","pairs":[],"report":"r","agent":"codex","model":"gpt-5.6-sol"}"#;
+        let intent: Intent = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            intent,
+            Intent::ReviewBranch { agent: Some(a), model: Some(m), .. } if a == "codex" && m == "gpt-5.6-sol"
+        ));
+    }
+
+    #[test]
     fn a_review_intent_carries_the_report_path_and_leaves_the_pairs_behind() {
         use crate::terminal::model::SessionWork as W;
         let intent = Intent::ReviewBranch {
@@ -1717,6 +1765,8 @@ mod tests {
             }],
             report: ".smetana/reviews/2026-08-31-pf40".into(),
             fetch_failed: vec!["/p/backend".into()],
+            agent: None,
+            model: None,
         };
         // The path is where the answer will be and is what the tab opened
         // afterwards is found by; the refs are the agent's briefing, the same
@@ -2117,6 +2167,8 @@ mod tests {
                     }],
                     report: ".smetana/reviews/x".into(),
                     fetch_failed: Vec::new(),
+                    agent: None,
+                    model: None,
                 },
                 ReviewBranch,
             ),

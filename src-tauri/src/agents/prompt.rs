@@ -915,7 +915,7 @@ fn body(
         Intent::ResumeSession { .. } | Intent::SignIn { .. } => None,
         Intent::Setup => Some(setup(delivery, skills, facts)),
         Intent::Bootstrap => Some(bootstrap(delivery, skills, facts)),
-        Intent::ReviewBranch { pairs, report, fetch_failed } => {
+        Intent::ReviewBranch { pairs, report, fetch_failed, .. } => {
             Some(review_branch(pairs, report, fetch_failed, delivery, skills, text.reviewing_branch))
         }
         Intent::Run { settings, reports, batch, continuation, remove_worktrees } => {
@@ -2398,6 +2398,8 @@ mod tests {
                 pairs: Vec::new(),
                 report: ".smetana/reviews/2026-08-31-pf40".into(),
                 fetch_failed: Vec::new(),
+                agent: None,
+                model: None,
             },
             // A review carrying that sentence too. This walk reads the last
             // characters of a prompt and nothing else, so what it covers here
@@ -2552,6 +2554,8 @@ mod tests {
             // so a sentence about a stale origin appearing in any of those
             // prompts would be a sentence appearing where nothing failed.
             fetch_failed: Vec::new(),
+            agent: None,
+            model: None,
         }
     }
 
@@ -2564,6 +2568,8 @@ mod tests {
                 pairs,
                 report,
                 fetch_failed: vec!["/p/frontend".into()],
+                agent: None,
+                model: None,
             },
             other => unreachable!("review() built {other:?}"),
         }
@@ -2780,6 +2786,8 @@ mod tests {
             pairs: Vec::new(),
             report: ".smetana/reviews/2026-08-31-pf40".into(),
             fetch_failed: Vec::new(),
+            agent: None,
+            model: None,
         };
         let text = build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "", None)
             .unwrap();

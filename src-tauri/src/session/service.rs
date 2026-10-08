@@ -3566,6 +3566,8 @@ mod tests {
                 pairs: vec![crate::agents::ReviewPair { repo: "/p".into(), base: "main".into(), head: "feature/x".into() }],
                 report: ".smetana/reviews/2026-09-21-feature-x".into(),
                 fetch_failed: Vec::new(),
+                agent: None,
+                model: None,
             },
             Intent::ResumeSession {
                 id: "9f1c0a2e-0000-4000-8000-000000000000".into(),
