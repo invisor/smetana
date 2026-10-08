@@ -752,7 +752,15 @@ export function adoptRunSession(project, id) {
     work: { kind: 'run' },
     title: null
   })
-  lastDrivenRunStart.value = id
+  /* The project travels with the id: adoption is for every project, but
+     bringing the agent forward is for the one this window is looking at, and
+     only the view knows which that is. A fresh object each time so the
+     watcher fires even for a repeated id. */
+  lastDrivenRunStart.value = { id, project }
+  /* As `startConversation` does: the record takes its state, conversation id
+     and title from the snapshot instead of sitting at `starting` until the
+     session next changes. `attach` reports its own failures. */
+  void attach(id)
 }
 
 /* The driven sessions of one project, oldest first. An array of ids rather than

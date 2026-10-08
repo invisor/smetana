@@ -3027,17 +3027,6 @@ async fn spawn_batch(
     }
 }
 
-/// The process group this batch's session runs in, with the evidence that says
-/// which process that pid is. `None` when the terminal worker cannot answer,
-/// when the platform cannot read a start time, or when the process never became
-/// nameable as itself — the batch is still recorded by its actor, which is what
-/// the tracker half matches on.
-///
-/// It waits, and briefly: the pid comes back from the fork, and the name under
-/// it is this app's own until the exec lands (smetana-6nr0). What bounds that
-/// wait is the comment at the call site — from there on the app may be killed
-/// at any moment and the registry does not know about this agent yet — so the
-/// ceiling is `recovery::EXEC`, a second, against an ordinary cost of one poll.
 /// The bd actor this batch's session claims under, by the worker the id
 /// belongs to. The loop is the one party that knows the transport, so it
 /// derives the name and hands it on (`Report::Started::actor`) rather than
@@ -3049,6 +3038,17 @@ fn actor_of(transport: &RunTransport, session: u64) -> String {
     }
 }
 
+/// The process group this batch's session runs in, with the evidence that says
+/// which process that pid is. `None` when the terminal worker cannot answer,
+/// when the platform cannot read a start time, or when the process never became
+/// nameable as itself — the batch is still recorded by its actor, which is what
+/// the tracker half matches on.
+///
+/// It waits, and briefly: the pid comes back from the fork, and the name under
+/// it is this app's own until the exec lands (smetana-6nr0). What bounds that
+/// wait is the comment at the call site — from there on the app may be killed
+/// at any moment and the registry does not know about this agent yet — so the
+/// ceiling is `recovery::EXEC`, a second, against an ordinary cost of one poll.
 async fn group_of(transport: &RunTransport, session: u64) -> Option<Proc> {
     let RunTransport::Pty(terminal) = transport else { return None };
     let (tx, rx) = oneshot::channel();

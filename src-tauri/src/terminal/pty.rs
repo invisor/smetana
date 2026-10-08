@@ -231,15 +231,13 @@ fn apply_environment(cmd: &mut CommandBuilder) {
     // What every child's own `PATH` is built on: the login shell's, because a
     // bundled app inherits launchd's, which holds nothing a person installed —
     // an agent started with that finds neither `git` nor `node` nor the helpers
-    // it shells out to. `crate::shell_env::path` already falls back to the
-    // inherited value, and `cmd.get_env` behind it covers the one case it
-    // cannot answer: `CommandBuilder::new` has snapshotted the parent's
-    // environment, so this is the value the child would otherwise have had.
-    // Filing a task means the agent running `bd`, and this app's bd is a
-    // sidecar inside the bundle: `agent_path` puts its directory in front of
-    // the login shell's `PATH`. `cmd.get_env` behind it covers the one case it
-    // cannot answer: `CommandBuilder::new` has snapshotted the parent's
-    // environment, so this is the value the child would otherwise have had.
+    // it shells out to. Filing a task means the agent running `bd`, and this
+    // app's bd is a sidecar inside the bundle: `agent_path` answers the login
+    // shell's `PATH` (which itself falls back to the inherited value) with the
+    // sidecar's directory in front. Only when it answers nothing at all is the
+    // `PATH` the command was built with kept: `CommandBuilder::new` has
+    // snapshotted the parent's environment, so that is the value the child
+    // would otherwise have had.
     let path = agent_path().or_else(|| cmd.get_env("PATH").map(OsStr::to_owned));
     if let Some(path) = path {
         cmd.env("PATH", path);

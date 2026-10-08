@@ -231,10 +231,16 @@ fn settle_exit(
     exits: &mut HashMap<SessionId, crate::terminal::model::Exit>,
     id: SessionId,
     exit: crate::terminal::model::Exit,
+    keep: bool,
 ) {
     let waiting = waiters.remove(&id).unwrap_or_default();
     if waiting.is_empty() {
-        exits.insert(id, exit);
+        // Only a session the run worker started has anybody to come asking;
+        // parking the exit of an ordinary one would grow this map for the
+        // life of the app.
+        if keep {
+            exits.insert(id, exit);
+        }
         return;
     }
     for waiter in waiting {
@@ -381,6 +387,10 @@ struct Live {
     /// `child_alive`, which `lost` also clears on a broken stdin while the
     /// child is still running.
     reaped: bool,
+    /// Started through `Request::RunStart`, so the run loop will ask for its
+    /// exit and an exit with no waiter yet is worth parking. Modelled on
+    /// `retain_crew_exit`'s rule for Crew roots.
+    run_started: bool,
     /// The last state emitted for this session. `session:state` goes out on a
     /// change and never on a repeat.
     state: SessionState,
@@ -1003,6 +1013,7 @@ fn spawn_session(
         child_alive: true,
         removed: false,
         reaped: false,
+        run_started: false,
         conversation,
         project: project.to_owned(),
         cwd: cwd.to_string_lossy().into_owned(),
@@ -2236,7 +2247,8 @@ fn handle(
             let id = *next_id;
             *next_id += 1;
             match spawn_session(app, id, &project, intent, permission, chunks, Some(&pinned)) {
-                Ok(live) => {
+                Ok(mut live) => {
+                    live.run_started = true;
                     sessions.insert(id, live);
                     if sessions.get(&id).is_some_and(|live| live.talking.as_ref().is_some_and(|talking| talking.driver.awaits_startup())) {
                         starting.insert(id, tx);
@@ -2605,14 +2617,14 @@ fn absorb(
             }
         }
         Chunk::Reaped(id, code) => {
-            let removed = match sessions.get_mut(&id) {
+            let (removed, keep) = match sessions.get_mut(&id) {
                 Some(live) => {
                     live.reaped = true;
-                    live.removed
+                    (live.removed, live.run_started)
                 }
-                None => false,
+                None => (false, false),
             };
-            settle_exit(exit_waiters, exits, id, exit_of(removed, code));
+            settle_exit(exit_waiters, exits, id, exit_of(removed, code), keep);
         }
         Chunk::Eof(id) => {
             let crew_failed_admission = crew_starting.remove(&id);
@@ -2959,7 +2971,7 @@ mod tests {
         use crate::terminal::model::Exit;
         let mut waiters: HashMap<SessionId, Vec<oneshot::Sender<Exit>>> = HashMap::new();
         let mut exits: HashMap<SessionId, Exit> = HashMap::new();
-        settle_exit(&mut waiters, &mut exits, 4, Exit::Code(2));
+        settle_exit(&mut waiters, &mut exits, 4, Exit::Code(2), true);
         assert_eq!(exits.get(&4), Some(&Exit::Code(2)));
         let (tx, rx) = oneshot::channel();
         await_exit(&mut waiters, &mut exits, 4, tx, true);
@@ -2974,9 +2986,18 @@ mod tests {
         let mut exits = HashMap::new();
         let (tx, rx) = oneshot::channel();
         await_exit(&mut waiters, &mut exits, 4, tx, true);
-        settle_exit(&mut waiters, &mut exits, 4, Exit::NoCode);
+        settle_exit(&mut waiters, &mut exits, 4, Exit::NoCode, true);
         assert_eq!(rx.blocking_recv().unwrap(), Exit::NoCode);
         assert!(exits.is_empty(), "a delivered exit is not parked");
+    }
+
+    #[test]
+    fn an_ordinary_sessions_exit_is_not_parked() {
+        use crate::terminal::model::Exit;
+        let mut waiters = HashMap::new();
+        let mut exits = HashMap::new();
+        settle_exit(&mut waiters, &mut exits, 5, Exit::Code(0), false);
+        assert!(exits.is_empty(), "nobody will ever ask for it");
     }
 
     #[test]

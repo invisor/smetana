@@ -1070,7 +1070,26 @@ describe('the conversation store', () => {
       const [row] = stores.conversation.drivenSessions.value
       expect(row.work).toEqual({ kind: 'run' })
       expect(row.state).toBe('starting')
-      expect(stores.conversation.lastDrivenRunStart.value).toBe(7)
+      expect(stores.conversation.lastDrivenRunStart.value).toEqual({ id: 7, project: '/p' })
+    })
+
+    it('announces the project with the id, so a view can ignore another project\'s run', async () => {
+      const { stores } = await ready()
+      stores.conversation.adoptRunSession('/a', 7)
+      stores.conversation.adoptRunSession('/b', 8)
+
+      expect(stores.conversation.lastDrivenRunStart.value).toEqual({ id: 8, project: '/b' })
+      expect(stores.conversation.conversationsIn('/a')).toEqual([7])
+      expect(stores.conversation.conversationsIn('/b')).toEqual([8])
+    })
+
+    it('attaches once on the first adopt, so the record takes the snapshot\'s state', async () => {
+      const { ipc, stores } = await ready({ events: [], seq: 0, state: 'running' })
+      stores.conversation.adoptRunSession('/p', 7)
+      stores.conversation.adoptRunSession('/p', 7)
+      await vi.waitFor(() => expect(stores.conversation.drivenSessions.value[0].state).toBe('running'))
+
+      expect(ipc.calls('session_attach')).toEqual([{ id: 7 }])
     })
 
     it('adopting the same run session twice keeps one record', async () => {
@@ -1086,6 +1105,8 @@ describe('the conversation store', () => {
       await stores.conversation.initConversation()
       await emit('session:state', { id: 7, state: 'running', conversation: null, title: null })
       stores.conversation.adoptRunSession('/p', 7)
+      // The adopt's own attach lands first; the change after it must still move the record.
+      await vi.waitFor(() => expect(stores.conversation.drivenSessions.value[0].state).toBe('ready'))
       await emit('session:state', { id: 7, state: 'needs-you', conversation: null, title: null })
 
       expect(stores.conversation.drivenSessions.value[0].state).toBe('needs-you')
