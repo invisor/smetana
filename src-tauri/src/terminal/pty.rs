@@ -79,46 +79,63 @@ pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
     if let Some(mark) = crate::runs::procs::mark(id) {
         cmd.env(crate::runs::procs::MARK_KEY, mark);
     }
-    // Caps how many workers `vitest` starts inside this session, the other
-    // half of the machine-load fix beside `apply_environment`'s own PATH and
-    // locale lines: `vitest` reads `VITEST_MAX_WORKERS` unconditionally on
-    // every config resolution (measured against vitest 4.1's own source), so
-    // one variable in the session's environment reaches every project a
-    // session might run `npm test` in without touching any project's own
-    // `vitest.config.js`. See `.claude/rules/runs.md`'s note beside Codex's
-    // own concurrency line for why the divisor is the same field.
-    cmd.env("VITEST_MAX_WORKERS", vitest_max_workers(&launch.intent).to_string());
-    // The environment half of running without a person. The argument half is
-    // applied by the profile itself, because it has to go in front of the
-    // positional prompt and `CommandBuilder` only appends; the environment has
-    // no order and belongs here, beside the other variables every agent gets.
-    // Only a `Run` has a mode, and only a `Run` gets any of this.
-    if let Intent::Run { settings, .. } = &launch.intent {
-        for (key, value) in launch.profile.autonomy(settings.mode).env {
-            cmd.env(key, value);
-        }
-        // The run's name in bd's audit trail, and the whole of what makes bd's
-        // claim a mutual exclusion. bd refuses `--claim` only when the issue is
-        // held by a *different* actor, and its default actor — `$BEADS_ACTOR`,
-        // else `git user.name`, else `$USER` — is identical for two runs on one
-        // machine, so without a per-run name both would "successfully" claim
-        // the same task. The session id is unique within this app instance,
-        // which is what makes the name unique per batch here; ids restart at 1
-        // on every launch, so a run after a restart — or in a second app
-        // instance — can mint the same name. That cross-instance gap is open
-        // and recorded rather than solved.
-        //
-        // The environment variable rather than `bd --actor` on every call: the
-        // skills would have to thread the flag through each bd invocation they
-        // document, and one forgotten call silently reverts to the shared
-        // default. And only for a `Run`: a person filing or editing a task
-        // through an agent keeps their own name in the audit trail.
-        // `run_actor` and not a format string here: the runs worker derives
-        // the same name to find what this session claimed, and two copies of
-        // the format would drift silently.
-        cmd.env("BEADS_ACTOR", crate::terminal::model::run_actor(id));
+    // Caps how many workers `vitest` starts, and (for a `Run`) the environment
+    // half of running without a person plus the run's bd actor. All of it is
+    // `run_environment`'s, shared with the driven spawn in `session::service`
+    // so the two cannot drift; `run_actor` is this worker's name for the
+    // actor, and the session worker passes its own.
+    for (key, value) in run_environment(&crate::terminal::model::run_actor(id), launch) {
+        cmd.env(key, value);
     }
     cmd
+}
+
+/// What every agent's `PATH` is: the login shell's, with the bundled `bd` in
+/// front of it. Shared with the driven spawn in `session::service`, which
+/// used to reach whatever `bd` the machine had instead of this app's own.
+pub(crate) fn agent_path() -> Option<OsString> {
+    let base = crate::shell_env::path().map(OsString::from);
+    match sidecar_dir() {
+        Some(dir) => Some(path_with(&dir, base.as_deref())),
+        None => base,
+    }
+}
+
+/// The environment half of a launch that is not about the terminal: the
+/// worker cap every agent gets, and, for a `Run`, the autonomy variables of
+/// its mode and its name in bd's audit trail.
+///
+/// `VITEST_MAX_WORKERS` caps how many workers `vitest` starts inside the
+/// session: `vitest` reads it unconditionally on every config resolution, so
+/// one variable reaches every project a session might run `npm test` in. See
+/// `.claude/rules/runs.md`'s note beside Codex's own concurrency line for why
+/// the divisor is the same field.
+///
+/// The autonomy variables are the environment half of running without a
+/// person; the argument half is applied by the profile itself, because it has
+/// to go in front of the positional prompt. Only a `Run` has a mode, and only
+/// a `Run` gets any of this.
+///
+/// `BEADS_ACTOR` is the whole of what makes bd's claim a mutual exclusion: bd
+/// refuses `--claim` only when the issue is held by a *different* actor, and
+/// its default actor is identical for two runs on one machine. The actor is
+/// the caller's because the two workers mint different names for the same
+/// reason their ids collide (`run_actor`, `driven_run_actor`). Ids restart at
+/// 1 on every launch, so a run after a restart, or in a second app instance,
+/// can mint the same name; that cross-instance gap is open and recorded. The
+/// environment variable rather than `bd --actor` on every call, because one
+/// forgotten call in a skill would silently revert to the shared default; and
+/// only for a `Run`, so a person filing a task through an agent keeps their
+/// own name.
+pub(crate) fn run_environment(actor: &str, launch: &Launch) -> Vec<(&'static str, String)> {
+    let mut env = vec![("VITEST_MAX_WORKERS", vitest_max_workers(&launch.intent).to_string())];
+    if let Intent::Run { settings, .. } = &launch.intent {
+        for (key, value) in launch.profile.autonomy(settings.mode).env {
+            env.push((key, value.to_owned()));
+        }
+        env.push(("BEADS_ACTOR", actor.to_owned()));
+    }
+    env
 }
 
 /// How many tasks this session's own work may be spread across at once — the
@@ -214,22 +231,14 @@ fn apply_environment(cmd: &mut CommandBuilder) {
     // What every child's own `PATH` is built on: the login shell's, because a
     // bundled app inherits launchd's, which holds nothing a person installed —
     // an agent started with that finds neither `git` nor `node` nor the helpers
-    // it shells out to. `crate::shell_env::path` already falls back to the
-    // inherited value, and `cmd.get_env` behind it covers the one case it
-    // cannot answer: `CommandBuilder::new` has snapshotted the parent's
-    // environment, so this is the value the child would otherwise have had.
-    let base = crate::shell_env::path()
-        .map(OsString::from)
-        .or_else(|| cmd.get_env("PATH").map(OsStr::to_owned));
-    // Filing a task means the agent running `bd`, and this app's bd is a
-    // sidecar inside the bundle: on a machine that never installed one there is
-    // nothing on `PATH` to find, and "command not found" is now the whole
-    // feature failing. One directory in front of that base, and nothing else
-    // about the environment is touched.
-    let path = match sidecar_dir() {
-        Some(dir) => Some(path_with(&dir, base.as_deref())),
-        None => base,
-    };
+    // it shells out to. Filing a task means the agent running `bd`, and this
+    // app's bd is a sidecar inside the bundle: `agent_path` answers the login
+    // shell's `PATH` (which itself falls back to the inherited value) with the
+    // sidecar's directory in front. Only when it answers nothing at all is the
+    // `PATH` the command was built with kept: `CommandBuilder::new` has
+    // snapshotted the parent's environment, so that is the value the child
+    // would otherwise have had.
+    let path = agent_path().or_else(|| cmd.get_env("PATH").map(OsStr::to_owned));
     if let Some(path) = path {
         cmd.env("PATH", path);
     }
@@ -1291,5 +1300,26 @@ mod tests {
         shell_pty.kill();
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_run_environment_carries_the_actor_it_was_handed() {
+        let env = run_environment("smetana-run-driven-9", &with_intent("claude", run_intent()));
+        assert!(env.iter().any(|(k, v)| *k == "BEADS_ACTOR" && v == "smetana-run-driven-9"), "{env:?}");
+        assert!(env.iter().any(|(k, _)| *k == "VITEST_MAX_WORKERS"), "{env:?}");
+    }
+
+    #[test]
+    fn the_run_environment_gives_no_other_intent_an_actor() {
+        let env = run_environment("smetana-run-9", &with_intent("claude", Intent::Bare));
+        assert!(env.iter().all(|(k, _)| *k != "BEADS_ACTOR"), "{env:?}");
+        assert!(env.iter().any(|(k, _)| *k == "VITEST_MAX_WORKERS"), "{env:?}");
+    }
+
+    #[test]
+    fn the_agent_path_puts_the_sidecar_first() {
+        let path = agent_path().expect("a test binary has a location");
+        let first = std::env::split_paths(&path).next().expect("at least one entry");
+        assert_eq!(first, sidecar_dir().expect("the test binary has a location"));
     }
 }

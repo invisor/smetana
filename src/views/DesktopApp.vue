@@ -171,6 +171,7 @@ import {
   drivenSessions,
   forget,
   initConversation,
+  lastDrivenRunStart,
   startConversation,
   statusOf
 } from '../stores/conversation.js'
@@ -3210,6 +3211,19 @@ watch(lastRunStart, (id) => {
   if (id == null) return
   project.sideTab = 'agents'
   selectAgent(id)
+})
+
+/* The driven twin of the watcher above: a Solo run with the panel on has its
+   lead in `conversation.js` rather than in `terminals.js`, and it is announced
+   there. The same two moves, through `selectAgent`, for the reason the watcher
+   above gives: a row click and a run's arrival land in one place. */
+watch(lastDrivenRunStart, (start) => {
+  /* Only the project on screen: a run starting in another project is adopted
+     all the same, but moving this window's side tab and selection for it
+     would drag a person off whatever they are looking at. */
+  if (start == null || start.project !== activePath.value) return
+  project.sideTab = 'agents'
+  selectAgent(drivenRowId(start.id))
 })
 
 /* The Agent tab is derived from the sessions, so it goes on its own when the

@@ -14,7 +14,7 @@
    enforced: an out-of-sequence event takes a fresh snapshot rather than
    stitching a hole, `question` is derived and never stored, and a draft
    survives a send that failed. */
-import { computed, reactive } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 /* The intent-to-work translation, shared with `stores/terminals.js` and
@@ -735,6 +735,39 @@ export const canDrive = (agent) => settings.conversationPanel && DRIVEN.includes
    string the terminal store keys its own sessions by: the project's own
    folder. */
 const started = reactive([])
+
+/* A run's own driven session, which the run worker started and this window
+   therefore never put in `started` through `startConversation`. The record is
+   the same shape, so every reader below (the rows, the counters, the Agent
+   tab) sees it as one more session; what differs is only who wrote it.
+
+   Idempotent, because `run:state` is emitted on every change of the run and
+   names the same session each time. Announced on `lastDrivenRunStart` the way
+   `terminals.js` announces a PTY run's on `lastRunStart`, and for its reason:
+   bringing the agent forward is the view's business, not a store's. */
+export const lastDrivenRunStart = ref(null)
+
+export function adoptRunSession(project, id) {
+  if (started.some((session) => session.id === id)) return
+  started.push({
+    id,
+    project,
+    state: 'starting',
+    startedAt: Date.now(),
+    conversation: null,
+    work: { kind: 'run' },
+    title: null
+  })
+  /* The project travels with the id: adoption is for every project, but
+     bringing the agent forward is for the one this window is looking at, and
+     only the view knows which that is. A fresh object each time so the
+     watcher fires even for a repeated id. */
+  lastDrivenRunStart.value = { id, project }
+  /* As `startConversation` does: the record takes its state, conversation id
+     and title from the snapshot instead of sitting at `starting` until the
+     session next changes. `attach` reports its own failures. */
+  void attach(id)
+}
 
 /* The driven sessions of one project, oldest first. An array of ids rather than
    of records, because that is the whole of what a caller wants — the tab is

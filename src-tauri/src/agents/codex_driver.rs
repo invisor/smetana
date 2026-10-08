@@ -244,8 +244,8 @@ impl Driver for CodexDriver {
                 let (cwd, model, resume) = self.launch.lock().map(|state| state.clone()).unwrap_or_default();
                 // Every intent this driver serves is an attended one — never
                 // the `Auto` run that earns the wider bypass, since
-                // `session::service::drivable` refuses `Intent::Run` outright
-                // — so the workspace sandbox this thread starts under is
+                // Auto never selects `Transport::Driven`; Solo reaches this
+                // road through `Request::RunStart` and has no bypass — so the workspace sandbox this thread starts under is
                 // never left to whatever `~/.codex/config.toml` happens to
                 // say. `codex.rs`'s own PTY road pins the same policy with
                 // `every_non_auto_launch_explicitly_sandboxes_its_current_workspace`,

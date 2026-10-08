@@ -215,6 +215,63 @@ impl ClaudePromptGate {
     }
 }
 
+/// What a reaped driven session ended as. A session the cross took
+/// (`Request::Close`) is `Removed` whatever its status: a person's doing, and
+/// the run loop stops on it rather than counting a crash. Otherwise the code,
+/// or `NoCode` for a signal.
+fn exit_of(removed: bool, code: Option<i32>) -> crate::terminal::model::Exit {
+    use crate::terminal::model::Exit;
+    if removed {
+        Exit::Removed
+    } else {
+        code.map_or(Exit::NoCode, Exit::Code)
+    }
+}
+
+/// An exit for `id` has landed: answer every waiter, or park it for the first
+/// one when nobody has asked yet. A spawn can answer and the child die before
+/// the run loop registers its `AwaitExit`.
+fn settle_exit(
+    waiters: &mut HashMap<SessionId, Vec<oneshot::Sender<crate::terminal::model::Exit>>>,
+    exits: &mut HashMap<SessionId, crate::terminal::model::Exit>,
+    id: SessionId,
+    exit: crate::terminal::model::Exit,
+    keep: bool,
+) {
+    let waiting = waiters.remove(&id).unwrap_or_default();
+    if waiting.is_empty() {
+        // Only a session the run worker started has anybody to come asking;
+        // parking the exit of an ordinary one would grow this map for the
+        // life of the app.
+        if keep {
+            exits.insert(id, exit);
+        }
+        return;
+    }
+    for waiter in waiting {
+        let _ = waiter.send(exit);
+    }
+}
+
+/// `Request::AwaitExit`'s rule: a parked exit answers at once and is spent, a
+/// session still to be reaped queues the waiter, and anything else is a
+/// session somebody took away (or whose exit has already been delivered).
+fn await_exit(
+    waiters: &mut HashMap<SessionId, Vec<oneshot::Sender<crate::terminal::model::Exit>>>,
+    exits: &mut HashMap<SessionId, crate::terminal::model::Exit>,
+    id: SessionId,
+    tx: oneshot::Sender<crate::terminal::model::Exit>,
+    pending: bool,
+) {
+    if let Some(exit) = exits.remove(&id) {
+        let _ = tx.send(exit);
+    } else if pending {
+        waiters.entry(id).or_default().push(tx);
+    } else {
+        let _ = tx.send(crate::terminal::model::Exit::Removed);
+    }
+}
+
 fn retain_crew_exit(admitted: bool, waiter_count: usize) -> bool {
     admitted && waiter_count == 0
 }
@@ -242,6 +299,15 @@ pub enum Request {
     /// worker's completion channel; it is distinct from removing the tree.
     CrewAwaitExit(u64, oneshot::Sender<crate::terminal::model::Exit>),
     CrewClear(u64),
+    /// The run worker's own door for a Solo lead: an ordinary driven session
+    /// for `Intent::Run`, which `Start` refuses at the front door so a person
+    /// cannot start a run from the composer. The `String` is the profile id
+    /// the run froze at its start, pinned for the reason `spawn_batch` pins it
+    /// on the PTY route.
+    RunStart(String, Intent, String, oneshot::Sender<Result<SessionId, SessionError>>),
+    /// Wait for a driven session's child to end: the run loop's completion
+    /// channel, the twin of the terminal worker's `AwaitExit`.
+    AwaitExit(SessionId, oneshot::Sender<crate::terminal::model::Exit>),
     Attach(SessionId, oneshot::Sender<Result<Attached, SessionError>>),
     /// Everything after `seq`, or `None` when the journal no longer holds it —
     /// which is the front end's cue to take a fresh snapshot rather than draw a
@@ -284,6 +350,10 @@ enum Chunk {
     /// is the process leaving. The exit status is reaped by a task of its own —
     /// see `Chunk::Eof`'s arm.
     Eof(SessionId),
+    /// The child has been waited on; its code, or `None` for a signal. Sent by
+    /// the reaper task `Eof`'s arm spawns, so the worker learns an exit
+    /// without ever waiting on a process itself.
+    Reaped(SessionId, Option<i32>),
 }
 
 /// The two halves of talking to a child, held together because they are wanted
@@ -315,6 +385,17 @@ struct Live {
     /// for the life of the app.
     child: Option<Child>,
     child_alive: bool,
+    /// Set by `Request::Close`: the cross on the row ended this session, so its
+    /// exit is `Exit::Removed` whatever status the child is reaped with.
+    removed: bool,
+    /// Set once `Chunk::Reaped` has settled this session's exit. Not
+    /// `child_alive`, which `lost` also clears on a broken stdin while the
+    /// child is still running.
+    reaped: bool,
+    /// Started through `Request::RunStart`, so the run loop will ask for its
+    /// exit and an exit with no waiter yet is worth parking. Modelled on
+    /// `retain_crew_exit`'s rule for Crew roots.
+    run_started: bool,
     /// The last state emitted for this session. `session:state` goes out on a
     /// change and never on a repeat.
     state: SessionState,
@@ -425,6 +506,12 @@ pub fn start(app: AppHandle) -> SessionHandle {
         // waiter consumes it instead of misreporting a real crash as Removed.
         let mut crew_exits: HashMap<u64, crate::terminal::model::Exit> = HashMap::new();
         let mut crew_send_waiters: HashMap<(u64, u64), CrewSendWaiter> = HashMap::new();
+        // The same pair for an ordinary driven session's child, keyed by its
+        // own id: an exit that lands before the run loop's `AwaitExit` is kept
+        // for the first waiter instead of being reported as a removal.
+        let mut exit_waiters: HashMap<SessionId, Vec<oneshot::Sender<crate::terminal::model::Exit>>> =
+            HashMap::new();
+        let mut exits: HashMap<SessionId, crate::terminal::model::Exit> = HashMap::new();
         let mut starting: HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>> = HashMap::new();
         // Crew admission is withheld until the structured provider transport
         // has created its root. A run must not claim work behind a failed
@@ -464,6 +551,8 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         &mut crew_waiters,
                         &mut crew_exits,
                         &mut crew_send_waiters,
+                        &mut exit_waiters,
+                        &mut exits,
                         &mut next_id,
                         &mut starting,
                         &mut crew_starting,
@@ -478,7 +567,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                     // breaking is a stopped worker, whereas continuing is a
                     // branch that is instantly ready forever.
                     let Some(chunk) = chunk else { break };
-                    absorb(&app, &mut sessions, &mut crews, &mut crew_leads, &mut crew_waiters, &mut crew_exits, &mut crew_send_waiters, &mut codex_hydrated, &mut codex_hydration_requested, &mut codex_buffered, &mut codex_seen, &mut codex_reconciled, &mut starting, &mut crew_starting, permission.as_ref(), chunk);
+                    absorb(&app, &mut sessions, &mut crews, &mut crew_leads, &mut crew_waiters, &mut crew_exits, &mut crew_send_waiters, &mut exit_waiters, &mut exits, &chunks_tx, &mut codex_hydrated, &mut codex_hydration_requested, &mut codex_buffered, &mut codex_seen, &mut codex_reconciled, &mut starting, &mut crew_starting, permission.as_ref(), chunk);
                 }
                 asked = asked_rx.recv(), if asked_open => {
                     let Some(asked) = asked else {
@@ -870,15 +959,18 @@ fn spawn_session(
     // keeps between a profile and the spawn around it.
     let mut builder = driver.start(&launch);
     builder.cwd(&launch.cwd);
-    // The same `PATH` every non-PTY spawn in this tree runs with
-    // (`agents::oneshot`, `vcs::run`, `runs::preflight`): the login shell's,
-    // because a bundled app inherits launchd's. It is deliberately not the
-    // PTY's, which also puts the bundled `bd` in front — that lives behind a
-    // private function in `terminal::pty`, and this stage may not touch that
-    // module. The cost is that an agent in a driven session reaches whatever
-    // `bd` the machine has rather than this app's own.
-    if let Some(path) = crate::shell_env::path() {
+    // The same `PATH` every PTY agent runs with, bundled `bd` in front: a run
+    // files and claims through `bd`, and the sidecar is the version the
+    // tracker handshake checked. `agent_path` is `terminal::pty`'s, shared
+    // rather than copied, and so is the run's environment; the actor is this
+    // worker's own name for it. No `SMETANA_SESSION` mark: it is keyed by a
+    // session id, the two workers' id spaces collide, and a driven child is
+    // ended by this worker's `kill_all`.
+    if let Some(path) = crate::terminal::pty::agent_path() {
         builder.env("PATH", path);
+    }
+    for (key, value) in crate::terminal::pty::run_environment(&super::model::driven_run_actor(id), &launch) {
+        builder.env(key, value);
     }
     let Some(mut command) = spawnable(&builder) else {
         return Err(SessionError::Spawn("the driver produced no command line".into()));
@@ -924,6 +1016,9 @@ fn spawn_session(
         journal,
         child: Some(child),
         child_alive: true,
+        removed: false,
+        reaped: false,
+        run_started: false,
         conversation,
         project: project.to_owned(),
         cwd: cwd.to_string_lossy().into_owned(),
@@ -1116,11 +1211,14 @@ fn lost(app: &AppHandle, id: SessionId, live: &mut Live) {
     append(app, id, live, vec![EventKind::Error { text: UNREACHABLE.into() }]);
 }
 
-/// Which intents this road starts. Everything a person talks to, which is
-/// everything but a run: nobody is in a run's conversation — the lead works
-/// overnight against a queue — and the panel would be drawing a session no one
-/// is meant to answer. The brief every other intent carries goes over stdin as
-/// the session's opening turn (`Driver::opening`), which is what made the old
+/// Which intents this road starts at the front door, `Request::Start`.
+/// Everything a person talks to, which is everything but a run: a composer
+/// cannot start one, and Autopilot's lead works overnight against a queue with
+/// nobody in its conversation. `Request::RunStart` is the run worker's own door
+/// past this refusal, for the one run mode a person does sit in: Solo, one task
+/// and no `bypassPermissions`, whose permission requests the person answers.
+/// The brief every other intent carries goes over stdin as the session's
+/// opening turn (`Driver::opening`), which is what made the old
 /// bare-or-resume refusal unnecessary.
 ///
 /// A sign-in is the second refusal: it is a harness's own login dialog, which
@@ -1865,6 +1963,8 @@ fn handle(
     crew_waiters: &mut HashMap<u64, Vec<oneshot::Sender<crate::terminal::model::Exit>>>,
     crew_exits: &mut HashMap<u64, crate::terminal::model::Exit>,
     crew_send_waiters: &mut HashMap<(u64, u64), CrewSendWaiter>,
+    exit_waiters: &mut HashMap<SessionId, Vec<oneshot::Sender<crate::terminal::model::Exit>>>,
+    exits: &mut HashMap<SessionId, crate::terminal::model::Exit>,
     next_id: &mut SessionId,
     starting: &mut HashMap<SessionId, oneshot::Sender<Result<SessionId, SessionError>>>,
     crew_starting: &mut HashMap<SessionId, (u64, oneshot::Sender<Result<(u64, SessionId), SessionError>>)>,
@@ -2149,6 +2249,34 @@ fn handle(
                 crate::terminal::model::Exit::Removed, admitted,
             );
         }
+        Request::RunStart(project, intent, pinned, tx) => {
+            // No `drivable` here: this is the run worker's own door, and the
+            // refusal in `Start` is about a person's composer. The same
+            // spawn and the same startup wait as `Start` otherwise.
+            let id = *next_id;
+            *next_id += 1;
+            match spawn_session(app, id, &project, intent, permission, chunks, Some(&pinned)) {
+                Ok(mut live) => {
+                    live.run_started = true;
+                    sessions.insert(id, live);
+                    if sessions.get(&id).is_some_and(|live| live.talking.as_ref().is_some_and(|talking| talking.driver.awaits_startup())) {
+                        starting.insert(id, tx);
+                        return;
+                    }
+                    let _ = tx.send(Ok(id));
+                }
+                Err(error) => {
+                    if let Some(server) = permission {
+                        server.forget(id);
+                    }
+                    let _ = tx.send(Err(error));
+                }
+            }
+        }
+        Request::AwaitExit(id, tx) => {
+            let pending = sessions.get(&id).is_some_and(|live| !live.reaped);
+            await_exit(exit_waiters, exits, id, tx, pending);
+        }
         Request::Start(project, intent, tx) => {
             if !drivable(&intent) {
                 // The same capability tag `driver_for`'s own `None` answers
@@ -2368,6 +2496,7 @@ fn handle(
             // deletes the `--mcp-config` file (`McpConfig::drop`, by dropping
             // `Talking`) — so this reaches all of that by the same road it
             // always has, rather than repeating it here.
+            live.removed = true;
             if let Some(child) = live.child.as_mut() {
                 let _ = child.start_kill();
             }
@@ -2387,6 +2516,9 @@ fn absorb(
     crew_waiters: &mut HashMap<u64, Vec<oneshot::Sender<crate::terminal::model::Exit>>>,
     crew_exits: &mut HashMap<u64, crate::terminal::model::Exit>,
     crew_send_waiters: &mut HashMap<(u64, u64), CrewSendWaiter>,
+    exit_waiters: &mut HashMap<SessionId, Vec<oneshot::Sender<crate::terminal::model::Exit>>>,
+    exits: &mut HashMap<SessionId, crate::terminal::model::Exit>,
+    chunks: &mpsc::UnboundedSender<Chunk>,
     codex_hydrated: &mut HashSet<(u64, String)>,
     codex_hydration_requested: &mut HashSet<(u64, String)>,
     codex_buffered: &mut HashMap<(u64, String), Vec<serde_json::Value>>,
@@ -2494,6 +2626,16 @@ fn absorb(
                 }
             }
         }
+        Chunk::Reaped(id, code) => {
+            let (removed, keep) = match sessions.get_mut(&id) {
+                Some(live) => {
+                    live.reaped = true;
+                    (live.removed, live.run_started)
+                }
+                None => (false, false),
+            };
+            settle_exit(exit_waiters, exits, id, exit_of(removed, code), keep);
+        }
         Chunk::Eof(id) => {
             let crew_failed_admission = crew_starting.remove(&id);
             let crew_failed_admission_pending = crew_failed_admission.is_some();
@@ -2548,14 +2690,23 @@ fn absorb(
             // wait on a process. Dropping the handle unwaited would leave a
             // zombie for the life of the app.
             if let Some(mut child) = live.child.take() {
+                let chunks = chunks.clone();
                 tauri::async_runtime::spawn(async move {
                     match child.wait().await {
-                        Ok(status) => log::info!("[session {id}] the child ended: {status}"),
+                        Ok(status) => {
+                            log::info!("[session {id}] the child ended: {status}");
+                            let _ = chunks.send(Chunk::Reaped(id, status.code()));
+                        }
                         Err(error) => {
-                            log::warn!("[session {id}] the child could not be waited on: {error}")
+                            log::warn!("[session {id}] the child could not be waited on: {error}");
+                            let _ = chunks.send(Chunk::Reaped(id, None));
                         }
                     }
                 });
+            } else {
+                // Nothing to wait on, so nothing will report: settle it here
+                // rather than leave a run loop waiting for good.
+                let _ = chunks.send(Chunk::Reaped(id, None));
             }
             // There is nothing left to decode and nowhere left to write, so the
             // codec and the way in are dropped here rather than kept for the
@@ -2811,6 +2962,64 @@ fn note_conversation(app: &AppHandle, id: SessionId, live: &mut Live, conversati
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_closed_session_answers_removed() {
+        use crate::terminal::model::Exit;
+        assert_eq!(exit_of(true, Some(0)), Exit::Removed);
+        assert_eq!(exit_of(true, None), Exit::Removed);
+    }
+
+    #[test]
+    fn an_ended_session_answers_its_code_or_a_signal() {
+        use crate::terminal::model::Exit;
+        assert_eq!(exit_of(false, Some(3)), Exit::Code(3));
+        assert_eq!(exit_of(false, None), Exit::NoCode);
+    }
+
+    #[test]
+    fn an_exit_arriving_before_its_waiter_is_kept_for_the_first_one() {
+        use crate::terminal::model::Exit;
+        let mut waiters: HashMap<SessionId, Vec<oneshot::Sender<Exit>>> = HashMap::new();
+        let mut exits: HashMap<SessionId, Exit> = HashMap::new();
+        settle_exit(&mut waiters, &mut exits, 4, Exit::Code(2), true);
+        assert_eq!(exits.get(&4), Some(&Exit::Code(2)));
+        let (tx, rx) = oneshot::channel();
+        await_exit(&mut waiters, &mut exits, 4, tx, true);
+        assert_eq!(rx.blocking_recv().unwrap(), Exit::Code(2));
+        assert!(exits.get(&4).is_none(), "taken once");
+    }
+
+    #[test]
+    fn a_waiter_registered_first_is_answered_by_the_reap() {
+        use crate::terminal::model::Exit;
+        let mut waiters = HashMap::new();
+        let mut exits = HashMap::new();
+        let (tx, rx) = oneshot::channel();
+        await_exit(&mut waiters, &mut exits, 4, tx, true);
+        settle_exit(&mut waiters, &mut exits, 4, Exit::NoCode, true);
+        assert_eq!(rx.blocking_recv().unwrap(), Exit::NoCode);
+        assert!(exits.is_empty(), "a delivered exit is not parked");
+    }
+
+    #[test]
+    fn an_ordinary_sessions_exit_is_not_parked() {
+        use crate::terminal::model::Exit;
+        let mut waiters = HashMap::new();
+        let mut exits = HashMap::new();
+        settle_exit(&mut waiters, &mut exits, 5, Exit::Code(0), false);
+        assert!(exits.is_empty(), "nobody will ever ask for it");
+    }
+
+    #[test]
+    fn waiting_on_a_session_already_settled_or_unknown_answers_removed() {
+        use crate::terminal::model::Exit;
+        let mut waiters = HashMap::new();
+        let mut exits = HashMap::new();
+        let (tx, rx) = oneshot::channel();
+        await_exit(&mut waiters, &mut exits, 9, tx, false);
+        assert_eq!(rx.blocking_recv().unwrap(), Exit::Removed);
+    }
+
     use super::*;
     use crate::agents::Intent;
 
