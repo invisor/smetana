@@ -185,11 +185,43 @@ pub struct ReviewPair {
     pub head: String,
 }
 
+/// Which of a harness's own login commands a sign-in session runs. Not every
+/// harness has both; `Profile::login_args` says which it does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SignInVariant {
+    /// The harness's ordinary login, which opens a browser.
+    Browser,
+    /// A code the person types on another device.
+    DeviceCode,
+}
+
+impl SignInVariant {
+    /// Every variant, in the order the front end draws their buttons.
+    pub const ALL: [SignInVariant; 2] = [SignInVariant::Browser, SignInVariant::DeviceCode];
+
+    /// The wire word, the same one serde writes.
+    pub fn wire(self) -> &'static str {
+        match self {
+            SignInVariant::Browser => "browser",
+            SignInVariant::DeviceCode => "deviceCode",
+        }
+    }
+}
+
 /// Why a session is being started. The front end sends this; every profile
 /// turns the same value into its own command line.
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum Intent {
+    /// The harness's own login dialog in a terminal tab, offered under a
+    /// conversation-panel error that says the person is signed out.
+    ///
+    /// `agent` is the id of the harness whose session failed, and it is the
+    /// harness this runs on — **not** the role table's default. The command is
+    /// `<binary> <login_args>` and nothing else: no prompt, no skills, no MCP
+    /// config, no model.
+    SignIn { agent: String, variant: SignInVariant },
     /// The "+ New agent" row: a person with their own reason, and nothing to
     /// impose on them.
     Bare,
@@ -518,6 +550,9 @@ impl Intent {
             Intent::ResumeSession { title, .. } => W::ResumeSession { title: title.clone() },
             Intent::Setup => W::Setup,
             Intent::Bootstrap => W::Bootstrap,
+            // Neither the harness nor the variant: the row's caption says what
+            // this tab is for, and the command line is on the tab itself.
+            Intent::SignIn { .. } => W::SignIn,
             // The report's path and not the pairs, which is the reading a
             // conflict's file list gets: the row draws where the answer is
             // going to be, and the refs are the briefing — a review of four
@@ -978,6 +1013,15 @@ pub trait Profile: Sync {
     fn transcript(&self) -> Option<fn(&str) -> Vec<String>> {
         None
     }
+
+    /// The arguments after `binary()` that run this harness's own sign-in
+    /// dialog, or `None` where it has no such variant. A capability and its
+    /// arguments in one answer, like `resume_args`, so `catalogue` derives the
+    /// front end's list of buttons from the same place the command line is
+    /// built.
+    fn login_args(&self, _variant: SignInVariant) -> Option<Vec<&'static str>> {
+        None
+    }
 }
 
 /// Which row of the settings window decides this session's harness and its
@@ -1014,9 +1058,13 @@ pub fn role_of(intent: &Intent) -> Role {
         // started with and is never told one at all (`Launch::model`), so the
         // row it nominally belongs to costs it nothing either way; putting it
         // anywhere else would only invite somebody to make that row reach it.
+        //
+        // `SignIn` is `Default` as well and its harness is not the table's:
+        // `settings::resolve_role_model` reads the agent off the intent.
         Intent::Bare
         | Intent::Setup
         | Intent::Bootstrap
+        | Intent::SignIn { .. }
         | Intent::RepairTracker { .. }
         | Intent::ResumeSession { .. } => Role::Default,
     }
@@ -1072,6 +1120,9 @@ pub struct Capabilities {
     pub usage: bool,
     pub batch: bool,
     pub oneshot: bool,
+    /// The sign-in variants this harness can run, by wire word, derived from
+    /// `Profile::login_args` and in `SignInVariant::ALL` order.
+    pub sign_in: Vec<&'static str>,
 }
 
 /// One model a harness offers, as the front end needs it while a dropdown is
@@ -1123,6 +1174,11 @@ pub fn catalogue() -> Vec<AgentRow> {
                 usage: profile.usage_source().is_some(),
                 batch: !profile.batch_args().is_empty(),
                 oneshot: profile.oneshot_args().is_some(),
+                sign_in: SignInVariant::ALL
+                    .iter()
+                    .filter(|variant| profile.login_args(**variant).is_some())
+                    .map(|variant| variant.wire())
+                    .collect(),
             },
             models: profile
                 .models()
@@ -2213,6 +2269,7 @@ mod tests {
         for field in ["resume", "fork", "clear", "usage", "batch", "oneshot"] {
             assert!(capabilities.get(field).is_some_and(serde_json::Value::is_boolean), "{field}");
         }
+        assert!(capabilities.get("signIn").is_some_and(serde_json::Value::is_array));
         // The models travel in the same row and by the names the settings
         // window's dropdown reads them by.
         let models = first.get("models").and_then(serde_json::Value::as_array);
@@ -2220,6 +2277,31 @@ mod tests {
         let model = models.first().expect("at least one model is offered");
         assert!(model.get("id").is_some_and(serde_json::Value::is_string));
         assert!(model.get("label").is_some_and(serde_json::Value::is_string));
+    }
+
+    #[test]
+    fn the_catalogue_derives_sign_in_variants_from_login_args() {
+        let json = serde_json::to_value(catalogue()).expect("the catalogue serializes");
+        let sign_in = |id: &str| {
+            let row = json.as_array().unwrap().iter().find(|row| row["id"] == id).unwrap();
+            row["capabilities"]["signIn"].clone()
+        };
+        assert_eq!(sign_in("codex"), serde_json::json!(["browser", "deviceCode"]));
+        assert_eq!(sign_in("claude"), serde_json::json!(["browser"]));
+    }
+
+    #[test]
+    fn a_sign_in_intent_has_the_wire_shape_the_front_end_sends() {
+        let intent: Intent = serde_json::from_str(r#"{"kind":"signIn","agent":"codex","variant":"deviceCode"}"#)
+            .expect("deserializes");
+        assert!(matches!(
+            &intent,
+            Intent::SignIn { agent, variant: SignInVariant::DeviceCode } if agent == "codex"
+        ));
+        assert_eq!(intent.work(), crate::terminal::model::SessionWork::SignIn);
+        assert_eq!(role_of(&intent), Role::Default);
+        assert!(!is_batch(&intent));
+        assert_eq!(intent.opening_words(), (None, Vec::new()));
     }
 
     #[test]

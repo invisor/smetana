@@ -929,3 +929,19 @@ The other half is what the discussion produces. Brainstorming on `On` buys half 
 down what somebody meant, and none of it is anywhere but that conversation — the agent that picks the
 task up months later has the person's original four sentences and nothing else. So `DISCUSS` requires
 the outcome, rejected options included, to be written into the issue itself.
+
+## Signing in from the conversation panel
+
+`Intent::SignIn { agent, variant }` runs a harness's own login command
+(`Profile::login_args`: `codex login`, `codex login --device-auth`,
+`claude auth login`) in a terminal tab. The command line is `<binary>
+<login_args>` and nothing else. The harness is the one the failed session ran
+on, carried in the intent and read by `settings::resolve_role_model` as the
+chosen harness; `terminal::service` refuses with `NoAgent` rather than letting
+`pick_with_model` substitute another installed one. It is never driven
+(`session::service::drivable`) and never offered back after a restart
+(`records_a_restorable`). The buttons come from `signIn` on the catalogue,
+derived from `login_args`, and appear under the last journal line whose text
+`signInHint.js` recognises. Whether a live Codex app-server picks up new
+credentials without `thread/resume` is unverified; see the comment on
+`CodexDriver`.

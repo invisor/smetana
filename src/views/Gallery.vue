@@ -85,6 +85,7 @@ import {
   NotificationPanel,
   Panel,
   PermissionRequest,
+  SignInOffer,
   ProjectRail,
   ProjectTile,
   PromoteColumnModal,
@@ -136,7 +137,7 @@ import {
 } from '../components/notifications/notifications.js'
 import { logLines } from './desktopAppData.js'
 import { folderRefusedNotice } from './folderAccess.js'
-import { MOCK_TREE } from '../stores/mockBackend.js'
+import { MOCK_TREE, SIGN_IN_CONVERSATION_ID } from '../stores/mockBackend.js'
 /* The app's one link-opening path, bound to what the inspector raises. In
    a browser it is a new tab; in the app it is the person's own browser.
    `copyText` is the other half of the same arrangement: a card's id and an
@@ -2688,6 +2689,14 @@ settings.activeProject = '/Users/you/dev/smetana/.worktrees/smetana-1a2b-rename-
    stores number their sessions independently, and one number for both would
    imply a relation between a PTY and a conversation that does not exist. */
 const GALLERY_CONVERSATION = 1
+
+/* The second panel, aimed at the mock's signed-out journal
+   (`SIGN_IN_CONVERSATION_ID`): a failed turn and the same sentence again under
+   it, with the composer showing, so the sign-in offer is drawn once beneath the
+   lower line. Which harness it offers for is the settings' default agent, as in
+   the app; the two standalone rows beside the panel show both harnesses' sets. */
+const GALLERY_SIGN_IN_CONVERSATION = SIGN_IN_CONVERSATION_ID
+const signInAnswer = ref('')
 
 /* What the agents-panel row for this conversation would be captioned by, the
    same `label`/`tasks` join `DesktopApp.vue`'s own `conversationCaption`
@@ -6887,6 +6896,36 @@ const menuTargetStyle = {
           }"
         >
           <ConversationView :session-id="GALLERY_CONVERSATION" :caption="GALLERY_CONVERSATION_CAPTION" />
+        </div>
+
+        <!-- A failed turn that asks for a sign-in, with the composer showing:
+             the strip and the line carry one sentence, and the buttons must
+             appear once, under the lower of the two. -->
+        <div
+          :style="{
+            width: '420px',
+            height: 'calc(var(--space-9) * 8)',
+            display: 'flex',
+            border: 'var(--border-w) solid var(--border)',
+            borderRadius: 'var(--radius-3)',
+            overflow: 'hidden'
+          }"
+        >
+          <ConversationView
+            :session-id="GALLERY_SIGN_IN_CONVERSATION"
+            caption="Agent"
+            @sign-in="signInAnswer = `${$event.agent}: ${$event.variant}`"
+          />
+        </div>
+
+        <!-- The offer on its own, for each harness' set of buttons: Codex's
+             two, and Claude Code's single plain one. -->
+        <div :style="{ width: '360px', display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
+          <SignInOffer agent="codex" :variants="['browser', 'deviceCode']" @sign-in="signInAnswer = `codex: ${$event}`" />
+          <SignInOffer agent="claude" :variants="['browser']" @sign-in="signInAnswer = `claude: ${$event}`" />
+          <div :style="{ font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
+            {{ signInAnswer ? `sign in: ${signInAnswer}` : 'no sign-in yet' }}
+          </div>
         </div>
 
         <div :style="{ width: '360px', display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">

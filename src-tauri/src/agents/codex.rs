@@ -25,7 +25,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use super::library::read_skill;
 use super::{
     cascade, prompt, Autonomy, ImageDelivery, Intent, Launch, McpConfigFormat, Profile,
-    SkillDelivery, Stage,
+    SignInVariant, SkillDelivery, Stage,
 };
 use crate::runs::model::RunMode;
 use crate::runs::usage::Usage;
@@ -426,6 +426,16 @@ impl Profile for Codex {
 
     fn command(&self, launch: &Launch) -> CommandBuilder {
         let mut cmd = CommandBuilder::new(self.binary());
+        // A sign-in is `codex login [--device-auth]` and nothing else: no
+        // sandbox flag, no model, no prompt. Those are arguments of the
+        // interactive agent, and `login` is a different subcommand that would
+        // refuse them.
+        if let Intent::SignIn { variant, .. } = &launch.intent {
+            for arg in self.login_args(*variant).into_iter().flatten() {
+                cmd.arg(arg);
+            }
+            return cmd;
+        }
         // First of all, and this is what makes an unattended batch end by
         // itself: `codex exec --json`. `exec` is a **subcommand**, not a flag,
         // so its position is not a preference — it has exactly one legal place
@@ -600,6 +610,15 @@ impl Profile for Codex {
 
     fn question(&self, screen: &[String]) -> Option<Question> {
         question(screen)
+    }
+
+    /// `codex login` opens the browser; `codex login --device-auth` prints a
+    /// code to enter elsewhere. Both are interactive and meant for a terminal.
+    fn login_args(&self, variant: SignInVariant) -> Option<Vec<&'static str>> {
+        Some(match variant {
+            SignInVariant::Browser => vec!["login"],
+            SignInVariant::DeviceCode => vec!["login", "--device-auth"],
+        })
     }
 
     fn text_question(&self, screen: &[String], entry_style: &[crate::terminal::screen::EntryStyle]) -> bool {
@@ -1431,6 +1450,25 @@ mod tests {
             model: None,
             worker_model: None,
         }
+    }
+
+    #[test]
+    fn a_sign_in_is_the_login_subcommand_and_nothing_else() {
+        use crate::agents::SignInVariant;
+        let mut browser = launch(Intent::SignIn { agent: "codex".into(), variant: SignInVariant::Browser });
+        // Things that would ride on any other launch must not reach this one.
+        browser.model = Some("gpt-5.6-sol".into());
+        browser.agent_prompt = "Be brief.".into();
+        assert_eq!(argv(&browser), ["codex", "login"]);
+        let device = launch(Intent::SignIn { agent: "codex".into(), variant: SignInVariant::DeviceCode });
+        assert_eq!(argv(&device), ["codex", "login", "--device-auth"]);
+    }
+
+    #[test]
+    fn codex_has_both_sign_in_variants() {
+        use crate::agents::SignInVariant;
+        assert_eq!(Codex.login_args(SignInVariant::Browser), Some(vec!["login"]));
+        assert_eq!(Codex.login_args(SignInVariant::DeviceCode), Some(vec!["login", "--device-auth"]));
     }
 
     #[test]

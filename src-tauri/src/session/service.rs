@@ -122,6 +122,11 @@ pub struct Attached {
     /// The same title `session:state` carries, here for the same window
     /// between the two that `conversation` above is here for.
     pub title: Option<String>,
+    /// `Live::agent` — the id of the harness that actually runs this session
+    /// (`profile.id()`), which is neither the default role's harness nor
+    /// necessarily the role the intent asked for: `pick_with_model` may have
+    /// substituted. The sign-in buttons are offered for this one.
+    pub agent: String,
 }
 
 /// A snapshot of exactly one native Crew node. Node ids stay scoped by `root`
@@ -1215,8 +1220,12 @@ fn lost(app: &AppHandle, id: SessionId, live: &mut Live) {
 /// The brief every other intent carries goes over stdin as the session's
 /// opening turn (`Driver::opening`), which is what made the old
 /// bare-or-resume refusal unnecessary.
+///
+/// A sign-in is the second refusal: it is a harness's own login dialog, which
+/// is a terminal program with no JSON-RPC face, so it falls back to the PTY
+/// like a run does.
 fn drivable(intent: &Intent) -> bool {
-    !matches!(intent, Intent::Run { .. })
+    !matches!(intent, Intent::Run { .. } | Intent::SignIn { .. })
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -2274,7 +2283,7 @@ fn handle(
                 // with: nothing was attempted, so the PTY fallback this tag
                 // buys is safe — see `SessionError::NotDriven`'s header.
                 let _ = tx.send(Err(SessionError::NotDriven(
-                    "a run is not a conversation and cannot be driven".into(),
+                    "a run or a sign-in is not a conversation and cannot be driven".into(),
                 )));
                 return;
             }
@@ -2316,6 +2325,7 @@ fn handle(
                         conversation: live.conversation.clone(),
                         cwd: live.cwd.clone(),
                         title: live.title.clone(),
+                        agent: live.agent.clone(),
                     })
                 }
                 None => Err(SessionError::NoSuchSession(id)),
@@ -3475,7 +3485,11 @@ mod tests {
     }
 
     #[test]
-    fn a_run_is_the_one_intent_this_road_refuses() {
+    fn a_run_and_a_sign_in_are_the_intents_this_road_refuses() {
+        assert!(!drivable(&Intent::SignIn {
+            agent: "codex".into(),
+            variant: crate::agents::SignInVariant::Browser,
+        }));
         assert!(drivable(&Intent::Bare));
         assert!(drivable(&Intent::Setup));
         assert!(drivable(&Intent::EditTask { id: "x-1".into(), title: "T".into() }));

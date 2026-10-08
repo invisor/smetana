@@ -656,8 +656,11 @@ pub fn shutdown(app: &AppHandle) {
 /// A shell does not reach this at all: it comes through `Request::CreateShell`,
 /// has no intent and no profile, and has no row in the panel this feature is
 /// about.
+///
+/// A sign-in is out too: it is a login dialog, not a conversation, and there is
+/// nothing to resume once the person has signed in.
 fn records_a_restorable(intent: &Intent) -> bool {
-    !matches!(intent, Intent::Run { .. })
+    !matches!(intent, Intent::Run { .. } | Intent::SignIn { .. })
 }
 
 /// The conversation id this session is to be recorded under **at the
@@ -713,6 +716,19 @@ fn discovers_its_own_id(profile: &'static dyn agents::Profile, intent: &Intent) 
         && records_a_restorable(intent)
         && profile.session_id_args("probe").is_none()
         && profile.discovers_session_id()
+}
+
+/// Why a sign-in cannot start on this profile, or `None` for every other intent
+/// and for a sign-in that can. Two refusals: the picked harness is not the one
+/// named (a substitution), and the named harness has no login command for the
+/// variant — launching it anyway would start the bare agent under a "Sign in"
+/// caption.
+fn sign_in_refusal(profile: &'static dyn agents::Profile, intent: &Intent) -> Option<TerminalError> {
+    let Intent::SignIn { agent: wanted, variant } = intent else { return None };
+    if profile.id() != wanted || profile.login_args(*variant).is_none() {
+        return Some(TerminalError::NoAgent(wanted.clone()));
+    }
+    None
 }
 
 /// Take this session's record out of its project's registry, if it had one.
@@ -1150,6 +1166,16 @@ fn handle(
                 let _ = tx.send(Err(TerminalError::NoAgent(agents::IDS.join(", "))));
                 return;
             };
+            // A sign-in is for one harness and no other. `pick_with_model`
+            // substitutes whatever is installed when the asked-for binary is
+            // missing, which is right for a session that only needs *an* agent
+            // and wrong here: `codex login` run as `claude auth login` would
+            // sign the person into the wrong product and leave the failed
+            // session exactly as it was.
+            if let Some(err) = sign_in_refusal(profile, &intent) {
+                let _ = tx.send(Err(err));
+                return;
+            }
             // A resume is refused here or nowhere: the front end greys the row
             // when the project's agent cannot be told to do it, but the front
             // end is not what this guard is for — a request that arrives all
@@ -1821,6 +1847,20 @@ mod tests {
     }
 
     #[test]
+    fn a_sign_in_is_refused_on_the_wrong_harness_or_without_a_login_command() {
+        use agents::SignInVariant::{Browser, DeviceCode};
+        let sign_in = |agent: &str, variant| Intent::SignIn { agent: agent.into(), variant };
+        assert!(sign_in_refusal(profile("codex"), &sign_in("codex", DeviceCode)).is_none());
+        assert!(sign_in_refusal(profile("claude"), &sign_in("claude", Browser)).is_none());
+        // Substituted harness.
+        assert!(sign_in_refusal(profile("claude"), &sign_in("codex", Browser)).is_some());
+        // Claude Code has no device-code login.
+        assert!(sign_in_refusal(profile("claude"), &sign_in("claude", DeviceCode)).is_some());
+        // Other intents are none of this guard's business.
+        assert!(sign_in_refusal(profile("claude"), &Intent::Bare).is_none());
+    }
+
+    #[test]
     fn only_a_persons_own_agent_is_offered_back() {
         use crate::runs::model::RunMode;
         for intent in [
@@ -1830,6 +1870,8 @@ mod tests {
         ] {
             assert!(records_a_restorable(&intent), "{intent:?}");
         }
+        let sign_in = Intent::SignIn { agent: "codex".into(), variant: agents::SignInVariant::Browser };
+        assert!(!records_a_restorable(&sign_in), "a login dialog is not offered back");
         // Both modes, because `is_batch` — the neighbouring question — answers
         // only for the unattended one, and a supervised run's session is still
         // the runs registry's rather than this file's.

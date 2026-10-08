@@ -81,6 +81,19 @@ describe('the conversation store', () => {
     expect(stores.conversation.conversationFor(1).cwd).toBe('')
   })
 
+  it('carries the harness that runs the session off the attach snapshot', async () => {
+    const { stores } = await ready({ events: [], seq: 0, state: 'ready', agent: 'codex' })
+    expect(stores.conversation.conversationFor(1).agent).toBe('')
+    await stores.conversation.attach(1)
+    expect(stores.conversation.conversationFor(1).agent).toBe('codex')
+  })
+
+  it('reads a snapshot that names no harness as unknown', async () => {
+    const { stores } = await ready({ events: [], seq: 0, state: 'ready' })
+    await stores.conversation.attach(1)
+    expect(stores.conversation.conversationFor(1).agent).toBe('')
+  })
+
   it('appends events that arrive in sequence', async () => {
     const { stores, emit, nextTick } = await ready({
       events: [text(1, 'a')],
