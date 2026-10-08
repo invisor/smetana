@@ -262,13 +262,17 @@ const composerShown = computed(() => !!held.value && props.canMessage && !waitin
 /* The one journal row the sign-in buttons hang under, or `null`: the last
    failed line that reads as a signed-out error (`signInHint.js`), so the
    sentence arriving twice in a row — a strip and a line — still draws them
-   once. Only while the composer is shown: a session that has ended has nothing
-   to be signed in to, and a pending question already holds the agent.
+   once. Only while the composer is shown (`composerShown`), which is to say
+   when the panel can message the session and no question is pending; it does
+   not look at the session's state.
 
-   The harness is the panel's own label source, `effectiveAgents`, and the
+   The harness is the one that actually runs this session, from the attach
+   snapshot (`held.agent`) — not the default role's, since a task session runs
+   on its own role's harness and `pick_with_model` may have substituted. The
+   settings' default is used only while the snapshot has not landed. The
    buttons are whatever the catalogue says that harness can run. */
 const signInKey = computed(() => (composerShown.value ? signInRowKey(rows.value) : null))
-const signInAgent = computed(() => effectiveAgents.value.agent)
+const signInAgent = computed(() => held.value?.agent || effectiveAgents.value.agent)
 const signInOptions = computed(() => signInVariants(signInAgent.value))
 
 /* The last refusal, if it is this session's — see `refusal` below for why the

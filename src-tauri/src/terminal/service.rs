@@ -718,6 +718,19 @@ fn discovers_its_own_id(profile: &'static dyn agents::Profile, intent: &Intent) 
         && profile.discovers_session_id()
 }
 
+/// Why a sign-in cannot start on this profile, or `None` for every other intent
+/// and for a sign-in that can. Two refusals: the picked harness is not the one
+/// named (a substitution), and the named harness has no login command for the
+/// variant — launching it anyway would start the bare agent under a "Sign in"
+/// caption.
+fn sign_in_refusal(profile: &'static dyn agents::Profile, intent: &Intent) -> Option<TerminalError> {
+    let Intent::SignIn { agent: wanted, variant } = intent else { return None };
+    if profile.id() != wanted || profile.login_args(*variant).is_none() {
+        return Some(TerminalError::NoAgent(wanted.clone()));
+    }
+    None
+}
+
 /// Take this session's record out of its project's registry, if it had one.
 ///
 /// The id is read off the session rather than held a second time beside it:
@@ -1159,11 +1172,9 @@ fn handle(
             // and wrong here: `codex login` run as `claude auth login` would
             // sign the person into the wrong product and leave the failed
             // session exactly as it was.
-            if let agents::Intent::SignIn { agent: wanted, .. } = &intent {
-                if profile.id() != wanted {
-                    let _ = tx.send(Err(TerminalError::NoAgent(wanted.clone())));
-                    return;
-                }
+            if let Some(err) = sign_in_refusal(profile, &intent) {
+                let _ = tx.send(Err(err));
+                return;
             }
             // A resume is refused here or nowhere: the front end greys the row
             // when the project's agent cannot be told to do it, but the front
@@ -1833,6 +1844,20 @@ mod tests {
             continuation: None,
             remove_worktrees: false,
         }
+    }
+
+    #[test]
+    fn a_sign_in_is_refused_on_the_wrong_harness_or_without_a_login_command() {
+        use agents::SignInVariant::{Browser, DeviceCode};
+        let sign_in = |agent: &str, variant| Intent::SignIn { agent: agent.into(), variant };
+        assert!(sign_in_refusal(profile("codex"), &sign_in("codex", DeviceCode)).is_none());
+        assert!(sign_in_refusal(profile("claude"), &sign_in("claude", Browser)).is_none());
+        // Substituted harness.
+        assert!(sign_in_refusal(profile("claude"), &sign_in("codex", Browser)).is_some());
+        // Claude Code has no device-code login.
+        assert!(sign_in_refusal(profile("claude"), &sign_in("claude", DeviceCode)).is_some());
+        // Other intents are none of this guard's business.
+        assert!(sign_in_refusal(profile("claude"), &Intent::Bare).is_none());
     }
 
     #[test]

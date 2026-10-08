@@ -1986,7 +1986,8 @@ export function installMockBackend() {
         events: MOCK_SIGN_IN_CONVERSATION.slice(),
         seq: MOCK_SIGN_IN_CONVERSATION[MOCK_SIGN_IN_CONVERSATION.length - 1].seq,
         state: 'idle',
-        conversation: null
+        conversation: null,
+        agent: 'codex'
       }
     }
     if (command === 'session_attach') {
@@ -2004,7 +2005,8 @@ export function installMockBackend() {
            Written out rather than left off, since the store reads this field
            off the snapshot and a fixture that answers in an older shape is
            exactly what this file exists to stop happening quietly. */
-        conversation: null
+        conversation: null,
+        agent: 'claude'
       }
     }
     if (command === 'session_since') {

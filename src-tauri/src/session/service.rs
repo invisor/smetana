@@ -122,6 +122,11 @@ pub struct Attached {
     /// The same title `session:state` carries, here for the same window
     /// between the two that `conversation` above is here for.
     pub title: Option<String>,
+    /// `Live::agent` — the id of the harness that actually runs this session
+    /// (`profile.id()`), which is neither the default role's harness nor
+    /// necessarily the role the intent asked for: `pick_with_model` may have
+    /// substituted. The sign-in buttons are offered for this one.
+    pub agent: String,
 }
 
 /// A snapshot of exactly one native Crew node. Node ids stay scoped by `root`
@@ -2192,6 +2197,7 @@ fn handle(
                         conversation: live.conversation.clone(),
                         cwd: live.cwd.clone(),
                         title: live.title.clone(),
+                        agent: live.agent.clone(),
                     })
                 }
                 None => Err(SessionError::NoSuchSession(id)),
