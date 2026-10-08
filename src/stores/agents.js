@@ -77,6 +77,17 @@ export function can(id, capability) {
   return Boolean(row?.capabilities?.[capability])
 }
 
+/* The sign-in variants this harness can run, by wire word — `browser` and
+   `deviceCode` — in the order `agents::catalogue` derived them from
+   `Profile::login_args`. Its own function and not `can`, which answers a
+   boolean: `signIn` is the one capability that is a list, and an empty array is
+   truthy. An id nobody ships answers an empty list, so no button is drawn for
+   it. */
+export function signInVariants(id) {
+  const list = agents.value.find((agent) => agent.id === id)?.capabilities?.signIn
+  return Array.isArray(list) ? list.filter((variant) => typeof variant === 'string') : []
+}
+
 /* The label a person reads, or the raw id when the catalogue has never heard of
    it: naming an unknown harness as one of ours would be the app claiming
    something it does not know.

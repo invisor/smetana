@@ -103,15 +103,37 @@ pub fn role_model(
     intent: &crate::agents::Intent,
     chosen: Option<&str>,
 ) -> (String, Option<String>) {
-    let (mut agent, mut model) = role_pair(app, project, crate::agents::role_of(intent));
+    let table = role_pair(app, project, crate::agents::role_of(intent));
+    resolve_role_model(table, intent, chosen)
+}
+
+/// `role_model` with the settings table already read: the pure half, so the
+/// rules about which harness wins are testable without a disk.
+///
+/// A sign-in names its own harness — the one whose session just failed — and it
+/// is read here as `chosen`, with the table's model dropped, since a model id
+/// chosen against another harness means nothing to this one.
+fn resolve_role_model(
+    table: (String, String),
+    intent: &crate::agents::Intent,
+    chosen: Option<&str>,
+) -> (String, Option<String>) {
+    let (mut agent, mut model) = table;
+    let chosen = match intent {
+        crate::agents::Intent::SignIn { agent, .. } => Some(agent.as_str()),
+        _ => chosen,
+    };
     if let Some(pinned) = chosen {
         if pinned != agent {
             agent = pinned.to_owned();
             model.clear();
         }
     }
+    // A sign-in is never told a model even when the table's harness is the one
+    // it names: `login` takes none.
+    let signing_in = matches!(intent, crate::agents::Intent::SignIn { .. });
     let resuming = matches!(intent, crate::agents::Intent::ResumeSession { .. });
-    let model = (!model.is_empty() && !resuming).then_some(model);
+    let model = (!model.is_empty() && !resuming && !signing_in).then_some(model);
     (agent, model)
 }
 
@@ -262,5 +284,38 @@ pub fn remember_dialog_size(app: &AppHandle, kind: &str, size: model::DialogSize
     };
     if let Err(err) = file::remember_dialog_size(&path, kind, size) {
         log::warn!("settings: the dialog size was not kept: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_role_model;
+    use crate::agents::{Intent, SignInVariant};
+
+    fn sign_in(agent: &str) -> Intent {
+        Intent::SignIn { agent: agent.into(), variant: SignInVariant::Browser }
+    }
+
+    #[test]
+    fn a_sign_in_runs_on_the_harness_it_names_not_the_default() {
+        let table = ("claude".to_owned(), "opus".to_owned());
+        let (agent, model) = resolve_role_model(table, &sign_in("codex"), None);
+        assert_eq!(agent, "codex");
+        assert_eq!(model, None, "a model chosen against another harness must not follow");
+    }
+
+    #[test]
+    fn a_sign_in_never_gets_a_model_even_on_the_default_harness() {
+        let table = ("codex".to_owned(), "gpt-5.6-sol".to_owned());
+        assert_eq!(resolve_role_model(table, &sign_in("codex"), None), ("codex".to_owned(), None));
+    }
+
+    #[test]
+    fn another_intent_still_takes_the_table_and_its_model() {
+        let table = ("claude".to_owned(), "opus".to_owned());
+        assert_eq!(
+            resolve_role_model(table, &Intent::Bare, None),
+            ("claude".to_owned(), Some("opus".to_owned()))
+        );
     }
 }

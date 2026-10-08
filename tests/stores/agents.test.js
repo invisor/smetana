@@ -25,7 +25,8 @@ const CATALOGUE = [
       clear: true,
       usage: true,
       batch: true,
-      oneshot: true
+      oneshot: true,
+      signIn: ['browser']
     },
     models: [
       { id: 'fable', label: 'Fable' },
@@ -41,7 +42,8 @@ const CATALOGUE = [
       clear: false,
       usage: true,
       batch: true,
-      oneshot: true
+      oneshot: true,
+      signIn: ['browser', 'deviceCode']
     },
     models: [{ id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' }]
   }
@@ -102,6 +104,18 @@ describe('the agent catalogue', () => {
     expect(await older).toBe(false)
     expect(agents.agents.value.find((row) => row.id === 'codex').models).toEqual([{ id: 'gpt-6-astra', label: 'GPT-6-Astra' }])
     expect(agents.codexModelsError.value).toBeNull()
+  })
+
+  it('lists the sign-in variants each harness offers, and none for an unknown id', async () => {
+    const { agents } = await loadCatalogue()
+    expect(agents.signInVariants('codex')).toEqual(['browser', 'deviceCode'])
+    expect(agents.signInVariants('claude')).toEqual(['browser'])
+    expect(agents.signInVariants('nobody')).toEqual([])
+  })
+
+  it('offers no sign-in when the catalogue could not be read', async () => {
+    const { agents } = await loadCatalogue(new Error('no back end'))
+    expect(agents.signInVariants('codex')).toEqual([])
   })
 
   it('holds one row per harness once it has been read', async () => {

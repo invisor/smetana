@@ -789,7 +789,9 @@ pub fn build(
     // Nothing at all for a resumed session, before any of the paragraphs below
     // are composed: see this function's own doc for why a prompt is the one
     // thing that must not reach it.
-    if matches!(intent, Intent::ResumeSession { .. }) {
+    // Nor for a sign-in, for the opposite reason: there is no agent to brief,
+    // only the harness's own login dialog in a terminal.
+    if matches!(intent, Intent::ResumeSession { .. } | Intent::SignIn { .. }) {
         return None;
     }
     // The language rules come first, before the work rather than after it, for
@@ -910,7 +912,7 @@ fn body(
         // before it composes anything; stated all the same, because the match
         // is exhaustive and the next variant added to `Intent` has to meet a
         // decision rather than a wildcard.
-        Intent::ResumeSession { .. } => None,
+        Intent::ResumeSession { .. } | Intent::SignIn { .. } => None,
         Intent::Setup => Some(setup(delivery, skills, facts)),
         Intent::Bootstrap => Some(bootstrap(delivery, skills, facts)),
         Intent::ReviewBranch { pairs, report, fetch_failed } => {

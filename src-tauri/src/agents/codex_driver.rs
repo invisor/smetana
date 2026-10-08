@@ -7,6 +7,26 @@ use crate::agents::{codex::Codex, Intent, Launch};
 use crate::session::driver::{Driver, Input, LineBuffer};
 use crate::session::model::{text_waits_for_reply, Decision, EventKind};
 
+/// **What `Intent::SignIn` does to a live session here: nothing, and whether
+/// that is enough has not been verified.**
+///
+/// A failed turn that says the refresh token was revoked gets a "Sign in"
+/// offer in the conversation panel (`SignInOffer.vue`). The button starts
+/// `codex login` (or `codex login --device-auth`) in a *separate* terminal tab
+/// — a different process from this session's `codex app-server --stdio`, and
+/// this driver is not told when the login finishes.
+///
+/// What is not known: whether the running app-server re-reads the credentials
+/// the login writes, so that the person's next message in the same session
+/// succeeds, or keeps the revoked ones in memory and needs the thread
+/// reopened through `thread/resume` (`resume_args` / `discovered`). The check
+/// that would answer it — `codex logout`, a refused turn, the button, the
+/// login, another message in the same session — signs the person out of their
+/// real account, and was deliberately not run when this was written. So the
+/// code does the one thing it can say is safe: it leaves the session alone,
+/// and no `thread/resume` re-opening is attempted. If the repeat message still
+/// fails with the same sentence after a successful login, that is the answer,
+/// and the fix belongs here.
 pub struct CodexDriver {
     lines: LineBuffer,
     next_id: u64,

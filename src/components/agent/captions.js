@@ -57,7 +57,10 @@ export const CAPTION = {
   /* The founding session: named for the folder it starts in rather than for
      the file it ends by writing, since the person watching it is answering
      questions about a project that does not exist yet. */
-  bootstrap: 'Starting a project'
+  bootstrap: 'Starting a project',
+  /* A harness's own login dialog in a terminal tab. The harness is the row's
+     agent label and the command is on the tab, so the words are all it needs. */
+  signIn: 'Sign in'
 }
 
 /* A row's caption, in two pieces because they are set differently: `label` is

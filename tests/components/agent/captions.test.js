@@ -18,6 +18,10 @@ describe('what a session row is captioned by', () => {
     expect(captionOf({ kind: 'resumeSession', title: null })).toEqual({ label: 'Resumed session', tasks: [] })
   })
 
+  it('captions a sign-in tab by what it is for', () => {
+    expect(captionOf({ kind: 'signIn' })).toEqual({ label: 'Sign in', tasks: [] })
+  })
+
   it('reads an unknown kind and a missing work as a bare agent', () => {
     expect(captionOf({ kind: 'somethingNew' })).toEqual({ label: CAPTION.bare, tasks: [] })
     expect(captionOf(null)).toEqual({ label: 'Agent', tasks: [] })

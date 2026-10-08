@@ -151,6 +151,10 @@ pub enum SessionWork {
     Setup,
     /// Starting a project in an empty folder; the caption is the front end's.
     Bootstrap,
+    /// A harness's own login dialog, opened from the conversation panel. It
+    /// carries nothing: the harness is the row's agent, and the variant is the
+    /// command on the tab.
+    SignIn,
     /// A branch review, by the path its report is written to, and the one work
     /// in this list that names a file which does not exist yet: the two
     /// documents appear when the agent is finished, and this is where the app
@@ -209,6 +213,7 @@ pub enum WorkKind {
     ResumeSession,
     Setup,
     Bootstrap,
+    SignIn,
     ReviewBranch,
     Run,
     Shell,
@@ -229,6 +234,7 @@ impl SessionWork {
             SessionWork::ResumeSession { .. } => WorkKind::ResumeSession,
             SessionWork::Setup => WorkKind::Setup,
             SessionWork::Bootstrap => WorkKind::Bootstrap,
+            SessionWork::SignIn => WorkKind::SignIn,
             SessionWork::ReviewBranch { .. } => WorkKind::ReviewBranch,
             SessionWork::Run => WorkKind::Run,
             SessionWork::Shell => WorkKind::Shell,
@@ -641,6 +647,7 @@ mod tests {
             }
             WorkKind::Setup => SessionWork::Setup,
             WorkKind::Bootstrap => SessionWork::Bootstrap,
+            WorkKind::SignIn => SessionWork::SignIn,
             WorkKind::ReviewBranch => {
                 SessionWork::ReviewBranch { report: ".smetana/reviews/2026-08-31-main".into() }
             }
@@ -672,6 +679,7 @@ mod tests {
             WorkKind::ResumeSession,
             WorkKind::Setup,
             WorkKind::Bootstrap,
+            WorkKind::SignIn,
             WorkKind::ReviewBranch,
             WorkKind::Run,
             WorkKind::Shell,

@@ -58,6 +58,7 @@ import AskUserQuestion from './AskUserQuestion.vue'
 import Composer from './Composer.vue'
 import PermissionRequest from './PermissionRequest.vue'
 import Reasoning from './Reasoning.vue'
+import SignInOffer from './SignInOffer.vue'
 import ToolCall from './ToolCall.vue'
 import TurnResult from './TurnResult.vue'
 import UserMessage from './UserMessage.vue'
@@ -67,6 +68,7 @@ import StatusBadge from '../status/StatusBadge.vue'
 import { isAskUserQuestion } from './askUserQuestion.js'
 import { attachmentAction } from './attachmentAction.js'
 import { isBusy, journalRows } from './journal.js'
+import { signInRowKey } from './signInHint.js'
 import { basename } from '../../paths.js'
 /* Four stores beside the conversation's own, and each is here because this
    component is the one that has to answer rather than raise — with one
@@ -118,7 +120,7 @@ import { basename } from '../../paths.js'
    of what that module buys: `UserMessage` and `Composer` cannot ask it
    themselves, so this file asks on their behalf and hands back which of
    their own attachments are worth drawing as a control at all. */
-import { agentLabel } from '../../stores/agents.js'
+import { agentLabel, signInVariants } from '../../stores/agents.js'
 import { openExternal, openImageWindow, pickFiles } from '../../stores/app.js'
 import { filesState } from '../../stores/files.js'
 import { effectiveAgents, settings } from '../../stores/settings.js'
@@ -162,7 +164,7 @@ const props = defineProps({
    through `openExternal`, and never leaves this component — see the note on
    the store imports above for why the local breed is the one link event this
    panel raises rather than owns. */
-const emit = defineEmits(['open-local'])
+const emit = defineEmits(['open-local', 'sign-in'])
 
 /* The record this panel is drawing.
 
@@ -256,6 +258,18 @@ const waitingForAnswer = computed(() => !!question.value)
    underneath, since `held.draft` lives in the store and `attachments` is this
    component's own ref, neither of which this `v-if` touches. */
 const composerShown = computed(() => !!held.value && props.canMessage && !waitingForAnswer.value)
+
+/* The one journal row the sign-in buttons hang under, or `null`: the last
+   failed line that reads as a signed-out error (`signInHint.js`), so the
+   sentence arriving twice in a row — a strip and a line — still draws them
+   once. Only while the composer is shown: a session that has ended has nothing
+   to be signed in to, and a pending question already holds the agent.
+
+   The harness is the panel's own label source, `effectiveAgents`, and the
+   buttons are whatever the catalogue says that harness can run. */
+const signInKey = computed(() => (composerShown.value ? signInRowKey(rows.value) : null))
+const signInAgent = computed(() => effectiveAgents.value.agent)
+const signInOptions = computed(() => signInVariants(signInAgent.value))
 
 /* The last refusal, if it is this session's — see `refusal` below for why the
    test is on the session rather than on there being one at all. */
@@ -821,6 +835,12 @@ const refusal = computed(() => ({
             <Icon name="x" :size="13" :stroke-width="2.25" />
             <span>{{ row.text }}</span>
           </div>
+          <SignInOffer
+            v-if="row.key === signInKey"
+            :agent="signInAgent"
+            :variants="signInOptions"
+            @sign-in="(variant) => emit('sign-in', { agent: signInAgent, variant })"
+          />
         </template>
       </template>
     </div>

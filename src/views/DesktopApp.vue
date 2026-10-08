@@ -765,7 +765,7 @@ onMounted(initUpdates)
    here throws — the one `try` is around `createSession`, the only call that
    rejects, and every caller is an event handler with nobody above it to catch
    one. */
-async function startAgent(path, intent) {
+async function startAgent(path, intent, { terminalOnly = false } = {}) {
   if (!path) return false
   /* What to put back if nothing starts: where the tab was aimed before the
      press, and whatever the driven road had to say for itself. `?? null` because
@@ -787,7 +787,7 @@ async function startAgent(path, intent) {
      actual role and binary, then permits the app-server slice for whichever
      harness actually has a codec (`driver_for`) or refuses so this function
      takes the existing PTY fallback. */
-  if (canDrive(effectiveAgents.value.agent)) {
+  if (!terminalOnly && canDrive(effectiveAgents.value.agent)) {
     /* The tab comes forward on the press; the aim follows the id, so a spawn
        that answers leaves the panel on the new conversation and one that does
        not leaves nothing pointing at a session that was never made. */
@@ -874,6 +874,16 @@ async function startAgent(path, intent) {
    becomes, and what happens if either road refuses, is `startAgent`'s. */
 async function newAgent() {
   await startAgent(activePath.value, { kind: 'bare' })
+}
+
+/* The sign-in buttons under a failed turn in the conversation panel: the
+   harness's own login dialog in a terminal tab. `terminalOnly` because a login
+   command is an interactive terminal program and has no driven form at all —
+   Rust refuses it as `notDriven` too (`session::service::drivable`), but there
+   is no point in the round trip. The harness is the failed session's, carried
+   in the intent, and not the role table's default (`settings::role_model`). */
+async function signIn({ agent, variant }) {
+  await startAgent(activePath.value, { kind: 'signIn', agent, variant }, { terminalOnly: true })
 }
 
 /* A shell of the person's own, in the project's root, in a tab of its own.
@@ -7627,6 +7637,7 @@ const toastStackStyle = {
             :can-message="conversationCanMessage"
             :can-stop="conversationCanStop"
             @open-local="onConversationLocalLink"
+            @sign-in="signIn"
           />
           <TerminalView
             v-else-if="project.activeTab === 'terminal'"

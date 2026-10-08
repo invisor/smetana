@@ -656,8 +656,11 @@ pub fn shutdown(app: &AppHandle) {
 /// A shell does not reach this at all: it comes through `Request::CreateShell`,
 /// has no intent and no profile, and has no row in the panel this feature is
 /// about.
+///
+/// A sign-in is out too: it is a login dialog, not a conversation, and there is
+/// nothing to resume once the person has signed in.
 fn records_a_restorable(intent: &Intent) -> bool {
-    !matches!(intent, Intent::Run { .. })
+    !matches!(intent, Intent::Run { .. } | Intent::SignIn { .. })
 }
 
 /// The conversation id this session is to be recorded under **at the
@@ -1150,6 +1153,18 @@ fn handle(
                 let _ = tx.send(Err(TerminalError::NoAgent(agents::IDS.join(", "))));
                 return;
             };
+            // A sign-in is for one harness and no other. `pick_with_model`
+            // substitutes whatever is installed when the asked-for binary is
+            // missing, which is right for a session that only needs *an* agent
+            // and wrong here: `codex login` run as `claude auth login` would
+            // sign the person into the wrong product and leave the failed
+            // session exactly as it was.
+            if let agents::Intent::SignIn { agent: wanted, .. } = &intent {
+                if profile.id() != wanted {
+                    let _ = tx.send(Err(TerminalError::NoAgent(wanted.clone())));
+                    return;
+                }
+            }
             // A resume is refused here or nowhere: the front end greys the row
             // when the project's agent cannot be told to do it, but the front
             // end is not what this guard is for — a request that arrives all
@@ -1830,6 +1845,8 @@ mod tests {
         ] {
             assert!(records_a_restorable(&intent), "{intent:?}");
         }
+        let sign_in = Intent::SignIn { agent: "codex".into(), variant: agents::SignInVariant::Browser };
+        assert!(!records_a_restorable(&sign_in), "a login dialog is not offered back");
         // Both modes, because `is_batch` — the neighbouring question — answers
         // only for the unattended one, and a supervised run's session is still
         // the runs registry's rather than this file's.

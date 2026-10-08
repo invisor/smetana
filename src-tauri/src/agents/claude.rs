@@ -10,7 +10,7 @@
 
 use portable_pty::CommandBuilder;
 
-use super::{prompt, Autonomy, Intent, Launch, McpConfigFormat, Profile, SkillDelivery};
+use super::{prompt, Autonomy, Intent, Launch, McpConfigFormat, Profile, SignInVariant, SkillDelivery};
 use crate::runs::model::RunMode;
 use crate::runs::usage::Usage;
 use crate::terminal::model::{Question, QuestionOption};
@@ -61,6 +61,14 @@ impl Claude {
     /// Everything `command` puts on the line except the positional prompt.
     pub(crate) fn command_without_prompt(&self, launch: &Launch) -> CommandBuilder {
         let mut cmd = CommandBuilder::new(self.binary());
+        // A sign-in is `claude auth login` and nothing else: no plugin
+        // directory, no MCP config, no session id, no model.
+        if let Intent::SignIn { variant, .. } = &launch.intent {
+            for arg in self.login_args(*variant).into_iter().flatten() {
+                cmd.arg(arg);
+            }
+            return cmd;
+        }
         // First of all, and before the plugins: this is what makes the batch
         // end by itself. See `agents::is_batch` for which sessions get it.
         if crate::agents::is_batch(&launch.intent) {
@@ -234,6 +242,14 @@ impl Profile for Claude {
 
     fn question(&self, screen: &[String]) -> Option<Question> {
         question(screen)
+    }
+
+    /// `claude auth login` only: it has no device-code form.
+    fn login_args(&self, variant: SignInVariant) -> Option<Vec<&'static str>> {
+        match variant {
+            SignInVariant::Browser => Some(vec!["auth", "login"]),
+            SignInVariant::DeviceCode => None,
+        }
     }
 
     /// `Auto` means nobody is there to answer a permission prompt, so the run
@@ -862,6 +878,24 @@ mod tests {
             .iter()
             .map(|s| s.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn a_sign_in_is_the_login_subcommand_and_nothing_else() {
+        use crate::agents::SignInVariant;
+        let mut with_everything = launch(Intent::SignIn { agent: "claude".into(), variant: SignInVariant::Browser }, false);
+        // Things that would ride on any other launch must not reach this one.
+        with_everything.model = Some("opus".into());
+        with_everything.session_id = Some("abc".into());
+        with_everything.agent_prompt = "Be brief.".into();
+        assert_eq!(argv(&with_everything), ["claude", "auth", "login"]);
+    }
+
+    #[test]
+    fn claude_has_a_browser_sign_in_and_no_device_code() {
+        use crate::agents::SignInVariant;
+        assert_eq!(Claude.login_args(SignInVariant::Browser), Some(vec!["auth", "login"]));
+        assert_eq!(Claude.login_args(SignInVariant::DeviceCode), None);
     }
 
     #[test]

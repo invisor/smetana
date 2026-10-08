@@ -651,6 +651,24 @@ const MOCK_CONVERSATION = [
   })
 ]
 
+/* A second driven session, for the one thing the first cannot show: it ends on
+   an open permission request, which hides the composer, and the sign-in offer
+   is drawn only while the composer is there. This one ends on a turn that
+   failed because the person is signed out — the strip and the line below it
+   carrying the same sentence, exactly as a real Codex session journals it — so
+   `?view=gallery` shows the buttons once, under the lower of the two. The
+   session id `session_attach` answers it for is `SIGN_IN_CONVERSATION_ID`, and
+   `Gallery.vue` aims its second panel at that number. */
+export const SIGN_IN_CONVERSATION_ID = 2
+const SIGN_IN_TEXT =
+  'Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.'
+const MOCK_SIGN_IN_CONVERSATION = [
+  journalEvent(1, 'turn-start', { by: 'person', at: recentAt(9000) }),
+  journalEvent(2, 'user-message', { text: 'Run the tests again.', attachments: [], at: recentAt(8800) }),
+  journalEvent(3, 'turn-failed', { text: SIGN_IN_TEXT, at: recentAt(3000) }),
+  journalEvent(4, 'error', { text: SIGN_IN_TEXT, at: recentAt(2900) })
+]
+
 /* PTY output is arbitrary bytes; the fixture's box-drawing characters sit
    outside Latin-1, so plain btoa() would throw. Route through TextEncoder
    first, to get from this fixture's JS string to the UTF-8 bytes a PTY would
@@ -1323,7 +1341,8 @@ export function installMockBackend() {
             clear: true,
             usage: true,
             batch: true,
-            oneshot: true
+            oneshot: true,
+            signIn: ['browser']
           },
           models: [
             { id: 'fable', label: 'Fable' },
@@ -1341,7 +1360,8 @@ export function installMockBackend() {
             clear: false,
             usage: true,
             batch: true,
-            oneshot: true
+            oneshot: true,
+            signIn: ['browser', 'deviceCode']
           },
           models: [
             { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' },
@@ -1961,6 +1981,14 @@ export function installMockBackend() {
        `terminal_shell` do and for the same reason: there is no child process in
        a browser, and a message that looked as though it had reached an agent
        would be worse than one that plainly did not. */
+    if (command === 'session_attach' && Number(payload?.id) === SIGN_IN_CONVERSATION_ID) {
+      return {
+        events: MOCK_SIGN_IN_CONVERSATION.slice(),
+        seq: MOCK_SIGN_IN_CONVERSATION[MOCK_SIGN_IN_CONVERSATION.length - 1].seq,
+        state: 'idle',
+        conversation: null
+      }
+    }
     if (command === 'session_attach') {
       /* A fresh array per answer, the way a worker's reply is its own object:
          the store assigns this straight to the conversation and pushes into it,

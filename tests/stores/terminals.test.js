@@ -77,7 +77,8 @@ async function ready() {
         clear: true,
         usage: true,
         batch: true,
-        oneshot: true
+        oneshot: true,
+        signIn: ['browser']
       }
     },
     {
@@ -89,7 +90,8 @@ async function ready() {
         clear: false,
         usage: true,
         batch: true,
-        oneshot: true
+        oneshot: true,
+        signIn: ['browser', 'deviceCode']
       }
     }
   ])
