@@ -41,12 +41,14 @@
    window rebuilt it and never the moment it re-announced the same one. */
 import { computed, nextTick, ref, watch } from 'vue'
 import Button from '../core/Button.vue'
+import Dropdown from '../core/Dropdown.vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import Modal from '../overlays/Modal.vue'
 import BranchPicker from './BranchPicker.vue'
 import { LOCAL_SIDE, ORIGIN_SIDE, normalizeSide, openingSide, originSideBranches } from './branchPicker.js'
 import { repoLabel, repoPath } from './repoLabel.js'
+import { AGENT_CHOOSES, modelOptionsFor } from './reviewAgent.js'
 import {
   PICK_HEAD,
   WAITING_FOR_BRANCH,
@@ -120,7 +122,14 @@ const props = defineProps({
      seeded from it is the *memory*; which side the open list is showing is
      `openingSide`'s answer, and the two are deliberately not the same ref. */
   branchSide: { type: String, default: LOCAL_SIDE },
-  busy: { type: Boolean, default: false }
+  busy: { type: Boolean, default: false },
+  /* Who may review, when there is a choice: one row per installed harness,
+     `reviewAgent.js`'s shape, with the model the settings would start it on.
+     Drawn only past one row — with one installed the settings decide and the
+     window asks nothing, which is also the whole history before this prop. */
+  reviewers: { type: Array, default: () => [] },
+  /* The id of the harness the block opens on, the settings' choice. */
+  reviewer: { type: String, default: '' }
 })
 
 /* `branch-side` is the toggle being pressed, and it travels because the
@@ -263,7 +272,11 @@ const rows = computed(() =>
 
 const base = computed(() => sideLabel(review.value.base))
 const head = computed(() => sideLabel(review.value.head))
-const caption = computed(() => ruleCaption(review.value))
+/* A project of one repository, which is a fact about the project and not about
+   the review: a project of several where only one has the branch still needs
+   `Add a repository` and the note about the others. */
+const single = computed(() => (props.repos ?? []).length === 1)
+const caption = computed(() => ruleCaption(review.value, { single: single.value }))
 const summary = computed(() => tableSummary(review.value))
 
 /* The candidates `Add a repository` opens on: what is not in the table, with
@@ -289,7 +302,7 @@ const notes = computed(() =>
 )
 
 const footerText = computed(() =>
-  footerSummary(review.value, { busy: props.busy, notes: notes.value.length })
+  footerSummary(review.value, { busy: props.busy, notes: notes.value.length, single: single.value })
 )
 
 const ready = computed(() => canReview(review.value) && !props.busy)
@@ -456,6 +469,34 @@ const add = (id) => {
   openPicker('head', id)
 }
 
+/* ---- who reviews --------------------------------------------------------- */
+
+const chosenAgent = ref('')
+const chosenModel = ref('')
+/* A choice exists only past one installed harness. */
+const choice = computed(() => (props.reviewers ?? []).length > 1)
+const chosenRow = computed(() => (props.reviewers ?? []).find((row) => row.id === chosenAgent.value) ?? null)
+/* Seeded by contents, the way `review` is, so a re-announcement does not throw
+   away a pick. */
+watch(
+  () => shape({ reviewers: props.reviewers, reviewer: props.reviewer }),
+  () => {
+    const rows = props.reviewers ?? []
+    const row = rows.find((r) => r.id === props.reviewer) ?? rows[0] ?? null
+    chosenAgent.value = row?.id ?? ''
+    chosenModel.value = row?.model ?? ''
+  },
+  { immediate: true }
+)
+const agentOptions = computed(() => (props.reviewers ?? []).map((row) => ({ value: row.id, label: row.label })))
+const modelChoices = computed(() => (chosenRow.value ? modelOptionsFor(chosenRow.value, chosenModel.value) : []))
+/* A model chosen against one harness means nothing to another, so a change of
+   harness lands on the default of the new one. */
+const pickAgent = (id) => {
+  chosenAgent.value = id
+  chosenModel.value = chosenRow.value?.model ?? ''
+}
+
 const submit = () => {
   if (!ready.value) return
   /* Both panels close on the way out. The footer is drawn whatever is above it,
@@ -464,7 +505,11 @@ const submit = () => {
      on trying to use. */
   picker.value = null
   addOpen.value = false
-  emit('submit', { form: JSON.parse(JSON.stringify(review.value)) })
+  emit('submit', {
+    form: JSON.parse(JSON.stringify(review.value)),
+    agent: choice.value ? chosenAgent.value : null,
+    model: choice.value ? chosenModel.value || null : null
+  })
 }
 
 /* ---- what it all looks like ---------------------------------------------- */
@@ -489,6 +534,13 @@ const microHeading = {
   letterSpacing: 'var(--tracking-caps)',
   textTransform: 'uppercase',
   color: 'var(--text-muted)'
+}
+
+const reviewerRow = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 'var(--space-3)',
+  minWidth: 0
 }
 
 const ruleRow = {
@@ -834,6 +886,26 @@ const out = () => {
         <span :style="captionStyle">{{ caption }}</span>
       </div>
 
+      <!-- Drawn only when there is a choice, and not while a branch list is open:
+           that list is the one thing to answer then, the way the table is. -->
+      <div v-if="choice && !picker" :style="blockStyle">
+        <span :style="microHeading">Reviewed by</span>
+        <div role="group" aria-label="The agent and model that review" :style="reviewerRow">
+          <Dropdown
+            :model-value="chosenAgent"
+            :options="agentOptions"
+            :disabled="busy"
+            @update:model-value="pickAgent"
+          />
+          <Dropdown
+            v-model="chosenModel"
+            :options="modelChoices"
+            :disabled="busy"
+            :placeholder="AGENT_CHOOSES"
+          />
+        </div>
+      </div>
+
       <!-- While the list is open the table is not drawn, and that is what keeps
            this window's height predictable: the list is capped at nine rows'
            worth of `--row-h` and scrolls inside itself, so the ceiling is the
@@ -856,7 +928,9 @@ const out = () => {
         @fetch="emit('fetch', { repoId: picker.repoId ?? null })"
       />
 
-      <div v-else :style="{ display: 'flex', flexDirection: 'column' }">
+      <!-- A project of one repository has nothing to choose among and nothing to
+           add, so the whole column goes: the notes below it stay. -->
+      <div v-else-if="!single" :style="{ display: 'flex', flexDirection: 'column' }">
         <div :style="tableHeadStyle">
           <span :style="microHeading">Repository</span>
           <span v-if="review.head" :style="metaStyle">{{ summary }}</span>

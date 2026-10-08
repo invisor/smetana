@@ -2078,6 +2078,13 @@ worth running is visible in the window rather than decided by a grey menu row.
 
 ### One pair for the project, and the rows that differ
 
+**A project of one repository draws no table.** The condition is `repos.length === 1` on the
+*project* (the `repos` prop), never the number of review rows: a project of several where only one has
+the branch still needs `Add a repository` and the note about the others. With one repository the window
+omits the `Repository` heading and its summary, the row, `Add a repository` with its panel and the
+`waiting for a branch` rows; the caption is `base → to check` (`RULE_CAPTION_SINGLE`) even with no
+branch yet, and the footer drops `N pair(s)`. The notes block stays, and the form is unchanged.
+
 `?view=dialog&kind=review-changes`, `components/git/ReviewChangesDialog.vue` over
 `views/DialogWindow.vue`, **720 wide** — the first dialog to outgrow `Modal`'s 440, which is what the
 width field in `views/dialogRegistry.js` was put there for. That number is written twice, there and as
@@ -2309,6 +2316,22 @@ neither;
 720 wide on the padding of a 440 dialog reads as a form that was stretched rather than designed. It is
 the shape `DiffView`'s column captions took for the compare window, one component over.
 
+### Who reviews: the Reviewed by block
+
+The window draws a **Reviewed by** block — a harness `Dropdown` and a model `Dropdown` in one row,
+between the pair and the table — only when `agents_installed` names more than one harness. "Installed"
+is `agents::installed`, the binaries on the login shell's `PATH` in `IDS` order, the same answer the run
+failover's reserve list uses; the app window asks it on **every opening** (an installation can change
+while the app runs, the catalogue cannot) and calls `refreshCodexModels()` beside it. With one harness,
+or with the command failing, nothing is drawn and `submit` carries `agent: null, model: null`, so Rust
+resolves the settings' pair exactly as before. The rows and defaults are `reviewAgent.js`'s, computed
+in the app window from `effectiveAgents` (a project's own `agents` block wins): the harness defaults to
+the `reviewBranch` role's if it is installed, else the first installed; a row's model is the role's when
+the role names that harness, else the root's when the root names it, else empty (`Agent chooses`);
+changing the harness resets the model to the new row's default. The pick rides in the intent as
+`agent`/`model` and is **never written to `settings.json`** — the settings are the memory, the window is
+one run. The settings row for this role is labelled `Code review`; its key stays `reviewBranch`.
+
 ### What Review does, in the order it has to happen in
 
 **This is the third of the window's three doors into a fetch, and the only one gated on a pair.** The
@@ -2337,8 +2360,8 @@ space, a hash or a word in another alphabet, and any of those is either a direct
 or a filename an OS argues about. A name that reduces to nothing at all is `review`, since a path
 ending in the minute is a file named after a clock.
 
-Then `startAgent(project, { kind: 'reviewBranch', pairs, report })` — an ordinary agent session, in the
-harness `settings.json` names, exactly like `New agent`: the conversation panel when `canDrive`
+Then `startAgent(project, { kind: 'reviewBranch', pairs, report, fetchFailed, agent, model })` — an ordinary agent session, in the
+harness the window chose, or the one `settings.json` names when it offered no choice, exactly like `New agent`: the conversation panel when `canDrive`
 answers true, a tab in the centre column otherwise (`.claude/rules/terminal.md`). And only
 then does the window close, which is the opposite of every other write behind a dialog in
 `DesktopApp.vue` and shares its reason with `delete-branch`: what the window is drawing while this runs

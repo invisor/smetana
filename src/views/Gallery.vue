@@ -1453,6 +1453,30 @@ const REVIEW_REMOTE = {
   '/Users/you/dev/smetana': ['main', 'staging', 'spike/origin-only'],
   '/Users/you/dev/smetana/admin': ['main', 'spike/origin-only']
 }
+/* Two installed harnesses, `reviewAgent.js`'s rows: the window then draws its
+   Reviewed by block. Claude carries the model the settings would start it on;
+   Codex has none, so a change of harness shows the model resetting to
+   `Agent chooses`. */
+const REVIEW_REVIEWERS = [
+  {
+    id: 'claude',
+    label: 'Claude Code',
+    model: 'opus',
+    models: [
+      { id: 'opus', label: 'Opus' },
+      { id: 'sonnet', label: 'Sonnet' }
+    ]
+  },
+  { id: 'codex', label: 'Codex', model: '', models: [{ id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' }] }
+]
+/* A project of one repository: the form `Review changes` opens with there. */
+const REVIEW_SINGLE_FORM = {
+  base: { ref: 'main', remote: false },
+  head: { ref: 'feature/smetana-4nsa-remote-branches-repo', remote: false },
+  repoIds: ['/Users/you/dev/smetana'],
+  overrides: {},
+  manual: []
+}
 const REVIEW_FETCHED_AT = {
   '/Users/you/dev/smetana': REVIEW_NOW - 2 * 60,
   '/Users/you/dev/smetana/admin': REVIEW_NOW - 3 * REVIEW_HOUR,
@@ -3676,7 +3700,7 @@ const menuTargetStyle = {
            The busy frame is the exception at 680, and it is genuinely done:
            every control in it is off, so its list cannot be opened and its 474
            never moves. Compact is shorter everywhere and clears all three. -->
-      <div :style="{ position: 'relative', height: '740px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+      <div :style="{ position: 'relative', height: '820px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ReviewChangesDialog
           :open="true"
           :form="REVIEW_FORM"
@@ -3686,6 +3710,8 @@ const menuTargetStyle = {
           :branches="REVIEW_BRANCHES"
           :remote="REVIEW_REMOTE"
           :fetched-at="REVIEW_FETCHED_AT"
+          :reviewers="REVIEW_REVIEWERS"
+          reviewer="claude"
           @close="() => {}"
           @submit="() => {}"
           @branch-side="() => {}"
@@ -3739,6 +3765,26 @@ const menuTargetStyle = {
           title="New review"
           :form="REVIEW_EMPTY"
           :repos="REVIEW_REPOS"
+          :root="REVIEW_ROOT"
+          :home="REVIEW_HOME"
+          :branches="REVIEW_BRANCHES"
+          :remote="REVIEW_REMOTE"
+          :fetched-at="REVIEW_FETCHED_AT"
+          @close="() => {}"
+          @submit="() => {}"
+          @branch-side="() => {}"
+        />
+      </div>
+      <!-- A project of one repository with one harness installed: nothing under
+           the pair but the caption `base → to check`, no Repository table, no
+           `Add a repository`, no `Reviewed by` block (`reviewers` is empty, as
+           it is when one harness or none is on PATH) and a footer with no
+           `1 pair` over it. -->
+      <div :style="{ position: 'relative', height: '440px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <ReviewChangesDialog
+          :open="true"
+          :form="REVIEW_SINGLE_FORM"
+          :repos="[REVIEW_REPOS[0]]"
           :root="REVIEW_ROOT"
           :home="REVIEW_HOME"
           :branches="REVIEW_BRANCHES"

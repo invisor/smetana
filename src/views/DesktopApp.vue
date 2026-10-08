@@ -23,6 +23,7 @@ import ConflictModal from '../components/git/ConflictModal.vue'
 import GitPanel from '../components/git/GitPanel.vue'
 import { gitActions } from '../components/git/gitActions.js'
 import { repoLabel } from '../components/git/repoLabel.js'
+import { defaultReviewer, reviewerRows } from '../components/git/reviewAgent.js'
 /* The whole of what the corner says about a write git carried through, and the
    closed list of the writes it says anything about at all. Out of
    `components/git/` like `gitActions.js` above it and for the same reason: a
@@ -109,7 +110,7 @@ import {
 import SessionRow from '../components/agent/SessionRow.vue'
 /* What each harness this build ships can be asked to do, read once at startup
    — the two agent menus and the Sessions tab's cards are all drawn from it. */
-import { can } from '../stores/agents.js'
+import { agents as agentCatalogue, can, installedAgents, refreshCodexModels } from '../stores/agents.js'
 import {
   DELETE_SESSION_TITLE,
   FORK_KIND,
@@ -1591,6 +1592,9 @@ const reviewHome = ref(null)
 const reviewFetching = ref([])
 const reviewFetchFailed = ref([])
 const reviewStarting = ref(false)
+/* The harness ids on PATH, asked on every opening of the review window; the
+   window draws a choice of reviewer only past one of them. */
+const reviewInstalled = ref([])
 
 /* The two terms `pickBranch` takes before it falls back to the top of the list.
    The reference branch is filled from the run dialog's own order, through the
@@ -1729,6 +1733,16 @@ async function openReviewChanges(branch = null) {
   reviewFetching.value = []
   reviewFetchFailed.value = []
   reviewStarting.value = false
+  /* Who may review, asked on every opening rather than once: what is on PATH
+     can change while the app runs, and a Codex list older than the Settings
+     window's would offer a model the CLI no longer has. Neither is awaited
+     past the window: the rows land under a window already drawing the pair,
+     the way the origin lists do. */
+  reviewInstalled.value = []
+  installedAgents().then((ids) => {
+    if (activePath.value === path) reviewInstalled.value = ids
+  })
+  refreshCodexModels()
   /* **Before the table and not after it**, unlike the run dialog's own late
      `loadBranches`. That window fills a field from the list and can do it when
      the list arrives; this one *is* the list — a table built before
@@ -1763,9 +1777,19 @@ async function openReviewChanges(branch = null) {
          back through `branch-side` below; the file is written by the ordinary
          debounced save, and never by the dialog. */
       branchSide: layout.branchSide,
-      busy: reviewStarting.value
+      busy: reviewStarting.value,
+      /* One row per installed harness with the model the settings would start
+         it on, and the harness the block opens on. Both from the effective
+         table, so a project's own `agents` block wins over the root's. The
+         window draws nothing for fewer than two rows. */
+      reviewers: reviewerRows(effectiveAgents.value, reviewInstalled.value, agentCatalogue.value),
+      reviewer: defaultReviewer(
+        reviewerRows(effectiveAgents.value, reviewInstalled.value, agentCatalogue.value),
+        effectiveAgents.value
+      )
     }),
     forget: () => {
+      reviewInstalled.value = []
       reviewSeed.value = null
       reviewRemote.value = {}
       reviewFetchedAt.value = {}
@@ -1774,7 +1798,7 @@ async function openReviewChanges(branch = null) {
     },
     onResult: (name, payload) => {
       if (name === 'close') closeDialog('review-changes')
-      if (name === 'submit') startReview(payload?.form)
+      if (name === 'submit') startReview(payload?.form, payload)
       /* A press of one of the branch list's two toggles. It is remembered for
          the machine rather than for the project — which side of a list somebody
          reads is a habit of theirs, and it must not change under them when they
@@ -1886,7 +1910,7 @@ async function refreshReviewOrigin(path, repoIds) {
    keeps `delete-branch` open: what the window is drawing while this runs — the
    fetch, and then which repositories it could not reach — is not said anywhere
    else, so closing first would be closing over the only report of it. */
-async function startReview(form) {
+async function startReview(form, choice = {}) {
   const path = activePath.value
   if (!path || !canReview(form) || reviewStarting.value) return
   reviewStarting.value = true
@@ -1949,7 +1973,11 @@ async function startReview(form) {
         kind: 'reviewBranch',
         pairs: reviewPairs(form),
         report,
-        fetchFailed: missed
+        fetchFailed: missed,
+        /* `null` when the window drew no choice: Rust then resolves the
+           settings' pair, exactly as before these fields existed. */
+        agent: typeof choice?.agent === 'string' && choice.agent ? choice.agent : null,
+        model: typeof choice?.model === 'string' && choice.model ? choice.model : null
       })
     ) {
       closeDialog('review-changes')
