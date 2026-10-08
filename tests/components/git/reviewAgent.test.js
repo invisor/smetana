@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { defaultReviewer, modelOptionsFor, reviewerRows } from '../../../src/components/git/reviewAgent.js'
+import { defaultReviewer, keepReviewerChoice, modelOptionsFor, reviewerRows } from '../../../src/components/git/reviewAgent.js'
 
 const agents = [
   { id: 'claude', label: 'Claude Code', models: [{ id: 'opus', label: 'Opus' }] },
@@ -53,5 +53,28 @@ describe('modelOptionsFor', () => {
     const options = modelOptionsFor(row, 'old-slug')
     expect(options[0]).toEqual({ value: '', label: 'Agent chooses' })
     expect(options.at(-1)).toEqual({ value: 'old-slug', label: 'old-slug (Unavailable)', disabled: true })
+  })
+})
+
+describe('keepReviewerChoice', () => {
+  const rows = reviewerRows(table('claude', 'opus'), ['claude', 'codex'], agents)
+  it('seeds the default when nothing was picked', () => {
+    expect(keepReviewerChoice(rows, 'claude', { agent: '', model: '' })).toEqual({ agent: 'claude', model: 'opus' })
+    expect(keepReviewerChoice(rows, 'missing', null)).toEqual({ agent: 'claude', model: 'opus' })
+  })
+  it('keeps a pick whose harness is still a row, model included', () => {
+    expect(keepReviewerChoice(rows, 'claude', { agent: 'codex', model: 'gpt-5.6-sol' })).toEqual({
+      agent: 'codex',
+      model: 'gpt-5.6-sol'
+    })
+    expect(keepReviewerChoice(rows, 'claude', { agent: 'codex', model: '' })).toEqual({ agent: 'codex', model: '' })
+  })
+  it('re-seeds when the picked harness has disappeared', () => {
+    const one = reviewerRows(table('claude', 'opus'), ['claude'], agents)
+    expect(keepReviewerChoice(one, 'claude', { agent: 'codex', model: 'gpt-5.6-sol' })).toEqual({
+      agent: 'claude',
+      model: 'opus'
+    })
+    expect(keepReviewerChoice([], '', { agent: 'codex', model: 'x' })).toEqual({ agent: '', model: '' })
   })
 })

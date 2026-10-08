@@ -850,8 +850,8 @@ the build hermetic.
 **`Intent::ReviewBranch` carries a choice of reviewer.** Beside `pairs`, `report` and `fetch_failed` it has
 `agent: Option<String>` and `model: Option<String>`, both `#[serde(default)]` so an intent written
 before them still starts. `settings::resolve_role_model` takes the pair from the intent whole when
-`agent` is in `IDS` (the role rule is not applied again; an empty or over-`MAX_ID_LEN` model becomes
-`None`, no flag); an unknown id, or no `agent`, resolves by the role table as before. Both start roads
+`agent` is in `IDS` (the role rule is not applied again; an empty model becomes `None`, no flag); an unknown id, a `model`
+longer than `MAX_ID_LEN`, or no `agent` at all is no choice and resolves by the role table as before. Both start roads
 go through that resolver. The prompt does not print either field. `agents_installed` (command) lists
 the ids from `agents::installed`, which the run failover reuses.
 

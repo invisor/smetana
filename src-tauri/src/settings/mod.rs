@@ -121,13 +121,13 @@ fn resolve_role_model(
     // A review that names its harness has already resolved the settings'
     // defaults in the window; applying the role rule again would be a second
     // opinion. An id this build does not ship, or a slug too long to be a
-    // model, is a damaged intent and takes the table instead.
+    // model, is a damaged intent: it is no choice at all and takes the table.
+    // An empty model with a known harness is a choice — that harness, and no
+    // flag, the harness picks.
     if let crate::agents::Intent::ReviewBranch { agent: Some(agent), model, .. } = intent {
-        if crate::agents::IDS.contains(&agent.as_str()) {
-            let model = model
-                .as_deref()
-                .filter(|m| !m.is_empty() && m.len() <= model::MAX_ID_LEN)
-                .map(str::to_owned);
+        let model_ok = model.as_deref().is_none_or(|m| m.len() <= model::MAX_ID_LEN);
+        if crate::agents::IDS.contains(&agent.as_str()) && model_ok {
+            let model = model.as_deref().filter(|m| !m.is_empty()).map(str::to_owned);
             return (agent.clone(), model);
         }
     }
@@ -353,12 +353,19 @@ mod tests {
     }
 
     #[test]
-    fn a_review_model_past_the_length_bound_never_reaches_argv() {
+    fn a_review_model_past_the_length_bound_takes_the_table_whole() {
         let table = ("claude".to_owned(), "opus".to_owned());
         let long = "m".repeat(201);
         assert_eq!(
-            resolve_role_model(table, &review(Some("claude"), Some(&long)), None),
-            ("claude".to_owned(), None)
+            resolve_role_model(table, &review(Some("codex"), Some(&long)), None),
+            ("claude".to_owned(), Some("opus".to_owned())),
+            "an over-long slug is no choice at all: the harness is the table's too"
+        );
+        let table = ("claude".to_owned(), "opus".to_owned());
+        assert_eq!(
+            resolve_role_model(table, &review(Some("codex"), Some("")), None),
+            ("codex".to_owned(), None),
+            "an empty model is a choice: that harness, no flag"
         );
     }
 

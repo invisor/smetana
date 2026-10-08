@@ -2330,7 +2330,10 @@ the `reviewBranch` role's if it is installed, else the first installed; a row's 
 the role names that harness, else the root's when the root names it, else empty (`Agent chooses`);
 changing the harness resets the model to the new row's default. The pick rides in the intent as
 `agent`/`model` and is **never written to `settings.json`** — the settings are the memory, the window is
-one run. The settings row for this role is labelled `Code review`; its key stays `reviewBranch`.
+one run. The block is hidden while a branch list is open, for the same window-height reason the table
+is, and the pick survives that (the state is held in the dialog, not in the block); it also survives a
+re-announcement that only moves a row's model list, such as Codex's refresh after opening
+(`keepReviewerChoice`). The settings row for this role is labelled `Code review`; its key stays `reviewBranch`.
 
 ### What Review does, in the order it has to happen in
 

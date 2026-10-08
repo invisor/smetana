@@ -48,7 +48,7 @@ import Modal from '../overlays/Modal.vue'
 import BranchPicker from './BranchPicker.vue'
 import { LOCAL_SIDE, ORIGIN_SIDE, normalizeSide, openingSide, originSideBranches } from './branchPicker.js'
 import { repoLabel, repoPath } from './repoLabel.js'
-import { AGENT_CHOOSES, modelOptionsFor } from './reviewAgent.js'
+import { AGENT_CHOOSES, keepReviewerChoice, modelOptionsFor } from './reviewAgent.js'
 import {
   PICK_HEAD,
   WAITING_FOR_BRANCH,
@@ -476,15 +476,21 @@ const chosenModel = ref('')
 /* A choice exists only past one installed harness. */
 const choice = computed(() => (props.reviewers ?? []).length > 1)
 const chosenRow = computed(() => (props.reviewers ?? []).find((row) => row.id === chosenAgent.value) ?? null)
-/* Seeded by contents, the way `review` is, so a re-announcement does not throw
-   away a pick. */
+/* Keyed on the installed ids and the default only, never on the rows' model
+   lists: Codex's list is refreshed after the window opens and re-announces
+   every prop, and that must not undo a pick. Even when the key moves, a pick
+   whose harness is still a row is kept (`keepReviewerChoice`). The model
+   options follow `reviewers` through `modelChoices` without touching
+   `chosenModel`. */
 watch(
-  () => shape({ reviewers: props.reviewers, reviewer: props.reviewer }),
+  () => shape({ ids: (props.reviewers ?? []).map((row) => row.id), reviewer: props.reviewer }),
   () => {
-    const rows = props.reviewers ?? []
-    const row = rows.find((r) => r.id === props.reviewer) ?? rows[0] ?? null
-    chosenAgent.value = row?.id ?? ''
-    chosenModel.value = row?.model ?? ''
+    const next = keepReviewerChoice(props.reviewers, props.reviewer, {
+      agent: chosenAgent.value,
+      model: chosenModel.value
+    })
+    chosenAgent.value = next.agent
+    chosenModel.value = next.model
   },
   { immediate: true }
 )

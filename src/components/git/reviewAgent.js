@@ -42,6 +42,20 @@ export function defaultReviewer(rows, table) {
   return rows.some((row) => row.id === wanted) ? wanted : rows[0].id
 }
 
+/* What the window holds after an announcement: the person's pick when its
+   harness is still a row, and the seeded default otherwise. An announcement
+   also arrives when only a row's model list moved (Codex's catalogue refreshing
+   after the window opened), which must not undo a pick — so a pick that still
+   has a row is kept whole, model included. */
+export function keepReviewerChoice(rows, reviewer, current) {
+  const list = rows ?? []
+  if (current?.agent && list.some((row) => row.id === current.agent)) {
+    return { agent: current.agent, model: current.model ?? '' }
+  }
+  const row = list.find((r) => r.id === reviewer) ?? list[0] ?? null
+  return { agent: row?.id ?? '', model: row?.model ?? '' }
+}
+
 /* The model dropdown's options for one row, keeping a settings slug the
    catalogue no longer lists as an unavailable entry rather than dropping it. */
 export function modelOptionsFor(row, model) {
