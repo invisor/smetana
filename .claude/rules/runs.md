@@ -838,6 +838,17 @@ next batch` and an `until HH:MM` detail, with no release button. None of the eig
 places that compare against `stopped` read it as stopped, since each compares
 for that one tag.
 
+## Notes for the agent
+
+The dialog's optional "Notes for the agent" field travels as
+`RunSettings::instructions` (`null` when empty; `components/run/runNotes.js`
+trims it, `validate` refuses more than 2000 characters, and the journal reads an
+entry without the key as `None`). `agents::prompt` quotes it under `From the
+person who started this run:` after the policy lines, and a replacement lead of
+a continued batch gets it from the same settings. It is deliberately **not
+remembered**: not in `project.runSettings`, not in `RunDefaults`, and the dialog
+opens with the field empty every time.
+
 ## The journal: what the loop decided, while it was deciding it
 
 The report above is about the **work**, and there was nothing at all about the

@@ -1954,6 +1954,7 @@ mod tests {
                 batch_pause_max: None,
                 live_check: true,
                 file_findings: true,
+                instructions: None,
             },
             reports: std::path::PathBuf::from("/p/.smetana/runs/7"),
             batch: 1,

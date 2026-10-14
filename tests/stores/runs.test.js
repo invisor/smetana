@@ -188,6 +188,17 @@ const TASK_RUN = {
 }
 
 describe('the runs in the active project', () => {
+  it('sends the notes for the agent to run_start as they were shaped', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    ipc.on('run_start', RUN)
+    await stores.runs.loadConfig('/p')
+
+    await stores.runs.startRun('/p', { ...RUN.settings, instructions: 'do not commit the result' })
+
+    expect(ipc.calls('run_start')[0].settings.instructions).toBe('do not commit the result')
+  })
+
   it('starting one puts it in the store and hands it back', async () => {
     const { ipc, stores } = await loadStores()
     ipc.on('project_config', OK)

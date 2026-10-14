@@ -575,6 +575,7 @@ mod tests {
                 batch_pause_max: None,
                 live_check: false,
                 file_findings: true,
+                instructions: None,
             },
         )
     }

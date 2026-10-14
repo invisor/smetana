@@ -3511,6 +3511,7 @@ mod tests {
                 batch_pause_max: None,
                 live_check: false,
                 file_findings: false,
+                instructions: None,
             },
             reports: std::path::PathBuf::from("/p/.smetana/runs/7"),
             batch: 2,

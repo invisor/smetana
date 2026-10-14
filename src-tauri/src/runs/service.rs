@@ -3212,6 +3212,7 @@ mod tests {
             batch_pause_max: None,
             live_check: true,
             file_findings: true,
+            instructions: None,
         }
     }
 

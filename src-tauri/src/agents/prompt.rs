@@ -1072,6 +1072,20 @@ fn run(
     if let (Some(model), false) = (worker_model, matches!(settings.mode, RunMode::Solo)) {
         let _ = writeln!(out, "- run the subagents that write code on model {model}");
     }
+    // After the policy and set apart from it: these are the person's own words
+    // for this run, not one more rule of ours, so they are quoted. Trimmed here
+    // so a whitespace-only string says nothing at all. Part of `RunSettings`,
+    // hence the replacement lead of a continued batch reads it too.
+    if let Some(text) = settings.instructions.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        let _ = writeln!(out, "\nFrom the person who started this run:\n");
+        for line in text.lines() {
+            if line.trim().is_empty() {
+                let _ = writeln!(out, ">");
+            } else {
+                let _ = writeln!(out, "> {}", line.trim_end());
+            }
+        }
+    }
 
     out.push('\n');
     match delivery {
@@ -1840,6 +1854,7 @@ mod tests {
             batch_pause_max: None,
             live_check: true,
             file_findings: true,
+            instructions: None,
         }
     }
 
@@ -1976,6 +1991,56 @@ mod tests {
         assert!(text.contains("if it is refused another actor lawfully owns it: skip it"), "{text}");
         assert!(text.contains("Do not recreate, clean, reset, or delete a worktree"), "{text}");
         assert!(text.contains("smetana-abc"), "{text}");
+    }
+
+    #[test]
+    fn instructions_are_quoted_after_the_policy_and_absent_means_silent() {
+        let header = "From the person who started this run:";
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let with = RunSettings {
+                instructions: Some("  do not commit the result\n\nask before pushing  ".into()),
+                ..run_settings(RunMode::Auto, RunScope::Queue)
+            };
+            let text = run_prompt(with, delivery);
+            let at = text.find(header).unwrap_or_else(|| panic!("{delivery:?}: {text}"));
+            assert!(
+                text.find("verify each merged task for real").unwrap() < at,
+                "the quote comes after the policy lines: {text}"
+            );
+            assert!(
+                text[at..].contains("\n\n> do not commit the result\n>\n> ask before pushing\n"),
+                "{delivery:?}: {text}"
+            );
+            for none in [None, Some("   \n ".to_owned())] {
+                let bare = RunSettings { instructions: none, ..run_settings(RunMode::Auto, RunScope::Queue) };
+                let text = run_prompt(bare, delivery);
+                assert!(!text.contains(header), "{delivery:?}: {text}");
+                assert!(!text.contains("\n> "), "{delivery:?}: {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_continued_batch_carries_the_same_instructions() {
+        let intent = Intent::Run {
+            settings: RunSettings {
+                instructions: Some("do not commit the result".into()),
+                ..run_settings(RunMode::Auto, RunScope::Queue)
+            },
+            reports: std::path::PathBuf::from("/p/.smetana/runs/7"),
+            batch: 2,
+            continuation: Some(crate::agents::RunContinuation {
+                attempt: 2,
+                previous_agent: "claude".into(),
+                previous_actor: "smetana-run-9".into(),
+                task_ids: vec![],
+                worktrees: vec![],
+            }),
+            remove_worktrees: true,
+        };
+        let text = prompt_of(intent, SkillDelivery::PluginDir);
+        assert!(text.contains("Continue logical batch 2, attempt 2"), "{text}");
+        assert!(text.contains("From the person who started this run:\n\n> do not commit the result"), "{text}");
     }
 
     #[test]
@@ -2227,6 +2292,7 @@ mod tests {
             RunSettings {
                 live_check: false,
                 file_findings: false,
+                instructions: None,
                 ..run_settings(RunMode::Auto, RunScope::Queue)
             },
             SkillDelivery::PluginDir,

@@ -116,7 +116,22 @@ pub struct RunSettings {
     /// Whether a finding may become a `deferred` issue at all. Off means
     /// everything goes to the digest — see the `running-tasks` skill.
     pub file_findings: bool,
+    /// A free-form instruction from the person for this run alone ("do not
+    /// commit the result"), read by the lead once, in its kickoff prompt.
+    ///
+    /// `serde(default)` because the settings are written into the run journal
+    /// and an entry from a build without the key must still read, as `None`.
+    /// Never remembered between runs — see `RunDefaults`, which has no such
+    /// field. A string of nothing but whitespace counts as absent; the prompt
+    /// builder trims, so no caller has to.
+    #[serde(default)]
+    pub instructions: Option<String>,
 }
+
+/// The longest `instructions` a run accepts, in characters. The dialog's
+/// `maxlength` is the same number, but counts UTF-16 units, so this is the
+/// bound that actually holds.
+pub const INSTRUCTIONS_MAX: usize = 2000;
 
 /// Why a run is not running any more.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -529,6 +544,14 @@ impl RunSettings {
                 "solo mode runs one task; a queue or an epic needs auto or supervised".into(),
             ));
         }
+        if let Some(text) = &self.instructions {
+            let len = text.chars().count();
+            if len > INSTRUCTIONS_MAX {
+                return Err(RunError::BadSettings(format!(
+                    "notes for the agent run to {INSTRUCTIONS_MAX} characters at most, not {len}"
+                )));
+            }
+        }
         if self.min_priority.is_some() && !matches!(self.scope, RunScope::Queue) {
             return Err(RunError::BadSettings(
                 "a priority floor belongs to the queue; a named task or epic is taken whatever \
@@ -756,6 +779,7 @@ mod tests {
             batch_pause_max: None,
             live_check: true,
             file_findings: true,
+            instructions: None,
         }
     }
 
@@ -1031,6 +1055,45 @@ mod tests {
         assert_eq!(parsed.min_priority, None, "the dialog shows no floor outside the queue");
         assert_eq!(parsed.max_parallel_tasks, Some(4));
         assert!(!parsed.live_check);
+    }
+
+    #[test]
+    fn settings_without_instructions_still_read_as_none() {
+        // A journal entry written before the field existed carries no key.
+        let json = serde_json::json!({
+            "scope": { "kind": "queue" },
+            "mode": "auto",
+            "target_branch": "main",
+            "min_priority": null,
+            "live_check": true,
+            "file_findings": true
+        });
+        let parsed: RunSettings = serde_json::from_value(json).expect("an old entry deserializes");
+        assert_eq!(parsed.instructions, None);
+        let with = serde_json::json!({
+            "scope": { "kind": "queue" },
+            "mode": "auto",
+            "target_branch": "main",
+            "min_priority": null,
+            "live_check": true,
+            "file_findings": true,
+            "instructions": "do not commit the result"
+        });
+        let parsed: RunSettings = serde_json::from_value(with).expect("the dialog's payload deserializes");
+        assert_eq!(parsed.instructions.as_deref(), Some("do not commit the result"));
+    }
+
+    #[test]
+    fn instructions_past_the_ceiling_are_refused() {
+        let with = |n: usize| RunSettings {
+            instructions: Some("я".repeat(n)),
+            ..settings(RunMode::Auto, RunScope::Queue)
+        };
+        assert!(with(INSTRUCTIONS_MAX).validate().is_ok(), "the ceiling itself is allowed");
+        assert!(
+            matches!(with(INSTRUCTIONS_MAX + 1).validate(), Err(RunError::BadSettings(_))),
+            "characters are counted, not bytes, and one past the ceiling is refused"
+        );
     }
 
     #[test]
