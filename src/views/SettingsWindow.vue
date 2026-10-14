@@ -85,6 +85,9 @@ const view = reactive({
      the switch in the opposite position for the moment before the first answer
      arrives. Off is also today's behaviour exactly. */
   editorWordWrap: false,
+  /* On, the same as `EditorSettings::default()` in Rust and `defaults()` in
+     `stores/settings.js`. */
+  editorConfirmCloseTerminals: true,
   agent: 'claude',
   /* Which model that agent is asked for, and the same per kind of call. Both
      ship empty, which is what "nothing chosen" is and is this app's behaviour
@@ -655,8 +658,10 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           v-else-if="tab === 'editor'"
           :font-size="view.editorFontSize"
           :word-wrap="view.editorWordWrap"
+          :confirm-close-terminals="view.editorConfirmCloseTerminals"
           @update:font-size="change({ editorFontSize: $event })"
           @update:word-wrap="change({ editorWordWrap: $event })"
+          @update:confirm-close-terminals="change({ editorConfirmCloseTerminals: $event })"
         />
         <!-- `notificationShowReport` is handed to two tabs out of this one
              view. General owns the switch; Agents only reads it, to say why the

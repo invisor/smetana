@@ -70,6 +70,7 @@ import { useCopyFeedback } from '../components/core/copyFeedback.js'
 import { promoteTitle, taskCount } from '../components/kanban/promoteTitle.js'
 import { canRestore, draftIsEmpty } from '../components/kanban/taskDraft.js'
 import Button from '../components/core/Button.vue'
+import Checkbox from '../components/core/Checkbox.vue'
 import RunBar from '../components/run/RunBar.vue'
 import ReportView from '../components/run/ReportView.vue'
 import ReportList from '../components/run/ReportList.vue'
@@ -202,7 +203,13 @@ import {
   measureStorage,
   notificationsState
 } from '../stores/notifications.js'
-import { applyPatch, effectiveAgents, initSettingsBridge, settings } from '../stores/settings.js'
+import {
+  applyPatch,
+  effectiveAgents,
+  initSettingsBridge,
+  settings,
+  stopAskingBeforeClosingTerminals
+} from '../stores/settings.js'
 import {
   announceBoardColumns,
   announceDialogProps,
@@ -302,6 +309,16 @@ import {
 import { initUpdates } from '../stores/updates.js'
 import { liveCheckBlock } from '../components/run/browserTools.js'
 import { folderOf, parentOf, relativePath } from '../components/files/fileMenu.js'
+import {
+  CLOSE_TERMINALS_TITLE,
+  allOf,
+  butTerminals,
+  closeTerminalsText,
+  othersOf,
+  rightOf,
+  savedOf,
+  terminalsIn
+} from '../components/shell/tabMenu.js'
 /* Which agent "Attach to agent" reaches, and whether there is one to pick at
    all — pure, over the merged agent rows this file already builds, so the
    rule can be tested where no `.vue` can be reached. `hasLiveAgent` is
@@ -383,6 +400,7 @@ import {
   isReportsTab,
   isTerminalTab,
   keepMine,
+  keepOpen,
   markGone,
   markStale,
   onUnsaved,
@@ -6614,20 +6632,84 @@ const answerUnsaved = async (answer) => {
   }
 }
 
-const onCloseTab = async (id) => {
-  /* A diff holds nothing of anybody's, so there is nothing to ask about and
-     nothing in `openTabs` to take out. */
+/* How each kind of tab closes, in one place, and with nothing asked: the cross
+   asks about unsaved text before calling it and a batch asks once for the whole
+   set. A diff holds nothing of anybody's and has nothing in `openTabs` to take
+   out. A terminal has nothing unsaved either, but closing it kills the shell
+   behind it — the tab is only a view of a session, and one that merely hid a
+   live shell would leave a process nobody can see; the store owns both halves of
+   that. The Reports tab is a read of a folder and closes as unconditionally as a
+   diff. */
+async function closeOne(id) {
   if (isDiffTab(id)) return closeDiff(id)
-  /* A terminal is the other way round: there is nothing unsaved in it either,
-     but closing it kills the shell behind it — the tab is only a view of a
-     session, and one that merely hid a live shell would leave a process nobody
-     can see. The store owns both halves of that. */
   if (isTerminalTab(id)) return closeTerminalTab(id)
-  /* The Reports tab holds nothing unsaved either — it is a read of a folder —
-     so closing it is the same unconditional act as closing a diff. */
   if (isReportsTab(id)) return closeReportsTab()
-  if (isDirty(id) && !(await confirmUnsaved([id]))) return
   closeTab(id)
+}
+
+const onCloseTab = async (id) => {
+  if (isDirty(id) && !(await confirmUnsaved([id]))) return
+  return closeOne(id)
+}
+
+/* The question a batch close asks when the set holds a shell, because closing a
+   terminal's tab ends the shell behind it. In-app and not a window of its own,
+   the shape of `unsaved` above. `dontAsk` is the checkbox, and it is only
+   written to the settings when the answer is Close: a Cancel that remembered
+   something would be a refusal with a side effect. */
+const closingTerminals = ref(null)
+
+function askCloseTerminals(count) {
+  if (!settings.editor.confirmCloseTerminals) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    /* A second question orphans nobody: the first gets its "no". */
+    if (closingTerminals.value) closingTerminals.value.resolve(false)
+    closingTerminals.value = { count, dontAsk: false, resolve }
+  })
+}
+
+const answerCloseTerminals = (ok) => {
+  const pending = closingTerminals.value
+  closingTerminals.value = null
+  if (!pending) return
+  if (ok && pending.dontAsk) stopAskingBeforeClosingTerminals()
+  pending.resolve(ok)
+}
+
+/* A batch, in the order the questions go: the shells first, then the unsaved
+   files, and a "no" to either closes nothing at all. The set is a list of tab
+   records taken from the drawn row before anything closes. */
+async function closeBatch(set) {
+  if (!set.length) return
+  const shells = terminalsIn(set)
+  if (shells.length && !(await askCloseTerminals(shells.length))) return
+  const dirty = set
+    .filter((tab) => (tab.kind === 'file' || tab.kind === 'preview') && isDirty(tab.id))
+    .map((tab) => tab.id)
+  if (dirty.length && !(await confirmUnsaved(dirty))) return
+  for (const tab of set) await closeOne(tab.id)
+}
+
+/* What a pick on the tab menu does. The `kind` strings are `tabMenu.js`'s,
+   matched by hand. The path verbs are the tree's own handlers with the tab's id
+   standing in for the path — a file tab's id is its path relative to the root,
+   which is what the tree hands them. Every set is worked out from `tabList`, the
+   drawn row, and not from `openTabs`. */
+const onTabAction = async ({ kind, id }) => {
+  const row = tabList.value
+  if (kind === 'close') return onCloseTab(id)
+  if (kind === 'close-others') return closeBatch(othersOf(row, id))
+  if (kind === 'close-right') return closeBatch(rightOf(row, id))
+  if (kind === 'close-saved') return closeBatch(savedOf(row, isDirty))
+  if (kind === 'close-but-terminals') return closeBatch(butTerminals(row))
+  if (kind === 'close-all') return closeBatch(allOf(row))
+  if (kind === 'keep-open') {
+    keepOpen(id)
+    return
+  }
+  if (kind === 'copy-path' || kind === 'copy-relative-path' || kind === 'reveal' || kind === 'attach') {
+    return onFileAction({ kind, path: id, target: 'file' })
+  }
 }
 
 /* editor/states.js keys state by path, and a tab's path is relative (tabs.js
@@ -7525,8 +7607,11 @@ const toastStackStyle = {
           :active-id="project.activeTab"
           @select="project.activeTab = $event"
           @close="onCloseTab"
+          :can-attach="attachTarget !== null"
+          :has-live-agent="hasAnyLiveAgent"
           @promote="promote"
           @reorder="project.tabOrder = $event"
+          @action="onTabAction"
         >
           <!-- Beside the pinned block rather than at the far right of the row:
                it is about those first two tabs, and past the strut it would
@@ -7584,6 +7669,19 @@ const toastStackStyle = {
           @abort="abortConflict"
           @close="dismissConflict"
         />
+        <Modal
+          v-if="closingTerminals"
+          :open="true"
+          :title="CLOSE_TERMINALS_TITLE"
+          :description="closeTerminalsText(closingTerminals.count)"
+          :closable="false"
+        >
+          <Checkbox v-model="closingTerminals.dontAsk" label="Don't ask again" />
+          <template #footer>
+            <Button variant="secondary" size="sm" @click="answerCloseTerminals(false)">Cancel</Button>
+            <Button variant="primary" size="sm" @click="answerCloseTerminals(true)">Close</Button>
+          </template>
+        </Modal>
         <Modal
           v-if="unsaved"
           :open="true"

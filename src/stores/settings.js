@@ -71,7 +71,10 @@ const defaults = () => ({
      opened, so shipping it on would re-lay somebody's editor out unasked. The
      copies of this default in `EditorSettings::default()` (Rust) and in `view`
      (`views/SettingsWindow.vue`) have to agree with this one. */
-  editor: { fontSize: EDITOR_FONT_DEFAULT, wordWrap: false },
+  /* `confirmCloseTerminals` is on: closing a terminal's tab ends its shell, so
+     a batch close that reaches one asks first until the person says
+     otherwise. Mirrors `EditorSettings::default()` in Rust. */
+  editor: { fontSize: EDITOR_FONT_DEFAULT, wordWrap: false, confirmCloseTerminals: true },
   /* What the app may do to a person's repositories without asking each time.
      `autoFetch` is whether this app opens a socket by itself — on window focus,
      throttled, and silently — to find out whether a branch has commits waiting
@@ -700,6 +703,7 @@ function toShared(source) {
     /* Flat beside `editorFontSize`, and for the reason every flat field here
        is: the payload is a message rather than a slice of the settings tree. */
     editorWordWrap: editor.wordWrap,
+    editorConfirmCloseTerminals: editor.confirmCloseTerminals,
     /* Flat, like `editor.fontSize` above and for the same reason: the payload
        is a message rather than a slice of the settings tree, and a nested
        `kanban` would invite somebody to send the whole section and quietly
@@ -810,6 +814,9 @@ export function applyPatch(patch) {
      default, and `false` is reachable because it is never coerced. */
   if (typeof patch.editorWordWrap === 'boolean') {
     settings.editor.wordWrap = patch.editorWordWrap
+  }
+  if (typeof patch.editorConfirmCloseTerminals === 'boolean') {
+    settings.editor.confirmCloseTerminals = patch.editorConfirmCloseTerminals
   }
   if (typeof patch.agent === 'string' && patch.agent) {
     settings.agent = patch.agent
@@ -971,6 +978,15 @@ function announce() {
   emit(SETTINGS_STATE, sharedSettings()).catch((err) => {
     console.error('[settings] telling the settings window failed:', err)
   })
+}
+
+/* Turns the question before a batch close off for good, from the app window's
+   own dialog. A function of the store rather than an assignment in the view:
+   the settings window shows this field as a switch, and a write that did not
+   announce would leave an open one drawing it on. */
+export function stopAskingBeforeClosingTerminals() {
+  settings.editor.confirmCloseTerminals = false
+  announce()
 }
 
 let bridged = false

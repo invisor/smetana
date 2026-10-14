@@ -168,11 +168,18 @@ pub struct EditorSettings {
     /// A bool has no value outside its set, so `validate` has nothing to say
     /// about it; a missing field takes this default through `serde(default)`.
     pub word_wrap: bool,
+    /// Whether closing a batch of tabs that holds a terminal asks first, since
+    /// closing a terminal's tab ends its shell. On by default: the question is
+    /// the safe side of an irreversible act, and "Don't ask again" in the
+    /// dialog is the way a person turns it off. A missing field takes this
+    /// default through `serde(default)`, so a file written before it existed
+    /// asks, which is the behaviour nobody could have opted out of.
+    pub confirm_close_terminals: bool,
 }
 
 impl Default for EditorSettings {
     fn default() -> Self {
-        Self { font_size: EDITOR_FONT_DEFAULT, word_wrap: false }
+        Self { font_size: EDITOR_FONT_DEFAULT, word_wrap: false, confirm_close_terminals: true }
     }
 }
 
@@ -2657,6 +2664,30 @@ mod tests {
         let settings = settings_of(r#"{"version":1,"editor":{"fontSize":18}}"#);
         assert_eq!(settings.editor.font_size, 18, "the section survives the missing field");
         assert!(!settings.editor.word_wrap, "a missing wordWrap is off, not a lost section");
+    }
+
+    #[test]
+    fn a_file_written_before_confirm_close_terminals_asks_by_default() {
+        // The same shape as the word-wrap test above: an `editor` section with
+        // a size and nothing else. The question stays on, because a person who
+        // never saw the switch cannot have turned it off.
+        let settings = settings_of(r#"{"version":1,"editor":{"fontSize":18}}"#);
+        assert_eq!(settings.editor.font_size, 18, "the section survives the missing field");
+        assert!(
+            settings.editor.confirm_close_terminals,
+            "a missing confirmCloseTerminals is on, not a lost section"
+        );
+    }
+
+    #[test]
+    fn confirm_close_terminals_off_survives_disk_to_front_end_and_back() {
+        let file = settings_of(r#"{"version":1,"editor":{"confirmCloseTerminals":false}}"#);
+        assert!(!file.editor.confirm_close_terminals, "parse must read it off the disk");
+        let resolved = resolve(&file, None);
+        assert!(!resolved.editor.confirm_close_terminals, "resolve must carry it to the front end");
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert!(!written.editor.confirm_close_terminals, "merge must carry it back into the file");
     }
 
     /// The walk `the_font_sizes_survive_disk_to_front_end_and_back` makes, for

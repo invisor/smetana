@@ -52,10 +52,14 @@ const props = defineProps({
      pointer is holding. Both are decided by the row — a single tab cannot know
      whether there is anywhere to move it to. */
   movable: { type: Boolean, default: false },
-  moving: { type: Boolean, default: false }
+  moving: { type: Boolean, default: false },
+  /* Whether the row's context menu is open on this tab. It draws the hover
+     surface and not the active one: a secondary click is a question about a
+     tab, not a visit to it, so nothing that says "selected" may appear. */
+  menuOpen: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['select', 'close', 'promote', 'grab'])
+const emit = defineEmits(['select', 'close', 'promote', 'grab', 'menu'])
 
 const hover = ref(false)
 const preview = computed(() => props.kind === 'preview')
@@ -82,7 +86,7 @@ const style = computed(() => ({
     ? 'var(--surface-active)'
     : props.active
       ? 'var(--surface-raised)'
-      : hover.value
+      : hover.value || props.menuOpen
         ? 'var(--surface-hover)'
         : 'transparent',
   color: props.active ? 'var(--text-primary)' : 'var(--text-secondary)',
@@ -135,6 +139,7 @@ const onPointerdown = (event) => {
     @click="emit('select')"
     @dblclick="emit('promote')"
     @pointerdown="onPointerdown"
+    @contextmenu.prevent="emit('menu', $event)"
     @mouseenter="hover = true"
     @mouseleave="hover = false"
   >

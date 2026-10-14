@@ -17,10 +17,12 @@ import { FONT_SIZES } from '../../appearance.js'
    also today's behaviour: a long line scrolls sideways. */
 const props = defineProps({
   fontSize: { type: Number, default: 12 },
-  wordWrap: { type: Boolean, default: false }
+  wordWrap: { type: Boolean, default: false },
+  /* On by default, the same as `EditorSettings::default()` in Rust. */
+  confirmCloseTerminals: { type: Boolean, default: true }
 })
 
-const emit = defineEmits(['update:fontSize', 'update:wordWrap'])
+const emit = defineEmits(['update:fontSize', 'update:wordWrap', 'update:confirmCloseTerminals'])
 
 /* Numbers, and they stay numbers on the way out — see the note on the same list
    in `GeneralSettings`. */
@@ -48,6 +50,15 @@ const sizeOptions = FONT_SIZES.map((size) => ({ value: size, label: `${size} px`
       <Switch
         :model-value="props.wordWrap"
         @update:model-value="emit('update:wordWrap', $event)"
+      />
+    </SettingsRow>
+    <SettingsRow
+      label="Ask before closing terminals with other tabs"
+      description="Closing several tabs at once that include a terminal ends its shell, so ask first."
+    >
+      <Switch
+        :model-value="props.confirmCloseTerminals"
+        @update:model-value="emit('update:confirmCloseTerminals', $event)"
       />
     </SettingsRow>
   </div>

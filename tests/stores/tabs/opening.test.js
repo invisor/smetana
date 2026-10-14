@@ -80,6 +80,23 @@ describe('a double click', () => {
   })
 })
 
+describe('keepOpen', () => {
+  it('drops the temporary flag and leaves the active tab alone', async () => {
+    await opened('a.txt')
+    await opened('b.txt', { permanent: true })
+    tabs.keepOpen('a.txt')
+
+    expect(state().previewTab).toBe(null)
+    expect(state().activeTab).toBe('b.txt')
+  })
+
+  it('does nothing to a tab that is not the preview', async () => {
+    await opened('a.txt')
+    tabs.keepOpen('other.txt')
+    expect(state().previewTab).toBe('a.txt')
+  })
+})
+
 describe('reopening what is already open', () => {
   it('only switches the active tab and does not re-read the file', async () => {
     await opened('a.txt', { permanent: true })
