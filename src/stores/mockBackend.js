@@ -1282,7 +1282,8 @@ export function installMockBackend() {
             min_priority: 2,
             max_parallel_tasks: 2,
             live_check: true,
-            file_findings: true
+            file_findings: true,
+            instructions: null
           },
           state: { kind: 'working', iteration: 0 },
           transport: 'pty',

@@ -2443,6 +2443,8 @@ const startTheRun = async (chosen) => {
         : { batchPauseMin: pauseMin, batchPauseMax: pauseMax }),
       liveCheck: chosen.live_check,
       fileFindings: chosen.file_findings
+      /* `chosen.instructions` is deliberately not here: the notes are for this
+         run alone and the dialog opens with the field empty every time. */
     }
     /* A run is agent sessions, and watching them is the point — the same move
        filing a task and "Ask agent to edit" already make. The side panel only,

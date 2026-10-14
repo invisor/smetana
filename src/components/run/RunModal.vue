@@ -17,6 +17,8 @@ import { needsCutting, pickBranch } from './branchChoice.js'
 import { readyPromoteNote } from './readyPromote.js'
 import { runTitle } from './runScopes.js'
 import Input from '../core/Input.vue'
+import Textarea from '../core/Textarea.vue'
+import { NOTES_MAX, notesPayload } from './runNotes.js'
 import { pauseFrom, pausePayload, validatePause } from './batchPause.js'
 
 const props = defineProps({
@@ -154,6 +156,8 @@ const pauseMax = ref(30)
 const createBranch = ref(false)
 const liveCheck = ref(true)
 const fileFindings = ref(true)
+/* Never remembered: it is empty at every opening, see the watcher below. */
+const notes = ref('')
 
 /* Whether the branch in the field is somebody's answer or this dialog's guess.
    Set in exactly one place — the handler under the control — which is why the
@@ -229,6 +233,7 @@ watch(
     parallel.value = Math.min(Math.max(props.defaultParallel || 1, 1), PARALLEL_MAX)
     liveCheck.value = props.liveCheckAvailable && !props.liveCheckBlocked && (kept.liveCheck ?? true)
     fileFindings.value = kept.fileFindings ?? true
+    notes.value = ''
     const pause = pauseFrom(kept)
     pauseMin.value = pause.min
     pauseMax.value = pause.max
@@ -333,7 +338,10 @@ const confirm = () => {
     batch_pause_min: pause?.min ?? null,
     batch_pause_max: pause?.max ?? null,
     live_check: liveCheck.value,
-    file_findings: fileFindings.value
+    file_findings: fileFindings.value,
+    /* Null when empty, the same shape as the floor; never written to the
+       project's remembered settings. */
+    instructions: notesPayload(notes.value)
   })
 }
 
@@ -620,6 +628,18 @@ const errorStyle = {
         <span :style="noteStyle">
           New tasks go to deferred and wait for you — a run never picks up its own findings.
         </span>
+      </div>
+
+      <div :style="row">
+        <span :style="labelStyle">Notes for the agent</span>
+        <Textarea
+          v-model="notes"
+          :rows="3"
+          :maxlength="NOTES_MAX"
+          :disabled="locked"
+          placeholder="For example: do not commit the result."
+        />
+        <span :style="noteStyle">Read once, at the start of this run. Not remembered.</span>
       </div>
 
       <!-- Not while the file is unreadable: the count is true, but "12 tasks are

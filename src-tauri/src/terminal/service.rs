@@ -1838,6 +1838,7 @@ mod tests {
                 batch_pause_max: None,
                 live_check: false,
                 file_findings: false,
+                instructions: None,
             },
             reports: PathBuf::from("/p/.smetana/runs/1"),
             batch: 1,
