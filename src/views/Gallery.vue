@@ -18,6 +18,7 @@ import {
    it: one duration, one rule about which press owns the state, in one file. */
 import { useCopyFeedback } from '../components/core/copyFeedback.js'
 import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
+import { CLOSE_TERMINALS_TITLE, closeTerminalsText } from '../components/shell/tabMenu.js'
 import { orderTabs } from '../components/shell/tabOrder.js'
 import { maxSeconds } from '../components/run/reportsPage.js'
 import {
@@ -2322,6 +2323,8 @@ const galleryEditorFont = ref(12)
 /* The Editor tab's switch, local like the refs above and for the same reason.
    Bound rather than left to its default so it actually moves when pressed. */
 const galleryEditorWordWrap = ref(false)
+const galleryConfirmCloseTerminals = ref(true)
+const galleryDontAsk = ref(false)
 /* The Git tab's two switches, local like the refs above and for the same
    reason: in the app these values come from the main window and go back to it
    as events, and neither end exists here. Bound rather than left to their
@@ -4299,7 +4302,10 @@ const menuTargetStyle = {
 
     <section :style="sectionStyle">
       <div :style="headStyle">Shell</div>
-      <TabBar :tabs="tabs" active-id="kanban" @reorder="galleryTabOrder = $event">
+      <!-- `can-attach` so the context menu is checkable here: right-click a
+           file tab, a diff, the terminal and one of the pinned two to see the
+           four sets of rows. The menu's own picks go nowhere in the gallery. -->
+      <TabBar :tabs="tabs" active-id="kanban" can-attach @reorder="galleryTabOrder = $event">
         <!-- The row's second slot, inside the scrolling strip and right after
              the pinned tabs, which is where the app puts it: the control is
              about those tabs and has to stay beside them however many files are
@@ -7046,8 +7052,10 @@ const menuTargetStyle = {
           <EditorSettings
             :font-size="galleryEditorFont"
             :word-wrap="galleryEditorWordWrap"
+            :confirm-close-terminals="galleryConfirmCloseTerminals"
             @update:font-size="galleryEditorFont = $event"
             @update:word-wrap="galleryEditorWordWrap = $event"
+            @update:confirm-close-terminals="galleryConfirmCloseTerminals = $event"
           />
         </div>
         <!-- Wider than the 380 px the other settings cells take, and it has to
@@ -7374,6 +7382,16 @@ const menuTargetStyle = {
         <EmptyState v-bind="folderRefusedNotice('unavailable')">
           <template #detail>no permission to read /home/you/projects/smetana/.beads</template>
         </EmptyState>
+      </div>
+      <!-- The question a batch close asks when the set holds a shell. -->
+      <div :style="{ position: 'relative', height: '220px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <Modal :title="CLOSE_TERMINALS_TITLE" :description="closeTerminalsText(2)" :closable="false">
+          <Checkbox v-model="galleryDontAsk" label="Don't ask again" />
+          <template #footer>
+            <Button variant="secondary" size="sm">Cancel</Button>
+            <Button variant="primary" size="sm">Close</Button>
+          </template>
+        </Modal>
       </div>
       <div :style="{ position: 'relative', height: '220px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <Modal title="Discard worktree?" description="wt/bd-a1b2 has 3 uncommitted files and 1 agent still running.">

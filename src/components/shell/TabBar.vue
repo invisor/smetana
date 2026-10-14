@@ -1,7 +1,9 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, useSlots, watch } from 'vue'
 import IconButton from '../core/IconButton.vue'
+import PointerMenu from '../overlays/PointerMenu.vue'
 import Tab from './Tab.vue'
+import { TAB_MENU_W, tabMenuItems } from './tabMenu.js'
 import { moveTab, orderTabs } from './tabOrder.js'
 
 const props = defineProps({
@@ -11,7 +13,12 @@ const props = defineProps({
   /* Whether a tab may be dragged to another place in the row. The board's own
      prop by the same name and for the same reason: the row is not the owner of
      the order, and a caller that keeps none says so here. */
-  reorderable: { type: Boolean, default: true }
+  reorderable: { type: Boolean, default: true },
+  /* The two the tree's menu takes, for the same reasons: whether the agent the
+     panel is highlighting can be typed into, and whether there is a live one at
+     all, which decides which reason Attach to agent gives when it is off. */
+  canAttach: { type: Boolean, default: false },
+  hasLiveAgent: { type: Boolean, default: false }
 })
 
 /* `reorder` carries the full list of ids in their new order, not a from/to
@@ -20,7 +27,11 @@ const props = defineProps({
    order and has no business describing a change to a list it does not keep.
    Whoever stores it applies the answer wholesale and hands it back through
    `tabs`. */
-const emit = defineEmits(['select', 'close', 'promote', 'reorder'])
+/* `action` carries which verb and which tab the menu was opened on — the shape
+   `FileTree.vue` hands `onFileAction`, with the tab's id where that has a path.
+   Which tabs a batch verb reaches is the owner's to work out from the row it
+   drew, so nothing about a set travels. */
+const emit = defineEmits(['select', 'close', 'promote', 'reorder', 'action'])
 
 const slots = useSlots()
 
@@ -386,6 +397,34 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
 })
 
+/* One menu for the row rather than one per tab, the way the tree has one. The
+   tab it is about is held by id so that tab can draw the hover surface while the
+   panel is up; `PointerMenu` clears it on close however the menu leaves. */
+const menu = ref(null)
+const menuFor = ref(null)
+const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent
+
+const menuKind = computed(() => view.value.find((tab) => tab.id === menuFor.value)?.kind ?? 'file')
+const items = computed(() =>
+  tabMenuItems({
+    kind: menuKind.value,
+    hasTerminals: view.value.some((tab) => tab.kind === 'terminal'),
+    canAttach: props.canAttach,
+    hasLiveAgent: props.hasLiveAgent,
+    userAgent
+  })
+)
+
+const openMenu = (tab, event) => {
+  if (draft.value) return
+  menuFor.value = tab.id
+  menu.value?.open(event, tab.id)
+}
+const pickItem = (item, id) => emit('action', { kind: item.kind, id })
+const onMenuClose = () => {
+  menuFor.value = null
+}
+
 const barStyle = {
   display: 'flex',
   alignItems: 'stretch',
@@ -460,6 +499,8 @@ const overflowStyle = {
         :key="t.id"
         v-bind="t"
         :active="t.id === activeId"
+        :menu-open="t.id === menuFor"
+        @menu="openMenu(t, $event)"
         @select="$emit('select', t.id)"
         @close="$emit('close', t.id)"
         @promote="$emit('promote', t.id)"
@@ -472,6 +513,8 @@ const overflowStyle = {
         :key="t.id"
         v-bind="t"
         :active="t.id === activeId"
+        :menu-open="t.id === menuFor"
+        @menu="openMenu(t, $event)"
         :movable="movable"
         :moving="t.id === held"
         @select="$emit('select', t.id)"
@@ -502,5 +545,6 @@ const overflowStyle = {
     >
       <slot name="actions" />
     </div>
+    <PointerMenu ref="menu" :items="items" :width="TAB_MENU_W" @select="pickItem" @close="onMenuClose" />
   </div>
 </template>

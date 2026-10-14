@@ -70,6 +70,7 @@ import { useCopyFeedback } from '../components/core/copyFeedback.js'
 import { promoteTitle, taskCount } from '../components/kanban/promoteTitle.js'
 import { canRestore, draftIsEmpty } from '../components/kanban/taskDraft.js'
 import Button from '../components/core/Button.vue'
+import Checkbox from '../components/core/Checkbox.vue'
 import RunBar from '../components/run/RunBar.vue'
 import ReportView from '../components/run/ReportView.vue'
 import ReportList from '../components/run/ReportList.vue'
@@ -302,6 +303,16 @@ import {
 import { initUpdates } from '../stores/updates.js'
 import { liveCheckBlock } from '../components/run/browserTools.js'
 import { folderOf, parentOf, relativePath } from '../components/files/fileMenu.js'
+import {
+  CLOSE_TERMINALS_TITLE,
+  allOf,
+  butTerminals,
+  closeTerminalsText,
+  othersOf,
+  rightOf,
+  savedOf,
+  terminalsIn
+} from '../components/shell/tabMenu.js'
 /* Which agent "Attach to agent" reaches, and whether there is one to pick at
    all — pure, over the merged agent rows this file already builds, so the
    rule can be tested where no `.vue` can be reached. `hasLiveAgent` is
@@ -6630,6 +6641,77 @@ const onCloseTab = async (id) => {
   closeTab(id)
 }
 
+/* The question a batch close asks when the set holds a shell, because closing a
+   terminal's tab ends the shell behind it. In-app and not a window of its own,
+   the shape of `unsaved` above. `dontAsk` is the checkbox, and it is only
+   written to the settings when the answer is Close: a Cancel that remembered
+   something would be a refusal with a side effect. */
+const closingTerminals = ref(null)
+
+function askCloseTerminals(count) {
+  if (!settings.editor.confirmCloseTerminals) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    /* A second question orphans nobody: the first gets its "no". */
+    if (closingTerminals.value) closingTerminals.value.resolve(false)
+    closingTerminals.value = { count, dontAsk: false, resolve }
+  })
+}
+
+const answerCloseTerminals = (ok) => {
+  const pending = closingTerminals.value
+  closingTerminals.value = null
+  if (!pending) return
+  if (ok && pending.dontAsk) settings.editor.confirmCloseTerminals = false
+  pending.resolve(ok)
+}
+
+/* One tab closed the way its own cross closes it, but with nothing asked:
+   whoever calls has already asked, once, for the whole set. */
+async function closeOne(tab) {
+  if (tab.kind === 'diff') return closeDiff(tab.id)
+  if (tab.kind === 'terminal') return closeTerminalTab(tab.id)
+  if (tab.kind === 'reports') return closeReportsTab()
+  closeTab(tab.id)
+}
+
+/* A batch, in the order the questions go: the shells first, then the unsaved
+   files, and a "no" to either closes nothing at all. The set is a list of tab
+   records taken from the drawn row before anything closes. */
+async function closeBatch(set) {
+  if (!set.length) return
+  const shells = terminalsIn(set)
+  if (shells.length && !(await askCloseTerminals(shells.length))) return
+  const dirty = set
+    .filter((tab) => (tab.kind === 'file' || tab.kind === 'preview') && isDirty(tab.id))
+    .map((tab) => tab.id)
+  if (dirty.length && !(await confirmUnsaved(dirty))) return
+  for (const tab of set) await closeOne(tab)
+}
+
+/* What a pick on the tab menu does. The `kind` strings are `tabMenu.js`'s,
+   matched by hand. The path verbs are the tree's own handlers with the tab's id
+   standing in for the path — a file tab's id is its path relative to the root,
+   which is what the tree hands them. Every set is worked out from `tabList`, the
+   drawn row, and not from `openTabs`. */
+const onTabAction = async ({ kind, id }) => {
+  const row = tabList.value
+  if (kind === 'close') return onCloseTab(id)
+  if (kind === 'close-others') return closeBatch(othersOf(row, id))
+  if (kind === 'close-right') return closeBatch(rightOf(row, id))
+  if (kind === 'close-saved') return closeBatch(savedOf(row, isDirty))
+  if (kind === 'close-but-terminals') return closeBatch(butTerminals(row))
+  if (kind === 'close-all') return closeBatch(allOf(row))
+  if (kind === 'keep-open') {
+    /* Not `promote`, which also activates the tab: a secondary click asks a
+       question about a tab and must not walk the person to it. */
+    if (project.previewTab === id) project.previewTab = null
+    return
+  }
+  if (kind === 'copy-path' || kind === 'copy-relative-path' || kind === 'reveal' || kind === 'attach') {
+    return onFileAction({ kind, path: id, target: 'file' })
+  }
+}
+
 /* editor/states.js keys state by path, and a tab's path is relative (tabs.js
    keeps it that way so a project move does not turn the list into rubbish). The
    same README.md, package.json or CLAUDE.md can be open in two different
@@ -7525,8 +7607,11 @@ const toastStackStyle = {
           :active-id="project.activeTab"
           @select="project.activeTab = $event"
           @close="onCloseTab"
+          :can-attach="attachTarget !== null"
+          :has-live-agent="hasAnyLiveAgent"
           @promote="promote"
           @reorder="project.tabOrder = $event"
+          @action="onTabAction"
         >
           <!-- Beside the pinned block rather than at the far right of the row:
                it is about those first two tabs, and past the strut it would
@@ -7584,6 +7669,19 @@ const toastStackStyle = {
           @abort="abortConflict"
           @close="dismissConflict"
         />
+        <Modal
+          v-if="closingTerminals"
+          :open="true"
+          :title="CLOSE_TERMINALS_TITLE"
+          :description="closeTerminalsText(closingTerminals.count)"
+          :closable="false"
+        >
+          <Checkbox v-model="closingTerminals.dontAsk" label="Don't ask again" />
+          <template #footer>
+            <Button variant="secondary" size="sm" @click="answerCloseTerminals(false)">Cancel</Button>
+            <Button variant="primary" size="sm" @click="answerCloseTerminals(true)">Close</Button>
+          </template>
+        </Modal>
         <Modal
           v-if="unsaved"
           :open="true"
