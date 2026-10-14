@@ -831,6 +831,17 @@ describe('the settings window', () => {
     expect(settings.settings.editor.wordWrap).toBe(false)
   })
 
+  it('turning the question off from the app announces it to the settings window', async () => {
+    const heard = []
+    await listen(settings.SETTINGS_STATE, (event) => heard.push(event.payload))
+
+    settings.stopAskingBeforeClosingTerminals()
+
+    expect(settings.settings.editor.confirmCloseTerminals).toBe(false)
+    await vi.waitFor(() => expect(heard).toHaveLength(1))
+    expect(heard[0].editorConfirmCloseTerminals).toBe(false)
+  })
+
   it('takes the confirm-close-terminals switch, and a bad value leaves the previous one', async () => {
     await emit(settings.SETTINGS_APPLY, { editorConfirmCloseTerminals: false })
     await nextTick()

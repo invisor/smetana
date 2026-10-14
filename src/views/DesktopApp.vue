@@ -203,7 +203,13 @@ import {
   measureStorage,
   notificationsState
 } from '../stores/notifications.js'
-import { applyPatch, effectiveAgents, initSettingsBridge, settings } from '../stores/settings.js'
+import {
+  applyPatch,
+  effectiveAgents,
+  initSettingsBridge,
+  settings,
+  stopAskingBeforeClosingTerminals
+} from '../stores/settings.js'
 import {
   announceBoardColumns,
   announceDialogProps,
@@ -394,6 +400,7 @@ import {
   isReportsTab,
   isTerminalTab,
   keepMine,
+  keepOpen,
   markGone,
   markStale,
   onUnsaved,
@@ -6625,20 +6632,24 @@ const answerUnsaved = async (answer) => {
   }
 }
 
-const onCloseTab = async (id) => {
-  /* A diff holds nothing of anybody's, so there is nothing to ask about and
-     nothing in `openTabs` to take out. */
+/* How each kind of tab closes, in one place, and with nothing asked: the cross
+   asks about unsaved text before calling it and a batch asks once for the whole
+   set. A diff holds nothing of anybody's and has nothing in `openTabs` to take
+   out. A terminal has nothing unsaved either, but closing it kills the shell
+   behind it — the tab is only a view of a session, and one that merely hid a
+   live shell would leave a process nobody can see; the store owns both halves of
+   that. The Reports tab is a read of a folder and closes as unconditionally as a
+   diff. */
+async function closeOne(id) {
   if (isDiffTab(id)) return closeDiff(id)
-  /* A terminal is the other way round: there is nothing unsaved in it either,
-     but closing it kills the shell behind it — the tab is only a view of a
-     session, and one that merely hid a live shell would leave a process nobody
-     can see. The store owns both halves of that. */
   if (isTerminalTab(id)) return closeTerminalTab(id)
-  /* The Reports tab holds nothing unsaved either — it is a read of a folder —
-     so closing it is the same unconditional act as closing a diff. */
   if (isReportsTab(id)) return closeReportsTab()
-  if (isDirty(id) && !(await confirmUnsaved([id]))) return
   closeTab(id)
+}
+
+const onCloseTab = async (id) => {
+  if (isDirty(id) && !(await confirmUnsaved([id]))) return
+  return closeOne(id)
 }
 
 /* The question a batch close asks when the set holds a shell, because closing a
@@ -6661,17 +6672,8 @@ const answerCloseTerminals = (ok) => {
   const pending = closingTerminals.value
   closingTerminals.value = null
   if (!pending) return
-  if (ok && pending.dontAsk) settings.editor.confirmCloseTerminals = false
+  if (ok && pending.dontAsk) stopAskingBeforeClosingTerminals()
   pending.resolve(ok)
-}
-
-/* One tab closed the way its own cross closes it, but with nothing asked:
-   whoever calls has already asked, once, for the whole set. */
-async function closeOne(tab) {
-  if (tab.kind === 'diff') return closeDiff(tab.id)
-  if (tab.kind === 'terminal') return closeTerminalTab(tab.id)
-  if (tab.kind === 'reports') return closeReportsTab()
-  closeTab(tab.id)
 }
 
 /* A batch, in the order the questions go: the shells first, then the unsaved
@@ -6685,7 +6687,7 @@ async function closeBatch(set) {
     .filter((tab) => (tab.kind === 'file' || tab.kind === 'preview') && isDirty(tab.id))
     .map((tab) => tab.id)
   if (dirty.length && !(await confirmUnsaved(dirty))) return
-  for (const tab of set) await closeOne(tab)
+  for (const tab of set) await closeOne(tab.id)
 }
 
 /* What a pick on the tab menu does. The `kind` strings are `tabMenu.js`'s,
@@ -6702,9 +6704,7 @@ const onTabAction = async ({ kind, id }) => {
   if (kind === 'close-but-terminals') return closeBatch(butTerminals(row))
   if (kind === 'close-all') return closeBatch(allOf(row))
   if (kind === 'keep-open') {
-    /* Not `promote`, which also activates the tab: a secondary click asks a
-       question about a tab and must not walk the person to it. */
-    if (project.previewTab === id) project.previewTab = null
+    keepOpen(id)
     return
   }
   if (kind === 'copy-path' || kind === 'copy-relative-path' || kind === 'reveal' || kind === 'attach') {

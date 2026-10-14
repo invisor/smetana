@@ -980,6 +980,15 @@ function announce() {
   })
 }
 
+/* Turns the question before a batch close off for good, from the app window's
+   own dialog. A function of the store rather than an assignment in the view:
+   the settings window shows this field as a switch, and a write that did not
+   announce would leave an open one drawing it on. */
+export function stopAskingBeforeClosingTerminals() {
+  settings.editor.confirmCloseTerminals = false
+  announce()
+}
+
 let bridged = false
 
 /* The main window's half. Called once, from the app view: from here on an edit

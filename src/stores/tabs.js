@@ -511,9 +511,16 @@ export function openFile(path, { permanent = false } = {}) {
 
 /* A double click on a tab. */
 export function promote(path) {
+  keepOpen(path)
+  project().activeTab = path
+}
+
+/* A preview tab becomes a permanent one, and nothing else happens: the tab menu
+   asks this about a tab it was opened on, and a secondary click is a question
+   rather than a visit, so the active tab stays where it was. */
+export function keepOpen(path) {
   const state = project()
   if (state.previewTab === path) state.previewTab = null
-  state.activeTab = path
 }
 
 export function closeTab(path) {
