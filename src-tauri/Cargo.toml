@@ -286,6 +286,27 @@ axum = { version = "0.8", default-features = false, features = [
 # things is smaller than the reason to pull it in.
 futures-core = "0.3"
 
+# The companion (`src-tauri/src/remote/`, `crates/remote-protocol/`): the wire types the
+# desktop shares with the mobile app and the servers, and the iroh endpoint that
+# carries them. Path dependency on purpose, with no workspace at the root: the
+# crate is built and tested on its own (`cd crates/remote-protocol && cargo
+# test`), and a root workspace would change where `cargo` finds this manifest
+# for every command in the repository.
+#
+# The price, counted against `Cargo.lock` the way every other line here is:
+# **142 `[[package]]` entries**, 610 to 752. iroh brings its own QUIC stack
+# (`noq`), a relay client and a second `rustls` consumer (ring, as the updater
+# already uses), and with them a long tail of crates.
+# `default-features` stay on: `tls-ring` is what `presets::Minimal` needs, and
+# turning off `metrics` or `portmapper` was not measured to be worth the
+# divergence from what the mobile build compiles.
+remote-protocol = { path = "../crates/remote-protocol" }
+iroh = "1.3"
+# The pairing secret. 0.10 because that is the major iroh itself is on, so this
+# adds no second copy.
+rand = "0.10"
+data-encoding = "2"
+
 # Process control the standard library does not expose, and it is described
 # here by subject rather than by call site on purpose: a comment that counts
 # the users or names the files reads as exhaustive, so the next person to reach

@@ -4,6 +4,7 @@ mod autostart;
 mod files;
 mod git;
 mod project;
+mod remote;
 mod rlimit;
 mod runs;
 mod session;
@@ -260,6 +261,10 @@ pub fn run() {
       // being written along the way too, so that a run cut short without a
       // clean exit does not open at the size from the run before last.
       window::persist_geometry(app.handle());
+      // The phone companion: the device key, the device list, and the endpoint
+      // if a phone is already paired. Last, because it needs nothing from the
+      // workers above and nothing waits for it.
+      remote::start(app.handle().clone());
       // Neither of the app's other windows owns anything — see
       // `close_children_with_main`.
       window::close_children_with_main(app.handle());
@@ -387,6 +392,11 @@ pub fn run() {
       session::commands::session_answer,
       session::commands::session_stop,
       session::commands::session_close,
+      remote::commands::remote_pair_begin,
+      remote::commands::remote_pair_cancel,
+      remote::commands::remote_pair_decide,
+      remote::commands::remote_devices,
+      remote::commands::remote_device_revoke,
     ])
     // build + run instead of .run(context): we need the exit event. This is
     // exactly what Builder::run does — build, then run — plus our callback.
@@ -403,6 +413,9 @@ pub fn run() {
         // closed. Beside the terminal's rather than inside it: the two workers
         // share no state, and each kills what it started.
         session::service::shutdown(app_handle);
+        // And the phone endpoint, so connected phones are told rather than left
+        // to time out.
+        remote::shutdown(app_handle);
       }
     });
 }

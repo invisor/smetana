@@ -11,5 +11,6 @@
 @import "./tokens/shape.css";
 @import "./tokens/motion.css";
 @import "./tokens/prose.css";
+@import "./tokens/qr.css";
 @import "./tokens/base.css";
 @import "./sm-prose.css";

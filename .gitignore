@@ -24,6 +24,8 @@ dist/
 
 # Tauri
 src-tauri/target/
+# The shared crates are built and tested on their own, so each has a target.
+crates/*/target/
 src-tauri/gen/
 src-tauri/binaries/*
 !src-tauri/binaries/LICENSE-bd
