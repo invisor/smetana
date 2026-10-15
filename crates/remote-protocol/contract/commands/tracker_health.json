@@ -1,0 +1,12 @@
+{
+  "args": [{}],
+  "reply": [
+    {"message":"bd said no","state":"ok"},
+    {"message":"bd said no","state":"no-project"},
+    {"message":"bd said no","state":"not-a-beads-repo"},
+    {"message":"bd said no","state":"bd-version-mismatch"},
+    {"message":"bd said no","state":"folder-refused"},
+    {"message":"bd said no","state":"error"},
+    {"state":"ok"}
+  ]
+}

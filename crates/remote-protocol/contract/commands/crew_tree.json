@@ -1,0 +1,7 @@
+{
+  "args": [{"root":1}],
+  "reply": [
+    [{"canMessage":true,"id":1,"label":"worker","parent":null,"root":1,"state":"starting"},{"canMessage":false,"id":2,"label":"worker","parent":1,"root":1,"state":"running"},{"canMessage":true,"id":3,"label":"worker","parent":1,"root":1,"state":"waiting"},{"canMessage":false,"id":4,"label":"worker","parent":1,"root":1,"state":"done"},{"canMessage":true,"id":5,"label":"worker","parent":1,"root":1,"state":"failed"}],
+    null
+  ]
+}

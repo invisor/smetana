@@ -7,9 +7,12 @@
 use iroh::endpoint::{RecvStream, SendStream};
 use serde::{de::DeserializeOwned, Serialize};
 
-/// The largest body either end will accept, in bytes. Generous for everything in
-/// this crate, small enough that a lying length costs nothing.
-pub const MAX_FRAME: usize = 1 << 20;
+/// The largest body either end will accept, in bytes. A reply to `tracker_snapshot`
+/// is a whole board and can pass a megabyte, so this is 16 MiB; the readers that
+/// face a stranger (the first frame of a connection, a phone's requests) pass a
+/// much smaller `limit` of their own, and a lying length costs nothing either way
+/// because it is checked before the body is allocated.
+pub const MAX_FRAME: usize = 16 << 20;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum FrameError {

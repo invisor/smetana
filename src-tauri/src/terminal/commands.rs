@@ -39,7 +39,7 @@ pub async fn terminal_list(
     handle: State<'_, TerminalHandle>,
     project: String,
 ) -> Result<Vec<Session>, TerminalError> {
-    ask(&handle, |tx| Request::List(project, tx)).await
+    plain::list(&handle, project).await
 }
 
 /// Every session the worker holds, of every project, as the project rail draws
@@ -113,7 +113,7 @@ pub async fn terminal_attach(
     handle: State<'_, TerminalHandle>,
     id: SessionId,
 ) -> Result<Attached, TerminalError> {
-    ask(&handle, |tx| Request::Attach(id, tx)).await?
+    plain::attach(&handle, id).await
 }
 
 /// Takes the id being left, not just "stop sending": switching tabs is a
@@ -200,4 +200,20 @@ pub async fn terminal_restorable(
 pub async fn terminal_forget(project: String, session_id: String) -> Result<(), TerminalError> {
     super::restore::drop_record(std::path::Path::new(&project), &session_id);
     Ok(())
+}
+
+/// The bodies of the two terminal commands the phone may call, over the worker's
+/// handle rather than Tauri's `State`; see `session::commands::plain`. There is
+/// no write or resize here and there will not be: a terminal is read-only on
+/// the phone.
+pub mod plain {
+    use super::*;
+
+    pub async fn list(handle: &TerminalHandle, project: String) -> Result<Vec<Session>, TerminalError> {
+        ask(handle, |tx| Request::List(project, tx)).await
+    }
+
+    pub async fn attach(handle: &TerminalHandle, id: SessionId) -> Result<Attached, TerminalError> {
+        ask(handle, |tx| Request::Attach(id, tx)).await?
+    }
 }

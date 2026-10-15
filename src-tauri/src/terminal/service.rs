@@ -742,8 +742,13 @@ fn forget_session(live: &Live) {
     super::restore::drop_record(Path::new(&live.session.project), id);
 }
 
+/// The payload of `terminal:removed`.
+pub(crate) fn removed_payload(id: SessionId) -> serde_json::Value {
+    serde_json::json!({ "id": id })
+}
+
 fn emit_state(app: &AppHandle, session: &Session) {
-    let _ = app.emit("terminal:state", session);
+    crate::remote::emit(app, "terminal:state", session);
 }
 
 /// Output chunks: into the ring for the human, into the screen for the app,
@@ -1555,7 +1560,7 @@ fn handle(
                 // switch. The front end's own remove has already dropped the
                 // row by the time this arrives, and filtering an absent id is
                 // a no-op, which is what makes one event serve both callers.
-                let _ = app.emit("terminal:removed", serde_json::json!({ "id": id }));
+                crate::remote::emit(app, "terminal:removed", &removed_payload(id));
                 // The same sweep a self-exit gets, for the row a person took
                 // away instead: `live.pty.kill()` above reaches the session's
                 // own process group and nothing outside it. `sessions` no

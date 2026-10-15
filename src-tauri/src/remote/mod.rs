@@ -1,9 +1,9 @@
 //! The desktop's half of the mobile companion: an iroh endpoint with a
 //! persistent key, pairing by QR code, and the list of phones allowed to connect.
 //!
-//! This stage ends at the handshake. A paired phone connects, says `Hello`, is
-//! answered with `HelloReply` and held open; the command bridge that will use
-//! the connection from there is the next stage's. The design is
+//! A paired phone connects, says `Hello`, is answered with `HelloReply` and then
+//! speaks the command bridge (`bridge.rs`) on the same stream: it calls the
+//! allowlisted commands and listens to the allowlisted events. The design is
 //! `docs/superpowers/specs/2026-10-15-mobile-companion-design.md`.
 //!
 //! The endpoint is not started with the app. Binding one contacts a relay, and
@@ -11,13 +11,19 @@
 //! used: it starts when a phone is first paired, and at launch only if there is
 //! already a phone to serve.
 
+pub mod bridge;
 pub mod commands;
 pub mod devices;
+pub mod dispatch;
 pub mod endpoint;
 pub mod pairing;
 
 #[cfg(test)]
+mod contract;
+#[cfg(test)]
 mod tests;
+
+pub use bridge::emit;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -77,6 +83,7 @@ pub struct Remote {
     pub(crate) pairing: Pairing,
     pub(crate) connections: endpoint::Connections,
     pub(crate) pairing_slots: Arc<tokio::sync::Semaphore>,
+    pub(crate) hub: bridge::Hub,
     pub(crate) app_version: String,
     events: EventSink,
     relay: Box<dyn Fn() -> String + Send + Sync>,
@@ -98,6 +105,7 @@ impl Remote {
             pairing,
             connections: endpoint::Connections::default(),
             pairing_slots: Arc::new(tokio::sync::Semaphore::new(endpoint::MAX_PAIRING_CONNECTIONS)),
+            hub: bridge::Hub::default(),
             app_version,
             events,
             relay,
@@ -287,6 +295,10 @@ pub fn start(app: AppHandle) {
         events,
         relay,
     );
+    match dispatch::Services::from_app(&app) {
+        Some(services) => remote.hub.set_dispatch(Arc::new(services)),
+        None => log::warn!("remote: the workers are not all managed, phones can call nothing"),
+    }
     let serve_now = !remote.devices.is_empty();
     app.manage(remote.clone());
     if serve_now {

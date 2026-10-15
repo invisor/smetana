@@ -1,0 +1,7 @@
+{
+  "args": [{"project":"/work/smetana"}],
+  "reply": [
+    [{"batches":2,"closed":3,"file":"run.html","finished":"2026-10-15 11:00","parked":1,"path":"/work/smetana/.smetana/reports/run.html","scope":"the queue","seconds":3600,"stamp":"2026-10-15T11:00:00Z","summary":"Three tasks","title":"Run report","total":"1h"},{"batches":null,"closed":null,"file":"old.html","finished":null,"parked":null,"path":"/work/smetana/.smetana/reports/old.html","scope":null,"seconds":null,"stamp":"2026-10-14T11:00:00Z","summary":null,"title":null,"total":null}],
+    []
+  ]
+}

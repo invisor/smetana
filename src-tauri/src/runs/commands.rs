@@ -313,7 +313,13 @@ pub async fn run_start(
     project: String,
     settings: RunSettings,
 ) -> Result<Run, RunError> {
-    ask(&handle, |tx| Request::Start(project, Box::new(settings), tx)).await?
+    start(&handle, project, settings).await
+}
+
+/// The body of `run_start`, for the phone bridge: the allowlisted commands are
+/// plain functions that the Tauri wrapper and `remote::bridge` both call.
+pub async fn start(handle: &RunHandle, project: String, settings: RunSettings) -> Result<Run, RunError> {
+    ask(handle, |tx| Request::Start(project, Box::new(settings), tx)).await?
 }
 
 /// Cooperative: this answers as soon as the worker has noted the request, and
@@ -325,7 +331,12 @@ pub async fn run_start(
 /// pressed. `None` back is a run that ended before the stop arrived.
 #[tauri::command]
 pub async fn run_stop(handle: State<'_, RunHandle>, token: u64) -> Result<Option<Run>, RunError> {
-    ask(&handle, |tx| Request::Stop(token, tx)).await
+    stop(&handle, token).await
+}
+
+/// The body of `run_stop`; see `start`.
+pub async fn stop(handle: &RunHandle, token: u64) -> Result<Option<Run>, RunError> {
+    ask(handle, |tx| Request::Stop(token, tx)).await
 }
 
 /// Let every run alive right now past its own pause threshold, for the rest of
@@ -356,7 +367,12 @@ pub async fn run_release(handle: State<'_, RunHandle>) -> Result<(), RunError> {
 /// way it kept the single one.
 #[tauri::command]
 pub async fn run_state(handle: State<'_, RunHandle>, project: String) -> Result<Vec<Run>, RunError> {
-    ask(&handle, |tx| Request::State(project, tx)).await
+    state(&handle, project).await
+}
+
+/// The body of `run_state`; see `start`.
+pub async fn state(handle: &RunHandle, project: String) -> Result<Vec<Run>, RunError> {
+    ask(handle, |tx| Request::State(project, tx)).await
 }
 
 /// The Reports tab's list — every row `.smetana/reports/` holds for this
