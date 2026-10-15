@@ -17,6 +17,7 @@ pub mod devices;
 pub mod dispatch;
 pub mod endpoint;
 pub mod pairing;
+pub mod push;
 
 #[cfg(test)]
 mod contract;

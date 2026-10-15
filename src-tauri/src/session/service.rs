@@ -2897,7 +2897,13 @@ fn refresh_state(app: &AppHandle, id: SessionId, live: &mut Live) {
     if state == live.state {
         return;
     }
+    let before = live.state;
     live.state = state;
+    // On the change of state and not on the event, so a second question queued behind the first, or
+    // any event while the wait goes on, does not reach the person's phone again.
+    if crate::remote::push::waiting_began(before, state) {
+        crate::remote::push::notify_needs_you(app, id, &live.project, &live.agent, live.title.as_deref());
+    }
     // Claude Code's own title, taken once a turn actually settles — `Ready`
     // or `NeedsYou` — and never chased again: every `ai-title` record of one
     // transcript carries the same text (measured in `sessions/mod.rs`), so a
