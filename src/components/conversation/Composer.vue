@@ -83,7 +83,10 @@ const props = defineProps({
   openAttachments: { type: Array, default: () => [] },
   /* A turn is in flight: the one button is Stop. */
   busy: { type: Boolean, default: false },
-  canStop: { type: Boolean, default: true }
+  canStop: { type: Boolean, default: true },
+  /* Whether the paperclip is drawn. Off for a surface that has no files to offer: on the
+     phone an attachment would be a path on the desktop, which the bridge refuses. */
+  attachable: { type: Boolean, default: true }
 })
 
 const emit = defineEmits([
@@ -324,6 +327,7 @@ const fieldStyle = computed(() => ({
       <!-- Pinned to the row's own bottom edge with Send/Stop, never disabled
            by `busy` — see the header above. -->
       <IconButton
+        v-if="attachable"
         icon="paperclip"
         label="Attach files"
         size="sm"

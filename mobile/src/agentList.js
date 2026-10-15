@@ -1,0 +1,52 @@
+/* The rows of the Agents screen: the desktop's own rule for what an agent row is, over the
+   sessions the phone can see.
+
+   The rows are `mergeAgentRows` of the terminal store's rows (PTY sessions) and the driven
+   ones, built the way `views/DesktopApp.vue` builds them, then ordered with `orderAgents` -
+   newest first, the order the agents panel keeps when nothing has been dragged. A phone never
+   drags and pins nothing. What this adds is the phone's two small questions: how a row opens
+   (a conversation or a read-only terminal) and which row shouts.
+
+   Which sessions the phone can see is a fact about the bridge, not about this rule: there is
+   no command that lists the driven sessions of the desktop. The phone sees the ones it started,
+   the ones a run is driving, and every PTY session of the project (`terminal_list`). */
+import { mergeAgentRows, drivenSessionOf } from '../../src/components/agent/drivenRows.js'
+import { orderAgents } from '../../src/components/agent/agentOrder.js'
+import { attentionLevel } from '../../src/components/status/status.js'
+
+/* A driven record as the agents panel's row builder wants it. `statusOf` and `elapsed` are the
+   store's and the clock's, handed in so that this stays free of both. */
+export function drivenRecords(sessions, project, { statusOf, elapsed }) {
+  return (sessions ?? [])
+    .filter((session) => session.project === project)
+    .map((session) => ({
+      id: session.id,
+      project: session.project,
+      state: statusOf(session.state),
+      elapsed: elapsed(session.startedAt),
+      startedAt: session.startedAt,
+      conversation: session.conversation ?? null,
+      work: session.work,
+      title: session.title ?? null
+    }))
+}
+
+export function agentRowsFor(terminalRows, driven) {
+  const rows = mergeAgentRows(
+    (terminalRows ?? []).filter((row) => !row.starting && !row.restored),
+    driven
+  )
+  return orderAgents(rows, null, [])
+}
+
+/* How a row opens: the entry the navigation pushes. A driven row names its session; a PTY row is
+   read-only, and its id is the terminal worker's. */
+export function entryFor(row) {
+  const driven = drivenSessionOf(row.id)
+  return driven === null
+    ? { screen: 'conversation', id: row.id, driven: false }
+    : { screen: 'conversation', id: driven, driven: true }
+}
+
+/* A row waiting on a person is the one the screen is for. */
+export const loud = (row) => attentionLevel(row.state) === 'loud'

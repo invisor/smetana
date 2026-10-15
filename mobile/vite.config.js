@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { fileURLToPath } from 'node:url'
-import { resolve, sep } from 'node:path'
+import { dirname, resolve, sep } from 'node:path'
 
 const here = (path) => fileURLToPath(new URL(path, import.meta.url))
 const storesDir = here('../src/stores') + sep
@@ -57,8 +57,41 @@ export function packagesFromHere() {
   }
 }
 
+/* Two stores of the desktop are answered by a phone file of the same shape, for the
+   reason that what they do has no meaning here, and one of them would reach the desktop
+   for it.
+
+   - `stores/app.js` opens windows, reads the build and picks files with the system
+     dialog. The conversation panel imports three names from it; the phone's version
+     (./src/phone/app.js) gives it those three and nothing else, so the panel's links open
+     in the system browser, a picture has no window of its own to open in, and the
+     paperclip finds no file to pick (it is not drawn at all, see `attachable`).
+   - `stores/windowDrops.js` follows a file dragged over a desktop window, and asks the
+     desktop which units the position arrives in (`drag_drop_space`, which is not on the
+     allowlist). There is no drag on a phone.
+
+   Matched by the file the import resolves to, so a relative import from any depth is
+   caught and a file elsewhere with the same name is not. */
+const PHONE_STORES = {
+  [here('../src/stores/app.js')]: here('./src/phone/app.js'),
+  [here('../src/stores/windowDrops.js')]: here('./src/phone/windowDrops.js')
+}
+
+export function phoneStores() {
+  return {
+    name: 'smetana-phone-stores',
+    enforce: 'pre',
+    resolveId(source, importer) {
+      if (!importer || !/^[./]/.test(source)) return null
+      const file = importer.split('?')[0]
+      if (!file.startsWith(srcDir)) return null
+      return PHONE_STORES[resolve(dirname(file), source)] ?? null
+    }
+  }
+}
+
 export default defineConfig({
-  plugins: [bridgeTransport(), packagesFromHere(), vue()],
+  plugins: [bridgeTransport(), packagesFromHere(), phoneStores(), vue()],
   clearScreen: false,
   server: {
     host: process.env.TAURI_DEV_HOST || false,

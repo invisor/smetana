@@ -65,7 +65,12 @@ const props = defineProps({
      one tooltip and nothing else — no colour, no surface, no size. The copying
      itself belongs to the view: exactly one file under `src/components/`
      imports a store, and it is not this one. */
-  copyState: { type: String, default: '' }
+  copyState: { type: String, default: '' },
+  /* Whether the card offers its action menu. On unless a surface says otherwise, and the
+     one that does is the phone's board: every verb in the menu is a write the phone's
+     bridge does not carry, so a menu button there would be a control with nothing behind
+     it. */
+  actionable: { type: Boolean, default: true }
 })
 
 /* One event for all four actions rather than four events forwarded three times
@@ -233,6 +238,7 @@ const titleStyle = computed(() => ({
              card and on a blocked one, so what a card cannot do is a greyed
              row inside, never a missing button outside. -->
         <MenuButton
+          v-if="actionable"
           :items="menuItems"
           :label="`Actions for ${id}`"
           :width="MENU_W"
