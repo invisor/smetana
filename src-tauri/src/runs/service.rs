@@ -617,8 +617,20 @@ fn handle_report(app: &AppHandle, active: &mut HashMap<u64, Active>, report: Rep
     // the project this run belongs to is on that entry. Kept out of `absorb`,
     // which stays pure.
     record(active, &report);
+    // What the worker held before the report: whether this one is what ended the run. Read here
+    // rather than inside `absorb`, which stays pure and answers only with what goes on the wire.
+    let was_over = match &report {
+        Report::State { token, .. } => active.get(token).map(|entry| entry.run.is_over()),
+        _ => None,
+    };
     if let Some(run) = absorb(active, report) {
         emit(app, &run);
+        // One push per ending. A person pressing stop with nothing in flight ends the run on the
+        // `Request::Stop` side and is not announced to their own phone; the loop's later report of
+        // that ending finds `was_over` already true.
+        if crate::remote::push::run_ended(was_over, run.is_over()) {
+            crate::remote::push::notify_run_finished(app, &run);
+        }
     }
 }
 
