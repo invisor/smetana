@@ -5,8 +5,7 @@
 //! nothing the phone has said:
 //!
 //! - **A key on the device list** gets the handshake: `Hello` in, `HelloReply`
-//!   out, and the connection is held open for the bridge that is the next
-//!   stage's.
+//!   out, and the same stream then carries the command bridge (`bridge.rs`).
 //! - **A key the list does not know, while a pairing code is outstanding**, gets
 //!   to send exactly one `PairRequest`. This is the only case in which anything
 //!   is read from an unknown key, and it is bounded: a small frame, one request,
@@ -184,7 +183,9 @@ async fn serve_paired(remote: &Arc<Remote>, conn: Connection, key: PublicKey) {
     // The list is checked again once the connection is registered: a revoke that
     // landed between the first check and the registration found nothing to close.
     if remote.devices.contains(&key) {
-        handshake(remote, &conn, &key).await;
+        if let Some((send, recv)) = handshake(remote, &conn, &key).await {
+            super::bridge::serve(remote, &conn, &key, send, recv).await;
+        }
         conn.closed().await;
     } else {
         conn.close(CLOSE_REVOKED.into(), b"revoked");
@@ -192,21 +193,26 @@ async fn serve_paired(remote: &Arc<Remote>, conn: Connection, key: PublicKey) {
     remote.connections.unregister(&key, id);
 }
 
-async fn handshake(remote: &Remote, conn: &Connection, key: &PublicKey) {
-    let Some((mut send, hello)) = first_frame::<Hello>(conn).await else {
+/// The handshake. `Some` is the phone's stream, left open for the bridge.
+async fn handshake(
+    remote: &Remote,
+    conn: &Connection,
+    key: &PublicKey,
+) -> Option<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
+    let Some((mut send, recv, hello)) = first_frame::<Hello>(conn).await else {
         conn.close(CLOSE_PROTOCOL.into(), b"expected a hello");
-        return;
+        return None;
     };
     let reply = HelloReply {
         protocol_major: PROTOCOL_MAJOR,
         protocol_minor: PROTOCOL_MINOR,
         app_version: remote.app_version.clone(),
-        capabilities: Vec::new(),
+        capabilities: remote_protocol::capabilities(),
         min_mobile_version: MIN_MOBILE_VERSION.to_owned(),
         recommended_mobile_version: RECOMMENDED_MOBILE_VERSION.to_owned(),
     };
     if write_frame(&mut send, &reply).await.is_err() {
-        return;
+        return None;
     }
     if hello.protocol_major != PROTOCOL_MAJOR {
         // The reply above is what tells the phone why; closing is what keeps it
@@ -214,26 +220,28 @@ async fn handshake(remote: &Remote, conn: &Connection, key: &PublicKey) {
         let _ = send.finish();
         let _ = tokio::time::timeout(LINGER, conn.closed()).await;
         conn.close(CLOSE_VERSION.into(), b"unsupported protocol major");
-        return;
+        return None;
     }
     remote.devices.touch(key, remote.pairing.now());
-    // The stream stays open: the bridge will use it.
+    Some((send, recv))
 }
 
 /// Opens the phone's first stream and reads the one frame it must begin with.
+/// Both halves of the stream come back: on a paired connection it goes on to
+/// carry the bridge.
 async fn first_frame<T: serde::de::DeserializeOwned>(
     conn: &Connection,
-) -> Option<(iroh::endpoint::SendStream, T)> {
+) -> Option<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream, T)> {
     let read = async {
         let (send, mut recv) = conn.accept_bi().await.ok()?;
         let frame = read_frame::<T>(&mut recv, FIRST_FRAME_LIMIT).await.ok()?;
-        Some((send, frame))
+        Some((send, recv, frame))
     };
     tokio::time::timeout(FIRST_FRAME_TIMEOUT, read).await.ok().flatten()
 }
 
 async fn serve_pairing(remote: &Arc<Remote>, conn: Connection, key: PublicKey) {
-    let Some((mut send, request)) = first_frame::<PairRequest>(&conn).await else {
+    let Some((mut send, _recv, request)) = first_frame::<PairRequest>(&conn).await else {
         conn.close(CLOSE_PROTOCOL.into(), b"expected a pair request");
         return;
     };

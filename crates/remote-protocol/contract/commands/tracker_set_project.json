@@ -1,0 +1,7 @@
+{
+  "args": [{"path":"/work/smetana"},{"path":null}],
+  "reply": [
+    {"columns":[{"category":"active","name":"open"},{"category":"wip","name":"in_progress"},{"category":"done","name":"closed"}],"generation":3,"issues":[{"acceptance_criteria":"Done when","assignee":"smetana-run-1","close_reason":"Done","closed_at":"2026-10-15T11:00:00Z","comment_count":2,"created_at":"2026-10-14T10:00:00Z","created_by":"someone","dependencies":[{"depends_on_id":"smetana-0","issue_id":"smetana-1","type":"parent-child"}],"dependency_count":1,"dependent_count":3,"description":"Why","design":"How","id":"smetana-1","issue_type":"bug","labels":["frontend"],"notes":"Parked because","owner":"owner","parent":"smetana-0","priority":1,"started_at":"2026-10-15T09:00:00Z","status":"open","title":"A task","updated_at":"2026-10-15T10:00:00Z"},{"acceptance_criteria":null,"assignee":null,"close_reason":null,"closed_at":null,"comment_count":null,"created_at":null,"created_by":null,"dependencies":[],"dependency_count":null,"dependent_count":null,"description":null,"design":null,"id":"smetana-1","issue_type":null,"labels":[],"notes":null,"owner":null,"parent":null,"priority":null,"started_at":null,"status":"open","title":"A task","updated_at":"2026-10-15T10:00:00Z"}]},
+    {"columns":[],"generation":1,"issues":[]}
+  ]
+}

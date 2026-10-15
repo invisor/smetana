@@ -31,12 +31,23 @@ async fn ask<T>(
 /// command hands the last state to whoever missed it.
 #[tauri::command]
 pub async fn tracker_health(handle: State<'_, TrackerHandle>) -> Result<Health, TrackerError> {
-    ask(&handle, Request::Health).await
+    health(&handle).await
+}
+
+/// The body of `tracker_health`, for the phone bridge: the allowlisted commands
+/// are plain functions that the Tauri wrapper and `remote::bridge` both call.
+pub async fn health(handle: &TrackerHandle) -> Result<Health, TrackerError> {
+    ask(handle, Request::Health).await
 }
 
 #[tauri::command]
 pub async fn tracker_snapshot(handle: State<'_, TrackerHandle>) -> Result<Snapshot, TrackerError> {
-    ask(&handle, Request::Snapshot).await
+    snapshot(&handle).await
+}
+
+/// The body of `tracker_snapshot`; see `health`.
+pub async fn snapshot(handle: &TrackerHandle) -> Result<Snapshot, TrackerError> {
+    ask(handle, Request::Snapshot).await
 }
 
 #[tauri::command]
@@ -89,8 +100,16 @@ pub async fn tracker_set_project(
     handle: State<'_, TrackerHandle>,
     path: Option<String>,
 ) -> Result<Snapshot, TrackerError> {
+    set_project(&handle, path).await
+}
+
+/// The body of `tracker_set_project`; see `health`.
+pub async fn set_project(
+    handle: &TrackerHandle,
+    path: Option<String>,
+) -> Result<Snapshot, TrackerError> {
     let dir = path.map(std::path::PathBuf::from);
-    ask(&handle, |tx| Request::SetProject(dir, tx)).await
+    ask(handle, |tx| Request::SetProject(dir, tx)).await
 }
 
 /// `bd init` in the active project's directory. Success returns the board

@@ -35,7 +35,7 @@ impl serde::Serialize for SettingsError {
     }
 }
 
-fn settings_path(app: &AppHandle) -> Result<PathBuf, SettingsError> {
+pub(crate) fn settings_path(app: &AppHandle) -> Result<PathBuf, SettingsError> {
     app.path()
         .app_config_dir()
         .map(|dir| dir.join("settings.json"))
@@ -58,7 +58,15 @@ pub async fn settings_load(
     project: Option<String>,
 ) -> Result<ResolvedSettings, SettingsError> {
     let path = settings_path(&app)?;
-    let (settings, problem) = file::load(&path);
+    load_from(&path, project)
+}
+
+/// The body of `settings_load` once the file is located, for the phone bridge:
+/// the allowlisted commands are plain functions that the Tauri wrapper and
+/// `remote::bridge` both call. The path is an argument because finding it takes
+/// an `AppHandle`.
+pub fn load_from(path: &std::path::Path, project: Option<String>) -> Result<ResolvedSettings, SettingsError> {
+    let (settings, problem) = file::load(path);
     match problem {
         Some(file::Problem::Broken) => {
             log::warn!("settings: {} did not read, a copy is next to it in .bak", path.display())

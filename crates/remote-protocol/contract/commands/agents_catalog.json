@@ -1,0 +1,6 @@
+{
+  "args": [{}],
+  "reply": [
+    [{"capabilities":{"batch":true,"clear":true,"fork":true,"oneshot":true,"resume":true,"signIn":["browser","deviceCode"],"usage":true},"id":"claude","label":"Claude Code","models":[{"id":"opus","label":"Opus"}]}]
+  ]
+}

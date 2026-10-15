@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use notify::RecommendedWatcher;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 
@@ -272,7 +272,7 @@ impl HealthReporter {
             return;
         }
         self.current = next;
-        let _ = self.app.emit("tracker:health", self.current.clone());
+        crate::remote::emit(&self.app, "tracker:health", &self.current);
     }
 }
 
@@ -290,7 +290,7 @@ fn no_tracker(health: &HealthReporter) -> TrackerError {
 
 fn emit_delta(app: &AppHandle, delta: Delta) {
     if !delta.is_empty() {
-        let _ = app.emit("tracker:delta", delta);
+        crate::remote::emit(app, "tracker:delta", &delta);
     }
 }
 

@@ -9,9 +9,10 @@ paths:
 
 # The phone companion: protocol, pairing, devices
 
-The design is `docs/superpowers/specs/2026-10-15-mobile-companion-design.md`. This is stage 1 of epic
-smetana-032e: the shared crate, the desktop's endpoint, pairing by QR code and the Devices tab. There is
-no command bridge yet — a paired phone connects, says `Hello`, is answered and is held open.
+The design is `docs/superpowers/specs/2026-10-15-mobile-companion-design.md`. Stage 1 of epic
+smetana-032e is the shared crate, the desktop's endpoint, pairing by QR code and the Devices tab; stage 2
+(smetana-zri2) is the command bridge: a paired phone connects, says `Hello`, and then calls allowlisted
+commands and listens to allowlisted events on the same stream.
 
 ## Where things are
 
@@ -19,12 +20,16 @@ no command bridge yet — a paired phone connects, says `Hello`, is answered and
   `src-tauri`. **No root workspace**, on purpose: `cd crates/remote-protocol && cargo test` is its own
   gate, and a workspace at the root would change where every `cargo` command in the repository finds its
   manifest. It holds wire types only (`PairingTicket`, `PairRequest`, `PairReply`, `Hello`,
-  `HelloReply`, `Platform`), the frame format (postcard behind a `u32` big-endian length, checked
-  against `MAX_FRAME` before the body is read) and `ALPN = b"smetana/remote/1"`. It has no clock and no
-  policy. The bridge's `ClientMsg`/`ServerMsg`/`BridgeError` will join it as frames on one bi-stream.
+  `HelloReply`, `Platform`), the bridge (`ClientMsg`/`ServerMsg`/`BridgeError`, `ALLOWED_COMMANDS`,
+  `ALLOWED_EVENTS`, `capabilities()`), the frame format (postcard behind a `u32` big-endian length,
+  checked against `MAX_FRAME` — 16 MiB, since a board snapshot passes a megabyte — before the body is
+  read) and `ALPN = b"smetana/remote/1"`. It has no clock and no policy. `contract/` holds the pinned
+  shape of every allowlisted command and event.
 - `src-tauri/src/remote/` — `mod.rs` (the `Remote` service, constants), `endpoint.rs` (binding,
   accept loop, the three kinds of connection), `pairing.rs` (secrets), `devices.rs`
-  (`remote-devices.json`), `commands.rs`, `tests.rs` (two real iroh endpoints on loopback).
+  (`remote-devices.json`), `commands.rs`, `bridge.rs` (the per-connection loop, the event hub, `emit`),
+  `dispatch.rs` (the allowlisted commands called without Tauri), `contract.rs` (the contract test),
+  `tests.rs` and `tests/phone_bridge.rs` (two real iroh endpoints on loopback).
 - `src/stores/remote.js`, `components/settings/DevicesSettings.vue`, `components/settings/devices.js`.
 
 ## Decisions worth knowing before changing them
@@ -79,6 +84,48 @@ string carries colours as attributes, which cannot be `var(--token)`, and the on
 because a scanner wants dark on light.
 
 **Tests** use `RelayMode::Disabled` and a loopback `bind_addr`; no relay process is needed.
+
+## The bridge (stage 2)
+
+**Wire.** `serde_json::Value` cannot go through postcard (it deserializes with `deserialize_any`), so
+every `Value` in `ClientMsg`/`ServerMsg`/`BridgeError::Handler` travels as the text of its JSON; under a
+human-readable format (`serde_json`) it is the value itself. The Rust types and the logical shape are
+exactly the epic's. `capabilities` in `HelloReply` is the allowed commands, then the allowed events; a
+command name never contains `:` and an event name always does.
+
+**The allowlist is checked in the bridge, before the dispatcher.** `Forbidden` means the desktop has a
+command of that name (`DESKTOP_COMMANDS` in `bridge.rs`, held equal to `lib.rs`'s `generate_handler!` by
+a test, so a new command is `Forbidden` and not `UnknownCommand` the day it is added); `UnknownCommand`
+means it has none. A refused command never reaches `Dispatch`. `session_send` is allowlisted but a
+non-empty `attachments` is `Forbidden`: those are paths on the desktop, and the spec keeps attachments
+from disk off the phone. `terminal_attach` is allowlisted and is served by the worker's read-only `Request::Peek`, never `Attach`: an attach moves the single `active` seat and `flush` drops the output of every session that is not active, so a phone would freeze the desktop's tab. `terminal_write`/`resize` are not allowlisted.
+
+**One function per command.** A command that takes `State` or `AppHandle` is split into a plain function
+over the worker's handle (`tracker::commands::snapshot`, `session::commands::plain::send`, …) that the
+`#[tauri::command]` wrapper and `dispatch.rs` both call. Only the allowlisted ones were split. A handler's
+error is `serde_json::to_value(err)`, which is how Tauri hands it to the webview, and travels as
+`BridgeError::Handler`.
+
+**One emission point.** The seven allowlisted events leave through `remote::emit(app, name, &payload)`,
+which emits to the windows as `app.emit` did and then to the phones listening (`Hub::publish`). A new
+emitter of an allowlisted event must use it; an event off the list may still use `app.emit`. A phone whose
+queue fills (512 messages) is closed with `CLOSE_SLOW` and reads its snapshots again, as after any dropped
+connection. Calls run concurrently (32 per phone); replies carry the phone's id and come in any order.
+
+**The contract.** `crates/remote-protocol/contract/commands/<cmd>.json` holds `args` (hand-written
+examples, every parameter present) and `reply` (examples of the real value, one of every enum variant);
+`events/<name>.json` holds `payload`; `versions.json` maps each protocol version to the digest of the whole contract at that version. `remote/contract.rs`
+builds the real values from the handlers' types, compares them field by field and fails naming the command
+or event and the path. A removed or renamed field needs `PROTOCOL_MAJOR`; an added one needs the file
+updated and `PROTOCOL_MINOR` raised. `SMETANA_UPDATE_CONTRACT=1 cargo test remote_contract` rewrites the
+replies and payloads from the desktop's values; arguments are edited by hand. `settings_load` pins the
+whole of `ResolvedSettings`, so adding a setting touches the contract — that is the price of the policy.
+
+**A regenerated contract does not pass by itself.** `SMETANA_UPDATE_CONTRACT` never writes `versions.json`.
+The test `remote_contract_changes_only_with_a_protocol_version` fails when the files hash to something other
+than the digest recorded for the current `PROTOCOL_MAJOR.PROTOCOL_MINOR`, and says which bump is needed:
+MINOR for additions, MAJOR for removals and renames. The way forward is a new entry under a higher version,
+added by hand together with the constants; an existing entry is a frozen contract and is not edited.
 
 ## Push
 

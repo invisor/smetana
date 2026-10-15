@@ -6,14 +6,20 @@
 //! has no clock, no device list and no policy — so a change to it is a change
 //! to a contract and is read as one.
 //!
-//! The command bridge (`ClientMsg`, `ServerMsg`, `BridgeError`) is the next
-//! stage's. It will travel as the same length-prefixed postcard frames, on one
-//! bi-directional stream per connection, and is deliberately absent here.
+//! The command bridge (`ClientMsg`, `ServerMsg`, `BridgeError`), its allowlist
+//! and the contract that pins the shape of everything on that list travel as
+//! the same length-prefixed postcard frames, on one bi-directional stream per
+//! connection.
 
+mod bridge;
 mod frame;
 pub mod push;
 mod ticket;
 
+pub use bridge::{
+    capabilities, command_contract_path, event_contract_path, is_allowed_command, is_allowed_event,
+    BridgeError, ClientMsg, ServerMsg, ALLOWED_COMMANDS, ALLOWED_EVENTS,
+};
 pub use frame::{decode_frame, encode_frame, read_frame, write_frame, FrameError, MAX_FRAME};
 pub use iroh::PublicKey;
 pub use ticket::{PairingTicket, TicketError, TICKET_PREFIX};
@@ -41,6 +47,9 @@ pub const CLOSE_REVOKED: u32 = 2;
 pub const CLOSE_VERSION: u32 = 3;
 /// The first frame was not the message the connection's state expects.
 pub const CLOSE_PROTOCOL: u32 = 4;
+/// The phone did not read events as fast as the desktop produced them. It should
+/// connect again and read the snapshots again, as after any dropped connection.
+pub const CLOSE_SLOW: u32 = 5;
 
 /// Length of the one-time pairing secret and of the push key, in bytes.
 pub const SECRET_LEN: usize = 32;
@@ -124,7 +133,8 @@ mod tests {
 
     #[test]
     fn close_codes_are_distinct() {
-        let codes = [CLOSE_DONE, CLOSE_UNKNOWN, CLOSE_REVOKED, CLOSE_VERSION, CLOSE_PROTOCOL];
+        let codes =
+            [CLOSE_DONE, CLOSE_UNKNOWN, CLOSE_REVOKED, CLOSE_VERSION, CLOSE_PROTOCOL, CLOSE_SLOW];
         for (i, a) in codes.iter().enumerate() {
             for b in &codes[i + 1..] {
                 assert_ne!(a, b);

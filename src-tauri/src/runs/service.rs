@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::awake;
@@ -343,7 +343,7 @@ pub fn start(
 }
 
 fn emit(app: &AppHandle, run: &Run) {
-    let _ = app.emit("run:state", run);
+    crate::remote::emit(app, "run:state", run);
 }
 
 /// Read only the provider's advertised version before a Crew package can

@@ -1,0 +1,6 @@
+{
+  "args": [{"answers":null,"decision":"allow","id":7,"question":"p1"},{"answers":{"Which approach?":"Rewrite"},"decision":"allow-always","id":7,"question":"p2"},{"answers":null,"decision":"deny","id":7,"question":"p3"}],
+  "reply": [
+    null
+  ]
+}

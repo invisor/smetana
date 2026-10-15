@@ -130,6 +130,12 @@ pub enum Request {
     CreateShell(String, Option<String>, oneshot::Sender<Result<Session, TerminalError>>),
     Remove(SessionId, oneshot::Sender<()>),
     Attach(SessionId, oneshot::Sender<Result<Attached, TerminalError>>),
+    /// The same answer as `Attach`, from a reader that is not the window: it
+    /// takes no seat. `active` and the pending output are left alone, because
+    /// `flush` throws away the output of every session that is not `active` —
+    /// an `Attach` from a phone would freeze the tab the desktop has on screen.
+    /// Used by the phone bridge's `terminal_attach`; nothing in the window sends it.
+    Peek(SessionId, oneshot::Sender<Result<Attached, TerminalError>>),
     /// Carries the id it is leaving, and not for symmetry: see the handler.
     Detach(SessionId),
     Resize(SessionId, u16, u16),
@@ -742,8 +748,13 @@ fn forget_session(live: &Live) {
     super::restore::drop_record(Path::new(&live.session.project), id);
 }
 
+/// The payload of `terminal:removed`.
+pub(crate) fn removed_payload(id: SessionId) -> serde_json::Value {
+    serde_json::json!({ "id": id })
+}
+
 fn emit_state(app: &AppHandle, session: &Session) {
-    let _ = app.emit("terminal:state", session);
+    crate::remote::emit(app, "terminal:state", session);
 }
 
 /// Output chunks: into the ring for the human, into the screen for the app,
@@ -1104,6 +1115,62 @@ fn shell_cwd(root: &Path, rel: Option<&str>) -> Result<PathBuf, TerminalError> {
 fn resume_cwd(root: &Path, cwd: &str) -> Result<PathBuf, TerminalError> {
     crate::sessions::model::resume_cwd(root, cwd)
         .ok_or_else(|| TerminalError::BadCwd(cwd.to_owned()))
+}
+
+/// A window takes a session on screen: it becomes `active`, and the ring comes
+/// back with the `seq` that output arriving after it continues from.
+fn attach(
+    sessions: &mut HashMap<SessionId, Live>,
+    active: &mut Option<SessionId>,
+    id: SessionId,
+) -> Result<Attached, TerminalError> {
+    match sessions.get_mut(&id) {
+        None => Err(TerminalError::NoSession(id)),
+        Some(live) => {
+            *active = Some(id);
+            // A human now has this session on screen, and that is a
+            // reasonable acknowledgement of a bell. It has to be
+            // acknowledged by something: a CLI agent rings on
+            // finishing a task just as readily as on asking a
+            // question, and with only a write and an exit clearing
+            // it, one completion bell would hold the row at
+            // `needs-you` for the rest of the session's life and
+            // refuse every `run_capture` with `busy` alongside it —
+            // an afternoon of that and every row is loud, which is
+            // the design failing quietly.
+            //
+            // Clearing it here is safe because the two detection
+            // layers are independent: if a permission dialog really
+            // is on the screen, the profile raises `needs-you` again
+            // from that screen on the next tick. A real question
+            // survives the acknowledgement; only a bell whose reason
+            // has already been read is lost.
+            live.bell_pending = false;
+            // Everything accumulated before attaching is already in
+            // the ring — sending it as a second event would mean
+            // showing it twice.
+            live.pending.clear();
+            Ok(Attached {
+                data: base64::engine::general_purpose::STANDARD.encode(live.ring.snapshot()),
+                seq: live.seq,
+            })
+        }
+    }
+}
+
+/// What `attach` answers, changing nothing. The sessions are borrowed shared and
+/// `active` is not a parameter, so a read cannot move the seat, drop the active
+/// session's pending output or touch `seq`. The bell is left too: acknowledging
+/// one is what a person looking at the session on the desktop does, and a
+/// phone's read is not that.
+fn peek(sessions: &HashMap<SessionId, Live>, id: SessionId) -> Result<Attached, TerminalError> {
+    match sessions.get(&id) {
+        None => Err(TerminalError::NoSession(id)),
+        Some(live) => Ok(Attached {
+            data: base64::engine::general_purpose::STANDARD.encode(live.ring.snapshot()),
+            seq: live.seq,
+        }),
+    }
 }
 
 /// Everything the worker does synchronously. `ShutDown` is handled by the
@@ -1555,7 +1622,7 @@ fn handle(
                 // switch. The front end's own remove has already dropped the
                 // row by the time this arrives, and filtering an absent id is
                 // a no-op, which is what makes one event serve both callers.
-                let _ = app.emit("terminal:removed", serde_json::json!({ "id": id }));
+                crate::remote::emit(app, "terminal:removed", &removed_payload(id));
                 // The same sweep a self-exit gets, for the row a person took
                 // away instead: `live.pty.kill()` above reaches the session's
                 // own process group and nothing outside it. `sessions` no
@@ -1571,38 +1638,10 @@ fn handle(
             let _ = tx.send(());
         }
         Request::Attach(id, tx) => {
-            let _ = tx.send(match sessions.get_mut(&id) {
-                None => Err(TerminalError::NoSession(id)),
-                Some(live) => {
-                    *active = Some(id);
-                    // A human now has this session on screen, and that is a
-                    // reasonable acknowledgement of a bell. It has to be
-                    // acknowledged by something: a CLI agent rings on
-                    // finishing a task just as readily as on asking a
-                    // question, and with only a write and an exit clearing
-                    // it, one completion bell would hold the row at
-                    // `needs-you` for the rest of the session's life and
-                    // refuse every `run_capture` with `busy` alongside it —
-                    // an afternoon of that and every row is loud, which is
-                    // the design failing quietly.
-                    //
-                    // Clearing it here is safe because the two detection
-                    // layers are independent: if a permission dialog really
-                    // is on the screen, the profile raises `needs-you` again
-                    // from that screen on the next tick. A real question
-                    // survives the acknowledgement; only a bell whose reason
-                    // has already been read is lost.
-                    live.bell_pending = false;
-                    // Everything accumulated before attaching is already in
-                    // the ring — sending it as a second event would mean
-                    // showing it twice.
-                    live.pending.clear();
-                    Ok(Attached {
-                        data: base64::engine::general_purpose::STANDARD.encode(live.ring.snapshot()),
-                        seq: live.seq,
-                    })
-                }
-            });
+            let _ = tx.send(attach(sessions, active, id));
+        }
+        Request::Peek(id, tx) => {
+            let _ = tx.send(peek(sessions, id));
         }
         // Only when `active` still points at that session. Switching tabs is
         // two calls — detach the old, attach the new — with no ordering
@@ -1820,6 +1859,73 @@ mod tests {
     fn the_empty_path_is_the_root() {
         let root = scratch("empty");
         assert_eq!(shell_cwd(&root, Some("")).unwrap(), root);
+    }
+
+    /* ---- reading a session without taking the seat ------------------------ */
+
+    fn shell_live(id: SessionId, dir: &Path, ring_bytes: &[u8]) -> Live {
+        let (out, _chunks) = mpsc::unbounded_channel();
+        let pty = Pty::spawn_shell(id, dir, DEFAULT_COLS, DEFAULT_ROWS, out).expect("a shell starts");
+        let mut ring = Ring::new(RING_CAP);
+        ring.push(ring_bytes);
+        Live {
+            session: Session::new(
+                id,
+                "sh",
+                &dir.to_string_lossy(),
+                &dir.to_string_lossy(),
+                crate::terminal::model::SessionWork::Shell,
+                None,
+            ),
+            profile: None,
+            pty,
+            ring,
+            screen: Screen::new(DEFAULT_COLS, DEFAULT_ROWS),
+            transcript: None,
+            text_questions: false,
+            bell_pending: true,
+            quiet: Quiet::new(),
+            last_output: Instant::now(),
+            pending: b"not yet flushed".to_vec(),
+            seq: 4,
+            #[cfg(target_os = "macos")]
+            descendants: crate::runs::procs::Descendants::default(),
+            handoff_ready: false,
+        }
+    }
+
+    #[test]
+    fn a_peek_answers_like_an_attach_and_leaves_the_seat_and_the_output_alone() {
+        let dir = scratch("peek");
+        let mut sessions = HashMap::new();
+        sessions.insert(1, shell_live(1, &dir, b"on screen"));
+        sessions.insert(2, shell_live(2, &dir, b"read by a phone"));
+        let mut active = None;
+
+        // The desktop has session 1 on screen.
+        attach(&mut sessions, &mut active, 1).unwrap();
+        sessions.get_mut(&1).unwrap().pending = b"next tick".to_vec();
+        assert_eq!(active, Some(1));
+
+        // A phone reads session 2, then session 1.
+        let other = peek(&sessions, 2).unwrap();
+        let same = peek(&sessions, 1).unwrap();
+        assert_eq!(other.data, base64::engine::general_purpose::STANDARD.encode(b"read by a phone"));
+        assert_eq!((other.seq, same.seq), (4, 4));
+        assert_eq!(active, Some(1), "the seat did not move");
+        assert_eq!(sessions[&1].pending, b"next tick", "the active session's output was not dropped");
+        assert_eq!(sessions[&2].pending, b"not yet flushed", "nor was the peeked session's");
+        assert!(sessions[&2].bell_pending, "a phone's read does not acknowledge a bell");
+        assert!(matches!(peek(&sessions, 9), Err(TerminalError::NoSession(9))));
+
+        // Contrast: an attach is what takes the seat and clears the rest.
+        attach(&mut sessions, &mut active, 2).unwrap();
+        assert_eq!(active, Some(2));
+        assert!(sessions[&2].pending.is_empty());
+
+        for live in sessions.values_mut() {
+            live.pty.kill();
+        }
     }
 
     /* ---- what a session leaves behind ------------------------------------ */

@@ -8,12 +8,13 @@
    issues. */
 import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listDir, setRoot } from './files.js'
 import { measureStorage } from './notifications.js'
 import { loadRepos } from './vcs.js'
 import { flushPending, loadProjectLayout, settings } from './settings.js'
-import { confirmUnsaved, resetTabs, restoreTabs } from './tabs.js'
+import { confirmUnsaved, dirtyPaths, resetTabs, restoreTabs } from './tabs.js'
 import { loadSessions } from './terminals.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
 import { basename, dirname } from '../paths.js'
@@ -56,6 +57,43 @@ export async function refreshProbes() {
    second attempt adds nothing. It is raised and cleared through try/finally so
    a failure (setProject throwing, say) does not lock the list forever. */
 let moving = false
+
+/* A switch the phone made while a move was under way. Never dropped: the
+   worker has already gone to that folder, and a window that did not follow
+   would sit on one project with the board of another. It is kept as `{ path }`
+   (the path may be `null`) and settled by `release`, the one place that ends a
+   move. Only the last one matters — each is the phone's latest word. */
+let pendingRemote = null
+
+/* True while an unsaved-edits question is up. The question can stay up for hours
+   on an unattended desktop, and while it does no `setProject` is in flight, so a
+   phone's switch that arrives meanwhile has left the worker on the phone's
+   folder with nothing to bring it back: `followRemoteProject` puts it back at
+   once. Every `confirmUnsaved` in a move goes through `askUnsaved`. */
+let asking = false
+
+async function askUnsaved() {
+  asking = true
+  try {
+    return await confirmUnsaved()
+  } finally {
+    asking = false
+  }
+}
+
+/* Ends a move, and settles what the phone said during it. Every `finally` that
+   clears `moving` calls this and never assigns the flag itself, so no road out
+   of a move can forget the announcement. The follow runs on its own turn: it
+   asks the worker for things, and the caller is on its way out. */
+function release() {
+  moving = false
+  if (!pendingRemote) return
+  const { path } = pendingRemote
+  pendingRemote = null
+  followRemoteProject(path).catch((err) => {
+    console.error("[projects] could not follow the phone's project switch:", err)
+  })
+}
 
 /* The shared part of a move: settings_load brings the new project's layout,
    tracker_set_project brings the issues. Callers are responsible for the moving
@@ -142,11 +180,11 @@ export async function switchTo(path) {
   if (path === settings.activeProject || moving) return
   moving = true
   try {
-    if (!(await confirmUnsaved())) return
+    if (!(await askUnsaved())) return
     await flushPending()
     await moveTo(path)
   } finally {
-    moving = false
+    release()
   }
 }
 
@@ -218,7 +256,7 @@ export async function addProject() {
        active, the tabs stay put and the question would be about nothing. It
        still comes before flushPending: the departing project's state must not
        land on disk before the person has decided whether to move at all. */
-    if (path !== settings.activeProject && !(await confirmUnsaved())) return null
+    if (path !== settings.activeProject && !(await askUnsaved())) return null
     /* First we flush the departing project's state and only then change the
        list: a write started after the row was added would carry the old
        project's state under the new list. The order here must not depend on
@@ -230,8 +268,71 @@ export async function addProject() {
     await moveTo(path)
     return path
   } finally {
-    moving = false
+    release()
   }
+}
+
+/* The desktop's half of a switch made on the phone. The phone's
+   `tracker_set_project` moves the tracker worker and nothing else, so the
+   desktop announces the new folder here (`remote:project-switched`) and the
+   window follows by the road a click on the list takes: `moveTo`, with the same
+   question about unsaved edits. A folder not on the list is put on it, as
+   `addProject` does.
+
+   No loop: the window's own move calls the `tracker_set_project` command, which
+   announces nothing — only a call that came over the bridge does — and a path
+   that is already active is not a move at all.
+
+   When the window does not follow (the person kept their unsaved edits, or the
+   phone emptied the tracker with `null`) the worker is put back on the window's
+   project, because a board that answers for one folder under another's header is
+   the fault this exists to prevent. An announcement that arrives during another
+   move is kept in `pendingRemote` and replayed by `release` when that move ends,
+   so it is never lost. */
+export async function followRemoteProject(raw) {
+  if (moving) {
+    pendingRemote = { path: raw }
+    /* A question is up, so nothing is putting the worker right: do it now. */
+    if (asking) await setProject(settings.activeProject)
+    return
+  }
+  /* The root, as `addProject` takes it: a subfolder or a trailing slash must not
+     become a second row. Compared with the active project only after this. */
+  const path = raw ? await projectRoot(raw) : null
+  /* A move may have started while the root was being asked for. */
+  if (moving) {
+    pendingRemote = { path }
+    return
+  }
+  moving = true
+  try {
+    if (path && path !== settings.activeProject) {
+      /* The question can stay up for hours on an unattended desktop, and until it
+         is answered the board must not show the phone's project under this
+         window's header. So with edits to lose the worker goes back first, and
+         moves to the phone's project only once the person agrees. (The simpler
+         alternative, leaving the switching skeleton up, would hide the board for
+         the same hours.) With nothing to lose there is no question and no wait. */
+      if (dirtyPaths.value.length) await setProject(settings.activeProject)
+      if (await askUnsaved()) {
+        await flushPending()
+        if (!settings.openProjects.includes(path)) settings.openProjects.push(path)
+        await moveTo(path)
+      }
+      return
+    }
+    /* `null`, or the window's own project. The worker is where the phone put it,
+       which for a subfolder of this project is the subfolder, so it is the raw
+       path that is compared: the window's project is what the worker must hold. */
+    if (raw !== settings.activeProject) await setProject(settings.activeProject)
+  } finally {
+    release()
+  }
+}
+
+/* Listens for the announcement above. Answers with the way to stop. */
+export function initProjectFollow() {
+  return listen('remote:project-switched', (event) => followRemoteProject(event.payload?.path ?? null))
 }
 
 /* Removal from the list. The project's state stays in the settings file and
@@ -248,7 +349,7 @@ export async function removeProject(path) {
        touch the tabs at all, and "Don't save" would erase the current project's
        edits for nothing. And still before flushPending — for the same reason as
        in switchTo. */
-    if (path === settings.activeProject && !(await confirmUnsaved())) return
+    if (path === settings.activeProject && !(await askUnsaved())) return
     /* As in switchTo: the departing project's state has to land on disk before
        the list changes, otherwise the four-hundred-millisecond debounce would
        overwrite an unsaved edit with an already-shortened list. */
@@ -265,7 +366,7 @@ export async function removeProject(path) {
     const next = settings.openProjects[at] ?? settings.openProjects[at - 1] ?? null
     await moveTo(next)
   } finally {
-    moving = false
+    release()
   }
 }
 

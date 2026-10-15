@@ -417,3 +417,5 @@ async fn remote_only_a_few_unknown_keys_are_served_while_a_code_is_out() {
     let closed = tokio::time::timeout(Duration::from_secs(5), conn.closed()).await.unwrap();
     assert_eq!(code(closed), Some(CLOSE_UNKNOWN as u64));
 }
+
+mod phone_bridge;

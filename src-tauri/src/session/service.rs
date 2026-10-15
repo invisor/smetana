@@ -1238,10 +1238,10 @@ struct CrewTreeChange {
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CrewEventsChange {
-    root: u64,
-    node: u64,
-    events: Vec<Event>,
+pub(crate) struct CrewEventsChange {
+    pub(crate) root: u64,
+    pub(crate) node: u64,
+    pub(crate) events: Vec<Event>,
 }
 
 fn emit_crew(app: &AppHandle, package: &CrewPackage) {
@@ -1255,9 +1255,14 @@ fn emit_crew(app: &AppHandle, package: &CrewPackage) {
     );
 }
 
+/// The payload of `session:events`.
+pub(crate) fn events_payload(id: SessionId, events: &[Event]) -> serde_json::Value {
+    serde_json::json!({ "id": id, "events": events })
+}
+
 fn emit_crew_events(app: &AppHandle, root: u64, node: u64, events: Vec<Event>) {
     if !events.is_empty() {
-        let _ = app.emit("crew:events", CrewEventsChange { root, node, events });
+        crate::remote::emit(app, "crew:events", &CrewEventsChange { root, node, events });
     }
 }
 
@@ -2848,7 +2853,7 @@ fn append(app: &AppHandle, id: SessionId, live: &mut Live, kinds: Vec<EventKind>
     let events: Vec<Event> =
         kinds.into_iter().map(|kind| live.journal.append(kind, at.clone())).collect();
     // For every session, attached or not. See this file's header.
-    let _ = app.emit("session:events", serde_json::json!({ "id": id, "events": events }));
+    crate::remote::emit(app, "session:events", &events_payload(id, &events));
     refresh_state(app, id, live);
 }
 

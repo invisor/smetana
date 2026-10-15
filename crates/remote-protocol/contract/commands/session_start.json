@@ -1,0 +1,6 @@
+{
+  "args": [{"intent":{"kind":"bare"},"project":"/work/smetana"},{"intent":{"id":"smetana-1","kind":"editTask","title":"A task"},"project":"/work/smetana"}],
+  "reply": [
+    7
+  ]
+}

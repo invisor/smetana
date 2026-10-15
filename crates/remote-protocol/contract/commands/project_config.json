@@ -1,0 +1,8 @@
+{
+  "args": [{"project":"/work/smetana"}],
+  "reply": [
+    {"config":{"defaults":{"max_parallel_tasks":3,"min_priority":2,"review_passes":5,"target_branch":"main"},"live_check":{"command":"npm run dev","mode":"browser","notes":"Open the board"},"merge":{"hazards":"Lockfile conflicts","regenerate":[{"command":"npm install","paths":["package-lock.json"]}]},"preflight":{"commands":["docker compose up -d"],"health":[{"url":"http://localhost:5173"},{"tcp":5432}]},"project":{"repos":["."]},"repo":{".":{"env_files":[".env"],"gates":["npm test"],"setup":"npm install"}}},"empty":false,"state":"ok"},
+    {"empty":true,"state":"missing"},
+    {"empty":false,"message":"bad toml","state":"broken"}
+  ]
+}

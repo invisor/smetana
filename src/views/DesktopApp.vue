@@ -243,6 +243,7 @@ import {
   adoptInitialProject,
   basename,
   initActive,
+  initProjectFollow,
   projectRows,
   refreshProbes,
   removeProject,
@@ -653,6 +654,8 @@ const RIGHT_TABS = [
   { id: 'sessions', label: 'Sessions' }
 ]
 onMounted(initTracker)
+/* A project switched on the phone: the window follows it. */
+onMounted(initProjectFollow)
 onMounted(adoptInitialProject)
 onMounted(initTerminals)
 // Crew topology is emitted when a package starts. Subscribe with the desktop

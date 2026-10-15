@@ -35,7 +35,7 @@ pub async fn session_start(
     project: String,
     intent: Intent,
 ) -> Result<SessionId, SessionError> {
-    ask(&handle, |tx| Request::Start(project, intent, tx)).await?
+    plain::start(&handle, project, intent).await
 }
 
 /// Snapshot a Crew package's backend-owned hierarchy. Individual updates use
@@ -45,7 +45,7 @@ pub async fn crew_tree(
     handle: State<'_, SessionHandle>,
     root: u64,
 ) -> Result<Option<Vec<CrewNode>>, SessionError> {
-    ask(&handle, |tx| Request::CrewTree(root, tx)).await
+    plain::crew_tree(&handle, root).await
 }
 
 #[tauri::command]
@@ -54,7 +54,7 @@ pub async fn crew_attach(
     root: u64,
     node: u64,
 ) -> Result<CrewAttached, SessionError> {
-    ask(&handle, |tx| Request::CrewAttach(root, node, tx)).await?
+    plain::crew_attach(&handle, root, node).await
 }
 
 /// Address the selected native Crew node. A failed send is intentionally an
@@ -66,7 +66,7 @@ pub async fn crew_send(
     node: u64,
     text: String,
 ) -> Result<(), SessionError> {
-    ask(&handle, |tx| Request::CrewSend(root, node, text, tx)).await?
+    plain::crew_send(&handle, root, node, text).await
 }
 
 /// Stop a Crew root. The native provider owns its children, so this terminates
@@ -76,7 +76,7 @@ pub async fn crew_stop(
     handle: State<'_, SessionHandle>,
     root: u64,
 ) -> Result<(), SessionError> {
-    ask(&handle, |tx| Request::CrewStop(root, tx)).await?
+    plain::crew_stop(&handle, root).await
 }
 
 /// End a Crew package from its row's close control. Kept separate from
@@ -100,7 +100,7 @@ pub async fn session_attach(
     handle: State<'_, SessionHandle>,
     id: SessionId,
 ) -> Result<Attached, SessionError> {
-    ask(&handle, |tx| Request::Attach(id, tx)).await?
+    plain::attach(&handle, id).await
 }
 
 /// Everything after `seq`. `None` is not an error — it means the journal no
@@ -112,7 +112,7 @@ pub async fn session_since(
     id: SessionId,
     seq: u64,
 ) -> Result<Option<Vec<Event>>, SessionError> {
-    ask(&handle, |tx| Request::Since(id, seq, tx)).await?
+    plain::since(&handle, id, seq).await
 }
 
 /// A person's turn. The journal gets it before the bytes reach the child, so
@@ -124,7 +124,7 @@ pub async fn session_send(
     text: String,
     attachments: Vec<String>,
 ) -> Result<(), SessionError> {
-    ask(&handle, |tx| Request::Send(id, text, attachments, tx)).await?
+    plain::send(&handle, id, text, attachments).await
 }
 
 /// A person's answer to a permission question. `question` is the id carried by
@@ -142,7 +142,7 @@ pub async fn session_answer(
     decision: Decision,
     answers: Option<BTreeMap<String, String>>,
 ) -> Result<(), SessionError> {
-    ask(&handle, |tx| Request::Answer(id, question, decision, answers, tx)).await?
+    plain::answer(&handle, id, question, decision, answers).await
 }
 
 /// Stop the turn in flight, by whatever means this harness leaves open. For
@@ -155,7 +155,7 @@ pub async fn session_stop(
     handle: State<'_, SessionHandle>,
     id: SessionId,
 ) -> Result<(), SessionError> {
-    ask(&handle, |tx| Request::Stop(id, tx)).await?
+    plain::stop(&handle, id).await
 }
 
 /// End the session outright — the cross on a driven agent row, never the
@@ -170,4 +170,84 @@ pub async fn session_close(
     id: SessionId,
 ) -> Result<(), SessionError> {
     ask(&handle, |tx| Request::Close(id, tx)).await?
+}
+
+/// The bodies of the commands the phone may call, as plain functions over the
+/// worker's handle: the `#[tauri::command]` wrappers above and `remote::bridge`
+/// both call these, so the phone reaches exactly the code the desktop front end
+/// does. A command that takes `State` cannot be called without Tauri, and this
+/// is what the wrapper becomes for the allowlisted ones.
+pub mod plain {
+    use super::*;
+
+    pub async fn start(
+        handle: &SessionHandle,
+        project: String,
+        intent: Intent,
+    ) -> Result<SessionId, SessionError> {
+        ask(handle, |tx| Request::Start(project, intent, tx)).await?
+    }
+
+    pub async fn crew_tree(
+        handle: &SessionHandle,
+        root: u64,
+    ) -> Result<Option<Vec<CrewNode>>, SessionError> {
+        ask(handle, |tx| Request::CrewTree(root, tx)).await
+    }
+
+    pub async fn crew_attach(
+        handle: &SessionHandle,
+        root: u64,
+        node: u64,
+    ) -> Result<CrewAttached, SessionError> {
+        ask(handle, |tx| Request::CrewAttach(root, node, tx)).await?
+    }
+
+    pub async fn crew_send(
+        handle: &SessionHandle,
+        root: u64,
+        node: u64,
+        text: String,
+    ) -> Result<(), SessionError> {
+        ask(handle, |tx| Request::CrewSend(root, node, text, tx)).await?
+    }
+
+    pub async fn crew_stop(handle: &SessionHandle, root: u64) -> Result<(), SessionError> {
+        ask(handle, |tx| Request::CrewStop(root, tx)).await?
+    }
+
+    pub async fn attach(handle: &SessionHandle, id: SessionId) -> Result<Attached, SessionError> {
+        ask(handle, |tx| Request::Attach(id, tx)).await?
+    }
+
+    pub async fn since(
+        handle: &SessionHandle,
+        id: SessionId,
+        seq: u64,
+    ) -> Result<Option<Vec<Event>>, SessionError> {
+        ask(handle, |tx| Request::Since(id, seq, tx)).await?
+    }
+
+    pub async fn send(
+        handle: &SessionHandle,
+        id: SessionId,
+        text: String,
+        attachments: Vec<String>,
+    ) -> Result<(), SessionError> {
+        ask(handle, |tx| Request::Send(id, text, attachments, tx)).await?
+    }
+
+    pub async fn answer(
+        handle: &SessionHandle,
+        id: SessionId,
+        question: String,
+        decision: Decision,
+        answers: Option<BTreeMap<String, String>>,
+    ) -> Result<(), SessionError> {
+        ask(handle, |tx| Request::Answer(id, question, decision, answers, tx)).await?
+    }
+
+    pub async fn stop(handle: &SessionHandle, id: SessionId) -> Result<(), SessionError> {
+        ask(handle, |tx| Request::Stop(id, tx)).await?
+    }
 }
