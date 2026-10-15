@@ -999,9 +999,32 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
         });
         let before = (live.session.state, live.session.question.clone());
         live.session.apply(out.state, out.question);
+        // The same predicate a conversation session uses, on the change of state and not on the tick:
+        // a session that stays in `NeedsYou` for a minute of ticks reaches the phone once.
+        announce_wait(before.0, live.session.state, || {
+            crate::remote::push::notify_needs_you(
+                app,
+                live.session.id,
+                &live.session.project,
+                &live.session.agent,
+                None,
+            );
+        });
         if before != (live.session.state, live.session.question.clone()) {
             emit_state(app, &live.session);
         }
+    }
+}
+
+/// Runs `notify` when this change of state is the start of a wait. Split out of `reassess` so the
+/// once-per-transition rule can be tested without an `AppHandle`.
+fn announce_wait(before: SessionState, after: SessionState, notify: impl FnOnce()) {
+    // `waiting_began` is written against the conversation session's state enum; only the wait itself
+    // matters to it, so a terminal state is carried over as waiting or as not waiting.
+    use crate::session::model::SessionState as Wire;
+    let wire = |state| if state == SessionState::NeedsYou { Wire::NeedsYou } else { Wire::Running };
+    if crate::remote::push::waiting_began(wire(before), wire(after)) {
+        notify();
     }
 }
 
@@ -1813,6 +1836,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the temp directory");
         dir.canonicalize().expect("canonicalize the temp directory")
+    }
+
+    /// Feeds a run of per-tick states through `announce_wait` and counts the pushes.
+    fn pushes_for(ticks: &[SessionState]) -> usize {
+        let mut state = SessionState::Starting;
+        let mut pushes = 0;
+        for &next in ticks {
+            announce_wait(state, next, || pushes += 1);
+            state = next;
+        }
+        pushes
+    }
+
+    #[test]
+    fn a_pty_session_entering_needs_you_pushes_once_however_many_ticks_follow() {
+        use SessionState::{NeedsYou, Running};
+        assert_eq!(pushes_for(&[Running, Running, NeedsYou, NeedsYou, NeedsYou, NeedsYou]), 1);
+    }
+
+    #[test]
+    fn a_pty_session_waiting_again_after_running_pushes_a_second_time() {
+        use SessionState::{NeedsYou, Running};
+        assert_eq!(pushes_for(&[Running, NeedsYou, NeedsYou, Running, NeedsYou, NeedsYou]), 2);
     }
 
     #[test]
