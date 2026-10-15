@@ -2,6 +2,7 @@
 import { computed, onMounted, watch, watchEffect } from 'vue'
 import { bridge, initStatus, screenFor } from './bridge/index.js'
 import { wireStores, home, refreshSummary } from './session.js'
+import { initPushTarget } from './pushTarget.js'
 import { trackerState } from '@src/stores/tracker.js'
 import { effectiveTheme } from '@src/appearance.js'
 import { usePrefersDark } from '@src/views/useAppearance.js'
@@ -30,6 +31,7 @@ watchEffect(() => {
 
 wireStores()
 onMounted(() => {
+  initPushTarget().catch((err) => console.warn('[companion] push target unavailable:', err))
   initStatus().catch((err) => {
     console.warn('[companion] could not read the connection state:', err)
     bridge.paired = false

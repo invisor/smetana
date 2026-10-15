@@ -35,6 +35,8 @@ const STORE_URL_IOS: &str = "https://apps.apple.com/app/smetana-companion/id0000
 
 static CORE: OnceLock<Arc<Core>> = OnceLock::new();
 static APP: OnceLock<AppHandle> = OnceLock::new();
+/// A token that arrived before the core existed (iOS can hand one over during launch).
+static EARLY_TOKEN: Mutex<Option<String>> = Mutex::new(None);
 static PUSH_TARGET: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(Serialize)]
@@ -89,8 +91,9 @@ fn take_push_target() -> Option<String> {
 
 /// A push token arrived from the platform (APNs or FCM).
 pub fn token_changed(token: &str) {
-    if let Some(core) = CORE.get() {
-        core.set_push_token(token);
+    match CORE.get() {
+        Some(core) => core.set_push_token(token),
+        None => *EARLY_TOKEN.lock().unwrap() = Some(token.to_owned()),
     }
 }
 
@@ -171,6 +174,9 @@ pub fn run() {
             let config = Config::new(env!("CARGO_PKG_VERSION"), platform, &name, store_url);
             let core = Core::new(store, sink, config);
             let _ = CORE.set(core.clone());
+            if let Some(token) = EARLY_TOKEN.lock().unwrap().take() {
+                core.set_push_token(&token);
+            }
             let _ = APP.set(handle);
             app.manage(core.clone());
             if core.pairing().is_some() {

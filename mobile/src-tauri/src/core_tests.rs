@@ -47,6 +47,7 @@ struct DesktopState {
     conns: Mutex<Vec<Connection>>,
     push_events: Mutex<Vec<(String, Value)>>,
     reject_pairing: AtomicBool,
+    close_pairing_with_protocol: AtomicBool,
 }
 
 impl Desktop {
@@ -116,6 +117,10 @@ async fn accept(endpoint: Endpoint, state: Arc<DesktopState>) {
 async fn serve_pairing(conn: Connection, state: Arc<DesktopState>, key: String) {
     let Ok((mut send, mut recv)) = conn.accept_bi().await else { return };
     let Ok(request) = read_frame::<PairRequest>(&mut recv, 16 * 1024).await else { return };
+    if state.close_pairing_with_protocol.load(Ordering::SeqCst) {
+        conn.close(remote_protocol::CLOSE_PROTOCOL.into(), b"expected a pair request");
+        return;
+    }
     let right = *state.secret.lock().unwrap() == Some(request.secret);
     state.requests.lock().unwrap().push(request);
     let reply = if state.reject_pairing.load(Ordering::SeqCst) || !right {
@@ -388,7 +393,7 @@ async fn a_revoked_phone_stops_trying() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_push_token_that_appears_after_pairing_is_reported_once() {
+async fn a_push_token_that_appears_after_pairing_is_reported_and_repeated_at_each_handshake() {
     let desktop = Desktop::start().await;
     let phone = phone();
     paired_and_online(&desktop, &phone).await;
@@ -396,17 +401,17 @@ async fn a_push_token_that_appears_after_pairing_is_reported_once() {
 
     phone.core.set_push_token("fcm-1");
     until("the token", || desktop.state.tokens.lock().unwrap().len() == 1).await;
-    phone.core.set_push_token("fcm-1");
     phone.core.set_push_token("fcm-2");
     until("the second token", || desktop.state.tokens.lock().unwrap().len() == 2).await;
     assert_eq!(desktop.state.tokens.lock().unwrap().as_slice(), ["fcm-1", "fcm-2"]);
 
-    // After a reconnect the desktop already has it: it is not sent again.
+    // Every handshake carries the token again: the phone keeps no record of what the desktop
+    // was told, because such a record could say "told" for a message that never arrived.
     desktop.drop_connections();
     until("unreachable", || matches!(phone.core.status(), Status::Unreachable { .. })).await;
     until("online again", || phone.core.status() == Status::Online).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(desktop.state.tokens.lock().unwrap().len(), 2);
+    until("the token again", || desktop.state.tokens.lock().unwrap().len() == 3).await;
+    assert_eq!(desktop.state.tokens.lock().unwrap().last().map(String::as_str), Some("fcm-2"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -429,4 +434,36 @@ async fn unpairing_forgets_the_desktop_and_stops_the_link() {
     assert!(phone.core.pairing().is_none());
     assert_eq!(phone.core.invoke("tracker_snapshot", json!({})).await, Err(CallError::Offline));
     assert!(phone.core.connect().is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_close_with_protocol_during_pairing_is_a_failure_and_stores_nothing() {
+    let desktop = Desktop::start().await;
+    desktop.state.close_pairing_with_protocol.store(true, Ordering::SeqCst);
+    let phone = phone();
+    let err = phone.core.pair(&desktop.ticket()).await.unwrap_err();
+    assert!(err.contains("try again"), "{err}");
+    assert!(phone.core.pairing().is_none(), "the ambiguous close is not a pairing");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_retry_from_unreachable_shows_connecting_and_then_the_real_status_again() {
+    let desktop = Desktop::start().await;
+    let phone = phone();
+    paired_and_online(&desktop, &phone).await;
+    desktop.endpoint.close().await;
+    until("unreachable", || matches!(phone.core.status(), Status::Unreachable { .. })).await;
+    let before = phone.statuses().len();
+
+    phone.core.connect().unwrap();
+    // The retry is announced, and its failure is announced too, though the value after it
+    // equals the value before it.
+    until("connecting then unreachable again", || {
+        let seen = phone.statuses();
+        let after = &seen[before..];
+        after.iter().position(|s| *s == Status::Connecting).is_some_and(|i| {
+            after[i..].iter().any(|s| matches!(s, Status::Unreachable { .. }))
+        })
+    })
+    .await;
 }

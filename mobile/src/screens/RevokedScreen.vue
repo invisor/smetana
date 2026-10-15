@@ -2,7 +2,7 @@
 import Frame from './Frame.vue'
 import EmptyState from '@src/components/core/EmptyState.vue'
 import Button from '@src/components/core/Button.vue'
-import { unpair } from '../bridge/index.js'
+import { unpairAndForget } from '../session.js'
 </script>
 
 <template>
@@ -12,6 +12,6 @@ import { unpair } from '../bridge/index.js'
       title="This phone was removed"
       description="The workstation no longer lists this phone. Pair it again from the desktop's Devices tab."
     />
-    <Button variant="primary" full-width @click="unpair">Pair again</Button>
+    <Button variant="primary" full-width @click="unpairAndForget">Pair again</Button>
   </Frame>
 </template>

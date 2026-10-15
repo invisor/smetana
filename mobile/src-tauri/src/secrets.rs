@@ -25,7 +25,6 @@ pub mod names {
     pub const PUSH_SECRET: &str = "push_secret";
     pub const PAIRING: &str = "pairing";
     pub const PUSH_TOKEN: &str = "push_token";
-    pub const PUSH_TOKEN_REPORTED: &str = "push_token_reported";
     pub const LAST_SEEN: &str = "last_seen";
 }
 

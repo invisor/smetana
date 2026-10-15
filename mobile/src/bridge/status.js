@@ -72,7 +72,6 @@ export async function unpair() {
   await tauriInvoke('unpair')
   bridge.paired = false
   bridge.status = { state: 'connecting' }
-  everOnline = false
 }
 
 export function dismissRecommended() {

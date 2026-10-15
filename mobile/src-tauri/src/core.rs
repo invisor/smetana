@@ -294,20 +294,13 @@ impl Core {
         let addr = EndpointAddr::new(ticket.desktop).with_relay_url(relay.clone());
         let outcome = self.pair_over(&endpoint, addr, &request).await;
         endpoint.close().await;
-        match outcome? {
-            PairOutcome::Accepted | PairOutcome::AlreadyPaired => {
-                let record = PairingRecord { desktop: ticket.desktop.to_string(), relay: relay.to_string() };
-                self.store.set(names::PAIRING, &serde_json::to_string(&record).map_err(|e| e.to_string())?)?;
-                match token {
-                    Some(token) => self.store.set(names::PUSH_TOKEN_REPORTED, &token)?,
-                    None => self.store.delete(names::PUSH_TOKEN_REPORTED),
-                }
-                Ok(())
-            }
-        }
+        outcome?;
+        let record = PairingRecord { desktop: ticket.desktop.to_string(), relay: relay.to_string() };
+        self.store.set(names::PAIRING, &serde_json::to_string(&record).map_err(|e| e.to_string())?)?;
+        Ok(())
     }
 
-    async fn pair_over(&self, endpoint: &Endpoint, addr: EndpointAddr, request: &PairRequest) -> Result<PairOutcome, String> {
+    async fn pair_over(&self, endpoint: &Endpoint, addr: EndpointAddr, request: &PairRequest) -> Result<(), String> {
         let conn = tokio::time::timeout(self.config.connect_timeout, endpoint.connect(addr, ALPN))
             .await
             .map_err(|_| "The desktop did not answer. Is it running, and online?".to_owned())?
@@ -316,14 +309,18 @@ impl Core {
         write_frame(&mut send, request).await.map_err(|err| err.to_string())?;
         let reply = tokio::time::timeout(self.config.pair_timeout, read_frame::<PairReply>(&mut recv, MAX_FRAME)).await;
         let outcome = match reply {
-            Ok(Ok(PairReply::Accepted)) => Ok(PairOutcome::Accepted),
+            Ok(Ok(PairReply::Accepted)) => Ok(()),
             Ok(Ok(PairReply::Rejected { reason })) => Err(rejection_text(&reason)),
             Ok(Err(_)) => {
-                // The desktop closed without a reply. A key it already lists is answered
-                // with `CLOSE_PROTOCOL`, which means this phone is paired already.
+                // The desktop closed without a reply. `CLOSE_PROTOCOL` is ambiguous: it is
+                // what a desktop answers a key it already lists, and also what it sends when
+                // the first frame did not arrive in time. Nothing is stored on either; the
+                // person can show a new code and try again.
                 let closed = tokio::time::timeout(Duration::from_secs(1), conn.closed()).await.ok();
                 match closed.as_ref().and_then(close_code) {
-                    Some(code) if code == remote_protocol::CLOSE_PROTOCOL => Ok(PairOutcome::AlreadyPaired),
+                    Some(code) if code == remote_protocol::CLOSE_PROTOCOL => {
+                        Err("The desktop closed the connection without answering. Show a new code on the desktop and try again.".into())
+                    }
                     Some(code) if code == CLOSE_UNKNOWN => Err("The desktop is not showing a pairing code any more.".into()),
                     _ => Err("The connection to the desktop dropped before it answered.".into()),
                 }
@@ -341,7 +338,7 @@ impl Core {
             handle.abort();
         }
         *self.live.lock().unwrap() = None;
-        for name in [names::PAIRING, names::LAST_SEEN, names::PUSH_TOKEN_REPORTED] {
+        for name in [names::PAIRING, names::LAST_SEEN] {
             self.store.delete(name);
         }
         self.last_seen.store(0, Ordering::Relaxed);
@@ -372,6 +369,7 @@ impl Core {
         };
         let addr = EndpointAddr::new(desktop).with_relay_url(relay.clone());
         let mut delay = self.config.backoff_start;
+        let mut retried = false;
         let endpoint = loop {
             match bind(&identity, &relay, &self.config).await {
                 Ok(endpoint) => break endpoint,
@@ -383,7 +381,10 @@ impl Core {
             }
         };
         loop {
-            if !matches!(self.status(), Status::Unreachable { .. }) {
+            // An explicit retry always shows `connecting` again, even from `unreachable`:
+            // the front end set it optimistically, and a failed attempt that ends in the
+            // same `unreachable` would otherwise emit nothing and leave it there.
+            if retried || !matches!(self.status(), Status::Unreachable { .. }) {
                 self.set_status(Status::Connecting);
             }
             match self.attempt(&endpoint, addr.clone()).await {
@@ -401,18 +402,20 @@ impl Core {
                 }
                 Attempt::Failed => self.set_status(self.unreachable()),
             }
-            self.pause(&mut delay).await;
+            retried = self.pause(&mut delay).await;
         }
         endpoint.close().await;
     }
 
     /// Waits out the pause (or is told to try now) and doubles it for next time.
-    async fn pause(&self, delay: &mut Duration) {
-        tokio::select! {
-            _ = tokio::time::sleep(*delay) => {}
-            _ = self.retry.notified() => {}
-        }
+    /// Returns whether it was cut short by a request to retry.
+    async fn pause(&self, delay: &mut Duration) -> bool {
+        let retried = tokio::select! {
+            _ = tokio::time::sleep(*delay) => false,
+            _ = self.retry.notified() => true,
+        };
         *delay = (*delay * 2).min(self.config.backoff_max);
+        retried
     }
 
     async fn attempt(&self, endpoint: &Endpoint, addr: EndpointAddr) -> Attempt {
@@ -556,28 +559,20 @@ impl Core {
         self.sync_token();
     }
 
-    /// Tells the desktop the token it does not have yet. Only to a desktop whose
-    /// protocol knows the message: an older one would read an unknown variant as a
-    /// broken frame and close.
+    /// Tells the desktop the token. Sent at every handshake and at every change, with no
+    /// record of what the desktop was told before: the message is idempotent there, and a
+    /// record kept on the phone could say "reported" for a token that never arrived. Only
+    /// to a desktop whose protocol knows the message: an older one would read an unknown
+    /// variant as a broken frame and close.
     fn sync_token(&self) {
         let Some(token) = self.token() else { return };
-        if self.store.get(names::PUSH_TOKEN_REPORTED).as_deref() == Some(token.as_str()) {
-            return;
-        }
         let guard = self.live.lock().unwrap();
         let Some(live) = guard.as_ref() else { return };
         if live.minor < PUSH_TOKEN_MINOR {
             return;
         }
-        if live.tx.try_send(ClientMsg::UpdatePushToken { token: token.clone() }).is_ok() {
-            let _ = self.store.set(names::PUSH_TOKEN_REPORTED, &token);
-        }
+        let _ = live.tx.try_send(ClientMsg::UpdatePushToken { token });
     }
-}
-
-enum PairOutcome {
-    Accepted,
-    AlreadyPaired,
 }
 
 /// The desktop's reason, in words for a person. Its own wording is kept when it

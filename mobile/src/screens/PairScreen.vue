@@ -45,7 +45,7 @@ const bodyStyle = computed(() => ({
   margin: 0,
   color: 'var(--text-secondary)',
   fontSize: 'var(--text-ui-size)',
-  lineHeight: 1.5
+  lineHeight: 'var(--leading-normal)'
 }))
 const errorStyle = computed(() => ({
   margin: 0,

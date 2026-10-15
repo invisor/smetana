@@ -112,3 +112,29 @@ describe('after a reconnect', () => {
     expect(status.bridge.status).toEqual({ state: 'unreachable', last_seen: 5 })
   })
 })
+
+describe('pairing again in one session', () => {
+  it('reads the snapshot again and does not start the stores a second time', async () => {
+    const { core, status } = await start({ unpair: null, pair: null, connect: null })
+    const session = await import('../../src/session.js')
+    session.wireStores()
+    localStorage.clear()
+
+    status.applyStatus({ state: 'online' })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(session.home.tasks).toBe(1)
+    expect(localStorage.getItem('smetana.companion.summary')).not.toBeNull()
+
+    await session.unpairAndForget()
+    expect(localStorage.getItem('smetana.companion.summary')).toBeNull()
+    expect(session.home.tasks).toBeNull()
+    expect(session.home.project).toBeNull()
+
+    status.applyStatus({ state: 'online' })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // Two reads of the board, but the events were subscribed once.
+    expect(core.bridged('tracker_snapshot')).toHaveLength(2)
+    expect(core.core('bridge_listen').filter((a) => a.event === 'tracker:delta')).toHaveLength(1)
+    expect(core.bridged('tracker_health')).toHaveLength(1)
+  })
+})

@@ -24,7 +24,7 @@ const copyStyle = computed(() => ({
   <Frame>
     <EmptyState icon="triangle-alert" title="Workstation unreachable" :description="text" />
     <p v-if="props.tasks !== null" :style="copyStyle">
-      Read only: {{ props.project ?? 'the last project' }}, {{ props.tasks }} tasks when last read.
+      Read only: {{ props.project ?? 'the last project' }}, {{ props.tasks }} {{ props.tasks === 1 ? 'task' : 'tasks' }} when last read.
     </p>
     <Button icon="refresh-cw" full-width @click="connect">Try again</Button>
   </Frame>
