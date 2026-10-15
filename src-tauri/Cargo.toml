@@ -301,6 +301,16 @@ futures-core = "0.3"
 # turning off `metrics` or `portmapper` was not measured to be worth the
 # divergence from what the mobile build compiles.
 remote-protocol = { path = "../crates/remote-protocol" }
+
+# The push sender (`remote/push.rs`) posts one JSON body to the gateway. `reqwest` was already in
+# the tree through the updater and iroh's relay client, so this names it rather than adding a
+# second HTTP client; the features are the updater's (`rustls-no-provider`, no default TLS
+# backend), so the one build is shared and no second crypto provider is compiled.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+# `rustls-no-provider` builds a client only if a process-wide crypto provider exists, and the updater
+# installs ring lazily on its first check. A push can come first, so the sender installs the same
+# provider itself (already in the lock through the updater: no new package).
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 iroh = "1.3"
 # The pairing secret. 0.10 because that is the major iroh itself is on, so this
 # adds no second copy.

@@ -15,6 +15,7 @@ pub mod commands;
 pub mod devices;
 pub mod endpoint;
 pub mod pairing;
+pub mod push;
 
 #[cfg(test)]
 mod tests;

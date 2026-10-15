@@ -79,3 +79,18 @@ string carries colours as attributes, which cannot be `var(--token)`, and the on
 because a scanner wants dark on light.
 
 **Tests** use `RelayMode::Disabled` and a loopback `bind_addr`; no relay process is needed.
+
+## Push
+
+`remote/push.rs` sends a run's ending and a session's start of waiting to every device with a `push_token`.
+The text is sealed in `remote_protocol::push` (X25519 to the device's `push_key`, BLAKE3-derived key,
+XChaCha20-Poly1305) and posted to `GATEWAY_URL` as `{ platform, token, blob }` — the body
+`server/push-gateway` accepts. The gateway URL is a constant and a **placeholder** (`.example`), not a
+setting: the gateway holds the published apps' APNs/FCM credentials.
+
+One push per transition. A session pushes in `refresh_state` when the state *changes into* `NeedsYou`
+(`waiting_began`); a run pushes in `handle_report` when a loop report moves it to over (`run_ended`),
+so a stop pressed with nothing in flight is not announced to one's own phone. Delivery is spawned,
+best effort, with no retry or queue; a failure is one log line naming the device and never the token.
+`reqwest` is the updater's build of it (`rustls-no-provider`), so `push::client` installs the ring
+provider itself in case no update check has run yet. Terminal (PTY) sessions do not push yet.

@@ -11,6 +11,7 @@
 //! bi-directional stream per connection, and is deliberately absent here.
 
 mod frame;
+pub mod push;
 mod ticket;
 
 pub use frame::{decode_frame, encode_frame, read_frame, write_frame, FrameError, MAX_FRAME};
