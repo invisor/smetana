@@ -144,8 +144,11 @@ XChaCha20-Poly1305) and posted to `GATEWAY_URL` as `{ platform, token, blob }` â
 setting: the gateway holds the published apps' APNs/FCM credentials.
 
 One push per transition. A session pushes in `refresh_state` when the state *changes into* `NeedsYou`
-(`waiting_began`); a run pushes in `handle_report` when a loop report moves it to over (`run_ended`),
+(`waiting_began`), and a terminal (PTY) session does the same in `reassess` in `terminal/service.rs`
+through `announce_wait`. The targets differ: `session:<id>` for a conversation session, `terminal:<id>` for a PTY one,
+because the two id counters are separate and both start at 1, so `session:3` from a terminal would open someone
+else's conversation; a run pushes in `handle_report` when a loop report moves it to over (`run_ended`),
 so a stop pressed with nothing in flight is not announced to one's own phone. Delivery is spawned,
 best effort, with no retry or queue; a failure is one log line naming the device and never the token.
 `reqwest` is the updater's build of it (`rustls-no-provider`), so `push::client` installs the ring
-provider itself in case no update check has run yet. Terminal (PTY) sessions do not push yet.
+provider itself in case no update check has run yet.
