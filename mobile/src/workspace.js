@@ -71,7 +71,11 @@ let runsPin = null
 /* The Runs screen is gone: the run stores follow the active project again, and are brought to
    it now if they were left on another. */
 export function unpinRuns() {
+  const was = runsPin
   runsPin = null
+  if (was !== null && was !== settings.activeProject) {
+    loadProject(settings.activeProject).catch((err) => console.warn('[companion] could not read the project:', err))
+  }
 }
 
 /* The link is up: the first time, and after every reconnect. The tracker has been read by the
@@ -93,6 +97,9 @@ export async function refreshFromDesktop() {
   await readDesktop()
   if (settings.activeProject !== before) await resync()
   await loadProject(settings.activeProject)
+  /* A Runs screen on another project is read again too, or it would be stale after the
+     phone was in the background. */
+  if (runsPin !== null && runsPin !== settings.activeProject) await loadRunsFor(runsPin)
 }
 
 /* Switching the project here switches the desktop's too: `tracker_set_project` is the one

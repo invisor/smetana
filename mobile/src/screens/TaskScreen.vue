@@ -3,7 +3,7 @@
    markdown of every prose field and the record beneath, plus the two dependency lists as
    things to open - the inspector names what blocks a task and leaves the tracing to the
    person, and on a phone a name is only useful if it can be tapped. */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import TaskInspector from '@src/components/kanban/TaskInspector.vue'
 import EmptyState from '@src/components/core/EmptyState.vue'
 import { boardColumns, dependencyEdges, issueById, toUiStatus } from '@src/stores/tracker.js'
@@ -21,6 +21,7 @@ const uiStatus = computed(
 
 /* The id to the clipboard; the inspector words the tooltip from the outcome. */
 const copied = ref('')
+watch(() => props.id, () => (copied.value = ''))
 async function copyId(id) {
   try {
     await navigator.clipboard.writeText(id)

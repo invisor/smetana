@@ -285,4 +285,22 @@ describe('the Runs screen on a project that is not the active one', () => {
     await workspace.startWorkspace()
     expect(stores.runs.runsState.project).toBe('/work/a')
   })
+
+  it('brings the stores back to the active project the moment the screen is gone', async () => {
+    const { workspace, stores } = await start({ project_config: byProject })
+    await workspace.startWorkspace()
+    await workspace.loadRunsFor('/work/b')
+    workspace.unpinRuns()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(stores.runs.runsState.project).toBe('/work/a')
+    expect(stores.runs.runsState.config.defaults.target_branch).toBe('a-main')
+  })
+
+  it('reads the pinned project again on a return from the background', async () => {
+    const { core, workspace } = await start({ project_config: byProject })
+    await workspace.loadRunsFor('/work/b')
+    const before = core.bridged('run_state').filter((a) => a.project === '/work/b').length
+    await workspace.refreshFromDesktop()
+    expect(core.bridged('run_state').filter((a) => a.project === '/work/b').length).toBe(before + 1)
+  })
 })
