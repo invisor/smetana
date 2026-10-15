@@ -59,6 +59,7 @@ import {
   Dropdown,
   DependencySpine,
   DraftInspector,
+  DevicesSettings,
   EditorSettings,
   EmptyState,
   FileEditor,
@@ -2333,6 +2334,17 @@ const galleryDontAsk = ref(false)
    both on: the page is where the pair of rows is looked at, and one of each
    shows both positions of a switch side by side. */
 const galleryGitAutoFetch = ref(true)
+/* The Devices tab in the four states worth looking at. The code is the mock's
+   own ticket, which has the length of a real one and decodes to nothing; the
+   countdown is a fixed number, so the picture does not change while somebody is
+   looking at it. */
+const galleryDevices = [
+  { key: 'a3f1c0de', name: 'Pixel 8', platform: 'android', pairedAt: 1_760_000_000, lastContact: 1_760_700_000 },
+  { key: '7be2d901', name: 'iPhone of Mira', platform: 'ios', pairedAt: 1_757_000_000, lastContact: null }
+]
+const galleryTicket =
+  'smetana1:aebagbafaydqqcikbmgq4eb5haytcmzzgm2tqnzvgu3tgnbzgyzdmmrqgq4wmnjvgi3dgnbxgmaebagbafaydqqcikbmgq4eb5haytcmzzgm2tqnzvgu3tgnbzgyzdm'
+const galleryRelay = ref('https://relay.example.org')
 const galleryRemoveWorktrees = ref(false)
 /* The two notification sounds, local for the same reason. Deliberately not
    both on a sound: this page is where the pair of rows is looked at, and one of
@@ -7162,6 +7174,43 @@ const menuTargetStyle = {
             @update:always-show="galleryKanbanAlwaysShow = $event"
             @update:interval="galleryKanbanInterval = $event"
             @update:unlimited="galleryKanbanUnlimited = $event"
+          />
+        </div>
+        <!-- The Devices tab: nobody paired and no code, a code on screen over
+             two paired phones, a phone asking to be let in, and a code that ran
+             out. Pressing emits and the harness does nothing. The clock is
+             fixed at a moment shortly after the second phone's last contact so
+             "last seen" does not drift while somebody is looking. -->
+        <div :style="{ width: '380px' }">
+          <DevicesSettings :relay-url="galleryRelay" @update:relay-url="galleryRelay = $event" />
+        </div>
+        <div :style="{ width: '380px' }">
+          <DevicesSettings
+            :devices="galleryDevices"
+            :ticket="galleryTicket"
+            :remaining="105"
+            :now="1_760_700_240_000"
+            :relay-url="galleryRelay"
+          />
+        </div>
+        <div :style="{ width: '380px' }">
+          <DevicesSettings
+            :devices="galleryDevices"
+            :ticket="galleryTicket"
+            :remaining="40"
+            :request="{ deviceName: 'Pixel 9 Pro', platform: 'android' }"
+            :now="1_760_700_240_000"
+            :relay-url="galleryRelay"
+          />
+        </div>
+        <div :style="{ width: '380px' }">
+          <DevicesSettings
+            :devices="galleryDevices.slice(0, 1)"
+            :ticket="galleryTicket"
+            :remaining="0"
+            :now="1_760_700_240_000"
+            error="The desktop could not start the endpoint."
+            relay-url="https://relay.example.org"
           />
         </div>
         <!-- The Storage tab in the three states worth looking at: something to

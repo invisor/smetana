@@ -1,0 +1,16 @@
+/* ============================================================================
+   PAIRING CODE — the one picture in this system whose colours are not the
+   theme's.
+
+   A phone's camera reads a QR code as dark modules on a light ground, and some
+   scanners do not read it the other way round. Every theme token flips between
+   light and dark, so none of them can promise that: in the dark theme
+   `--text-primary` is the light one. These two are identical in both themes for
+   the reason `--prose-figure-mat` is — the object is the same in either, a
+   printed card pinned to the surface — and the ground is the same paper as that
+   mat so the two read as one material.
+   ============================================================================ */
+:root{
+  --qr-paper:#f4f7f7;
+  --qr-ink:#10151a;
+}

@@ -212,6 +212,72 @@ impl Default for GitSettings {
     }
 }
 
+/// The companion app's one preference: the relay a phone reaches this desktop
+/// through.
+///
+/// Global rather than under a project, on `GitSettings`' argument exactly: it is
+/// a fact about this machine's network and about whom its owner trusts to carry
+/// ciphertext, and no repository has an opinion on it. The device list is
+/// **not** here — it is state the app writes, not a preference, and revoking
+/// from it has to take effect at once; it lives in its own file
+/// (`remote/devices.rs`).
+///
+/// The default is `remote::DEFAULT_RELAY_URL`, and there are **four** copies of
+/// it under the same obligation `git.autoFetch`'s four have: `RemoteSettings`
+/// here, `defaults()` in `stores/settings.js`, `view` in `SettingsWindow.vue`
+/// and the prop default in `components/settings/DevicesSettings.vue`. A
+/// disagreement draws a different relay in the field than the one the next
+/// ticket carries, for as long as it takes the first answer to arrive.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RemoteSettings {
+    pub relay_url: String,
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        Self { relay_url: crate::remote::DEFAULT_RELAY_URL.into() }
+    }
+}
+
+/// The longest relay URL kept. Generous for a hostname and a path; it exists to
+/// catch a pasted page, not to be tight.
+const MAX_RELAY_URL: usize = 2048;
+
+/// Whether `url` can be handed to the relay client as an address: `https://`,
+/// then a host, and nothing a URL does not hold. Plain `http://` is refused
+/// because the relay carries ciphertext but also learns who talks to whom, and
+/// a bare IP is refused by the spec (it would need a certificate nobody has).
+/// The check is deliberately shallow — whether the name resolves is the
+/// endpoint's to find out — but it is the one thing that keeps a typo from
+/// reaching it.
+pub fn valid_relay_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    if url.len() > MAX_RELAY_URL || rest.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit_once(':').map_or(host, |(name, port)| {
+        if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) { name } else { host }
+    });
+    !host.is_empty()
+        && !host.contains('@')
+        && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        && !host.starts_with(['.', '-'])
+        && host.parse::<std::net::IpAddr>().is_err()
+}
+
+impl RemoteSettings {
+    fn validate(&mut self) {
+        self.relay_url = self.relay_url.trim().to_owned();
+        if !valid_relay_url(&self.relay_url) {
+            self.relay_url = crate::remote::DEFAULT_RELAY_URL.into();
+        }
+    }
+}
+
 /// The percentages at which a run holds itself back, and how far.
 ///
 /// At the root beside `agent` and the languages rather than under a project,
@@ -1250,6 +1316,9 @@ pub struct Settings {
     /// What the Git panel may do on its own. At the root for the reason
     /// `GitSettings` records.
     pub git: GitSettings,
+    /// The relay a phone reaches this desktop through. At the root for the
+    /// reason `RemoteSettings` records.
+    pub remote: RemoteSettings,
     /// The percentages at which a run holds itself back. At the root for the
     /// reason `SubscriptionSettings` records.
     pub subscription: SubscriptionSettings,
@@ -1373,6 +1442,7 @@ impl Default for Settings {
             kanban: KanbanSettings::default(),
             reports: ReportsSettings::default(),
             git: GitSettings::default(),
+            remote: RemoteSettings::default(),
             subscription: SubscriptionSettings::default(),
             run_failover: RunFailoverSettings::default(),
             window: WindowSettings::default(),
@@ -1415,6 +1485,8 @@ pub struct ResolvedSettings {
     pub reports: ReportsSettings,
     /// What the Git panel may do on its own. See `Settings::git`.
     pub git: GitSettings,
+    /// The companion's relay. See `Settings::remote`.
+    pub remote: RemoteSettings,
     /// The run gate's thresholds. See `Settings::subscription`.
     pub subscription: SubscriptionSettings,
     /// The global run failover policy. See `Settings::run_failover`.
@@ -1464,6 +1536,7 @@ impl Default for ResolvedSettings {
             kanban: KanbanSettings::default(),
             reports: ReportsSettings::default(),
             git: GitSettings::default(),
+            remote: RemoteSettings::default(),
             subscription: SubscriptionSettings::default(),
             run_failover: RunFailoverSettings::default(),
             window: WindowSettings::default(),
@@ -1518,6 +1591,7 @@ pub fn parse(text: &str) -> Outcome {
         kanban: section(&object, "kanban"),
         reports: section(&object, "reports"),
         git: section(&object, "git"),
+        remote: section(&object, "remote"),
         subscription: section(&object, "subscription"),
         run_failover: section(&object, "runFailover"),
         window: section(&object, "window"),
@@ -1586,6 +1660,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         kanban: file.kanban.clone(),
         reports: file.reports.clone(),
         git: file.git.clone(),
+        remote: file.remote.clone(),
         subscription: file.subscription,
         run_failover: file.run_failover.clone(),
         window: file.window.clone(),
@@ -1621,6 +1696,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.kanban = resolved.kanban;
     file.reports = resolved.reports;
     file.git = resolved.git;
+    file.remote = resolved.remote;
     file.subscription = resolved.subscription;
     file.run_failover = resolved.run_failover;
     file.window = resolved.window;
@@ -1804,6 +1880,7 @@ impl Settings {
         self.editor.validate();
         self.kanban.validate();
         self.reports.validate();
+        self.remote.validate();
         self.subscription.validate();
         self.run_failover.validate();
         self.notifications.validate();
@@ -1851,6 +1928,7 @@ impl ResolvedSettings {
         self.editor.validate();
         self.kanban.validate();
         self.reports.validate();
+        self.remote.validate();
         self.subscription.validate();
         self.run_failover.validate();
         self.notifications.validate();
@@ -2275,6 +2353,69 @@ mod tests {
             Outcome::Ok(settings) => settings,
             other => panic!("expected Ok, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_relay_defaults_to_ours_and_a_stored_one_survives_disk_to_front_end_and_back() {
+        assert_eq!(Settings::default().remote.relay_url, crate::remote::DEFAULT_RELAY_URL);
+        assert_eq!(
+            settings_of(r#"{"version":1,"appearance":{"theme":"light"}}"#).remote,
+            RemoteSettings::default(),
+            "a file written before the section existed opens on the default"
+        );
+
+        let file = settings_of(r#"{"version":1,"remote":{"relayUrl":"https://relay.example.org"}}"#);
+        assert_eq!(file.remote.relay_url, "https://relay.example.org", "parse must read it");
+        let resolved = resolve(&file, None);
+        assert_eq!(resolved.remote.relay_url, "https://relay.example.org", "resolve must carry it");
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert_eq!(written.remote.relay_url, "https://relay.example.org", "merge must write it back");
+    }
+
+    #[test]
+    fn a_relay_url_that_is_not_https_or_is_empty_is_replaced_by_the_default() {
+        for bad in [
+            "",
+            "   ",
+            "http://relay.example.org",
+            "relay.example.org",
+            "ftp://relay.example.org",
+            "https://",
+            "https:///path",
+            "https://relay example.org",
+            "https://user@relay.example.org",
+            "https://203.0.113.7",
+            "https://203.0.113.7:4433/",
+            "https://-bad.example.org",
+        ] {
+            let text = format!(r#"{{"version":1,"remote":{{"relayUrl":{}}}}}"#, serde_json::json!(bad));
+            assert_eq!(
+                settings_of(&text).remote.relay_url,
+                crate::remote::DEFAULT_RELAY_URL,
+                "{bad:?} must not survive parse"
+            );
+        }
+        for good in ["https://relay.example.org", "https://relay.example.org:8443/", "https://localhost"] {
+            let text = format!(r#"{{"version":1,"remote":{{"relayUrl":{}}}}}"#, serde_json::json!(good));
+            assert_eq!(settings_of(&text).remote.relay_url, good);
+        }
+    }
+
+    #[test]
+    fn a_relay_url_the_front_end_should_not_have_sent_does_not_reach_the_file() {
+        let mut resolved = ResolvedSettings::default();
+        resolved.remote.relay_url = "http://insecure.example.org".into();
+        let mut file = Settings::default();
+        merge(&mut file, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert_eq!(file.remote.relay_url, crate::remote::DEFAULT_RELAY_URL);
+    }
+
+    #[test]
+    fn a_remote_section_of_the_wrong_type_is_lost_whole() {
+        let settings = settings_of(r#"{"version":1,"remote":"relay","appearance":{"theme":"light"}}"#);
+        assert_eq!(settings.remote, RemoteSettings::default());
+        assert_eq!(settings.appearance.theme, "light");
     }
 
     #[test]

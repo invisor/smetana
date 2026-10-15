@@ -28,6 +28,7 @@ import { LEFT_DEFAULT, RIGHT_DEFAULT } from '../views/panelWidths.js'
    store ships as its default and the word the picker draws a list from cannot
    be two different words. */
 import { LOCAL_SIDE } from '../components/git/branchPicker.js'
+import { DEFAULT_RELAY_URL, validRelayUrl } from '../components/settings/devices.js'
 /* Pure, no Vue and no DOM: what the board's two view settings may be, and the
    shape of the two column lists beside them. Imported so this store and the
    settings tab cannot disagree about which values are legal — and so that what
@@ -87,6 +88,14 @@ const defaults = () => ({
      ships on because that is today's behaviour exactly. A section missing there
      is a section this window cannot draw. */
   git: { autoFetch: true, removeWorktrees: true },
+  /* The relay a paired phone reaches this desktop through, for the Devices tab.
+     Global rather than per project for the reason `RemoteSettings` in Rust
+     records, and shipped as that file ships it: the value is imported from
+     `components/settings/devices.js` instead of written out, and a test keeps
+     that module's copy and Rust's equal. The paired devices are deliberately
+     not here — they are state the app writes to a file of its own, not a
+     preference, and they never travel through this store. */
+  remote: { relayUrl: DEFAULT_RELAY_URL },
   /* What the main window does with the size and position it was left at.
      `restoreGeometry` off stops it being put back and never stops it being
      saved — `src-tauri/src/window.rs` holds that half — so switching it back on
@@ -584,6 +593,7 @@ export async function loadSettings() {
     applySection(settings.appearance, base.appearance, stored.appearance)
     applySection(settings.editor, base.editor, stored.editor)
     applySection(settings.git, base.git, stored.git)
+    applySection(settings.remote, base.remote, stored.remote)
     applySection(settings.subscription, base.subscription, stored.subscription)
     applySection(settings.runFailover, base.runFailover, stored.runFailover)
     settings.runFailover.priority = priorityOrder(settings.runFailover.priority, base.runFailover.priority)
@@ -683,6 +693,7 @@ function toShared(source) {
   const editor = { ...base.editor, ...source.editor }
   const kanban = { ...base.kanban, ...source.kanban }
   const git = { ...base.git, ...source.git }
+  const remote = { ...base.remote, ...source.remote }
   const subscription = { ...base.subscription, ...source.subscription }
   const runFailover = { ...base.runFailover, ...source.runFailover }
   runFailover.priority = priorityOrder(runFailover.priority, base.runFailover.priority)
@@ -715,6 +726,8 @@ function toShared(source) {
     /* Flat for the same reason the four above it are. */
     gitAutoFetch: git.autoFetch,
     gitRemoveWorktrees: git.removeWorktrees,
+    /* Flat for the same reason as the fields above it. */
+    remoteRelayUrl: remote.relayUrl,
     /* Flat beside the agent and the languages, and named for the section plus
        the field: two numbers of one policy, where a `subscription` object in
        this message would invite somebody to send half of it and blank the
@@ -902,6 +915,14 @@ export function applyPatch(patch) {
      malformed event into a deliberate-looking answer either way. */
   if (typeof patch.gitRemoveWorktrees === 'boolean') {
     settings.git.removeWorktrees = patch.gitRemoveWorktrees
+  }
+  /* The relay address, held to the same shape Rust holds it to. Rust replaces
+     what it refuses with the default on the next save and says nothing, so a
+     value let through here would sit on screen for the session and quietly
+     revert after a restart; the check is `validRelayUrl`, the front end's copy
+     of Rust's rule. */
+  if (typeof patch.remoteRelayUrl === 'string' && validRelayUrl(patch.remoteRelayUrl)) {
+    settings.remote.relayUrl = patch.remoteRelayUrl.trim()
   }
   /* The run gate's two thresholds, checked against the ladder rather than
      merely for a number, unlike the font sizes above, which are clamped. There

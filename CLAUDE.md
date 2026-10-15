@@ -126,7 +126,7 @@ preference, and a stored version had the run case highlighting a card the inspec
 `src/stores/files.js`, `src/stores/terminals.js`, `src/stores/conversation.js`,
 `src/stores/sessions.js`, `src/stores/reports.js`, `src/stores/git.js`, `src/stores/vcs.js`, `src/stores/runs.js`,
 `src/stores/attachments.js`, `src/stores/windowDrops.js`, `src/stores/updates.js`,
-`src/stores/compare.js`, `src/stores/agents.js` and `src/stores/app.js` are the **only** files in
+`src/stores/compare.js`, `src/stores/agents.js`, `src/stores/remote.js` and `src/stores/app.js` are the **only** files in
 `src/` that know Tauri exists — components see reactive stores and nothing else.
 `mockBackend.js` below is the last and the exception that proves it: it imports Tauri in order
 to stand in for the absence of one. `app.js` is the odd one, and it is
@@ -226,6 +226,7 @@ cannot make it.
 | the column order, and what of the board is drawn | `.claude/rules/kanban-board.md` |
 | `settings.json`, and the settings window | `.claude/rules/settings.md` |
 | in-app updates, and the release that feeds them | `.claude/rules/updates.md` |
+| the phone companion: protocol crate, pairing, devices | `.claude/rules/remote.md` |
 
 ### The bd sidecar
 
