@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "default",
+  "description": "The companion's one window",
+  "windows": ["main"],
+  "platforms": ["iOS", "android"],
+  "permissions": [
+    "core:default",
+    "barcode-scanner:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://apps.apple.com/*" }, { "url": "https://play.google.com/*" }]
+    }
+  ]
+}
