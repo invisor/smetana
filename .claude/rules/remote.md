@@ -98,8 +98,7 @@ command of that name (`DESKTOP_COMMANDS` in `bridge.rs`, held equal to `lib.rs`'
 a test, so a new command is `Forbidden` and not `UnknownCommand` the day it is added); `UnknownCommand`
 means it has none. A refused command never reaches `Dispatch`. `session_send` is allowlisted but a
 non-empty `attachments` is `Forbidden`: those are paths on the desktop, and the spec keeps attachments
-from disk off the phone. `terminal_attach` is allowlisted, `terminal_write`/`resize` are not; note that
-attaching sets the terminal worker's active session and clears a pending bell, exactly as for the window.
+from disk off the phone. `terminal_attach` is allowlisted and is served by the worker's read-only `Request::Peek`, never `Attach`: an attach moves the single `active` seat and `flush` drops the output of every session that is not active, so a phone would freeze the desktop's tab. `terminal_write`/`resize` are not allowlisted.
 
 **One function per command.** A command that takes `State` or `AppHandle` is split into a plain function
 over the worker's handle (`tracker::commands::snapshot`, `session::commands::plain::send`, …) that the
@@ -115,9 +114,15 @@ connection. Calls run concurrently (32 per phone); replies carry the phone's id 
 
 **The contract.** `crates/remote-protocol/contract/commands/<cmd>.json` holds `args` (hand-written
 examples, every parameter present) and `reply` (examples of the real value, one of every enum variant);
-`events/<name>.json` holds `payload`; `version.json` holds the protocol version. `remote/contract.rs`
+`events/<name>.json` holds `payload`; `versions.json` maps each protocol version to the digest of the whole contract at that version. `remote/contract.rs`
 builds the real values from the handlers' types, compares them field by field and fails naming the command
 or event and the path. A removed or renamed field needs `PROTOCOL_MAJOR`; an added one needs the file
 updated and `PROTOCOL_MINOR` raised. `SMETANA_UPDATE_CONTRACT=1 cargo test remote_contract` rewrites the
 replies and payloads from the desktop's values; arguments are edited by hand. `settings_load` pins the
 whole of `ResolvedSettings`, so adding a setting touches the contract — that is the price of the policy.
+
+**A regenerated contract does not pass by itself.** `SMETANA_UPDATE_CONTRACT` never writes `versions.json`.
+The test `remote_contract_changes_only_with_a_protocol_version` fails when the files hash to something other
+than the digest recorded for the current `PROTOCOL_MAJOR.PROTOCOL_MINOR`, and says which bump is needed:
+MINOR for additions, MAJOR for removals and renames. The way forward is a new entry under a higher version,
+added by hand together with the constants; an existing entry is a frozen contract and is not edited.

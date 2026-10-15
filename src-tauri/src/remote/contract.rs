@@ -20,10 +20,11 @@
 //! not carry a key nothing reads), so a renamed or newly required parameter
 //! breaks the examples a phone is built on.
 //!
-//! The files are written by `SMETANA_UPDATE_CONTRACT=1 cargo test contract`
-//! (replies and payloads; arguments are edited by hand). Updating them is the
-//! deliberate act that goes with the version bump, and `version.json` there is
-//! held equal to `PROTOCOL_MAJOR`/`PROTOCOL_MINOR`.
+//! The files are written by `SMETANA_UPDATE_CONTRACT=1 cargo test remote_contract`
+//! (replies and payloads; arguments are edited by hand). That never touches
+//! `versions.json`, which pins the digest of the contract at each protocol
+//! version and is edited by a person together with the version bump: regenerating
+//! after a rename fails `remote_contract_changes_only_with_a_protocol_version`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -701,20 +702,81 @@ fn read_or_default(file: &str, key: &str) -> Value {
         .unwrap_or_else(|| json!([{}]))
 }
 
-#[test]
-fn remote_contract_version_file_is_held_equal_to_the_protocol_constants() {
-    if updating() {
-        let text = format!("{{\n  \"protocolMajor\": {PROTOCOL_MAJOR},\n  \"protocolMinor\": {PROTOCOL_MINOR}\n}}\n");
-        std::fs::write(root().join("version.json"), text).unwrap();
-        return;
+/// FNV-1a over every contract file, in path order, each as its canonical JSON
+/// (so line endings and layout do not matter). Not a security hash: it is a
+/// fingerprint, and a changed byte of any file changes it.
+fn contract_digest() -> String {
+    let mut paths: Vec<String> = ALLOWED_COMMANDS.iter().map(|c| command_contract_path(c)).collect();
+    paths.extend(ALLOWED_EVENTS.iter().map(|e| event_contract_path(e)));
+    paths.sort();
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut feed = |bytes: &[u8]| {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+    };
+    for path in &paths {
+        feed(path.as_bytes());
+        feed(&[0]);
+        feed(read(path).to_string().as_bytes());
+        feed(&[0]);
     }
-    let version = read("version.json");
-    assert_eq!(
-        (version["protocolMajor"].clone(), version["protocolMinor"].clone()),
-        (json!(PROTOCOL_MAJOR), json!(PROTOCOL_MINOR)),
-        "contract/version.json and PROTOCOL_MAJOR/PROTOCOL_MINOR must change together: a changed contract \
-         is a new protocol version"
+    format!("{hash:016x}")
+}
+
+fn version_key(major: u16, minor: u16) -> String {
+    format!("{major}.{minor}")
+}
+
+fn parse_version(key: &str) -> (u16, u16) {
+    let (major, minor) = key.split_once('.').unwrap_or_else(|| panic!("versions.json key {key:?} is not MAJOR.MINOR"));
+    (major.parse().expect("a numeric major"), minor.parse().expect("a numeric minor"))
+}
+
+/// `versions.json` records the digest of the contract at every protocol version,
+/// and **nothing writes it but a person**: `SMETANA_UPDATE_CONTRACT` rewrites the
+/// examples and never this file. So a regenerated contract cannot pass by
+/// itself. The files of a version that has an entry are frozen, and a different
+/// digest under the same version is a change that needed a bump; the only way
+/// forward is a new entry under a higher `PROTOCOL_MAJOR`/`PROTOCOL_MINOR`, which
+/// is a decision in the diff.
+#[test]
+fn remote_contract_changes_only_with_a_protocol_version() {
+    let versions = read("versions.json");
+    let entries = versions.as_object().expect("versions.json is an object of MAJOR.MINOR to digest");
+    let current = version_key(PROTOCOL_MAJOR, PROTOCOL_MINOR);
+    let digest = contract_digest();
+
+    let newest = entries.keys().map(|key| parse_version(key)).max().expect("versions.json is empty");
+    assert!(
+        newest <= (PROTOCOL_MAJOR, PROTOCOL_MINOR),
+        "versions.json records {}.{}, newer than PROTOCOL_MAJOR/PROTOCOL_MINOR ({current}): the constants were lowered",
+        newest.0,
+        newest.1
     );
+
+    match entries.get(&current).and_then(Value::as_str) {
+        Some(pinned) if pinned == digest => {}
+        Some(pinned) => panic!(
+            "the contract changed but the protocol version did not: version {current} is pinned to digest {pinned} \
+             and the files now hash to {digest}.\n\
+             - if you only ADDED (a field, a command, an event): raise PROTOCOL_MINOR in remote/mod.rs to {}.{} \
+             and add \"{}.{}\": \"{digest}\" to contract/versions.json;\n\
+             - if you REMOVED or RENAMED anything: raise PROTOCOL_MAJOR to {} and add \"{}.0\": \"{digest}\".\n\
+             Do not edit the digest of an existing version: phones built against it hold that contract.",
+            PROTOCOL_MAJOR,
+            PROTOCOL_MINOR + 1,
+            PROTOCOL_MAJOR,
+            PROTOCOL_MINOR + 1,
+            PROTOCOL_MAJOR + 1,
+            PROTOCOL_MAJOR + 1,
+        ),
+        None => panic!(
+            "PROTOCOL_MAJOR/PROTOCOL_MINOR is {current} and versions.json has no entry for it: \
+             add \"{current}\": \"{digest}\""
+        ),
+    }
 }
 
 /// The argument examples are the contract's input side: each must decode the way

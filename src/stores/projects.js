@@ -8,6 +8,7 @@
    issues. */
 import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listDir, setRoot } from './files.js'
 import { measureStorage } from './notifications.js'
@@ -232,6 +233,45 @@ export async function addProject() {
   } finally {
     moving = false
   }
+}
+
+/* The desktop's half of a switch made on the phone. The phone's
+   `tracker_set_project` moves the tracker worker and nothing else, so the
+   desktop announces the new folder here (`remote:project-switched`) and the
+   window follows by the road a click on the list takes: `moveTo`, with the same
+   question about unsaved edits. A folder not on the list is put on it, as
+   `addProject` does.
+
+   No loop: the window's own move calls the `tracker_set_project` command, which
+   announces nothing — only a call that came over the bridge does — and a path
+   that is already active is not a move at all.
+
+   When the window does not follow (the person kept their unsaved edits, or the
+   phone emptied the tracker with `null`) the worker is put back on the window's
+   project, because a board that answers for one folder under another's header is
+   the fault this exists to prevent. A move already under way settles it: it
+   ends by telling the worker where the window went. */
+export async function followRemoteProject(path) {
+  if (moving) return
+  if (path && path !== settings.activeProject) {
+    moving = true
+    try {
+      if (await confirmUnsaved()) {
+        await flushPending()
+        if (!settings.openProjects.includes(path)) settings.openProjects.push(path)
+        await moveTo(path)
+        return
+      }
+    } finally {
+      moving = false
+    }
+  }
+  if (path !== settings.activeProject) await setProject(settings.activeProject)
+}
+
+/* Listens for the announcement above. Answers with the way to stop. */
+export function initProjectFollow() {
+  return listen('remote:project-switched', (event) => followRemoteProject(event.payload?.path ?? null))
 }
 
 /* Removal from the list. The project's state stays in the settings file and

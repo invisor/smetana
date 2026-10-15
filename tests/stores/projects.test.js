@@ -3,6 +3,7 @@ import { loadStores } from '../support/stores.js'
 import { buffer, listing, snapshot } from '../support/fixtures.js'
 
 let ipc
+let emit
 let settings
 let projects
 let tabs
@@ -10,6 +11,7 @@ let tabs
 beforeEach(async () => {
   const loaded = await loadStores()
   ipc = loaded.ipc
+  emit = loaded.emit
   settings = loaded.stores.settings
   projects = loaded.stores.projects
   tabs = loaded.stores.tabs
@@ -482,5 +484,53 @@ describe('bd init', () => {
     ipc.fail('tracker_init', new Error('bd init did not work out'))
 
     await expect(projects.initActive()).resolves.toBeUndefined()
+  })
+})
+
+describe('a project switched on the phone', () => {
+  it('moves the window to it the way a click on the list does', async () => {
+    settings.settings.openProjects = ['/a', '/b']
+    settings.settings.activeProject = '/a'
+    await projects.initProjectFollow()
+
+    await emit('remote:project-switched', { path: '/b' })
+    await vi.waitFor(() => expect(settings.settings.activeProject).toBe('/b'))
+
+    expect(ipc.calls('tracker_set_project')).toEqual([{ path: '/b' }])
+    expect(ipc.calls('files_list').some((call) => call.dir === '')).toBe(true)
+  })
+
+  it('puts a folder that is not on the list onto it', async () => {
+    settings.settings.openProjects = ['/a']
+    settings.settings.activeProject = '/a'
+    await projects.initProjectFollow()
+
+    await emit('remote:project-switched', { path: '/c' })
+    await vi.waitFor(() => expect(settings.settings.activeProject).toBe('/c'))
+
+    expect(settings.settings.openProjects).toEqual(['/a', '/c'])
+  })
+
+  it('does nothing about the project the window is already on, so the announcement cannot loop', async () => {
+    settings.settings.openProjects = ['/a']
+    settings.settings.activeProject = '/a'
+    await projects.initProjectFollow()
+
+    await emit('remote:project-switched', { path: '/a' })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(ipc.calls('tracker_set_project')).toEqual([])
+    expect(settings.settings.activeProject).toBe('/a')
+  })
+
+  it('tells the worker where the window is when the phone empties the tracker', async () => {
+    settings.settings.openProjects = ['/a']
+    settings.settings.activeProject = '/a'
+    await projects.initProjectFollow()
+
+    await emit('remote:project-switched', { path: null })
+    await vi.waitFor(() => expect(ipc.calls('tracker_set_project')).toEqual([{ path: '/a' }]))
+
+    expect(settings.settings.activeProject).toBe('/a')
   })
 })

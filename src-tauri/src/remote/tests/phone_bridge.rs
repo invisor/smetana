@@ -212,8 +212,14 @@ fn services() -> (Services, Snapshot) {
     let answer = snapshot.clone();
     tokio::spawn(async move {
         while let Some(request) = tracker_rx.recv().await {
-            if let TrackerRequest::Snapshot(tx) = request {
-                let _ = tx.send(answer.clone());
+            match request {
+                TrackerRequest::Snapshot(tx) => {
+                    let _ = tx.send(answer.clone());
+                }
+                TrackerRequest::SetProject(_, tx) => {
+                    let _ = tx.send(answer.clone());
+                }
+                _ => {}
             }
         }
     });
@@ -240,6 +246,7 @@ fn services() -> (Services, Snapshot) {
         sessions: SessionHandle(session_tx),
         terminal: TerminalHandle(terminal_tx),
         settings_path: Err("no settings in tests".into()),
+        project_switched: None,
     };
     (services, snapshot)
 }
@@ -394,4 +401,21 @@ async fn remote_bridge_a_revoked_phone_is_closed_and_its_listeners_go() {
     wait_until("the listener to go", || h.remote.hub.listeners("run:state") == 0).await;
     h.remote.hub.publish("run:state", &json!({}));
     assert!(write_frame(&mut client.send, &ClientMsg::Listen { event: "run:state".into() }).await.is_err());
+}
+
+#[tokio::test]
+async fn remote_bridge_a_project_switch_from_a_phone_is_announced_to_the_window() {
+    let h = harness().await;
+    let (mut services, _) = services();
+    let heard: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+    let sink = heard.clone();
+    services.project_switched = Some(Arc::new(move |path| sink.lock().unwrap().push(path)));
+    h.remote.hub.set_dispatch(Arc::new(services));
+    let (_phone, mut client) = paired(&h).await;
+
+    client.call("tracker_set_project", json!({ "path": "/work/b" })).await.unwrap();
+    client.call("tracker_set_project", json!({ "path": null })).await.unwrap();
+    // A call that is refused or does not decode announces nothing.
+    assert!(client.call("tracker_set_project", json!({ "path": 5 })).await.is_err());
+    assert_eq!(heard.lock().unwrap().as_slice(), [Some("/work/b".to_string()), None]);
 }

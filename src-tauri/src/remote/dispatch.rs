@@ -41,7 +41,17 @@ pub struct Services {
     pub terminal: TerminalHandle,
     /// Where `settings.json` is, or why that is not known.
     pub settings_path: Result<PathBuf, String>,
+    /// Told the folder after a project switch made over the bridge succeeds. The
+    /// tracker worker holds the one active project, and a phone's switch moves
+    /// only that; this is how the window is told to follow (see
+    /// `projects.js::followRemoteProject`). Production emits the window event.
+    pub project_switched: Option<ProjectSwitched>,
 }
+
+pub type ProjectSwitched = std::sync::Arc<dyn Fn(Option<String>) + Send + Sync>;
+
+/// The window event a phone's project switch is announced with.
+pub const PROJECT_SWITCHED_EVENT: &str = "remote:project-switched";
 
 impl Services {
     /// The managed state of a running app. `None` while any of it is missing,
@@ -54,6 +64,13 @@ impl Services {
             terminal: app.try_state::<TerminalHandle>()?.inner().clone(),
             settings_path: crate::settings::commands::settings_path(app)
                 .map_err(|err| err.to_string()),
+            project_switched: Some({
+                use tauri::Emitter;
+                let app = app.clone();
+                std::sync::Arc::new(move |path: Option<String>| {
+                    let _ = app.emit(PROJECT_SWITCHED_EVENT, json!({ "path": path }));
+                })
+            }),
         })
     }
 }
@@ -260,7 +277,14 @@ impl Services {
             Call::TrackerHealth => answer(tracker::commands::health(&self.tracker).await),
             Call::TrackerSnapshot => answer(tracker::commands::snapshot(&self.tracker).await),
             Call::TrackerSetProject(a) => {
-                answer(tracker::commands::set_project(&self.tracker, a.path).await)
+                let path = a.path.clone();
+                let result = tracker::commands::set_project(&self.tracker, a.path).await;
+                if result.is_ok() {
+                    if let Some(announce) = &self.project_switched {
+                        announce(path);
+                    }
+                }
+                answer(result)
             }
             Call::SettingsLoad(a) => match &self.settings_path {
                 Ok(path) => answer(crate::settings::commands::load_from(path, a.project)),
@@ -304,7 +328,8 @@ impl Services {
             ),
             Call::CrewStop(a) => answer(session::commands::plain::crew_stop(&self.sessions, a.root).await),
             Call::TerminalList(a) => answer(terminal::commands::plain::list(&self.terminal, a.project).await),
-            Call::TerminalAttach(a) => answer(terminal::commands::plain::attach(&self.terminal, a.id).await),
+            // A peek and not an attach: the phone must not take the window's seat.
+            Call::TerminalAttach(a) => answer(terminal::commands::plain::peek(&self.terminal, a.id).await),
         }
     }
 }

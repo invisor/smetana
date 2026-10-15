@@ -216,4 +216,10 @@ pub mod plain {
     pub async fn attach(handle: &TerminalHandle, id: SessionId) -> Result<Attached, TerminalError> {
         ask(handle, |tx| Request::Attach(id, tx)).await?
     }
+
+    /// `terminal_attach` for a reader that is not the window: the same reply, and
+    /// no seat taken. See `Request::Peek`.
+    pub async fn peek(handle: &TerminalHandle, id: SessionId) -> Result<Attached, TerminalError> {
+        ask(handle, |tx| Request::Peek(id, tx)).await?
+    }
 }
