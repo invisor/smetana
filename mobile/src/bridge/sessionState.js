@@ -16,10 +16,16 @@ const ENDED = ['exited', 'failed']
 
 /* The fold's state, as the accumulator `step` carries it. */
 function fresh() {
-  return { openTurn: false, pending: new Set(), textQuestion: false, seen: false, dead: null, last: null }
+  return { openTurn: false, pending: new Set(), textQuestion: false, seen: false, dead: null, last: null, seq: 0 }
 }
 
+/* An event at or before the last one folded is a repeat (a batch overtaken by a snapshot) and
+   is skipped, as the desktop's own store drops a stale one. */
 function step(acc, event) {
+  if (typeof event.seq === 'number') {
+    if (event.seq <= acc.seq) return
+    acc.seq = event.seq
+  }
   acc.seen = true
   switch (event.kind) {
     case 'turn-start':

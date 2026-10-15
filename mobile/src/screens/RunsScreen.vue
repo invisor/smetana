@@ -10,7 +10,7 @@
 
    `project` is the one a notification named, else the one in front. The run stores hold one
    project at a time, so it is loaded again whenever it changes. */
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import Button from '@src/components/core/Button.vue'
 import EmptyState from '@src/components/core/EmptyState.vue'
 import Select from '@src/components/core/Select.vue'
@@ -24,7 +24,7 @@ import { settings } from '@src/stores/settings.js'
 import { basename } from '@src/paths.js'
 import { describeStart, runSettings, startBlock } from '../runStart.js'
 import { reportRows } from '../reports.js'
-import { loadRunsFor } from '../workspace.js'
+import { loadRunsFor, unpinRuns } from '../workspace.js'
 
 const props = defineProps({ project: { type: String, default: null } })
 
@@ -38,19 +38,31 @@ watch(
   { immediate: true }
 )
 
+/* The run stores can only be trusted for the project they hold. If they drift from this
+   screen's, read them again. */
+watch(
+  () => runsState.project,
+  (held) => {
+    if (path.value && held !== path.value) loadRunsFor(path.value).catch((err) => console.warn('[companion] runs not read:', err))
+  }
+)
+onBeforeUnmount(unpinRuns)
+
 const live = computed(() => runsState.project === path.value)
 const runs = computed(() => (live.value ? [...runsState.runs].reverse() : []))
 const reports = computed(() => (reportsState.project === path.value ? reportRows(reportsState.rows) : []))
 
-const block = computed(() => startBlock(runsState.config))
-const busyReason = computed(() => scopeBusyReason({ kind: 'queue' }, runsState.runs))
+const block = computed(() => (live.value ? startBlock(runsState.config) : 'Reading the run configuration.'))
+const busyReason = computed(() => (live.value ? scopeBusyReason({ kind: 'queue' }, runsState.runs) : ''))
 
 /* The target branch: the person's pick, else the desktop's own rule (a pick of nothing). */
 const picked = ref('')
 watch(path, () => (picked.value = ''))
 const remembered = computed(() => (path.value === settings.activeProject ? settings.project.runSettings : null))
 const settingsToSend = computed(() =>
-  runSettings({
+  !live.value
+    ? null
+    : runSettings({
     config: runsState.config,
     branches: gitState.branches,
     remembered: remembered.value,
@@ -76,7 +88,7 @@ const stopping = ref(null)
 const failure = ref('')
 
 async function start() {
-  if (!settingsToSend.value || starting.value) return
+  if (!live.value || !settingsToSend.value || starting.value) return
   starting.value = true
   failure.value = ''
   try {

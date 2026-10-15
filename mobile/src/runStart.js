@@ -58,7 +58,8 @@ export function runSettings({ config, branches, remembered, branch = '' }) {
 
   /* Queue scope: the dialog turns a remembered Solo into Autopilot for anything but a task. */
   const mode = kept.mode && kept.mode !== 'solo' ? kept.mode : 'auto'
-  const pause = mode === 'auto' ? pausePayload(...Object.values(pauseFrom(kept))) : null
+  const gap = pauseFrom(kept)
+  const pause = mode === 'auto' ? pausePayload(gap.min, gap.max) : null
   const parallel = Math.min(
     Math.max((defaults.max_parallel_tasks ?? DEFAULTS_FALLBACK.max_parallel_tasks) || 1, 1),
     PARALLEL_MAX

@@ -261,3 +261,28 @@ describe('runs', () => {
     expect(settings.notifications.needsAttention).toBe('off')
   })
 })
+
+describe('the Runs screen on a project that is not the active one', () => {
+  const byProject = (args) => (args?.project === '/work/b' ? { state: 'ok', defaults: { target_branch: 'b-main' } } : { state: 'ok', defaults: { target_branch: 'a-main' } })
+
+  it('keeps the run stores on that project through a cold start and a return from the background', async () => {
+    const { core, workspace, stores } = await start({ project_config: byProject })
+    await workspace.loadRunsFor('/work/b')
+    expect(stores.runs.runsState.project).toBe('/work/b')
+
+    await workspace.startWorkspace()
+    expect(stores.runs.runsState.project).toBe('/work/b')
+    await workspace.refreshFromDesktop()
+    expect(stores.runs.runsState.project).toBe('/work/b')
+    expect(stores.runs.runsState.config.defaults.target_branch).toBe('b-main')
+    expect(core.bridged('project_config').filter((a) => a.project === '/work/a')).toEqual([])
+  })
+
+  it('follows the active project again once the screen is gone', async () => {
+    const { workspace, stores } = await start({ project_config: byProject })
+    await workspace.loadRunsFor('/work/b')
+    workspace.unpinRuns()
+    await workspace.startWorkspace()
+    expect(stores.runs.runsState.project).toBe('/work/a')
+  })
+})

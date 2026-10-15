@@ -79,4 +79,11 @@ describe('a driven session\'s state, from its events', () => {
     tracker.seed(1, [ev(1, 'turn-start'), ev(2, 'result')], 'ready')
     expect(tracker.absorb(1, [ev(3, 'turn-start')])).toBe('running')
   })
+
+  it('skips an event it has already folded', () => {
+    const tracker = createTracker()
+    tracker.seed(1, [ev(1, 'turn-start'), ev(2, 'permission', { id: 'p' })], 'needs-you')
+    expect(tracker.absorb(1, [ev(2, 'permission', { id: 'p' }), ev(1, 'turn-start')])).toBeNull()
+    expect(tracker.absorb(1, [ev(3, 'permission-answered', { id: 'p' })])).toBe('running')
+  })
 })

@@ -66,6 +66,7 @@ const body = computed(() => ({
   overflowY: props.fill ? 'hidden' : 'auto',
   overflowX: 'hidden'
 }))
+/* `0px` and not a bare 0: a unitless zero is invalid inside max() beside env(). */
 const bar = {
   flex: '0 0 auto',
   display: 'flex',

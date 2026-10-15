@@ -48,15 +48,30 @@ export async function readDesktop(project = null) {
    so that its session is in the Agents list. */
 export async function loadProject(project) {
   if (!project) return
+  /* The run stores hold one project at a time. While the Runs screen is showing another one
+     (a run notification named it), moving them back to this project would leave the screen
+     naming one project over the other's runs and configuration, so they are left alone. */
+  const runsElsewhere = runsPin !== null && runsPin !== project
   await Promise.all([
     loadSessions(project),
-    loadConfig(project),
-    loadRun(project).then(() => {
-      for (const run of runsState.runs) {
-        if (run.transport === 'driven' && run.session != null) adoptRunSession(run.project, run.session)
-      }
-    })
+    runsElsewhere ? null : loadConfig(project),
+    runsElsewhere
+      ? null
+      : loadRun(project).then(() => {
+          for (const run of runsState.runs) {
+            if (run.transport === 'driven' && run.session != null) adoptRunSession(run.project, run.session)
+          }
+        })
   ])
+}
+
+/* The project the Runs screen is showing, while it is showing one; `null` otherwise. */
+let runsPin = null
+
+/* The Runs screen is gone: the run stores follow the active project again, and are brought to
+   it now if they were left on another. */
+export function unpinRuns() {
+  runsPin = null
 }
 
 /* The link is up: the first time, and after every reconnect. The tracker has been read by the
@@ -101,5 +116,6 @@ export async function chooseProject(path) {
 /* The runs screen for a project that is not the one in front (a notification named it). The
    run stores keep one project at a time, so this is the same load the active project gets. */
 export async function loadRunsFor(project) {
+  runsPin = project
   await Promise.all([loadConfig(project), loadRun(project), loadReports(project), loadBranches(project)])
 }
