@@ -16,7 +16,8 @@ use remote_protocol::{
 };
 
 use super::devices::{Device, Devices};
-use super::endpoint::{decide_pairing, CLOSE_REVOKED, CLOSE_UNKNOWN, CLOSE_VERSION};
+use super::endpoint::{decide_pairing, MAX_PAIRING_CONNECTIONS};
+use remote_protocol::{CLOSE_REVOKED, CLOSE_UNKNOWN, CLOSE_VERSION};
 use super::pairing::{Pairing, SECRET_TTL_SECS};
 use super::{Event, Remote, PROTOCOL_MAJOR};
 
@@ -348,4 +349,71 @@ async fn remote_a_device_listed_on_disk_is_served_after_a_restart() {
         .unwrap();
     let conn = phone.connect(&h).await;
     assert_eq!(handshake(&conn, PROTOCOL_MAJOR).await.protocol_major, PROTOCOL_MAJOR);
+}
+
+#[tokio::test]
+async fn remote_a_ticket_carries_the_relay_it_is_asked_for_and_not_the_one_on_disk() {
+    let h = harness().await;
+    // The harness's disk-side relay is "loopback"; the field says otherwise.
+    let issued = h.remote.pair_begin("https://new-relay.example.org").await.unwrap();
+    let ticket = remote_protocol::PairingTicket::decode(&issued.ticket).unwrap();
+    assert_eq!(ticket.relay, "https://new-relay.example.org");
+    assert_eq!(ticket.desktop, h.remote.public_key());
+    assert_eq!(issued.expires_at, ticket.expires_at);
+    h.remote.stop().await;
+}
+
+#[tokio::test]
+async fn remote_a_relay_that_is_not_usable_issues_no_ticket() {
+    let h = harness().await;
+    for bad in ["", "http://relay.example.org", "https://203.0.113.7", "relay.example.org"] {
+        assert!(h.remote.pair_begin(bad).await.is_err(), "{bad:?}");
+    }
+    assert!(!h.remote.pairing.is_open(), "nothing was issued");
+}
+
+#[tokio::test]
+async fn remote_a_request_that_ends_is_announced_so_the_prompt_can_go() {
+    let h = harness().await;
+    let phone = phone().await;
+    pair_accepted(&h, &phone).await;
+    assert!(h.events.lock().unwrap().contains(&Event::PairEnded));
+}
+
+#[tokio::test]
+async fn remote_an_accepted_pairing_the_phone_never_heard_is_undone() {
+    let h = harness().await;
+    let phone = phone().await;
+    let ticket = h.remote.pairing.begin(h.remote.public_key(), "loopback");
+    let conn = phone.connect(&h).await;
+    let (mut send, _recv) = conn.open_bi().await.unwrap();
+    write_frame(&mut send, &request(ticket.secret)).await.unwrap();
+    wait_until("the pair request", || !h.events.lock().unwrap().is_empty()).await;
+    // The phone gives up before the person answers.
+    conn.close(0u32.into(), b"gave up");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(h.remote.pairing.decide(true));
+    wait_until("the request to end", || h.events.lock().unwrap().contains(&Event::PairEnded)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(h.remote.devices.is_empty(), "a device nobody was told about is not kept");
+}
+
+#[tokio::test]
+async fn remote_only_a_few_unknown_keys_are_served_while_a_code_is_out() {
+    let h = harness().await;
+    h.remote.pairing.begin(h.remote.public_key(), "loopback");
+    let mut held = Vec::new();
+    for _ in 0..MAX_PAIRING_CONNECTIONS {
+        let phone = phone().await;
+        let conn = phone.connect(&h).await;
+        let (mut send, recv) = conn.open_bi().await.unwrap();
+        // Say nothing useful, so the desktop sits in its first-frame wait.
+        send.write_all(&[0, 0]).await.unwrap();
+        held.push((phone, conn, send, recv));
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let late = phone().await;
+    let conn = late.connect(&h).await;
+    let closed = tokio::time::timeout(Duration::from_secs(5), conn.closed()).await.unwrap();
+    assert_eq!(code(closed), Some(CLOSE_UNKNOWN as u64));
 }

@@ -40,6 +40,24 @@ closed (`CLOSE_UNKNOWN`) before a byte is read. This reads the spec's "closed be
 the pairing window as its one exception, because pairing and ordinary connections share one ALPN and
 the first message is the only thing that tells them apart.
 
+**A request that ends is withdrawn.** Whatever ends the wait (decision, timeout, the phone leaving) emits
+`remote:pair-ended`, and the window clears the prompt; each wait has an id so a late finish cannot clear a
+newer request. `remote_pair_decide` is an error when nothing is waiting, so the screen never shows a
+success that did not happen. Closing the settings window cancels the code from Rust (`WindowEvent::Destroyed`
+in `window::settings_window_open`), because the page's unmount hooks do not run when the OS window dies.
+
+**The relay is passed, not read.** `remote_pair_begin(relay_url)` takes the address in the field and
+refuses one `valid_relay_url` refuses, because an edit reaches `settings.json` only after the app window's
+400 ms debounce; start-up alone reads the file.
+
+**A lost `Accepted` is undone.** If the reply cannot be delivered the device is removed again. A phone whose
+key is already on the list and which sends a `PairRequest` is answered `CLOSE_PROTOCOL` (the desktop expects
+`Hello` from a known key); the mobile client should treat that as "already paired" and connect again with
+`Hello`. At most `MAX_PAIRING_CONNECTIONS` (4) unknown-key connections are served at once; the rest get
+`CLOSE_UNKNOWN`. The `CLOSE_*` codes live in `remote-protocol` beside the ALPN.
+
+**Webviews never see `push_token` or `push_key`**: `remote_devices` and `remote:devices` carry `DeviceView`.
+
 **A secret is burned when presented, not when confirmed.** A rejected or timed-out request leaves
 nothing that could be tried again. A wrong secret does not burn the right one. The wait for the
 person is bounded by what is left of the secret's two minutes. Close codes (`CLOSE_*` in `endpoint.rs`)

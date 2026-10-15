@@ -36,9 +36,9 @@ use pairing::Pairing;
 /// `.example` is reserved and never resolves, so a build that ships this value
 /// fails to reach a relay rather than quietly reaching somebody else's. Replace
 /// it with the real URL before the first release that includes the companion.
-/// It is written out again in the front end (`defaults()` in
-/// `stores/settings.js`, `view` in `SettingsWindow.vue`, and the prop default of
-/// `DevicesSettings.vue`) and those copies must agree with this one.
+/// It is written out twice in the tree, here and as `DEFAULT_RELAY_URL` in
+/// `components/settings/devices.js`, which every front-end default imports;
+/// `tests/components/settings/devices.test.js` holds the two equal.
 pub const DEFAULT_RELAY_URL: &str = "https://relay.smetana.example";
 
 /// The protocol this desktop speaks. A phone on another major is answered with
@@ -58,6 +58,9 @@ pub enum Event {
     PairRequest { device_name: String, platform: Platform },
     /// The list of devices changed.
     DevicesChanged(Vec<Device>),
+    /// The request that was on the screen is over — decided, timed out or the
+    /// phone left — and the prompt should go.
+    PairEnded,
 }
 
 pub type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
@@ -73,6 +76,7 @@ pub struct Remote {
     pub(crate) devices: Devices,
     pub(crate) pairing: Pairing,
     pub(crate) connections: endpoint::Connections,
+    pub(crate) pairing_slots: Arc<tokio::sync::Semaphore>,
     pub(crate) app_version: String,
     events: EventSink,
     relay: Box<dyn Fn() -> String + Send + Sync>,
@@ -93,6 +97,7 @@ impl Remote {
             devices,
             pairing,
             connections: endpoint::Connections::default(),
+            pairing_slots: Arc::new(tokio::sync::Semaphore::new(endpoint::MAX_PAIRING_CONNECTIONS)),
             app_version,
             events,
             relay,
@@ -108,11 +113,15 @@ impl Remote {
         self.key.public()
     }
 
-    /// Starts the endpoint if it is not running with the relay the settings name
-    /// now, and returns that relay. A changed relay URL takes effect here — at
-    /// the next pairing — and ends the connections held on the old one.
-    pub async fn ensure_running(self: &Arc<Self>) -> Result<String, String> {
-        let wanted = (self.relay)();
+    /// Starts the endpoint if it is not running with the relay wanted, and
+    /// returns that relay. `wanted` is the address the caller has on screen; with
+    /// none, the one `settings.json` holds (start-up). A changed relay takes
+    /// effect here and ends the connections held on the old one.
+    pub async fn ensure_running(self: &Arc<Self>, wanted: Option<&str>) -> Result<String, String> {
+        let wanted = match wanted {
+            Some(url) => url.trim().to_owned(),
+            None => (self.relay)(),
+        };
         let mut running = self.running.lock().await;
         if let Some(current) = running.as_ref() {
             if current.relay == wanted {
@@ -148,8 +157,18 @@ impl Remote {
 
     /// Issues a ticket for a new pairing, starting the endpoint first: the relay
     /// in the ticket is the one the endpoint is actually on.
-    pub async fn pair_begin(self: &Arc<Self>) -> Result<PairBegin, String> {
-        let relay = self.ensure_running().await?;
+    ///
+    /// The relay is an argument and not read from `settings.json`: an edit in the
+    /// settings window reaches that file only after the app window's debounce,
+    /// so a press that followed it closely would pair through the old relay while
+    /// the field showed the new one. What the person sees is what is used. An
+    /// address `valid_relay_url` refuses is an error rather than a fallback, for
+    /// the same reason.
+    pub async fn pair_begin(self: &Arc<Self>, relay: &str) -> Result<PairBegin, String> {
+        if !crate::settings::model::valid_relay_url(relay.trim()) {
+            return Err("That is not a usable relay address.".into());
+        }
+        let relay = self.ensure_running(Some(relay)).await?;
         let ticket = self.pairing.begin(self.public_key(), &relay);
         Ok(PairBegin { ticket: ticket.encode(), expires_at: ticket.expires_at })
     }
@@ -167,7 +186,7 @@ impl Remote {
     /// list, not by luck.
     pub fn revoke(&self, key: &PublicKey) -> Result<(), String> {
         let removed = self.devices.remove(key)?;
-        self.connections.close_all(key, endpoint::CLOSE_REVOKED, b"revoked");
+        self.connections.close_all(key, remote_protocol::CLOSE_REVOKED, b"revoked");
         if removed {
             self.emit(Event::DevicesChanged(self.devices.all()));
         }
@@ -191,6 +210,35 @@ pub struct PairRequestPayload {
 
 pub const PAIR_REQUEST_EVENT: &str = "remote:pair-request";
 pub const DEVICES_EVENT: &str = "remote:devices";
+pub const PAIR_ENDED_EVENT: &str = "remote:pair-ended";
+
+/// A device as a webview may see it. The push token and push key stay on disk:
+/// nothing in the interface uses them, and a webview has no business holding
+/// the credentials that wake somebody's phone.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceView {
+    pub key: String,
+    pub name: String,
+    pub platform: Platform,
+    pub paired_at: u64,
+    pub last_contact: Option<u64>,
+}
+
+impl From<&Device> for DeviceView {
+    fn from(device: &Device) -> Self {
+        Self {
+            key: device.key.clone(),
+            name: device.name.clone(),
+            platform: device.platform,
+            paired_at: device.paired_at,
+            last_contact: device.last_contact,
+        }
+    }
+}
+
+pub fn device_views(list: &[Device]) -> Vec<DeviceView> {
+    list.iter().map(DeviceView::from).collect()
+}
 
 /// The directory the key and the device list live in.
 fn data_dir(app: &AppHandle) -> Option<PathBuf> {
@@ -225,7 +273,10 @@ pub fn start(app: AppHandle) {
             let _ = sink_app.emit(PAIR_REQUEST_EVENT, PairRequestPayload { device_name, platform });
         }
         Event::DevicesChanged(list) => {
-            let _ = sink_app.emit(DEVICES_EVENT, list);
+            let _ = sink_app.emit(DEVICES_EVENT, device_views(&list));
+        }
+        Event::PairEnded => {
+            let _ = sink_app.emit(PAIR_ENDED_EVENT, ());
         }
     });
     let remote = Remote::new(
@@ -240,10 +291,20 @@ pub fn start(app: AppHandle) {
     app.manage(remote.clone());
     if serve_now {
         tauri::async_runtime::spawn(async move {
-            if let Err(err) = remote.ensure_running().await {
+            if let Err(err) = remote.ensure_running(None).await {
                 log::warn!("remote: could not start the endpoint: {err}");
             }
         });
+    }
+}
+
+/// Withdraws a pairing code when the settings window is destroyed. The code is
+/// a secret on a screen that is gone; whoever photographed it would still have
+/// the minutes it has left. Called from the window's own `Destroyed` event,
+/// since the page's unmount hooks do not run when the OS window is torn down.
+pub fn cancel_pairing(app: &AppHandle) {
+    if let Some(remote) = app.try_state::<Arc<Remote>>() {
+        remote.pairing.cancel();
     }
 }
 

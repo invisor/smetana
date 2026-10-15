@@ -61,6 +61,7 @@ import {
   listDevices,
   revokeDevice,
   watchDevices,
+  watchPairEnded,
   watchPairRequests
 } from '../stores/remote.js'
 
@@ -281,6 +282,7 @@ let stopSections = null
 let stopColumns = null
 let stopUpdates = null
 let stopRequests = null
+let stopEnded = null
 let stopDevices = null
 const version = ref(null)
 
@@ -336,6 +338,9 @@ onMounted(async () => {
     stopRequests = await watchPairRequests((request) => {
       devices.request = request
     })
+    stopEnded = await watchPairEnded(() => {
+      devices.request = null
+    })
     stopDevices = await watchDevices((list) => {
       devices.list = list
     })
@@ -373,10 +378,13 @@ onUnmounted(() => {
   stopColumns?.()
   stopUpdates?.()
   stopRequests?.()
+  stopEnded?.()
   stopDevices?.()
   clearInterval(ticker)
-  /* A code left behind a closed window is a secret nobody can see and anybody
-     who photographed it can still use, for the two minutes it has left. */
+  /* The code is withdrawn by Rust when the OS window is destroyed
+     (`window::settings_window_open`), which is the path that runs when the
+     window is closed; this is the same withdrawal for the page being torn down
+     while the window lives on. */
   if (devices.ticket !== null) cancelPairing().catch(() => {})
 })
 
@@ -523,7 +531,7 @@ const begin = async () => {
   devices.busy = true
   devices.error = null
   try {
-    const issued = await beginPairing()
+    const issued = await beginPairing(view.remoteRelayUrl)
     devices.ticket = issued.ticket
     devices.expiresAt = issued.expiresAt
   } catch (err) {
@@ -553,6 +561,9 @@ const decide = async (accept) => {
     devices.request = null
     devices.ticket = null
   } catch (err) {
+    /* Refused, most likely because the request ended a moment ago: what was on
+       screen is stale either way. */
+    devices.request = null
     devices.error = err.message
   } finally {
     devices.busy = false

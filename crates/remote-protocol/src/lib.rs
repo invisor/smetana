@@ -24,6 +24,23 @@ use serde::{Deserialize, Serialize};
 /// `Hello`, so that a desktop can still answer an older phone politely.
 pub const ALPN: &[u8] = b"smetana/remote/1";
 
+/// Application close codes, sent as the error code of a QUIC connection close.
+/// They are part of the protocol: a phone reads them to tell a refused pairing
+/// from a revoked device from an unsupported version.
+///
+/// A phone whose key is already on the device list and which sends a
+/// `PairRequest` is answered `CLOSE_PROTOCOL`, because the desktop expects a
+/// `Hello` from a known key. It should then connect again and send `Hello`.
+pub const CLOSE_DONE: u32 = 0;
+/// The key is not on the list and no pairing is open (or the desktop is busy).
+pub const CLOSE_UNKNOWN: u32 = 1;
+/// The device was removed from the list while connected.
+pub const CLOSE_REVOKED: u32 = 2;
+/// The `Hello` named a protocol major this desktop does not serve.
+pub const CLOSE_VERSION: u32 = 3;
+/// The first frame was not the message the connection's state expects.
+pub const CLOSE_PROTOCOL: u32 = 4;
+
 /// Length of the one-time pairing secret and of the push key, in bytes.
 pub const SECRET_LEN: usize = 32;
 
@@ -102,6 +119,16 @@ mod tests {
         let (decoded, rest): (PairRequest, _) = decode_frame(&frame).unwrap();
         assert_eq!(decoded, request);
         assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn close_codes_are_distinct() {
+        let codes = [CLOSE_DONE, CLOSE_UNKNOWN, CLOSE_REVOKED, CLOSE_VERSION, CLOSE_PROTOCOL];
+        for (i, a) in codes.iter().enumerate() {
+            for b in &codes[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
     }
 
     #[test]

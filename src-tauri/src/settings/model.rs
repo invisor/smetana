@@ -222,12 +222,12 @@ impl Default for GitSettings {
 /// from it has to take effect at once; it lives in its own file
 /// (`remote/devices.rs`).
 ///
-/// The default is `remote::DEFAULT_RELAY_URL`, and there are **four** copies of
-/// it under the same obligation `git.autoFetch`'s four have: `RemoteSettings`
-/// here, `defaults()` in `stores/settings.js`, `view` in `SettingsWindow.vue`
-/// and the prop default in `components/settings/DevicesSettings.vue`. A
-/// disagreement draws a different relay in the field than the one the next
-/// ticket carries, for as long as it takes the first answer to arrive.
+/// The default is `remote::DEFAULT_RELAY_URL`, written out **twice** in the
+/// tree: there, and as `DEFAULT_RELAY_URL` in `components/settings/devices.js`,
+/// which `defaults()` in `stores/settings.js`, `view` in `SettingsWindow.vue` and
+/// the tab's prop default all import. `tests/components/settings/devices.test.js`
+/// reads this side and holds the two equal; a disagreement would draw a
+/// different relay in the field than the one the next ticket carries.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct RemoteSettings {

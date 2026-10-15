@@ -7,8 +7,8 @@
    What this file does is rename: Rust's fields are snake_case, as the spec for
    the commands fixes them, and a component should read camelCase like every
    other value it is handed. It also decides what a component never sees. A
-   device record carries a push token and a push key; neither is anything the
-   Devices tab draws, so neither crosses this file.
+   device record carries a push token and a push key on disk; Rust does not send
+   them here at all, and this file reads only the fields the tab draws.
 
    Errors are thrown as `Error`s with a readable message, the shape
    `attachments.js` answers with, so the window can put one on a line. */
@@ -18,6 +18,7 @@ import { listen } from '@tauri-apps/api/event'
 /* `remote/mod.rs`'s `PAIR_REQUEST_EVENT` and `DEVICES_EVENT`, spelled the same
    on both sides. */
 export const PAIR_REQUEST_EVENT = 'remote:pair-request'
+export const PAIR_ENDED_EVENT = 'remote:pair-ended'
 export const DEVICES_EVENT = 'remote:devices'
 
 function messageOf(err) {
@@ -52,9 +53,14 @@ async function call(command, args) {
 }
 
 /* Starts the endpoint if it is not up and issues a ticket. `ticket` is the
-   string the QR code carries and `expiresAt` the Unix second it stops working. */
-export async function beginPairing() {
-  const answer = await call('remote_pair_begin')
+   string the QR code carries and `expiresAt` the Unix second it stops working.
+
+   The relay is **passed**, the one in the field, and not left for Rust to read
+   from `settings.json`: an edit reaches that file only after the app window's
+   debounce, so a press right behind an edit would otherwise pair through the old
+   relay while the screen showed the new one. */
+export async function beginPairing(relayUrl) {
+  const answer = await call('remote_pair_begin', { relayUrl })
   return { ticket: String(answer.ticket), expiresAt: Number(answer.expires_at) }
 }
 
@@ -85,6 +91,11 @@ export async function watchPairRequests(handler) {
       platform: payload.platform === 'ios' || payload.platform === 'android' ? payload.platform : null
     })
   })
+}
+
+/* The request on screen is over — decided, timed out, or the phone left. */
+export async function watchPairEnded(handler) {
+  return listen(PAIR_ENDED_EVENT, () => handler())
 }
 
 export async function watchDevices(handler) {

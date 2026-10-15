@@ -39,7 +39,9 @@ struct Issued {
 struct State {
     issued: Option<Issued>,
     /// The person's answer to the request that is on screen, if one is.
-    waiting: Option<oneshot::Sender<bool>>,
+    waiting: Option<(u64, oneshot::Sender<bool>)>,
+    /// The id the next wait gets.
+    next_wait: u64,
 }
 
 pub struct Pairing {
@@ -49,6 +51,7 @@ pub struct Pairing {
 
 /// A request that has been entered and is waiting for the person.
 pub struct Waiting {
+    pub id: u64,
     answer: oneshot::Receiver<bool>,
 }
 
@@ -89,7 +92,7 @@ impl Pairing {
     pub fn cancel(&self) {
         let mut state = self.lock();
         state.issued = None;
-        if let Some(waiting) = state.waiting.take() {
+        if let Some((_, waiting)) = state.waiting.take() {
             let _ = waiting.send(false);
         }
     }
@@ -129,20 +132,30 @@ impl Pairing {
             return Err("another phone is waiting to be confirmed");
         }
         let (tx, rx) = oneshot::channel();
-        state.waiting = Some(tx);
-        Ok(Waiting { answer: rx })
+        let id = state.next_wait;
+        state.next_wait += 1;
+        state.waiting = Some((id, tx));
+        Ok(Waiting { id, answer: rx })
     }
 
-    /// Forgets the request that was waiting; called when it is over, however it
-    /// ended.
-    pub fn finish_waiting(&self) {
-        self.lock().waiting = None;
+    /// Forgets the wait with this id; called when it is over, however it ended.
+    /// Clears only on a match, so a late finish cannot wipe a newer request that
+    /// took the slot in between. `true` when this call is the one that cleared it
+    /// (a decision or a cancel has already taken it otherwise).
+    pub fn finish_waiting(&self, id: u64) -> bool {
+        let mut state = self.lock();
+        if state.waiting.as_ref().is_some_and(|(held, _)| *held == id) {
+            state.waiting = None;
+            true
+        } else {
+            false
+        }
     }
 
     /// The person's answer. `false` when there was nothing to answer.
     pub fn decide(&self, accept: bool) -> bool {
         match self.lock().waiting.take() {
-            Some(waiting) => {
+            Some((_, waiting)) => {
                 let _ = waiting.send(accept);
                 true
             }
@@ -234,6 +247,18 @@ mod tests {
         assert!(pairing.decide(true));
         assert!(waiting.answer(5).await);
         assert!(!pairing.decide(true), "nothing left to answer");
+    }
+
+    #[tokio::test]
+    async fn a_late_finish_does_not_clear_a_newer_request() {
+        let (pairing, _) = pairing();
+        let first = pairing.wait_for_decision().unwrap();
+        assert!(pairing.decide(false));
+        let second = pairing.wait_for_decision().unwrap();
+        assert!(!pairing.finish_waiting(first.id), "the old request no longer owns the slot");
+        assert!(pairing.wait_for_decision().is_err(), "the newer one is still waiting");
+        assert!(pairing.finish_waiting(second.id));
+        assert!(pairing.wait_for_decision().is_ok());
     }
 
     #[tokio::test]

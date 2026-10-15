@@ -1182,8 +1182,6 @@ export function installMockBackend() {
           key: 'a3f1c0de5b7a49d2884e61f0c2d7ab3e9f10c4b85a6d7e2f1038495a6b7c8d9e',
           name: 'Pixel 8',
           platform: 'android',
-          push_token: null,
-          push_key: '00'.repeat(32),
           paired_at: secondsAgo(9 * 24 * 3600),
           last_contact: secondsAgo(4 * 60)
         },
@@ -1191,8 +1189,6 @@ export function installMockBackend() {
           key: '7be2d9014c6f38a5e0b1927d4c8a5f63120e9d7b4a8c6f5e3d2b1a09f8e7d6c5',
           name: 'iPhone of Mira',
           platform: 'ios',
-          push_token: 'mock-token',
-          push_key: '11'.repeat(32),
           paired_at: secondsAgo(40 * 24 * 3600),
           last_contact: null
         }

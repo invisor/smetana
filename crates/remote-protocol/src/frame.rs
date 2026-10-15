@@ -111,10 +111,8 @@ mod tests {
             decode_frame::<String>(&[0xff, 0xff, 0xff, 0xff]),
             Err(FrameError::TooLarge(_))
         ));
-        assert!(matches!(
-            decode_frame::<u64>(&[0, 0, 0, 1, 0xff]),
-            Err(FrameError::Decode(_)) | Ok(_)
-        ));
+        // A one-byte body of 0xff is a varint that never ends.
+        assert!(matches!(decode_frame::<u64>(&[0, 0, 0, 1, 0xff]), Err(FrameError::Decode(_))));
     }
 
     #[test]

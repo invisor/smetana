@@ -23,6 +23,7 @@ use iroh::endpoint::{presets, Connection};
 use iroh::{Endpoint, RelayMode, RelayUrl, SecretKey};
 use remote_protocol::{
     read_frame, write_frame, Hello, HelloReply, PairReply, PairRequest, PublicKey, ALPN,
+    CLOSE_DONE, CLOSE_PROTOCOL, CLOSE_REVOKED, CLOSE_UNKNOWN, CLOSE_VERSION,
 };
 
 #[cfg(not(unix))]
@@ -32,12 +33,11 @@ use super::{Event, Remote, MIN_MOBILE_VERSION, PROTOCOL_MAJOR, PROTOCOL_MINOR, R
 
 pub const KEY_FILE: &str = "remote-key";
 
-/// Application close codes. They are part of the protocol a phone reads.
-pub const CLOSE_UNKNOWN: u32 = 1;
-pub const CLOSE_REVOKED: u32 = 2;
-pub const CLOSE_VERSION: u32 = 3;
-pub const CLOSE_PROTOCOL: u32 = 4;
-pub const CLOSE_DONE: u32 = 0;
+/// How many connections from keys the list does not know are served at once,
+/// while a pairing code is out. Pairing needs one phone; the rest is margin for a
+/// retry, and a cap keeps a stranger who has the endpoint's address from holding
+/// sockets open for the length of the first-frame timeout.
+pub const MAX_PAIRING_CONNECTIONS: usize = 4;
 
 /// How long a phone gets to open its stream and send its first frame.
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(15);
@@ -169,7 +169,11 @@ async fn handle(remote: Arc<Remote>, conn: Connection) {
     if remote.devices.contains(&key) {
         serve_paired(&remote, conn, key).await;
     } else if remote.pairing.is_open() {
-        serve_pairing(&remote, conn, key).await;
+        // Held for the whole of the exchange, the wait for the person included.
+        match remote.pairing_slots.clone().try_acquire_owned() {
+            Ok(_permit) => serve_pairing(&remote, conn, key).await,
+            Err(_) => conn.close(CLOSE_UNKNOWN.into(), b"busy"),
+        }
     } else {
         conn.close(CLOSE_UNKNOWN.into(), b"unknown device");
     }
@@ -234,9 +238,18 @@ async fn serve_pairing(remote: &Arc<Remote>, conn: Connection, key: PublicKey) {
         return;
     };
     let reply = decide_pairing(remote, &key, request).await;
-    if write_frame(&mut send, &reply).await.is_ok() {
+    let delivered = conn.close_reason().is_none() && write_frame(&mut send, &reply).await.is_ok();
+    if delivered {
         let _ = send.finish();
         let _ = tokio::time::timeout(LINGER, conn.closed()).await;
+    } else if reply == PairReply::Accepted {
+        // The phone never heard it. A device on the list that believes it was
+        // refused could only be removed by hand, and a phone that tries again
+        // would be told its key is already paired, so the entry goes.
+        match remote.devices.remove(&key) {
+            Ok(_) => remote.emit(Event::DevicesChanged(remote.devices.all())),
+            Err(err) => log::warn!("remote: could not undo an undelivered pairing: {err}"),
+        }
     }
     conn.close(CLOSE_DONE.into(), b"done");
 }
@@ -256,9 +269,12 @@ pub(crate) async fn decide_pairing(remote: &Remote, key: &PublicKey, request: Pa
         Ok(waiting) => waiting,
         Err(reason) => return rejected(reason),
     };
+    let id = waiting.id;
     remote.emit(Event::PairRequest { device_name: name.clone(), platform: request.platform });
     let accepted = waiting.answer(remaining).await;
-    remote.pairing.finish_waiting();
+    remote.pairing.finish_waiting(id);
+    // However it ended, the prompt on the screen is stale now.
+    remote.emit(Event::PairEnded);
     if !accepted {
         return rejected("the desktop did not confirm the pairing");
     }

@@ -6,8 +6,7 @@ use std::sync::Arc;
 use remote_protocol::PublicKey;
 use tauri::{AppHandle, Manager};
 
-use super::devices::Device;
-use super::{PairBegin, Remote};
+use super::{device_views, DeviceView, PairBegin, Remote};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RemoteError {
@@ -29,11 +28,13 @@ fn remote(app: &AppHandle) -> Result<Arc<Remote>, RemoteError> {
     app.try_state::<Arc<Remote>>().map(|state| state.inner().clone()).ok_or(RemoteError::Unavailable)
 }
 
-/// Starts the endpoint if it is not running, issues a ticket and answers with the
-/// string for the QR code and the second it stops being good.
+/// Starts the endpoint if it is not running on `relay_url`, issues a ticket and
+/// answers with the string for the QR code and the second it stops being good.
+/// The address is the one in the field, passed in so that it cannot lag the
+/// settings file by a debounce.
 #[tauri::command]
-pub async fn remote_pair_begin(app: AppHandle) -> Result<PairBegin, RemoteError> {
-    remote(&app)?.pair_begin().await.map_err(RemoteError::Failed)
+pub async fn remote_pair_begin(app: AppHandle, relay_url: String) -> Result<PairBegin, RemoteError> {
+    remote(&app)?.pair_begin(&relay_url).await.map_err(RemoteError::Failed)
 }
 
 /// Withdraws the ticket, and refuses a phone that is waiting to be confirmed.
@@ -43,16 +44,21 @@ pub fn remote_pair_cancel(app: AppHandle) -> Result<(), RemoteError> {
     Ok(())
 }
 
-/// The person's answer to `remote:pair-request`.
+/// The person's answer to `remote:pair-request`. An error when there is nothing
+/// to answer — the request timed out, or the phone left, a moment ago — so the
+/// screen does not report a success that did not happen.
 #[tauri::command]
 pub fn remote_pair_decide(app: AppHandle, accept: bool) -> Result<(), RemoteError> {
-    remote(&app)?.pairing.decide(accept);
-    Ok(())
+    if remote(&app)?.pairing.decide(accept) {
+        Ok(())
+    } else {
+        Err(RemoteError::Failed("There is no pairing request to answer.".into()))
+    }
 }
 
 #[tauri::command]
-pub fn remote_devices(app: AppHandle) -> Result<Vec<Device>, RemoteError> {
-    Ok(remote(&app)?.devices.all())
+pub fn remote_devices(app: AppHandle) -> Result<Vec<DeviceView>, RemoteError> {
+    Ok(device_views(&remote(&app)?.devices.all()))
 }
 
 /// Removes the device and closes its connections.

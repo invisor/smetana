@@ -293,9 +293,10 @@ futures-core = "0.3"
 # test`), and a root workspace would change where `cargo` finds this manifest
 # for every command in the repository.
 #
-# The price, counted against `Cargo.lock` the way every other line here is: iroh
-# brings its own QUIC stack (`noq`), a relay client and a second `rustls` consumer
-# (ring, as the updater already uses), and with them a long tail of crates.
+# The price, counted against `Cargo.lock` the way every other line here is:
+# **142 `[[package]]` entries**, 610 to 752. iroh brings its own QUIC stack
+# (`noq`), a relay client and a second `rustls` consumer (ring, as the updater
+# already uses), and with them a long tail of crates.
 # `default-features` stay on: `tls-ring` is what `presets::Minimal` needs, and
 # turning off `metrics` or `portmapper` was not measured to be worth the
 # divergence from what the mobile build compiles.

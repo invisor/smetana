@@ -5,8 +5,6 @@ const record = {
   key: 'ab12',
   name: 'Pixel 8',
   platform: 'android',
-  push_token: 'secret-token',
-  push_key: '00'.repeat(32),
   paired_at: 1_760_000_000,
   last_contact: null
 }
@@ -25,7 +23,7 @@ describe('the phone companion store', () => {
       pairedAt: 1_760_000_000,
       lastContact: null
     })
-    expect(JSON.stringify(device)).not.toContain('secret-token')
+    expect(Object.keys(device).sort()).toEqual(['key', 'lastContact', 'name', 'pairedAt', 'platform'])
   })
 
   it('drops a record with no key rather than drawing a row with no name', async () => {
@@ -46,10 +44,23 @@ describe('the phone companion store', () => {
     const { ipc, stores } = await loadStores()
     ipc.on('remote_pair_begin', { ticket: 'smetana1:abc', expires_at: 1_760_000_120 })
 
-    expect(await stores.remote.beginPairing()).toEqual({
+    expect(await stores.remote.beginPairing('https://relay.example.org')).toEqual({
       ticket: 'smetana1:abc',
       expiresAt: 1_760_000_120
     })
+  })
+
+  /* The relay on screen is the relay used: an edit followed at once by the press
+     must carry the new address, not whatever `settings.json` held a debounce ago. */
+  it('passes the relay in the field with the press, straight after an edit', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('remote_pair_begin', { ticket: 'smetana1:abc', expires_at: 1_760_000_120 })
+
+    stores.settings.applyPatch({ remoteRelayUrl: 'https://new.example.org' })
+    await stores.remote.beginPairing(stores.settings.settings.remote.relayUrl)
+
+    expect(ipc.calls('remote_pair_begin')).toEqual([{ relayUrl: 'https://new.example.org' }])
+    expect(ipc.calls('settings_save')).toEqual([])
   })
 
   it('sends the answer as a strict boolean', async () => {
@@ -82,12 +93,16 @@ describe('the phone companion store', () => {
     const { emit, stores, nextTick } = await loadStores()
     const requests = []
     const lists = []
+    let ended = 0
+    await stores.remote.watchPairEnded(() => ended++)
     await stores.remote.watchPairRequests((request) => requests.push(request))
     await stores.remote.watchDevices((list) => lists.push(list))
 
     await emit('remote:pair-request', { device_name: 'Pixel 8', platform: 'android' })
     await emit('remote:devices', [record])
+    await emit('remote:pair-ended', null)
     await nextTick()
+    expect(ended).toBe(1)
 
     expect(requests).toEqual([{ deviceName: 'Pixel 8', platform: 'android' }])
     expect(lists).toHaveLength(1)
