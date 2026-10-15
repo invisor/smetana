@@ -1002,12 +1002,11 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
         // The same predicate a conversation session uses, on the change of state and not on the tick:
         // a session that stays in `NeedsYou` for a minute of ticks reaches the phone once.
         announce_wait(before.0, live.session.state, || {
-            crate::remote::push::notify_needs_you(
+            crate::remote::push::notify_terminal_needs_you(
                 app,
                 live.session.id,
                 &live.session.project,
                 &live.session.agent,
-                None,
             );
         });
         if before != (live.session.state, live.session.question.clone()) {
