@@ -343,6 +343,13 @@ pub(crate) async fn serve(
         match msg {
             ClientMsg::Listen { event } => remote.hub.listen(id, &event, true),
             ClientMsg::Unlisten { event } => remote.hub.listen(id, &event, false),
+            ClientMsg::UpdatePushToken { token } => {
+                if token.is_empty() || token.len() > super::endpoint::TOKEN_LIMIT {
+                    log::debug!("remote: a phone sent a push token of an unusable size");
+                } else if let Err(err) = remote.devices.set_push_token(key, token) {
+                    log::warn!("remote: could not save a phone's new push token: {err}");
+                }
+            }
             ClientMsg::Invoke { id: call, cmd, args } => {
                 while calls.try_join_next().is_some() {}
                 if calls.len() >= MAX_IN_FLIGHT {
