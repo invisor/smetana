@@ -65,6 +65,22 @@ let moving = false
    move. Only the last one matters — each is the phone's latest word. */
 let pendingRemote = null
 
+/* True while an unsaved-edits question is up. The question can stay up for hours
+   on an unattended desktop, and while it does no `setProject` is in flight, so a
+   phone's switch that arrives meanwhile has left the worker on the phone's
+   folder with nothing to bring it back: `followRemoteProject` puts it back at
+   once. Every `confirmUnsaved` in a move goes through `askUnsaved`. */
+let asking = false
+
+async function askUnsaved() {
+  asking = true
+  try {
+    return await confirmUnsaved()
+  } finally {
+    asking = false
+  }
+}
+
 /* Ends a move, and settles what the phone said during it. Every `finally` that
    clears `moving` calls this and never assigns the flag itself, so no road out
    of a move can forget the announcement. The follow runs on its own turn: it
@@ -74,7 +90,9 @@ function release() {
   if (!pendingRemote) return
   const { path } = pendingRemote
   pendingRemote = null
-  followRemoteProject(path)
+  followRemoteProject(path).catch((err) => {
+    console.error("[projects] could not follow the phone's project switch:", err)
+  })
 }
 
 /* The shared part of a move: settings_load brings the new project's layout,
@@ -162,7 +180,7 @@ export async function switchTo(path) {
   if (path === settings.activeProject || moving) return
   moving = true
   try {
-    if (!(await confirmUnsaved())) return
+    if (!(await askUnsaved())) return
     await flushPending()
     await moveTo(path)
   } finally {
@@ -238,7 +256,7 @@ export async function addProject() {
        active, the tabs stay put and the question would be about nothing. It
        still comes before flushPending: the departing project's state must not
        land on disk before the person has decided whether to move at all. */
-    if (path !== settings.activeProject && !(await confirmUnsaved())) return null
+    if (path !== settings.activeProject && !(await askUnsaved())) return null
     /* First we flush the departing project's state and only then change the
        list: a write started after the row was added would carry the old
        project's state under the new list. The order here must not depend on
@@ -274,6 +292,8 @@ export async function addProject() {
 export async function followRemoteProject(raw) {
   if (moving) {
     pendingRemote = { path: raw }
+    /* A question is up, so nothing is putting the worker right: do it now. */
+    if (asking) await setProject(settings.activeProject)
     return
   }
   /* The root, as `addProject` takes it: a subfolder or a trailing slash must not
@@ -294,15 +314,17 @@ export async function followRemoteProject(raw) {
          alternative, leaving the switching skeleton up, would hide the board for
          the same hours.) With nothing to lose there is no question and no wait. */
       if (dirtyPaths.value.length) await setProject(settings.activeProject)
-      if (await confirmUnsaved()) {
+      if (await askUnsaved()) {
         await flushPending()
         if (!settings.openProjects.includes(path)) settings.openProjects.push(path)
         await moveTo(path)
       }
       return
     }
-    /* `null`, or the project the window is on already. */
-    if (path !== settings.activeProject) await setProject(settings.activeProject)
+    /* `null`, or the window's own project. The worker is where the phone put it,
+       which for a subfolder of this project is the subfolder, so it is the raw
+       path that is compared: the window's project is what the worker must hold. */
+    if (raw !== settings.activeProject) await setProject(settings.activeProject)
   } finally {
     release()
   }
@@ -327,7 +349,7 @@ export async function removeProject(path) {
        touch the tabs at all, and "Don't save" would erase the current project's
        edits for nothing. And still before flushPending — for the same reason as
        in switchTo. */
-    if (path === settings.activeProject && !(await confirmUnsaved())) return
+    if (path === settings.activeProject && !(await askUnsaved())) return
     /* As in switchTo: the departing project's state has to land on disk before
        the list changes, otherwise the four-hundred-millisecond debounce would
        overwrite an unsaved edit with an already-shortened list. */

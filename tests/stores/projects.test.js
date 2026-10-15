@@ -614,16 +614,40 @@ describe('a project switched on the phone', () => {
     expect(ipc.calls('tracker_set_project').at(-1)).toEqual({ path: '/b' })
   })
 
-  it('compares the normalised path with the active project, so a subfolder of it is no move', async () => {
+  it('puts the worker back when the phone chose a subfolder of the window\'s project', async () => {
     settings.settings.openProjects = ['/a']
     settings.settings.activeProject = '/a'
     ipc.on('project_root', () => '/a')
     await projects.initProjectFollow()
 
     await emit('remote:project-switched', { path: '/a/sub' })
+    await vi.waitFor(() => expect(ipc.calls('tracker_set_project')).toEqual([{ path: '/a' }]))
+
+    expect(settings.settings.activeProject).toBe('/a')
+  })
+
+  it('keeps the worker on the window\'s project while a question is up, however often the phone switches', async () => {
+    settings.settings.openProjects = ['/a', '/b', '/c']
+    settings.settings.activeProject = '/a'
+    settings.settings.project.openTabs = ['a.txt']
+    tabs.buffers.set('a.txt', buffer({ text: 'an edit' }))
+    let answer
+    tabs.onUnsaved(() => new Promise((resolve) => (answer = resolve)))
+    await projects.initProjectFollow()
+    /* The person's own move is the one asking. */
+    const own = projects.switchTo('/c')
+    await vi.waitFor(() => expect(answer).toBeTypeOf('function'))
+
+    await emit('remote:project-switched', { path: '/b' })
+    await emit('remote:project-switched', { path: '/b' })
+    await vi.waitFor(() => expect(ipc.calls('tracker_set_project').length).toBeGreaterThanOrEqual(2))
     await new Promise((resolve) => setTimeout(resolve, 20))
 
-    expect(ipc.calls('tracker_set_project')).toEqual([])
+    expect(ipc.calls('tracker_set_project').at(-1)).toEqual({ path: '/a' })
+    answer(false)
+    await own
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(ipc.calls('tracker_set_project').at(-1)).toEqual({ path: '/a' })
   })
 })
 
