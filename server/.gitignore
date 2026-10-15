@@ -1,0 +1,9 @@
+# Build output, and anything a person drops in to run the stack locally. Keys and
+# certificates are never committed.
+target/
+certs/
+.env
+*.p8
+*.pem
+*.key
+secrets/
