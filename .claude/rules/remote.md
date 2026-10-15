@@ -127,6 +127,14 @@ than the digest recorded for the current `PROTOCOL_MAJOR.PROTOCOL_MINOR`, and sa
 MINOR for additions, MAJOR for removals and renames. The way forward is a new entry under a higher version,
 added by hand together with the constants; an existing entry is a frozen contract and is not edited.
 
+## Protocol 1.1: `UpdatePushToken`
+
+`ClientMsg::UpdatePushToken { token }` is the last variant of `ClientMsg`, so postcard's numbering of the others is
+unchanged. A phone sends it when its push token appears or changes after pairing; the desktop stores it with
+`Devices::set_push_token` (an empty token or one over `TOKEN_LIMIT` is ignored, the connection stays). An older desktop
+would read the variant as a broken frame, so a phone sends it only when `HelloReply.protocol_minor >= 1`. The contract
+files did not change, so `versions.json` has `1.1` with the same digest as `1.0`.
+
 ## Push
 
 `remote/push.rs` sends a run's ending and a session's start of waiting to every device with a `push_token`.

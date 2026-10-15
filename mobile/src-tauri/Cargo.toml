@@ -48,3 +48,13 @@ security-framework-sys = "2"
 [dev-dependencies]
 iroh = { version = "1.3", features = ["test-utils"] }
 tokio = { version = "1", features = ["test-util"] }
+
+# Cargo.lock also pins `libc` to 0.2.189. 0.2.190 left the routing-socket constants (`RTM_*`, `RTAX_*`,
+# `RTF_*`) out of iOS, and netwatch (iroh's network monitor) uses them for iOS as for the other BSDs, so
+# nothing downstream of iroh compiles for iOS with it. Raise it when netwatch stops needing them there.
+
+# iroh's `netwatch` needs `netdev` 0.46, and no 0.46 release compiles for iOS: `libc` defines
+# `in6_ifreq` and `ifmibdata` for macOS only. The copy in vendor/netdev is 0.46.1 with those two
+# uses made macOS-only (see PATCHED.md there). Remove it when netdev ships a fix.
+[patch.crates-io]
+netdev = { path = "../vendor/netdev" }

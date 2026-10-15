@@ -227,6 +227,7 @@ cannot make it.
 | `settings.json`, and the settings window | `.claude/rules/settings.md` |
 | in-app updates, and the release that feeds them | `.claude/rules/updates.md` |
 | the phone companion: protocol crate, pairing, devices | `.claude/rules/remote.md` |
+| the phone companion's own app, `mobile/` | `.claude/rules/mobile.md` |
 
 ### The bd sidecar
 
