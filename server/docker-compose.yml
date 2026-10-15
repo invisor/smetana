@@ -1,0 +1,81 @@
+# Both processes from the one image.
+#
+# `relay` is for anybody. With RELAY_CERT_MODE=letsencrypt (the default) it gets its own
+# certificate for RELAY_HOSTNAME; with RELAY_CERT_MODE=manual it reads RELAY_CERT_FILE and
+# RELAY_KEY_FILE from ./certs. `push-gateway` needs the APNs and FCM credentials of the app's
+# owner, so it only does real work for us; it still starts without them (a platform with no
+# credentials answers 503), which is what lets this file be brought up as a smoke test.
+#
+# Copy .env.example to .env and edit it. Nothing here has a volume for data: neither process
+# stores any (the one named volume holds the relay's own TLS certificate, no traffic).
+
+services:
+  relay:
+    build: .
+    image: smetana-server
+    restart: unless-stopped
+    command: ["relay-entrypoint"]
+    init: true
+    environment:
+      # iroh-relay tags its log lines with the connecting peer's address
+      # (`conn{peer=IP:port}`) and, at its default ERROR level, prints one for every failed
+      # handshake. Docker keeps container output on the host's disk, so the relay is silenced
+      # entirely: this is what keeps "the relay stores no addresses" true. Set RELAY_LOG=error
+      # only to debug a startup problem, and clear the container's logs afterwards.
+      RUST_LOG: ${RELAY_LOG:-off}
+      RELAY_CERT_MODE: ${RELAY_CERT_MODE:-letsencrypt}
+      RELAY_HOSTNAME: ${RELAY_HOSTNAME:-}
+      RELAY_CONTACT: ${RELAY_CONTACT:-}
+      RELAY_LETSENCRYPT_PROD: ${RELAY_LETSENCRYPT_PROD:-true}
+      RELAY_HTTP_PORT: ${RELAY_HTTP_PORT:-80}
+      RELAY_HTTPS_PORT: ${RELAY_HTTPS_PORT:-443}
+      RELAY_QUIC_PORT: ${RELAY_QUIC_PORT:-7842}
+      RELAY_CERT_FILE: /certs/relay.crt
+      RELAY_KEY_FILE: /certs/relay.key
+    ports:
+      - "${RELAY_HTTP_PORT:-80}:${RELAY_HTTP_PORT:-80}/tcp"
+      - "${RELAY_HTTPS_PORT:-443}:${RELAY_HTTPS_PORT:-443}/tcp"
+      - "${RELAY_QUIC_PORT:-7842}:${RELAY_QUIC_PORT:-7842}/udp"
+    volumes:
+      - ./certs:/certs:ro
+      # The relay's own Let's Encrypt account and certificate, and nothing else. Without it every
+      # restart would ask for a new certificate and run into Let's Encrypt's rate limits.
+      - relay-certs:/var/lib/relay-certs
+    read_only: true
+    tmpfs:
+      - /tmp
+    logging: &bounded-logs
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+  push-gateway:
+    image: smetana-server
+    restart: unless-stopped
+    command: ["push-gateway"]
+    init: true
+    environment:
+      PUSH_BIND: 0.0.0.0:8080
+      PUSH_RATE_LIMIT_PER_MINUTE: ${PUSH_RATE_LIMIT_PER_MINUTE:-30}
+      # Set to 1 only when a reverse proxy in front appends the real client to X-Forwarded-For.
+      PUSH_TRUST_FORWARDED_FOR: ${PUSH_TRUST_FORWARDED_FOR:-0}
+      APNS_KEY_PATH: ${APNS_KEY_PATH:-}
+      APNS_KEY_ID: ${APNS_KEY_ID:-}
+      APNS_TEAM_ID: ${APNS_TEAM_ID:-}
+      APNS_BUNDLE_ID: ${APNS_BUNDLE_ID:-}
+      APNS_SANDBOX: ${APNS_SANDBOX:-0}
+      FCM_SERVICE_ACCOUNT_PATH: ${FCM_SERVICE_ACCOUNT_PATH:-}
+    # Plain HTTP, published on the loopback only: a TLS-terminating reverse proxy goes in front
+    # of it (and sets PUSH_TRUST_FORWARDED_FOR=1 so the rate limit sees real clients).
+    ports:
+      - "127.0.0.1:${PUSH_PORT:-8080}:8080/tcp"
+    volumes:
+      - ./secrets:/secrets:ro
+    read_only: true
+    logging: *bounded-logs
+    depends_on:
+      - relay
+
+volumes:
+  relay-certs:

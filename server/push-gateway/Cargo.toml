@@ -1,0 +1,32 @@
+[package]
+name = "push-gateway"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Stateless push gateway: forwards an opaque encrypted blob to APNs or FCM"
+license = "MIT"
+publish = false
+
+# Deliberately not a member of any workspace: server/ is built on its own and
+# neither src-tauri nor the front end's tooling ever sees it.
+[workspace]
+
+[dependencies]
+axum = { version = "0.8", features = ["http2"] }
+base64 = "0.22"
+jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs", "use_pem"] }
+reqwest = { version = "0.13", features = ["json", "form"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = { version = "0.1", features = ["channel"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
+
+[profile.release]
+lto = "thin"
+strip = true

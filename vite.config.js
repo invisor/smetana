@@ -8,7 +8,7 @@ export default defineConfig({
   clearScreen: false,
   server: {
     strictPort: true,
-    watch: { ignored: ['**/src-tauri/**'] }
+    watch: { ignored: ['**/src-tauri/**', '**/server/**'] }
   },
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) }
