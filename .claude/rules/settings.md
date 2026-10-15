@@ -574,6 +574,16 @@ and a screen full of switches nobody wanted is worse than a short one. `?theme=`
 still override the first two for one run and are deliberately **not** written back — one visit to the
 dev server must not repaint the app forever. `?view=gallery` neither reads nor writes.
 
+`remote` is a global section with one field, `relayUrl`, the relay the phone companion goes through; the
+Devices tab edits it and `.claude/rules/remote.md` is the rule for everything else about the companion.
+Rust refuses anything that is not `https://` and a host name (`valid_relay_url`, bare IPs included) and
+replaces it with `remote::DEFAULT_RELAY_URL` **without a word**, so `validRelayUrl` in
+`components/settings/devices.js` holds the same rule on the front end and `applyPatch` skips a value it
+fails — the tab commits on Enter or blur and shows the reason, rather than letting a bad address sit on
+screen for a session and revert after a restart. The default is written out in Rust and once in
+`devices.js`; `defaults()`, `SettingsWindow.vue` and the tab's prop default import that one, and a test
+reads the Rust file to keep the pair equal. The paired devices are **not** a setting and are not here.
+
 ## The settings window
 
 The gear in the scope bar opens a **second `WebviewWindow`**, not a modal (`window.rs`:

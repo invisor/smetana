@@ -46,7 +46,8 @@ export async function loadStores() {
     compare,
     app,
     agents,
-    windowDrops
+    windowDrops,
+    remote
   ] =
     await Promise.all([
       import('vue'),
@@ -69,7 +70,8 @@ export async function loadStores() {
       import('../../src/stores/compare.js'),
       import('../../src/stores/app.js'),
       import('../../src/stores/agents.js'),
-      import('../../src/stores/windowDrops.js')
+      import('../../src/stores/windowDrops.js'),
+      import('../../src/stores/remote.js')
     ])
 
   built.push({ ipc, settings })
@@ -98,7 +100,8 @@ export async function loadStores() {
       compare,
       app,
       agents,
-      windowDrops
+      windowDrops,
+      remote
     }
   }
 }

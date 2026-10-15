@@ -1156,6 +1156,50 @@ export function installMockBackend() {
        here: with the state unavailable the About tab draws no control at all,
        so neither can be reached in the ordinary course. */
     if (command === 'updates_state') return null
+    /* The Devices tab's reads. A browser has no desktop to pair with, so these
+       answer with two phones that look like what the real list holds, and a
+       ticket of the right shape: it begins `smetana1:` and is lower-case base32 the
+       length of a real one, so the QR code the tab draws is the size of the one
+       a person would scan. It is not a ticket for anything — it does not decode
+       and nothing is listening — and it comes back with a fresh two-minute
+       expiry each time.
+
+       `remote_pair_begin` answers although it sounds like a write, because the
+       tab cannot be checked by eye without a code on screen, and it changes
+       nothing: no secret is kept and no endpoint is started.
+
+       `remote_pair_cancel`, `remote_pair_decide` and `remote_device_revoke` are
+       deliberately absent and fall through to the loud refusal at the bottom,
+       like every other write. Revoking a phone that did not go away would be
+       the worst of them — the row would stay, which is the honest picture, and
+       the refusal appears on the tab's own error line.
+
+       `remote:pair-request` cannot be provoked from here; the gallery draws
+       that state with props. */
+    if (command === 'remote_devices') {
+      return [
+        {
+          key: 'a3f1c0de5b7a49d2884e61f0c2d7ab3e9f10c4b85a6d7e2f1038495a6b7c8d9e',
+          name: 'Pixel 8',
+          platform: 'android',
+          paired_at: secondsAgo(9 * 24 * 3600),
+          last_contact: secondsAgo(4 * 60)
+        },
+        {
+          key: '7be2d9014c6f38a5e0b1927d4c8a5f63120e9d7b4a8c6f5e3d2b1a09f8e7d6c5',
+          name: 'iPhone of Mira',
+          platform: 'ios',
+          paired_at: secondsAgo(40 * 24 * 3600),
+          last_contact: null
+        }
+      ]
+    }
+    if (command === 'remote_pair_begin') {
+      return {
+        ticket: 'smetana1:' + 'aebagbafaydqqcikbmgq4eb5haytcmzzgm2tqnzvgu3tgnbzgyzdmmrqgq4wmnjvgi3dgnbxgm'.repeat(2).slice(0, 154),
+        expires_at: Math.floor(Date.now() / 1000) + 120
+      }
+    }
     /* What a refused folder needs. A read, so it answers — otherwise every
        start of `npm run dev` would put a warning in the console about a
        subsystem that is simply not there. `'unavailable'` is the honest answer

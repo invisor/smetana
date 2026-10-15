@@ -1095,6 +1095,7 @@ describe('the settings window', () => {
       kanbanUnlimited: [],
       gitAutoFetch: true,
       gitRemoveWorktrees: true,
+      remoteRelayUrl: 'https://relay.smetana.example',
       subscriptionPauseAt: 90,
       subscriptionReducedAt: 75,
       runFailoverEnabled: false,
@@ -1200,6 +1201,7 @@ describe('the settings window', () => {
       kanbanUnlimited: [],
       gitAutoFetch: true,
       gitRemoveWorktrees: true,
+      remoteRelayUrl: 'https://relay.smetana.example',
       subscriptionPauseAt: 90,
       subscriptionReducedAt: 75,
       runFailoverEnabled: false,
@@ -1349,6 +1351,21 @@ describe('closing the window', () => {
     settings.applyPatch({ subscriptionPauseAt: 0 })
 
     expect(settings.settings.subscription).toEqual({ pauseAt: 0, reducedAt: 75 })
+  })
+
+  /* The relay address is the one string on the contract that Rust replaces
+     with the default, silently, when it refuses it — so the store must refuse
+     the same values first, or a bad address sits on screen for the session and
+     is gone after a restart. */
+  it('takes a relay address only when it is one Rust will keep', async () => {
+    const shipped = settings.settings.remote.relayUrl
+    for (const bad of ['', '   ', 'http://relay.example.org', 'relay.example.org', 'https://203.0.113.7', 7, null]) {
+      settings.applyPatch({ remoteRelayUrl: bad })
+      expect(settings.settings.remote.relayUrl, `${String(bad)} must be skipped`).toBe(shipped)
+    }
+    settings.applyPatch({ remoteRelayUrl: '  https://relay.example.org:8443/  ' })
+    expect(settings.settings.remote.relayUrl).toBe('https://relay.example.org:8443/')
+    expect(settings.sharedSettings().remoteRelayUrl).toBe('https://relay.example.org:8443/')
   })
 
   it('an unrelated edit leaves a settled pair alone', async () => {

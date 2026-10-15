@@ -78,6 +78,7 @@ import {
   Pin,
   Play,
   Plus,
+  QrCode,
   RefreshCw,
   Scissors,
   ScrollText,
@@ -86,6 +87,7 @@ import {
   Settings,
   Settings2,
   SlidersHorizontal,
+  Smartphone,
   Sparkles,
   Square,
   SquareCheck,
@@ -202,6 +204,12 @@ export const iconNodes = {
   'clipboard-paste': ClipboardPaste,
   'copy-plus': CopyPlus,
   pencil: Pencil,
+
+  /* The Devices tab: a phone is what is being paired, and the code is what it
+     scans. Two glyphs because the tab has two different acts on it — connecting
+     a new phone, and the list of those already connected. */
+  smartphone: Smartphone,
+  'qr-code': QrCode,
 
   // status
   'triangle-alert': TriangleAlert,

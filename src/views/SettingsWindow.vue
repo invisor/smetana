@@ -17,13 +17,14 @@
    same frame, and it is what makes this screen work in a browser at all, where
    nothing answers. The announcement that follows is the correction — a value the
    main window refuses comes straight back and overwrites what is drawn here. */
-import { onMounted, onUnmounted, reactive, ref, watch, watchEffect } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch, watchEffect } from 'vue'
 import TabBar from '../components/shell/TabBar.vue'
 import GeneralSettings from '../components/settings/GeneralSettings.vue'
 import EditorSettings from '../components/settings/EditorSettings.vue'
 import AgentSettings from '../components/settings/AgentSettings.vue'
 import KanbanSettings from '../components/settings/KanbanSettings.vue'
 import GitSettings from '../components/settings/GitSettings.vue'
+import DevicesSettings from '../components/settings/DevicesSettings.vue'
 import StorageSettings from '../components/settings/StorageSettings.vue'
 import AboutSettings from '../components/settings/AboutSettings.vue'
 /* Which harness a run would actually start, out of the same pure module the
@@ -52,6 +53,17 @@ import {
 import { clearStorage, surveyStorage } from '../stores/attachments.js'
 import { checkForUpdate, initUpdates, installUpdate, updatesState } from '../stores/updates.js'
 import { shownRefusal } from '../components/settings/update.js'
+import { DEFAULT_RELAY_URL, remainingSeconds } from '../components/settings/devices.js'
+import {
+  beginPairing,
+  cancelPairing,
+  decidePairing,
+  listDevices,
+  revokeDevice,
+  watchDevices,
+  watchPairEnded,
+  watchPairRequests
+} from '../stores/remote.js'
 
 /* The query string's two overrides, passed down rather than read here so that
    `App.vue` stays the one place that knows about them. They win over what the
@@ -140,6 +152,11 @@ const view = reactive({
      the first answer arrives. */
   gitAutoFetch: true,
   gitRemoveWorktrees: true,
+  /* The Devices tab's one setting, the relay a phone reaches this desktop
+     through. The same shipped value as `settings/model.rs` and
+     `stores/settings.js`, imported rather than spelled out here, so it cannot
+     draw a different relay from the one the next code carries. */
+  remoteRelayUrl: DEFAULT_RELAY_URL,
   /* The Agents tab's two run limits, the percentages at which a run holds
      itself back. Shipped as today's behaviour exactly — the same numbers as
      `settings/model.rs`, `stores/settings.js` and the component's own prop
@@ -264,6 +281,9 @@ let stopWatching = null
 let stopSections = null
 let stopColumns = null
 let stopUpdates = null
+let stopRequests = null
+let stopEnded = null
+let stopDevices = null
 const version = ref(null)
 
 /* The update machine, and the fourth part of this window that is not a setting:
@@ -314,6 +334,19 @@ onMounted(async () => {
   } catch (err) {
     console.warn('[settings-window] no app window to hear the board columns from:', err)
   }
+  try {
+    stopRequests = await watchPairRequests((request) => {
+      devices.request = request
+    })
+    stopEnded = await watchPairEnded(() => {
+      devices.request = null
+    })
+    stopDevices = await watchDevices((list) => {
+      devices.list = list
+    })
+  } catch (err) {
+    console.warn('[settings-window] the phone companion cannot be heard from:', err)
+  }
   /* And only now: this window is listening, and the section its URL named is
      the one `tab` was seeded with at setup. A gear pressed on a section while
      this window was still loading is handed over on this call and lands as an
@@ -344,6 +377,15 @@ onUnmounted(() => {
   stopSections?.()
   stopColumns?.()
   stopUpdates?.()
+  stopRequests?.()
+  stopEnded?.()
+  stopDevices?.()
+  clearInterval(ticker)
+  /* The code is withdrawn by Rust when the OS window is destroyed
+     (`window::settings_window_open`), which is the path that runs when the
+     window is closed; this is the same withdrawal for the page being torn down
+     while the window lives on. */
+  if (devices.ticket !== null) cancelPairing().catch(() => {})
 })
 
 /* This window paints itself: it is a separate webview with its own document
@@ -371,6 +413,7 @@ const TABS = [
      settings and Storage is the one that is not, so another section of settings
      belongs on this side of that line. */
   { id: 'git', label: 'Git', kind: 'pinned' },
+  { id: 'devices', label: 'Devices', kind: 'pinned' },
   { id: 'storage', label: 'Storage', kind: 'pinned' },
   { id: 'about', label: 'About', kind: 'pinned' }
 ]
@@ -437,6 +480,103 @@ const clear = async () => {
     storage.error = err.message
   } finally {
     storage.busy = false
+  }
+}
+
+/* The Devices tab, and a part of this window that is not a setting, with one
+   exception: the relay address in `view` is. The phones are the app's own state
+   in a file of its own (`remote-devices.json`), the pairing code is a secret
+   Rust holds for two minutes, and neither reaches `settings.json` or `FIELDS`.
+   Rust is the one writer and this window the one reader, so there is no
+   announcement to follow and nothing to reconcile.
+
+   Subscribed from mounting, not from opening the tab: a request can arrive
+   while a person is looking at another tab after pressing the button, and it
+   has to be waiting when they come back. The list is read on opening the tab,
+   which is the only time a stale one could be on screen. */
+const devices = reactive({
+  list: [],
+  ticket: null,
+  expiresAt: 0,
+  request: null,
+  busy: false,
+  error: null
+})
+const clock = ref(Date.now())
+const remaining = computed(() => remainingSeconds(devices.expiresAt, clock.value))
+let ticker = null
+watch(
+  () => devices.ticket,
+  (ticket) => {
+    clearInterval(ticker)
+    ticker = null
+    if (ticket !== null) {
+      clock.value = Date.now()
+      ticker = setInterval(() => {
+        clock.value = Date.now()
+      }, 1000)
+    }
+  }
+)
+
+const readDevices = async () => {
+  try {
+    devices.list = await listDevices()
+  } catch (err) {
+    devices.error = err.message
+  }
+}
+
+const begin = async () => {
+  devices.busy = true
+  devices.error = null
+  try {
+    const issued = await beginPairing(view.remoteRelayUrl)
+    devices.ticket = issued.ticket
+    devices.expiresAt = issued.expiresAt
+  } catch (err) {
+    devices.error = err.message
+  } finally {
+    devices.busy = false
+  }
+}
+
+const cancel = async () => {
+  devices.ticket = null
+  devices.request = null
+  try {
+    await cancelPairing()
+  } catch (err) {
+    devices.error = err.message
+  }
+}
+
+const decide = async (accept) => {
+  devices.busy = true
+  devices.error = null
+  try {
+    await decidePairing(accept)
+    /* Answered either way, and the code was spent the moment the phone
+       presented it: nothing is left to show. */
+    devices.request = null
+    devices.ticket = null
+  } catch (err) {
+    /* Refused, most likely because the request ended a moment ago: what was on
+       screen is stale either way. */
+    devices.request = null
+    devices.error = err.message
+  } finally {
+    devices.busy = false
+  }
+}
+
+const revoke = async (key) => {
+  devices.error = null
+  try {
+    await revokeDevice(key)
+    await readDevices()
+  } catch (err) {
+    devices.error = err.message
   }
 }
 
@@ -563,6 +703,7 @@ watch(
   tab,
   (which) => {
     if (which === 'storage' && !storage.busy) readStorage()
+    if (which === 'devices') readDevices()
     if (which === 'general') readAutostart()
     /* Guarded by `busy` the way Storage is, and for a longer reason: walking
        off this tab and back while a minute-long probe is out must not start a
@@ -720,6 +861,22 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :remove-worktrees="view.gitRemoveWorktrees"
           @update:auto-fetch="change({ gitAutoFetch: $event })"
           @update:remove-worktrees="change({ gitRemoveWorktrees: $event })"
+        />
+        <DevicesSettings
+          v-else-if="tab === 'devices'"
+          :devices="devices.list"
+          :ticket="devices.ticket"
+          :remaining="remaining"
+          :request="devices.request"
+          :now="clock"
+          :busy="devices.busy"
+          :error="devices.error"
+          :relay-url="view.remoteRelayUrl"
+          @begin="begin"
+          @cancel="cancel"
+          @decide="decide"
+          @revoke="revoke"
+          @update:relay-url="change({ remoteRelayUrl: $event })"
         />
         <StorageSettings
           v-else-if="tab === 'storage'"

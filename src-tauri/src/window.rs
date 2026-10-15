@@ -483,7 +483,17 @@ pub fn settings_window_open(app: AppHandle, tab: Option<String>) -> Result<(), S
         builder = builder.parent(&main).map_err(|err| err.to_string())?;
     }
 
-    builder.build().map(|_| ()).map_err(|err| err.to_string())
+    let window = builder.build().map_err(|err| err.to_string())?;
+    // A pairing code shown in this window is withdrawn when it goes. Rust and not
+    // the page does it, because the page's unmount hooks do not run when the OS
+    // window is destroyed.
+    let handle = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Destroyed) {
+            crate::remote::cancel_pairing(&handle);
+        }
+    });
+    Ok(())
 }
 
 /// Opens the compare window on a branch, or brings the open one forward.
