@@ -533,4 +533,97 @@ describe('a project switched on the phone', () => {
 
     expect(settings.settings.activeProject).toBe('/a')
   })
+
+  it('puts the worker back on the window\'s project before the question and keeps it there when the person cancels', async () => {
+    settings.settings.openProjects = ['/a', '/b']
+    settings.settings.activeProject = '/a'
+    settings.settings.project.openTabs = ['a.txt']
+    tabs.buffers.set('a.txt', buffer({ text: 'an edit' }))
+    let answer
+    tabs.onUnsaved(() => new Promise((resolve) => (answer = resolve)))
+    await projects.initProjectFollow()
+
+    await emit('remote:project-switched', { path: '/b' })
+    await vi.waitFor(() => expect(answer).toBeTypeOf('function'))
+    /* The question is up, and the board is already back on the window's project. */
+    expect(ipc.calls('tracker_set_project')).toEqual([{ path: '/a' }])
+
+    answer(false)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(settings.settings.activeProject).toBe('/a')
+    expect(ipc.calls('tracker_set_project').at(-1)).toEqual({ path: '/a' })
+  })
+
+  it('moves the worker to the phone\'s project only once the person agrees', async () => {
+    settings.settings.openProjects = ['/a', '/b']
+    settings.settings.activeProject = '/a'
+    settings.settings.project.openTabs = ['a.txt']
+    tabs.buffers.set('a.txt', buffer({ text: 'an edit' }))
+    tabs.onUnsaved(() => true)
+    await projects.initProjectFollow()
+
+    await emit('remote:project-switched', { path: '/b' })
+    await vi.waitFor(() => expect(settings.settings.activeProject).toBe('/b'))
+
+    expect(ipc.calls('tracker_set_project').at(-1)).toEqual({ path: '/b' })
+  })
+
+  it('an announcement that lands while the window is moving is replayed, and ends with window and worker together', async () => {
+    settings.settings.openProjects = ['/a', '/b', '/c']
+    settings.settings.activeProject = '/a'
+    await projects.initProjectFollow()
+    /* The window's own move to /c is held in the middle of its tracker call. */
+    let release
+    ipc.on('tracker_set_project', (args) =>
+      args.path === '/c' ? new Promise((resolve) => (release = () => resolve(snapshot()))) : snapshot()
+    )
+    const own = projects.switchTo('/c')
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+
+    await emit('remote:project-switched', { path: '/b' })
+    release()
+    await own
+    await vi.waitFor(() => expect(settings.settings.activeProject).toBe('/b'))
+
+    expect(ipc.calls('tracker_set_project').at(-1)).toEqual({ path: '/b' })
+  })
+
+  it('an announcement that lands during a removal is not lost either', async () => {
+    settings.settings.openProjects = ['/a', '/b', '/c']
+    settings.settings.activeProject = '/a'
+    await projects.initProjectFollow()
+    tabs.onUnsaved(() => true)
+    const removal = projects.removeProject('/c')
+    await emit('remote:project-switched', { path: '/b' })
+    await removal
+    await vi.waitFor(() => expect(settings.settings.activeProject).toBe('/b'))
+    expect(ipc.calls('tracker_set_project').at(-1)).toEqual({ path: '/b' })
+  })
+
+  it('takes the tracked root of the phone\'s path, as adding a project does, so no second row appears', async () => {
+    settings.settings.openProjects = ['/a', '/b']
+    settings.settings.activeProject = '/a'
+    ipc.on('project_root', (args) => (args.path.startsWith('/b') ? '/b' : args.path))
+    await projects.initProjectFollow()
+
+    await emit('remote:project-switched', { path: '/b/src/deep/' })
+    await vi.waitFor(() => expect(settings.settings.activeProject).toBe('/b'))
+
+    expect(settings.settings.openProjects).toEqual(['/a', '/b'])
+    expect(ipc.calls('tracker_set_project').at(-1)).toEqual({ path: '/b' })
+  })
+
+  it('compares the normalised path with the active project, so a subfolder of it is no move', async () => {
+    settings.settings.openProjects = ['/a']
+    settings.settings.activeProject = '/a'
+    ipc.on('project_root', () => '/a')
+    await projects.initProjectFollow()
+
+    await emit('remote:project-switched', { path: '/a/sub' })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(ipc.calls('tracker_set_project')).toEqual([])
+  })
 })
+

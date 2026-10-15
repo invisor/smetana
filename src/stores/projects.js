@@ -14,7 +14,7 @@ import { listDir, setRoot } from './files.js'
 import { measureStorage } from './notifications.js'
 import { loadRepos } from './vcs.js'
 import { flushPending, loadProjectLayout, settings } from './settings.js'
-import { confirmUnsaved, resetTabs, restoreTabs } from './tabs.js'
+import { confirmUnsaved, dirtyPaths, resetTabs, restoreTabs } from './tabs.js'
 import { loadSessions } from './terminals.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
 import { basename, dirname } from '../paths.js'
@@ -57,6 +57,25 @@ export async function refreshProbes() {
    second attempt adds nothing. It is raised and cleared through try/finally so
    a failure (setProject throwing, say) does not lock the list forever. */
 let moving = false
+
+/* A switch the phone made while a move was under way. Never dropped: the
+   worker has already gone to that folder, and a window that did not follow
+   would sit on one project with the board of another. It is kept as `{ path }`
+   (the path may be `null`) and settled by `release`, the one place that ends a
+   move. Only the last one matters — each is the phone's latest word. */
+let pendingRemote = null
+
+/* Ends a move, and settles what the phone said during it. Every `finally` that
+   clears `moving` calls this and never assigns the flag itself, so no road out
+   of a move can forget the announcement. The follow runs on its own turn: it
+   asks the worker for things, and the caller is on its way out. */
+function release() {
+  moving = false
+  if (!pendingRemote) return
+  const { path } = pendingRemote
+  pendingRemote = null
+  followRemoteProject(path)
+}
 
 /* The shared part of a move: settings_load brings the new project's layout,
    tracker_set_project brings the issues. Callers are responsible for the moving
@@ -147,7 +166,7 @@ export async function switchTo(path) {
     await flushPending()
     await moveTo(path)
   } finally {
-    moving = false
+    release()
   }
 }
 
@@ -231,7 +250,7 @@ export async function addProject() {
     await moveTo(path)
     return path
   } finally {
-    moving = false
+    release()
   }
 }
 
@@ -249,24 +268,44 @@ export async function addProject() {
    When the window does not follow (the person kept their unsaved edits, or the
    phone emptied the tracker with `null`) the worker is put back on the window's
    project, because a board that answers for one folder under another's header is
-   the fault this exists to prevent. A move already under way settles it: it
-   ends by telling the worker where the window went. */
-export async function followRemoteProject(path) {
-  if (moving) return
-  if (path && path !== settings.activeProject) {
-    moving = true
-    try {
+   the fault this exists to prevent. An announcement that arrives during another
+   move is kept in `pendingRemote` and replayed by `release` when that move ends,
+   so it is never lost. */
+export async function followRemoteProject(raw) {
+  if (moving) {
+    pendingRemote = { path: raw }
+    return
+  }
+  /* The root, as `addProject` takes it: a subfolder or a trailing slash must not
+     become a second row. Compared with the active project only after this. */
+  const path = raw ? await projectRoot(raw) : null
+  /* A move may have started while the root was being asked for. */
+  if (moving) {
+    pendingRemote = { path }
+    return
+  }
+  moving = true
+  try {
+    if (path && path !== settings.activeProject) {
+      /* The question can stay up for hours on an unattended desktop, and until it
+         is answered the board must not show the phone's project under this
+         window's header. So with edits to lose the worker goes back first, and
+         moves to the phone's project only once the person agrees. (The simpler
+         alternative, leaving the switching skeleton up, would hide the board for
+         the same hours.) With nothing to lose there is no question and no wait. */
+      if (dirtyPaths.value.length) await setProject(settings.activeProject)
       if (await confirmUnsaved()) {
         await flushPending()
         if (!settings.openProjects.includes(path)) settings.openProjects.push(path)
         await moveTo(path)
-        return
       }
-    } finally {
-      moving = false
+      return
     }
+    /* `null`, or the project the window is on already. */
+    if (path !== settings.activeProject) await setProject(settings.activeProject)
+  } finally {
+    release()
   }
-  if (path !== settings.activeProject) await setProject(settings.activeProject)
 }
 
 /* Listens for the announcement above. Answers with the way to stop. */
@@ -305,7 +344,7 @@ export async function removeProject(path) {
     const next = settings.openProjects[at] ?? settings.openProjects[at - 1] ?? null
     await moveTo(next)
   } finally {
-    moving = false
+    release()
   }
 }
 
