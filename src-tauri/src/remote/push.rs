@@ -103,6 +103,16 @@ pub fn run_finished(project_path: &str, summary: Option<&RunSummary>) -> Message
 /// The message for a session that has started waiting. The body names the agent, and the session's title
 /// when it has one.
 pub fn needs_you(project_path: &str, session: u64, agent: &str, title: Option<&str>) -> Message {
+    needs_you_at(project_path, format!("session:{session}"), agent, title)
+}
+
+/// The same message for a terminal (PTY) session. Only the target differs: terminal ids and conversation
+/// ids are separate counters that both start at 1, so `session:3` would open somebody else's conversation.
+pub fn terminal_needs_you(project_path: &str, terminal: u64, agent: &str) -> Message {
+    needs_you_at(project_path, format!("terminal:{terminal}"), agent, None)
+}
+
+fn needs_you_at(project_path: &str, target: String, agent: &str, title: Option<&str>) -> Message {
     let project = project_name(project_path);
     let body = match title.filter(|title| !title.is_empty()) {
         Some(title) => format!("{project}: {agent} on \"{title}\""),
@@ -112,7 +122,7 @@ pub fn needs_you(project_path: &str, session: u64, agent: &str, title: Option<&s
         kind: Kind::NeedsYou,
         title: "An agent is waiting for you".into(),
         body,
-        target: format!("session:{session}"),
+        target,
         project,
     }
 }
@@ -215,6 +225,10 @@ pub fn notify_run_finished(app: &AppHandle, run: &crate::runs::model::Run) {
 
 pub fn notify_needs_you(app: &AppHandle, session: u64, project: &str, agent: &str, title: Option<&str>) {
     dispatch(app, needs_you(project, session, agent, title));
+}
+
+pub fn notify_terminal_needs_you(app: &AppHandle, terminal: u64, project: &str, agent: &str) {
+    dispatch(app, terminal_needs_you(project, terminal, agent));
 }
 
 #[cfg(test)]
@@ -445,6 +459,16 @@ mod tests {
         assert_eq!(message.title, "An agent is waiting for you");
         assert_eq!(message.body, "smetana: claude on \"fix the board\"");
         assert_eq!(message.target, "session:7");
+    }
+
+    #[test]
+    fn a_terminal_session_message_targets_terminal_and_is_otherwise_the_same() {
+        let message = terminal_needs_you("/work/smetana", 7, "claude");
+        assert_eq!(message.target, "terminal:7");
+        let conversation = needs_you("/work/smetana", 7, "claude", None);
+        assert_eq!(message.kind, conversation.kind);
+        assert_eq!(message.title, conversation.title);
+        assert_eq!(message.body, conversation.body);
         assert_eq!(needs_you("/work/smetana", 7, "claude", None).body, "smetana: claude");
     }
 }
