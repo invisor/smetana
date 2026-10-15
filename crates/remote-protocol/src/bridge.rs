@@ -35,6 +35,11 @@ pub enum ClientMsg {
     /// Start receiving an event. Listening twice is the same as once.
     Listen { event: String },
     Unlisten { event: String },
+    /// The phone's push token appeared or changed after pairing. Added in
+    /// protocol 1.1 as the last variant, so the numbering of the others is
+    /// unchanged; a phone sends it only to a desktop whose `HelloReply` says
+    /// `protocol_minor >= 1`, because an older desktop would not read it.
+    UpdatePushToken { token: String },
 }
 
 /// The desktop's message.
@@ -235,6 +240,7 @@ mod tests {
             args: json!({ "token": 3, "nested": [1, null, { "a": "b" }], "f": 1.5 }),
         });
         round_trip(ClientMsg::Listen { event: "run:state".into() });
+        round_trip(ClientMsg::UpdatePushToken { token: "t".into() });
         round_trip(ClientMsg::Unlisten { event: "run:state".into() });
         round_trip(ServerMsg::Event { name: "tracker:delta".into(), payload: json!({ "generation": 2 }) });
         round_trip(ServerMsg::Reply { id: 1, result: Ok(json!(null)) });

@@ -46,7 +46,7 @@ const LINGER: Duration = Duration::from_secs(2);
 const FIRST_FRAME_LIMIT: usize = 16 * 1024;
 
 const NAME_LIMIT: usize = 64;
-const TOKEN_LIMIT: usize = 4096;
+pub(crate) const TOKEN_LIMIT: usize = 4096;
 
 /// The device key, read from `path` or made and written there. Created at first
 /// launch and never rotated: it is the desktop's identity, and every ticket and

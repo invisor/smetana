@@ -1,0 +1,634 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		118376A3E7EAF7902296552E /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 85AB4271FDDDD4B48B7F7CA6 /* CoreGraphics.framework */; };
+		1D4078C0E35E51E0FEBD7789 /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 09D03BB77201C1C12283AD7C /* libapp.a */; };
+		1E957D78C412B917235A8414 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B8976732D866AB46E2358B58 /* Metal.framework */; };
+		1FC27003042997ABCA4314A7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 31B6260C53DB05CECDBE8429 /* Assets.xcassets */; };
+		2A2448D1C93C547044E53FC2 /* PushRegistration.m in Sources */ = {isa = PBXBuildFile; fileRef = D29945A6F16B032590D0CB03 /* PushRegistration.m */; };
+		31141B5869AB1BEE33E73C24 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D531293915ACA1F5083CE957 /* Security.framework */; };
+		387A5D2870035AD06D8A3801 /* PushBlob.swift in Sources */ = {isa = PBXBuildFile; fileRef = E760C5419E42F19A5B860476 /* PushBlob.swift */; };
+		4554FD4644E5B14A488C4607 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F9D3005A60F96365051E0D16 /* SystemConfiguration.framework */; };
+		482284498B453ED8E9F5300F /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 453BE644564D095AB3859547 /* UIKit.framework */; };
+		63EE5FEB13B56517AEB39225 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2A79CB0731283822A7C3F724 /* MetalKit.framework */; };
+		72229E1C30CF61B6BC3ABE43 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD46A5A934B660BD093F0200 /* NotificationService.swift */; };
+		882447354B360076EAD89190 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 5399349ED562013FAD2C0033 /* LaunchScreen.storyboard */; };
+		9A8B39B57429D43F6C476C37 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 9BBD176D4C8CB5191B4B94D0 /* main.mm */; };
+		9DA444211ADD323DFA1F8590 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 724F3B62FD5196687D4DA810 /* assets */; };
+		AB8FB4C280BABC98BA7547F6 /* Network.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 07F18DF057216EAC75135121 /* Network.framework */; };
+		E080F9BBC28A2434D9C69E42 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D0E2A5E89D609A2FFB93F797 /* QuartzCore.framework */; };
+		E667850628F99DDE56D89697 /* NotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 7B55B495B91CCFE27EDEEF51 /* NotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		EDFA3D90D820E16440BCE722 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6A0F185F53233EA92AC56A7B /* WebKit.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		6E82EC66C2CD26033B2E9595 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B3851151A9DF1F9014104B7F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D6347E85DE09AA2C2E2EBE69;
+			remoteInfo = NotificationService;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		32FC8DC67DA31BEC645871B9 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				E667850628F99DDE56D89697 /* NotificationService.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		07F18DF057216EAC75135121 /* Network.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Network.framework; path = System/Library/Frameworks/Network.framework; sourceTree = SDKROOT; };
+		095DAF47F00D003E67808600 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		09D03BB77201C1C12283AD7C /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		27F1B34927B967A51F4BD657 /* keychain.rs */ = {isa = PBXFileReference; path = keychain.rs; sourceTree = "<group>"; };
+		2A79CB0731283822A7C3F724 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		31B6260C53DB05CECDBE8429 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		3DBA154B5F881BD58F930764 /* core.rs */ = {isa = PBXFileReference; path = core.rs; sourceTree = "<group>"; };
+		430CF135AA52324DF540CC4A /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
+		453BE644564D095AB3859547 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		4A7EEA8108C960CD8CD82C06 /* smetana-companion_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "smetana-companion_iOS.entitlements"; sourceTree = "<group>"; };
+		5399349ED562013FAD2C0033 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		59680D5FCA1FD9F22EBDC441 /* core_tests.rs */ = {isa = PBXFileReference; path = core_tests.rs; sourceTree = "<group>"; };
+		6A0F185F53233EA92AC56A7B /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+		724F3B62FD5196687D4DA810 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
+		7B55B495B91CCFE27EDEEF51 /* NotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = NotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		85AB4271FDDDD4B48B7F7CA6 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		87380A65DC4EF86055D58CAD /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		956800FD01B09E517E98E2FD /* version.rs */ = {isa = PBXFileReference; path = version.rs; sourceTree = "<group>"; };
+		9BBD176D4C8CB5191B4B94D0 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
+		A5900CF015C7B6C0D3F41556 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		B3110BB9357808AA44EB83D6 /* secrets.rs */ = {isa = PBXFileReference; path = secrets.rs; sourceTree = "<group>"; };
+		B8976732D866AB46E2358B58 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		BC0D9FCB8DB25413CE82BD85 /* smetana-companion_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "smetana-companion_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		BD46A5A934B660BD093F0200 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		D0E2A5E89D609A2FFB93F797 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		D29945A6F16B032590D0CB03 /* PushRegistration.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = PushRegistration.m; sourceTree = "<group>"; };
+		D531293915ACA1F5083CE957 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		E760C5419E42F19A5B860476 /* PushBlob.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushBlob.swift; sourceTree = "<group>"; };
+		E9E5CF26C0E012D068D3307B /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
+		EF33895C72F3C4F60F4CD677 /* push.rs */ = {isa = PBXFileReference; path = push.rs; sourceTree = "<group>"; };
+		F9D3005A60F96365051E0D16 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		25A122C73E91D569820E6150 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1D4078C0E35E51E0FEBD7789 /* libapp.a in Frameworks */,
+				118376A3E7EAF7902296552E /* CoreGraphics.framework in Frameworks */,
+				1E957D78C412B917235A8414 /* Metal.framework in Frameworks */,
+				63EE5FEB13B56517AEB39225 /* MetalKit.framework in Frameworks */,
+				E080F9BBC28A2434D9C69E42 /* QuartzCore.framework in Frameworks */,
+				31141B5869AB1BEE33E73C24 /* Security.framework in Frameworks */,
+				4554FD4644E5B14A488C4607 /* SystemConfiguration.framework in Frameworks */,
+				AB8FB4C280BABC98BA7547F6 /* Network.framework in Frameworks */,
+				482284498B453ED8E9F5300F /* UIKit.framework in Frameworks */,
+				EDFA3D90D820E16440BCE722 /* WebKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		5D31E616D934587BA8F754B1 /* NotificationService */ = {
+			isa = PBXGroup;
+			children = (
+				BD46A5A934B660BD093F0200 /* NotificationService.swift */,
+			);
+			path = NotificationService;
+			sourceTree = "<group>";
+		};
+		6B8061E89B5732E58B55A120 /* ios-push */ = {
+			isa = PBXGroup;
+			children = (
+				E760C5419E42F19A5B860476 /* PushBlob.swift */,
+			);
+			name = "ios-push";
+			path = "../../../ios-push";
+			sourceTree = "<group>";
+		};
+		6E024D65C23195199C618FA3 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				7B55B495B91CCFE27EDEEF51 /* NotificationService.appex */,
+				BC0D9FCB8DB25413CE82BD85 /* smetana-companion_iOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		7CF4A8D5FF28D52D86CACA33 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				85AB4271FDDDD4B48B7F7CA6 /* CoreGraphics.framework */,
+				09D03BB77201C1C12283AD7C /* libapp.a */,
+				B8976732D866AB46E2358B58 /* Metal.framework */,
+				2A79CB0731283822A7C3F724 /* MetalKit.framework */,
+				07F18DF057216EAC75135121 /* Network.framework */,
+				D0E2A5E89D609A2FFB93F797 /* QuartzCore.framework */,
+				D531293915ACA1F5083CE957 /* Security.framework */,
+				F9D3005A60F96365051E0D16 /* SystemConfiguration.framework */,
+				453BE644564D095AB3859547 /* UIKit.framework */,
+				6A0F185F53233EA92AC56A7B /* WebKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		900CFDBA555916A7B7C2134C = {
+			isa = PBXGroup;
+			children = (
+				724F3B62FD5196687D4DA810 /* assets */,
+				31B6260C53DB05CECDBE8429 /* Assets.xcassets */,
+				5399349ED562013FAD2C0033 /* LaunchScreen.storyboard */,
+				A29D05C8797783DB9EDCB7CE /* Externals */,
+				6B8061E89B5732E58B55A120 /* ios-push */,
+				5D31E616D934587BA8F754B1 /* NotificationService */,
+				E8CDE0D76995338553CE3649 /* smetana-companion_iOS */,
+				B5931A7366CF2C0A38E0BB98 /* Sources */,
+				E75BD5857C5C4FE2143D105B /* src */,
+				7CF4A8D5FF28D52D86CACA33 /* Frameworks */,
+				6E024D65C23195199C618FA3 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A077CA90C02BB7A82FA90AB9 /* smetana-companion */ = {
+			isa = PBXGroup;
+			children = (
+				9BBD176D4C8CB5191B4B94D0 /* main.mm */,
+				E72AA53C020E4A9EA96D2674 /* bindings */,
+			);
+			path = "smetana-companion";
+			sourceTree = "<group>";
+		};
+		A29D05C8797783DB9EDCB7CE /* Externals */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Externals;
+			sourceTree = "<group>";
+		};
+		B5931A7366CF2C0A38E0BB98 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				D29945A6F16B032590D0CB03 /* PushRegistration.m */,
+				A077CA90C02BB7A82FA90AB9 /* smetana-companion */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		E72AA53C020E4A9EA96D2674 /* bindings */ = {
+			isa = PBXGroup;
+			children = (
+				E9E5CF26C0E012D068D3307B /* bindings.h */,
+			);
+			path = bindings;
+			sourceTree = "<group>";
+		};
+		E75BD5857C5C4FE2143D105B /* src */ = {
+			isa = PBXGroup;
+			children = (
+				430CF135AA52324DF540CC4A /* android.rs */,
+				59680D5FCA1FD9F22EBDC441 /* core_tests.rs */,
+				3DBA154B5F881BD58F930764 /* core.rs */,
+				27F1B34927B967A51F4BD657 /* keychain.rs */,
+				095DAF47F00D003E67808600 /* lib.rs */,
+				A5900CF015C7B6C0D3F41556 /* main.rs */,
+				EF33895C72F3C4F60F4CD677 /* push.rs */,
+				B3110BB9357808AA44EB83D6 /* secrets.rs */,
+				956800FD01B09E517E98E2FD /* version.rs */,
+			);
+			name = src;
+			path = ../../src;
+			sourceTree = "<group>";
+		};
+		E8CDE0D76995338553CE3649 /* smetana-companion_iOS */ = {
+			isa = PBXGroup;
+			children = (
+				87380A65DC4EF86055D58CAD /* Info.plist */,
+				4A7EEA8108C960CD8CD82C06 /* smetana-companion_iOS.entitlements */,
+			);
+			path = "smetana-companion_iOS";
+			sourceTree = "<group>";
+		};
+		"TEMP_0F773FF9-9B2A-4311-BA82-5160DF39DBF7" /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = arm64;
+			sourceTree = "<group>";
+		};
+		"TEMP_3F500224-2264-42F4-8A27-27553599D5EE" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		2A71F2C6100C89D6FF81E3D9 /* smetana-companion_iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FA3667ECFF02D65ED6423C6E /* Build configuration list for PBXNativeTarget "smetana-companion_iOS" */;
+			buildPhases = (
+				C9839AB1F97EF0D97D1F226B /* Build Rust Code */,
+				DAE2FB9AC83EDE5E606EA399 /* Sources */,
+				3F5F949DC7BBE587E77152AB /* Resources */,
+				25A122C73E91D569820E6150 /* Frameworks */,
+				32FC8DC67DA31BEC645871B9 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				FF38BC39C2E6889C8BCEC80A /* PBXTargetDependency */,
+			);
+			name = "smetana-companion_iOS";
+			packageProductDependencies = (
+			);
+			productName = "smetana-companion_iOS";
+			productReference = BC0D9FCB8DB25413CE82BD85 /* smetana-companion_iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+		D6347E85DE09AA2C2E2EBE69 /* NotificationService */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8EECDD3E6547829367B7713A /* Build configuration list for PBXNativeTarget "NotificationService" */;
+			buildPhases = (
+				FF53FB5D73DB9D0E525EC908 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NotificationService;
+			packageProductDependencies = (
+			);
+			productName = NotificationService;
+			productReference = 7B55B495B91CCFE27EDEEF51 /* NotificationService.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		B3851151A9DF1F9014104B7F /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = 3EC73DCE1432DC6BCCC81EA9 /* Build configuration list for PBXProject "smetana-companion" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 900CFDBA555916A7B7C2134C;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 6E024D65C23195199C618FA3 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				2A71F2C6100C89D6FF81E3D9 /* smetana-companion_iOS */,
+				D6347E85DE09AA2C2E2EBE69 /* NotificationService */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		3F5F949DC7BBE587E77152AB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1FC27003042997ABCA4314A7 /* Assets.xcassets in Resources */,
+				882447354B360076EAD89190 /* LaunchScreen.storyboard in Resources */,
+				9DA444211ADD323DFA1F8590 /* assets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		C9839AB1F97EF0D97D1F226B /* Build Rust Code */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust Code";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a",
+				"$(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "npm run -- tauri ios xcode-script -v --platform \"${PLATFORM_DISPLAY_NAME:?}\" --sdk-root \"${SDKROOT:?}\" --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration \"${CONFIGURATION:?}\" ${FORCE_COLOR} ${ARCHS:?}\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		DAE2FB9AC83EDE5E606EA399 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2A2448D1C93C547044E53FC2 /* PushRegistration.m in Sources */,
+				9A8B39B57429D43F6C476C37 /* main.mm in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FF53FB5D73DB9D0E525EC908 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				72229E1C30CF61B6BC3ABE43 /* NotificationService.swift in Sources */,
+				387A5D2870035AD06D8A3801 /* PushBlob.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		FF38BC39C2E6889C8BCEC80A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D6347E85DE09AA2C2E2EBE69 /* NotificationService */;
+			targetProxy = 6E82EC66C2CD26033B2E9595 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		2C05BFDE4FFDEB7DEAF85CB8 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = release;
+		};
+		3F2DCE44DDFE7A75FCCA4ABF /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "smetana-companion_iOS/smetana-companion_iOS.entitlements";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = "smetana-companion_iOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.invisor.smetana.companion;
+				PRODUCT_NAME = "Smetana Companion";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
+			};
+			name = debug;
+		};
+		5ACF9AD3CAF263AFBF2C7A06 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = NotificationService/NotificationService.entitlements;
+				INFOPLIST_FILE = NotificationService/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.invisor.smetana.companion.NotificationService;
+				PRODUCT_NAME = NotificationService;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = release;
+		};
+		64734BFF62F1A99EB0DD11DE /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = NotificationService/NotificationService.entitlements;
+				INFOPLIST_FILE = NotificationService/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.invisor.smetana.companion.NotificationService;
+				PRODUCT_NAME = NotificationService;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = debug;
+		};
+		A8581AB352679DB35A1FD0E4 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ARCHS = (
+					arm64,
+				);
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "smetana-companion_iOS/smetana-companion_iOS.entitlements";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
+				INFOPLIST_FILE = "smetana-companion_iOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.invisor.smetana.companion;
+				PRODUCT_NAME = "Smetana Companion";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
+			};
+			name = release;
+		};
+		FB020C9B4EC0672404DC0DB4 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3EC73DCE1432DC6BCCC81EA9 /* Build configuration list for PBXProject "smetana-companion" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FB020C9B4EC0672404DC0DB4 /* debug */,
+				2C05BFDE4FFDEB7DEAF85CB8 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+		8EECDD3E6547829367B7713A /* Build configuration list for PBXNativeTarget "NotificationService" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				64734BFF62F1A99EB0DD11DE /* debug */,
+				5ACF9AD3CAF263AFBF2C7A06 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+		FA3667ECFF02D65ED6423C6E /* Build configuration list for PBXNativeTarget "smetana-companion_iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3F2DCE44DDFE7A75FCCA4ABF /* debug */,
+				A8581AB352679DB35A1FD0E4 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = B3851151A9DF1F9014104B7F /* Project object */;
+}

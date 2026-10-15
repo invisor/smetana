@@ -419,3 +419,24 @@ async fn remote_bridge_a_project_switch_from_a_phone_is_announced_to_the_window(
     assert!(client.call("tracker_set_project", json!({ "path": 5 })).await.is_err());
     assert_eq!(heard.lock().unwrap().as_slice(), [Some("/work/b".to_string()), None]);
 }
+
+#[tokio::test]
+async fn remote_bridge_a_phone_reports_a_new_push_token_and_the_device_keeps_it() {
+    let h = harness().await;
+    h.remote.hub.set_dispatch(Arc::new(Recorder::default()));
+    let (phone, mut client) = paired(&h).await;
+    assert_eq!(client.hello.protocol_minor, 1, "UpdatePushToken is announced by protocol 1.1");
+    client.send_msg(ClientMsg::UpdatePushToken { token: "fresh-token".into() }).await;
+    // Messages are handled in order: once this answer is back, the token was seen.
+    client.call("tracker_health", json!({})).await.unwrap();
+    let key = phone.key.public().to_string();
+    let device = h.remote.devices.all().into_iter().find(|d| d.key == key).unwrap();
+    assert_eq!(device.push_token.as_deref(), Some("fresh-token"));
+
+    // An empty or oversized token is ignored and does not end the connection.
+    client.send_msg(ClientMsg::UpdatePushToken { token: String::new() }).await;
+    client.send_msg(ClientMsg::UpdatePushToken { token: "x".repeat(5000) }).await;
+    client.call("tracker_health", json!({})).await.unwrap();
+    let device = h.remote.devices.all().into_iter().find(|d| d.key == key).unwrap();
+    assert_eq!(device.push_token.as_deref(), Some("fresh-token"));
+}

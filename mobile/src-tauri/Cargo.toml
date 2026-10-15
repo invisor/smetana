@@ -1,0 +1,60 @@
+[package]
+name = "smetana-companion"
+version = "0.1.0"
+description = "Smetana companion: a remote client for a paired workstation"
+edition = "2021"
+rust-version = "1.77.2"
+publish = false
+
+# No workspace, here or at the repository root: this crate is built by `tauri
+# ios build` / `tauri android build` from mobile/, and `cd mobile/src-tauri &&
+# cargo test` is its own gate. The desktop's `cargo` never sees it.
+
+[lib]
+name = "smetana_companion_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+data-encoding = "2"
+log = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+# The wire types, the allowlist and the push blob, shared with the desktop.
+remote-protocol = { path = "../../crates/remote-protocol" }
+# The same iroh the desktop and the relay are on (src-tauri/Cargo.toml,
+# crates/remote-protocol/Cargo.toml, IROH_RELAY_VERSION in server/Dockerfile).
+# A mismatch builds green and fails only at runtime through the relay, so a
+# test (`tests/versions.rs`) compares the locked versions.
+iroh = "1.3"
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-barcode-scanner = "2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+core-foundation = "0.10"
+security-framework-sys = "2"
+
+[dev-dependencies]
+iroh = { version = "1.3", features = ["test-utils"] }
+tokio = { version = "1", features = ["test-util"] }
+
+# Cargo.lock also pins `libc` to 0.2.189. 0.2.190 left the routing-socket constants (`RTM_*`, `RTAX_*`,
+# `RTF_*`) out of iOS, and netwatch (iroh's network monitor) uses them for iOS as for the other BSDs, so
+# nothing downstream of iroh compiles for iOS with it. Raise it when netwatch stops needing them there.
+
+# iroh's `netwatch` needs `netdev` 0.46, and no 0.46 release compiles for iOS: `libc` defines
+# `in6_ifreq` and `ifmibdata` for macOS only. The copy in vendor/netdev is 0.46.1 with those two
+# uses made macOS-only (see PATCHED.md there). Remove it when netdev ships a fix.
+[patch.crates-io]
+netdev = { path = "../vendor/netdev" }

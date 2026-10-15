@@ -57,8 +57,8 @@ refuses one `valid_relay_url` refuses, because an edit reaches `settings.json` o
 
 **A lost `Accepted` is undone.** If the reply cannot be delivered the device is removed again. A phone whose
 key is already on the list and which sends a `PairRequest` is answered `CLOSE_PROTOCOL` (the desktop expects
-`Hello` from a known key); the mobile client should treat that as "already paired" and connect again with
-`Hello`. At most `MAX_PAIRING_CONNECTIONS` (4) unknown-key connections are served at once; the rest get
+`Hello` from a known key); the mobile client does **not** treat that as "already paired": the desktop sends the same code when the first
+frame times out, so it is reported as a pairing failure the person can retry. At most `MAX_PAIRING_CONNECTIONS` (4) unknown-key connections are served at once; the rest get
 `CLOSE_UNKNOWN`. The `CLOSE_*` codes live in `remote-protocol` beside the ALPN.
 
 **Webviews never see `push_token` or `push_key`**: `remote_devices` and `remote:devices` carry `DeviceView`.
@@ -126,6 +126,14 @@ The test `remote_contract_changes_only_with_a_protocol_version` fails when the f
 than the digest recorded for the current `PROTOCOL_MAJOR.PROTOCOL_MINOR`, and says which bump is needed:
 MINOR for additions, MAJOR for removals and renames. The way forward is a new entry under a higher version,
 added by hand together with the constants; an existing entry is a frozen contract and is not edited.
+
+## Protocol 1.1: `UpdatePushToken`
+
+`ClientMsg::UpdatePushToken { token }` is the last variant of `ClientMsg`, so postcard's numbering of the others is
+unchanged. A phone sends it when its push token appears or changes after pairing; the desktop stores it with
+`Devices::set_push_token` (an empty token or one over `TOKEN_LIMIT` is ignored, the connection stays). An older desktop
+would read the variant as a broken frame, so a phone sends it only when `HelloReply.protocol_minor >= 1`. The contract
+files did not change, so `versions.json` has `1.1` with the same digest as `1.0`.
 
 ## Push
 

@@ -116,6 +116,21 @@ impl Devices {
         Ok(true)
     }
 
+    /// Replaces a device's push token (the phone reported a new one). `false` when
+    /// there is no such device. A failed write leaves the list as it was.
+    pub fn set_push_token(&self, key: &PublicKey, token: String) -> Result<bool, String> {
+        let key = key.to_string();
+        let mut list = self.lock();
+        let Some(index) = list.iter().position(|device| device.key == key) else {
+            return Ok(false);
+        };
+        let mut next = list.clone();
+        next[index].push_token = Some(token);
+        write(&self.path, &next)?;
+        *list = next;
+        Ok(true)
+    }
+
     /// Records a completed handshake. A failed write is logged and forgotten:
     /// a timestamp is not worth refusing a phone over.
     pub fn touch(&self, key: &PublicKey, now: u64) {
