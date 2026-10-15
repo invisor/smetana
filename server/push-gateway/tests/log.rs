@@ -32,6 +32,7 @@ fn state(limit: u32, fail: Option<ProviderError>) -> State {
         fcm: Some(Arc::new(Stub(fail))),
         limiter: Arc::new(RateLimiter::new(limit, Duration::from_secs(60))),
         trust_forwarded_for: false,
+        body_timeout: Duration::from_secs(5),
     }
 }
 

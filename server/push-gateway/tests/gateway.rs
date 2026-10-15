@@ -50,6 +50,7 @@ fn rig_with(limit: u32, apns: Recorder) -> Rig {
         fcm: Some(fcm.clone()),
         limiter: Arc::new(RateLimiter::new(limit, Duration::from_secs(60))),
         trust_forwarded_for: false,
+        body_timeout: Duration::from_secs(5),
     };
     Rig { apns, fcm, state }
 }
@@ -183,4 +184,66 @@ async fn forwarded_for_is_honoured_only_when_trusted() {
     assert_eq!(send(rig.state.clone(), "9.9.9.9, 1.1.1.1").await, StatusCode::OK);
     assert_eq!(send(rig.state.clone(), "9.9.9.9, 2.2.2.2").await, StatusCode::OK);
     assert_eq!(send(rig.state.clone(), "9.9.9.9, 2.2.2.2").await, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn ipv6_clients_share_a_budget_per_slash_64_and_ipv4_per_address() {
+    let limiter = RateLimiter::new(2, Duration::from_secs(60));
+    let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+    assert!(limiter.allow(ip("2001:db8:1:2::1")));
+    assert!(limiter.allow(ip("2001:db8:1:2:ffff:ffff:ffff:ffff")));
+    // A third address in the same /64 is over the shared budget of two.
+    assert!(!limiter.allow(ip("2001:db8:1:2:aaaa::7")));
+    // The neighbouring /64 has a budget of its own.
+    assert!(limiter.allow(ip("2001:db8:1:3::1")));
+    // IPv4 is counted per full address.
+    assert!(limiter.allow(ip("192.0.2.1")));
+    assert!(limiter.allow(ip("192.0.2.1")));
+    assert!(!limiter.allow(ip("192.0.2.1")));
+    assert!(limiter.allow(ip("192.0.2.2")));
+}
+
+#[tokio::test]
+async fn a_full_table_refuses_new_clients_but_still_serves_known_ones() {
+    let limiter = RateLimiter::with_capacity(5, Duration::from_secs(60), 2);
+    let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+    assert!(limiter.allow(ip("192.0.2.1")));
+    assert!(limiter.allow(ip("192.0.2.2")));
+    assert!(!limiter.allow(ip("192.0.2.3")), "a new client is refused when the table is full");
+    assert!(limiter.allow(ip("192.0.2.1")), "a known client is still counted normally");
+}
+
+#[tokio::test]
+async fn expired_entries_make_room_again() {
+    let limiter = RateLimiter::with_capacity(5, Duration::from_millis(50), 1);
+    let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+    assert!(limiter.allow(ip("192.0.2.1")));
+    assert!(!limiter.allow(ip("192.0.2.2")));
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert!(limiter.allow(ip("192.0.2.2")));
+}
+
+#[tokio::test]
+async fn blob_over_the_cap_is_400_and_the_cap_itself_is_accepted() {
+    let rig = rig(100);
+    let at = "A".repeat(push_gateway::MAX_BLOB);
+    let over = "A".repeat(push_gateway::MAX_BLOB + 4);
+    assert_eq!(post(&rig.state, "10.0.0.1", json("android", "tok", &at)).await, StatusCode::OK);
+    assert_eq!(post(&rig.state, "10.0.0.1", json("android", "tok", &over)).await, StatusCode::BAD_REQUEST);
+    assert_eq!(rig.fcm.got.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_body_that_never_finishes_is_408() {
+    let mut rig = rig(100);
+    rig.state.body_timeout = Duration::from_millis(50);
+    // The sender is kept alive and never sends: the body stays pending.
+    let (_sender, channel) = http_body_util::channel::Channel::<axum::body::Bytes, std::convert::Infallible>::new(1);
+    let mut request = Request::post("/v1/push").body(Body::new(channel)).unwrap();
+    request
+        .extensions_mut()
+        .insert(ConnectInfo("10.0.0.1:1".parse::<SocketAddr>().unwrap()));
+    let status = app(rig.state.clone()).oneshot(request).await.unwrap().status();
+    assert_eq!(status, StatusCode::REQUEST_TIMEOUT);
+    assert!(rig.apns.got.lock().unwrap().is_empty() && rig.fcm.got.lock().unwrap().is_empty());
 }

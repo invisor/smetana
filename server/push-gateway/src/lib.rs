@@ -30,33 +30,94 @@ use providers::{Provider, ProviderError, PushMessage};
 /// The largest request body, in bytes.
 pub const MAX_BODY: usize = 4 * 1024;
 
-/// Fixed-window counter per address, in memory. A window is dropped when it expires, so the map
-/// holds only addresses seen within the last window.
+/// The longest blob text accepted, in characters of base64. Apple caps a whole payload at 4096
+/// bytes and Google caps `data` at 4 KiB; the wrapper around the blob is under 100 bytes in either,
+/// so this leaves room for it. A longer blob would be rejected by the provider anyway, after the
+/// gateway had spent a request on it.
+pub const MAX_BLOB: usize = 3500;
+
+/// How many distinct clients the limiter remembers at once.
+pub const DEFAULT_MAX_CLIENTS: usize = 100_000;
+
+/// The smallest gap between two sweeps forced by a full table.
+const MIN_FORCED_SWEEP: Duration = Duration::from_secs(1);
+
+/// What a client is counted as: an IPv4 address in full, an IPv6 address by its /64, because a
+/// single subscriber is routinely handed a whole /64 and could otherwise mint a fresh budget with
+/// every address in it.
+fn client_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => {
+            let mut octets = v6.octets();
+            octets[8..].fill(0);
+            IpAddr::V6(octets.into())
+        }
+    }
+}
+
+struct Table {
+    seen: HashMap<IpAddr, (Instant, u32)>,
+    last_sweep: Instant,
+}
+
+impl Table {
+    fn sweep(&mut self, now: Instant, window: Duration) {
+        self.seen
+            .retain(|_, (start, _)| now.duration_since(*start) < window);
+        self.last_sweep = now;
+    }
+}
+
+/// Fixed-window counter per client, in memory only.
+///
+/// The table is bounded: once it holds `max_clients` live entries a client it has not seen is
+/// refused, which fails closed (a flood of spoofed or rotating sources can lock out newcomers for
+/// the length of a window, but cannot grow the process). Expired entries are swept at most once
+/// per window, or when a full table is hit, at most once a second, never on every request.
 pub struct RateLimiter {
     limit: u32,
     window: Duration,
-    seen: Mutex<HashMap<IpAddr, (Instant, u32)>>,
+    max_clients: usize,
+    table: Mutex<Table>,
 }
 
 impl RateLimiter {
     pub fn new(limit: u32, window: Duration) -> RateLimiter {
+        RateLimiter::with_capacity(limit, window, DEFAULT_MAX_CLIENTS)
+    }
+
+    pub fn with_capacity(limit: u32, window: Duration, max_clients: usize) -> RateLimiter {
         RateLimiter {
             limit,
             window,
-            seen: Mutex::new(HashMap::new()),
+            max_clients,
+            table: Mutex::new(Table {
+                seen: HashMap::new(),
+                last_sweep: Instant::now(),
+            }),
         }
     }
 
-    /// Counts one request from `ip`; false when it is over the limit.
+    /// Counts one request from `ip`; false when it is over the limit or the table is full.
     pub fn allow(&self, ip: IpAddr) -> bool {
+        let key = client_key(ip);
         let now = Instant::now();
-        let Ok(mut seen) = self.seen.lock() else {
+        let Ok(mut table) = self.table.lock() else {
             return false;
         };
-        if seen.len() > 10_000 {
-            seen.retain(|_, (start, _)| now.duration_since(*start) < self.window);
+        if now.duration_since(table.last_sweep) >= self.window {
+            table.sweep(now, self.window);
         }
-        let entry = seen.entry(ip).or_insert((now, 0));
+        if !table.seen.contains_key(&key) && table.seen.len() >= self.max_clients {
+            if now.duration_since(table.last_sweep) >= MIN_FORCED_SWEEP {
+                table.sweep(now, self.window);
+            }
+            if table.seen.len() >= self.max_clients {
+                return false;
+            }
+        }
+        let entry = table.seen.entry(key).or_insert((now, 0));
         if now.duration_since(entry.0) >= self.window {
             *entry = (now, 0);
         }
@@ -73,6 +134,8 @@ pub struct State {
     /// Behind a reverse proxy the socket peer is the proxy; the real client is the last hop it
     /// appended to `X-Forwarded-For`. Only honoured when the operator says a proxy is there.
     pub trust_forwarded_for: bool,
+    /// How long a client gets to deliver its body before the request is dropped with 408.
+    pub body_timeout: Duration,
 }
 
 pub fn app(state: State) -> Router {
@@ -132,7 +195,15 @@ async fn push(
 
     // An oversized body is a 400, as specified, and it is cut off at the limit rather than
     // buffered: to_bytes stops reading one byte past it.
-    let Ok(bytes) = axum::body::to_bytes(request.into_body(), MAX_BODY).await else {
+    let read = tokio::time::timeout(
+        state.body_timeout,
+        axum::body::to_bytes(request.into_body(), MAX_BODY),
+    )
+    .await;
+    let Ok(read) = read else {
+        return reply(StatusCode::REQUEST_TIMEOUT, "unknown");
+    };
+    let Ok(bytes) = read else {
         return reply(StatusCode::BAD_REQUEST, "unknown");
     };
     let Ok(body) = serde_json::from_slice::<PushRequest>(&bytes) else {
@@ -145,6 +216,7 @@ async fn push(
     };
     if !token_ok(platform, &body.token)
         || body.blob.is_empty()
+        || body.blob.len() > MAX_BLOB
         || STANDARD.decode(&body.blob).is_err()
     {
         return reply(StatusCode::BAD_REQUEST, platform);

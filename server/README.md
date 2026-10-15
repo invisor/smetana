@@ -36,12 +36,23 @@ It passes the blob to Apple or Google exactly as received. It has no key that co
 **Apple and Google see** that a notification was delivered to the device, as they do for every
 push.
 
-**Nothing is stored.** There is no database and no log of requests. The push gateway's log lines
-hold a status and a platform and nothing else: no token, no blob, no address, and no text from a
-provider's error (which could contain the token). A test in `push-gateway/tests/log.rs` fails if
-that changes. The rate limiter is a table in memory that is gone when the process stops.
-The one file that survives a restart is the relay's own Let's Encrypt certificate and account,
-in a named volume, when you ask the relay to obtain a certificate itself.
+**Nothing is stored.** There is no database, and neither process writes request data anywhere.
+Said precisely, because "no logs" is a claim that has to be true to be made:
+
+- **The relay logs nothing, by configuration.** `iroh-relay` tags its log lines with the peer's
+  address (`conn{peer=IP:port}`) and prints one at its default level for every failed handshake,
+  which Docker would keep on the host's disk. `docker-compose.yml` therefore sets
+  `RUST_LOG=off` for it (`RELAY_LOG` overrides this for debugging; if you turn it on, those
+  lines hold client addresses and you should clear the container's logs afterwards). Any
+  container output is also capped at 1 MB by the logging options in the compose file.
+- **The push gateway logs a status and a platform per request** (`push status=200
+  platform="ios"`) and one line at startup saying which platforms have credentials. It never
+  logs a token, a blob, an address, or the text of a provider's error. A test in
+  `push-gateway/tests/log.rs` fails if that changes.
+- **The rate limiter is a table in memory**, keyed by client address (IPv6 by its /64) and
+  bounded in size; it is gone when the process stops.
+- **The one file that survives a restart** is the relay's own Let's Encrypt account and
+  certificate, in a named volume, when you ask the relay to obtain a certificate itself.
 
 ## Run your own relay
 
@@ -72,9 +83,10 @@ The URL travels in the pairing code, so a phone paired afterwards uses the same 
 | `RELAY_HOSTNAME` | | name on the certificate (required for `letsencrypt`) |
 | `RELAY_CONTACT` | | email for Let's Encrypt (required for `letsencrypt`) |
 | `RELAY_LETSENCRYPT_PROD` | `true` | `false` uses Let's Encrypt staging |
-| `RELAY_HTTP_PORT` | `3340` in compose, `80` in `.env.example` | HTTP port |
-| `RELAY_HTTPS_PORT` | `8443` in compose, `443` in `.env.example` | HTTPS port |
+| `RELAY_HTTP_PORT` | `80` | HTTP port |
+| `RELAY_HTTPS_PORT` | `443` | HTTPS port |
 | `RELAY_QUIC_PORT` | `7842` | QUIC address discovery (UDP) |
+| `RELAY_LOG` | `off` | the relay's log filter; see above before changing it |
 
 The relay is the unmodified `iroh-relay` crate at an exact version (`IROH_RELAY_VERSION` in the
 `Dockerfile`), installed with `--locked`. The container's entrypoint
@@ -95,7 +107,8 @@ the phone's Notification Service Extension can decrypt the blob and replace the 
 | status | meaning |
 |---|---|
 | 200 | handed to the provider |
-| 400 | unknown platform, malformed token, blob not base64, bad JSON, or body over 4 KiB |
+| 400 | unknown platform, malformed token, blob not base64 or over 3500 characters, bad JSON, or body over 4 KiB |
+| 408 | the body did not arrive within 5 seconds |
 | 410 | the provider says the token is no longer valid |
 | 429 | too many requests from this address |
 | 502 | the provider could not be reached or refused |
@@ -113,7 +126,9 @@ used by Matrix and ntfy.
 | `APNS_KEY_PATH`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_SANDBOX` | APNs token authentication (`.p8` key) |
 | `FCM_SERVICE_ACCOUNT_PATH` | FCM HTTP v1 service account JSON |
 
-The gateway speaks plain HTTP; put TLS in front of it (a reverse proxy) when you expose it.
+The gateway speaks plain HTTP and compose publishes it on `127.0.0.1` only; put a TLS-terminating
+reverse proxy in front of it when you expose it, and set `PUSH_TRUST_FORWARDED_FOR=1` so the rate
+limit sees real clients.
 A platform with no credentials answers 503, and the process still starts.
 
 ## Build and test
@@ -126,3 +141,7 @@ cd server/push-gateway && cargo test     # providers are stand-ins; no network
 docker build -t smetana-server server/
 docker compose -f server/docker-compose.yml up
 ```
+
+To smoke-test the stack without a domain, put a self-signed `relay.crt` and `relay.key` in
+`server/certs/` and run with `RELAY_CERT_MODE=manual RELAY_HOSTNAME=localhost RELAY_HTTP_PORT=3340
+RELAY_HTTPS_PORT=8443 docker compose up`. `curl -k https://localhost:8443/` answers from the relay.

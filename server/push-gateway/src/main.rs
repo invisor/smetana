@@ -44,6 +44,7 @@ async fn main() {
             std::time::Duration::from_secs(60),
         )),
         trust_forwarded_for: config.trust_forwarded_for,
+        body_timeout: std::time::Duration::from_secs(5),
     };
 
     let listener = tokio::net::TcpListener::bind(config.bind)

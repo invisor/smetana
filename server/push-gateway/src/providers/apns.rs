@@ -19,12 +19,22 @@ pub struct Apns {
     key_id: String,
     team_id: String,
     bundle_id: String,
-    host: &'static str,
+    host: String,
     cached: Mutex<Option<(Instant, String)>>,
 }
 
 impl Apns {
     pub fn new(http: reqwest::Client, config: ApnsConfig) -> Apns {
+        let host = if config.sandbox {
+            "https://api.sandbox.push.apple.com"
+        } else {
+            "https://api.push.apple.com"
+        };
+        Apns::with_base_url(http, config, host.to_string())
+    }
+
+    /// As `new`, against another server (a stand-in, in tests). `base_url` has no trailing slash.
+    pub fn with_base_url(http: reqwest::Client, config: ApnsConfig, base_url: String) -> Apns {
         let key = EncodingKey::from_ec_pem(&config.key_pem).ok();
         if key.is_none() {
             tracing::error!("the APNs key could not be parsed; iOS pushes will fail");
@@ -35,11 +45,7 @@ impl Apns {
             key_id: config.key_id,
             team_id: config.team_id,
             bundle_id: config.bundle_id,
-            host: if config.sandbox {
-                "https://api.sandbox.push.apple.com"
-            } else {
-                "https://api.push.apple.com"
-            },
+            host: base_url,
             cached: Mutex::new(None),
         }
     }

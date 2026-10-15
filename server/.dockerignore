@@ -1,4 +1,8 @@
 **/target
 certs
+secrets
 .env
+*.p8
+*.pem
+*.key
 README.md

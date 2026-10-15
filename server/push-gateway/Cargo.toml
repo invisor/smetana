@@ -12,7 +12,7 @@ publish = false
 [workspace]
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["http2"] }
 base64 = "0.22"
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 reqwest = { version = "0.13", features = ["json", "form"] }
@@ -24,7 +24,8 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-http-body-util = "0.1"
+http-body-util = { version = "0.1", features = ["channel"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
 
 [profile.release]
 lto = "thin"

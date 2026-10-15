@@ -30,11 +30,18 @@ struct TokenReply {
 pub struct Fcm {
     http: reqwest::Client,
     account: Option<ServiceAccount>,
+    base_url: String,
     cached: Mutex<Option<(Instant, String)>>,
 }
 
 impl Fcm {
     pub fn new(http: reqwest::Client, config: FcmConfig) -> Fcm {
+        Fcm::with_base_url(http, config, "https://fcm.googleapis.com".to_string())
+    }
+
+    /// As `new`, sending to another server (a stand-in, in tests). The OAuth exchange goes to the
+    /// service account's own `token_uri`. `base_url` has no trailing slash.
+    pub fn with_base_url(http: reqwest::Client, config: FcmConfig, base_url: String) -> Fcm {
         let account = serde_json::from_slice::<ServiceAccount>(&config.service_account_json).ok();
         if account.is_none() {
             tracing::error!("the FCM service account could not be parsed; Android pushes will fail");
@@ -42,6 +49,7 @@ impl Fcm {
         Fcm {
             http,
             account,
+            base_url,
             cached: Mutex::new(None),
         }
     }
@@ -111,8 +119,8 @@ impl Provider for Fcm {
                 .await
                 .ok_or(ProviderError::Unavailable)?;
             let url = format!(
-                "https://fcm.googleapis.com/v1/projects/{}/messages:send",
-                account.project_id
+                "{}/v1/projects/{}/messages:send",
+                self.base_url, account.project_id
             );
             let response = self
                 .http
