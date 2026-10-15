@@ -157,7 +157,9 @@ const props = defineProps({
      `journal.js`'s `opening` fold for why the fallback lives here rather than
      in that pure module: the caption is a row's sentence, and that file knows
      nothing of rows. */
-  caption: { type: String, default: '' }
+  caption: { type: String, default: '' },
+  /* Passed on to the composer's paperclip; see `Composer.vue`. */
+  attachable: { type: Boolean, default: true }
 })
 
 /* `open-local` alone: `open` (the external breed) is answered here directly,
@@ -877,6 +879,7 @@ const refusal = computed(() => ({
         :open-attachments="openableAttachments(attachments)"
         :busy="busy"
         :can-stop="canStop"
+        :attachable="attachable"
         @update:attachments="attachments = $event"
         @send="send"
         @stop="stop"

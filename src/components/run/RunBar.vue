@@ -35,7 +35,10 @@ const props = defineProps({
      `true` by default, so a bar drawn on its own — the gallery, a footer with
      one run in it — reads exactly as it always has. The default is the
      single-run case rather than a caller's obligation. */
-  speaks: { type: Boolean, default: true }
+  speaks: { type: Boolean, default: true },
+  /* Whether "Run anyway" is offered. Off for a surface that cannot release a pause: the
+     phone's bridge has no `run_release`. */
+  canRelease: { type: Boolean, default: true }
 })
 
 defineEmits(['stop', 'release'])
@@ -76,7 +79,9 @@ const mute = computed(() => paused.value && !props.speaks)
    percentage and a reset in them. On the muted segments too: the release is one
    press for every run, so a second button beside a silent segment would be a
    second way to do the thing the first one already did. */
-const releasable = computed(() => paused.value && props.speaks && !state.value?.spent)
+const releasable = computed(
+  () => props.canRelease && paused.value && props.speaks && !state.value?.spent
+)
 
 const label = computed(() => {
   if (!state.value) return ''

@@ -70,5 +70,48 @@ notification service extension target is in `gen/apple/project.yml` (re-run `xco
 sit beside `MainActivity.kt`. Push on Android needs a Firebase project: `google-services.json` in
 `gen/android/app/` (not committed); without it the build works and push is off.
 
+## The working screens (stage 6, smetana-xvbo)
+
+`screens/Workspace.vue` is what the app is once the desktop answers: four tabs (Board, Agents, Runs, Projects) in
+`Shell.vue`, and screens opened over them (`TaskScreen`, `ConversationScreen`, `NewTaskScreen`). Where the person is
+is one route, `nav.js` (pure; `routeForTarget` is what a tapped notification becomes: `run:<project path>` -> Runs of
+that project, `session:<id>` -> the driven conversation, `terminal:<id>` -> the read-only terminal; the two id spaces
+are separate counters, so the kind travels with the id; anything else leaves the app where it is). The glue that
+starts the stores and reads a project is `workspace.js`, called from `session.js` on every (re)connect. **The board is
+one column under another, not a swipe**: every column's name and count is on screen at once, the gesture is the
+thumb's own, and a header folds its column (`board.js` is `orderColumns` then `visibleColumns`, the desktop's rules, plus
+a 20-card preview). `env(safe-area-inset-*)` is in `screens/safeArea.js` only.
+
+What the phone must not call is kept out of the stores' reach rather than hoped about:
+
+- **`allowed.js`** is the phone's copy of the epic's two lists; `tests/allowed.test.js` holds it equal to
+  `crates/remote-protocol/src/bridge.rs` and scans `src/` for any literal `invoke('...')` off the list.
+  `tests/workspace.test.js` runs every screen's reads and writes through the real stores and asserts the same of what
+  actually left, and that `settings_save`, files, git and terminal writes did not.
+- **`bridge/core.js` `LOCAL`** answers three questions a store asks about the desktop's machine without sending them
+  (`tracker_access_repair`, `terminal_marks`, `terminal_restorable`); **`bridge/event.js`** does not ask the core to
+  subscribe to a name off the list. Do not use `loadSettings` (it starts the write-back watch): `desktopSettings.js`
+  copies the few fields the screens read into the same `settings` object, and silences the stores' `chime`.
+- **`vite.config.js` `phoneStores`** answers `stores/app.js` and `stores/windowDrops.js` with `src/phone/` files (the
+  conversation panel imports three names from the first; the second would ask `drag_drop_space`). `Composer` and
+  `ConversationView` take `attachable`, `TaskCard` takes `actionable`, `RunBar` takes `canRelease`; all default on, and
+  the phone turns them off because paperclip, card menu and "Run anyway" are writes the bridge does not carry.
+
+**There is no `session:state` on the bridge**, and a conversation's state decides Send versus Stop and the Agents
+list's needs-you. `bridge/sessionState.js` folds the journal exactly as `session::model::state_of` does (except it
+cannot see the child die: a session read as ended stays ended, one that dies later reads as before until the next
+snapshot) and `bridge/event.js` dispatches the result locally as `session:state` after each `session:events` batch;
+`bridge/core.js` seeds it from every `session_attach` reply. **Known gaps, all of the bridge's shape and not the
+screens'**: no command lists the desktop's driven sessions, so the Agents list holds the PTY sessions
+(`terminal_list`), the sessions the phone started and the ones a run drives (adopted from `run_state`); a conversation
+started on the desktop is reachable from a `session:<id>` notification and not from the list. There is no event for
+the desktop switching project, so the phone reads `settings_load` again on reconnect and when the page becomes visible.
+A terminal session's output is the one `terminal_attach` snapshot (`terminalText.js`), refreshed on `terminal:state`
+and by a button; `terminal:output` is not on the list.
+
+`npm run dev` (port 5174) now shows the working screens over the desktop's `mockBackend.js` through `devBackend.js`
+(dev only; it refuses an off-list command as the core would): `?theme=`, `?density=` and `?target=session:1` (a tap on a
+notification) are read, and `window.__phone.emit(name, payload)` delivers an event.
+
 Not checked by any runner: every `.vue` file here. They are small, inline-style, token-only, and verified by eye in
 `npm run dev` (port 5174), where the shell shows its pairing screen.

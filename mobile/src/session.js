@@ -7,8 +7,9 @@
    again, because missed deltas are not replayed. */
 import { reactive } from 'vue'
 import { initTracker, resync, trackerState, isLockIssue } from '@src/stores/tracker.js'
-import { invoke } from './bridge/core.js'
+import { settings } from '@src/stores/settings.js'
 import { whenOnline } from './bridge/index.js'
+import { startWorkspace } from './workspace.js'
 import { projectName, taskCount, saveSummary, loadSummary, forgetSummary } from './summary.js'
 import { unpair } from './bridge/index.js'
 
@@ -18,11 +19,6 @@ function remember() {
   home.tasks = taskCount(trackerState.issues.values(), isLockIssue)
   home.loadedAt = Date.now()
   saveSummary(localStorage, { project: home.project, tasks: home.tasks })
-}
-
-async function readProject() {
-  const settings = await invoke('settings_load', { project: null })
-  home.project = projectName(settings.activeProject)
 }
 
 /* The stores are started once per app lifetime. `initTracker` subscribes to events, and a
@@ -43,7 +39,14 @@ export function wireStores() {
       started = true
       await initTracker()
     }
-    await readProject()
+    /* The rest of what the screens draw. A failure here is the working screens' to show; the
+       summary below is what the unreachable screen keeps, and it needs only the tracker. */
+    try {
+      await startWorkspace()
+    } catch (err) {
+      console.warn('[companion] the working screens could not be read:', err)
+    }
+    home.project = projectName(settings.activeProject)
     remember()
   })
 }

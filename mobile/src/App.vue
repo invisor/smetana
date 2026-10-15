@@ -7,17 +7,18 @@ import { trackerState } from '@src/stores/tracker.js'
 import { effectiveTheme } from '@src/appearance.js'
 import { usePrefersDark } from '@src/views/useAppearance.js'
 import PairScreen from './screens/PairScreen.vue'
-import HomeScreen from './screens/HomeScreen.vue'
+import Workspace from './screens/Workspace.vue'
 import UnreachableScreen from './screens/UnreachableScreen.vue'
 import UpdateScreen from './screens/UpdateScreen.vue'
 import RevokedScreen from './screens/RevokedScreen.vue'
 import StatusScreen from './screens/StatusScreen.vue'
 
-/* The phone follows the system theme and has no settings of its own yet; the
-   desktop's density and font choices are not read, because the phone does not
-   read the desktop's settings file beyond the active project. */
+/* The phone follows the system theme and has no settings of its own yet; the desktop's
+   density and font choices are not read. `?theme=` and `?density=` are for the browser, where
+   the four looks have to be checked by eye (CLAUDE.md, Commands). */
 const params = new URLSearchParams(window.location.search)
 const prefersDark = usePrefersDark()
+const density = ['comfortable', 'compact'].includes(params.get('density')) ? params.get('density') : 'comfortable'
 const theme = computed(() =>
   ['dark', 'light'].includes(params.get('theme')) ? params.get('theme') : effectiveTheme('system', prefersDark.value)
 )
@@ -25,7 +26,7 @@ const theme = computed(() =>
 watchEffect(() => {
   const root = document.documentElement
   root.setAttribute('data-theme', theme.value)
-  root.setAttribute('data-density', 'comfortable')
+  root.setAttribute('data-density', density)
   root.setAttribute('data-window-chrome', 'none')
 })
 
@@ -56,10 +57,8 @@ const showBanner = computed(
     :project="home.project"
     :tasks="home.tasks"
   />
-  <HomeScreen
+  <Workspace
     v-else-if="screen === 'home'"
-    :project="home.project"
-    :tasks="home.tasks"
     :banner="showBanner"
     :store-url="bridge.status.store_url"
   />

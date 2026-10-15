@@ -2,8 +2,8 @@
 
    The core gets the target from the push (decrypted from the blob) and offers it twice: as the
    event `push:target` while the app is running, and through `take_push_target` for a tap that
-   started the app. This holds the latest one and nothing more; routing by it belongs to the
-   screens of a later stage. */
+   started the app. This holds the latest one and nothing more; turning it into a screen is
+   ./nav.js (`routeForTarget`), and spending it is screens/Workspace.vue. */
 import { reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
