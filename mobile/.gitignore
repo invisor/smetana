@@ -1,0 +1,23 @@
+node_modules/
+dist/
+.DS_Store
+*.local
+
+# Rust
+src-tauri/target/
+
+# Tauri's own generated, machine-specific output. The projects under gen/ are
+# committed (they carry the extension targets and the Kotlin sources); what
+# their build tools write is not.
+src-tauri/gen/apple/build/
+src-tauri/gen/apple/Externals/
+src-tauri/gen/apple/DerivedData/
+src-tauri/gen/apple/*.xcodeproj/xcuserdata/
+src-tauri/gen/apple/*.xcodeproj/project.xcworkspace/xcuserdata/
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/build/
+src-tauri/gen/android/app/build/
+src-tauri/gen/android/local.properties
+src-tauri/gen/android/.idea/
+src-tauri/gen/android/app/src/main/jniLibs/
+src-tauri/gen/android/app/google-services.json

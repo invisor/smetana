@@ -1,0 +1,29 @@
+{
+  "name": "smetana-companion",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-barcode-scanner": "^2.5.3",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-opener": "^2.5.4",
+    "lucide": "^0.469.0",
+    "qrcode": "^1.5.4",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "happy-dom": "^20.11.1",
+    "vite": "^6.0.7",
+    "vitest": "^4.1.10"
+  }
+}
