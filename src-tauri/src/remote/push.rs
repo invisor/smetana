@@ -26,11 +26,8 @@ use crate::session::model::SessionState;
 
 /// The gateway's endpoint. Ours and not configurable, unlike the relay: the gateway holds the APNs and
 /// FCM credentials of the published apps, so it cannot be self-hosted by someone else.
-///
-/// **A placeholder**, like `DEFAULT_RELAY_URL`: `.example` never resolves, so a build that ships it
-/// fails to reach a gateway rather than reaching somebody else's. Replace it before the first release
-/// that includes the companion.
-pub const GATEWAY_URL: &str = "https://push.smetana.example/v1/push";
+/// It runs beside the relay, behind the same Caddy (`server/README.md`, "Our deployment").
+pub const GATEWAY_URL: &str = "https://push.smetana.io/v1/push";
 
 /// How long one request to the gateway may take. A push that is late by more than this is not worth
 /// holding a task for.

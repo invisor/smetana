@@ -39,19 +39,17 @@ use pairing::Pairing;
 /// The relay a desktop uses until its owner names another, and the one put in
 /// every ticket it issues.
 ///
-/// **A placeholder.** The spec says the default is "ours" and gives no address;
-/// `.example` is reserved and never resolves, so a build that ships this value
-/// fails to reach a relay rather than quietly reaching somebody else's. Replace
-/// it with the real URL before the first release that includes the companion.
+/// Ours: the relay in `server/`, behind Caddy on the project's own VPS
+/// (`server/README.md`, "Our deployment").
 /// It is written out twice in the tree, here and as `DEFAULT_RELAY_URL` in
 /// `components/settings/devices.js`, which every front-end default imports;
 /// `tests/components/settings/devices.test.js` holds the two equal.
-pub const DEFAULT_RELAY_URL: &str = "https://relay.smetana.example";
+pub const DEFAULT_RELAY_URL: &str = "https://relay.smetana.io";
 
 /// The protocol this desktop speaks. A phone on another major is answered with
 /// this and disconnected.
 pub const PROTOCOL_MAJOR: u16 = 1;
-pub const PROTOCOL_MINOR: u16 = 1;
+pub const PROTOCOL_MINOR: u16 = 2;
 
 /// Below this the phone shows one screen, "Update the app", and calls nothing.
 pub const MIN_MOBILE_VERSION: &str = "0.1.0";

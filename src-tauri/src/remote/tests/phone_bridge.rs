@@ -425,7 +425,7 @@ async fn remote_bridge_a_phone_reports_a_new_push_token_and_the_device_keeps_it(
     let h = harness().await;
     h.remote.hub.set_dispatch(Arc::new(Recorder::default()));
     let (phone, mut client) = paired(&h).await;
-    assert_eq!(client.hello.protocol_minor, 1, "UpdatePushToken is announced by protocol 1.1");
+    assert!(client.hello.protocol_minor >= 1, "UpdatePushToken is announced by protocol 1.1");
     client.send_msg(ClientMsg::UpdatePushToken { token: "fresh-token".into() }).await;
     // Messages are handled in order: once this answer is back, the token was seen.
     client.call("tracker_health", json!({})).await.unwrap();
