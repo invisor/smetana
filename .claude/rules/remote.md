@@ -74,8 +74,9 @@ rotated). `settings.json` holds only `remote.relayUrl`, validated by `valid_rela
 `settings/model.rs` (https, a host name, no IP) and mirrored by `validRelayUrl` in `devices.js` so the
 field refuses what Rust would silently replace with the default.
 
-**`DEFAULT_RELAY_URL` is a placeholder** (`https://relay.smetana.example`; `.example` never resolves).
-The spec says the default is "ours" and names no address. The front end imports one copy from
+**`DEFAULT_RELAY_URL` is ours** (`https://relay.smetana.io`), and `GATEWAY_URL` in `remote/push.rs`
+is `https://push.smetana.io/v1/push`: both run from `server/` on the project's VPS, behind one Caddy
+(`server/README.md`, "Our deployment"). The front end imports one copy from
 `devices.js`, and `tests/components/settings/devices.test.js` reads `remote/mod.rs` to keep the pair equal.
 
 **The QR is drawn from the module matrix by the component**, not from the library's SVG string: that

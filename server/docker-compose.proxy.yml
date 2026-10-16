@@ -1,0 +1,57 @@
+# Our own deployment: Caddy in front of both services, one machine, every name on 80 and 443.
+# Used on top of docker-compose.yml — set COMPOSE_FILE=docker-compose.yml:docker-compose.proxy.yml
+# in .env and plain `docker compose ...` picks both up. See "Our deployment" in the README.
+#
+# Caddy terminates TLS for RELAY_HOSTNAME, PUSH_HOSTNAME and SITE_HOSTNAME. The relay speaks plain
+# HTTP to it on the compose network and publishes only UDP for QUIC address discovery, which an
+# HTTP proxy cannot carry; for that it reads Caddy's certificate for its own name.
+
+services:
+  caddy:
+    build: caddy
+    image: smetana-caddy
+    restart: unless-stopped
+    environment:
+      RELAY_HOSTNAME: ${RELAY_HOSTNAME:?RELAY_HOSTNAME is required}
+      PUSH_HOSTNAME: ${PUSH_HOSTNAME:?PUSH_HOSTNAME is required}
+      SITE_HOSTNAME: ${SITE_HOSTNAME:?SITE_HOSTNAME is required}
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and the ACME account: the one thing on this machine that survives a restart.
+      - caddy-data:/data
+      - caddy-config:/config
+    read_only: true
+    tmpfs:
+      - /tmp
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+  relay:
+    environment:
+      RELAY_CERT_MODE: proxy
+      RELAY_HTTP_PORT: "3340"
+      RELAY_CERT_FILE: /caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${RELAY_HOSTNAME}/${RELAY_HOSTNAME}.crt
+      RELAY_KEY_FILE: /caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${RELAY_HOSTNAME}/${RELAY_HOSTNAME}.key
+    # Only QUIC goes straight to the relay; its HTTP is reachable from Caddy alone.
+    ports: !override
+      - "${RELAY_QUIC_PORT:-7842}:${RELAY_QUIC_PORT:-7842}/udp"
+    volumes:
+      - caddy-data:/caddy-data:ro
+    # Caddy first, so that it is the container that creates caddy-data and the volume is seeded
+    # with the image's ownership rather than left root's and unwritable for Caddy.
+    depends_on:
+      - caddy
+
+  push-gateway:
+    environment:
+      PUSH_TRUST_FORWARDED_FOR: "1"
+
+volumes:
+  caddy-data:
+  caddy-config:

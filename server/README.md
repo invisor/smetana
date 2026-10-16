@@ -79,7 +79,7 @@ The URL travels in the pairing code, so a phone paired afterwards uses the same 
 
 | variable | default | meaning |
 |---|---|---|
-| `RELAY_CERT_MODE` | `letsencrypt` | `letsencrypt` or `manual` |
+| `RELAY_CERT_MODE` | `letsencrypt` | `letsencrypt`, `manual`, or `proxy` (see "Our deployment") |
 | `RELAY_HOSTNAME` | | name on the certificate (required for `letsencrypt`) |
 | `RELAY_CONTACT` | | email for Let's Encrypt (required for `letsencrypt`) |
 | `RELAY_LETSENCRYPT_PROD` | `true` | `false` uses Let's Encrypt staging |
@@ -130,6 +130,57 @@ The gateway speaks plain HTTP and compose publishes it on `127.0.0.1` only; put 
 reverse proxy in front of it when you expose it, and set `PUSH_TRUST_FORWARDED_FOR=1` so the rate
 limit sees real clients.
 A platform with no credentials answers 503, and the process still starts.
+
+## Our deployment
+
+`relay.smetana.io` and `push.smetana.io` — the desktop's built-in defaults — run from this
+directory on one machine, with Caddy in front of both. `docker-compose.proxy.yml` is laid over
+`docker-compose.yml` for that:
+
+| service | listens | does |
+|---|---|---|
+| `caddy` | TCP 80, 443 | TLS for every name, certificates from Let's Encrypt, renewed by Caddy itself |
+| `relay` | UDP 7842 only | `RELAY_CERT_MODE=proxy`: plain HTTP to Caddy on the compose network |
+| `push-gateway` | 127.0.0.1:8080 | behind Caddy, with `PUSH_TRUST_FORWARDED_FOR=1` |
+
+`SITE_HOSTNAME` (`smetana.io`) is reserved for the project's site; until there is one, Caddy
+answers it with a single line.
+
+**The `proxy` mode.** The relay drops its own HTTPS and serves plain HTTP on port 3340 inside the
+compose network, and Caddy forwards `RELAY_HOSTNAME` to it, upgrades included. QUIC address
+discovery cannot pass through an HTTP proxy, so the relay still answers it on UDP 7842 itself,
+using Caddy's certificate for its own name: Caddy's data volume is mounted into the relay
+read-only, the relay re-reads the certificate as Caddy renews it, and on a first start it waits
+until Caddy has obtained one. That is why Caddy runs as the relay's uid (`caddy/Dockerfile`):
+Caddy writes its keys readable by their owner only. Nothing about the invariants above changes:
+Caddy keeps no access log, and its data volume holds certificates and the ACME account, nothing
+from a client.
+
+Bringing it up, on Ubuntu with Docker from Docker's own repository:
+
+```sh
+# on the machine, in a copy of this directory
+cp .env.example .env
+$EDITOR .env        # RELAY_HOSTNAME, and the commented proxy block
+docker compose up -d --build
+```
+
+With `COMPOSE_FILE` set in `.env`, plain `docker compose` uses both files. Open TCP 80 and 443 and
+UDP 7842; every service has `restart: unless-stopped`, so the stack comes back after a reboot.
+
+**Uploading the gateway's keys** is a script run from the workstation, never by hand:
+
+```sh
+server/upload-secrets.sh ~/Desktop/Projects/smetana-secrets smetana-vps [remote-dir]
+```
+
+It reads `apns.p8`, `apns.txt` (Key ID on the first line, Team ID on the second) and
+`fcm-service-account.json` from the folder — any platform whose files are missing is skipped —
+copies the keys into `secrets/` on the machine through ssh's stdin, owned by the gateway's uid and
+readable by it alone, sets `APNS_KEY_PATH`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID` and
+`FCM_SERVICE_ACCOUNT_PATH` in the machine's `.env`, and recreates the gateway so it reads them.
+It prints the names of what it set and never a value. `remote-dir` is this directory on the
+machine, `smetana/server` under the login's home by default.
 
 ## Build and test
 

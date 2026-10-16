@@ -1,0 +1,26 @@
+# One front for every name on the machine. Caddy obtains and renews a Let's Encrypt certificate for
+# each of them and speaks plain HTTP to the services behind it on the compose network.
+{
+	# No contact address: Caddy renews on its own, and Let's Encrypt sends no expiry mail any more.
+	# Let's Encrypt only, never the ZeroSSL fallback: the relay reads the certificate from Caddy's
+	# storage at a path that names the issuer (RELAY_CERT_FILE in docker-compose.proxy.yml).
+	cert_issuer acme
+	# Caddy's access log is off by default; this says so where somebody would look for it. Nothing
+	# here writes a client address anywhere.
+}
+
+{$RELAY_HOSTNAME} {
+	# The relay's HTTP upgrade and websocket connections pass through as they are.
+	reverse_proxy relay:3340
+}
+
+{$PUSH_HOSTNAME} {
+	# Caddy sets X-Forwarded-For to the connecting client, which is what the gateway's rate limit
+	# reads with PUSH_TRUST_FORWARDED_FOR=1.
+	reverse_proxy push-gateway:8080
+}
+
+{$SITE_HOSTNAME} {
+	# Reserved for the project's site; until it exists the root answers with one line.
+	respond "Smetana" 200
+}

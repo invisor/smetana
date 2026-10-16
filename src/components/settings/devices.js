@@ -13,7 +13,7 @@ import QRCode from 'qrcode'
    Devices tab's prop default all import it rather than spell it again, and
    `tests/components/settings/devices.test.js` reads the Rust file to keep the
    one remaining pair in step. */
-export const DEFAULT_RELAY_URL = 'https://relay.smetana.example'
+export const DEFAULT_RELAY_URL = 'https://relay.smetana.io'
 
 /* The longest stretch the tab will draw a code for after the desktop's answer
    comes back wrong about it. The desktop issues two-minute codes
