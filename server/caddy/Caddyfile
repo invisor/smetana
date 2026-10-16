@@ -14,6 +14,18 @@
 	reverse_proxy relay:3340
 }
 
+# iroh's captive-portal probe is plain HTTP by design: a client asks the relay for /generate_204 on
+# port 80 and expects the relay's own 204, so a redirect to HTTPS reads as a captive portal. That one
+# path goes to the relay as it is; everything else on port 80 still redirects.
+http://{$RELAY_HOSTNAME} {
+	handle /generate_204 {
+		reverse_proxy relay:3340
+	}
+	handle {
+		redir https://{host}{uri} 308
+	}
+}
+
 {$PUSH_HOSTNAME} {
 	# Caddy sets X-Forwarded-For to the connecting client, which is what the gateway's rate limit
 	# reads with PUSH_TRUST_FORWARDED_FOR=1.
