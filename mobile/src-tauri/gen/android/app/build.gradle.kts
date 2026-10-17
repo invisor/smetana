@@ -39,8 +39,10 @@ android {
             }
         }
         getByName("release") {
+            // Off: Rust reaches SecretVault over JNI by name and Tauri calls plugins by
+            // reflection, so R8 inlined and dropped methods nothing in Kotlin kept alive.
             optimization {
-               enable = true
+               enable = false
             }
             proguardFiles(
                 *fileTree(".") {
