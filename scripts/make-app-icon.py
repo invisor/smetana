@@ -21,6 +21,25 @@ would be a gap no stylesheet could see. `--body` writes the squircle alone, and
     python3 scripts/make-app-icon.py <source.png> src/assets/app-icon.png \
         --body --size 256
 
+The phone companion wants a third shape. iOS and Android round and mask the icon
+themselves, so margins and a squircle of its own would be drawn twice. `--square`
+writes the artwork cropped to its bounding box, scaled to the whole side and laid
+over an opaque ground of the artwork's own colour, with no alpha anywhere. The
+ground is read from just inside the body (its left edge, middle row), not
+from the corner: the desktop master's corner is transparent and reads as pure
+black in RGB, which would leave a seam against the real ground.
+
+    python3 scripts/make-app-icon.py app-icon.png mobile/app-icon.png \
+        --square --size 1024
+
+Android masks an adaptive icon to its middle 66dp of 108, so its foreground layer
+wants the same artwork shrunk onto the same ground. `--scale` does that, and the
+result is the manifest's `android_fg` (`tauri icon` 2.12 reads `android_fg_scale`
+but does not apply it, so the shrink is made here, where it can be measured):
+
+    python3 scripts/make-app-icon.py app-icon.png mobile/app-icon-fg.png \
+        --square --size 1024 --scale 0.66
+
 Needs Pillow and NumPy, neither of which the app itself depends on — this is run
 by hand when the artwork changes, not by the build.
 """
@@ -81,6 +100,25 @@ def squircle_body(source, side=CONTENT):
     return body
 
 
+def square_full(source, side=CANVAS, scale=1.0):
+    """The artwork filling an opaque square of `side`: no margin, no corner cut."""
+    src = Image.open(source).convert("RGBA")
+    alpha = np.asarray(src.getchannel("A"))
+    ys, xs = np.nonzero(alpha > 0)
+    body = src.crop((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
+    # The ground, sampled just inside the body on its left edge.
+    ground = body.getpixel((body.width // 80, body.height // 2))[:3]
+    flat = Image.new("RGB", body.size, ground)
+    flat.paste(body, (0, 0), body)
+    flat = flat.resize((side, side), Image.LANCZOS)
+    if scale == 1.0:
+        return flat
+    inner = round(side * scale)
+    out = Image.new("RGB", (side, side), ground)
+    out.paste(flat.resize((inner, inner), Image.LANCZOS), ((side - inner) // 2,) * 2)
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", help="square PNG to build the icon from")
@@ -90,10 +128,23 @@ def main():
         action="store_true",
         help="write the squircle alone, without the 1024 canvas margin",
     )
+    parser.add_argument(
+        "--square",
+        action="store_true",
+        help="write an opaque full-bleed square for the phone app",
+    )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=1.0,
+        help="with --square, shrink the artwork onto the ground by this factor",
+    )
     parser.add_argument("--size", type=int, help="output side in pixels")
     args = parser.parse_args()
 
-    if args.body:
+    if args.square:
+        icon = square_full(args.source, args.size or CANVAS, args.scale)
+    elif args.body:
         icon = squircle_body(args.source, args.size or CONTENT)
     else:
         # Build at the full content size and downsample once, so --size never
