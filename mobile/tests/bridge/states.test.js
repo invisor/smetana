@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isOnline, lastSeenText, screenFor } from '../../src/bridge/states.js'
+import { desktopMinor, isOnline, lastSeenText, screenFor } from '../../src/bridge/states.js'
 
 describe('which screen the shell draws', () => {
   it('waits for the core before choosing', () => {
@@ -34,5 +34,17 @@ describe('last seen', () => {
   it('gives the time for today and the day for earlier', () => {
     expect(lastSeenText(new Date(2026, 9, 15, 9, 5).getTime(), now, 'en-US')).toBe('Last seen at 9:05 AM.')
     expect(lastSeenText(new Date(2026, 9, 13, 9, 5).getTime(), now, 'en-US')).toBe('Last seen Oct 13 at 9:05 AM.')
+  })
+})
+
+describe('the desktop\'s protocol minor', () => {
+  it('is read off an online status and off nothing else', () => {
+    expect(desktopMinor({ state: 'online', protocol_minor: 3 })).toBe(3)
+    expect(
+      desktopMinor({ state: 'update-recommended', store_url: 'x', recommended: '1', protocol_minor: 2 })
+    ).toBe(2)
+    expect(desktopMinor({ state: 'unreachable' })).toBe(0)
+    expect(desktopMinor({ state: 'online' })).toBe(0)
+    expect(desktopMinor(null)).toBe(0)
   })
 })

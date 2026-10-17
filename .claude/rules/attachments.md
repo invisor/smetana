@@ -132,6 +132,7 @@ person throws away in a week and the link in the issue has to outlive that. Writ
 repository instead would work in every clone and worktree, but only for files somebody committed, and
 committing binaries into another person's tree is not this app's decision. The price is plain: in
 somebody else's clone, and in CI, the pictures are not there.
+A picture taken on a phone arrives by the same `attachment_write`, over the bridge as bytes (`.claude/rules/remote.md`, protocol 1.3), and is stored exactly as a paste is.
 
 There is no `resolve_within` here, and its absence is the design rather than an oversight.
 `files/fs.rs` confines every path to the project root because everything it touches belongs to the

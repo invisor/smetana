@@ -227,7 +227,7 @@ async fn until(what: &str, mut done: impl FnMut() -> bool) {
 async fn paired_and_online(desktop: &Desktop, phone: &Phone) {
     phone.core.pair(&desktop.ticket()).await.unwrap();
     phone.core.connect().unwrap();
-    until("online", || matches!(phone.core.status(), Status::Online | Status::UpdateRecommended { .. })).await;
+    until("online", || matches!(phone.core.status(), Status::Online { .. } | Status::UpdateRecommended { .. })).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -324,13 +324,13 @@ async fn events_arrive_and_listening_survives_a_reconnect() {
 
     desktop.drop_connections();
     until("unreachable", || matches!(phone.core.status(), Status::Unreachable { .. })).await;
-    until("online again", || phone.core.status() == Status::Online).await;
+    until("online again", || phone.core.status() == Status::Online { protocol_minor: 1 }).await;
     // Listen was sent again on the new connection, so the event is delivered again.
     until("the event again", || phone.events().len() == 2).await;
     assert_eq!(desktop.state.listens.lock().unwrap().len(), 2);
 
     let seen = phone.statuses();
-    let ups = seen.iter().filter(|s| **s == Status::Online).count();
+    let ups = seen.iter().filter(|s| **s == Status::Online { protocol_minor: 1 }).count();
     assert_eq!(ups, 2, "online, then online again: {seen:?}");
     assert!(seen.iter().any(|s| matches!(s, Status::Unreachable { last_seen: Some(_) })), "{seen:?}");
     // A call works on the new link.
@@ -363,7 +363,7 @@ async fn a_minimum_version_above_this_build_shows_the_update_screen_and_calls_no
     assert_eq!(phone.core.status(), Status::UpdateRequired { store_url: "https://store.example/app".into() });
     assert_eq!(phone.core.invoke("tracker_snapshot", json!({})).await, Err(CallError::Offline));
     assert!(desktop.state.calls.lock().unwrap().is_empty());
-    assert!(phone.statuses().iter().all(|s| *s != Status::Online), "never online");
+    assert!(phone.statuses().iter().all(|s| !matches!(s, Status::Online { .. })), "never online");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -374,7 +374,7 @@ async fn a_recommended_version_above_this_build_is_online_with_a_banner() {
     paired_and_online(&desktop, &phone).await;
     assert_eq!(
         phone.core.status(),
-        Status::UpdateRecommended { store_url: "https://store.example/app".into(), recommended: "0.3.0".into() }
+        Status::UpdateRecommended { store_url: "https://store.example/app".into(), recommended: "0.3.0".into(), protocol_minor: 1 }
     );
     assert!(phone.core.invoke("tracker_snapshot", json!({})).await.is_ok());
 }
@@ -409,7 +409,7 @@ async fn a_push_token_that_appears_after_pairing_is_reported_and_repeated_at_eac
     // was told, because such a record could say "told" for a message that never arrived.
     desktop.drop_connections();
     until("unreachable", || matches!(phone.core.status(), Status::Unreachable { .. })).await;
-    until("online again", || phone.core.status() == Status::Online).await;
+    until("online again", || phone.core.status() == Status::Online { protocol_minor: 1 }).await;
     until("the token again", || desktop.state.tokens.lock().unwrap().len() == 3).await;
     assert_eq!(desktop.state.tokens.lock().unwrap().last().map(String::as_str), Some("fcm-2"));
 }

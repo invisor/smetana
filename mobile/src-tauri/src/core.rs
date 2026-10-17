@@ -38,9 +38,9 @@ use crate::version::older_than;
 
 /// The protocol this build speaks. `PROTOCOL_MAJOR` must equal the desktop's
 /// (`src-tauri/src/remote/mod.rs`; `tests/versions.rs` reads the file). The minor
-/// is the newest this build knows: 1 added `UpdatePushToken`.
+/// is the newest this build knows: 1 added `UpdatePushToken`, 3 `attachment_write`.
 pub const PROTOCOL_MAJOR: u16 = 1;
-pub const PROTOCOL_MINOR: u16 = 1;
+pub const PROTOCOL_MINOR: u16 = 3;
 /// The first minor whose desktop reads `ClientMsg::UpdatePushToken`.
 const PUSH_TOKEN_MINOR: u16 = 1;
 
@@ -49,7 +49,9 @@ const PUSH_TOKEN_MINOR: u16 = 1;
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum Status {
     Connecting,
-    Online,
+    /// `protocol_minor` is the desktop's own, from its `HelloReply`: the page
+    /// hides what a desktop of that minor cannot do (`desktopMinor`).
+    Online { protocol_minor: u16 },
     /// `last_seen` is milliseconds since the epoch, or absent when this phone has
     /// never reached the desktop.
     Unreachable { last_seen: Option<u64> },
@@ -57,7 +59,7 @@ pub enum Status {
     /// then is show where to get it.
     UpdateRequired { store_url: String },
     /// Working, with a newer app on offer.
-    UpdateRecommended { store_url: String, recommended: String },
+    UpdateRecommended { store_url: String, recommended: String, protocol_minor: u16 },
     /// The desktop no longer lists this phone. Retrying cannot help.
     Revoked,
 }
@@ -456,9 +458,10 @@ impl Core {
             self.set_status(Status::UpdateRecommended {
                 store_url: self.config.store_url.clone(),
                 recommended: reply.recommended_mobile_version.clone(),
+                protocol_minor: reply.protocol_minor,
             });
         } else {
-            self.set_status(Status::Online);
+            self.set_status(Status::Online { protocol_minor: reply.protocol_minor });
         }
 
         // Read until the link goes.

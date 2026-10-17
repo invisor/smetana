@@ -18,6 +18,18 @@ import { emit } from '@tauri-apps/api/event'
 import { installMockBackend } from '@src/stores/mockBackend.js'
 import { isAllowedCommand } from './allowed.js'
 
+/* `attachment_write` answers here and not in `mockBackend.js`, which refuses it on purpose
+   for the desktop's app window: a write that looked like it worked would be worse than none
+   there. The New task screen is the one thing the phone can check by eye, and it cannot show
+   a thumbnail without an answer. The picture is the eight-pixel PNG `attachment_reopen`
+   gives, so no second copy of the bytes lives in the tree. */
+async function devAttachmentWrite(mock, args, options) {
+  const name = args?.name || `pasted-${Date.now()}.png`
+  const path = `/dev/attachments/${name}`
+  const picture = await mock('attachment_reopen', { path }, options)
+  return { ...picture, path, name, bytes: Math.floor(((args?.data ?? '').length * 3) / 4) }
+}
+
 export function installDevBackend() {
   if (!installMockBackend()) return false
   const internals = window.__TAURI_INTERNALS__
@@ -27,7 +39,7 @@ export function installDevBackend() {
   internals.invoke = (cmd, args, options) => {
     switch (cmd) {
       case 'bridge_state':
-        return Promise.resolve({ paired: true, version: 'dev', status: { state: 'online' } })
+        return Promise.resolve({ paired: true, version: 'dev', status: { state: 'online', protocol_minor: 3 } })
       case 'bridge_listen':
       case 'bridge_unlisten':
         return Promise.resolve(null)
@@ -38,6 +50,7 @@ export function installDevBackend() {
           console.warn(`[devBackend] "${args.cmd}" is not on the allowlist; the core would refuse it`)
           return Promise.reject('forbidden')
         }
+        if (args.cmd === 'attachment_write') return devAttachmentWrite(mock, args.args, options)
         return mock(args.cmd, args.args, options)
       default:
         return mock(cmd, args, options)

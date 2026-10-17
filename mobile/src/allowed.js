@@ -31,7 +31,8 @@ export const ALLOWED_COMMANDS = [
   'crew_send',
   'crew_stop',
   'terminal_list',
-  'terminal_attach'
+  'terminal_attach',
+  'attachment_write'
 ]
 
 export const ALLOWED_EVENTS = [

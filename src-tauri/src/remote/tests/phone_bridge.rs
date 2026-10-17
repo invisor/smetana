@@ -246,6 +246,7 @@ fn services() -> (Services, Snapshot) {
         sessions: SessionHandle(session_tx),
         terminal: TerminalHandle(terminal_tx),
         settings_path: Err("no settings in tests".into()),
+        attachments_root: Err("no attachments in tests".into()),
         project_switched: None,
     };
     (services, snapshot)

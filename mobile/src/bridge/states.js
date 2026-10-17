@@ -13,6 +13,12 @@ export const REVOKED = 'revoked'
    it: `update-recommended` is online with a banner. */
 export const isOnline = (status) => status?.state === ONLINE || status?.state === RECOMMENDED
 
+/* The protocol minor of the desktop on the other end, which the core reads from its
+   hello and puts on every status that means the link works. What is not online has
+   none to report, and 0 hides whatever a newer desktop would have added. */
+export const desktopMinor = (status) =>
+  isOnline(status) && Number.isInteger(status.protocol_minor) ? status.protocol_minor : 0
+
 /* Which screen the shell draws. A phone that is not paired has one thing to do;
    one that is too old for its desktop has one screen and calls nothing, whatever
    the link is doing. */

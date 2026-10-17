@@ -35,6 +35,7 @@ use serde_json::{json, Value};
 
 use super::dispatch::Call;
 use super::{PROTOCOL_MAJOR, PROTOCOL_MINOR};
+use crate::attachments::Attachment;
 use crate::agents::{AgentModel, AgentRow, Capabilities};
 use crate::runs::commands::ProjectConfigReply;
 use crate::runs::config::{self, ConfigState};
@@ -501,6 +502,16 @@ fn replies() -> BTreeMap<&'static str, Vec<Value>> {
     map.insert("session_start", vec![json!(7)]);
     map.insert("session_attach", all(&driven_attached()));
     map.insert("session_since", vec![json_of(&conversation()), Value::Null]);
+    map.insert(
+        "attachment_write",
+        vec![json_of(&Attachment {
+            path: "/data/attachments/proj-abc/20261017-x.png".into(),
+            name: "20261017-x.png".into(),
+            bytes: 2,
+            mime: "image/png".into(),
+            data: "aGk=".into(),
+        })],
+    );
     map.insert("session_send", vec![Value::Null]);
     map.insert("session_answer", vec![Value::Null]);
     map.insert("session_stop", vec![Value::Null]);
