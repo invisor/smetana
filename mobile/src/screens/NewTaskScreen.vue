@@ -22,7 +22,7 @@ import { canDrive, conversationState, startConversation } from '@src/stores/conv
 import { effectiveAgents, settings } from '@src/stores/settings.js'
 import { agentLabel } from '@src/stores/agents.js'
 import { bridge } from '../bridge/status.js'
-import { PRIORITIES, STAGE_DEFAULT, TYPES, canAttach, canFile, newTaskIntent } from '../newTask.js'
+import { PRIORITIES, STAGE_DEFAULT, TYPES, canAttach, canStart, newTaskIntent } from '../newTask.js'
 
 const emit = defineEmits(['started'])
 
@@ -33,6 +33,7 @@ const brainstorm = ref(STAGE_DEFAULT)
 const spec = ref(STAGE_DEFAULT)
 const plan = ref(STAGE_DEFAULT)
 const busy = ref(false)
+const attaching = ref(false)
 const picker = ref(null)
 
 const drivable = computed(() => canDrive(effectiveAgents.value.agent))
@@ -49,11 +50,17 @@ watch(spec, () => {
   plan.value = STAGE_DEFAULT
 })
 
-function choose(event) {
+async function choose(event) {
   const input = event.target
   const files = [...(input.files ?? [])]
   input.value = ''
-  if (files.length) attachFiles(files)
+  if (!files.length) return
+  attaching.value = true
+  try {
+    await attachFiles(files)
+  } finally {
+    attaching.value = false
+  }
 }
 
 function reset() {
@@ -67,7 +74,7 @@ function reset() {
 }
 
 async function start() {
-  if (busy.value || !canFile(text.value) || !settings.activeProject) return
+  if (!canStart({ text: text.value, busy: busy.value, attaching: attaching.value }) || !settings.activeProject) return
   busy.value = true
   conversationState.lastError = null
   try {
@@ -130,7 +137,7 @@ const hidden = { display: 'none' }
       <div v-if="attachable" :style="images">
         <div :style="attachRow">
           <div :style="label">Images</div>
-          <Button size="sm" icon="paperclip" :disabled="busy" @click="picker?.click()">Attach</Button>
+          <Button size="sm" icon="paperclip" :disabled="busy || attaching" @click="picker?.click()">Attach</Button>
           <input ref="picker" type="file" accept="image/*" multiple :style="hidden" @change="choose" />
         </div>
         <AttachmentStrip :items="attachmentsState.items" :disabled="busy" @remove="removeAttachment" />
@@ -170,7 +177,7 @@ const hidden = { display: 'none' }
         />
       </div>
       <p v-if="refusal" :style="failure">{{ refusal }}</p>
-      <Button variant="primary" :disabled="busy || !canFile(text)" @click="start">
+      <Button variant="primary" :disabled="!canStart({ text, busy, attaching })" @click="start">
         {{ busy ? 'Starting the agent' : 'Start the agent' }}
       </Button>
     </template>

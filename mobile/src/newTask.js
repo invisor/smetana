@@ -10,6 +10,7 @@
    Because the agent is what files the task, the session that starts is a conversation, and
    the person lands in it: the agent may well ask something before it runs `bd create`. */
 import { DEFAULT_STAGE, cascade } from '@src/components/kanban/taskStages.js'
+import { desktopMinor } from './bridge/states.js'
 
 export const STAGE_DEFAULT = DEFAULT_STAGE
 
@@ -33,9 +34,12 @@ export const PRIORITIES = [
 export const canFile = (text) => typeof text === 'string' && text.trim().length > 0
 
 /* Whether the desktop on the other end can store a picture the phone sends. */
-export const canAttach = (status) =>
-  (status?.state === 'online' || status?.state === 'update-recommended') &&
-  Number(status.protocol_minor) >= ATTACHMENTS_MINOR
+export const canAttach = (status) => desktopMinor(status) >= ATTACHMENTS_MINOR
+
+/* Whether Start may be pressed: there are words, nothing is being started, and no picture is
+   still on its way to the desktop. A task filed while one uploads would go without it, and the
+   picture would then turn up in the next, freshly cleared form. */
+export const canStart = ({ text, busy = false, attaching = false }) => !busy && !attaching && canFile(text)
 
 const chosen = (value) => (value === undefined || value === null || value === 'auto' || value === '' ? null : value)
 

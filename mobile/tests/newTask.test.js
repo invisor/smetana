@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canAttach, canFile, newTaskIntent } from '../src/newTask.js'
+import { canAttach, canFile, canStart, newTaskIntent } from '../src/newTask.js'
 
 describe('filing a task from the phone', () => {
   it('has nothing to file without words', () => {
@@ -55,5 +55,12 @@ describe('filing a task from the phone', () => {
     expect(canAttach({ state: 'online' })).toBe(false)
     expect(canAttach({ state: 'unreachable', protocol_minor: 3 })).toBe(false)
     expect(canAttach(null)).toBe(false)
+  })
+
+  it('cannot be started while words are missing, a start is running or a picture is uploading', () => {
+    expect(canStart({ text: 'x' })).toBe(true)
+    expect(canStart({ text: ' ' })).toBe(false)
+    expect(canStart({ text: 'x', busy: true })).toBe(false)
+    expect(canStart({ text: 'x', attaching: true })).toBe(false)
   })
 })
