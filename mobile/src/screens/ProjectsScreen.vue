@@ -96,7 +96,12 @@ const mark = {
         <span :style="nameStyle">{{ item.name }}</span>
         <span :style="pathStyle"><bdo dir="ltr">{{ item.path }}</bdo></span>
       </span>
-      <Icon v-if="workspace.switching === item.path" name="loader-circle" :size="14" />
+      <Icon
+        v-if="workspace.switching === item.path"
+        name="loader-circle"
+        :size="14"
+        :style="{ color: 'var(--attn-live)', animation: 'sm-spin var(--dur-pulse) linear infinite' }"
+      />
       <span v-else-if="item.active" :style="mark">On desktop</span>
     </button>
   </div>

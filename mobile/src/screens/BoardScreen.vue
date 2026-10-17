@@ -69,6 +69,7 @@ const more = { alignSelf: 'flex-start' }
     <EmptyState
       v-if="!trackerState.ready"
       icon="loader-circle"
+      spin
       title="Reading the board"
       description="The desktop is being asked for its tasks."
     />
