@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { describeStart, modeLabel, runSettings, startBlock } from '../src/runStart.js'
+import {
+  MODES,
+  PARALLEL,
+  canRun,
+  hasPause,
+  modeLabel,
+  openForm,
+  pauseErrors,
+  runPayload,
+  runSettings,
+  startBlock
+} from '../src/runStart.js'
 
 const branches = [
   { name: 'develop', missing_in: [] },
@@ -32,9 +43,95 @@ describe('whether a run can be started', () => {
   })
 })
 
-describe('the settings a run is started with', () => {
-  it('are the ones the desktop\'s run window opens on, for a project nobody has run before', () => {
-    expect(runSettings({ config, branches, remembered: null })).toEqual({
+const sources = (over = {}) => ({ config, branches, remembered: null, ...over })
+const payloadOf = (form, over = {}) => runPayload(form, { config, branches, ...over })
+
+describe('the form when it opens', () => {
+  it('holds the dialog\'s own opening values for a project nobody has run before', () => {
+    expect(openForm(sources())).toEqual({
+      branch: 'main',
+      mode: 'auto',
+      parallel: 4,
+      pauseMin: 10,
+      pauseMax: 30,
+      priority: 1,
+      liveCheck: true,
+      fileFindings: true,
+      notes: ''
+    })
+  })
+
+  it('falls back to the dialog\'s own numbers where the configuration says nothing', () => {
+    const form = openForm({ config: { state: 'ok' }, branches, remembered: null })
+    expect(form).toMatchObject({ parallel: 3, priority: 2, branch: 'develop' })
+  })
+
+  it('takes what the project was left at from the remembered settings', () => {
+    const remembered = {
+      targetBranch: 'develop',
+      mode: 'supervised',
+      minPriority: 3,
+      batchPauseMin: 5,
+      batchPauseMax: 15,
+      liveCheck: false,
+      fileFindings: false
+    }
+    expect(openForm(sources({ remembered }))).toEqual({
+      branch: 'develop',
+      mode: 'supervised',
+      parallel: 4,
+      pauseMin: 5,
+      pauseMax: 15,
+      priority: 3,
+      liveCheck: false,
+      fileFindings: false,
+      notes: ''
+    })
+  })
+
+  it('takes the floor from the configuration when nothing is remembered, and a remembered 0 over it', () => {
+    expect(openForm(sources()).priority).toBe(1)
+    expect(openForm(sources({ remembered: { minPriority: 0 } })).priority).toBe(0)
+  })
+
+  it('skips a remembered branch that has gone, then the configured one, then the first of the list', () => {
+    expect(openForm(sources({ remembered: { targetBranch: 'gone' } })).branch).toBe('main')
+    const noDefault = { ...config, defaults: { ...config.defaults, target_branch: undefined } }
+    expect(openForm(sources({ config: noDefault, remembered: { targetBranch: 'gone' } })).branch).toBe('develop')
+  })
+
+  it('takes the number of tasks at once from the configuration every time, within the dialog\'s range', () => {
+    const wide = { ...config, defaults: { ...config.defaults, max_parallel_tasks: 40 } }
+    expect(openForm(sources({ config: wide })).parallel).toBe(8)
+    const none = { ...config, defaults: { ...config.defaults, max_parallel_tasks: 0 } }
+    expect(openForm(sources({ config: none })).parallel).toBe(1)
+    expect(openForm(sources({ config: wide, remembered: { parallel: 2, maxParallelTasks: 2 } })).parallel).toBe(8)
+  })
+
+  it('turns a remembered Solo into Autopilot, and does not offer Solo', () => {
+    expect(openForm(sources({ remembered: { mode: 'solo' } })).mode).toBe('auto')
+    expect(MODES.map((m) => m.label)).toEqual(['Autopilot', 'Crew'])
+  })
+
+  it('offers One at a time and then N at once up to eight', () => {
+    expect(PARALLEL.map((p) => p.label)).toEqual([
+      'One at a time', '2 at once', '3 at once', '4 at once', '5 at once', '6 at once', '7 at once', '8 at once'
+    ])
+  })
+
+  it('switches the live check off where the project declares none, remembered or not', () => {
+    const none = { ...config, live_check: { mode: 'none' } }
+    expect(openForm(sources({ config: none, remembered: { liveCheck: true } })).liveCheck).toBe(false)
+  })
+
+  it('opens with empty notes', () => {
+    expect(openForm(sources()).notes).toBe('')
+  })
+})
+
+describe('the payload of Run', () => {
+  it('is the dialog\'s for a form left as it opened', () => {
+    expect(runSettings(sources())).toEqual({
       scope: { kind: 'queue' },
       mode: 'auto',
       target_branch: 'main',
@@ -49,90 +146,74 @@ describe('the settings a run is started with', () => {
     })
   })
 
-  it('run into what the project was left at, ahead of its configured default', () => {
-    const settings = runSettings({ config, branches, remembered: { targetBranch: 'develop' } })
-    expect(settings.target_branch).toBe('develop')
+  it('carries each field as it stands, the selects\' text made into numbers', () => {
+    const form = {
+      ...openForm(sources()),
+      branch: 'develop',
+      mode: 'supervised',
+      parallel: '6',
+      priority: '3',
+      liveCheck: false,
+      fileFindings: false,
+      notes: '  do not commit  '
+    }
+    expect(payloadOf(form)).toEqual({
+      scope: { kind: 'queue' },
+      mode: 'supervised',
+      target_branch: 'develop',
+      create_target: false,
+      min_priority: 3,
+      max_parallel_tasks: 6,
+      batch_pause_min: null,
+      batch_pause_max: null,
+      live_check: false,
+      file_findings: false,
+      instructions: 'do not commit'
+    })
   })
 
-  it('skips a remembered branch that has gone, then the configured one, then the first of the list', () => {
-    expect(runSettings({ config, branches, remembered: { targetBranch: 'gone' } }).target_branch).toBe('main')
-    const noDefault = { ...config, defaults: { ...config.defaults, target_branch: undefined } }
-    expect(runSettings({ config: noDefault, branches, remembered: { targetBranch: 'gone' } }).target_branch).toBe('develop')
+  it('has a pause between batches in Autopilot only', () => {
+    const form = { ...openForm(sources()), pauseMin: '5', pauseMax: '15' }
+    expect(hasPause(form)).toBe(true)
+    expect(payloadOf(form)).toMatchObject({ batch_pause_min: 5, batch_pause_max: 15 })
+    const crew = { ...form, mode: 'supervised' }
+    expect(hasPause(crew)).toBe(false)
+    expect(payloadOf(crew)).toMatchObject({ batch_pause_min: null, batch_pause_max: null })
   })
 
-  it('takes the person\'s own pick over all of that', () => {
-    expect(runSettings({ config, branches, remembered: { targetBranch: 'develop' }, branch: 'main' }).target_branch).toBe('main')
+  it('refuses a pause that runs backwards, and says why, in Autopilot only', () => {
+    const form = { ...openForm(sources()), pauseMin: '30', pauseMax: '10' }
+    expect(pauseErrors(form).max).toMatch(/Not less than/)
+    expect(canRun(form)).toBe(false)
+    expect(payloadOf(form)).toBeNull()
+    const crew = { ...form, mode: 'supervised' }
+    expect(pauseErrors(crew)).toEqual({})
+    expect(canRun(crew)).toBe(true)
   })
 
-  it('ignores a pick that is not in the list', () => {
-    expect(runSettings({ config, branches, remembered: null, branch: 'nowhere' }).target_branch).toBe('main')
-  })
-
-  it('may cut a branch that is missing from some repository', () => {
-    const settings = runSettings({ config, branches, remembered: null, branch: 'release' })
-    expect(settings.create_target).toBe(true)
+  it('may cut a branch that is missing from some repository, or from the list', () => {
+    expect(payloadOf({ ...openForm(sources()), branch: 'release' }).create_target).toBe(true)
+    expect(payloadOf({ ...openForm(sources()), branch: 'new-one' }).create_target).toBe(true)
   })
 
   it('has no run to start without a branch', () => {
-    expect(runSettings({ config, branches: [], remembered: null })).toBeNull()
+    expect(runSettings(sources({ branches: [] }))).toBeNull()
   })
 
-  it('keeps what was chosen last for the floor, the mode and the switches', () => {
-    const settings = runSettings({
-      config,
-      branches,
-      remembered: { mode: 'supervised', minPriority: 3, liveCheck: false, fileFindings: false }
-    })
-    expect(settings).toMatchObject({ mode: 'supervised', min_priority: 3, live_check: false, file_findings: false })
-  })
-
-  it('turns a remembered Solo into Autopilot, since a queue is not one task', () => {
-    expect(runSettings({ config, branches, remembered: { mode: 'solo' } }).mode).toBe('auto')
-  })
-
-  it('has a pause between batches for Autopilot only', () => {
-    const remembered = { batchPauseMin: 5, batchPauseMax: 15 }
-    expect(runSettings({ config, branches, remembered })).toMatchObject({ batch_pause_min: 5, batch_pause_max: 15 })
-    expect(runSettings({ config, branches, remembered: { ...remembered, mode: 'supervised' } })).toMatchObject({
-      batch_pause_min: null,
-      batch_pause_max: null
-    })
-  })
-
-  it('takes the number of tasks at once from the config every time, within the dialog\'s range', () => {
-    const wide = { ...config, defaults: { ...config.defaults, max_parallel_tasks: 40 } }
-    expect(runSettings({ config: wide, branches, remembered: null }).max_parallel_tasks).toBe(8)
-    const none = { ...config, defaults: { ...config.defaults, max_parallel_tasks: 0 } }
-    expect(runSettings({ config: none, branches, remembered: null }).max_parallel_tasks).toBe(1)
-    const bare = { state: 'ok' }
-    expect(runSettings({ config: bare, branches, remembered: null }).max_parallel_tasks).toBe(3)
-  })
-
-  it('has no live check where the project declares none', () => {
+  it('has no live check where the project declares none, whatever the switch holds', () => {
     const none = { ...config, live_check: { mode: 'none' } }
-    expect(runSettings({ config: none, branches, remembered: { liveCheck: true } }).live_check).toBe(false)
+    const form = { ...openForm(sources({ config: none })), liveCheck: true }
+    expect(payloadOf(form, { config: none }).live_check).toBe(false)
   })
 
-  it('carries no notes: they are for one run alone', () => {
-    expect(runSettings({ config, branches, remembered: null }).instructions).toBeNull()
+  it('sends empty or blank notes as null', () => {
+    expect(payloadOf({ ...openForm(sources()), notes: '' }).instructions).toBeNull()
+    expect(payloadOf({ ...openForm(sources()), notes: '  \n ' }).instructions).toBeNull()
   })
 })
 
-describe('the sentence under the press', () => {
-  it('says what is about to start', () => {
-    const settings = runSettings({ config, branches, remembered: null })
-    expect(describeStart(settings, 5)).toBe('Autopilot into main, 4 tasks at once, 5 tasks are ready')
-    expect(describeStart({ ...settings, max_parallel_tasks: 1 }, 1)).toBe(
-      'Autopilot into main, one task at a time, one task is ready'
-    )
-  })
-
-  it('does not claim a count it was not given', () => {
-    const settings = runSettings({ config, branches, remembered: null })
-    expect(describeStart(settings, undefined)).toBe('Autopilot into main, 4 tasks at once')
-  })
-
-  it('names the modes the way the desktop does', () => {
+describe('the names of the modes', () => {
+  it('are the desktop\'s', () => {
     expect(modeLabel('auto')).toBe('Autopilot')
     expect(modeLabel('supervised')).toBe('Crew')
     expect(modeLabel('solo')).toBe('Solo')
