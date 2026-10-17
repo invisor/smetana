@@ -7390,6 +7390,7 @@ const menuTargetStyle = {
         </div>
         <EmptyState title="No board yet" description="Connect a tracker to pull tasks, or create the first task locally." icon="columns-3" />
         <EmptyState tone="error" title="Tracker unreachable" description="bd exited 101." />
+        <EmptyState spin icon="loader-circle" title="Reading the board" description="The desktop is being asked for its tasks." />
         <!-- The `detail` slot: what the failing thing said, in mono under the
              sentence about it, never wrapped. The line is deliberately longer
              than the slot's own 420px cap, so what this entry shows is the

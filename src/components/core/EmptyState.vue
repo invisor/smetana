@@ -8,7 +8,12 @@ const props = defineProps({
   title: { type: String, required: true },
   description: { type: String, default: '' },
   tone: { type: String, default: 'neutral' },
-  compact: { type: Boolean, default: false }
+  compact: { type: Boolean, default: false },
+  /* Whether the glyph turns: `IconButton.vue`'s idiom, token for token, for an
+     empty state that is really "still going". The caller decides, never the
+     glyph's name. Ignored under `tone="error"`, where the glyph is always the
+     warning triangle. */
+  spin: { type: Boolean, default: false }
 })
 
 const err = computed(() => props.tone === 'error')
@@ -23,6 +28,14 @@ const style = computed(() => ({
   padding: props.compact ? 'var(--space-6)' : 'var(--space-9) var(--space-6)',
   color: 'var(--text-muted)'
 }))
+
+/* The one turning glyph this system draws is `--attn-live` at `--dur-pulse`;
+   a second spinner in the muted colour would be a second idiom. */
+const iconStyle = computed(() =>
+  props.spin && !err.value
+    ? { color: 'var(--attn-live)', animation: 'sm-spin var(--dur-pulse) linear infinite' }
+    : { color: err.value ? 'var(--status-failed-fg)' : 'var(--text-muted)' }
+)
 
 const titleStyle = computed(() => ({
   color: err.value ? 'var(--status-failed-fg)' : 'var(--text-secondary)',
@@ -80,7 +93,7 @@ const detailStyle = computed(() => ({
     <Icon
       :name="err ? 'triangle-alert' : icon"
       :size="compact ? 16 : 20"
-      :style="{ color: err ? 'var(--status-failed-fg)' : 'var(--text-muted)' }"
+      :style="iconStyle"
     />
     <div :style="titleStyle">{{ title }}</div>
     <div
