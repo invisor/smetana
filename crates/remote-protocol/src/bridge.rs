@@ -94,7 +94,9 @@ impl std::error::Error for BridgeError {}
 /// There is deliberately no `terminal_write`, `terminal_resize`, `terminal_shell`
 /// or `terminal_create`: a terminal is read-only on a phone. `session_send` is
 /// allowlisted, but its `attachments` must be empty (the desktop refuses a
-/// phone's paths — see `remote::bridge`).
+/// phone's paths — see `remote::bridge`). `attachment_write` is how a picture
+/// taken on a phone reaches the desktop's attachment store, and the pictures a
+/// phone's `session_start` names must be in that store.
 pub const ALLOWED_COMMANDS: &[&str] = &[
     "tracker_health",
     "tracker_snapshot",
@@ -120,6 +122,7 @@ pub const ALLOWED_COMMANDS: &[&str] = &[
     "crew_stop",
     "terminal_list",
     "terminal_attach",
+    "attachment_write",
 ];
 
 /// The events a phone may listen to. Every name contains a colon and no command

@@ -41,6 +41,10 @@ pub struct Services {
     pub terminal: TerminalHandle,
     /// Where `settings.json` is, or why that is not known.
     pub settings_path: Result<PathBuf, String>,
+    /// The attachment store, or why that is not known. A phone's pictures are
+    /// written under it, and the paths a phone may name in a new task are
+    /// confined to it.
+    pub attachments_root: Result<PathBuf, String>,
     /// Told the folder after a project switch made over the bridge succeeds. The
     /// tracker worker holds the one active project, and a phone's switch moves
     /// only that; this is how the window is told to follow (see
@@ -64,6 +68,7 @@ impl Services {
             terminal: app.try_state::<TerminalHandle>()?.inner().clone(),
             settings_path: crate::settings::commands::settings_path(app)
                 .map_err(|err| err.to_string()),
+            attachments_root: crate::attachments::store_root(app).map_err(|err| err.to_string()),
             project_switched: Some({
                 use tauri::Emitter;
                 let app = app.clone();
@@ -111,6 +116,13 @@ pub(crate) struct RunStop {
 pub(crate) struct SessionStart {
     project: String,
     intent: Intent,
+}
+
+#[derive(Deserialize)]
+#[cfg_attr(test, serde(deny_unknown_fields))]
+pub(crate) struct AttachmentWrite {
+    name: Option<String>,
+    data: String,
 }
 
 #[derive(Deserialize)]
@@ -180,6 +192,7 @@ pub(crate) enum Call {
     RunStart(RunStart),
     RunStop(RunStop),
     SessionStart(SessionStart),
+    AttachmentWrite(AttachmentWrite),
     SessionAttach(SessionId),
     SessionSince(SessionSince),
     SessionSend(SessionSend),
@@ -242,8 +255,35 @@ impl Call {
             "crew_stop" => Call::CrewStop(decode(cmd, args)?),
             "terminal_list" => Call::TerminalList(decode(cmd, args)?),
             "terminal_attach" => Call::TerminalAttach(decode(cmd, args)?),
+            "attachment_write" => Call::AttachmentWrite(decode(cmd, args)?),
             _ => return Err(BridgeError::Forbidden),
         })
+    }
+}
+
+/// What a phone may name as a new task's pictures: files in the attachment
+/// store, and nothing else. The agent that files the task runs on the desktop
+/// and opens whatever path it is given, so a path outside the store would let a
+/// phone point it at any file of the desktop's. A store that cannot be located
+/// refuses every picture (nothing observable reads as "no").
+fn confine_new_task(root: &Result<PathBuf, String>, intent: &Intent) -> Result<(), BridgeError> {
+    let Intent::NewTask { draft, .. } = intent else {
+        return Ok(());
+    };
+    if draft.images.is_empty() {
+        return Ok(());
+    }
+    let Ok(root) = root else {
+        return Err(BridgeError::Forbidden);
+    };
+    if draft
+        .images
+        .iter()
+        .all(|path| crate::attachments::cleanup::in_store(root, std::path::Path::new(path)))
+    {
+        Ok(())
+    } else {
+        Err(BridgeError::Forbidden)
     }
 }
 
@@ -305,7 +345,13 @@ impl Services {
             Call::RunStart(a) => answer(runs::commands::start(&self.runs, a.project, a.settings).await),
             Call::RunStop(a) => answer(runs::commands::stop(&self.runs, a.token).await),
             Call::SessionStart(a) => {
+                confine_new_task(&self.attachments_root, &a.intent)?;
                 answer(session::commands::plain::start(&self.sessions, a.project, a.intent).await)
+            }
+            Call::AttachmentWrite(a) => {
+                let root = self.attachments_root.clone().map_err(|_| BridgeError::Forbidden)?;
+                let project = crate::attachments::current_project(&self.tracker).await;
+                answer(crate::attachments::plain::write(&root, project.as_deref(), a.name, a.data))
             }
             Call::SessionAttach(a) => answer(session::commands::plain::attach(&self.sessions, a.id).await),
             Call::SessionSince(a) => {
@@ -337,5 +383,64 @@ impl Services {
 impl Dispatch for Services {
     fn call<'a>(&'a self, cmd: &'a str, args: Value) -> BoxFuture<'a, Result<Value, BridgeError>> {
         Box::pin(async move { self.run(Call::parse(cmd, args)?).await })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn new_task(images: &[&str]) -> Intent {
+        serde_json::from_value(json!({
+            "kind": "newTask",
+            "brainstorm": "auto",
+            "spec": "auto",
+            "plan": "auto",
+            "draft": { "text": "x", "issue_type": null, "priority": null, "images": images, "parent": null }
+        }))
+        .expect("a new task intent decodes")
+    }
+
+    #[test]
+    fn a_phones_new_task_may_name_only_pictures_in_the_store() {
+        let root = Ok(PathBuf::from("/data/attachments"));
+        let inside = "/data/attachments/proj-abc/20261017-x.png";
+        assert!(confine_new_task(&root, &new_task(&[inside])).is_ok());
+        assert!(confine_new_task(&root, &new_task(&[])).is_ok());
+        assert!(matches!(
+            confine_new_task(&root, &new_task(&["/etc/passwd"])),
+            Err(BridgeError::Forbidden)
+        ));
+        assert!(matches!(
+            confine_new_task(&root, &new_task(&[inside, "/etc/passwd"])),
+            Err(BridgeError::Forbidden)
+        ));
+        assert!(matches!(
+            confine_new_task(&root, &new_task(&["/data/attachments/../secret.png"])),
+            Err(BridgeError::Forbidden)
+        ));
+    }
+
+    #[test]
+    fn an_unlocatable_store_refuses_every_picture_but_not_a_task_without_any() {
+        let root: Result<PathBuf, String> = Err("no app data".into());
+        assert!(confine_new_task(&root, &new_task(&[])).is_ok());
+        assert!(matches!(
+            confine_new_task(&root, &new_task(&["/data/attachments/p/x.png"])),
+            Err(BridgeError::Forbidden)
+        ));
+    }
+
+    #[test]
+    fn attachment_write_is_decoded_with_a_null_name() {
+        let call = Call::parse("attachment_write", json!({ "name": null, "data": "aGk=" }))
+            .unwrap_or_else(|_| panic!("the call decodes"));
+        match call {
+            Call::AttachmentWrite(a) => {
+                assert_eq!(a.name, None);
+                assert_eq!(a.data, "aGk=");
+            }
+            _ => panic!("expected an attachment_write call"),
+        }
     }
 }
