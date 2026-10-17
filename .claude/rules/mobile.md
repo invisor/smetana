@@ -70,9 +70,23 @@ notification service extension target is in `gen/apple/project.yml` (re-run `xco
 sit beside `MainActivity.kt`. Push on Android needs a Firebase project: `google-services.json` in
 `gen/android/app/` (not committed); without it the build works and push is off.
 
+The app icon is the desktop's artwork, built for a phone. `mobile/app-icon.png` is the master: 1024 px, opaque, the
+bowl filling the whole square on the artwork's own ground (7, 10, 13), made by `scripts/make-app-icon.py --square`. It is
+not the desktop master (`app-icon.png` at the root), which carries transparent margins and a squircle because macOS does
+not round icons; iOS and Android do, so those would be drawn twice and the bowl would come out a third too small.
+`mobile/app-icon.json` is the `tauri icon` manifest beside it: `app-icon-bg.png` is the Android adaptive background (a flat
+ground) and `app-icon-fg.png` the foreground, the same artwork at 0.66 (`--square --scale 0.66`) so the bowl sits inside
+the middle 66 dp of 108 that a launcher mask leaves (measured: farthest bowl pixel 125 px from the centre of the 432 px
+layer, limit 132). The manifest's `android_fg_scale` is not used: tauri-cli 2.12.3 reads it and ignores it. To regenerate,
+run `cd mobile && npm run icons`, which runs `tauri icon app-icon.json` into `gen/apple/.../AppIcon.appiconset` and
+`gen/android/.../res`, then drops the alpha channel the CLI leaves on the iOS PNGs (`scripts/flatten-ios-icons.py`; App
+Store Connect rejects an icon that has one). The desktop-format files it also writes into `src-tauri/icons/` ship in
+nothing, and `icon.icns` comes out with its entries in a different order every run, so `git checkout` it after a regeneration
+that did not change the artwork.
+
 ## The working screens (stage 6, smetana-xvbo)
 
-`screens/Workspace.vue` is what the app is once the desktop answers: four tabs (Board, Agents, Runs, Projects) in
+`screens/Workspace.vue` is what the app is once the desktop answers: four tabs (Kanban, Agents, Runs, Projects) in
 `Shell.vue`, and screens opened over them (`TaskScreen`, `ConversationScreen`, `NewTaskScreen`). Where the person is
 is one route, `nav.js` (pure; `routeForTarget` is what a tapped notification becomes: `run:<project path>` -> Runs of
 that project, `session:<id>` -> the driven conversation, `terminal:<id>` -> the read-only terminal; the two id spaces

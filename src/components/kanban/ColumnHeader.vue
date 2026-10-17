@@ -40,7 +40,12 @@ const props = defineProps({
      order, and worked out there by `columnOrder.js`; the header only draws it.
      The default is what the button always drew, so a caller that knows nothing
      about the board's order is unchanged. */
-  promoteSide: { type: String, default: 'right' }
+  promoteSide: { type: String, default: 'right' },
+  /* The status-coloured underline, and the gap under it. A board of columns
+     side by side wants it; a caller that stacks headers and draws its own
+     divider (the phone's accordion) switches it off, and both go together so
+     no empty gap is left above that divider. */
+  accent: { type: Boolean, default: true }
 })
 
 const emit = defineEmits(['add', 'grab', 'move', 'run', 'promote'])
@@ -157,8 +162,12 @@ const style = computed(() => ({
   height: 'var(--row-h)',
   flex: '0 0 auto',
   padding: '0 var(--space-3) 0 var(--space-4)',
-  borderBottom: `var(--border-w-strong) solid ${c.value.border}`,
-  marginBottom: 'var(--space-4)',
+  ...(props.accent
+    ? {
+        borderBottom: `var(--border-w-strong) solid ${c.value.border}`,
+        marginBottom: 'var(--space-4)'
+      }
+    : {}),
   /* Being dragged is a surface step up, the same as every other interaction in
      this system — never a colour change and never a transform, so a column
      under the pointer cannot jump away from it. */

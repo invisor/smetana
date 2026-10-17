@@ -50,7 +50,7 @@
 //! a `slug` that keeps ASCII letters and digits and nothing else, so no name
 //! coming in can climb a directory, hide behind a dot or need quoting.
 
-mod cleanup;
+pub(crate) mod cleanup;
 pub mod figure;
 
 use std::path::{Path, PathBuf};
@@ -282,7 +282,7 @@ fn stamp() -> String {
 }
 
 /// The whole store: every project's folder lives under this one.
-fn store_root(app: &AppHandle) -> Result<PathBuf, AttachmentError> {
+pub(crate) fn store_root(app: &AppHandle) -> Result<PathBuf, AttachmentError> {
     Ok(app
         .path()
         .app_data_dir()
@@ -345,6 +345,12 @@ async fn current(app: &AppHandle) -> Result<(Option<PathBuf>, Health, Snapshot),
     let handle = app
         .try_state::<TrackerHandle>()
         .ok_or_else(|| AttachmentError::Io("the tracker worker is not running".to_owned()))?;
+    current_of(&handle).await
+}
+
+async fn current_of(
+    handle: &TrackerHandle,
+) -> Result<(Option<PathBuf>, Health, Snapshot), AttachmentError> {
     let (tx, rx) = oneshot::channel();
     handle
         .0
@@ -366,8 +372,8 @@ async fn current(app: &AppHandle) -> Result<(Option<PathBuf>, Health, Snapshot),
 /// goes to the root of the store, which is the one place nothing ever deletes.
 /// Health is not consulted here on purpose: whether the board can be read
 /// decides what may be deleted and says nothing about where a new file belongs.
-async fn current_project(app: &AppHandle) -> Option<PathBuf> {
-    match current(app).await {
+pub(crate) async fn current_project(handle: &TrackerHandle) -> Option<PathBuf> {
+    match current_of(handle).await {
         Ok((project, _, _)) => project,
         Err(err) => {
             log::warn!("attachments: no project for this image ({err}); storing it in the root");
@@ -638,7 +644,7 @@ pub async fn attachment_import(app: AppHandle, path: String) -> Result<Attachmen
         });
     }
     let bytes = std::fs::read(&source).map_err(|err| AttachmentError::Io(format!("{path}: {err}")))?;
-    let dir = store_dir(&app, current_project(&app).await.as_deref())?;
+    let dir = store_dir(&app, current_project_of(&app).await.as_deref())?;
     save_into(&dir, name.as_deref(), bytes, &stamp())
 }
 
@@ -702,20 +708,53 @@ pub async fn attachment_write(
     name: Option<String>,
     data: String,
 ) -> Result<Attachment, AttachmentError> {
-    if decoded_at_least(data.len()) > MAX_IMAGE_BYTES {
-        return Err(AttachmentError::TooLarge {
-            name: name.unwrap_or_else(|| PASTED.to_owned()),
-            // The upper bound, which is what the person actually handed over to
-            // within two bytes; the lower bound is for deciding, not for
-            // reporting a size back to somebody.
-            bytes: (data.len() / 4 * 3) as u64,
-        });
+    let root = store_root(&app)?;
+    let project = current_project_of(&app).await;
+    plain::write(&root, project.as_deref(), name, data)
+}
+
+/// `current_project` for a caller that holds the app rather than the worker's handle.
+async fn current_project_of(app: &AppHandle) -> Option<PathBuf> {
+    match app.try_state::<TrackerHandle>() {
+        Some(handle) => current_project(&handle).await,
+        None => {
+            log::warn!("attachments: no tracker worker for this image; storing it in the root");
+            None
+        }
     }
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data.as_bytes())
-        .map_err(|err| AttachmentError::Io(format!("{PASTED} did not decode: {err}")))?;
-    let dir = store_dir(&app, current_project(&app).await.as_deref())?;
-    save_into(&dir, name.as_deref(), bytes, &stamp())
+}
+
+/// The command's body without Tauri, which is what the phone's bridge calls
+/// (`remote/dispatch.rs`): the validation here is the only validation, so a
+/// picture arriving from a phone is judged by exactly the rules a paste is.
+pub mod plain {
+    use super::*;
+
+    /// `root` is the whole store and `project` the folder the picture belongs
+    /// under (`None` is the root of the store, see `store_dir`).
+    pub fn write(
+        root: &Path,
+        project: Option<&Path>,
+        name: Option<String>,
+        data: String,
+    ) -> Result<Attachment, AttachmentError> {
+        if decoded_at_least(data.len()) > MAX_IMAGE_BYTES {
+            return Err(AttachmentError::TooLarge {
+                name: name.unwrap_or_else(|| PASTED.to_owned()),
+                // The upper bound, which is what the person actually handed over to
+                // within two bytes; the lower bound is for deciding, not for
+                // reporting a size back to somebody.
+                bytes: (data.len() / 4 * 3) as u64,
+            });
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data.as_bytes())
+            .map_err(|err| AttachmentError::Io(format!("{PASTED} did not decode: {err}")))?;
+        let dir = project_dir(root, project);
+        std::fs::create_dir_all(&dir)
+            .map_err(|err| AttachmentError::Io(format!("{}: {err}", dir.display())))?;
+        save_into(&dir, name.as_deref(), bytes, &stamp())
+    }
 }
 
 #[cfg(test)]
@@ -730,6 +769,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the temp directory");
         dir
+    }
+
+    #[test]
+    fn plain_write_stores_a_picture_under_its_project_and_refuses_an_oversized_one() {
+        let root = scratch("plain-write");
+        let png = base64::engine::general_purpose::STANDARD.encode(PNG);
+        let saved = plain::write(&root, Some(Path::new("/work/proj")), Some("shot.png".into()), png)
+            .expect("a png is stored");
+        assert!(cleanup::in_store(&root, Path::new(&saved.path)));
+        assert!(Path::new(&saved.path).is_file());
+        let big = "A".repeat(((MAX_IMAGE_BYTES as usize / 3) + 8) * 4);
+        assert!(matches!(
+            plain::write(&root, None, None, big),
+            Err(AttachmentError::TooLarge { .. })
+        ));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

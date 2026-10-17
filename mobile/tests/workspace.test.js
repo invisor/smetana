@@ -36,7 +36,6 @@ const desktop = (extra = {}) => ({
   terminal_list: [{ id: 2, project: '/work/a', agent: 'claude', state: 'idle', startedAt: '2026-10-15T10:00:00Z', work: { kind: 'bare' } }],
   project_config: { state: 'ok', defaults: { target_branch: 'main', max_parallel_tasks: 2 } },
   run_state: [RUN],
-  run_reports: [{ path: '/r.html', title: 'A run', stamp: '2026-10-15T10:00:00Z' }],
   target_branches: [{ name: 'main', missing_in: [] }, { name: 'develop', missing_in: [] }],
   session_attach: { events: [{ seq: 1, kind: 'turn-start' }], seq: 1, state: 'running', cwd: '/work/a', agent: 'claude' },
   session_start: 7,
@@ -58,6 +57,7 @@ const start = async (extra) => {
   const workspace = await import('../src/workspace.js')
   const settings = await import('../../src/stores/settings.js')
   const stores = {
+    attachments: await import('../../src/stores/attachments.js'),
     conversation: await import('../../src/stores/conversation.js'),
     runs: await import('../../src/stores/runs.js'),
     terminals: await import('../../src/stores/terminals.js')
@@ -76,7 +76,7 @@ describe('what the working screens ask the desktop for', () => {
     await workspace.chooseProject('/work/b')
     await workspace.refreshFromDesktop()
 
-    await stores.conversation.startConversation('/work/a', newTaskIntent('Fix the board'))
+    await stores.conversation.startConversation('/work/a', newTaskIntent({ text: 'Fix the board' }))
     await stores.conversation.sendMessage(7, 'hello')
     await stores.conversation.answerQuestion(7, 'q1', 'allow')
     await stores.conversation.stopConversation(7)
@@ -93,7 +93,7 @@ describe('what the working screens ask the desktop for', () => {
     expect(listened.filter((event) => !ALLOWED_EVENTS.includes(event))).toEqual([])
 
     // The audit is only worth something if the screens really did reach for these.
-    for (const name of ['settings_load', 'tracker_set_project', 'agents_catalog', 'project_config', 'run_state', 'run_reports', 'target_branches', 'terminal_list', 'session_start', 'session_attach', 'session_send', 'session_answer', 'session_stop', 'run_start', 'run_stop', 'terminal_attach']) {
+    for (const name of ['settings_load', 'tracker_set_project', 'agents_catalog', 'project_config', 'run_state', 'target_branches', 'terminal_list', 'session_start', 'session_attach', 'session_send', 'session_answer', 'session_stop', 'run_start', 'run_stop', 'terminal_attach']) {
       expect(asked.has(name), name).toBe(true)
     }
     expect(listened).toEqual(expect.arrayContaining(['tracker:delta', 'tracker:health', 'run:state', 'session:events', 'terminal:state', 'terminal:removed']))
@@ -189,10 +189,33 @@ describe('switching the project', () => {
 describe('talking to an agent', () => {
   it('files a task by starting the agent with the desktop\'s intent and attaching to it', async () => {
     const { core, stores } = await start()
-    const id = await stores.conversation.startConversation('/work/a', newTaskIntent('Fix the board'))
+    const id = await stores.conversation.startConversation('/work/a', newTaskIntent({ text: 'Fix the board' }))
     expect(id).toBe(7)
-    expect(core.bridged('session_start')).toEqual([{ project: '/work/a', intent: newTaskIntent('Fix the board') }])
+    expect(core.bridged('session_start')).toEqual([{ project: '/work/a', intent: newTaskIntent({ text: 'Fix the board' }) }])
     expect(core.bridged('session_attach')).toEqual([{ id: 7 }])
+  })
+
+  it('attaches a picture as bytes through attachment_write and keeps the path it was given', async () => {
+    const { core, stores } = await start({
+      attachment_write: ({ name }) => ({ path: `/store/p/${name}`, name, bytes: 2, mime: 'image/png', data: 'aGk=' })
+    })
+    await stores.attachments.attachFiles([new File([new Uint8Array([104, 105])], 'shot.png')])
+    expect(core.bridged('attachment_write')).toEqual([{ name: 'shot.png', data: 'aGk=' }])
+    expect(stores.attachments.attachmentsState.items.map((item) => item.path)).toEqual(['/store/p/shot.png'])
+    stores.attachments.removeAttachment('/store/p/shot.png')
+    expect(stores.attachments.attachmentsState.items).toEqual([])
+  })
+
+  it('files a task naming the pictures the desktop stored, and never asks it to import a path', async () => {
+    const { core, stores } = await start({
+      attachment_write: ({ name }) => ({ path: `/store/p/${name}`, name, bytes: 2, mime: 'image/png', data: 'aGk=' })
+    })
+    await stores.attachments.attachFiles([new File([new Uint8Array([104, 105])], 'shot.png')])
+    const images = stores.attachments.attachmentsState.items.map((item) => item.path)
+    await stores.conversation.startConversation('/work/a', newTaskIntent({ text: 'Fix it', images }))
+    expect(core.bridged('session_start')[0].intent.draft.images).toEqual(['/store/p/shot.png'])
+    expect(core.bridged('attachment_import')).toEqual([])
+    expect(names(core)).not.toContain('attachment_import')
   })
 
   it('sends a message with no attachments, which the desktop would refuse on a phone', async () => {
