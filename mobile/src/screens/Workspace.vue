@@ -54,7 +54,7 @@ const onVisible = () => {
 onMounted(() => document.addEventListener('visibilitychange', onVisible))
 onBeforeUnmount(() => document.removeEventListener('visibilitychange', onVisible))
 
-const TITLES = { board: 'Board', agents: 'Agents', runs: 'Runs', projects: 'Projects' }
+const TITLES = { board: 'Kanban', agents: 'Agents', runs: 'Runs', projects: 'Projects' }
 const project = computed(() => (settings.activeProject ? basename(settings.activeProject) : ''))
 
 const header = computed(() => {
