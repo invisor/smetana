@@ -136,6 +136,16 @@ unchanged. A phone sends it when its push token appears or changes after pairing
 would read the variant as a broken frame, so a phone sends it only when `HelloReply.protocol_minor >= 1`. The contract
 files did not change, so `versions.json` has `1.1` with the same digest as `1.0`.
 
+## Protocol 1.3: `attachment_write`
+
+`attachment_write { name, data }` (base64 bytes, `name` may be `null`) joins the allowlist as its last entry and
+answers an `Attachment` whose `path` is absolute on the desktop; its body is `attachments::plain::write`, so a phone's
+picture is judged by the rules a paste is. The phone gates its Images block on `protocol_minor >= 3` (`desktopMinor`
+of the status it is given), because an older desktop answers `Forbidden`. The other half is the confinement in
+`dispatch.rs`: a phone's `session_start` with `Intent::NewTask` is `Forbidden` unless every `draft.images` path is
+`attachments::cleanup::in_store` the store (`Services.attachments_root`), since the agent that files the task opens
+whatever path it is given.
+
 ## Push
 
 `remote/push.rs` sends a run's ending and a session's start of waiting to every device with a `push_token`.

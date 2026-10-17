@@ -1,24 +1,30 @@
-/* The settings a run is started with from the phone, and whether one may be started at all.
+/* The form the phone starts a run from, and whether one may be started at all.
 
-   The phone does not offer the desktop's run window. It starts the run that window opens on,
-   so the only choices left are the ones the person makes on a phone: the target branch and the
-   press. Every other field is what `RunModal.vue` fills in when it opens on "Run the queue",
-   from the same sources and by the same rules (the pure modules it reads - `pickBranch`,
-   `needsCutting`, `pauseFrom`, `pausePayload` - are the ones used here):
+   The phone mirrors the desktop's "Run the queue" window (`RunModal.vue`, scope `queue`): the same
+   fields, in the same order, filled from the same three sources when the form is opened, and
+   turned into the same `run_start` payload when Run is pressed. The pure modules the dialog reads
+   (`pickBranch`, `needsCutting`, `pauseFrom`, `pausePayload`, `notesPayload`) are the ones used here.
+
+   Filled on opening (`openForm`), from `config`, `branches` and `remembered`:
 
    - the mode, the priority floor, the pause between batches, the live check and the filing of
-     findings are what this project was left at last time (`settings.project.runSettings`,
-     which the desktop keeps per project), else the dialog's own opening values;
+     findings are what this project was left at last time (`settings.project.runSettings`, which
+     the desktop keeps per project), else the dialog's own opening values;
    - the number of tasks at once is the project's `[defaults].max_parallel_tasks`, every time,
      never what was chosen last (the dialog's own rule);
    - the target branch is `pickBranch`: what the project was left at, its configured default,
-     the first of the list.
+     the first of the list;
+   - the notes are empty.
+
+   What is chosen on the phone is remembered nowhere: `settings_save` is not on the bridge's
+   list, so the form is filled from the desktop's memory and never writes to it.
 
    The scope is the queue. A task or an epic is started from the desktop's board, where the
    card is. */
 import { needsCutting, pickBranch } from '../../src/components/run/branchChoice.js'
-import { pauseFrom, pausePayload } from '../../src/components/run/batchPause.js'
+import { pauseFrom, pausePayload, validatePause } from '../../src/components/run/batchPause.js'
 import { DEFAULTS_FALLBACK } from '../../src/components/run/projectDefaults.js'
+import { notesPayload } from '../../src/components/run/runNotes.js'
 
 /* The dialog's own ceiling on tasks at once. */
 export const PARALLEL_MAX = 8
@@ -45,53 +51,92 @@ export function startBlock(config) {
   }
 }
 
-/* The payload of `run_start`, or `null` while there is no branch to run into. `branch` is the
-   person's own choice, `''` or absent when they have made none. */
-export function runSettings({ config, branches, remembered, branch = '' }) {
+/* Solo is a single task's mode and the scope here is the queue, so it is not offered. */
+export const MODES = [
+  { value: 'auto', label: 'Autopilot' },
+  { value: 'supervised', label: 'Crew' }
+]
+
+export const PRIORITIES = [0, 1, 2, 3, 4].map((p) => ({ value: p, label: `P${p} and better` }))
+
+export const PARALLEL = Array.from({ length: PARALLEL_MAX }, (_, i) => ({
+  value: i + 1,
+  label: i === 0 ? 'One at a time' : `${i + 1} at once`
+}))
+
+/* The desktop's own sentences, word for word. */
+export const MODE_NOTE = {
+  auto: 'Nothing is asked. Anything it cannot resolve is parked with a reason.',
+  supervised: 'It takes a single batch, asks when something needs deciding, and stops once the batch is merged.'
+}
+export const PAUSE_NOTE = 'A random number of minutes in this range, both ends included. 0 and 0 means no pause.'
+export const LIVE_CHECK_LABEL = 'Check each task for real before closing it'
+export const LIVE_CHECK_NONE_NOTE = 'This project declares no way to check a merged task, so tasks close on a green merge.'
+export const FINDINGS_LABEL = 'File what it finds along the way'
+export const FINDINGS_NOTE = 'New tasks go to deferred and wait for you \u2014 a run never picks up its own findings.'
+export const NOTES_PLACEHOLDER = 'For example: do not commit the result.'
+export const NOTES_NOTE = 'Read once, at the start of this run. Not remembered.'
+export const QUEUE_DESCRIPTION = 'Everything ready on the board.'
+
+/* Whether the project declares any way to check a merged task. */
+export const liveCheckAvailable = (config) => config?.live_check?.mode !== 'none'
+
+/* The values the form's fields hold when it is opened. */
+export function openForm({ config, branches, remembered }) {
   const kept = remembered ?? {}
   const defaults = config?.defaults ?? {}
-  const target =
-    branch && (branches ?? []).some((b) => b?.name === branch)
-      ? branch
-      : pickBranch(branches, kept.targetBranch, defaults.target_branch)
-  if (!target) return null
-
-  /* Queue scope: the dialog turns a remembered Solo into Autopilot for anything but a task. */
+  const branch = pickBranch(branches, kept.targetBranch, defaults.target_branch)
+  /* The dialog turns a remembered Solo into Autopilot for anything but a task. */
   const mode = kept.mode && kept.mode !== 'solo' ? kept.mode : 'auto'
   const gap = pauseFrom(kept)
-  const pause = mode === 'auto' ? pausePayload(gap.min, gap.max) : null
-  const parallel = Math.min(
-    Math.max((defaults.max_parallel_tasks ?? DEFAULTS_FALLBACK.max_parallel_tasks) || 1, 1),
-    PARALLEL_MAX
-  )
   return {
-    scope: { kind: 'queue' },
+    branch,
     mode,
-    target_branch: target,
-    create_target: needsCutting(branches, target),
-    min_priority: kept.minPriority ?? defaults.min_priority ?? DEFAULTS_FALLBACK.min_priority,
-    max_parallel_tasks: parallel,
-    batch_pause_min: pause?.min ?? null,
-    batch_pause_max: pause?.max ?? null,
-    /* The dialog switches the live check off when the machine cannot drive a browser
+    parallel: Math.min(
+      Math.max((defaults.max_parallel_tasks ?? DEFAULTS_FALLBACK.max_parallel_tasks) || 1, 1),
+      PARALLEL_MAX
+    ),
+    pauseMin: gap.min,
+    pauseMax: gap.max,
+    priority: kept.minPriority ?? defaults.min_priority ?? DEFAULTS_FALLBACK.min_priority,
+    /* The dialog also switches the live check off when the machine cannot drive a browser
        (`browser_tools`, which is not on the phone's list). Not knowing is the dialog's own
        "nobody has asked" state, and it leaves the switch where it was remembered. */
-    live_check: config?.live_check?.mode !== 'none' && (kept.liveCheck ?? true),
-    file_findings: kept.fileFindings ?? true,
-    instructions: null
+    liveCheck: liveCheckAvailable(config) && (kept.liveCheck ?? true),
+    fileFindings: kept.fileFindings ?? true,
+    notes: ''
   }
 }
 
-/* The sentence the confirmation says, so that the press is made knowing what it starts. */
-export function describeStart(settings, ready) {
-  const parts = [`${modeLabel(settings.mode)} into ${settings.target_branch}`]
-  if (settings.mode !== 'solo' && settings.max_parallel_tasks) {
-    parts.push(
-      settings.max_parallel_tasks === 1
-        ? 'one task at a time'
-        : `${settings.max_parallel_tasks} tasks at once`
-    )
+/* The pause fields exist in Autopilot alone: the other mode runs one batch. */
+export const hasPause = (form) => form?.mode === 'auto'
+
+/* A sentence per pause field that is wrong, `{}` otherwise and outside Autopilot. */
+export const pauseErrors = (form) => (hasPause(form) ? validatePause(form.pauseMin, form.pauseMax) : {})
+
+/* Whether Run may be pressed: a branch to run into and a pause that can be sent. */
+export const canRun = (form) => Boolean(form?.branch) && Object.keys(pauseErrors(form)).length === 0
+
+/* The payload of `run_start` for what the form holds, or `null` while Run may not be pressed.
+   A `Select` hands back text, so the two numbers are made numbers here. */
+export function runPayload(form, { config, branches }) {
+  if (!canRun(form)) return null
+  const pause = hasPause(form) ? pausePayload(form.pauseMin, form.pauseMax) : null
+  return {
+    scope: { kind: 'queue' },
+    mode: form.mode,
+    target_branch: form.branch,
+    create_target: needsCutting(branches, form.branch),
+    min_priority: Number(form.priority),
+    max_parallel_tasks: Number(form.parallel),
+    batch_pause_min: pause?.min ?? null,
+    batch_pause_max: pause?.max ?? null,
+    live_check: liveCheckAvailable(config) && Boolean(form.liveCheck),
+    file_findings: Boolean(form.fileFindings),
+    instructions: notesPayload(form.notes)
   }
-  if (typeof ready === 'number') parts.push(ready === 1 ? 'one task is ready' : `${ready} tasks are ready`)
-  return parts.join(', ')
 }
+
+/* The payload for a form left exactly as it opens. */
+export const runSettings = ({ config, branches, remembered }) =>
+  runPayload(openForm({ config, branches, remembered }), { config, branches })
