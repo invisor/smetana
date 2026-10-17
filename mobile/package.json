@@ -8,6 +8,7 @@
     "build": "vite build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "icons": "tauri icon app-icon.json && python3 ../scripts/flatten-ios-icons.py src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset",
     "tauri": "tauri"
   },
   "dependencies": {
