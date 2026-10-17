@@ -36,7 +36,6 @@ const desktop = (extra = {}) => ({
   terminal_list: [{ id: 2, project: '/work/a', agent: 'claude', state: 'idle', startedAt: '2026-10-15T10:00:00Z', work: { kind: 'bare' } }],
   project_config: { state: 'ok', defaults: { target_branch: 'main', max_parallel_tasks: 2 } },
   run_state: [RUN],
-  run_reports: [{ path: '/r.html', title: 'A run', stamp: '2026-10-15T10:00:00Z' }],
   target_branches: [{ name: 'main', missing_in: [] }, { name: 'develop', missing_in: [] }],
   session_attach: { events: [{ seq: 1, kind: 'turn-start' }], seq: 1, state: 'running', cwd: '/work/a', agent: 'claude' },
   session_start: 7,
@@ -93,7 +92,7 @@ describe('what the working screens ask the desktop for', () => {
     expect(listened.filter((event) => !ALLOWED_EVENTS.includes(event))).toEqual([])
 
     // The audit is only worth something if the screens really did reach for these.
-    for (const name of ['settings_load', 'tracker_set_project', 'agents_catalog', 'project_config', 'run_state', 'run_reports', 'target_branches', 'terminal_list', 'session_start', 'session_attach', 'session_send', 'session_answer', 'session_stop', 'run_start', 'run_stop', 'terminal_attach']) {
+    for (const name of ['settings_load', 'tracker_set_project', 'agents_catalog', 'project_config', 'run_state', 'target_branches', 'terminal_list', 'session_start', 'session_attach', 'session_send', 'session_answer', 'session_stop', 'run_start', 'run_stop', 'terminal_attach']) {
       expect(asked.has(name), name).toBe(true)
     }
     expect(listened).toEqual(expect.arrayContaining(['tracker:delta', 'tracker:health', 'run:state', 'session:events', 'terminal:state', 'terminal:removed']))

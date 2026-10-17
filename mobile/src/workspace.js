@@ -19,7 +19,6 @@ import { initAgents } from '../../src/stores/agents.js'
 import { initRuns, loadConfig, loadRun, runsState } from '../../src/stores/runs.js'
 import { initConversation, adoptRunSession } from '../../src/stores/conversation.js'
 import { initTerminals, loadSessions } from '../../src/stores/terminals.js'
-import { loadReports } from '../../src/stores/reports.js'
 import { loadBranches } from '../../src/stores/git.js'
 import { resync, setProject, trackerState } from '../../src/stores/tracker.js'
 import { invoke } from './bridge/core.js'
@@ -124,5 +123,5 @@ export async function chooseProject(path) {
    run stores keep one project at a time, so this is the same load the active project gets. */
 export async function loadRunsFor(project) {
   runsPin = project
-  await Promise.all([loadConfig(project), loadRun(project), loadReports(project), loadBranches(project)])
+  await Promise.all([loadConfig(project), loadRun(project), loadBranches(project)])
 }
