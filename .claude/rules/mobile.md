@@ -86,7 +86,7 @@ that did not change the artwork.
 
 ## The working screens (stage 6, smetana-xvbo)
 
-`screens/Workspace.vue` is what the app is once the desktop answers: four tabs (Board, Agents, Runs, Projects) in
+`screens/Workspace.vue` is what the app is once the desktop answers: four tabs (Kanban, Agents, Runs, Projects) in
 `Shell.vue`, and screens opened over them (`TaskScreen`, `ConversationScreen`, `NewTaskScreen`). Where the person is
 is one route, `nav.js` (pure; `routeForTarget` is what a tapped notification becomes: `run:<project path>` -> Runs of
 that project, `session:<id>` -> the driven conversation, `terminal:<id>` -> the read-only terminal; the two id spaces

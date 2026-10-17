@@ -10,7 +10,7 @@
    one `ref` and be sure that a change is a change. */
 
 export const TABS = [
-  { id: 'board', label: 'Board', icon: 'columns-3' },
+  { id: 'board', label: 'Kanban', icon: 'columns-3' },
   { id: 'agents', label: 'Agents', icon: 'bot' },
   { id: 'runs', label: 'Runs', icon: 'play' },
   { id: 'projects', label: 'Projects', icon: 'folder' }

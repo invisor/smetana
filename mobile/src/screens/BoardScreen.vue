@@ -88,7 +88,7 @@ const more = { alignSelf: 'flex-start' }
         @keydown.enter="toggle(folded, col.status)"
         @keydown.space.prevent="toggle(folded, col.status)"
       >
-        <ColumnHeader :status="col.status" :count="col.tasks.length" :addable="false">
+        <ColumnHeader :status="col.status" :count="col.tasks.length" :addable="false" :accent="false">
           <template #actions>
             <Icon :name="folded.has(col.status) ? 'chevron-right' : 'chevron-down'" :size="14" />
           </template>
