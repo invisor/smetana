@@ -269,10 +269,16 @@ pub fn valid_relay_url(url: &str) -> bool {
         && host.parse::<std::net::IpAddr>().is_err()
 }
 
+/// The placeholder `DEFAULT_RELAY_URL` was before the relay existed. Builds up to
+/// v0.2.30 wrote it into the file as an ordinary value, so without this it would
+/// outlive the change of default and every ticket would still name a host that
+/// does not exist.
+const RETIRED_RELAY_URL: &str = "https://relay.smetana.example";
+
 impl RemoteSettings {
     fn validate(&mut self) {
         self.relay_url = self.relay_url.trim().to_owned();
-        if !valid_relay_url(&self.relay_url) {
+        if !valid_relay_url(&self.relay_url) || self.relay_url.trim_end_matches('/') == RETIRED_RELAY_URL {
             self.relay_url = crate::remote::DEFAULT_RELAY_URL.into();
         }
     }
@@ -2400,6 +2406,19 @@ mod tests {
             let text = format!(r#"{{"version":1,"remote":{{"relayUrl":{}}}}}"#, serde_json::json!(good));
             assert_eq!(settings_of(&text).remote.relay_url, good);
         }
+    }
+
+    #[test]
+    fn the_placeholder_relay_earlier_builds_wrote_is_replaced_by_the_default() {
+        for stale in ["https://relay.smetana.example", "https://relay.smetana.example/", " https://relay.smetana.example "] {
+            let text = format!(r#"{{"version":1,"remote":{{"relayUrl":{}}}}}"#, serde_json::json!(stale));
+            assert_eq!(settings_of(&text).remote.relay_url, crate::remote::DEFAULT_RELAY_URL, "{stale:?}");
+        }
+        let mut resolved = ResolvedSettings::default();
+        resolved.remote.relay_url = "https://relay.smetana.example".into();
+        let mut file = Settings::default();
+        merge(&mut file, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert_eq!(file.remote.relay_url, crate::remote::DEFAULT_RELAY_URL);
     }
 
     #[test]
