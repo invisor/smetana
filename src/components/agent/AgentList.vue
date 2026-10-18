@@ -47,6 +47,7 @@
    `nameAgentRows` in `agentName.js` are the pure rules this component leans
    on; the write itself is the caller's, through the `rename` event below. */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import EmptyState from '../core/EmptyState.vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import { useInteractive } from '../core/interactive.js'
@@ -57,6 +58,10 @@ import { agentKey, isPinned, moveAgent, orderAgents, togglePin } from './agentOr
 
 const props = defineProps({
   rows: { type: Array, default: () => [] },
+  /* A run has been started and its first batch has no session yet, so an empty
+     list means "on its way" rather than "nothing is running". Only read while
+     `rows` is empty. */
+  starting: { type: Boolean, default: false },
   activeId: { type: [Number, String], default: null },
   /* Which agents are kept above the rest, by conversation id — the caller's
      list, straight out of `settings.json`. A prop rather than a flag on each
@@ -746,7 +751,15 @@ const empty = computed(() => props.rows.length === 0)
           @click.stop="$emit('remove', row.id)"
         />
       </div>
-      <div v-if="empty" :style="{ padding: 'var(--space-5)', color: 'var(--text-muted)', font: 'var(--weight-regular) var(--text-xs)/1.5 var(--font-sans)' }">
+      <EmptyState
+        v-if="empty && starting"
+        icon="loader-circle"
+        spin
+        compact
+        title="Starting the run"
+        description="Agents appear here once the first batch begins"
+      />
+      <div v-else-if="empty" :style="{ padding: 'var(--space-5)', color: 'var(--text-muted)', font: 'var(--weight-regular) var(--text-xs)/1.5 var(--font-sans)' }">
         No agents running. Right-click a project to start one.
       </div>
     </div>

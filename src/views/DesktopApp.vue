@@ -86,7 +86,6 @@ import Toast from '../components/overlays/Toast.vue'
 import ProjectRail from '../components/shell/ProjectRail.vue'
 import { projectSummary } from '../components/shell/projectState.js'
 import StatusFooter from '../components/shell/StatusFooter.vue'
-import Skeleton from '../components/core/Skeleton.vue'
 import Icon from '../components/core/Icon.vue'
 import Tooltip from '../components/core/Tooltip.vue'
 import IconButton from '../components/core/IconButton.vue'
@@ -346,6 +345,7 @@ import { needsReady, promotesToReady } from '../components/run/readyPromote.js'
 import { promotedNote } from '../components/run/promotedNote.js'
 import { runTitle, scopeBusyReason } from '../components/run/runScopes.js'
 import { limitVoice } from '../components/run/limitVoice.js'
+import { warmingUp } from '../components/run/runWarmup.js'
 import { DEFAULTS_FALLBACK, draftFrom } from '../components/run/projectDefaults.js'
 import {
   LEFT_DEFAULT,
@@ -2479,16 +2479,11 @@ const startTheRun = async (chosen) => {
        moved by the `lastRunStart` watcher below, when the batch's session
        actually arrives, which is the one place that rule is written.
 
-       What this line does promise is only where the agents will appear, not that
-       there is anything to see yet: for the whole of preflight the panel draws
-       AgentList's own empty state, which says no agent is running and offers the
-       + row — the same untruth the centre tab was just taken off, one panel over
-       and in much quieter type. It is left standing because it is pre-existing,
-       because the panel is genuinely the destination, and because a side panel
-       saying "nothing yet" is a smaller lie than a centre column drawing a pane
-       behind a tab nobody can see. Do not read this line as evidence the empty
-       state was thought through. The press's visible effect meanwhile is the run
-       bar, which is where a run's own progress is reported. */
+       What this line promises is where the agents will appear. Until the first
+       batch has a session the panel draws AgentList's "Starting the run" empty
+       state, driven by the same `warmingUp` rule as the run bar's turning glyph,
+       so the panel does not claim nothing is running just after Start run was
+       pressed. The run bar is where the run's own progress is reported. */
     project.sideTab = 'agents'
   } catch (err) {
     runError.value = runFailure(err)
@@ -2528,6 +2523,9 @@ const stopTheRun = (token) => {
    the whole list and no segment can see one — the rule itself is
    `limitVoice.js`, out where a test can reach it. */
 const limitSpeaker = computed(() => limitVoice(runsState.runs))
+/* Some run is started and has no session yet: AgentList's empty list then says
+   "starting" instead of "nothing is running". */
+const runWarmingUp = computed(() => runsState.runs.some(warmingUp))
 
 /* No token: the press releases every run that is alive, because one reading of
    one subscription is what stood them all up. See `releaseRuns`. */
@@ -7568,6 +7566,7 @@ const toastStackStyle = {
               <AgentList
                 v-else
                 :rows="orderedAgentRows"
+                :starting="runWarmingUp"
                 :active-id="activeAgentRow"
                 :pinned="project.pinnedAgents"
                 @select="selectAgent"
@@ -7789,17 +7788,16 @@ const toastStackStyle = {
             :session-id="terminalState.activeId"
           />
           <TerminalView v-else-if="activeTerminal" :session-id="activeTerminal.session" />
-          <!-- bd init is the one wait that keeps its EmptyState: the skeleton
-               would replace the very sentence that explains what is happening,
-               and the busy button says it better than six grey lines. Every
-               other switch shows the skeleton — there the board is what is
-               being replaced. -->
-          <div
+          <!-- bd init is the one wait that keeps its EmptyState with a busy
+               button: it has a sentence to say. Every other switch shows the
+               system's turning glyph, because the grey bars of a skeleton
+               were too faint to read as "loading". -->
+          <EmptyState
             v-else-if="trackerState.switching && !initing && !repairing"
-            :style="{ padding: 'var(--panel-pad)' }"
-          >
-            <Skeleton :lines="6" :height="12" />
-          </div>
+            icon="loader-circle"
+            spin
+            title="Loading the board"
+          />
           <EmptyState v-else-if="healthNotice" v-bind="healthNotice">
             <!-- What bd said, under the sentence about it: the diagnostic used to
                  go to the console alone, which asked a person to open developer

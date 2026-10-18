@@ -4736,6 +4736,16 @@ const menuTargetStyle = {
              one flag stood for the whole project. -->
         <AgentList :rows="agentRows" :active-id="2" :pinned="AGENT_PINS" />
       </div>
+      <!-- The two empty states side by side: the plain one, and the one drawn
+           between Start run and the first batch's session. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-5)' }">
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <AgentList :rows="[]" />
+        </div>
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <AgentList :rows="[]" starting />
+        </div>
+      </div>
       <!-- What that second row's run has taken, drawn where it actually
            appears: the right column at its shipped 340px, padded by
            --panel-pad the way the inspector column is, so the negative margin
