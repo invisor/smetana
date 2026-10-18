@@ -23,6 +23,7 @@ import IconButton from '../core/IconButton.vue'
 import { TONE, endingDetail, stopReason } from './stopReason.js'
 import { failoverDetail, failoverLabel } from './failoverVoice.js'
 import { restDetail, restLabel } from './batchPause.js'
+import { warmingUp } from './runWarmup.js'
 
 const props = defineProps({
   /* The whole Run from the worker, or null when nothing has been started. */
@@ -61,11 +62,16 @@ const reason = computed(() => stopReason(state.value?.reason?.kind))
    only by colour — the rule the status palette keeps everywhere else in this
    system. A pause is a third silhouette for the same reason: it is neither
    working nor over, and the glyph is the fastest way to tell it from both. */
+/* Started but no session yet: the one glyph here that turns, because it is the
+   only sign of life in the footer for the seconds before the first batch. */
+const warming = computed(() => warmingUp(props.run))
+
 const glyph = computed(() => {
   /* No fallback here: `stopReason` answers with a glyph for every ending it
      knows and for every one it does not, so a default written at this call site
      would be a second copy of a decision that lives next door. */
   if (over.value) return reason.value.icon
+  if (warming.value) return 'loader-circle'
   return (paused.value || waiting.value || resting.value) ? 'pause' : 'play'
 })
 
@@ -159,6 +165,12 @@ const style = computed(() => ({
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
 }))
 
+/* `EmptyState`'s and `IconButton`'s spinner, token for token. */
+const spinStyle = {
+  color: 'var(--attn-live)',
+  animation: 'sm-spin var(--dur-pulse) linear infinite'
+}
+
 const detailStyle = {
   color: 'var(--text-muted)',
   minWidth: 0,
@@ -170,7 +182,7 @@ const detailStyle = {
 
 <template>
   <div v-if="run" :style="style">
-    <Icon :name="glyph" :size="11" />
+    <Icon :name="glyph" :size="11" :style="warming ? spinStyle : undefined" />
     <!-- Dropped rather than left empty when there is nothing to say: the row's
          own `gap` sits on either side of it, so a blank span would space the
          glyph and the buttons of a muted segment twice as far apart as a
