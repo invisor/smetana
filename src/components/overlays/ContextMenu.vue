@@ -59,7 +59,7 @@ const itemStyle = (it, i) => {
     height: 'var(--row-h)',
     padding: '0 var(--space-4)',
     borderRadius: 'var(--radius-2)',
-    background: on ? 'var(--surface-hover)' : 'transparent',
+    background: on ? 'var(--surface-overlay-hover)' : 'transparent',
     color: it.disabled
       ? 'var(--text-muted)'
       : it.tone === 'danger'

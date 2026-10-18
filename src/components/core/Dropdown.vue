@@ -439,7 +439,7 @@ const optionStyle = (option, index) => ({
      A disabled row takes neither. The cursor cannot land on it, but the seat
      described at the Enter branch can, and a highlight there would promise a
      press that does nothing. */
-  background: !option.disabled && index === cursor.value ? 'var(--surface-hover)' : 'transparent',
+  background: !option.disabled && index === cursor.value ? 'var(--surface-overlay-hover)' : 'transparent',
   /* One step further back than an unselected row, which is the whole of how a
      row that cannot be picked is told from one that simply is not — the same
      `--text-muted` the field itself takes when the control is disabled. */
