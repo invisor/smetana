@@ -11,6 +11,12 @@
   --surface-overlay:#ffffff;
   --surface-hover:#e4e9ea;
   --surface-active:#d9e0e1;
+  /* Interactive row on an overlay panel (menus, dropdown lists). --surface-hover
+     is a step up from --surface/--surface-raised, but a panel already sits on the
+     lightest dark surface, so there it is invisible (1.03:1). */
+  /* Light: equal to --surface-hover/--surface-active; contrast to #ffffff 1.23:1 / 1.34:1. */
+  --surface-overlay-hover:#e4e9ea;
+  --surface-overlay-active:#d9e0e1;
   --surface-selected:#dde7ef;
 
   --border-subtle:#dde3e3;
@@ -67,6 +73,12 @@
   --surface-overlay:#1f272f;
   --surface-hover:#202932;
   --surface-active:#26303a;
+  /* Interactive row on an overlay panel (menus, dropdown lists). --surface-hover
+     is a step up from --surface/--surface-raised, but a panel already sits on the
+     lightest dark surface, so there it is invisible (1.03:1). */
+  /* Dark: contrast to --surface-overlay #1f272f is 1.32:1 hover, 1.52:1 active. */
+  --surface-overlay-hover:#2f3b47;
+  --surface-overlay-active:#374452;
   --surface-selected:#1f2c39;
 
   --border-subtle:#232b33;
