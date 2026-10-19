@@ -256,10 +256,10 @@ describe('the conversation store', () => {
     })
     await stores.conversation.attach('crew:42:3')
     const held = stores.conversation.conversationFor('crew:42:3')
-    held.draft = 'do not reroute this'
+    held.draft = [{ kind: 'text', text: 'do not reroute this' }]
     await stores.conversation.sendMessage('crew:42:3', held.draft, [])
 
-    expect(held.draft).toBe('do not reroute this')
+    expect(held.draft).toEqual([{ kind: 'text', text: 'do not reroute this' }])
     expect(ipc.calls('crew_send')).toEqual([{ root: 42, node: 3, text: 'do not reroute this' }])
     expect(stores.conversation.conversationState.lastError.session).toBe('crew:42:3')
   })
@@ -386,7 +386,7 @@ describe('the conversation store', () => {
     stores.conversation.conversationFor(1).draft = 'unsent words'
     await stores.conversation.sendMessage(1, 'unsent words', [])
 
-    expect(stores.conversation.conversationFor(1).draft).toBe('unsent words')
+    expect(stores.conversation.conversationFor(1).draft).toEqual([{ kind: 'text', text: 'unsent words' }])
     expect(stores.conversation.conversationState.lastError).toBeTruthy()
   })
 
@@ -397,7 +397,53 @@ describe('the conversation store', () => {
     stores.conversation.conversationFor(1).draft = 'sent words'
     await stores.conversation.sendMessage(1, 'sent words', [])
 
-    expect(stores.conversation.conversationFor(1).draft).toBe('')
+    expect(stores.conversation.conversationFor(1).draft).toEqual([{ kind: 'text', text: '' }])
+  })
+
+  it('reads an unset draft as the empty segment list', async () => {
+    const { stores } = await ready()
+    expect(stores.conversation.conversationFor(1).draft).toEqual([{ kind: 'text', text: '' }])
+  })
+
+  it('sends a segment draft as markdown and clears it to the empty list', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('session_send', null)
+    await stores.conversation.attach(1)
+    const held = stores.conversation.conversationFor(1)
+    held.draft = [{ kind: 'quote', text: 'said' }, { kind: 'text', text: 'why?' }]
+    await stores.conversation.sendMessage(1, held.draft, [])
+    expect(ipc.calls('session_send')[0].text).toBe('> said\n\nwhy?')
+    expect(held.draft).toEqual([{ kind: 'text', text: '' }])
+  })
+
+  it('keeps the segment draft, quotes included, when the send is refused', async () => {
+    const { ipc, stores } = await ready()
+    ipc.fail('session_send', new Error('the worker is not running'))
+    await stores.conversation.attach(1)
+    const held = stores.conversation.conversationFor(1)
+    held.draft = [{ kind: 'quote', text: 'said' }, { kind: 'text', text: 'why?' }]
+    await stores.conversation.sendMessage(1, held.draft, [])
+    expect(held.draft).toEqual([{ kind: 'quote', text: 'said' }, { kind: 'text', text: 'why?' }])
+    expect(stores.conversation.conversationState.lastError).toBeTruthy()
+  })
+
+  it('sends a quote with no words at all', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('session_send', null)
+    await stores.conversation.attach(1)
+    await stores.conversation.sendMessage(1, [{ kind: 'quote', text: 'said' }, { kind: 'text', text: '' }], [])
+    expect(ipc.calls('session_send')).toHaveLength(1)
+    expect(ipc.calls('session_send')[0].text).toBe('> said')
+  })
+
+  it('still accepts a plain string from an older caller', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('session_send', null)
+    await stores.conversation.attach(1)
+    stores.conversation.conversationFor(1).draft = 'sent words'
+    expect(stores.conversation.conversationFor(1).draft).toEqual([{ kind: 'text', text: 'sent words' }])
+    await stores.conversation.sendMessage(1, 'sent words', [])
+    expect(ipc.calls('session_send')[0].text).toBe('sent words')
   })
 
   /* The other half of the same rule, and the road it arrives by is the one a
@@ -411,12 +457,12 @@ describe('the conversation store', () => {
 
     const held = stores.conversation.conversationFor(1)
     held.draft = 'sent words'
-    const sending = stores.conversation.sendMessage(1, 'sent words', [])
+    const sending = stores.conversation.sendMessage(1, held.draft, [])
     held.draft = 'sent words, and more of them'
     release(null)
     await sending
 
-    expect(held.draft).toBe('sent words, and more of them')
+    expect(held.draft).toEqual([{ kind: 'text', text: 'sent words, and more of them' }])
   })
 
   it('carries a failure to answer into lastError rather than swallowing it', async () => {

@@ -339,6 +339,7 @@ import { checkNewName } from '../components/files/newEntry.js'
    too. */
 import { absolutePath, ancestors, isUnder, relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
+import { appendText } from '../components/conversation/draftSegments.js'
 import { resolveLocalLinkPath } from '../components/conversation/localLinkTarget.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { needsReady, promotesToReady } from '../components/run/readyPromote.js'
@@ -6006,11 +6007,12 @@ async function attachToAgent(path) {
   if (target.road === 'driven') {
     /* Appended rather than replaced, the way the PTY road's own `dropText`
        joins several paths of one drop: a second attach while the first is
-       still sitting unsent must not erase it. A space in front only when
-       there is already something to join it to, so the field never opens on
-       a leading space nobody typed. */
+       still sitting unsent must not erase it. `appendText` puts it at the end
+       of the trailing text segment, with a space in front only when there is
+       already something to join it to, so the field never opens on a leading
+       space nobody typed. */
     const held = conversationFor(target.id)
-    held.draft = held.draft ? `${held.draft} ${path} ` : `${path} `
+    held.draft = appendText(held.draft, `${path} `)
     /* Aim the tab at this conversation and bring it forward: the row was
        already the panel's selection, so this is the one case that can move
        nothing on screen, and it is what puts the person in front of the
