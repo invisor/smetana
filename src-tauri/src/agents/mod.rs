@@ -1024,6 +1024,19 @@ pub trait Profile: Sync {
         None
     }
 
+    /// The structured twin of `transcript`: the same JSONL line, read as
+    /// `LogKind` records the Agent tab draws as a timeline instead of text.
+    /// It is installed by the same predicate (`is_batch`) and obeys the same
+    /// rule — an event it has never heard of yields nothing. `seq` and the
+    /// instant are the worker's, not the translator's.
+    ///
+    /// `None` is a working answer: such a harness keeps drawing xterm over the
+    /// text transcript (or its own readable output), and `Session::timeline`
+    /// stays `false`.
+    fn batch_log(&self) -> Option<fn(&str) -> Vec<crate::terminal::model::LogKind>> {
+        None
+    }
+
     /// The arguments after `binary()` that run this harness's own sign-in
     /// dialog, or `None` where it has no such variant. A capability and its
     /// arguments in one answer, like `resume_args`, so `catalogue` derives the

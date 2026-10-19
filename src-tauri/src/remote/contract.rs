@@ -475,6 +475,7 @@ fn terminal_sessions() -> Vec<Session> {
                 exit_code: full.then_some(0),
                 work,
                 conversation: full.then(|| "conv-1".to_string()),
+                timeline: full,
             }
         })
         .collect()
@@ -520,7 +521,7 @@ fn replies() -> BTreeMap<&'static str, Vec<Value>> {
     map.insert("crew_send", vec![Value::Null]);
     map.insert("crew_stop", vec![Value::Null]);
     map.insert("terminal_list", vec![json_of(&terminal_sessions()), json!([])]);
-    map.insert("terminal_attach", vec![json_of(&TerminalAttached { data: "aGk=".into(), seq: 12 })]);
+    map.insert("terminal_attach", vec![json_of(&TerminalAttached { data: "aGk=".into(), seq: 12, log: Vec::new(), log_trimmed: 0 })]);
     map
 }
 

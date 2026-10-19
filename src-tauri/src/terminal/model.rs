@@ -276,6 +276,40 @@ pub struct Session {
     /// row takes part in the panel's order for as long as the window lives and
     /// is written to no file.
     pub conversation: Option<String>,
+    /// Whether the Agent tab draws this session as a structured timeline
+    /// (`LogEntry`) instead of xterm. Decided at the spawn, in the one place
+    /// the text transcript is installed, and never revised: it is `true`
+    /// exactly when the session was given a structured translator, so it
+    /// is the one fact the front end needs before it mounts a pane.
+    pub timeline: bool,
+}
+
+/// One kind of thing a batch's structured log can say. The translator
+/// (`Profile::batch_log`) yields these; the worker numbers and dates them
+/// into `LogEntry`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum LogKind {
+    /// The agent's own remark, whole, newlines kept.
+    Say { text: String },
+    /// A tool call. `command` is the tool's detail without the one-line clip;
+    /// `cwd` is only ever set for Bash, from a leading `cd <absolute path>`.
+    Tool { id: String, tool: String, command: String, cwd: Option<String> },
+    /// How a tool call went, never what it printed.
+    Result { id: String, ok: bool, summary: String },
+    /// A system line: session start, an API retry, the batch's result.
+    Note { text: String },
+}
+
+/// A `LogKind` with its place in the session's log (`seq`, from 1) and the
+/// instant it was translated (`at`, RFC 3339 local time).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogEntry {
+    pub seq: u64,
+    pub at: String,
+    #[serde(flatten)]
+    pub kind: LogKind,
 }
 
 /// What the project rail needs to know about a session, and nothing else: a
@@ -402,6 +436,7 @@ impl Session {
             exit_code: None,
             work,
             conversation,
+            timeline: false,
         }
     }
 

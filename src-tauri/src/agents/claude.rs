@@ -13,7 +13,7 @@ use portable_pty::CommandBuilder;
 use super::{prompt, Autonomy, Intent, Launch, McpConfigFormat, Profile, SignInVariant, SkillDelivery};
 use crate::runs::model::RunMode;
 use crate::runs::usage::Usage;
-use crate::terminal::model::{Question, QuestionOption};
+use crate::terminal::model::{LogKind, Question, QuestionOption};
 
 /// The models this harness offers, the id first and the name a person reads
 /// second.
@@ -297,6 +297,12 @@ impl Profile for Claude {
         Some(transcript_line)
     }
 
+    /// The same JSONL lines, read a second way: as the structured records the
+    /// Agent tab draws as a timeline. See `batch_entries`.
+    fn batch_log(&self) -> Option<fn(&str) -> Vec<LogKind>> {
+        Some(batch_entries)
+    }
+
     /// `/usage` is a slash command of the interactive interface, and `-p` runs
     /// one anyway and prints what it would have drawn. There is no
     /// machine-readable form of this and none has appeared: as of 2.1.174 the
@@ -433,6 +439,13 @@ pub(crate) fn clip(text: &str, max: usize) -> String {
 /// table is the reference formatter's; a tool it has never heard of still gets
 /// its name shown, because the point of the line is that something happened.
 pub(crate) fn tool_detail(name: &str, input: &serde_json::Value) -> String {
+    clip(&one_line(&tool_detail_full(name, input)), MAX_DETAIL)
+}
+
+/// `tool_detail`'s field choice with no collapsing and no clip: the structured
+/// log shows a command whole, and one function picks the field for both
+/// readers so they cannot drift apart.
+pub(crate) fn tool_detail_full(name: &str, input: &serde_json::Value) -> String {
     let field = |key: &str| input.get(key).and_then(serde_json::Value::as_str).unwrap_or("");
     let detail = match name {
         "Bash" => field("command").to_string(),
@@ -466,9 +479,16 @@ pub(crate) fn tool_detail(name: &str, input: &serde_json::Value) -> String {
             .and_then(serde_json::Value::as_str)
             .unwrap_or("")
             .to_string(),
+        // The delay a wake-up was scheduled for, written the way a person
+        // would say it.
+        "ScheduleWakeup" => match input.get("delaySeconds").and_then(serde_json::Value::as_u64) {
+            Some(secs) if secs > 0 && secs % 60 == 0 => format!("in {}m", secs / 60),
+            Some(secs) => format!("in {secs}s"),
+            None => String::new(),
+        },
         _ => String::new(),
     };
-    clip(&one_line(&detail), MAX_DETAIL)
+    detail
 }
 
 /// One line of `--output-format stream-json`, as the pane should show it.
@@ -560,6 +580,163 @@ pub fn transcript_line(line: &str) -> Vec<String> {
                 tokens("input_tokens"),
                 tokens("output_tokens")
             )]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Ceilings of the structured log (`batch_entries`): a command and an agent's
+/// remark, each clipped with `...` like the text transcript's, only far wider.
+pub(crate) const MAX_COMMAND: usize = 4096;
+pub(crate) const MAX_SAY: usize = 16_384;
+
+/// Control characters dropped except the newline and the tab. These strings
+/// are agent-authored (see `one_line` for why that matters), but a command or a
+/// paragraph keeps its line breaks in the structured log.
+fn keep_lines(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect()
+}
+
+/// A Bash command's leading `cd <absolute path>` and what is left of it.
+///
+/// Four spellings are read, because that is what agents write to keep a
+/// command in its worktree: `cd P || exit 1; …`, the bare `cd P || exit 1 …`,
+/// `cd P && …` and `cd P; …`. A relative path or a quoted one is not a scope
+/// this log can name, so such a command comes back whole with no `cwd`.
+pub(crate) fn split_cd_prefix(command: &str) -> (Option<String>, String) {
+    let whole = || (None, command.to_string());
+    let trimmed = command.trim_start();
+    let Some(after_cd) = trimmed.strip_prefix("cd") else { return whole() };
+    if !after_cd.starts_with(char::is_whitespace) {
+        return whole();
+    }
+    let after_cd = after_cd.trim_start();
+    if !after_cd.starts_with('/') {
+        return whole();
+    }
+    let end = after_cd.find(char::is_whitespace).unwrap_or(after_cd.len());
+    let (token, rest) = after_cd.split_at(end);
+    // `cd /p;` with the semicolon glued to the path is the fourth form.
+    if let Some(path) = token.strip_suffix(';') {
+        if path.len() > 1 {
+            return (Some(path.to_string()), rest.trim().to_string());
+        }
+        return whole();
+    }
+    let rest = rest.trim_start();
+    let remainder = if let Some(tail) = rest.strip_prefix("||") {
+        let Some(tail) = tail.trim_start().strip_prefix("exit 1") else { return whole() };
+        // `exit 10` is not `exit 1`.
+        if !(tail.is_empty() || tail.starts_with(|c: char| c.is_whitespace() || c == ';')) {
+            return whole();
+        }
+        tail.trim_start().strip_prefix(';').unwrap_or(tail)
+    } else if let Some(tail) = rest.strip_prefix("&&") {
+        tail
+    } else if let Some(tail) = rest.strip_prefix(';') {
+        tail
+    } else {
+        return whole();
+    };
+    (Some(token.to_string()), remainder.trim().to_string())
+}
+
+/// One line of `--output-format stream-json` as structured records, the twin
+/// of `transcript_line` over the same input: the agent's remarks whole, a tool
+/// call with its full command and the worktree it ran in, how each call went,
+/// and the three system lines. An event this build has never heard of — and a
+/// line that is not JSON at all — yields nothing, the standing rule of both
+/// translators. The notes say what the text transcript says, without its
+/// `--`/`!!` sigils.
+pub fn batch_entries(line: &str) -> Vec<LogKind> {
+    use serde_json::Value;
+    let Ok(event) = serde_json::from_str::<Value>(line) else {
+        return Vec::new();
+    };
+    let str_at = |value: &Value, key: &str| value.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+    match str_at(&event, "type").as_str() {
+        "system" => match str_at(&event, "subtype").as_str() {
+            "init" => {
+                let model = clip(&one_line(&str_at(&event, "model")), MAX_DETAIL);
+                vec![LogKind::Note {
+                    text: if model.is_empty() {
+                        "session start".to_string()
+                    } else {
+                        format!("session start (model {model})")
+                    },
+                }]
+            }
+            "api_retry" => {
+                let error = clip(&one_line(&str_at(&event, "error")), MAX_DETAIL);
+                let error = if error.is_empty() { "error".to_string() } else { error };
+                let attempt =
+                    event.get("attempt").and_then(Value::as_i64).map_or("?".to_string(), |n| n.to_string());
+                vec![LogKind::Note { text: format!("api retry ({error}), attempt {attempt}") }]
+            }
+            _ => Vec::new(),
+        },
+        "assistant" => event
+            .pointer("/message/content")
+            .and_then(Value::as_array)
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter_map(|block| match block.get("type").and_then(Value::as_str)? {
+                        "text" => {
+                            let text = keep_lines(block.get("text").and_then(Value::as_str)?);
+                            let text = text.trim();
+                            (!text.is_empty()).then(|| LogKind::Say { text: clip(text, MAX_SAY) })
+                        }
+                        "tool_use" => {
+                            let tool = block.get("name").and_then(Value::as_str)?.to_string();
+                            let detail =
+                                tool_detail_full(&tool, block.get("input").unwrap_or(&Value::Null));
+                            let (cwd, command) = if tool == "Bash" {
+                                split_cd_prefix(&detail)
+                            } else {
+                                (None, detail)
+                            };
+                            Some(LogKind::Tool {
+                                id: str_at(block, "id"),
+                                tool,
+                                command: clip(keep_lines(&command).trim(), MAX_COMMAND),
+                                cwd,
+                            })
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        "user" => event
+            .pointer("/message/content")
+            .and_then(Value::as_array)
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+                    .map(|block| LogKind::Result {
+                        id: str_at(block, "tool_use_id"),
+                        ok: !block.get("is_error").and_then(Value::as_bool).unwrap_or(false),
+                        summary: super::claude_driver::result_summary(block.get("content")),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        "result" => {
+            let tokens = |key: &str| {
+                event
+                    .pointer(&format!("/usage/{key}"))
+                    .and_then(Value::as_i64)
+                    .map_or("?".to_string(), |n| n.to_string())
+            };
+            vec![LogKind::Note {
+                text: format!(
+                    "batch result (in {} / out {} tok)",
+                    tokens("input_tokens"),
+                    tokens("output_tokens")
+                ),
+            }]
         }
         _ => Vec::new(),
     }
@@ -1857,5 +2034,131 @@ Last 24h · 2269 requests · 24 sessions
     #[test]
     fn ask_user_questions_detail_is_empty_rather_than_panicking_on_a_bare_call() {
         assert_eq!(tool_detail("AskUserQuestion", &serde_json::json!({})), "");
+    }
+
+    // ---- batch_entries: the structured twin of the text transcript ----
+
+    #[test]
+    fn a_bash_call_with_a_cd_prefix_splits_into_cwd_and_the_rest() {
+        for prefix in ["cd /p/wt || exit 1; ", "cd /p/wt || exit 1 ", "cd /p/wt && ", "cd /p/wt; "] {
+            assert_eq!(
+                split_cd_prefix(&format!("{prefix}cat a.txt")),
+                (Some("/p/wt".into()), "cat a.txt".into()),
+                "{prefix:?}"
+            );
+        }
+        assert_eq!(split_cd_prefix("cat a.txt"), (None, "cat a.txt".into()));
+        assert_eq!(
+            split_cd_prefix("cd relative; ls"),
+            (None, "cd relative; ls".into()),
+            "a relative cd is part of the command"
+        );
+        assert_eq!(
+            split_cd_prefix("cd /p || exit 10; ls"),
+            (None, "cd /p || exit 10; ls".into()),
+            "exit 10 is not exit 1"
+        );
+    }
+
+    #[test]
+    fn a_tool_use_becomes_a_tool_entry_with_the_whole_command() {
+        let long = "x".repeat(5000);
+        let line = format!(
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"t1","name":"Bash","input":{{"command":"cd /p || exit 1; echo {long}"}}}}]}}}}"#
+        );
+        let [LogKind::Tool { id, tool, command, cwd }] = &batch_entries(&line)[..] else {
+            panic!("expected one tool entry")
+        };
+        assert_eq!((id.as_str(), tool.as_str(), cwd.as_deref()), ("t1", "Bash", Some("/p")));
+        assert_eq!(command.chars().count(), MAX_COMMAND);
+        assert!(command.ends_with("..."));
+    }
+
+    #[test]
+    fn a_bash_call_without_a_cd_prefix_has_no_cwd() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls\n  -la"}}]}}"#;
+        assert_eq!(
+            batch_entries(line),
+            vec![LogKind::Tool { id: "t2".into(), tool: "Bash".into(), command: "ls\n  -la".into(), cwd: None }]
+        );
+    }
+
+    #[test]
+    fn a_read_keeps_its_full_path_and_no_cwd() {
+        let path = format!("/p/{}", "d/".repeat(100));
+        let line = format!(
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"r1","name":"Read","input":{{"file_path":"{path}"}}}}]}}}}"#
+        );
+        assert_eq!(
+            batch_entries(&line),
+            vec![LogKind::Tool { id: "r1".into(), tool: "Read".into(), command: path, cwd: None }]
+        );
+    }
+
+    #[test]
+    fn a_text_block_becomes_a_say_with_its_newlines() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"one\n\ntwo\u001b[31m"}]}}"#;
+        assert_eq!(batch_entries(line), vec![LogKind::Say { text: "one\n\ntwo[31m".into() }]);
+        let blank = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"  \n "}]}}"#;
+        assert!(batch_entries(blank).is_empty());
+    }
+
+    #[test]
+    fn a_say_is_clipped_at_its_ceiling() {
+        let text = "y".repeat(MAX_SAY + 10);
+        let line = format!(r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"{text}"}}]}}}}"#);
+        let [LogKind::Say { text }] = &batch_entries(&line)[..] else { panic!("expected one say") };
+        assert_eq!(text.chars().count(), MAX_SAY);
+        assert!(text.ends_with("..."));
+    }
+
+    #[test]
+    fn a_tool_result_becomes_a_result_with_its_summary() {
+        let err = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"a\nb"}]}}"#;
+        assert_eq!(
+            batch_entries(err),
+            vec![LogKind::Result { id: "t1".into(), ok: false, summary: "2 lines".into() }]
+        );
+        let ok = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","is_error":false,"content":"a"}]}}"#;
+        let [LogKind::Result { ok, .. }] = &batch_entries(ok)[..] else { panic!("expected one result") };
+        assert!(ok);
+    }
+
+    #[test]
+    fn the_three_system_lines_become_notes_without_sigils() {
+        assert_eq!(
+            batch_entries(r#"{"type":"system","subtype":"init","model":"m"}"#),
+            vec![LogKind::Note { text: "session start (model m)".into() }]
+        );
+        assert_eq!(
+            batch_entries(r#"{"type":"system","subtype":"api_retry","error":"boom","attempt":2}"#),
+            vec![LogKind::Note { text: "api retry (boom), attempt 2".into() }]
+        );
+        assert_eq!(
+            batch_entries(r#"{"type":"result","usage":{"input_tokens":1,"output_tokens":2}}"#),
+            vec![LogKind::Note { text: "batch result (in 1 / out 2 tok)".into() }]
+        );
+    }
+
+    #[test]
+    fn an_unknown_event_and_a_non_json_line_produce_nothing() {
+        assert!(batch_entries(r#"{"type":"rate_limit_event"}"#).is_empty());
+        assert!(batch_entries(r#"{"type":"system","subtype":"hook"}"#).is_empty());
+        assert!(batch_entries("not json").is_empty());
+    }
+
+    #[test]
+    fn schedule_wakeup_detail_is_minutes_when_round() {
+        let input = |secs: u64| serde_json::json!({ "delaySeconds": secs });
+        assert_eq!(tool_detail_full("ScheduleWakeup", &input(300)), "in 5m");
+        assert_eq!(tool_detail_full("ScheduleWakeup", &input(90)), "in 90s");
+        assert_eq!(tool_detail("ScheduleWakeup", &input(300)), "in 5m");
+        assert_eq!(tool_detail_full("ScheduleWakeup", &serde_json::json!({})), "");
+    }
+
+    #[test]
+    fn the_profile_answers_a_batch_log_and_codex_does_not() {
+        assert!(Claude.batch_log().is_some());
+        assert!(crate::agents::codex::Codex.batch_log().is_none());
     }
 }
