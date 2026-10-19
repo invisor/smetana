@@ -94,7 +94,7 @@ are separate counters, so the kind travels with the id; anything else leaves the
 starts the stores and reads a project is `workspace.js`, called from `session.js` on every (re)connect. **The board is
 one column under another, not a swipe**: every column's name and count is on screen at once, the gesture is the
 thumb's own, and a header folds its column (`board.js` is `orderColumns` then `visibleColumns`, the desktop's rules, plus
-a 20-card preview). `env(safe-area-inset-*)` is in `screens/safeArea.js` only.
+a 20-card preview). `NewTaskScreen` folds its Type, Priority and three stage selects under an "Advanced settings" `Disclosure`, the same `core/Disclosure.vue` the desktop's New task window uses, closed on every open and after every successful start. `env(safe-area-inset-*)` is in `screens/safeArea.js` only.
 
 What the phone must not call is kept out of the stores' reach rather than hoped about:
 
