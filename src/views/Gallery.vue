@@ -77,6 +77,7 @@ import {
   KanbanBoard,
   KanbanSettings,
   LogView,
+  BatchTimeline,
   Markdown,
   MenuButton,
   NewBranchModal,
@@ -2771,6 +2772,44 @@ const composerText = ref([
 ])
 const composerAttachments = ref([...CONVERSATION_ATTACHMENTS])
 const composerBusyText = ref([{ kind: 'text', text: 'a turn in flight' }])
+
+/* The batch timeline's fixtures: one of everything a log can say. Times are
+   built from today's local date so the day row is the only date change, and the
+   last call is left open on purpose — it is the one that pulses. */
+const batchProject = '/Users/you/Projects/smetana'
+const batchIssueIds = ['smetana-th4n', 'smetana-z46y', 'smetana-qwhx']
+const batchAppDir = '/Applications/smetana.app/Contents/Resources'
+const batchAt = (day, h, m, s) => {
+  const d = new Date()
+  d.setDate(d.getDate() + day)
+  d.setHours(h, m, s, 0)
+  return d.toISOString()
+}
+/* Each row is `[day offset, h, m, s, entry]`; `seq` is its place in the list. */
+const batchLog = [
+  [-1, 23, 58, 2, { kind: 'note', text: 'session start (model opus)' }],
+  [-1, 23, 58, 9, { kind: 'say', text: 'Both executors are working in the background. While I wait I am reading `reviewing` and `merging`.' }],
+  [-1, 23, 58, 12, { kind: 'tool', id: 'a', tool: 'Bash', command: 'git status --short', cwd: batchProject }],
+  [-1, 23, 58, 12, { kind: 'result', id: 'a', ok: true, summary: '4 lines' }],
+  [-1, 23, 58, 20, { kind: 'tool', id: 'b', tool: 'Bash', command: 'cat src/components/agent/LogView.vue | head -80 && grep -n "follow" src/components/agent/LogView.vue src/components/agent/LogLine.vue', cwd: `${batchProject}/.worktrees/smetana-th4n-run-dialog-advanced` }],
+  [-1, 23, 58, 20, { kind: 'result', id: 'b', ok: true, summary: '80 lines' }],
+  [-1, 23, 58, 31, { kind: 'tool', id: 'c', tool: 'Bash', command: 'ls -la\nwc -l out.txt', cwd: '/tmp/scratch' }],
+  [-1, 23, 58, 31, { kind: 'result', id: 'c', ok: true, summary: '2 lines' }],
+  [-1, 23, 58, 40, { kind: 'tool', id: 'd', tool: 'Bash', command: 'cat smetana/skills/reviewing/SKILL.md', cwd: `${batchAppDir}/smetana` }],
+  [-1, 23, 58, 40, { kind: 'result', id: 'd', ok: true, summary: '212 lines' }],
+  [-1, 23, 59, 2, { kind: 'tool', id: 'e', tool: 'Read', command: `${batchProject}/src/components/agent/batchScope.js`, cwd: null }],
+  [-1, 23, 59, 2, { kind: 'result', id: 'e', ok: true, summary: '58 lines' }],
+  [0, 0, 3, 31, { kind: 'say', text: 'The scope rule is read. Handing the next two tasks to executors.' }],
+  [0, 0, 3, 40, { kind: 'tool', id: 'f', tool: 'Task', command: 'general-purpose: Implement smetana-z46y in its worktree', cwd: null }],
+  [0, 0, 3, 41, { kind: 'result', id: 'f', ok: true, summary: '1 line' }],
+  [0, 0, 3, 44, { kind: 'tool', id: 'g', tool: 'ScheduleWakeup', command: 'in 5m', cwd: null }],
+  [0, 0, 3, 44, { kind: 'result', id: 'g', ok: true, summary: 'no output' }],
+  [0, 0, 9, 1, { kind: 'tool', id: 'h', tool: 'Bash', command: 'npm test -- tests/stores/tracker.test.js', cwd: `${batchProject}/.worktrees/smetana-z46y-composer-quote-segments` }],
+  [0, 0, 9, 5, { kind: 'result', id: 'h', ok: false, summary: '31 lines' }],
+  [0, 0, 9, 8, { kind: 'tool', id: 'i', tool: 'Edit', command: `${batchProject}/src/stores/tracker.js`, cwd: null }],
+  [0, 0, 9, 9, { kind: 'result', id: 'i', ok: true, summary: '1 line' }],
+  [0, 0, 9, 12, { kind: 'tool', id: 'j', tool: 'Bash', command: 'npm run build', cwd: `${batchProject}/.worktrees/smetana-qwhx-agent-batch-timeline` }]
+].map(([day, h, m, s, entry], i) => ({ seq: i + 1, at: batchAt(day, h, m, s), ...entry }))
 
 const sectionStyle = {
   display: 'flex', flexDirection: 'column', gap: 'var(--space-5)',
@@ -6590,6 +6629,26 @@ const menuTargetStyle = {
           :notice="{ tone: 'stale', text: 'This file changed on disk since it was opened.' }"
         />
         <DocumentModeToggle mode="source" />
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Autopilot batch timeline</div>
+      <!-- The Agent tab's pane for a Claude Code Autopilot batch, drawn from
+           fixtures (`entries` given, so it never attaches). Look for: the day
+           row between the two dates; scope tags in the root, worktree (a hue per
+           task id), /tmp and app cases, with the full path in a tooltip; the
+           relative path on the Read row; the last call pulsing; a click opening
+           a row to its whole command and one outcome line, the failed call
+           showing a cross. In all four theme x density combinations, the
+           tags must stay readable on the canvas. -->
+      <div :style="{ display: 'flex', flexDirection: 'column', height: '460px', border: 'var(--border-w) solid var(--border-subtle)' }">
+        <BatchTimeline
+          :entries="batchLog"
+          :project="batchProject"
+          :issue-ids="batchIssueIds"
+          :app-dir="batchAppDir"
+        />
       </div>
     </section>
 

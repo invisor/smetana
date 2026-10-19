@@ -3,7 +3,7 @@
 //! `select!` — the same reason as in the tracker: operations of
 //! unpredictable length must not block one another.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 
 use super::detect::{detect, DetectInput, Quiet};
-use super::model::{Exit, Session, SessionId, SessionMark, SessionState, TerminalError};
+use super::model::{Exit, LogEntry, Session, SessionId, SessionMark, SessionState, TerminalError};
 use super::pty::{Chunk, Pty};
 use super::ring::Ring;
 use super::screen::Screen;
@@ -98,6 +98,28 @@ pub struct Attached {
     /// inflate every chunk about fivefold.
     pub data: String,
     pub seq: u64,
+    /// The whole structured log of a timeline session (`Session::timeline`),
+    /// empty for any other. The ring snapshot above still travels for a
+    /// timeline session and is simply not drawn: a second attach path was the
+    /// dearer way to save those bytes.
+    pub log: Vec<LogEntry>,
+    /// The `seq` of the newest entry the budget dropped, or 0.
+    pub log_trimmed: u64,
+}
+
+/// How many structured entries a session keeps. Past it the oldest go, like
+/// the ring's bytes; a night's batch is thousands of tool calls.
+pub const LOG_BUDGET: usize = 4000;
+
+/// Append one entry, dropping from the front past the budget and recording the
+/// `seq` of the newest one dropped.
+fn push_log(log: &mut VecDeque<LogEntry>, trimmed: &mut u64, entry: LogEntry) {
+    log.push_back(entry);
+    while log.len() > LOG_BUDGET {
+        if let Some(dropped) = log.pop_front() {
+            *trimmed = dropped.seq;
+        }
+    }
 }
 
 pub enum Request {
@@ -216,6 +238,14 @@ struct Live {
     /// tick.
     pending: Vec<u8>,
     seq: u64,
+    /// The structured log of a timeline session (`Session::timeline`): bounded
+    /// by `LOG_BUDGET`, numbered from 1 by `log_seq`, with `log_trimmed` the
+    /// `seq` of the newest entry the budget dropped. `pending_log` is what has
+    /// not left in a `terminal:log` event yet, on the same rule as `pending`.
+    log: VecDeque<LogEntry>,
+    log_seq: u64,
+    log_trimmed: u64,
+    pending_log: Vec<LogEntry>,
     /// macOS only: what the two-second poller below has accumulated about
     /// this session's own descendants — see `runs::procs::Descendants` for
     /// what it remembers and why. Present on every session, including a
@@ -768,7 +798,16 @@ fn absorb(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk
             // built on. A session with no transcript is every session a person
             // started, and its bytes are its own.
             let bytes = match live.transcript.as_mut() {
-                Some(transcript) => transcript.feed(&bytes),
+                Some(transcript) => {
+                    let fed = transcript.feed(&bytes);
+                    for (at, kind) in fed.entries {
+                        live.log_seq += 1;
+                        let entry = LogEntry { seq: live.log_seq, at, kind };
+                        push_log(&mut live.log, &mut live.log_trimmed, entry.clone());
+                        live.pending_log.push(entry);
+                    }
+                    fed.bytes
+                }
                 None => bytes,
             };
             live.ring.push(&bytes);
@@ -928,6 +967,17 @@ fn poll_mac_descendants(_sessions: &mut HashMap<SessionId, Live>) {}
 /// for the human, and it is already here.
 fn flush(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, active: Option<SessionId>) {
     for (id, live) in sessions.iter_mut() {
+        // The log follows the bytes' rule: a background session's is for the
+        // app, which already holds it in the deque, not for a window nobody
+        // has open on it.
+        if !live.pending_log.is_empty() {
+            if Some(*id) == active {
+                let entries = std::mem::take(&mut live.pending_log);
+                let _ = app.emit("terminal:log", serde_json::json!({ "id": id, "entries": entries }));
+            } else {
+                live.pending_log.clear();
+            }
+        }
         if live.pending.is_empty() {
             continue;
         }
@@ -1172,9 +1222,13 @@ fn attach(
             // the ring — sending it as a second event would mean
             // showing it twice.
             live.pending.clear();
+            // The same for the log: the snapshot below carries all of it.
+            live.pending_log.clear();
             Ok(Attached {
                 data: base64::engine::general_purpose::STANDARD.encode(live.ring.snapshot()),
                 seq: live.seq,
+                log: live.log.iter().cloned().collect(),
+                log_trimmed: live.log_trimmed,
             })
         }
     }
@@ -1191,6 +1245,8 @@ fn peek(sessions: &HashMap<SessionId, Live>, id: SessionId) -> Result<Attached, 
         Some(live) => Ok(Attached {
             data: base64::engine::general_purpose::STANDARD.encode(live.ring.snapshot()),
             seq: live.seq,
+            log: live.log.iter().cloned().collect(),
+            log_trimmed: live.log_trimmed,
         }),
     }
 }
@@ -1423,7 +1479,7 @@ fn handle(
                     // opened from a folder in the tree has, one arm down. The
                     // project is what the panel, the rail and `List` read; the
                     // directory is where the agent actually is.
-                    let session = Session::new(
+                    let mut session = Session::new(
                         id,
                         profile.id(),
                         &dir.to_string_lossy(),
@@ -1431,6 +1487,14 @@ fn handle(
                         work,
                         conversation.clone(),
                     );
+                    // The structured translator rides the same predicate as the
+                    // text one, and whether it exists is the one fact the front
+                    // end needs before it mounts a pane. Set here, before the
+                    // clone below, and never revised.
+                    let log_entries = agents::is_batch(&launch.intent)
+                        .then(|| profile.batch_log())
+                        .flatten();
+                    session.timeline = log_entries.is_some();
                     let live = Live {
                         session: session.clone(),
                         profile: Some(profile),
@@ -1440,13 +1504,19 @@ fn handle(
                         transcript: agents::is_batch(&launch.intent)
                             .then(|| profile.transcript())
                             .flatten()
-                            .map(crate::terminal::transcript::Transcript::new),
+                            .map(|render| {
+                                crate::terminal::transcript::Transcript::new(render, log_entries)
+                            }),
                         text_questions: !agents::is_batch(&launch.intent),
                         bell_pending: false,
                         quiet: Quiet::new(),
                         last_output: Instant::now(),
                         pending: Vec::new(),
                         seq: 0,
+                        log: VecDeque::new(),
+                        log_seq: 0,
+                        log_trimmed: 0,
+                        pending_log: Vec::new(),
                         #[cfg(target_os = "macos")]
                         descendants: crate::runs::procs::Descendants::default(),
                         handoff_ready: false,
@@ -1610,6 +1680,10 @@ fn handle(
                         last_output: Instant::now(),
                         pending: Vec::new(),
                         seq: 0,
+                        log: VecDeque::new(),
+                        log_seq: 0,
+                        log_trimmed: 0,
+                        pending_log: Vec::new(),
                         #[cfg(target_os = "macos")]
                         descendants: crate::runs::procs::Descendants::default(),
                         handoff_ready: false,
@@ -1824,6 +1898,20 @@ fn handle(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_log_keeps_the_newest_budget_and_records_what_it_dropped() {
+        let mut log = VecDeque::new();
+        let mut trimmed = 0;
+        for seq in 1..=(LOG_BUDGET as u64 + 3) {
+            let kind = crate::terminal::model::LogKind::Note { text: seq.to_string() };
+            push_log(&mut log, &mut trimmed, LogEntry { seq, at: String::new(), kind });
+        }
+        assert_eq!(log.len(), LOG_BUDGET);
+        assert_eq!(log.front().map(|e| e.seq), Some(4));
+        assert_eq!(log.back().map(|e| e.seq), Some(LOG_BUDGET as u64 + 3));
+        assert_eq!(trimmed, 3);
+    }
+
     use super::*;
 
     /// A directory of its own per test, with the pid in the name so parallel
@@ -1933,6 +2021,10 @@ mod tests {
             last_output: Instant::now(),
             pending: b"not yet flushed".to_vec(),
             seq: 4,
+            log: VecDeque::new(),
+            log_seq: 0,
+            log_trimmed: 0,
+            pending_log: Vec::new(),
             #[cfg(target_os = "macos")]
             descendants: crate::runs::procs::Descendants::default(),
             handoff_ready: false,

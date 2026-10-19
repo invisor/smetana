@@ -294,7 +294,7 @@ fn lines_summary(lines: usize) -> String {
 ///
 /// A block that is not prose has no lines to count, so it is said in its own
 /// word. Folding it into the line count would be wrong about both halves.
-fn result_summary(content: Option<&Value>) -> String {
+pub(crate) fn result_summary(content: Option<&Value>) -> String {
     let Some(content) = content else {
         return lines_summary(0);
     };

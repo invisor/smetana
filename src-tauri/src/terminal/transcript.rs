@@ -23,12 +23,18 @@
 
 use chrono::{DateTime, Local};
 
+use super::model::LogKind;
+
 /// The ceiling on a line that has not ended yet. A tool result carrying a large
 /// file is one enormous line, and this runs for the length of a night.
 pub const MAX_LINE: usize = 1 << 20;
 
 pub struct Transcript {
     render: fn(&str) -> Vec<String>,
+    /// The structured twin of `render`, for a harness that has one
+    /// (`Profile::batch_log`): the same line, read as records for the Agent
+    /// tab's timeline. `None` leaves `Fed::entries` empty.
+    entries: Option<fn(&str) -> Vec<LogKind>>,
     /// Where "now" comes from for the stamp on each rendered line.
     /// `Local::now` in production; a fixed closure in the tests below, so a
     /// byte-for-byte comparison does not race the wall clock.
@@ -49,21 +55,35 @@ fn stamp(now: DateTime<Local>) -> String {
     format!("{} ", now.format("%Y-%m-%d %H:%M:%S"))
 }
 
+/// What one `feed` produced: the bytes a person should see, and the structured
+/// records of the same lines, each with the RFC 3339 instant of the very clock
+/// reading that stamped the text beside it.
+pub struct Fed {
+    pub bytes: Vec<u8>,
+    pub entries: Vec<(String, LogKind)>,
+}
+
 impl Transcript {
-    pub fn new(render: fn(&str) -> Vec<String>) -> Self {
-        Self::with_clock(render, Local::now)
+    pub fn new(render: fn(&str) -> Vec<String>, entries: Option<fn(&str) -> Vec<LogKind>>) -> Self {
+        Self::with_clock(render, entries, Local::now)
     }
 
     /// `new` with the clock made substitutable — the seam the tests below use
     /// to hold "now" fixed while still comparing real output bytes.
-    fn with_clock(render: fn(&str) -> Vec<String>, clock: fn() -> DateTime<Local>) -> Self {
-        Self { render, clock, buf: Vec::new(), dropped: false }
+    fn with_clock(
+        render: fn(&str) -> Vec<String>,
+        entries: Option<fn(&str) -> Vec<LogKind>>,
+        clock: fn() -> DateTime<Local>,
+    ) -> Self {
+        Self { render, entries, clock, buf: Vec::new(), dropped: false }
     }
 
-    /// The bytes a person should see, for the bytes the child wrote.
-    pub fn feed(&mut self, bytes: &[u8]) -> Vec<u8> {
+    /// The bytes a person should see, for the bytes the child wrote — and, beside
+    /// them, the structured records of the same lines.
+    pub fn feed(&mut self, bytes: &[u8]) -> Fed {
         self.buf.extend_from_slice(bytes);
         let mut out = String::new();
+        let mut entries = Vec::new();
         while let Some(end) = self.buf.iter().position(|b| *b == b'\n') {
             let line: Vec<u8> = self.buf.drain(..=end).collect();
             if self.dropped {
@@ -71,6 +91,10 @@ impl Transcript {
                 continue;
             }
             let line = String::from_utf8_lossy(&line);
+            if let Some(translate) = self.entries {
+                let at = (self.clock)().to_rfc3339();
+                entries.extend(translate(line.trim_end()).into_iter().map(|kind| (at.clone(), kind)));
+            }
             for rendered in (self.render)(line.trim_end()) {
                 out.push_str(&stamp((self.clock)()));
                 out.push_str(&rendered);
@@ -83,7 +107,7 @@ impl Transcript {
             out.push_str(&stamp((self.clock)()));
             out.push_str("-- a line too long to show was dropped\r\n");
         }
-        out.into_bytes()
+        Fed { bytes: out.into_bytes(), entries }
     }
 }
 
@@ -103,8 +127,8 @@ mod tests {
         }
     }
 
-    fn text(bytes: Vec<u8>) -> String {
-        String::from_utf8(bytes).unwrap()
+    fn text(fed: Fed) -> String {
+        String::from_utf8(fed.bytes).unwrap()
     }
 
     /// A clock fixed at one instant, for tests that compare bytes exactly —
@@ -118,7 +142,7 @@ mod tests {
     const STAMP: &str = "2026-01-02 03:04:05 ";
 
     fn frozen_transcript(render: fn(&str) -> Vec<String>) -> Transcript {
-        Transcript::with_clock(render, frozen)
+        Transcript::with_clock(render, None, frozen)
     }
 
     #[test]
@@ -198,9 +222,38 @@ mod tests {
         // `Local::now`; nothing here freezes it, so the only thing worth
         // checking is that the stamp it produces looks like one — the exact
         // instant is, by construction, whenever the test ran.
-        let mut t = Transcript::new(echo);
+        let mut t = Transcript::new(echo, None);
         let out = text(t.feed(b"hi\n"));
         assert_eq!(out.len(), STAMP.len() + "hi\r\n".len(), "{out}");
         assert!(out.ends_with("hi\r\n"), "{out}");
+    }
+
+    /// A structured rule with nothing of any harness in it: a line that says
+    /// `k` is one note, `skip` is nothing.
+    fn notes(line: &str) -> Vec<LogKind> {
+        if line == "k" { vec![LogKind::Note { text: "k".into() }] } else { Vec::new() }
+    }
+
+    #[test]
+    fn entries_come_out_beside_the_bytes_with_the_same_instant() {
+        let mut t = Transcript::with_clock(echo, Some(notes), frozen);
+        let fed = t.feed(b"k\nx\n");
+        assert_eq!(fed.entries, vec![(frozen().to_rfc3339(), LogKind::Note { text: "k".into() })]);
+        assert_eq!(text(fed), format!("{STAMP}k\r\n{STAMP}x\r\n"));
+    }
+
+    #[test]
+    fn a_transcript_without_an_entry_translator_yields_no_entries() {
+        let mut t = frozen_transcript(echo);
+        assert!(t.feed(b"k\n").entries.is_empty());
+    }
+
+    #[test]
+    fn a_dropped_overlong_line_yields_no_entry() {
+        let mut t = Transcript::with_clock(echo, Some(notes), frozen);
+        let flood = vec![b'k'; MAX_LINE + 1];
+        assert!(t.feed(&flood).entries.is_empty());
+        assert!(t.feed(b"kkk\n").entries.is_empty(), "the rest of the dropped line is not a line");
+        assert_eq!(t.feed(b"k\n").entries.len(), 1);
     }
 }

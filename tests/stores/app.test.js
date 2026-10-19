@@ -258,3 +258,15 @@ describe('the subscription probe', () => {
     expect(ipc.calls('agent_usage')).toEqual([{ agent: null, project: null }])
   })
 })
+
+describe('the resource directory', () => {
+  it('is read once and then answered from the cache', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('plugin:path|resolve_directory', '/Applications/smetana.app/Contents/Resources')
+
+    expect(await stores.app.resourceDir()).toBe('/Applications/smetana.app/Contents/Resources')
+    expect(await stores.app.resourceDir()).toBe('/Applications/smetana.app/Contents/Resources')
+
+    expect(ipc.calls('plugin:path|resolve_directory')).toHaveLength(1)
+  })
+})

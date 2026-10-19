@@ -128,6 +128,12 @@ than the digest recorded for the current `PROTOCOL_MAJOR.PROTOCOL_MINOR`, and sa
 MINOR for additions, MAJOR for removals and renames. The way forward is a new entry under a higher version,
 added by hand together with the constants; an existing entry is a frozen contract and is not edited.
 
+## Protocol 1.4: the batch log
+
+`Session` gained `timeline: bool` and `terminal_attach`'s reply gained `log` and `logTrimmed`, for the desktop's own
+Agent tab (see `terminal.md`, "A batch's log as a timeline"). Additions only, so a phone that ignores them keeps
+working; a phone reads the ring snapshot as before and draws xterm.
+
 ## Protocol 1.1: `UpdatePushToken`
 
 `ClientMsg::UpdatePushToken { token }` is the last variant of `ClientMsg`, so postcard's numbering of the others is

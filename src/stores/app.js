@@ -13,7 +13,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { emit, listen } from '@tauri-apps/api/event'
 import { getVersion } from '@tauri-apps/api/app'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { downloadDir } from '@tauri-apps/api/path'
+import { downloadDir, resourceDir as tauriResourceDir } from '@tauri-apps/api/path'
 import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -690,6 +690,17 @@ async function pickerDir() {
   } catch {
     return undefined
   }
+}
+
+/* The app bundle's resource folder: where the skill library an agent reads
+   lives, and so what tells the batch timeline that a path is "the app" and not
+   a project. Cached after the first answer — it cannot change while the process
+   runs — and cached only when there is one, so a failed read is tried again. */
+let resourceDirCache = null
+
+export async function resourceDir() {
+  if (resourceDirCache === null) resourceDirCache = await tauriResourceDir()
+  return resourceDirCache
 }
 
 /* Cancelling answers `[]`, not a rejection — `ConversationView.vue` reads that
