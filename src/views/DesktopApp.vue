@@ -89,7 +89,7 @@ import StatusFooter from '../components/shell/StatusFooter.vue'
 import Icon from '../components/core/Icon.vue'
 import Tooltip from '../components/core/Tooltip.vue'
 import IconButton from '../components/core/IconButton.vue'
-import { CommandPalette, ConversationView, TaskSearchButton, TerminalView } from '../components/index.js'
+import { BatchTimeline, CommandPalette, ConversationView, TaskSearchButton, TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import { agentKey, conversationsOf, orderAgents } from '../components/agent/agentOrder.js'
 import { turnEnded } from '../components/agent/turnEnded.js'
@@ -228,7 +228,8 @@ import {
   watchBoardHello,
   watchDialogHello,
   watchDialogResult,
-  watchFullscreen
+  watchFullscreen,
+  resourceDir
 } from '../stores/app.js'
 /* Which harness a run would actually start. The settings window imports the
    same function for the same block, and `runs/commands.rs` answers the same
@@ -3501,6 +3502,31 @@ const conversationPanelOpen = computed(
   () => project.activeTab === 'terminal' && conversationId.value !== null
 )
 
+/* Whether the Agent tab draws the selected PTY session as a timeline.
+
+   Decided by a fact Rust fixed at the spawn (`Session.timeline`: a Claude Code
+   Autopilot batch) and never by anything read here, so a session cannot flip
+   between panes. It sits after the conversation panel in the branch order, so a
+   driven session never reaches it, and a person's own shell tab is not the
+   Agent tab at all. */
+const activeAgentSession = computed(
+  () => terminalState.sessions.find((s) => s.id === terminalState.activeId) ?? null
+)
+const timelineOpen = computed(
+  () =>
+    project.activeTab === 'terminal' &&
+    !conversationPanelOpen.value &&
+    activeAgentSession.value?.timeline === true
+)
+const boardIssueIds = computed(() => [...trackerState.issues.keys()])
+/* Where the app bundle's resources live, so the timeline can tell a path inside
+   it from a project's. Empty until the read answers, which only costs a tag
+   reading by its folder name for a moment. */
+const appResourceDir = ref('')
+onMounted(async () => {
+  appResourceDir.value = await resourceDir().catch(() => '')
+})
+
 /* **Which of the two readers says a refusal.** `conversationState.lastError` is
    a sentence and the session it is about; the panel draws the ones about the
    session it is holding, and the corner draws everything else — a refusal for a
@@ -4287,7 +4313,7 @@ const selectFromSearch = (id) => {
 
 /* Copying a task's id, for the card on the board and for the inspector's
    header both. It lives here rather than in either component because exactly
-   one file under `src/components/` imports a store, and it is `TerminalView`:
+   two files under `src/components/` import a store, `TerminalView` and `BatchTimeline`:
    the two of them raise `copy-id` and take back a word for their tooltip, and
    neither knows a clipboard exists.
 
@@ -7784,6 +7810,17 @@ const toastStackStyle = {
             :can-stop="conversationCanStop"
             @open-local="onConversationLocalLink"
             @sign-in="signIn"
+          />
+          <!-- A third pane over the same session id, for a Claude Code Autopilot
+               batch only: the same PTY and the same ring, drawn from the
+               structured log beside them. `timelineOpen` says why it is chosen. -->
+          <BatchTimeline
+            v-else-if="timelineOpen"
+            :session-id="terminalState.activeId"
+            :project="activePath"
+            :issue-ids="boardIssueIds"
+            :app-dir="appResourceDir"
+            :exited="activeAgentSession.state === 'exited'"
           />
           <TerminalView
             v-else-if="project.activeTab === 'terminal'"

@@ -1672,3 +1672,30 @@ telling a "talking" session from a "coding" one. The last is the interesting one
 a worktree, and both the path and the branch carry a task id — but the signal is not absolute (98 of
 275 root sessions sat on `develop`, `staging` or a `feature/…` branch), and the instruction was to
 show all of them and sort it out later.
+
+## A batch's log as a timeline
+
+A Claude Code Autopilot batch (`agents::is_batch`) is drawn on the Agent tab by `BatchTimeline.vue`, not by xterm.
+Design: `.smetana/docs/superpowers/specs/2026-10-19-agent-log-timeline-design.md` (outside the repository, kept with
+the project's other specs). Visual source: variant 1a of the agent log handoff.
+
+- **A second translator beside the first.** `Transcript` feeds each JSONL line to the text renderer (`transcript_line`,
+  unchanged: the ring, the screen and `detect.rs` read that text, and `DetectInput::transcript` is only a marker) and
+  to `Profile::batch_log` (`claude.rs::batch_entries`), which yields `LogKind` records. Structure is not parsed off the
+  rendered text: the text clips a command to 140 characters, and its line format would become a contract nobody
+  declared. Codex answers `None`, so a Codex batch keeps xterm.
+- **Four kinds.** `Say` (whole remark, newlines kept, 16 384 chars), `Tool` (command unclipped up to 4 096, `cwd` only
+  for Bash, from a leading `cd <abs>` in four spellings, the rest of the command being `command`), `Result` (ok and
+  `claude_driver::result_summary`'s one line, never the output), `Note` (the three system lines, no sigils). An unknown
+  event yields nothing. `tool_detail_full` is the one field choice both readers share.
+- **Transport is the ring's road with one more passenger.** `Live.log` is a deque of `LOG_BUDGET` (4000) entries,
+  numbered by `log_seq`, `log_trimmed` being the seq of the newest dropped. `flush` emits `terminal:log` for the active
+  session and clears the rest (the byte rule); `terminal_attach` returns `log` and `logTrimmed` beside the ring, which
+  still travels for a timeline session and is simply not drawn. The front end checks `seq` continuity and re-attaches
+  on a gap (`stores/terminals.js`, `subscribeLog`). Added to the phone contract as protocol 1.4.
+- **`Session.timeline`** is `is_batch && batch_log.is_some()`, set where the transcript is installed and never revised.
+  `DesktopApp.vue` chooses the pane from it (`timelineOpen`), after the conversation panel and before `TerminalView`.
+- **The rules are pure**, in `src/components/agent/`: `batchScope.js` (which directory a call ran in: root, worktree by
+  the longest board id prefixing the folder name, `/tmp`, app bundle, other) and `batchTimeline.js` (folding a result
+  into its call by id, `live` only while the session has not exited, day rows, labels and tones). Only Bash rows carry
+  a scope tag, since only Bash has a `cwd`.
