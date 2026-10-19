@@ -13,6 +13,7 @@
    off, or the agent it would use cannot be driven, this says so and offers nothing. */
 import { computed, ref, watch } from 'vue'
 import Button from '@src/components/core/Button.vue'
+import Disclosure from '@src/components/core/Disclosure.vue'
 import Select from '@src/components/core/Select.vue'
 import Textarea from '@src/components/core/Textarea.vue'
 import AttachmentStrip from '@src/components/kanban/AttachmentStrip.vue'
@@ -32,6 +33,8 @@ const priority = ref('auto')
 const brainstorm = ref(STAGE_DEFAULT)
 const spec = ref(STAGE_DEFAULT)
 const plan = ref(STAGE_DEFAULT)
+/* Folded out or not; forgotten on every start, kept nowhere. */
+const advanced = ref(false)
 const busy = ref(false)
 const attaching = ref(false)
 const picker = ref(null)
@@ -70,6 +73,7 @@ function reset() {
   brainstorm.value = STAGE_DEFAULT
   spec.value = STAGE_DEFAULT
   plan.value = STAGE_DEFAULT
+  advanced.value = false
   clearAttachments()
 }
 
@@ -144,38 +148,40 @@ const hidden = { display: 'none' }
         <p v-if="attachmentsState.lastError" :style="errorLine">{{ attachmentsState.lastError }}</p>
       </div>
       <p v-else :style="muted">Attaching pictures needs a newer desktop app.</p>
-      <div :style="field">
-        <div :style="label">Type</div>
-        <Select v-model="issueType" :options="TYPES" :style="full" />
-      </div>
-      <div :style="field">
-        <div :style="label">Priority</div>
-        <Select v-model="priority" :options="PRIORITIES" :style="full" />
-      </div>
-      <div :style="field">
-        <div :style="label">Brainstorming</div>
-        <Select v-model="brainstorm" :options="STAGES" :style="full" />
-      </div>
-      <div :style="field">
-        <div :style="label">Spec</div>
-        <Select
-          :model-value="stages.spec.value"
-          :options="STAGES"
-          :disabled="!stages.spec.interactive"
-          :style="full"
-          @update:model-value="spec = $event"
-        />
-      </div>
-      <div :style="field">
-        <div :style="label">Plan</div>
-        <Select
-          :model-value="stages.plan.value"
-          :options="STAGES"
-          :disabled="!stages.plan.interactive"
-          :style="full"
-          @update:model-value="plan = $event"
-        />
-      </div>
+      <Disclosure v-model:open="advanced" label="Advanced settings">
+        <div :style="field">
+          <div :style="label">Type</div>
+          <Select v-model="issueType" :options="TYPES" :style="full" />
+        </div>
+        <div :style="field">
+          <div :style="label">Priority</div>
+          <Select v-model="priority" :options="PRIORITIES" :style="full" />
+        </div>
+        <div :style="field">
+          <div :style="label">Brainstorming</div>
+          <Select v-model="brainstorm" :options="STAGES" :style="full" />
+        </div>
+        <div :style="field">
+          <div :style="label">Spec</div>
+          <Select
+            :model-value="stages.spec.value"
+            :options="STAGES"
+            :disabled="!stages.spec.interactive"
+            :style="full"
+            @update:model-value="spec = $event"
+          />
+        </div>
+        <div :style="field">
+          <div :style="label">Plan</div>
+          <Select
+            :model-value="stages.plan.value"
+            :options="STAGES"
+            :disabled="!stages.plan.interactive"
+            :style="full"
+            @update:model-value="plan = $event"
+          />
+        </div>
+      </Disclosure>
       <p v-if="refusal" :style="failure">{{ refusal }}</p>
       <Button variant="primary" :disabled="!canStart({ text, busy, attaching })" @click="start">
         {{ busy ? 'Starting the agent' : 'Start the agent' }}

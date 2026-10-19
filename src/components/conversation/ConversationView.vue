@@ -56,6 +56,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import AgentMessage from './AgentMessage.vue'
 import AskUserQuestion from './AskUserQuestion.vue'
 import Composer from './Composer.vue'
+import PointerMenu from '../overlays/PointerMenu.vue'
 import PermissionRequest from './PermissionRequest.vue'
 import Reasoning from './Reasoning.vue'
 import SignInOffer from './SignInOffer.vue'
@@ -67,7 +68,9 @@ import Icon from '../core/Icon.vue'
 import StatusBadge from '../status/StatusBadge.vue'
 import { isAskUserQuestion } from './askUserQuestion.js'
 import { attachmentAction } from './attachmentAction.js'
+import { appendQuote, quoteFromSelection } from './draftSegments.js'
 import { isBusy, journalRows } from './journal.js'
+import { SELECTION_MENU_W, selectionMenuItems } from './selectionMenu.js'
 import { signInRowKey } from './signInHint.js'
 import { basename } from '../../paths.js'
 /* Four stores beside the conversation's own, and each is here because this
@@ -159,14 +162,21 @@ const props = defineProps({
      nothing of rows. */
   caption: { type: String, default: '' },
   /* Passed on to the composer's paperclip; see `Composer.vue`. */
-  attachable: { type: Boolean, default: true }
+  attachable: { type: Boolean, default: true },
+  /* The right-click menu over a selection in the journal. The phone passes
+     `false`: an Android webview fires `contextmenu` on a long press, and a menu
+     whose rows emit to nobody is worse than the platform's own callout. */
+  selectionMenu: { type: Boolean, default: true },
+  /* Whether "New task from selection" may be pressed. Greyed rather than hidden
+     when false: "not now", not "never". */
+  canFile: { type: Boolean, default: true }
 })
 
 /* `open-local` alone: `open` (the external breed) is answered here directly,
    through `openExternal`, and never leaves this component — see the note on
    the store imports above for why the local breed is the one link event this
    panel raises rather than owns. */
-const emit = defineEmits(['open-local', 'sign-in'])
+const emit = defineEmits(['open-local', 'sign-in', 'copy', 'new-task'])
 
 /* The record this panel is drawing.
 
@@ -473,6 +483,54 @@ async function pickAttachments() {
   }
 }
 
+/* The selection menu. It hangs off the journal's viewport, because that is the
+   one element every row of text sits inside, and a selection whose anchor is
+   elsewhere is not about this panel.
+
+   Copy and New task are emitted, never performed: the phone draws this view and
+   its build aliases `stores/app.js` to a module with no clipboard helper in it, so a
+   static import here would fail that build. `DesktopApp.vue` is the listener.
+   The Quote row follows `composerShown` — with no composer there is nowhere to
+   put the quote. */
+const selectionMenuRef = ref(null)
+const selectedText = ref(null)
+const selectionItems = computed(() =>
+  selectionMenuItems({ canQuote: composerShown.value, canFile: props.canFile })
+)
+
+function onJournalMenu(event) {
+  if (!props.selectionMenu) return
+  const sel = window.getSelection()
+  const text = quoteFromSelection(sel?.toString())
+  if (!text || !viewport.value?.contains(sel.anchorNode)) return
+  event.preventDefault()
+  selectedText.value = text
+  let at = event
+  /* A menu key or Shift+F10 arrives with no pointer: anchor the menu to the
+     bottom right of the selection instead. */
+  if (event.clientX === 0 && event.clientY === 0 && sel.rangeCount) {
+    const rect = sel.getRangeAt(0).getBoundingClientRect()
+    at = { clientX: rect.right, clientY: rect.bottom }
+  }
+  selectionMenuRef.value?.open(at, text)
+}
+
+function pickSelection(item, text) {
+  if (!text) return
+  if (item.kind === 'quote') {
+    const record = held.value
+    if (!record) return
+    record.draft = appendQuote(record.draft, text)
+    /* The composer grows, so keep the panel docked as `send` does. */
+    stick = true
+    nextTick(toEnd)
+  } else if (item.kind === 'copy') {
+    emit('copy', text)
+  } else if (item.kind === 'new-task') {
+    emit('new-task', text)
+  }
+}
+
 async function send() {
   const record = held.value
   if (!record) return
@@ -763,7 +821,7 @@ const refusal = computed(() => ({
       </span>
     </div>
 
-    <div ref="viewport" class="sm-prose" :style="journal" @scroll="onScroll">
+    <div ref="viewport" class="sm-prose" :style="journal" @scroll="onScroll" @contextmenu="onJournalMenu">
       <EmptyState
         v-if="!sessionId"
         icon="message-square"
@@ -887,5 +945,12 @@ const refusal = computed(() => ({
         @attach="pickAttachments"
       />
     </div>
+    <PointerMenu
+      ref="selectionMenuRef"
+      :items="selectionItems"
+      :width="SELECTION_MENU_W"
+      @select="pickSelection"
+      @close="selectedText = null"
+    />
   </div>
 </template>
