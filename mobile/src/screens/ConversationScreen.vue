@@ -78,7 +78,8 @@ const output = {
 
 <template>
   <div :style="page">
-    <ConversationView v-if="driven" :session-id="id" :attachable="false" />
+    <!-- A long press fires `contextmenu` on Android and the rows would emit to nobody. -->
+    <ConversationView v-if="driven" :session-id="id" :attachable="false" :selection-menu="false" />
     <template v-else>
       <div :style="bar">
         <StatusBadge v-if="state" :status="state" size="sm" />

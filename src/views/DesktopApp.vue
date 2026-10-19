@@ -1101,6 +1101,12 @@ const gitWrites = computed(() => gitActions(runsState.runs))
    is a rescue from a switch, not a document store. */
 const openDialogs = new Map()
 
+/* The one fact about that map a template needs, as a ref: whether the New task
+   window is up. The conversation panel greys "New task from selection" on it,
+   and a plain Map cannot tell a template to redraw. Written beside every
+   `set`/`delete` of the 'new-task' entry below and nowhere else. */
+const newTaskOpen = ref(false)
+
 /* Half-written tasks, by the path of the project each belongs to.
 
    Only the New task dialog has anything to keep: the other ten confirm
@@ -1162,6 +1168,7 @@ function serveDialog(kind, { ground, props: propsFor, onResult, forget = null })
   }).then(collect, failed)
 
   openDialogs.set(kind, service)
+  if (kind === 'new-task') newTaskOpen.value = true
   openDialogWindow(kind, dialogWidth(kind))
 }
 
@@ -1197,6 +1204,7 @@ function stopServing(kind, { forget = true } = {}) {
   service.closed = true
   for (const stop of service.stops) stop()
   openDialogs.delete(kind)
+  if (kind === 'new-task') newTaskOpen.value = false
   if (forget) service.forget?.()
 }
 
@@ -6059,6 +6067,32 @@ async function copyBranchName(branch) {
   )
 }
 
+async function copySelection(text) {
+  const ok = await copyText(text)
+  sayFileMenu(
+    ok
+      ? { tone: 'success', title: 'Copied the selection' }
+      : {
+          tone: 'error',
+          title: 'Could not copy the selection',
+          description: 'The clipboard refused it. The reason is in the console.'
+        }
+  )
+}
+
+/* "New task from selection". A draft kept from a dialog a project switch closed
+   is appended to and never replaced, so nobody's words are lost; its other
+   fields stay as they were. The row is greyed while the window is up, so this
+   never hands a draft to a live dialog. */
+function newTaskFromSelection(text) {
+  const kept = taskDrafts.get(activePath.value)
+  const merged =
+    kept && !draftIsEmpty(kept)
+      ? { ...kept, text: kept.text?.trim() ? `${kept.text}\n\n${text}` : text }
+      : { text }
+  openNewTask(null, merged)
+}
+
 async function copyPath(text, what) {
   const ok = await copyText(text)
   sayFileMenu(
@@ -7782,8 +7816,11 @@ const toastStackStyle = {
             :caption="conversationCaption"
             :can-message="conversationCanMessage"
             :can-stop="conversationCanStop"
+            :can-file="!newTaskOpen"
             @open-local="onConversationLocalLink"
             @sign-in="signIn"
+            @copy="copySelection"
+            @new-task="newTaskFromSelection"
           />
           <TerminalView
             v-else-if="project.activeTab === 'terminal'"
