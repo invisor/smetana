@@ -568,3 +568,32 @@ Styling), and there was no reason to invent a second treatment for the same gest
 'none'` is load-bearing here for the same reason it is on the terminal's: the response sits over the
 whole panel as a sibling, and taking pointer events would make it the answer to the very hit test that
 draws it, switching itself off the instant it appeared.
+
+## Quoting the conversation
+
+A person selects text in the journal, right-clicks, and picks Quote; the quote lands in the composer
+as a block of its own with their comment written under it. Full reasoning is in
+`.smetana/docs/superpowers/specs/2026-10-19-conversation-quotes-design.md` (outside the repository's
+tracked tree, so it may not be in a fresh checkout).
+
+**The draft is a list of segments, not a string**: `[{ kind: 'text'|'quote', text }]`. Three
+invariants — the list ends with a text segment, no two texts are adjacent, no two quotes are adjacent
+(an empty text always sits between, so every quote has somewhere to be answered). A quote may be
+first. `draftSegments.js` is the one rule for all of it (append, remove, merge, normalise, serialise);
+`Composer.vue` and the store only call it. Not `contenteditable` (caret, IME, paste and selection
+semantics for a surface a list of textareas reproduces), and not a chip strip above the field (with
+two quotes and two comments nothing says which answers which).
+
+**On the wire** a quote is a markdown block quote, every line prefixed `> ` and a blank line inside
+it written as a bare `>`, blocks joined by one blank line. No preface, no attribution. A quote with no
+words is sendable.
+
+**The menu** is `PointerMenu` on the journal's viewport, rows from `selectionMenu.js`. Quote writes
+the draft in place; Copy and New task from selection are **emitted** (`copy`, `new-task`) and never
+performed, because the phone draws this view and its build aliases `stores/app.js` to a module with no
+`copyText`. `DesktopApp.vue` is the only listener. The phone passes `:selection-menu="false"` since a
+long press fires `contextmenu` on Android. `canFile` greys New task while that dialog is up (a ref,
+`newTaskOpen`, because `openDialogs` is a plain Map).
+
+**A kept task draft is appended to, never replaced**: a draft left by a project switch gets the
+selection after a blank line, its other fields untouched.

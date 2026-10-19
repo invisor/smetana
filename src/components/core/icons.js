@@ -79,6 +79,7 @@ import {
   Play,
   Plus,
   QrCode,
+  Quote,
   RefreshCw,
   Scissors,
   ScrollText,
@@ -296,6 +297,8 @@ export const iconNodes = {
   'search-check': SearchCheck,
   'refresh-cw': RefreshCw,
   copy: Copy,
+  // The selection menu's Quote row in the conversation panel.
+  quote: Quote,
 
   // shell
   'panel-left-close': PanelLeftClose,
