@@ -654,6 +654,22 @@ function push(bytes, meta = {}) {
   for (const sink of sinks) sink(bytes, meta)
 }
 
+/* The structured log of a timeline session (`session.timeline`) travels beside
+   the bytes: the same attach hands over the whole of it, `terminal:log` carries
+   the rest. Its own subscribers, because the pane that draws it is not the pane
+   that draws bytes. A callback gets `{ reset: true, entries, trimmed }` on an
+   attach — throw away what you hold — and `{ entries }` on a delta. */
+const logSinks = new Set()
+
+export function subscribeLog(cb) {
+  logSinks.add(cb)
+  return () => logSinks.delete(cb)
+}
+
+function pushLog(change) {
+  for (const sink of logSinks) sink(change)
+}
+
 function decode(base64) {
   const binary = atob(base64)
   const bytes = new Uint8Array(binary.length)
@@ -738,6 +754,8 @@ function report(kind, error) {
    a lost event — then we take the truth whole, the way the tracker takes a
    snapshot on a generation gap. */
 let seq = 0
+/* The same anchor for the log: the `seq` of the last entry delivered. */
+let logSeq = 0
 let attaching = null
 /* Which session the worker is streaming output to this window, which is the
    *other* thing `activeId` used to mean. Splitting it out is what lets a
@@ -892,6 +910,19 @@ export async function initTerminals() {
     }
     seq = next
     push(decode(data))
+  })
+  await listen('terminal:log', (event) => {
+    const { id, entries } = event.payload
+    /* The same guard and the same remedy as the bytes above: an entry that does
+       not continue the last one seen means an event was lost, and the truth is
+       taken whole. */
+    if (id !== streaming || !entries?.length) return
+    if (entries[0].seq !== logSeq + 1) {
+      attach(id).catch(() => {})
+      return
+    }
+    logSeq = entries[entries.length - 1].seq
+    pushLog({ entries })
   })
   terminalState.ready = true
 }
@@ -1170,10 +1201,12 @@ export async function attach(id) {
   const current = invoke('terminal_attach', { id })
   attaching = current
   try {
-    const { data, seq: at } = await current
+    const { data, seq: at, log = [], logTrimmed = 0 } = await current
     if (attaching !== current) return
     seq = at
+    logSeq = log.length ? log[log.length - 1].seq : logTrimmed
     push(decode(data), { reset: true })
+    pushLog({ reset: true, entries: log, trimmed: logTrimmed })
     terminalState.lastError = null
   } catch (err) {
     // A newer attach already overtook this one; its outcome, not this

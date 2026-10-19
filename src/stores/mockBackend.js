@@ -9,6 +9,7 @@
    invented issue — otherwise a "write" in the browser would look like it worked
    while silently doing nothing. */
 import { mockIPC } from '@tauri-apps/api/mocks'
+import { BaseDirectory } from '@tauri-apps/api/path'
 import { emit, listen } from '@tauri-apps/api/event'
 import { columns as fixtureColumns } from '../views/desktopAppData.js'
 import { defaults as settingsDefaults } from './settings.js'
@@ -1059,6 +1060,12 @@ export function installMockBackend() {
   mockIPC((command, payload) => {
     if (command === 'tracker_snapshot' || command === 'tracker_resync') return snapshot
     if (command === 'tracker_health') return { state: 'ok' }
+    /* The one directory read the front end makes that a browser can answer: the
+       app bundle's resource folder, which tells the batch timeline what an
+       "app" path is. Any other base directory stays unanswered, as before. */
+    if (command === 'plugin:path|resolve_directory' && payload?.directory === BaseDirectory.Resource) {
+      return '/Applications/smetana.app/Contents/Resources'
+    }
     if (command === 'settings_load') {
       /* project means "read this project's state": the real back end answers
          it, and the stub has to as well, otherwise switching could not be seen
@@ -1858,6 +1865,7 @@ export function installMockBackend() {
              accepted and dropped — so what `npm run dev` checks is the drawing
              and not the remembering. */
           conversation: '5f2d9c31-8a4e-4b6f-9c0d-1e2f3a4b5c6d',
+          timeline: false,
           /* The draft rides in the session — see `SessionWork` in
              `src-tauri/src/terminal/model.rs`. There is no issue behind it and
              nothing else on the front end holds these words, so without this
@@ -1895,6 +1903,7 @@ export function installMockBackend() {
              is no id under which a pin could survive a restart. The row is
              dragged like any other and its menu greys the pin. */
           conversation: null,
+          timeline: false,
           work: { kind: 'run' }
         },
         {
@@ -1915,6 +1924,7 @@ export function installMockBackend() {
           startedAt: new Date(Date.now() - 134 * 60000).toISOString(),
           exitCode: null,
           conversation: '7c3b1a05-2d6e-4f81-9a3b-4c5d6e7f8a90',
+          timeline: false,
           /* Without this the row would be captioned "Agent", which is the
              honest answer for a session whose work is unknown and a useless
              one for the only session a browser has. An edit is the case worth
@@ -1993,7 +2003,7 @@ export function installMockBackend() {
       ]
     }
     if (command === 'terminal_attach') {
-      return { data: toBase64(MOCK_SESSION_OUTPUT), seq: 0 }
+      return { data: toBase64(MOCK_SESSION_OUTPUT), seq: 0, log: [], logTrimmed: 0 }
     }
     /* Detach and resize change nothing on disk and have nothing to lie
        about. */

@@ -29,6 +29,7 @@ const session = (over = {}) => ({
   startedAt: '2026-08-03T10:00:00Z',
   exitCode: null,
   work: { kind: 'bare' },
+  timeline: false,
   ...over
 })
 
@@ -52,7 +53,7 @@ async function ready() {
      the sessions the worker actually holds. */
   loaded.ipc.on('terminal_restorable', [])
   loaded.ipc.on('terminal_marks', [])
-  loaded.ipc.on('terminal_attach', { data: b64('hello'), seq: 0 })
+  loaded.ipc.on('terminal_attach', { data: b64('hello'), seq: 0, log: [], logTrimmed: 0 })
   loaded.ipc.on('terminal_detach', null)
   loaded.ipc.on('terminal_write', null)
   loaded.ipc.on('terminal_resize', null)
@@ -725,6 +726,66 @@ describe('a follow-up being filed', () => {
       priority: null,
       parent: 'smetana-3uv'
     })
+  })
+})
+
+/* One entry of the structured log, in the shape `terminal:log` carries. */
+const entry = (seq) => ({ seq, at: '2026-10-19T10:00:00+03:00', kind: 'note', text: `n${seq}` })
+
+describe('the structured log of a timeline session', () => {
+  it('hands the attached log over as a reset and then streams contiguous deltas', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    ipc.on('terminal_attach', { data: b64(''), seq: 0, log: [entry(1), entry(2)], logTrimmed: 0 })
+    const seen = []
+    stores.terminals.subscribeLog((change) => seen.push(change))
+    await stores.terminals.attach(1)
+    await emit('terminal:log', { id: 1, entries: [entry(3)] })
+    await nextTick()
+    expect(seen).toEqual([{ reset: true, entries: [entry(1), entry(2)], trimmed: 0 }, { entries: [entry(3)] }])
+  })
+
+  it('re-attaches on a gap in the log sequence', async () => {
+    const { ipc, stores, emit } = await ready()
+    ipc.on('terminal_attach', { data: b64(''), seq: 0, log: [entry(1)], logTrimmed: 0 })
+    const seen = []
+    stores.terminals.subscribeLog((change) => seen.push(change))
+    await stores.terminals.attach(1)
+    ipc.on('terminal_attach', { data: b64(''), seq: 0, log: [entry(1), entry(2), entry(3)], logTrimmed: 0 })
+    await emit('terminal:log', { id: 1, entries: [entry(3)] })
+    await vi.waitFor(() => expect(seen).toHaveLength(2))
+    expect(ipc.calls('terminal_attach')).toHaveLength(2)
+    expect(seen[1]).toEqual({ reset: true, entries: [entry(1), entry(2), entry(3)], trimmed: 0 })
+  })
+
+  it('continues from the trimmed mark when the attached log is empty', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    ipc.on('terminal_attach', { data: b64(''), seq: 0, log: [], logTrimmed: 5 })
+    const seen = []
+    stores.terminals.subscribeLog((change) => seen.push(change))
+    await stores.terminals.attach(1)
+    await emit('terminal:log', { id: 1, entries: [entry(6)] })
+    await nextTick()
+    expect(seen.at(-1)).toEqual({ entries: [entry(6)] })
+    expect(ipc.calls('terminal_attach')).toHaveLength(1)
+  })
+
+  it('ignores log events for a session this window is not streaming', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    const seen = []
+    stores.terminals.subscribeLog((change) => seen.push(change))
+    await stores.terminals.attach(1)
+    await emit('terminal:log', { id: 2, entries: [entry(1)] })
+    await nextTick()
+    expect(seen).toHaveLength(1)
+    expect(ipc.calls('terminal_attach')).toHaveLength(1)
+  })
+
+  it('carries the timeline flag of a session through to the list', async () => {
+    const { stores, emit, nextTick } = await ready()
+    expect(stores.terminals.terminalState.sessions[0].timeline).toBe(false)
+    await emit('terminal:state', session({ timeline: true }))
+    await nextTick()
+    expect(stores.terminals.terminalState.sessions[0].timeline).toBe(true)
   })
 })
 
