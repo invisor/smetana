@@ -324,6 +324,14 @@ const hasPause = computed(() => mode.value === 'auto')
 const pauseErrors = computed(() => validatePause(pauseMin.value, pauseMax.value))
 const pauseOk = computed(() => !hasPause.value || Object.keys(pauseErrors.value).length === 0)
 
+/* An invalid pair forces the Advanced settings block open; remember that as a
+   real open, so fixing the pair does not fold the block away under the person
+   who just fixed it. Clicks on the header are ignored meanwhile (see the
+   template), and folding after the fix is then an ordinary click. */
+watch(pauseOk, (ok) => {
+  if (!ok) advanced.value = true
+})
+
 const confirm = () => {
   const pause = hasPause.value ? pausePayload(pauseMin.value, pauseMax.value) : null
   emit('confirm', {
@@ -552,7 +560,7 @@ const errorStyle = {
       <Disclosure
         label="Advanced settings"
         :open="advanced || !pauseOk"
-        @update:open="advanced = $event"
+        @update:open="(v) => { if (pauseOk) advanced = v }"
       >
         <!-- Kept where the mode is, because it is the mode that decides whether
              it means anything: solo does the work itself, so there is nobody to
