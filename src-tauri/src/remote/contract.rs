@@ -51,7 +51,7 @@ use crate::session::model::{
 use crate::session::service::{events_payload, Attached as DrivenAttached, CrewAttached, CrewEventsChange};
 use crate::settings::model::ResolvedSettings;
 use crate::terminal::model::{
-    Question, QuestionOption, Session, SessionState as TerminalState, SessionWork,
+    LogEntry, LogKind, Question, QuestionOption, Session, SessionState as TerminalState, SessionWork,
 };
 use crate::terminal::service::{removed_payload, Attached as TerminalAttached};
 use crate::tracker::model::{ColumnDef, Delta, Dependency, Health, HealthState, Issue, Snapshot};
@@ -481,6 +481,24 @@ fn terminal_sessions() -> Vec<Session> {
         .collect()
 }
 
+/// One entry of every kind a batch's structured log can carry, a tool call both
+/// with a `cwd` and without, a result both ways.
+fn log_entries() -> Vec<LogEntry> {
+    let at = || "2026-10-19T10:00:00+03:00".to_string();
+    [
+        LogKind::Note { text: "session start (model opus)".into() },
+        LogKind::Say { text: "Reading `merging`.\n\nThen the diff.".into() },
+        LogKind::Tool { id: "t1".into(), tool: "Bash".into(), command: "git status".into(), cwd: Some("/work/smetana".into()) },
+        LogKind::Result { id: "t1".into(), ok: true, summary: "4 lines".into() },
+        LogKind::Tool { id: "t2".into(), tool: "Read".into(), command: "/work/smetana/a.txt".into(), cwd: None },
+        LogKind::Result { id: "t2".into(), ok: false, summary: "1 line".into() },
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, kind)| LogEntry { seq: i as u64 + 4, at: at(), kind })
+    .collect()
+}
+
 // ---------------------------------------------------------------------------
 // What the contract says each command answers and each event carries.
 // ---------------------------------------------------------------------------
@@ -521,7 +539,7 @@ fn replies() -> BTreeMap<&'static str, Vec<Value>> {
     map.insert("crew_send", vec![Value::Null]);
     map.insert("crew_stop", vec![Value::Null]);
     map.insert("terminal_list", vec![json_of(&terminal_sessions()), json!([])]);
-    map.insert("terminal_attach", vec![json_of(&TerminalAttached { data: "aGk=".into(), seq: 12, log: Vec::new(), log_trimmed: 0 })]);
+    map.insert("terminal_attach", vec![json_of(&TerminalAttached { data: "aGk=".into(), seq: 12, log: log_entries(), log_trimmed: 3 })]);
     map
 }
 

@@ -491,6 +491,57 @@ pub(crate) fn tool_detail_full(name: &str, input: &serde_json::Value) -> String 
     detail
 }
 
+/// The three system events both readers print — `system/init`, `system/api_retry`
+/// and the closing `result` — as the sigil the text transcript puts in front
+/// and the words after it. One function, so the text line and the structured
+/// `Note` cannot drift apart: `transcript_line` writes `{sigil}{text}` and
+/// `batch_entries` keeps `text` alone.
+fn event_note(event: &serde_json::Value) -> Option<(&'static str, String)> {
+    let str_at = |key: &str| event.get(key).and_then(serde_json::Value::as_str).unwrap_or("");
+    match (str_at("type"), str_at("subtype")) {
+        ("system", "init") => {
+            // Collapsed first and judged empty afterwards: a model field of
+            // pure whitespace would otherwise render as `(model )`.
+            let model = clip(&one_line(str_at("model")), MAX_DETAIL);
+            Some(("-- ", if model.is_empty() {
+                "session start".to_string()
+            } else {
+                format!("session start (model {model})")
+            }))
+        }
+        ("system", "api_retry") => {
+            // Somebody else's error message, and the same treatment the
+            // agent's own prose gets: a newline in it is the diagonal
+            // stepping the `\r\n` rule exists against, and an unbounded one
+            // is a wall.
+            let error = clip(&one_line(str_at("error")), MAX_DETAIL);
+            let error = if error.is_empty() { "error".to_string() } else { error };
+            let attempt = event
+                .get("attempt")
+                .and_then(serde_json::Value::as_i64)
+                .map_or("?".to_string(), |n| n.to_string());
+            Some(("!! ", format!("api retry ({error}), attempt {attempt}")))
+        }
+        ("result", _) => {
+            let tokens = |key: &str| {
+                event
+                    .pointer(&format!("/usage/{key}"))
+                    .and_then(serde_json::Value::as_i64)
+                    .map_or("?".to_string(), |n| n.to_string())
+            };
+            Some((
+                "-- ",
+                format!(
+                    "batch result (in {} / out {} tok)",
+                    tokens("input_tokens"),
+                    tokens("output_tokens")
+                ),
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// One line of `--output-format stream-json`, as the pane should show it.
 ///
 /// Zero lines is an ordinary answer and the commonest one: hook chatter, a
@@ -508,34 +559,10 @@ pub fn transcript_line(line: &str) -> Vec<String> {
     };
     let str_at = |key: &str| event.get(key).and_then(serde_json::Value::as_str).unwrap_or("");
     match str_at("type") {
-        "system" => match str_at("subtype") {
-            "init" => {
-                // Collapsed first and judged empty afterwards: a model field of
-                // pure whitespace would otherwise render as `(model )`.
-                let model = clip(&one_line(str_at("model")), MAX_DETAIL);
-                Some(if model.is_empty() {
-                    "-- session start".to_string()
-                } else {
-                    format!("-- session start (model {model})")
-                })
-            }
-            "api_retry" => {
-                // Somebody else's error message, and the same treatment the
-                // agent's own prose gets: a newline in it is the diagonal
-                // stepping the `\r\n` rule exists against, and an unbounded one
-                // is a wall.
-                let error = clip(&one_line(str_at("error")), MAX_DETAIL);
-                let error = if error.is_empty() { "error".to_string() } else { error };
-                let attempt = event
-                    .get("attempt")
-                    .and_then(serde_json::Value::as_i64)
-                    .map_or("?".to_string(), |n| n.to_string());
-                Some(format!("!! api retry ({error}), attempt {attempt}"))
-            }
-            _ => None,
-        }
-        .into_iter()
-        .collect(),
+        "system" | "result" => event_note(&event)
+            .map(|(sigil, text)| format!("{sigil}{text}"))
+            .into_iter()
+            .collect(),
         "assistant" => event
             .pointer("/message/content")
             .and_then(serde_json::Value::as_array)
@@ -568,19 +595,6 @@ pub fn transcript_line(line: &str) -> Vec<String> {
                     .collect()
             })
             .unwrap_or_default(),
-        "result" => {
-            let tokens = |key: &str| {
-                event
-                    .pointer(&format!("/usage/{key}"))
-                    .and_then(serde_json::Value::as_i64)
-                    .map_or("?".to_string(), |n| n.to_string())
-            };
-            vec![format!(
-                "-- batch result (in {} / out {} tok)",
-                tokens("input_tokens"),
-                tokens("output_tokens")
-            )]
-        }
         _ => Vec::new(),
     }
 }
@@ -618,10 +632,7 @@ pub(crate) fn split_cd_prefix(command: &str) -> (Option<String>, String) {
     let (token, rest) = after_cd.split_at(end);
     // `cd /p;` with the semicolon glued to the path is the fourth form.
     if let Some(path) = token.strip_suffix(';') {
-        if path.len() > 1 {
-            return (Some(path.to_string()), rest.trim().to_string());
-        }
-        return whole();
+        return (Some(path.to_string()), rest.trim().to_string());
     }
     let rest = rest.trim_start();
     let remainder = if let Some(tail) = rest.strip_prefix("||") {
@@ -655,26 +666,9 @@ pub fn batch_entries(line: &str) -> Vec<LogKind> {
     };
     let str_at = |value: &Value, key: &str| value.get(key).and_then(Value::as_str).unwrap_or("").to_string();
     match str_at(&event, "type").as_str() {
-        "system" => match str_at(&event, "subtype").as_str() {
-            "init" => {
-                let model = clip(&one_line(&str_at(&event, "model")), MAX_DETAIL);
-                vec![LogKind::Note {
-                    text: if model.is_empty() {
-                        "session start".to_string()
-                    } else {
-                        format!("session start (model {model})")
-                    },
-                }]
-            }
-            "api_retry" => {
-                let error = clip(&one_line(&str_at(&event, "error")), MAX_DETAIL);
-                let error = if error.is_empty() { "error".to_string() } else { error };
-                let attempt =
-                    event.get("attempt").and_then(Value::as_i64).map_or("?".to_string(), |n| n.to_string());
-                vec![LogKind::Note { text: format!("api retry ({error}), attempt {attempt}") }]
-            }
-            _ => Vec::new(),
-        },
+        "system" | "result" => {
+            event_note(&event).map(|(_, text)| LogKind::Note { text }).into_iter().collect()
+        }
         "assistant" => event
             .pointer("/message/content")
             .and_then(Value::as_array)
@@ -723,21 +717,6 @@ pub fn batch_entries(line: &str) -> Vec<LogKind> {
                     .collect()
             })
             .unwrap_or_default(),
-        "result" => {
-            let tokens = |key: &str| {
-                event
-                    .pointer(&format!("/usage/{key}"))
-                    .and_then(Value::as_i64)
-                    .map_or("?".to_string(), |n| n.to_string())
-            };
-            vec![LogKind::Note {
-                text: format!(
-                    "batch result (in {} / out {} tok)",
-                    tokens("input_tokens"),
-                    tokens("output_tokens")
-                ),
-            }]
-        }
         _ => Vec::new(),
     }
 }
@@ -2048,6 +2027,8 @@ Last 24h · 2269 requests · 24 sessions
             );
         }
         assert_eq!(split_cd_prefix("cat a.txt"), (None, "cat a.txt".into()));
+        assert_eq!(split_cd_prefix("cd /; ls"), (Some("/".into()), "ls".into()));
+        assert_eq!(split_cd_prefix("cd / && ls"), (Some("/".into()), "ls".into()));
         assert_eq!(
             split_cd_prefix("cd relative; ls"),
             (None, "cd relative; ls".into()),

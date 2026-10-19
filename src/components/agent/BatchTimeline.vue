@@ -7,8 +7,7 @@
    handoff; the rules for what a row says are `batchTimeline.js` and
    `batchScope.js`, and this file only draws them.
 
-   **It reads the terminals store, as `TerminalView.vue` does, and is the one
-   other component allowed to.** It attaches to the session and listens on the
+   **It reads the terminals store, as `TerminalView.vue` does.** It attaches to the session and listens on the
    store's log channel (`subscribeLog`); the byte channel carries the same
    session's text transcript, which this pane deliberately does not draw. The
    `entries` prop is the gallery's way in: given, the component draws exactly
@@ -80,8 +79,12 @@ function onScroll() {
   pinned = el.scrollHeight - el.scrollTop - el.clientHeight <= row
 }
 
+/* Keyed on the last entry's `seq` and not on the row count: the count stops
+   moving once the log sits at its cap, and a result folding into the call above
+   it adds no row, yet both are news at the bottom that should keep a docked
+   pane docked. */
 watch(
-  () => rows.value.length,
+  () => source.value[source.value.length - 1]?.seq,
   async () => {
     if (!pinned) return
     await nextTick()

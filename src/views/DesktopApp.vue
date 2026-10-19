@@ -4312,10 +4312,10 @@ const selectFromSearch = (id) => {
 }
 
 /* Copying a task's id, for the card on the board and for the inspector's
-   header both. It lives here rather than in either component because exactly
-   two files under `src/components/` import a store, `TerminalView` and `BatchTimeline`:
-   the two of them raise `copy-id` and take back a word for their tooltip, and
-   neither knows a clipboard exists.
+   header both. It lives here rather than in either component because
+   components do not import stores (`TerminalView` and `BatchTimeline` are the
+   panes that do): the two of them raise `copy-id` and take back a word for
+   their tooltip, and neither knows a clipboard exists.
 
    The confirmation is that tooltip rather than a toast, and this is the one
    place in the app where a copy is answered without `sayFileMenu`. A toast
