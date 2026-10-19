@@ -2749,7 +2749,9 @@ const GALLERY_CONVERSATION_CAPTION = 'Editing smetana-agh'
 
 /* The composer on its own, in the two states the panel cannot show at the
    same time: a draft with files on it, and a turn in flight where the one
-   button is Stop. Local refs, so both are live enough to type into — which
+   button is Stop. The first draft holds two quotes, the second of them four
+   lines long so the three-line clamp is visible, each with its own reply line
+   under it. Local refs, so both are live enough to type into — which
    is the only way to see the field grow to its ceiling and then scroll.
    There used to be a third variant here, `waiting`, drawn locked under a
    caption while a question or a permission request sat above it; smetana-kteg
@@ -2757,9 +2759,15 @@ const GALLERY_CONVERSATION_CAPTION = 'Editing smetana-agh'
    composer outright for that stretch instead — the panel beside these,
    whose own fixture journal ends on an open permission request, is where
    that is checkable, by there being no composer under the card at all. */
-const composerText = ref('Rename the worktree when the branch changes, and keep `wt/` off the folder name.')
+const composerText = ref([
+  { kind: 'text', text: 'Looks right to me, but' },
+  { kind: 'quote', text: 'the tests mock exactly one thing — the IPC transport' },
+  { kind: 'text', text: 'is that still true after the Crew work?' },
+  { kind: 'quote', text: 'line one\nline two\nline three\nline four — clamped' },
+  { kind: 'text', text: '' }
+])
 const composerAttachments = ref([...CONVERSATION_ATTACHMENTS])
-const composerBusyText = ref('')
+const composerBusyText = ref([{ kind: 'text', text: 'a turn in flight' }])
 
 const sectionStyle = {
   display: 'flex', flexDirection: 'column', gap: 'var(--space-5)',

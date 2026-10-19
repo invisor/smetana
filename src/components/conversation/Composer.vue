@@ -10,11 +10,31 @@
    working, because at that moment there is no send affordance on the panel for
    it to be the keyboard equivalent of.
 
-   The field grows to a ceiling and then scrolls. The ceiling is a multiple of
-   `--row-h`, so it follows the density and the app-wide font size the way every
-   other height in the system does; what the growth itself is measured in is the
-   browser's own `scrollHeight`, which is a fact about the text that has been
-   typed rather than a value this design system chooses.
+   **The draft is a list of segments, not a string.** Text and quotes, in
+   order (`draftSegments.js` holds every rule over it and its three invariants:
+   it ends with a text, no two texts touch, no two quotes touch). It is drawn
+   as a column inside the one frame: a text segment is a `<textarea rows="1">`
+   that grows with what is in it, a quote is a full-width block with a bar on
+   the left and a cross, and each quote has its own line under it for the reply
+   so it is never unclear which words answer which quote. Not
+   `contenteditable`: one editable surface holding non-editable blocks brings
+   the caret model, IME composition and paste with it, where a list of
+   textareas keeps the model a plain array that can be tested outside the DOM.
+   A quote is never edited in place — remove it with the cross (or Backspace at
+   the start of the line under it) and quote again.
+
+   The ceiling belongs to the column and not to each field, a multiple of
+   `--row-h` so it follows the density and the app-wide font size the way every
+   other height in the system does, and a long draft scrolls as one thing. What
+   each field's growth is measured in is the browser's own `scrollHeight`, a
+   fact about the text that has been typed rather than a value this design
+   system chooses. The bar is `--border` and not `--prose-rule-strong`, the
+   token it aliases: that one is declared under `.sm-prose`, and the composer
+   is outside that root.
+
+   Enter sends from any text segment. When a quote arrives (the count of quotes
+   in `modelValue` grows) the focus goes to the last, empty, text segment —
+   the reply is written on the new line under the quote.
 
    An attachment is a path and nothing more — that is what `session_send`
    carries — so a chip draws `basename` from `src/paths.js` and never a second
@@ -70,12 +90,13 @@ import Button from '../core/Button.vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import { basename } from '../../paths.js'
+import { emptyDraft, isEmptyDraft, normalizeDraft, removeQuote } from './draftSegments.js'
 
 const props = defineProps({
-  /* The unsent words. `v-model`, so whoever draws this decides where a draft
-     lives — in the conversation panel it is the store's, which is what makes it
-     outlive a tab switch. */
-  modelValue: { type: String, default: '' },
+  /* The unsent draft, a segment list. `v-model`, so whoever draws this decides
+     where a draft lives — in the conversation panel it is the store's, which is
+     what makes it outlive a tab switch. A new array is emitted on every edit. */
+  modelValue: { type: Array, default: () => emptyDraft() },
   /* Absolute paths, in the order they were attached. */
   attachments: { type: Array, default: () => [] },
   /* The subset of `attachments` worth drawing as a control — see the header
@@ -104,11 +125,20 @@ const emit = defineEmits([
   'attach'
 ])
 
-const field = ref(null)
+const column = ref(null)
 const focus = ref(false)
 
-/* How tall the field is right now, and why it is a ref in the style object
-   rather than a line written onto the element.
+/* The list as drawn: repaired to the invariants, so an index here is an index
+   in what is emitted. */
+const segments = computed(() => normalizeDraft(props.modelValue))
+
+/* The text field of segment `index`, found by its attribute rather than kept
+   in an array of refs: indices shift when a quote goes, and a function ref
+   called out of order across a patch would leave a stale slot. */
+const fieldAt = (index) => column.value?.querySelector(`textarea[data-seg="${index}"]`) ?? null
+
+/* How tall each text field is right now, and why it is a ref in the style
+   object rather than a line written onto the element.
 
    A textarea's height is the browser's `rows` attribute and nothing else, so
    there is no declarative way to say "as tall as what is in it": the content
@@ -119,34 +149,90 @@ const focus = ref(false)
    comes from is what keeps `:style` the one thing that decides how this element
    looks; an imperative `el.style.height` would be a second writer to the same
    property, and Vue's own patch is the other. */
-const grown = ref('auto')
+const grown = ref([])
 
 async function measure() {
-  if (!field.value) return
-  grown.value = 'auto'
+  grown.value = []
   await nextTick()
   /* The panel can be taken away between the two halves of a measurement — a
      tab switch is one tick, and this awaits one. */
-  if (!field.value) return
+  if (!column.value) return
   /* A field with no layout behind it measures zero, and a height of zero is one
      a person cannot type their way back out of: nothing is drawn, so nothing
      grows it. `auto` is the honest answer there and it is also the right one —
      it is the single row `rows="1"` asks for. */
-  const height = field.value.scrollHeight
-  grown.value = height > 0 ? `${height}px` : 'auto'
+  const heights = []
+  column.value.querySelectorAll('textarea[data-seg]').forEach((el) => {
+    const height = el.scrollHeight
+    heights[Number(el.dataset.seg)] = height > 0 ? `${height}px` : 'auto'
+  })
+  grown.value = heights
 }
 
 watch(() => props.modelValue, measure)
 onMounted(measure)
 
-/* Nothing to send: no words and no files. The button is refused rather than
-   pressed into nothing — `sendMessage` in the store refuses the same message
-   for the same reason, and a control that looks available and does nothing is
-   the thing that reads as a broken app. Blank text with a file on it is an
-   ordinary message and does go: a picture is a thing to say. */
-const nothingToSend = computed(() => !props.modelValue.trim() && props.attachments.length === 0)
+/* Nothing to send: no words, no quote and no files. The button is refused
+   rather than pressed into nothing — `sendMessage` in the store refuses the
+   same message for the same reason, and a control that looks available and
+   does nothing is the thing that reads as a broken app. A quote with no words
+   is a thing to say, and so is blank text with a file on it. */
+const nothingToSend = computed(() => isEmptyDraft(segments.value) && props.attachments.length === 0)
 
-function onKeydown(event) {
+const quoteCount = computed(() => segments.value.filter((segment) => segment.kind === 'quote').length)
+
+function focusField(index, offset) {
+  const el = fieldAt(index)
+  if (!el) return
+  el.focus()
+  el.setSelectionRange(offset, offset)
+}
+
+/* A quote that arrived sends the person to the empty line under it. */
+watch(quoteCount, (now, before) => {
+  if (now > before) nextTick(() => focusField(segments.value.length - 1, 0))
+})
+
+function onInput(index, event) {
+  const next = [...segments.value]
+  next[index] = { kind: 'text', text: event.target.value }
+  emit('update:modelValue', next)
+}
+
+/* One removal, whether by the cross or by Backspace: the quote goes, the texts
+   around it merge, and the caret lands at the join. */
+function removeAt(index) {
+  const { segments: next, focus: at } = removeQuote(segments.value, index)
+  if (!at) return
+  emit('update:modelValue', next)
+  nextTick(() => focusField(at.index, at.offset))
+}
+
+function onKeydown(index, event) {
+  const el = event.target
+  const collapsed = el.selectionStart === el.selectionEnd
+  if (event.key === 'Backspace') {
+    if (collapsed && el.selectionStart === 0 && segments.value[index - 1]?.kind === 'quote') {
+      event.preventDefault()
+      removeAt(index - 1)
+    }
+    return
+  }
+  if (event.key === 'ArrowUp') {
+    const above = segments.value[index - 2]
+    if (collapsed && el.selectionStart === 0 && above?.kind === 'text') {
+      event.preventDefault()
+      focusField(index - 2, above.text.length)
+    }
+    return
+  }
+  if (event.key === 'ArrowDown') {
+    if (collapsed && el.selectionStart === el.value.length && segments.value[index + 2]?.kind === 'text') {
+      event.preventDefault()
+      focusField(index + 2, 0)
+    }
+    return
+  }
   if (event.key !== 'Enter' || event.shiftKey) return
   /* A keystroke inside an input method's composition — picking a candidate with
      Enter in Japanese, Chinese or Korean — is that method's and not this
@@ -155,6 +241,13 @@ function onKeydown(event) {
   event.preventDefault()
   if (props.busy || nothingToSend.value) return
   emit('send')
+}
+
+/* The frame's ring stays while the caret moves between fields of the same
+   column; it goes only when focus leaves them. */
+function onBlur(event) {
+  if (event.relatedTarget && column.value?.contains(event.relatedTarget)) return
+  focus.value = false
 }
 
 const remove = (path) =>
@@ -273,15 +366,27 @@ const row = computed(() => ({
   transition: 'var(--transition-control)'
 }))
 
-const fieldStyle = computed(() => ({
+/* The segment column carries the ceiling for all of its fields at once. Six
+   rows, and then it scrolls: a multiple of the row height rather than a number
+   of its own, because the ceiling has to move with the density and with the
+   app-wide font size, or the field holds a different amount of text on every
+   machine. */
+const columnStyle = {
   flex: 1,
   minWidth: 0,
-  height: grown.value,
-  /* Six rows, and then it scrolls. A multiple of the row height rather than a
-     number of its own: the ceiling has to move with the density and with the
-     app-wide font size, or the field holds a different amount of text on every
-     machine. */
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-2)',
   maxHeight: 'calc(var(--row-h) * 6)',
+  overflowY: 'auto'
+}
+
+/* `flex: 0 0 auto` on both kinds of child: in a column that has hit its ceiling
+   the default would shrink the fields to fit, instead of letting it scroll. */
+const fieldStyle = (index) => ({
+  flex: '0 0 auto',
+  minWidth: 0,
+  height: grown.value[index] ?? 'auto',
   padding: 'var(--space-2) var(--space-3)',
   background: 'transparent',
   color: 'var(--text-primary)',
@@ -290,12 +395,36 @@ const fieldStyle = computed(() => ({
   /* Prose, so sans — a person's message to an agent is a sentence and not an
      identifier, whatever paths it happens to hold. */
   font: 'var(--weight-regular) var(--text-sm)/var(--leading-normal) var(--font-sans)',
-  overflowY: 'auto',
   cursor: 'text',
   /* The grip is a browser-drawn control with no place in this system, and the
      field sizes itself anyway. */
   resize: 'none'
-}))
+})
+
+/* The quotation's own device in this panel is the bar on the left. */
+const quoteBlock = {
+  flex: '0 0 auto',
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 'var(--space-2)',
+  padding: 'var(--space-1) 0 var(--space-1) var(--space-3)',
+  borderLeft: 'var(--border-w-strong) solid var(--border)',
+  color: 'var(--text-secondary)',
+  font: 'var(--weight-regular) var(--text-sm)/var(--leading-normal) var(--font-sans)'
+}
+
+/* Three lines and then cut: a long quote is a reminder of what is being
+   answered, and the agent gets all of it. */
+const quoteText = {
+  flex: 1,
+  minWidth: 0,
+  display: '-webkit-box',
+  WebkitBoxOrient: 'vertical',
+  WebkitLineClamp: 3,
+  overflow: 'hidden',
+  whiteSpace: 'pre-wrap',
+  overflowWrap: 'anywhere'
+}
 </script>
 
 <template>
@@ -334,17 +463,26 @@ const fieldStyle = computed(() => ({
         variant="ghost"
         @click="emit('attach')"
       />
-      <textarea
-        ref="field"
-        rows="1"
-        :value="modelValue"
-        placeholder="Message the agent"
-        :style="fieldStyle"
-        @input="emit('update:modelValue', $event.target.value)"
-        @keydown="onKeydown"
-        @focus="focus = true"
-        @blur="focus = false"
-      />
+      <div ref="column" :style="columnStyle">
+        <template v-for="(segment, i) in segments" :key="i">
+          <textarea
+            v-if="segment.kind === 'text'"
+            rows="1"
+            :data-seg="i"
+            :value="segment.text"
+            :placeholder="segments.length === 1 ? 'Message the agent' : ''"
+            :style="fieldStyle(i)"
+            @input="onInput(i, $event)"
+            @keydown="onKeydown(i, $event)"
+            @focus="focus = true"
+            @blur="onBlur"
+          />
+          <div v-else data-quote :style="quoteBlock">
+            <span :style="quoteText">{{ segment.text }}</span>
+            <IconButton icon="x" size="sm" label="Remove quote" @click="removeAt(i)" />
+          </div>
+        </template>
+      </div>
       <!-- One control in two states, and never two controls: see the header. -->
       <Button v-if="busy && canStop" size="sm" icon="square" @click="emit('stop')">Stop</Button>
       <Button

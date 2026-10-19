@@ -20,6 +20,7 @@ import { listen } from '@tauri-apps/api/event'
 /* The intent-to-work translation, shared with `stores/terminals.js` and
    `components/agent/drivenRows.js` — see `components/agent/sessionWork.js`'s
    own header for why it lives outside every store. */
+import { emptyDraft, messageText, normalizeDraft } from '../components/conversation/draftSegments.js'
 import { workOf } from '../components/agent/sessionWork.js'
 import { crewRows } from '../components/agent/crewTree.js'
 /* The one thing this store reads out of another, and it is read inside
@@ -154,7 +155,7 @@ export const crewConversationsIn = (project) => crewAgentsIn(project).map((row) 
    rule below refuses. Keyed by session, so two sessions never share one.
 
    Nothing empties it. A window's sessions are counted in tens at the very most,
-   and a draft is a short string; forgetting one at the moment its session ends
+   and a draft is a short list of segments (`draftSegments.js`); forgetting one at the moment its session ends
    would be throwing away the one copy of it just as somebody goes looking. */
 const drafts = reactive(new Map())
 
@@ -223,10 +224,12 @@ function hold(id) {
        as a property, so `held.question` is the same read it always was. */
     question: computed(() => openQuestion(fresh.events)),
     get draft() {
-      return drafts.get(id) ?? ''
+      return drafts.get(id) ?? emptyDraft()
     },
-    set draft(text) {
-      drafts.set(id, text)
+    /* Always a segment list in the map: a string from an older caller is read
+       back as one text segment. */
+    set draft(value) {
+      drafts.set(id, normalizeDraft(value))
     }
   })
   conversations.set(id, fresh)
@@ -939,8 +942,11 @@ export async function startConversation(project, intent = { kind: 'bare' }) {
 
    An empty message is not sent at all. Blank text with an attachment on it is
    an ordinary message and does go: a picture is a thing to say. */
-export async function sendMessage(id, text, attachments = []) {
-  if (!String(text ?? '').trim() && attachments.length === 0) return
+export async function sendMessage(id, message, attachments = []) {
+  /* A string (the phone, Crew, older callers) or a segment list; either way
+     what goes over the wire is one string. */
+  const text = messageText(message)
+  if (!text.trim() && attachments.length === 0) return
   try {
     const address = crewAddress(id)
     if (address) {
@@ -955,7 +961,12 @@ export async function sendMessage(id, text, attachments = []) {
        clear here would wipe those keystrokes with the reply to the message
        before them — the same loss the failed-send rule above refuses, arriving
        by the other road. */
-    if (drafts.get(id) === text) drafts.set(id, '')
+    const kept = drafts.get(id)
+    /* By reference for a list; by words for a string, which cannot be the same
+       object as the list it was read from. */
+    if (kept === message || (typeof message === 'string' && kept && messageText(kept) === message)) {
+      drafts.set(id, emptyDraft())
+    }
   } catch (err) {
     report(id, 'sending a message', err)
   }

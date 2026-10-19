@@ -257,7 +257,7 @@ const waitingForAnswer = computed(() => !!question.value)
    was a control that took up room, refused everything typed into it and
    still offered Stop beside a card asking to go on. Hiding it outright is
    the fix, not a second "locked" look: the draft and the attachments survive
-   underneath, since `held.draft` lives in the store and `attachments` is this
+   underneath, since `held.draft` (a segment list) lives in the store and `attachments` is this
    component's own ref, neither of which this `v-if` touches. */
 const composerShown = computed(() => !!held.value && props.canMessage && !waitingForAnswer.value)
 
