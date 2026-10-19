@@ -829,13 +829,15 @@ after the wait would answer `NoProgress` (smetana-lutm). `journal::started` reco
 The rule on the front end is `components/run/batchPause.js` (defaults 10 and 30,
 the bounds, `min <= max`, and the bar's words); `RunModal.vue` draws the two
 fields under "How many at once" in autopilot only and disables Run on an invalid
-pair. Everything from "How many at once" down sits under a folded "Advanced settings"
-block (`core/Disclosure.vue`), folded again on every opening and never remembered; the
-"N tasks are ready" line and the error line stay outside it, and an invalid pause pair
-holds the block open (`:open="advanced || !pauseOk"`) so the error cannot be hidden. It is remembered per project in `project.runSettings` as
+pair. It is remembered per project in `project.runSettings` as
 `batchPauseMin`/`batchPauseMax`, written only by a run that sent them (so a Solo
 or Crew run keeps what was remembered), and mirrored by `RunDefaults` in
 `settings/model.rs`, whose validation replaces a bad pair with 10/30 whole.
+Everything from "How many at once" down sits under a folded "Advanced settings"
+block (`core/Disclosure.vue`), folded again on every opening and never remembered;
+the "N tasks are ready" line and the error line stay outside it, and an invalid
+pause pair holds the block open (`:open="advanced || !pauseOk"`) so the error
+cannot be hidden.
 `RunBar.vue` draws `resting` with the `pause` glyph, `Pausing N min before the
 next batch` and an `until HH:MM` detail, with no release button. None of the eight
 places that compare against `stopped` read it as stopped, since each compares
