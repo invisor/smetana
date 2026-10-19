@@ -5,6 +5,7 @@ import Button from '../core/Button.vue'
 import Dropdown from '../core/Dropdown.vue'
 import Textarea from '../core/Textarea.vue'
 import Icon from '../core/Icon.vue'
+import Disclosure from '../core/Disclosure.vue'
 import AttachmentStrip from './AttachmentStrip.vue'
 import { cascade, DEFAULT_STAGE, STAGES } from './taskStages.js'
 
@@ -82,6 +83,10 @@ const brainstorm = ref(DEFAULT_STAGE)
    that is not On the control shows the parent's own position instead. */
 const spec = ref(DEFAULT_STAGE)
 const plan = ref(DEFAULT_STAGE)
+
+/* Whether the "Advanced settings" block is folded out. Local and forgotten on
+   every opening; the hidden fields keep their values and still travel. */
+const advanced = ref(false)
 
 const stages = computed(() => cascade(brainstorm.value, spec.value, plan.value))
 
@@ -276,6 +281,7 @@ watch(
   async (isOpen) => {
     if (isOpen) {
       document.addEventListener('paste', onPaste)
+      advanced.value = false
       /* Before the focus and before anything is awaited: the fields are what
          this window is, and a person who sees it empty for a frame and full the
          next has watched their own words arrive as if from somewhere else. */
@@ -303,6 +309,7 @@ watch(
     brainstorm.value = DEFAULT_STAGE
     spec.value = DEFAULT_STAGE
     plan.value = DEFAULT_STAGE
+    advanced.value = false
   },
   { immediate: true }
 )
@@ -433,46 +440,48 @@ const parentWhy = {
         />
         <span v-if="error" :style="errorStyle">{{ error }}</span>
       </div>
-      <div :style="row">
-        <div :style="field">
-          <div :style="label">Type</div>
-          <Dropdown v-model="issueType" :options="TYPES" />
+      <Disclosure v-model:open="advanced" label="Advanced settings">
+        <div :style="row">
+          <div :style="field">
+            <div :style="label">Type</div>
+            <Dropdown v-model="issueType" :options="TYPES" />
+          </div>
+          <div :style="field">
+            <div :style="label">Priority</div>
+            <Dropdown v-model="priority" :options="PRIORITIES" />
+          </div>
+          <div :style="field">
+            <div :style="label">Brainstorming</div>
+            <Dropdown v-model="brainstorm" :options="STAGES" />
+          </div>
         </div>
-        <div :style="field">
-          <div :style="label">Priority</div>
-          <Dropdown v-model="priority" :options="PRIORITIES" />
+        <!-- A second row rather than five fields across one: the modal's width
+             divided five ways is too narrow to read, and the empty third cell
+             keeps every field one column wide. Neither of these is on v-model,
+             because what a person chose and what the control shows are different
+             facts here — a disabled stage draws its parent's position. -->
+        <div :style="row">
+          <div :style="field">
+            <div :style="label">Spec</div>
+            <Dropdown
+              :model-value="stages.spec.value"
+              :options="STAGES"
+              :disabled="!stages.spec.interactive"
+              @update:model-value="spec = $event"
+            />
+          </div>
+          <div :style="field">
+            <div :style="label">Plan</div>
+            <Dropdown
+              :model-value="stages.plan.value"
+              :options="STAGES"
+              :disabled="!stages.plan.interactive"
+              @update:model-value="plan = $event"
+            />
+          </div>
+          <div :style="field" />
         </div>
-        <div :style="field">
-          <div :style="label">Brainstorming</div>
-          <Dropdown v-model="brainstorm" :options="STAGES" />
-        </div>
-      </div>
-      <!-- A second row rather than five fields across one: the modal's width
-           divided five ways is too narrow to read, and the empty third cell
-           keeps every field one column wide. Neither of these is on v-model,
-           because what a person chose and what the control shows are different
-           facts here — a disabled stage draws its parent's position. -->
-      <div :style="row">
-        <div :style="field">
-          <div :style="label">Spec</div>
-          <Dropdown
-            :model-value="stages.spec.value"
-            :options="STAGES"
-            :disabled="!stages.spec.interactive"
-            @update:model-value="spec = $event"
-          />
-        </div>
-        <div :style="field">
-          <div :style="label">Plan</div>
-          <Dropdown
-            :model-value="stages.plan.value"
-            :options="STAGES"
-            :disabled="!stages.plan.interactive"
-            @update:model-value="plan = $event"
-          />
-        </div>
-        <div :style="field" />
-      </div>
+      </Disclosure>
     </div>
     <template #footer>
       <Button variant="ghost" :disabled="busy" @click="$emit('close')">Cancel</Button>
