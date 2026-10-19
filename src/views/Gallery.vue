@@ -56,6 +56,7 @@ import {
   DiffView,
   DiscardChangeModal,
   DocumentModeToggle,
+  Disclosure,
   Dropdown,
   DependencySpine,
   DraftInspector,
@@ -823,6 +824,8 @@ const everywhere = (...names) => names.map((name) => ({ name, missing_in: [] }))
 const partialBranch = ref('feature/runs-project-config')
 const checked = ref(true)
 const switched = ref(true)
+const discClosed = ref(false)
+const discOpen = ref(true)
 
 /* The gallery's tab row is its own: in the app it comes from a store, while
    here we need a fixed set showing all four kinds at once. The glyphs come from
@@ -2980,6 +2983,15 @@ const menuTargetStyle = {
         <Checkbox v-model="checked" label="Follow tail" />
         <Checkbox :model-value="false" indeterminate label="Partial" />
         <Switch v-model="switched" label="Compact density" />
+        <div :style="{ width: '280px', display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
+          <Disclosure v-model:open="discClosed" label="Advanced settings">
+            <Switch v-model="switched" label="Hidden while folded" />
+          </Disclosure>
+          <Disclosure v-model:open="discOpen" label="Advanced settings">
+            <Dropdown v-model="choice" :options="['ready', 'running', 'done']" />
+            <Switch v-model="switched" label="Compact density" />
+          </Disclosure>
+        </div>
         <Tooltip label="Read-only while an agent is working" shortcut="⌘R">
           <Button variant="secondary" size="sm">Hover me</Button>
         </Tooltip>

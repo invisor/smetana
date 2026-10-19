@@ -16,6 +16,7 @@ import Tooltip from '../core/Tooltip.vue'
 import { needsCutting, pickBranch } from './branchChoice.js'
 import { readyPromoteNote } from './readyPromote.js'
 import { runTitle } from './runScopes.js'
+import Disclosure from '../core/Disclosure.vue'
 import Input from '../core/Input.vue'
 import Textarea from '../core/Textarea.vue'
 import { NOTES_MAX, notesPayload } from './runNotes.js'
@@ -210,6 +211,10 @@ watch(
   }
 )
 
+/* Whether the "Advanced settings" block is folded out. Local and forgotten on
+   every opening: nothing about it is remembered. */
+const advanced = ref(false)
+
 /* Filled on opening rather than on mounting: the dialog is kept in the tree
    and reopened, and its fields have to be what this project remembers now, not
    what the last project remembered. */
@@ -217,6 +222,7 @@ watch(
   () => props.open,
   (open) => {
     if (!open) return
+    advanced.value = false
     const kept = props.remembered ?? {}
     /* A fresh dialog: whatever was picked by hand last time was for that run,
        and the three steps above decide this one. */
@@ -541,106 +547,114 @@ const errorStyle = {
         </span>
       </div>
 
-      <!-- Kept where the mode is, because it is the mode that decides whether
-           it means anything: solo does the work itself, so there is nobody to
-           spawn. The whole row goes rather than being disabled, and that
-           reverses what stood here before: the shift it costs was the argument
-           for leaving a dead field on screen, and it lost, because a field that
-           can do nothing still takes its line and then owes a sentence under it
-           saying why it is there — dropping the field drops the sentence too.
-           A dialog that rebuilds itself on the spot is nothing new here either:
-           `rescope` takes the "Part of ..." block away and Solo out of the mode
-           list without closing anything. -->
-      <div v-if="mode !== 'solo'" :style="row">
-        <span :style="labelStyle">How many at once</span>
-        <Dropdown v-model="parallel" :options="PARALLEL" :disabled="locked" />
-      </div>
-
-      <!-- Autopilot's alone: see `hasPause`. Two numbers of minutes, and the run
-           picks one out of the interval, ends included, before each batch but
-           the first. -->
-      <div v-if="hasPause" :style="row">
-        <span :style="labelStyle">Pause between batches, min</span>
-        <div :style="pairStyle">
-          <div :style="pairCellStyle">
-            <span :style="noteStyle">From</span>
-            <Input
-              v-model="pauseMin"
-              type="number"
-              mono
-              :invalid="Boolean(pauseErrors.min)"
-              :disabled="locked"
-            />
-          </div>
-          <div :style="pairCellStyle">
-            <span :style="noteStyle">To</span>
-            <Input
-              v-model="pauseMax"
-              type="number"
-              mono
-              :invalid="Boolean(pauseErrors.max)"
-              :disabled="locked"
-            />
-          </div>
+      <!-- Held open while the pause pair is invalid, so the error is never
+           hidden behind a fold; Run is already blocked then. -->
+      <Disclosure
+        label="Advanced settings"
+        :open="advanced || !pauseOk"
+        @update:open="advanced = $event"
+      >
+        <!-- Kept where the mode is, because it is the mode that decides whether
+             it means anything: solo does the work itself, so there is nobody to
+             spawn. The whole row goes rather than being disabled, and that
+             reverses what stood here before: the shift it costs was the argument
+             for leaving a dead field on screen, and it lost, because a field that
+             can do nothing still takes its line and then owes a sentence under it
+             saying why it is there — dropping the field drops the sentence too.
+             A dialog that rebuilds itself on the spot is nothing new here either:
+             `rescope` takes the "Part of ..." block away and Solo out of the mode
+             list without closing anything. -->
+        <div v-if="mode !== 'solo'" :style="row">
+          <span :style="labelStyle">How many at once</span>
+          <Dropdown v-model="parallel" :options="PARALLEL" :disabled="locked" />
         </div>
-        <span v-if="pauseErrors.min || pauseErrors.max" :style="errorStyle">
-          {{ pauseErrors.min || pauseErrors.max }}
-        </span>
-        <span v-else :style="noteStyle">
-          A random number of minutes in this range, both ends included. 0 and 0 means no pause.
-        </span>
-      </div>
 
-      <!-- The queue's alone: see `hasFloor`. -->
-      <div v-if="hasFloor" :style="row">
-        <span :style="labelStyle">Take tasks</span>
-        <Dropdown v-model="priority" :options="PRIORITIES" :disabled="locked" />
-      </div>
+        <!-- Autopilot's alone: see `hasPause`. Two numbers of minutes, and the run
+             picks one out of the interval, ends included, before each batch but
+             the first. -->
+        <div v-if="hasPause" :style="row">
+          <span :style="labelStyle">Pause between batches, min</span>
+          <div :style="pairStyle">
+            <div :style="pairCellStyle">
+              <span :style="noteStyle">From</span>
+              <Input
+                v-model="pauseMin"
+                type="number"
+                mono
+                :invalid="Boolean(pauseErrors.min)"
+                :disabled="locked"
+              />
+            </div>
+            <div :style="pairCellStyle">
+              <span :style="noteStyle">To</span>
+              <Input
+                v-model="pauseMax"
+                type="number"
+                mono
+                :invalid="Boolean(pauseErrors.max)"
+                :disabled="locked"
+              />
+            </div>
+          </div>
+          <span v-if="pauseErrors.min || pauseErrors.max" :style="errorStyle">
+            {{ pauseErrors.min || pauseErrors.max }}
+          </span>
+          <span v-else :style="noteStyle">
+            A random number of minutes in this range, both ends included. 0 and 0 means no pause.
+          </span>
+        </div>
 
-      <div :style="row">
-        <!-- The tooltip is on the switch itself rather than in a note beside it,
-             because what it says is about this control and not about the run:
-             the project's own reason already has the note below, and a second
-             paragraph under the same switch would read as one explanation
-             contradicting itself.
+        <!-- The queue's alone: see `hasFloor`. -->
+        <div v-if="hasFloor" :style="row">
+          <span :style="labelStyle">Take tasks</span>
+          <Dropdown v-model="priority" :options="PRIORITIES" :disabled="locked" />
+        </div>
 
-             `Switch` is a `<label>` with spans and a `role="switch"` — never a
-             native disabled `<input>` — so a disabled one still raises the
-             pointer events this needs. `alignSelf` keeps the hover on the
-             control and its label: the wrapper is a flex item in this column and
-             would otherwise stretch across the dialog, putting a tooltip on
-             empty space. -->
-        <Tooltip
-          v-if="liveCheckBlocked"
-          :label="liveCheckBlocked"
-          :style="{ alignSelf: 'flex-start' }"
-        >
-          <Switch v-model="liveCheck" :disabled="liveCheckOff" :label="LIVE_CHECK_LABEL" />
-        </Tooltip>
-        <Switch v-else v-model="liveCheck" :disabled="liveCheckOff" :label="LIVE_CHECK_LABEL" />
-        <span v-if="!liveCheckAvailable" :style="noteStyle">
-          This project declares no way to check a merged task, so tasks close on a green merge.
-        </span>
-      </div>
+        <div :style="row">
+          <!-- The tooltip is on the switch itself rather than in a note beside it,
+               because what it says is about this control and not about the run:
+               the project's own reason already has the note below, and a second
+               paragraph under the same switch would read as one explanation
+               contradicting itself.
 
-      <div :style="row">
-        <Switch v-model="fileFindings" :disabled="locked" label="File what it finds along the way" />
-        <span :style="noteStyle">
-          New tasks go to deferred and wait for you — a run never picks up its own findings.
-        </span>
-      </div>
+               `Switch` is a `<label>` with spans and a `role="switch"` — never a
+               native disabled `<input>` — so a disabled one still raises the
+               pointer events this needs. `alignSelf` keeps the hover on the
+               control and its label: the wrapper is a flex item in this column and
+               would otherwise stretch across the dialog, putting a tooltip on
+               empty space. -->
+          <Tooltip
+            v-if="liveCheckBlocked"
+            :label="liveCheckBlocked"
+            :style="{ alignSelf: 'flex-start' }"
+          >
+            <Switch v-model="liveCheck" :disabled="liveCheckOff" :label="LIVE_CHECK_LABEL" />
+          </Tooltip>
+          <Switch v-else v-model="liveCheck" :disabled="liveCheckOff" :label="LIVE_CHECK_LABEL" />
+          <span v-if="!liveCheckAvailable" :style="noteStyle">
+            This project declares no way to check a merged task, so tasks close on a green merge.
+          </span>
+        </div>
 
-      <div :style="row">
-        <span :style="labelStyle">Notes for the agent</span>
-        <Textarea
-          v-model="notes"
-          :rows="3"
-          :maxlength="NOTES_MAX"
-          :disabled="locked"
-          placeholder="For example: do not commit the result."
-        />
-        <span :style="noteStyle">Read once, at the start of this run. Not remembered.</span>
-      </div>
+        <div :style="row">
+          <Switch v-model="fileFindings" :disabled="locked" label="File what it finds along the way" />
+          <span :style="noteStyle">
+            New tasks go to deferred and wait for you — a run never picks up its own findings.
+          </span>
+        </div>
+
+        <div :style="row">
+          <span :style="labelStyle">Notes for the agent</span>
+          <Textarea
+            v-model="notes"
+            :rows="3"
+            :maxlength="NOTES_MAX"
+            :disabled="locked"
+            placeholder="For example: do not commit the result."
+          />
+          <span :style="noteStyle">Read once, at the start of this run. Not remembered.</span>
+        </div>
+      </Disclosure>
 
       <!-- Not while the file is unreadable: the count is true, but "12 tasks are
            ready" under a notice saying nothing can be run reads as a promise the
