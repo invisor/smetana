@@ -296,10 +296,10 @@ describe('parseInline', () => {
     ])
   })
 
-  it('keeps a path in code exactly as typed', () => {
-    expect(parseInline('see `src/stores/app.js`')[1]).toEqual({
+  it('keeps a call in code exactly as typed', () => {
+    expect(parseInline('see `src/stores/app(x)`')[1]).toEqual({
       type: 'code',
-      value: 'src/stores/app.js'
+      value: 'src/stores/app(x)'
     })
   })
 
@@ -584,6 +584,7 @@ describe('the invariant', () => {
     nodes
       .map((n) => {
         if (n.type === 'text' || n.type === 'code') return n.value
+        if (n.type === 'link' && n.local) return `${n.head}${n.tail}${n.targetKind === 'dir' ? '/' : ''}`
         if (n.type === 'link') return `${flatten(n.children)} ${n.href}`
         if (n.children) return flatten(n.children)
         return ''
@@ -649,7 +650,9 @@ describe('the invariant', () => {
     '',
     '---',
     '',
-    'Trailing <b>tag</b> and [a][ref].'
+    'Trailing <b>tag</b> and [a][ref].',
+    '',
+    'Folders keep their slash: docs/ and `src/`.'
   ].join('\n')
 
   /* Five constructs in one string, and every word of all five is still on
@@ -948,5 +951,215 @@ describe('parseMarkdown details', () => {
     const [outer] = parseMarkdown('<details>\n<details>\ninner\n</details>\nafter\n</details>')
     expect(outer.blocks.map((b) => b.type)).toEqual(['details', 'paragraph'])
     expect(outer.blocks[0].blocks).toEqual([para('inner')])
+  })
+})
+
+describe('bare paths, bare URLs and code spans that name one', () => {
+  const para = (text) => parseMarkdown(text)[0].children
+  const linkOf = (text) => para(text).find((n) => n.type === 'link')
+
+  it('turns a bare relative path into a local link between its text neighbours', () => {
+    expect(para('see .smetana/reviews/a.md and more')).toEqual([
+      { type: 'text', value: 'see ' },
+      {
+        type: 'link',
+        local: true,
+        path: '.smetana/reviews/a.md',
+        targetKind: 'file',
+        head: '.smetana/reviews/',
+        tail: 'a.md'
+      },
+      { type: 'text', value: ' and more' }
+    ])
+  })
+
+  it('reads every accepted bare path shape as a link', () => {
+    for (const p of ['src/a.js:12', '/Users/x/a.md', './a.md', '../b/c.rs', '~/d.txt', 'docs/']) {
+      expect(linkOf(`look at ${p} now`), p).toMatchObject({ type: 'link', local: true })
+    }
+    expect(linkOf('src/a.js:12')).toMatchObject({ path: 'src/a.js', tail: 'a.js:12' })
+    expect(linkOf('docs/')).toMatchObject({ targetKind: 'dir', path: 'docs' })
+  })
+
+  it('leaves trailing punctuation and a closing bracket outside a bare path', () => {
+    expect(para('src/a.js.')).toEqual([
+      expect.objectContaining({ type: 'link', path: 'src/a.js' }),
+      { type: 'text', value: '.' }
+    ])
+    expect(para('(src/a.js)')).toEqual([
+      { type: 'text', value: '(' },
+      expect.objectContaining({ type: 'link', path: 'src/a.js' }),
+      { type: 'text', value: ')' }
+    ])
+    expect(para('src/a.js,')).toEqual([
+      expect.objectContaining({ type: 'link', path: 'src/a.js' }),
+      { type: 'text', value: ',' }
+    ])
+  })
+
+  it('keeps words that only look like paths as plain text, character for character', () => {
+    for (const w of [
+      'Node.js',
+      'package.json',
+      'e.g.',
+      'v2.0',
+      'and/or',
+      'src/foo',
+      'origin/feature/x-v2',
+      '16:9',
+      '2:1'
+    ]) {
+      expect(para(`about ${w} here`), w).toEqual([{ type: 'text', value: `about ${w} here` }])
+    }
+  })
+
+  it('does not start a bare URL in the middle of a word', () => {
+    expect(para('xhttps://a.io/b')).toEqual([{ type: 'text', value: 'xhttps://a.io/b' }])
+  })
+
+  it('turns a bare URL into an external link with a verbatim label', () => {
+    expect(para('see https://example.com/a_b, then')).toEqual([
+      { type: 'text', value: 'see ' },
+      {
+        type: 'link',
+        href: 'https://example.com/a_b',
+        children: [{ type: 'text', value: 'https://example.com/a_b' }]
+      },
+      { type: 'text', value: ', then' }
+    ])
+  })
+
+  it('lowercases only the scheme of a bare URL and keeps its label as written', () => {
+    expect(linkOf('HTTPS://X.io/P')).toEqual({
+      type: 'link',
+      href: 'https://X.io/P',
+      children: [{ type: 'text', value: 'HTTPS://X.io/P' }]
+    })
+  })
+
+  it('keeps a balanced closing parenthesis inside a bare URL and drops an unbalanced one', () => {
+    expect(linkOf('https://en.wikipedia.org/wiki/A_(b)').href).toBe(
+      'https://en.wikipedia.org/wiki/A_(b)'
+    )
+    const nodes = para('(see https://example.com/x)')
+    expect(nodes.find((n) => n.type === 'link').href).toBe('https://example.com/x')
+    expect(nodes[nodes.length - 1]).toEqual({ type: 'text', value: ')' })
+  })
+
+  it('turns a code span holding one path into a code link', () => {
+    expect(para('`src/a.js`')).toEqual([
+      {
+        type: 'link',
+        local: true,
+        code: true,
+        path: 'src/a.js',
+        targetKind: 'file',
+        head: 'src/',
+        tail: 'a.js'
+      }
+    ])
+  })
+
+  it('allows spaces inside a backticked path', () => {
+    expect(linkOf('`~/Library/Application Support/x.png`')).toMatchObject({
+      local: true,
+      code: true,
+      path: '~/Library/Application Support/x.png'
+    })
+  })
+
+  it('turns a code span holding a URL into an external code link', () => {
+    expect(para('`https://example.com`')).toEqual([
+      {
+        type: 'link',
+        code: true,
+        href: 'https://example.com',
+        children: [{ type: 'text', value: 'https://example.com' }]
+      }
+    ])
+  })
+
+  it('leaves other code spans as code', () => {
+    for (const c of ['taxCalculationMixin', '[merge].hazards', 'Node.js', 'origin/feature/x-v2']) {
+      expect(para(`\`${c}\``), c).toEqual([{ type: 'code', value: c }])
+    }
+  })
+
+  it('creates no auto link inside a fenced block', () => {
+    expect(parseMarkdown('```\nsee src/a.js and https://x.io\n```')).toEqual([
+      { type: 'code', lang: null, text: 'see src/a.js and https://x.io' }
+    ])
+  })
+
+  it('creates no auto link inside the label of an explicit link', () => {
+    const link = linkOf('[src/a.js](https://x.io)')
+    expect(link.children).toEqual([{ type: 'text', value: 'src/a.js' }])
+    const url = linkOf('[https://y.io](https://x.io)')
+    expect(url.children).toEqual([{ type: 'text', value: 'https://y.io' }])
+    const nested = linkOf('[**src/a.js**](https://x.io)')
+    expect(nested.children).toEqual([
+      { type: 'strong', children: [{ type: 'text', value: 'src/a.js' }] }
+    ])
+  })
+
+  it('starts a quoted path after the quote, which stays text', () => {
+    for (const q of ['"', "'"]) {
+      const nodes = para(`open ${q}src/a.js${q} now`)
+      expect(nodes).toEqual([
+        { type: 'text', value: `open ${q}` },
+        expect.objectContaining({ type: 'link', path: 'src/a.js', head: 'src/', tail: 'a.js' }),
+        { type: 'text', value: `${q} now` }
+      ])
+    }
+  })
+
+  it('starts a path after a typographic quote, which stays text', () => {
+    for (const [open, close] of [['\u201c', '\u201d'], ['\u2018', '\u2019'], ['\u00ab', '\u00bb']]) {
+      expect(para(`open ${open}src/a.js${close} now`)).toEqual([
+        { type: 'text', value: `open ${open}` },
+        expect.objectContaining({ type: 'link', path: 'src/a.js', head: 'src/', tail: 'a.js' }),
+        { type: 'text', value: `${close} now` }
+      ])
+    }
+    expect(para('open \u201cdocs/\u201d now')[1]).toMatchObject({ path: 'docs', targetKind: 'dir' })
+  })
+
+  it('does not turn a punctuation-only folder into a link', () => {
+    for (const w of [':/', ':-/', '-/']) {
+      expect(para(`a ${w} b`), w).toEqual([{ type: 'text', value: `a ${w} b` }])
+      expect(para(`\`${w}\``), w).toEqual([{ type: 'code', value: w }])
+    }
+  })
+
+  it('parses pathological inputs in a short time', () => {
+    const inputs = [
+      ')'.repeat(10000),
+      `${'a'.repeat(40000)}`,
+      `${'['.repeat(2000)}${']'.repeat(2000)}`,
+      'word '.repeat(200000),
+      `x ${'('.repeat(10000)}`,
+      `a${'"a'.repeat(10000)}`,
+      `${'a/'.repeat(5000)}`
+    ]
+    for (const input of inputs) {
+      const t0 = performance.now()
+      parseMarkdown(input)
+      expect(performance.now() - t0, input.slice(0, 12)).toBeLessThan(1000)
+    }
+  })
+
+  it('keeps an over-long URL or path as plain text', () => {
+    const url = `https://x.io/${'a'.repeat(9000)}`
+    expect(para(`see ${url} now`)).toEqual([{ type: 'text', value: `see ${url} now` }])
+    const path = `${'a'.repeat(1100)}/b.js`
+    expect(para(`see ${path} now`)).toEqual([{ type: 'text', value: `see ${path} now` }])
+    const mid = `https://x.io/${'a'.repeat(2000)}`
+    expect(para(mid)[0]).toMatchObject({ type: 'link', href: mid })
+  })
+
+  it('finds a path inside emphasis', () => {
+    const strong = para('**src/a.js**')[0]
+    expect(strong.type).toBe('strong')
+    expect(strong.children[0]).toMatchObject({ type: 'link', path: 'src/a.js' })
   })
 })

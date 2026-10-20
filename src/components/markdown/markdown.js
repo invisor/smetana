@@ -61,7 +61,7 @@
    head, exactly as typed, never discarded and never run back through this
    parser. Nothing is lost either way: every character of whichever string is
    shown survives, in the head or in the tail. */
-import { classifyLink, splitPath } from './links.js'
+import { bareTarget, classifyLink, splitPath, wholeTarget } from './links.js'
 
 /* The closing run of hashes is optional and must have whitespace before it.
    Without that whitespace `## Migrate to C#` loses the character that makes the
@@ -611,7 +611,18 @@ const INLINE = [
      them took 3.6 seconds, on the UI thread, inside a computed — and no code
      span is fenced by more than a few. Past ten the run is not an opener at
      all and falls through to plain text, markers included. */
-  [/^(`{1,10})([\s\S]*?[^`])\1(?!`)/, (m) => ({ type: 'code', value: m[2] })],
+  [
+    /^(`{1,10})([\s\S]*?[^`])\1(?!`)/,
+    (m, _before, auto) => {
+      /* A span that is wholly one path or URL is a link drawn as code. */
+      const inner = m[2].trim()
+      if (auto && wholeTarget(inner)) {
+        const built = link(inner, inner, { verbatim: true, code: true })
+        if (built) return built
+      }
+      return { type: 'code', value: m[2] }
+    }
+  ],
   /* Unlike `IMAGE_LINE`'s bare branch, this one's address group is lazy
      (`+?`), not greedy, so no `.trim()` is needed on `m[3]`: a lazy repeat
      stops expanding the moment the rest of the pattern already matches, and
@@ -623,19 +634,37 @@ const INLINE = [
   ],
   [
     /^\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|((?:[^()\n]|\([^()\n]*\))+?))\s*\)/,
-    (m) => link(m[2] ?? m[3], m[1])
+    (m) => link(m[2] ?? m[3], m[1], { autoLabel: false })
   ],
   [/^<(https?:\/\/[^>\s]+)>/i, (m) => link(m[1], m[1], { verbatim: true })],
-  [/^\*\*([\s\S]+?)\*\*(?!\*)/, (m) => ({ type: 'strong', children: parseInline(m[1]) })],
+  [/^\*\*([\s\S]+?)\*\*(?!\*)/, (m, _before, auto) => ({ type: 'strong', children: parseInline(m[1], auto) })],
   [
     /^__([\s\S]+?)__(?![\p{L}\p{N}_])/u,
-    (m, before) => (WORD.test(before) ? null : { type: 'strong', children: parseInline(m[1]) })
+    (m, before, auto) =>
+      WORD.test(before) ? null : { type: 'strong', children: parseInline(m[1], auto) }
   ],
-  [/^~~([\s\S]+?)~~(?!~)/, (m) => ({ type: 'del', children: parseInline(m[1]) })],
-  [/^\*([^\s*][\s\S]*?)\*(?!\*)/, (m) => ({ type: 'em', children: parseInline(m[1]) })],
+  [/^~~([\s\S]+?)~~(?!~)/, (m, _before, auto) => ({ type: 'del', children: parseInline(m[1], auto) })],
+  [/^\*([^\s*][\s\S]*?)\*(?!\*)/, (m, _before, auto) => ({ type: 'em', children: parseInline(m[1], auto) })],
   [
     /^_([^\s_][\s\S]*?)_(?![\p{L}\p{N}_])/u,
-    (m, before) => (WORD.test(before) ? null : { type: 'em', children: parseInline(m[1]) })
+    (m, before, auto) =>
+      WORD.test(before) ? null : { type: 'em', children: parseInline(m[1], auto) }
+  ],
+  /* A path or URL written with no markup at all. What counts is `links.js`'s
+     (`bareTarget`), the position included, which is judged from `before`
+     ahead of any scanning. The pattern is an object with its own `exec`
+     because the length consumed is the token with its trailing punctuation
+     already cut off, which no regex over `rest` can say. Switched off inside
+     an explicit link's label, where a nested anchor is not allowed. */
+  [
+    {
+      exec: (rest, before) => {
+        const found = bareTarget(rest, before)
+        return found ? [found.token] : null
+      }
+    },
+    (m) => link(m[0], m[0], { verbatim: true }),
+    { bare: true }
   ]
 ]
 
@@ -675,17 +704,19 @@ const WORD = /[\p{L}\p{N}_]/u
    `sm-prose.css`'s `a[data-path] > span[data-head]`: no content, no border,
    no padding, so `text-overflow: ellipsis` has nothing to clip and nothing
    is on screen to say the span is there). */
-function link(href, rawLabel, { verbatim = false } = {}) {
+function link(href, rawLabel, { verbatim = false, code = false, autoLabel = true } = {}) {
   const classified = classifyLink(href)
   if (!classified) return null
   if (classified.kind === 'external') {
-    const children = verbatim ? [{ type: 'text', value: rawLabel }] : parseInline(rawLabel)
-    return { type: 'link', href: classified.href, children }
+    const children = verbatim ? [{ type: 'text', value: rawLabel }] : parseInline(rawLabel, autoLabel)
+    return code
+      ? { type: 'link', code: true, href: classified.href, children }
+      : { type: 'link', href: classified.href, children }
   }
   const label = rawLabel.trim()
   const { head, tail } =
     label && label !== href ? { head: '', tail: label } : splitPath(classified.display)
-  return {
+  const node = {
     type: 'link',
     local: true,
     path: classified.path,
@@ -693,9 +724,13 @@ function link(href, rawLabel, { verbatim = false } = {}) {
     head,
     tail
   }
+  return code ? { ...node, code: true } : node
 }
 
-export function parseInline(text) {
+/* `auto` is whether bare paths, bare URLs and backticked ones may become links
+   here; it is switched off for the label of an explicit link and inherited by
+   everything nested in it. */
+export function parseInline(text, auto = true) {
   if (!text) return []
   const nodes = []
   let plain = ''
@@ -710,10 +745,11 @@ export function parseInline(text) {
        the very beginning, which no guard treats as a word. */
     const before = text.slice(0, text.length - rest.length).slice(-1)
     let hit = null
-    for (const [pattern, build] of INLINE) {
-      const match = pattern.exec(rest)
+    for (const [pattern, build, flags] of INLINE) {
+      if (flags?.bare && !auto) continue
+      const match = pattern.exec(rest, before)
       if (!match) continue
-      const built = build(match, before)
+      const built = build(match, before, auto)
       /* A marker this module recognises but cannot honour — a link it may not
          open, an underscore inside a name — falls through to the plain branch
          below, so its characters stay on screen exactly as written. */

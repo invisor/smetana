@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { classifyLink, localHref, splitPath } from '../../../src/components/markdown/links.js'
+import {
+  bareTarget,
+  classifyLink,
+  localHref,
+  splitPath,
+  wholeTarget
+} from '../../../src/components/markdown/links.js'
 
 describe('classifyLink: external', () => {
   it('reads an http or https target as external', () => {
@@ -243,5 +249,96 @@ describe('localHref', () => {
     expect(localHref('/Users/flexo/my project', 'a b.txt')).toBe(
       'file:///Users/flexo/my%20project/a%20b.txt'
     )
+  })
+})
+
+describe('bareTarget', () => {
+  it('answers the token and its kind for a path or URL at the start of the text', () => {
+    expect(bareTarget('src/a.js. Next', '')).toEqual({ token: 'src/a.js', kind: 'local' })
+    expect(bareTarget('src/a.js:12:3, next', ' ')).toEqual({ token: 'src/a.js:12:3', kind: 'local' })
+    expect(bareTarget('docs/', '(')).toEqual({ token: 'docs/', kind: 'local' })
+    expect(bareTarget('~/d.txt)', ' ')).toEqual({ token: '~/d.txt', kind: 'local' })
+    expect(bareTarget('https://x.io/a?b=1!', ' ')).toEqual({
+      token: 'https://x.io/a?b=1',
+      kind: 'external'
+    })
+    expect(bareTarget('https://x.io/A_(b))', ' ')).toEqual({
+      token: 'https://x.io/A_(b)',
+      kind: 'external'
+    })
+  })
+
+  it('answers null for words that are not paths', () => {
+    for (const w of ['Node.js', 'e.g.', 'v2.0', 'and/or', 'src/foo', '16:9', '/', '//', 'https://']) {
+      expect(bareTarget(`${w} rest`, ' '), w).toBeNull()
+    }
+  })
+
+  it('refuses a path that has no letter or digit in it', () => {
+    for (const w of [':/', ':-/', '-/', '../', './']) {
+      expect(bareTarget(`${w} rest`, ' '), w).toBeNull()
+    }
+    expect(bareTarget('w/ rest', ' ')).toEqual({ token: 'w/', kind: 'local' })
+  })
+
+  it('starts a path only at the start, after a space, a parenthesis or a quote', () => {
+    expect(bareTarget('src/a.js', 'x')).toBeNull()
+    expect(bareTarget('src/a.js', '-')).toBeNull()
+    for (const before of ['', ' ', '\n', '(', '"', "'"]) {
+      expect(bareTarget('src/a.js', before), JSON.stringify(before)).not.toBeNull()
+    }
+  })
+
+  it('starts a URL anywhere but inside a word', () => {
+    expect(bareTarget('https://a.io/b', 'x')).toBeNull()
+    expect(bareTarget('https://a.io/b', '=')).not.toBeNull()
+  })
+
+  it('leaves a token longer than the cap as plain text instead of linking its prefix', () => {
+    expect(bareTarget(`${'a'.repeat(1100)}/b.js rest`, ' ')).toBeNull()
+    expect(bareTarget(`src/${'a'.repeat(1100)}.js rest`, ' ')).toBeNull()
+    expect(bareTarget(`https://x.io/${'a'.repeat(9000)} rest`, ' ')).toBeNull()
+    expect(bareTarget(`https://x.io/${'a'.repeat(2000)} rest`, ' ')).toEqual({
+      token: `https://x.io/${'a'.repeat(2000)}`,
+      kind: 'external'
+    })
+  })
+
+  it('reads typographic quotes like straight ones', () => {
+    for (const before of ['\u201c', '\u2018', '\u00ab']) {
+      expect(bareTarget('src/a.js', before), before).not.toBeNull()
+    }
+    for (const closer of ['\u201d', '\u2019', '\u00bb']) {
+      expect(bareTarget(`src/a.js${closer} x`, ' '), closer).toEqual({
+        token: 'src/a.js',
+        kind: 'local'
+      })
+    }
+  })
+
+  it('stays fast on a long run of closers and on one very long token', () => {
+    const t0 = performance.now()
+    bareTarget(')'.repeat(10000), ' ')
+    bareTarget(`${'a'.repeat(40000)}/`, ' ')
+    bareTarget(`src/${')'.repeat(40000)}`, ' ')
+    expect(performance.now() - t0).toBeLessThan(1000)
+  })
+})
+
+describe('wholeTarget', () => {
+  it('accepts a whole string that is one path or URL, spaces allowed in a path', () => {
+    expect(wholeTarget('src/a.js')).toBe(true)
+    expect(wholeTarget('~/Library/Application Support/x.png')).toBe(true)
+    expect(wholeTarget('https://example.com')).toBe(true)
+  })
+
+  it('refuses anything else, including a URL with a space', () => {
+    expect(wholeTarget('taxCalculationMixin')).toBe(false)
+    expect(wholeTarget('[merge].hazards')).toBe(false)
+    expect(wholeTarget('Node.js')).toBe(false)
+    expect(wholeTarget('https://example.com/a b')).toBe(false)
+    expect(wholeTarget('a/b.c\nd.e')).toBe(false)
+    expect(wholeTarget(':/')).toBe(false)
+    expect(wholeTarget(':-/')).toBe(false)
   })
 })

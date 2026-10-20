@@ -655,6 +655,18 @@
   content:var(--prose-dir-glyph);
   color:var(--text-muted);
 }
+/* A link that was written in backticks: the reader sees the code they wrote,
+   made pressable. It takes inline code's ground and padding and nothing of its
+   hairline box, so the link's own underline stays the one mark of a link.
+   Applies to a local and to an external link alike. */
+.sm-prose a[data-code]{
+  padding:var(--space-0) var(--space-2);
+  border-radius:var(--radius-2);
+  background:var(--prose-chip-bg);
+  font-family:var(--font-mono);
+  font-size:var(--text-code-size);
+  overflow-wrap:anywhere;
+}
 /* On a line of its own: takes the full column so the head truncates late. */
 .sm-prose p > a[data-path]:only-child{
   display:flex;
