@@ -59,6 +59,10 @@ does not revive it while it is absent from `members[]` (once listed again, by a 
 after a Crew run handed back was one stopped by `shutdown_request`, whose transcript ends on a `user`
 record and a `tool_use` (stop_reason null), never an `end_turn`, and which was then removed from
 `members[]`; that is the `finish_absent` case above, not a binding failure. A transcript whose
+Safety net: when a Supervised Crew batch hands back, the run worker sends `Request::CrewBatchEnded(root)` and
+`CrewTree::settle_unstarted` turns every child still `Starting` (never driven by a transcript of its own)
+into `Waiting` — not `Done`, the rows and the lead stay (`.claude/rules/runs.md`); `Running` children are
+left to their transcript. A transcript whose
 identity is not yet resolvable is left unread (`is_hidden_bootstrap` is false for an unresolved
 identity), so its lifecycle records are still there when the member binds. Hook records
 (`SubagentStop`, `TeammateIdle`) are deliberately not used: they exist only

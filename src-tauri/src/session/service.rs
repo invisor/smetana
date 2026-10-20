@@ -299,6 +299,11 @@ pub enum Request {
     /// worker's completion channel; it is distinct from removing the tree.
     CrewAwaitExit(u64, oneshot::Sender<crate::terminal::model::Exit>),
     CrewClear(u64),
+    /// The run worker's word that the batch this Crew package drove has handed
+    /// its work back. Fire and forget: any child still `Starting` (never driven
+    /// by a transcript of its own) is settled to `Waiting`; the package, its
+    /// rows and its lead session stay (smetana-vknk).
+    CrewBatchEnded(u64),
     /// The run worker's own door for a Solo lead: an ordinary driven session
     /// for `Intent::Run`, which `Start` refuses at the front door so a person
     /// cannot start a run from the composer. The `String` is the profile id
@@ -2262,6 +2267,15 @@ fn handle(
                 crate::terminal::model::Exit::Removed, admitted,
             );
             let _ = tx.send(Ok(()));
+        }
+        Request::CrewBatchEnded(root) => {
+            if let Some(package) = crews.get_mut(&root) {
+                let settled = package.tree.settle_unstarted();
+                if !settled.is_empty() {
+                    log::info!("[crew] root {root}: batch handed back, {} never-started child(ren) settled to waiting", settled.len());
+                    emit_crew(app, package);
+                }
+            }
         }
         Request::CrewClear(root) => {
             let admitted = !claude_starting.contains_key(&root);

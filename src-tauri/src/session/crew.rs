@@ -327,6 +327,24 @@ impl CrewTree {
         switched
     }
 
+    /// The run's batch has handed back. A child still `Starting` has never been
+    /// driven by a transcript of its own (a bound one is `Running`/`Waiting`)
+    /// and its config says nothing (`Unknown`), so nothing will ever move it
+    /// and it would be counted as working for good. It becomes `Waiting`, not
+    /// `Done`: the row stays and the lead lives on. The root, `Running`
+    /// children (an explicit status or a transcript turn) and finished nodes
+    /// are untouched. Returns the settled ids. Cause named in smetana-vknk.
+    pub fn settle_unstarted(&mut self) -> Vec<CrewNodeId> {
+        let mut settled = Vec::new();
+        for node in self.nodes.values_mut() {
+            if node.id != node.root && node.state == CrewState::Starting {
+                node.state = CrewState::Waiting;
+                settled.push(node.id);
+            }
+        }
+        settled
+    }
+
     /// Whether a transcript lifecycle record may change this node's state.
     /// `present` is the membership set of the tick's reconcile step, `None`
     /// when no reconcile ran. A teammate that is absent from `members[]` is
@@ -385,6 +403,34 @@ impl CrewTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn member(id: &str, state: ProviderState) -> ProviderNode {
+        ProviderNode { id: id.into(), parent: None, state, label: Some(id.into()), can_message: true }
+    }
+
+    #[test]
+    fn a_handed_back_batch_settles_only_never_started_children() {
+        let mut package = CrewPackage::new("/project".into(), 1, "Crew lead");
+        let unbound = package.apply(member("a@t", ProviderState::Unknown)).unwrap();
+        let bound = package.apply(member("b@t", ProviderState::Unknown)).unwrap();
+        let working = package.apply(member("c@t", ProviderState::Running)).unwrap();
+        let done = package.apply(member("d@t", ProviderState::Done)).unwrap();
+        let failed = package.apply(member("e@t", ProviderState::Failed)).unwrap();
+        package.tree.set_state(bound, CrewState::Running);
+        package.tree.set_state(1, CrewState::Starting);
+
+        let settled = package.tree.settle_unstarted();
+
+        assert_eq!(settled, vec![unbound]);
+        let state = |id| package.tree.node(id).unwrap().state;
+        assert_eq!(state(unbound), CrewState::Waiting);
+        assert_eq!(state(bound), CrewState::Running, "a transcript-driven state is kept");
+        assert_eq!(state(working), CrewState::Running);
+        assert_eq!(state(done), CrewState::Done);
+        assert_eq!(state(failed), CrewState::Failed);
+        assert_eq!(state(1), CrewState::Starting, "the root is untouched");
+        assert!(package.tree.settle_unstarted().is_empty(), "a repeat settles nothing");
+    }
 
     #[test]
     fn close_turn_closes_only_a_turn_this_journal_opened() {

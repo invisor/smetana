@@ -3140,6 +3140,16 @@ async fn watch_batch(
                 exit = &mut ended => return Batch::Ended(exit),
                 _ = tokio::time::sleep(ASK_POLL) => {
                     if handed_back(reports, batch) {
+                        // Tell a Crew package its batch is over, so a child
+                        // that never started reading as anything but
+                        // `Starting` stops being counted as working. The
+                        // lead's session id is the package root for a Crew
+                        // transport (`CrewStart` answers `(root, root)`).
+                        if let RunTransport::Driven { session: driven, run: driven_run } = transport {
+                            if driven_run.transport != Transport::Driven {
+                                let _ = driven.0.send(crate::session::service::Request::CrewBatchEnded(session)).await;
+                            }
+                        }
                         return Batch::HandedBack;
                     }
                 }
