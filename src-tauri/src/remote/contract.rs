@@ -390,8 +390,9 @@ fn driven_attached() -> Vec<DrivenAttached> {
             cwd: "/work/smetana".into(),
             title: (i == 0).then(|| "Fix the board".to_string()),
             agent: "claude".into(),
-            // Off the wire when `None`: the phone's contract stays as it was.
-            model: None,
+            // Pinned on the first element only: the key is absent when `None`
+            // (protocol 1.5), so the others keep the shape older phones know.
+            model: (i == 0).then(|| "opus".to_string()),
         })
         .collect()
 }

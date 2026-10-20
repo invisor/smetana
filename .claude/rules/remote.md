@@ -128,6 +128,14 @@ than the digest recorded for the current `PROTOCOL_MAJOR.PROTOCOL_MINOR`, and sa
 MINOR for additions, MAJOR for removals and renames. The way forward is a new entry under a higher version,
 added by hand together with the constants; an existing entry is a frozen contract and is not edited.
 
+## Protocol 1.5: the session's model
+
+`session_attach`'s reply (`Attached`) gained an optional `model`: the model the session was actually started with,
+present only when one was passed, absent otherwise. The desktop's panel names the harness and model from it
+(`conversation-panel.md`, "Who the header names"); a phone that ignores it keeps working. The contract pins it on the
+first fixture element only, so both shapes are held. The mobile build's own `PROTOCOL_MINOR` is the newest minor it
+*knows* and stays where it was, as it did for 1.4.
+
 ## Protocol 1.4: the batch log
 
 `Session` gained `timeline: bool` and `terminal_attach`'s reply gained `log` and `logTrimmed`, for the desktop's own

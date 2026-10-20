@@ -133,10 +133,10 @@ pub struct Attached {
     /// chose for itself. Read with `agent` by the panel's header, which would
     /// otherwise name the settings' pair for a session that ran on another.
     ///
-    /// Left off the wire when `None`, so the phone companion's committed
-    /// contract (`crates/remote-protocol/contract`), which has no model in it,
-    /// is unchanged by a field only the desktop panel reads; the store reads an
-    /// absent key as empty.
+    /// Absent from the wire when `None` and present when set, so a paired
+    /// phone's `session_attach` reply gains a `model` key whenever the role
+    /// names a model: an addition to the protocol (1.5), pinned in the
+    /// contract on one element. The store reads an absent key as empty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 }
