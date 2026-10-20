@@ -245,3 +245,72 @@ export function localHref(root, path) {
   const rooted = forward.startsWith('/') ? forward : `/${forward}`
   return `file://${encodeURI(rooted)}`
 }
+
+/* ---- Bare targets: paths and URLs the agent wrote without any markup -------
+
+   The rule for "what counts as a link in plain prose" lives here, beside
+   `classifyLink`, so `markdown.js` only asks. It is deliberately narrower than
+   `LOOKS_LIKE_PATH`, which governs an explicit `[label](target)` where a
+   person said "this is a link" on purpose: in running text a bare word with an
+   extension (`Node.js`, `package.json`, `e.g.`, `v2.0`) is far more often a
+   word than a path, and a link to nowhere on every second reply is worse than
+   a path left as text. So a bare token is a path only when it says so itself:
+   a leading `/`, `./`, `../` or `~/`; or a `/` somewhere with an extension on
+   the last segment; or a trailing `/` (a folder). `and/or`, `src/foo` and
+   `origin/feature/x` have none of these and stay text. A path with a space in
+   it cannot be told from words and is not found here; it is reachable through
+   backticks (`wholeTarget`) or an explicit link. */
+
+const BARE_URL = /^https?:\/\/\S/i
+const PATH_PREFIX = /^(?:\/|\.\/|\.\.\/|~\/)/
+const LAST_SEGMENT_EXTENSION = /\.[A-Za-z0-9]{1,10}(?::\d+(?::\d+)?)?$/
+const SOMETHING_NAMED = /[^/.~]/
+
+/* Sentence punctuation and an unmatched closer do not belong to the token
+   they trail, the way GFM reads a bare URL. A `)` or `]` stays when the token
+   holds an opener for it (`.../A_(b)`). `:` is only stripped when nothing
+   follows it, so `a.js:12` keeps its line. */
+function trimTrailing(token) {
+  let end = token.length
+  const count = (ch) => token.slice(0, end).split(ch).length - 1
+  while (end > 0) {
+    const last = token[end - 1]
+    if (/[.,;:!?'"]/.test(last)) end -= 1
+    else if (last === ')' && count('(') < count(')')) end -= 1
+    else if (last === ']' && count('[') < count(']')) end -= 1
+    else break
+  }
+  return token.slice(0, end)
+}
+
+function isPathShape(text) {
+  if (HTTP_SCHEME.test(text) || !SOMETHING_NAMED.test(text)) return false
+  const shaped =
+    PATH_PREFIX.test(text) ||
+    text.endsWith('/') ||
+    (text.includes('/') && LAST_SEGMENT_EXTENSION.test(text.slice(text.lastIndexOf('/') + 1)))
+  /* `classifyLink` still has the last word: a token with a foreign scheme
+     (`ftp://x/a.js`) is declined there, and so is it here. */
+  return shaped && classifyLink(text) !== null
+}
+
+/* The token at the very start of `text` when it is a bare URL or path, with
+   its trailing punctuation cut off; `null` when it is neither. The caller
+   decides whether the position is allowed to start one (what precedes it). */
+export function bareTarget(text) {
+  const raw = /^\S+/.exec(text)
+  if (!raw) return null
+  const token = trimTrailing(raw[0])
+  if (!token) return null
+  if (BARE_URL.test(token)) return token
+  return isPathShape(token) ? token : null
+}
+
+/* Whether a whole string — a code span's content, already trimmed — is one URL
+   or one path. Nothing is cut from it, and a path may hold spaces, since the
+   backticks have already said where it ends. */
+export function wholeTarget(text) {
+  if (!text || text.includes('\n')) return false
+  if (/^https?:\/\/\S+$/i.test(text)) return true
+  return isPathShape(text)
+}

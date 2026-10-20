@@ -2056,7 +2056,12 @@ const MARKDOWN_LINKS_SAMPLE = [
   'The replay is stitched in',
   '[src-tauri/src/session/claude_driver/conversation_history_replay_and_stitching_logic.rs:184](src-tauri/src/session/claude_driver/conversation_history_replay_and_stitching_logic.rs:184),',
   'read from [src/components/markdown/](src/components/markdown/) — see also',
-  '[the manifest](src-tauri/tauri.conf.json).'
+  '[the manifest](src-tauri/tauri.conf.json).',
+  '',
+  'Written with no markup, a path becomes a link too: .smetana/reviews/2026-10-20-review.md and',
+  'docs/ are found in the running text, and so is https://example.com/a_b.',
+  'Inside backticks it keeps the look of code: `src/components/markdown/links.js:40` and',
+  '`https://example.com/docs`, while `taxCalculationMixin` stays plain code.'
 ].join('\n')
 
 /* The active project's absolute path this page pretends to have, so the

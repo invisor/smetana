@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { classifyLink, localHref, splitPath } from '../../../src/components/markdown/links.js'
+import {
+  bareTarget,
+  classifyLink,
+  localHref,
+  splitPath,
+  wholeTarget
+} from '../../../src/components/markdown/links.js'
 
 describe('classifyLink: external', () => {
   it('reads an http or https target as external', () => {
@@ -243,5 +249,38 @@ describe('localHref', () => {
     expect(localHref('/Users/flexo/my project', 'a b.txt')).toBe(
       'file:///Users/flexo/my%20project/a%20b.txt'
     )
+  })
+})
+
+describe('bareTarget', () => {
+  it('answers the token of a path or URL at the start of the text, without trailing punctuation', () => {
+    expect(bareTarget('src/a.js. Next')).toBe('src/a.js')
+    expect(bareTarget('src/a.js:12:3, next')).toBe('src/a.js:12:3')
+    expect(bareTarget('docs/')).toBe('docs/')
+    expect(bareTarget('~/d.txt)')).toBe('~/d.txt')
+    expect(bareTarget('https://x.io/a?b=1!')).toBe('https://x.io/a?b=1')
+    expect(bareTarget('https://x.io/A_(b))')).toBe('https://x.io/A_(b)')
+  })
+
+  it('answers null for words that are not paths', () => {
+    for (const w of ['Node.js', 'e.g.', 'v2.0', 'and/or', 'src/foo', '16:9', '/', '//', 'https://']) {
+      expect(bareTarget(`${w} rest`), w).toBeNull()
+    }
+  })
+})
+
+describe('wholeTarget', () => {
+  it('accepts a whole string that is one path or URL, spaces allowed in a path', () => {
+    expect(wholeTarget('src/a.js')).toBe(true)
+    expect(wholeTarget('~/Library/Application Support/x.png')).toBe(true)
+    expect(wholeTarget('https://example.com')).toBe(true)
+  })
+
+  it('refuses anything else, including a URL with a space', () => {
+    expect(wholeTarget('taxCalculationMixin')).toBe(false)
+    expect(wholeTarget('[merge].hazards')).toBe(false)
+    expect(wholeTarget('Node.js')).toBe(false)
+    expect(wholeTarget('https://example.com/a b')).toBe(false)
+    expect(wholeTarget('a/b.c\nd.e')).toBe(false)
   })
 })

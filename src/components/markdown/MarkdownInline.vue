@@ -143,6 +143,7 @@ function onLocalAuxClick(event, path, kind) {
       v-else-if="node.type === 'link' && node.local && root"
       :data-path="node.path"
       :data-kind="node.targetKind"
+      :data-code="node.code ? '' : undefined"
       :href="localHref(root, node.path)"
       @click.prevent="emit('open-local', { path: node.path, kind: node.targetKind })"
       @auxclick.prevent="onLocalAuxClick($event, node.path, node.targetKind)"
@@ -153,9 +154,11 @@ function onLocalAuxClick(event, path, kind) {
          nothing can answer: `sm-prose.css` only styles `a[data-path]`, so an
          inert control here would still look pressable while doing nothing,
          which is the one thing worse than not styling it at all. -->
+    <code v-else-if="node.type === 'link' && node.local && node.code">{{ node.head }}{{ node.tail }}</code>
     <template v-else-if="node.type === 'link' && node.local">{{ node.head }}{{ node.tail }}</template>
     <a
       v-else-if="node.type === 'link'"
+      :data-code="node.code ? '' : undefined"
       :href="node.href"
       @click.prevent="emit('open', node.href)"
       @auxclick.prevent="onAuxClick($event, node.href)"
