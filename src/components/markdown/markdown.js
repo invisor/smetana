@@ -669,6 +669,7 @@ const INLINE = [
 ]
 
 const WORD = /[\p{L}\p{N}_]/u
+const WORD_RUN = /^[\p{L}\p{N}]+/u
 
 /* `href` is the target as written; `rawLabel` is the text between the
    brackets, unparsed — `classifyLink` decides what the target is, and this
@@ -743,7 +744,7 @@ export function parseInline(text, auto = true) {
     /* The character this position follows, in the original string — what tells
        an underscore between two words from one starting an emphasis. Empty at
        the very beginning, which no guard treats as a word. */
-    const before = text.slice(0, text.length - rest.length).slice(-1)
+    const before = text[text.length - rest.length - 1] ?? ''
     let hit = null
     for (const [pattern, build, flags] of INLINE) {
       if (flags?.bare && !auto) continue
@@ -762,8 +763,16 @@ export function parseInline(text, auto = true) {
       nodes.push(...(Array.isArray(hit.built) ? hit.built : [hit.built]))
       rest = rest.slice(hit.length)
     } else {
-      plain += rest[0]
-      rest = rest.slice(1)
+      /* A letter or digit right after a word character starts nothing: every
+         marker is punctuation, and a bare path or URL needs a non-word
+         character before it (`bareTarget`). So the rest of such a run is
+         plain text, taken in one step rather than one pattern sweep per
+         character — the difference between a megabyte of prose parsing in
+         half a second and in well over one. */
+      const run = WORD.test(rest[0]) ? WORD_RUN.exec(rest.slice(1)) : null
+      const length = 1 + (run ? run[0].length : 0)
+      plain += rest.slice(0, length)
+      rest = rest.slice(length)
     }
   }
   flush()
