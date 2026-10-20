@@ -127,6 +127,18 @@ pub struct Attached {
     /// necessarily the role the intent asked for: `pick_with_model` may have
     /// substituted. The sign-in buttons are offered for this one.
     pub agent: String,
+    /// `Live::model` — the model this session was actually started with
+    /// (what `pick_with_model` handed back, so already dropped when the harness
+    /// was substituted), `None` where no model flag was passed and the harness
+    /// chose for itself. Read with `agent` by the panel's header, which would
+    /// otherwise name the settings' pair for a session that ran on another.
+    ///
+    /// Absent from the wire when `None` and present when set, so a paired
+    /// phone's `session_attach` reply gains a `model` key whenever the role
+    /// names a model: an addition to the protocol (1.5), pinned in the
+    /// contract on one element. The store reads an absent key as empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// A snapshot of exactly one native Crew node. Node ids stay scoped by `root`
@@ -431,6 +443,9 @@ struct Live {
     /// second guess at them. `terminal::service`'s `Live` carries these for
     /// the identical reason, as part of the `Session` it never lets go of.
     agent: String,
+    /// The model `pick_with_model` returned at the spawn, kept for `Attached`.
+    /// Not part of the `agents.json` record, which does not carry one.
+    model: Option<String>,
     work: crate::terminal::model::SessionWork,
     started_at: String,
     /// The automatic title, in order of arrival: the person's first words at
@@ -954,7 +969,7 @@ fn spawn_session(
         agent_prompt: crate::settings::agent_prompt(app),
         facts,
         session_id,
-        model,
+        model: model.clone(),
         // A run's subagents, and this stage starts no run.
         worker_model: None,
     };
@@ -1028,6 +1043,7 @@ fn spawn_session(
         project: project.to_owned(),
         cwd: cwd.to_string_lossy().into_owned(),
         agent: profile.id().to_owned(),
+        model,
         work,
         started_at,
         // The person's first words, if there were any — the opening prose a
@@ -2379,6 +2395,7 @@ fn handle(
                         cwd: live.cwd.clone(),
                         title: live.title.clone(),
                         agent: live.agent.clone(),
+                        model: live.model.clone(),
                     })
                 }
                 None => Err(SessionError::NoSuchSession(id)),
@@ -3021,6 +3038,58 @@ fn note_conversation(app: &AppHandle, id: SessionId, live: &mut Live, conversati
 
 #[cfg(test)]
 mod tests {
+    /// smetana-70uj: a review that names its harness is launched on that pair,
+    /// and the snapshot carries it, so the panel does not sign it with the
+    /// settings' default. Everything between the intent and `Attached` that
+    /// can be run without a process is run here: the resolution, the pick on a
+    /// `PATH` holding both binaries, and the wire shape.
+    #[test]
+    fn a_review_snapshot_carries_the_harness_and_model_it_was_launched_on() {
+        let bin = tempfile::tempdir().unwrap();
+        for name in ["claude", "codex"] {
+            std::fs::write(bin.path().join(name), "").unwrap();
+        }
+        let path = bin.path().to_string_lossy().into_owned();
+        let intent = Intent::ReviewBranch {
+            pairs: Vec::new(),
+            report: ".smetana/reviews/x".into(),
+            fetch_failed: Vec::new(),
+            agent: Some("codex".into()),
+            model: Some("gpt-5".into()),
+        };
+        let (agent, model) =
+            crate::settings::resolve_role_model(("claude".into(), "opus".into()), &intent, None);
+        let (profile, model) = agents::pick_with_model(&agent, model, Some(&path)).unwrap();
+        let attached = Attached {
+            events: Vec::new(),
+            seq: 0,
+            state: SessionState::Ready,
+            conversation: None,
+            cwd: String::new(),
+            title: None,
+            agent: profile.id().to_owned(),
+            model,
+        };
+        let wire = serde_json::to_value(&attached).unwrap();
+        assert_eq!(wire["agent"], "codex");
+        assert_eq!(wire["model"], "gpt-5");
+    }
+
+    #[test]
+    fn a_snapshot_with_no_model_flag_leaves_the_key_off() {
+        let attached = Attached {
+            events: Vec::new(),
+            seq: 0,
+            state: SessionState::Ready,
+            conversation: None,
+            cwd: String::new(),
+            title: None,
+            agent: "claude".into(),
+            model: None,
+        };
+        assert!(serde_json::to_value(&attached).unwrap().get("model").is_none());
+    }
+
     #[test]
     fn a_closed_session_answers_removed() {
         use crate::terminal::model::Exit;

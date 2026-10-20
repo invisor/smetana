@@ -295,27 +295,29 @@ const ourRefusal = computed(() =>
     : ''
 )
 
-/* Who is on the other end. None of this is on the wire — `session_attach`
-   answers with the journal, the sequence number and the state, and nothing
-   else — so it is read from the front end's own settings, where the same three
-   values decided what was spawned: `Intent::Bare` takes the `Default` role,
-   which is `Settings::role_pair`'s own project-aware reading of it — the
-   active project's own `agents` block where it names a harness, the root pair
-   otherwise (`.claude/rules/settings.md`). `effectiveAgents` is the front
-   end's mirror of that same resolution, so this label and the harness that
-   actually spawned the session cannot disagree over a project carrying its
-   own table.
+/* Who is on the other end. The session snapshot (`session_attach`) names the
+   harness that actually runs it and the model it was started with
+   (`held.agent`, `held.model`), and that is what is drawn once it has arrived:
+   a review with its reviewer picked in the Review changes window, a role whose
+   harness differs from Default, or a substitution by `agents::pick` all run on
+   a pair the settings do not name. The settings' pair — `effectiveAgents`, the
+   front end's mirror of `Settings::role_pair`'s project-aware reading of the
+   Default role (`.claude/rules/settings.md`) — is only the answer for the
+   moment before the snapshot lands, where it is also right for a session that
+   starts on that pair.
+
+   Once the harness is known the model is the snapshot's alone, never a mix: a
+   model id chosen against one harness means nothing to another. An empty model
+   is the harness choosing for itself, so nothing is drawn rather than an
+   empty gap.
 
    There is deliberately **no glyph for the agent's brand**. `core/icons.js` is
    lucide and holds no Claude or Codex mark, and vendoring one would be a third
    exception to "no pictures" after the app icon and the Catppuccin file icons.
    The label carries it, and it works for the next harness on the day it is
-   added.
-
-   An empty model is the harness choosing for itself, which is what an unset
-   `model` means, so nothing is drawn rather than an empty gap. */
-const label = computed(() => agentLabel(effectiveAgents.value.agent))
-const model = computed(() => effectiveAgents.value.model)
+   added. */
+const label = computed(() => agentLabel(held.value?.agent || effectiveAgents.value.agent))
+const model = computed(() => (held.value?.agent ? held.value.model : effectiveAgents.value.model))
 const folder = computed(() => (settings.activeProject ? basename(settings.activeProject) : ''))
 
 /* The activity strip's own `waiting` sentence — the same label the bar

@@ -94,6 +94,19 @@ describe('the conversation store', () => {
     expect(stores.conversation.conversationFor(1).agent).toBe('')
   })
 
+  it('carries the model the session was started with off the attach snapshot', async () => {
+    const { stores } = await ready({ events: [], seq: 0, state: 'ready', agent: 'codex', model: 'gpt-5' })
+    expect(stores.conversation.conversationFor(1).model).toBe('')
+    await stores.conversation.attach(1)
+    expect(stores.conversation.conversationFor(1).model).toBe('gpt-5')
+  })
+
+  it('reads a snapshot that names no model as empty', async () => {
+    const { stores } = await ready({ events: [], seq: 0, state: 'ready', agent: 'codex', model: null })
+    await stores.conversation.attach(1)
+    expect(stores.conversation.conversationFor(1).model).toBe('')
+  })
+
   it('appends events that arrive in sequence', async () => {
     const { stores, emit, nextTick } = await ready({
       events: [text(1, 'a')],
