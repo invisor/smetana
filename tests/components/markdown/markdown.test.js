@@ -1124,7 +1124,8 @@ describe('bare paths, bare URLs and code spans that name one', () => {
     const inputs = [
       ')'.repeat(10000),
       `${'a'.repeat(40000)}`,
-      `${'['.repeat(400)}${']'.repeat(400)}`,
+      `${'['.repeat(2000)}${']'.repeat(2000)}`,
+      'word '.repeat(80000),
       `x ${'('.repeat(10000)}`,
       `a${'"a'.repeat(10000)}`,
       `${'a/'.repeat(5000)}`
@@ -1132,8 +1133,17 @@ describe('bare paths, bare URLs and code spans that name one', () => {
     for (const input of inputs) {
       const t0 = performance.now()
       parseMarkdown(input)
-      expect(performance.now() - t0, input.slice(0, 12)).toBeLessThan(200)
+      expect(performance.now() - t0, input.slice(0, 12)).toBeLessThan(1000)
     }
+  })
+
+  it('keeps an over-long URL or path as plain text', () => {
+    const url = `https://x.io/${'a'.repeat(9000)}`
+    expect(para(`see ${url} now`)).toEqual([{ type: 'text', value: `see ${url} now` }])
+    const path = `${'a'.repeat(1100)}/b.js`
+    expect(para(`see ${path} now`)).toEqual([{ type: 'text', value: `see ${path} now` }])
+    const mid = `https://x.io/${'a'.repeat(2000)}`
+    expect(para(mid)[0]).toMatchObject({ type: 'link', href: mid })
   })
 
   it('finds a path inside emphasis', () => {

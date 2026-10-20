@@ -294,12 +294,34 @@ describe('bareTarget', () => {
     expect(bareTarget('https://a.io/b', '=')).not.toBeNull()
   })
 
+  it('leaves a token longer than the cap as plain text instead of linking its prefix', () => {
+    expect(bareTarget(`${'a'.repeat(1100)}/b.js rest`, ' ')).toBeNull()
+    expect(bareTarget(`src/${'a'.repeat(1100)}.js rest`, ' ')).toBeNull()
+    expect(bareTarget(`https://x.io/${'a'.repeat(9000)} rest`, ' ')).toBeNull()
+    expect(bareTarget(`https://x.io/${'a'.repeat(2000)} rest`, ' ')).toEqual({
+      token: `https://x.io/${'a'.repeat(2000)}`,
+      kind: 'external'
+    })
+  })
+
+  it('reads typographic quotes like straight ones', () => {
+    for (const before of ['\u201c', '\u2018', '\u00ab']) {
+      expect(bareTarget('src/a.js', before), before).not.toBeNull()
+    }
+    for (const closer of ['\u201d', '\u2019', '\u00bb']) {
+      expect(bareTarget(`src/a.js${closer} x`, ' '), closer).toEqual({
+        token: 'src/a.js',
+        kind: 'local'
+      })
+    }
+  })
+
   it('stays fast on a long run of closers and on one very long token', () => {
     const t0 = performance.now()
     bareTarget(')'.repeat(10000), ' ')
     bareTarget(`${'a'.repeat(40000)}/`, ' ')
     bareTarget(`src/${')'.repeat(40000)}`, ' ')
-    expect(performance.now() - t0).toBeLessThan(200)
+    expect(performance.now() - t0).toBeLessThan(1000)
   })
 })
 

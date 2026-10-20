@@ -269,11 +269,20 @@ const LAST_SEGMENT_EXTENSION = /\.[A-Za-z0-9]{1,10}(?::\d+(?::\d+)?)?$/
 /* A path with nothing readable in it (`:/`, `-/`, `../`) is punctuation. */
 const SOMETHING_NAMED = /[\p{L}\p{N}]/u
 const WORD_CHAR = /[\p{L}\p{N}_]/u
-const PATH_MAY_FOLLOW = /^(?:|\s|[("'])$/
-/* No path or URL this long is written by hand, and the cap is what keeps the
-   scan of one token bounded when many positions start one. */
-const MAX_TOKEN = 1024
-const TOKEN = new RegExp(`^\\S{1,${MAX_TOKEN}}`)
+const PATH_MAY_FOLLOW = /^(?:|\s|[("'\u201c\u2018\u00ab])$/
+/* No path or URL this long is written by hand, and the caps are what keep the
+   scan of one token bounded when many positions start one. A token that runs
+   past its cap is left as text whole: linking its first part would point at a
+   different place than the one written. A URL's cap is higher because its scan
+   only starts at a scheme, and a presigned link is routinely long. */
+const MAX_PATH = 1024
+const MAX_URL = 8192
+const PATH_TOKEN = new RegExp(`^\\S{1,${MAX_PATH}}`)
+const URL_TOKEN = new RegExp(`^\\S{1,${MAX_URL}}`)
+/* A path shape holds a slash, so one within the first token's reach is the
+   price of entry — checked by a bounded pattern, never by a search of the rest
+   of the paragraph. */
+const SLASH_NEAR = new RegExp(`^[^\\s/]{0,${MAX_PATH - 1}}/`)
 const NOT_A_START = /^[\s()"']/
 
 /* Sentence punctuation and an unmatched closer do not belong to the token
@@ -294,7 +303,7 @@ function trimTrailing(token) {
   }
   while (end > 0) {
     const last = token[end - 1]
-    if (/[.,;:!?'"]/.test(last)) end -= 1
+    if (/[.,;:!?'"\u201d\u2019\u00bb]/.test(last)) end -= 1
     else if (last === ')' && parens < 0) {
       parens += 1
       end -= 1
@@ -328,11 +337,12 @@ export function bareTarget(text, before = '') {
   if (!text || NOT_A_START.test(text)) return null
   const isUrl = HTTP_SCHEME.test(text)
   if (isUrl ? WORD_CHAR.test(before) : !PATH_MAY_FOLLOW.test(before)) return null
-  /* Every path shape holds a slash, so a text with none near its start is
-     refused by a native search before any token is cut out of it. */
-  if (!isUrl && !(text.indexOf('/') >= 0 && text.indexOf('/') < MAX_TOKEN)) return null
-  const raw = TOKEN.exec(text)
+  if (!isUrl && !SLASH_NEAR.test(text)) return null
+  const cap = isUrl ? MAX_URL : MAX_PATH
+  const raw = (isUrl ? URL_TOKEN : PATH_TOKEN).exec(text)
   if (!raw) return null
+  /* Cut off by the cap rather than by whitespace or the end: not a target. */
+  if (raw[0].length === cap && text.length > cap && !/\s/.test(text[cap])) return null
   const token = trimTrailing(raw[0])
   if (!token) return null
   if (isUrl) return BARE_URL.test(token) && classifyLink(token) ? { token, kind: 'external' } : null
