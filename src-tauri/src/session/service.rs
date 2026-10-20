@@ -1727,6 +1727,23 @@ fn refresh_claude_crews(
         for node in crate::agents::claude_crew::members_excluding(&config, hidden_bootstrap) {
             package.apply(node);
         }
+        // Claude Code 2.1.304 removes a stopped teammate from `members[]`
+        // instead of writing a status, so absence is the Done signal. Only
+        // trust it from a config that parsed with a team name (checked above)
+        // and a real `members` array: a config read mid-rewrite must not
+        // finish everyone. The full set, bootstrap included, is deliberate.
+        let mut reconciled_members: Option<HashSet<String>> = None;
+        if config.get("members").and_then(serde_json::Value::as_array).is_some() {
+            let present: HashSet<String> = crate::agents::claude_crew::members_excluding(&config, None)
+                .into_iter()
+                .map(|member| member.id)
+                .collect();
+            let switched = package.tree.finish_absent(&present);
+            if !switched.is_empty() {
+                log::info!("[crew] root {root}: {} teammate(s) left the team config, marked done", switched.len());
+            }
+            reconciled_members = Some(present);
+        }
         match lead_tails.entry(*root).or_default().read_new_with_lifecycle(&lead_transcript) {
             Ok((events, lifecycle)) => {
                 // This first read advances past only the constrained
@@ -1873,11 +1890,19 @@ fn refresh_claude_crews(
                     // lead's report to count, so a child's are not.
                     for state in lifecycle {
                         match state {
+                            // While a teammate is absent from `members[]` its
+                            // trailing transcript (the shutdown exchange ends
+                            // on a tool_use) must not revive it; once it is
+                            // listed again, the transcript drives it.
+                            crate::agents::claude_crew::LeadLifecycle::TurnStart
+                                if !package.tree.transcript_may_drive(node, reconciled_members.as_ref()) => {}
                             crate::agents::claude_crew::LeadLifecycle::TurnStart => {
                                 package.tree.set_state(node, CrewState::Running);
                             }
                             crate::agents::claude_crew::LeadLifecycle::Ready { tokens_in, tokens_out } => {
-                                package.tree.set_state(node, CrewState::Waiting);
+                                if package.tree.transcript_may_drive(node, reconciled_members.as_ref()) {
+                                    package.tree.set_state(node, CrewState::Waiting);
+                                }
                                 if let Some(events) = package.close_turn(node, tokens_in, tokens_out) {
                                     emit_crew_events(app, *root, node, events);
                                 }
