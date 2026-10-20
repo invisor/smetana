@@ -2061,7 +2061,8 @@ export function installMockBackend() {
         seq: MOCK_SIGN_IN_CONVERSATION[MOCK_SIGN_IN_CONVERSATION.length - 1].seq,
         state: 'idle',
         conversation: null,
-        agent: 'codex'
+        agent: 'codex',
+        model: 'gpt-5.6-sol'
       }
     }
     if (command === 'session_attach') {
@@ -2080,7 +2081,8 @@ export function installMockBackend() {
            off the snapshot and a fixture that answers in an older shape is
            exactly what this file exists to stop happening quietly. */
         conversation: null,
-        agent: 'claude'
+        agent: 'claude',
+        model: 'opus'
       }
     }
     if (command === 'session_since') {

@@ -113,7 +113,7 @@ pub fn role_model(
 /// A sign-in names its own harness — the one whose session just failed — and it
 /// is read here as `chosen`, with the table's model dropped, since a model id
 /// chosen against another harness means nothing to this one.
-fn resolve_role_model(
+pub(crate) fn resolve_role_model(
     table: (String, String),
     intent: &crate::agents::Intent,
     chosen: Option<&str>,

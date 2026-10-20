@@ -15,6 +15,18 @@ paths:
 
 # The conversation panel: what it renders, and why
 
+## Who the header names
+
+The header's harness and model, and the "… is thinking" and "… is responding" lines, come from the
+session snapshot (`held.agent` and `held.model`, off `Attached::agent` and `Attached::model`), not from
+the settings. A session does not always run on the Default role's pair: a review with its reviewer
+picked in the Review changes window, a role whose harness differs from Default, and an
+`agents::pick` substitution all launch another one, and `Live` is the only place that knows what was
+actually started (smetana-70uj). The settings' pair (`effectiveAgents`) is the answer only until the
+snapshot lands. Once `held.agent` is known the model is the snapshot's alone — an empty one draws
+nothing, never the settings' model for another harness. The footer's subscription strip is the Run
+lead's harness and is a different question.
+
 ## Crew node journals
 
 A native Crew row uses a composite `crew:<root>:<node>` address. The backend

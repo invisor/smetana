@@ -217,6 +217,10 @@ function hold(id) {
        names none; readers fall back to the settings' default harness only
        while it is unknown. */
     agent: '',
+    /* `Attached::model` — the model that session was started with, from the
+       snapshot. `''` until it lands and for a session started with no model
+       flag, where the harness chose for itself. */
+    model: '',
     /* Derived, and derived once per change rather than once per read. A getter
        here read the same and refolded the whole journal every time a render
        touched it — against `journal::BUDGET`, four thousand events, while
@@ -429,7 +433,7 @@ export async function attach(id) {
     : invoke('session_attach', { id })
   attaching.set(id, current)
   try {
-    const { events, seq, state, conversation, cwd, title, agent } = await current
+    const { events, seq, state, conversation, cwd, title, agent, model } = await current
     if (attaching.get(id) !== current) return
     /* Replaced whole and never merged: this *is* the conversation, and the one
        thing a snapshot is for is being trusted over whatever was drawn before
@@ -443,6 +447,7 @@ export async function attach(id) {
        reconciles the id against `session:state`. */
     held.cwd = cwd ?? ''
     held.agent = typeof agent === 'string' ? agent : ''
+    held.model = typeof model === 'string' ? model : ''
     /* The snapshot is the freshest thing anybody has about this session, so the
        record takes it too — a row drawn from a state event alone would be one
        event behind the panel beside it for as long as nothing moved. */
