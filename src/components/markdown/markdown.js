@@ -651,19 +651,19 @@ const INLINE = [
       WORD.test(before) ? null : { type: 'em', children: parseInline(m[1], auto) }
   ],
   /* A path or URL written with no markup at all. What counts is `links.js`'s
-     (`bareTarget`); this only checks the position: a URL may not start in the
-     middle of a word, and a path must follow the start of the text, a space or
-     an opening parenthesis. The pattern is an object with its own `exec`
+     (`bareTarget`), the position included, which is judged from `before`
+     ahead of any scanning. The pattern is an object with its own `exec`
      because the length consumed is the token with its trailing punctuation
      already cut off, which no regex over `rest` can say. Switched off inside
      an explicit link's label, where a nested anchor is not allowed. */
   [
-    { exec: (rest) => { const t = bareTarget(rest); return t ? [t] : null } },
-    (m, before) => {
-      const isUrl = /^https?:\/\//i.test(m[0])
-      const allowed = isUrl ? !WORD.test(before) : before === '' || before === '(' || /\s/.test(before)
-      return allowed ? link(m[0], m[0], { verbatim: true }) : null
+    {
+      exec: (rest, before) => {
+        const found = bareTarget(rest, before)
+        return found ? [found.token] : null
+      }
     },
+    (m) => link(m[0], m[0], { verbatim: true }),
     { bare: true }
   ]
 ]
@@ -747,7 +747,7 @@ export function parseInline(text, auto = true) {
     let hit = null
     for (const [pattern, build, flags] of INLINE) {
       if (flags?.bare && !auto) continue
-      const match = pattern.exec(rest)
+      const match = pattern.exec(rest, before)
       if (!match) continue
       const built = build(match, before, auto)
       /* A marker this module recognises but cannot honour — a link it may not

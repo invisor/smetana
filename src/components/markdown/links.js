@@ -261,24 +261,47 @@ export function localHref(root, path) {
    it cannot be told from words and is not found here; it is reachable through
    backticks (`wholeTarget`) or an explicit link. */
 
-const BARE_URL = /^https?:\/\/\S/i
+/* Derived from `HTTP_SCHEME` above rather than spelled again: which schemes
+   this app will open is decided in one place only. */
+const BARE_URL = new RegExp(`${HTTP_SCHEME.source}\\S`, 'i')
 const PATH_PREFIX = /^(?:\/|\.\/|\.\.\/|~\/)/
 const LAST_SEGMENT_EXTENSION = /\.[A-Za-z0-9]{1,10}(?::\d+(?::\d+)?)?$/
-const SOMETHING_NAMED = /[^/.~]/
+/* A path with nothing readable in it (`:/`, `-/`, `../`) is punctuation. */
+const SOMETHING_NAMED = /[\p{L}\p{N}]/u
+const WORD_CHAR = /[\p{L}\p{N}_]/u
+const PATH_MAY_FOLLOW = /^(?:|\s|[("'])$/
+/* No path or URL this long is written by hand, and the cap is what keeps the
+   scan of one token bounded when many positions start one. */
+const MAX_TOKEN = 1024
+const TOKEN = new RegExp(`^\\S{1,${MAX_TOKEN}}`)
+const NOT_A_START = /^[\s()"']/
 
 /* Sentence punctuation and an unmatched closer do not belong to the token
    they trail, the way GFM reads a bare URL. A `)` or `]` stays when the token
    holds an opener for it (`.../A_(b)`). `:` is only stripped when nothing
-   follows it, so `a.js:12` keeps its line. */
+   follows it, so `a.js:12` keeps its line. Linear: the brackets are counted
+   once and the counts follow the cut. */
 function trimTrailing(token) {
   let end = token.length
-  const count = (ch) => token.slice(0, end).split(ch).length - 1
+  let parens = 0
+  let squares = 0
+  for (let i = 0; i < end; i += 1) {
+    const ch = token[i]
+    if (ch === '(') parens += 1
+    else if (ch === ')') parens -= 1
+    else if (ch === '[') squares += 1
+    else if (ch === ']') squares -= 1
+  }
   while (end > 0) {
     const last = token[end - 1]
     if (/[.,;:!?'"]/.test(last)) end -= 1
-    else if (last === ')' && count('(') < count(')')) end -= 1
-    else if (last === ']' && count('[') < count(']')) end -= 1
-    else break
+    else if (last === ')' && parens < 0) {
+      parens += 1
+      end -= 1
+    } else if (last === ']' && squares < 0) {
+      squares += 1
+      end -= 1
+    } else break
   }
   return token.slice(0, end)
 }
@@ -294,16 +317,26 @@ function isPathShape(text) {
   return shaped && classifyLink(text) !== null
 }
 
-/* The token at the very start of `text` when it is a bare URL or path, with
-   its trailing punctuation cut off; `null` when it is neither. The caller
-   decides whether the position is allowed to start one (what precedes it). */
-export function bareTarget(text) {
-  const raw = /^\S+/.exec(text)
+/* The bare URL or path at the very start of `text`, as `{ token, kind }` with
+   its trailing punctuation cut off, or `null`. `before` is the character that
+   precedes `text` in the source, and the position is judged from it first,
+   before any scanning: a URL may start anywhere but inside a word, a path only
+   at the start, after whitespace, an opening parenthesis or a quote (which
+   stays text). Judging first is what keeps the parser linear — it calls this
+   at every character. `kind` is `classifyLink`'s: `external` or `local`. */
+export function bareTarget(text, before = '') {
+  if (!text || NOT_A_START.test(text)) return null
+  const isUrl = HTTP_SCHEME.test(text)
+  if (isUrl ? WORD_CHAR.test(before) : !PATH_MAY_FOLLOW.test(before)) return null
+  /* Every path shape holds a slash, so a text with none near its start is
+     refused by a native search before any token is cut out of it. */
+  if (!isUrl && !(text.indexOf('/') >= 0 && text.indexOf('/') < MAX_TOKEN)) return null
+  const raw = TOKEN.exec(text)
   if (!raw) return null
   const token = trimTrailing(raw[0])
   if (!token) return null
-  if (BARE_URL.test(token)) return token
-  return isPathShape(token) ? token : null
+  if (isUrl) return BARE_URL.test(token) && classifyLink(token) ? { token, kind: 'external' } : null
+  return isPathShape(token) ? { token, kind: 'local' } : null
 }
 
 /* Whether a whole string — a code span's content, already trimmed — is one URL
@@ -311,6 +344,6 @@ export function bareTarget(text) {
    backticks have already said where it ends. */
 export function wholeTarget(text) {
   if (!text || text.includes('\n')) return false
-  if (/^https?:\/\/\S+$/i.test(text)) return true
+  if (HTTP_SCHEME.test(text)) return !/\s/.test(text) && classifyLink(text) !== null
   return isPathShape(text)
 }

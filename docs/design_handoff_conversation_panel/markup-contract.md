@@ -228,6 +228,10 @@ Decisions worth knowing:
   `[data-tail]` (never truncates — the file name and line number). Inline, the
   link is an `inline-flex` that yields to the sentence; as the only child of a
   `p` it takes the full column, so the head truncates as late as possible.
+- A link the agent wrote in backticks carries **`data-code`** on the same
+  anchor (local or external): inline code's background, padding and radius, so
+  it still reads as code while being pressable. Colour and underline are the
+  link's own.
 - Both take the 2px `--focus-ring`.
 
 ---

@@ -584,7 +584,7 @@ describe('the invariant', () => {
     nodes
       .map((n) => {
         if (n.type === 'text' || n.type === 'code') return n.value
-        if (n.type === 'link' && n.local) return `${n.head}${n.tail}`
+        if (n.type === 'link' && n.local) return `${n.head}${n.tail}${n.targetKind === 'dir' ? '/' : ''}`
         if (n.type === 'link') return `${flatten(n.children)} ${n.href}`
         if (n.children) return flatten(n.children)
         return ''
@@ -650,7 +650,9 @@ describe('the invariant', () => {
     '',
     '---',
     '',
-    'Trailing <b>tag</b> and [a][ref].'
+    'Trailing <b>tag</b> and [a][ref].',
+    '',
+    'Folders keep their slash: docs/ and `src/`.'
   ].join('\n')
 
   /* Five constructs in one string, and every word of all five is still on
@@ -1098,6 +1100,40 @@ describe('bare paths, bare URLs and code spans that name one', () => {
     expect(nested.children).toEqual([
       { type: 'strong', children: [{ type: 'text', value: 'src/a.js' }] }
     ])
+  })
+
+  it('starts a quoted path after the quote, which stays text', () => {
+    for (const q of ['"', "'"]) {
+      const nodes = para(`open ${q}src/a.js${q} now`)
+      expect(nodes).toEqual([
+        { type: 'text', value: `open ${q}` },
+        expect.objectContaining({ type: 'link', path: 'src/a.js', head: 'src/', tail: 'a.js' }),
+        { type: 'text', value: `${q} now` }
+      ])
+    }
+  })
+
+  it('does not turn a punctuation-only folder into a link', () => {
+    for (const w of [':/', ':-/', '-/']) {
+      expect(para(`a ${w} b`), w).toEqual([{ type: 'text', value: `a ${w} b` }])
+      expect(para(`\`${w}\``), w).toEqual([{ type: 'code', value: w }])
+    }
+  })
+
+  it('parses pathological inputs in a short time', () => {
+    const inputs = [
+      ')'.repeat(10000),
+      `${'a'.repeat(40000)}`,
+      `${'['.repeat(400)}${']'.repeat(400)}`,
+      `x ${'('.repeat(10000)}`,
+      `a${'"a'.repeat(10000)}`,
+      `${'a/'.repeat(5000)}`
+    ]
+    for (const input of inputs) {
+      const t0 = performance.now()
+      parseMarkdown(input)
+      expect(performance.now() - t0, input.slice(0, 12)).toBeLessThan(200)
+    }
   })
 
   it('finds a path inside emphasis', () => {

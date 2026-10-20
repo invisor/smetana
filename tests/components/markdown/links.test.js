@@ -253,19 +253,53 @@ describe('localHref', () => {
 })
 
 describe('bareTarget', () => {
-  it('answers the token of a path or URL at the start of the text, without trailing punctuation', () => {
-    expect(bareTarget('src/a.js. Next')).toBe('src/a.js')
-    expect(bareTarget('src/a.js:12:3, next')).toBe('src/a.js:12:3')
-    expect(bareTarget('docs/')).toBe('docs/')
-    expect(bareTarget('~/d.txt)')).toBe('~/d.txt')
-    expect(bareTarget('https://x.io/a?b=1!')).toBe('https://x.io/a?b=1')
-    expect(bareTarget('https://x.io/A_(b))')).toBe('https://x.io/A_(b)')
+  it('answers the token and its kind for a path or URL at the start of the text', () => {
+    expect(bareTarget('src/a.js. Next', '')).toEqual({ token: 'src/a.js', kind: 'local' })
+    expect(bareTarget('src/a.js:12:3, next', ' ')).toEqual({ token: 'src/a.js:12:3', kind: 'local' })
+    expect(bareTarget('docs/', '(')).toEqual({ token: 'docs/', kind: 'local' })
+    expect(bareTarget('~/d.txt)', ' ')).toEqual({ token: '~/d.txt', kind: 'local' })
+    expect(bareTarget('https://x.io/a?b=1!', ' ')).toEqual({
+      token: 'https://x.io/a?b=1',
+      kind: 'external'
+    })
+    expect(bareTarget('https://x.io/A_(b))', ' ')).toEqual({
+      token: 'https://x.io/A_(b)',
+      kind: 'external'
+    })
   })
 
   it('answers null for words that are not paths', () => {
     for (const w of ['Node.js', 'e.g.', 'v2.0', 'and/or', 'src/foo', '16:9', '/', '//', 'https://']) {
-      expect(bareTarget(`${w} rest`), w).toBeNull()
+      expect(bareTarget(`${w} rest`, ' '), w).toBeNull()
     }
+  })
+
+  it('refuses a path that has no letter or digit in it', () => {
+    for (const w of [':/', ':-/', '-/', '../', './']) {
+      expect(bareTarget(`${w} rest`, ' '), w).toBeNull()
+    }
+    expect(bareTarget('w/ rest', ' ')).toEqual({ token: 'w/', kind: 'local' })
+  })
+
+  it('starts a path only at the start, after a space, a parenthesis or a quote', () => {
+    expect(bareTarget('src/a.js', 'x')).toBeNull()
+    expect(bareTarget('src/a.js', '-')).toBeNull()
+    for (const before of ['', ' ', '\n', '(', '"', "'"]) {
+      expect(bareTarget('src/a.js', before), JSON.stringify(before)).not.toBeNull()
+    }
+  })
+
+  it('starts a URL anywhere but inside a word', () => {
+    expect(bareTarget('https://a.io/b', 'x')).toBeNull()
+    expect(bareTarget('https://a.io/b', '=')).not.toBeNull()
+  })
+
+  it('stays fast on a long run of closers and on one very long token', () => {
+    const t0 = performance.now()
+    bareTarget(')'.repeat(10000), ' ')
+    bareTarget(`${'a'.repeat(40000)}/`, ' ')
+    bareTarget(`src/${')'.repeat(40000)}`, ' ')
+    expect(performance.now() - t0).toBeLessThan(200)
   })
 })
 
@@ -282,5 +316,7 @@ describe('wholeTarget', () => {
     expect(wholeTarget('Node.js')).toBe(false)
     expect(wholeTarget('https://example.com/a b')).toBe(false)
     expect(wholeTarget('a/b.c\nd.e')).toBe(false)
+    expect(wholeTarget(':/')).toBe(false)
+    expect(wholeTarget(':-/')).toBe(false)
   })
 })

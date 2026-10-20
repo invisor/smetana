@@ -153,9 +153,11 @@ function onLocalAuxClick(event, path, kind) {
          Drawn as the plain text the path already is rather than as an anchor
          nothing can answer: `sm-prose.css` only styles `a[data-path]`, so an
          inert control here would still look pressable while doing nothing,
-         which is the one thing worse than not styling it at all. -->
-    <code v-else-if="node.type === 'link' && node.local && node.code">{{ node.head }}{{ node.tail }}</code>
-    <template v-else-if="node.type === 'link' && node.local">{{ node.head }}{{ node.tail }}</template>
+         which is the one thing worse than not styling it at all. A folder's
+         slash is added back here: `classifyLink` cut it off and, with an
+         anchor, the stylesheet draws it. -->
+    <code v-else-if="node.type === 'link' && node.local && node.code">{{ node.head }}{{ node.tail }}{{ node.targetKind === 'dir' ? '/' : '' }}</code>
+    <template v-else-if="node.type === 'link' && node.local">{{ node.head }}{{ node.tail }}{{ node.targetKind === 'dir' ? '/' : '' }}</template>
     <a
       v-else-if="node.type === 'link'"
       :data-code="node.code ? '' : undefined"
