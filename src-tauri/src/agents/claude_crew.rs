@@ -1059,6 +1059,15 @@ pub fn bootstrap_is_internal(config: &Value, provider: &str, admission_pending: 
     admission_pending || !bootstrap_is_working(config, provider)
 }
 
+/// Whether a transcript belongs to the private bootstrap helper: both its
+/// resolved member id and the hidden id must exist and agree. An unresolved
+/// identity (`None`) is never the bootstrap, even when no bootstrap is hidden
+/// (`None == None` would say it is, and the caller would then consume the
+/// file's lifecycle records unbound).
+pub fn is_hidden_bootstrap(provider: Option<&str>, hidden: Option<&str>) -> bool {
+    matches!((provider, hidden), (Some(provider), Some(hidden)) if provider == hidden)
+}
+
 pub fn members_excluding(config: &Value, excluded_provider: Option<&str>) -> Vec<ProviderNode> {
     config
         .get("members")
@@ -1783,6 +1792,15 @@ mod tests {
         let mut lead = TranscriptTail::default();
         assert!(lead.read_new(&path).unwrap().is_empty(), "the lead scope still drops the sidechain");
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn an_unresolved_identity_is_never_the_hidden_bootstrap() {
+        assert!(!is_hidden_bootstrap(None, None), "None == None must not hide a transcript");
+        assert!(!is_hidden_bootstrap(None, Some("smetana-bootstrap@t")));
+        assert!(!is_hidden_bootstrap(Some("worker@t"), None));
+        assert!(!is_hidden_bootstrap(Some("worker@t"), Some("smetana-bootstrap@t")));
+        assert!(is_hidden_bootstrap(Some("smetana-bootstrap@t"), Some("smetana-bootstrap@t")));
     }
 
     #[test]

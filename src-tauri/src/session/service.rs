@@ -1841,7 +1841,16 @@ fn refresh_claude_crews(
                             .then(|| crate::agents::claude_crew::member_id(&config, &name))
                             .flatten()
                         });
-                    if provider.as_deref() == hidden_bootstrap {
+                    // Cause of smetana-vknk's residual case: this used to be a
+                    // bare `provider.as_deref() == hidden_bootstrap`, which is
+                    // true for `None == None`. A transcript whose identity was
+                    // not yet resolvable (no member in the config, or no
+                    // `.meta.json` yet) while no bootstrap was being hidden was
+                    // then read to its end as if it were the private bootstrap
+                    // exchange: its cursor moved past the lifecycle records,
+                    // and once the member did bind, nothing was left to take
+                    // it off its initial `Starting`.
+                    if crate::agents::claude_crew::is_hidden_bootstrap(provider.as_deref(), hidden_bootstrap) {
                         // Advance the actual file cursor through the private
                         // bootstrap exchange. If the exact member later goes
                         // working, its public node begins at that boundary
