@@ -74,7 +74,7 @@ const props = defineProps({
   base: { type: String, default: '' }
 })
 
-const emit = defineEmits(['open', 'open-local', 'open-image'])
+const emit = defineEmits(['open', 'open-local', 'link-menu', 'open-image'])
 
 const open = ref(props.expanded)
 watch(toRef(props, 'expanded'), (value) => { open.value = value })
@@ -98,6 +98,7 @@ const elapsedText = computed(() => (props.ms == null ? '' : formatElapsedClock(p
       :base="base"
       @open="emit('open', $event)"
       @open-local="emit('open-local', $event)"
+      @link-menu="emit('link-menu', $event)"
       @open-image="emit('open-image', $event)"
     />
   </details>

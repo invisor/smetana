@@ -631,5 +631,16 @@ performed, because the phone draws this view and its build aliases `stores/app.j
 long press fires `contextmenu` on Android. `canFile` greys New task while that dialog is up (a ref,
 `newTaskOpen`, because `openDialogs` is a plain Map).
 
+**The link menu** is a second `PointerMenu` in `ConversationView.vue`, rows from `linkMenu.js`, opened by a
+right click (or Menu / Shift+F10) on a local `<a data-path>`. `MarkdownInline.vue` raises `link-menu
+{ path, kind, clientX, clientY, anchorRight, anchorBottom }` with `@contextmenu.prevent.stop`; the `.stop`
+is what lets it beat the selection menu on the viewport when text is selected. The event travels
+`MarkdownInline` -> `Markdown` -> `AgentMessage` / `Reasoning` / `UserMessage` -> `ConversationView`, so
+**every `MarkdownInline` and recursive `Markdown` call in both templates must carry `@link-menu` beside
+`@open-local`**, or a link in that spot swallows the click and opens nothing. Open emits `open-local`,
+Reveal emits `reveal-local` and Copy path emits `copy-path` (the absolute path); `DesktopApp.vue` listens
+to both, since the phone's `stores/app.js` has neither a file manager nor a clipboard helper. The menu
+reuses the `selectionMenu` prop as its gate, so the phone's `:selection-menu="false"` silences it too.
+
 **A kept task draft is appended to, never replaced**: a draft left by a project switch gets the
 selection after a blank line, its other fields untouched.

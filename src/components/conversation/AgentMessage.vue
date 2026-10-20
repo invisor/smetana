@@ -60,7 +60,7 @@ defineProps({
   base: { type: String, default: '' }
 })
 
-const emit = defineEmits(['open', 'open-local', 'open-image'])
+const emit = defineEmits(['open', 'open-local', 'link-menu', 'open-image'])
 </script>
 
 <template>
@@ -72,6 +72,7 @@ const emit = defineEmits(['open', 'open-local', 'open-image'])
       :base="base"
       @open="emit('open', $event)"
       @open-local="emit('open-local', $event)"
+      @link-menu="emit('link-menu', $event)"
       @open-image="emit('open-image', $event)"
     />
   </article>

@@ -71,6 +71,7 @@ import { attachmentAction } from './attachmentAction.js'
 import { appendQuote, quoteFromSelection } from './draftSegments.js'
 import { isBusy, journalRows } from './journal.js'
 import { SELECTION_MENU_W, selectionMenuItems } from './selectionMenu.js'
+import { LINK_MENU_W, linkAbsolutePath, linkMenuItems } from './linkMenu.js'
 import { signInRowKey } from './signInHint.js'
 import { basename } from '../../paths.js'
 /* Four stores beside the conversation's own, and each is here because this
@@ -176,7 +177,7 @@ const props = defineProps({
    through `openExternal`, and never leaves this component — see the note on
    the store imports above for why the local breed is the one link event this
    panel raises rather than owns. */
-const emit = defineEmits(['open-local', 'sign-in', 'copy', 'new-task'])
+const emit = defineEmits(['open-local', 'reveal-local', 'copy-path', 'sign-in', 'copy', 'new-task'])
 
 /* The record this panel is drawing.
 
@@ -533,6 +534,37 @@ function pickSelection(item, text) {
   }
 }
 
+/* The link menu: a right click on a local link in the journal. The anchor stops
+   the event, so the selection menu above never opens over it. Open, Reveal
+   and Copy path are emitted (`copy-path` has its own toast, "Copied the path"),
+   for the reason the selection menu gives: the phone's `stores/app.js` has neither a file manager
+   nor a clipboard helper. Gated on the same prop that silences the selection
+   menu there, since Android sends `contextmenu` on a long press. */
+const linkMenuRef = ref(null)
+const linkItems = computed(() => linkMenuItems({ userAgent: navigator.userAgent }))
+
+function onLinkMenu(link) {
+  if (!props.selectionMenu) return
+  let at = link
+  /* A menu key or Shift+F10 arrives with no pointer: anchor the menu to the
+     bottom right of the link instead. */
+  if (link.clientX === 0 && link.clientY === 0) {
+    at = { clientX: link.anchorRight, clientY: link.anchorBottom }
+  }
+  linkMenuRef.value?.open(at, { path: link.path, kind: link.kind })
+}
+
+function pickLink(item, link) {
+  if (!link) return
+  if (item.kind === 'open') {
+    emit('open-local', { path: link.path, kind: link.kind })
+  } else if (item.kind === 'reveal') {
+    emit('reveal-local', { path: link.path })
+  } else if (item.kind === 'copy-path') {
+    emit('copy-path', linkAbsolutePath(filesState.root ?? '', link.path))
+  }
+}
+
 async function send() {
   const record = held.value
   if (!record) return
@@ -856,6 +888,7 @@ const refusal = computed(() => ({
             :base="base"
             @open="openExternal"
             @open-local="emit('open-local', $event)"
+            @link-menu="onLinkMenu"
             @open-image="(picture) => openImageWindow(picture.path, picture.name)"
             @open-attachment="openAttachment"
           />
@@ -867,6 +900,7 @@ const refusal = computed(() => ({
             :base="base"
             @open="openExternal"
             @open-local="emit('open-local', $event)"
+            @link-menu="onLinkMenu"
             @open-image="(picture) => openImageWindow(picture.path, picture.name)"
           />
           <Reasoning
@@ -877,6 +911,7 @@ const refusal = computed(() => ({
             :base="base"
             @open="openExternal"
             @open-local="emit('open-local', $event)"
+            @link-menu="onLinkMenu"
             @open-image="(picture) => openImageWindow(picture.path, picture.name)"
           />
           <ToolCall
@@ -953,6 +988,12 @@ const refusal = computed(() => ({
       :width="SELECTION_MENU_W"
       @select="pickSelection"
       @close="selectedText = null"
+    />
+    <PointerMenu
+      ref="linkMenuRef"
+      :items="linkItems"
+      :width="LINK_MENU_W"
+      @select="pickLink"
     />
   </div>
 </template>
