@@ -390,6 +390,8 @@ fn driven_attached() -> Vec<DrivenAttached> {
             cwd: "/work/smetana".into(),
             title: (i == 0).then(|| "Fix the board".to_string()),
             agent: "claude".into(),
+            // Off the wire when `None`: the phone's contract stays as it was.
+            model: None,
         })
         .collect()
 }
