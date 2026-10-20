@@ -283,7 +283,7 @@ const URL_TOKEN = new RegExp(`^\\S{1,${MAX_URL}}`)
    price of entry — checked by a bounded pattern, never by a search of the rest
    of the paragraph. */
 const SLASH_NEAR = new RegExp(`^[^\\s/]{0,${MAX_PATH - 1}}/`)
-const NOT_A_START = /^[\s()"']/
+const NOT_A_START = /^[\s()"'\u201c\u2018\u00ab]/
 
 /* Sentence punctuation and an unmatched closer do not belong to the token
    they trail, the way GFM reads a bare URL. A `)` or `]` stays when the token

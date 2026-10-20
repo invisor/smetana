@@ -1113,6 +1113,17 @@ describe('bare paths, bare URLs and code spans that name one', () => {
     }
   })
 
+  it('starts a path after a typographic quote, which stays text', () => {
+    for (const [open, close] of [['\u201c', '\u201d'], ['\u2018', '\u2019'], ['\u00ab', '\u00bb']]) {
+      expect(para(`open ${open}src/a.js${close} now`)).toEqual([
+        { type: 'text', value: `open ${open}` },
+        expect.objectContaining({ type: 'link', path: 'src/a.js', head: 'src/', tail: 'a.js' }),
+        { type: 'text', value: `${close} now` }
+      ])
+    }
+    expect(para('open \u201cdocs/\u201d now')[1]).toMatchObject({ path: 'docs', targetKind: 'dir' })
+  })
+
   it('does not turn a punctuation-only folder into a link', () => {
     for (const w of [':/', ':-/', '-/']) {
       expect(para(`a ${w} b`), w).toEqual([{ type: 'text', value: `a ${w} b` }])
@@ -1125,7 +1136,7 @@ describe('bare paths, bare URLs and code spans that name one', () => {
       ')'.repeat(10000),
       `${'a'.repeat(40000)}`,
       `${'['.repeat(2000)}${']'.repeat(2000)}`,
-      'word '.repeat(80000),
+      'word '.repeat(200000),
       `x ${'('.repeat(10000)}`,
       `a${'"a'.repeat(10000)}`,
       `${'a/'.repeat(5000)}`
