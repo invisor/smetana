@@ -55,7 +55,7 @@ teammate is removed from `members[]` (no `status: left`), and its transcript
 ends on a `tool_use` (`SendMessage` carrying `shutdown_response`) with no
 `end_turn`, so it would stay `Running` forever. The node is not removed — it
 keeps its id and journal until package cleanup — and its trailing transcript
-does not revive it. The lead is never reconciled. Hook records
+does not revive it while it is absent from `members[]` (once listed again, by a same-named respawn or after a config rewrite, its transcript drives it). The lead is never reconciled. Hook records
 (`SubagentStop`, `TeammateIdle`) are deliberately not used: they exist only
 where the user's settings install those hooks.
 

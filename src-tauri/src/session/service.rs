@@ -1716,6 +1716,7 @@ fn refresh_claude_crews(
         // trust it from a config that parsed with a team name (checked above)
         // and a real `members` array: a config read mid-rewrite must not
         // finish everyone. The full set, bootstrap included, is deliberate.
+        let mut reconciled_members: Option<HashSet<String>> = None;
         if config.get("members").and_then(serde_json::Value::as_array).is_some() {
             let present: HashSet<String> = crate::agents::claude_crew::members_excluding(&config, None)
                 .into_iter()
@@ -1725,6 +1726,7 @@ fn refresh_claude_crews(
             if !switched.is_empty() {
                 log::info!("[crew] root {root}: {} teammate(s) left the team config, marked done", switched.len());
             }
+            reconciled_members = Some(present);
         }
         match lead_tails.entry(*root).or_default().read_new_with_lifecycle(&lead_transcript) {
             Ok((events, lifecycle)) => {
@@ -1872,16 +1874,17 @@ fn refresh_claude_crews(
                     // lead's report to count, so a child's are not.
                     for state in lifecycle {
                         match state {
-                            // A teammate reconciled to Done keeps its trailing
-                            // transcript (the shutdown exchange ends on a
-                            // tool_use), which must not revive it.
+                            // While a teammate is absent from `members[]` its
+                            // trailing transcript (the shutdown exchange ends
+                            // on a tool_use) must not revive it; once it is
+                            // listed again, the transcript drives it.
                             crate::agents::claude_crew::LeadLifecycle::TurnStart
-                                if package.tree.node(node).is_some_and(|n| n.state == CrewState::Done) => {}
+                                if !package.tree.transcript_may_drive(node, reconciled_members.as_ref()) => {}
                             crate::agents::claude_crew::LeadLifecycle::TurnStart => {
                                 package.tree.set_state(node, CrewState::Running);
                             }
                             crate::agents::claude_crew::LeadLifecycle::Ready { tokens_in, tokens_out } => {
-                                if !package.tree.node(node).is_some_and(|n| n.state == CrewState::Done) {
+                                if package.tree.transcript_may_drive(node, reconciled_members.as_ref()) {
                                     package.tree.set_state(node, CrewState::Waiting);
                                 }
                                 if let Some(events) = package.close_turn(node, tokens_in, tokens_out) {

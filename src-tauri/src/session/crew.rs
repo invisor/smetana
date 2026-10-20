@@ -327,6 +327,19 @@ impl CrewTree {
         switched
     }
 
+    /// Whether a transcript lifecycle record may change this node's state.
+    /// `present` is the membership set of the tick's reconcile step, `None`
+    /// when no reconcile ran. A teammate that is absent from `members[]` is
+    /// finished, and its trailing transcript must not revive it; once its id
+    /// is back in the set (a same-named teammate spawned later, or a config
+    /// rewrite that dropped it for one tick) the transcript drives it again.
+    pub fn transcript_may_drive(&self, id: CrewNodeId, present: Option<&HashSet<String>>) -> bool {
+        match (present, self.provider_id(id)) {
+            (Some(present), Some(provider)) => present.contains(provider) || !self.is_child(id),
+            _ => true,
+        }
+    }
+
     fn is_child(&self, id: CrewNodeId) -> bool {
         self.nodes.get(&id).is_some_and(|node| node.parent.is_some() && node.id != node.root)
     }
@@ -430,6 +443,29 @@ mod tests {
         tree.fail_node(a);
         assert!(tree.finish_absent(&HashSet::new()).is_empty());
         assert_eq!(tree.node(a).unwrap().state, CrewState::Failed);
+    }
+
+    #[test]
+    fn a_transcript_drives_a_child_only_while_it_is_present_in_members() {
+        let mut tree = CrewTree::default();
+        let root = tree.root("Lead");
+        assert!(tree.bind_root(root, "team-lead"));
+        let a = tree.upsert(root, worker("a", None, ProviderState::Running)).unwrap();
+        let gone = HashSet::new();
+        assert_eq!(tree.finish_absent(&gone), vec![a]);
+        assert!(!tree.transcript_may_drive(a, Some(&gone)));
+        assert!(tree.transcript_may_drive(root, Some(&gone)));
+        assert!(tree.transcript_may_drive(a, None));
+
+        // The same provider id comes back: its transcript revives the row.
+        let back: HashSet<String> = ["a".to_string()].into();
+        assert!(tree.transcript_may_drive(a, Some(&back)));
+        tree.upsert(root, worker("a", None, ProviderState::Unknown));
+        assert_eq!(tree.node(a).unwrap().state, CrewState::Done);
+        tree.set_state(a, CrewState::Running);
+        let node = tree.node(a).unwrap();
+        assert_eq!(node.state, CrewState::Running);
+        assert!(node.can_message);
     }
 
     #[test]
