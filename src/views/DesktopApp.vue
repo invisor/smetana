@@ -341,6 +341,7 @@ import { checkNewName } from '../components/files/newEntry.js'
 import { absolutePath, ancestors, isUnder, relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
 import { appendText } from '../components/conversation/draftSegments.js'
+import { linkAbsolutePath } from '../components/conversation/linkMenu.js'
 import { resolveLocalLinkPath } from '../components/conversation/localLinkTarget.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { needsReady, promotesToReady } from '../components/run/readyPromote.js'
@@ -5721,6 +5722,22 @@ function onConversationLocalLink({ path, kind }) {
   else openFile(resolved, { permanent: true })
 }
 
+/* Reveal for the conversation's link menu. An absolute path goes to the file
+   manager as it is, outside the project too — the file manager does not care
+   whose folder it is — and a relative one is joined onto the root first, so
+   the call never names something under the process's working directory. */
+async function onConversationReveal({ path }) {
+  const ok = await revealInFileManager(linkAbsolutePath(filesState.root, path))
+  if (!ok) {
+    /* Word for word the file tree's own refusal: a browser has no file manager. */
+    sayFileMenu({
+      tone: 'error',
+      title: 'Could not show it',
+      description: 'This one needs the desktop app — a browser has no file manager to ask.'
+    })
+  }
+}
+
 /* `immediate`, and that is the startup case rather than tidiness: `activeTab` is
    restored from `settings.json` before this view is rendered at all — `App.vue`
    awaits `loadSettings` — so a watcher that only fired on a change would never
@@ -7844,6 +7861,7 @@ const toastStackStyle = {
             :can-stop="conversationCanStop"
             :can-file="!newTaskOpen"
             @open-local="onConversationLocalLink"
+            @reveal-local="onConversationReveal"
             @sign-in="signIn"
             @copy="copySelection"
             @new-task="newTaskFromSelection"

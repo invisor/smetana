@@ -84,6 +84,7 @@ defineProps({
 const emit = defineEmits([
   'open',
   'open-local',
+  'link-menu',
   'open-image',
   /* The bare path, raised only for an attachment `openAttachments` names —
      `ConversationView.vue` decides whether it is a picture or a file, or
@@ -100,6 +101,7 @@ const emit = defineEmits([
       :base="base"
       @open="emit('open', $event)"
       @open-local="emit('open-local', $event)"
+      @link-menu="emit('link-menu', $event)"
       @open-image="emit('open-image', $event)"
     />
     <ul v-if="attachments.length" data-attachments>
