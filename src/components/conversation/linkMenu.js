@@ -5,7 +5,7 @@
    test in this repository can reach.
 
    Open and Reveal are *emitted* by `ConversationView.vue` and never performed
-   there, and Copy path goes out through the existing `copy` event: the phone
+   there, and Copy path goes out as `copy-path`: the phone
    draws the same view, and its build aliases `stores/app.js` to a module with no
    `revealInFileManager` and no clipboard helper, so a static import in the view
    would fail that build. `DesktopApp.vue` is the one listener.
