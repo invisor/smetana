@@ -177,7 +177,7 @@ const props = defineProps({
    through `openExternal`, and never leaves this component — see the note on
    the store imports above for why the local breed is the one link event this
    panel raises rather than owns. */
-const emit = defineEmits(['open-local', 'reveal-local', 'sign-in', 'copy', 'new-task'])
+const emit = defineEmits(['open-local', 'reveal-local', 'copy-path', 'sign-in', 'copy', 'new-task'])
 
 /* The record this panel is drawing.
 
@@ -535,9 +535,9 @@ function pickSelection(item, text) {
 }
 
 /* The link menu: a right click on a local link in the journal. The anchor stops
-   the event, so the selection menu above never opens over it. Open and Reveal
-   are emitted and Copy path goes out through `copy`, for the reason the
-   selection menu gives: the phone's `stores/app.js` has neither a file manager
+   the event, so the selection menu above never opens over it. Open, Reveal
+   and Copy path are emitted (`copy-path` has its own toast, "Copied the path"),
+   for the reason the selection menu gives: the phone's `stores/app.js` has neither a file manager
    nor a clipboard helper. Gated on the same prop that silences the selection
    menu there, since Android sends `contextmenu` on a long press. */
 const linkMenuRef = ref(null)
@@ -561,7 +561,7 @@ function pickLink(item, link) {
   } else if (item.kind === 'reveal') {
     emit('reveal-local', { path: link.path })
   } else if (item.kind === 'copy-path') {
-    emit('copy', linkAbsolutePath(filesState.root ?? '', link.path))
+    emit('copy-path', linkAbsolutePath(filesState.root ?? '', link.path))
   }
 }
 
