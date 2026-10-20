@@ -155,7 +155,7 @@ const props = defineProps({
   streaming: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['open', 'open-local', 'open-image'])
+const emit = defineEmits(['open', 'open-local', 'link-menu', 'open-image'])
 
 const tree = computed(() => props.blocks ?? parseMarkdown(props.text))
 
@@ -293,6 +293,7 @@ function isCodeCopied(index) {
           :root="root"
           @open="emit('open', $event)"
           @open-local="emit('open-local', $event)"
+          @link-menu="emit('link-menu', $event)"
         />
         <span v-if="edgeHere(index)" data-edge></span>
       </component>
@@ -303,6 +304,7 @@ function isCodeCopied(index) {
           :root="root"
           @open="emit('open', $event)"
           @open-local="emit('open-local', $event)"
+          @link-menu="emit('link-menu', $event)"
         />
         <span v-if="edgeHere(index)" data-edge></span>
       </p>
@@ -333,6 +335,7 @@ function isCodeCopied(index) {
           :streaming="edgeHere(index)"
           @open="emit('open', $event)"
           @open-local="emit('open-local', $event)"
+          @link-menu="emit('link-menu', $event)"
           @open-image="emit('open-image', $event)"
         />
       </blockquote>
@@ -345,6 +348,7 @@ function isCodeCopied(index) {
             :root="root"
             @open="emit('open', $event)"
             @open-local="emit('open-local', $event)"
+            @link-menu="emit('link-menu', $event)"
           />
           <template v-else>Details</template>
         </summary>
@@ -355,6 +359,7 @@ function isCodeCopied(index) {
           :streaming="edgeHere(index)"
           @open="emit('open', $event)"
           @open-local="emit('open-local', $event)"
+          @link-menu="emit('link-menu', $event)"
           @open-image="emit('open-image', $event)"
         />
       </details>
@@ -377,6 +382,7 @@ function isCodeCopied(index) {
             :streaming="edgeHere(index) && at === group.block.items.length - 1"
             @open="emit('open', $event)"
             @open-local="emit('open-local', $event)"
+            @link-menu="emit('link-menu', $event)"
             @open-image="emit('open-image', $event)"
           />
         </li>
@@ -390,6 +396,7 @@ function isCodeCopied(index) {
               :root="root"
               @open="emit('open', $event)"
               @open-local="emit('open-local', $event)"
+              @link-menu="emit('link-menu', $event)"
             />
           </dt>
           <dd v-for="(definition, d) in item.definitions" :key="d">
@@ -398,6 +405,7 @@ function isCodeCopied(index) {
               :root="root"
               @open="emit('open', $event)"
               @open-local="emit('open-local', $event)"
+              @link-menu="emit('link-menu', $event)"
             />
           </dd>
         </template>
@@ -425,6 +433,7 @@ function isCodeCopied(index) {
                   :root="root"
                   @open="emit('open', $event)"
                   @open-local="emit('open-local', $event)"
+                  @link-menu="emit('link-menu', $event)"
                 />
               </th>
             </tr>
@@ -441,6 +450,7 @@ function isCodeCopied(index) {
                   :root="root"
                   @open="emit('open', $event)"
                   @open-local="emit('open-local', $event)"
+                  @link-menu="emit('link-menu', $event)"
                 />
               </td>
             </tr>

@@ -84,7 +84,7 @@ defineProps({
   root: { type: String, default: '' }
 })
 
-const emit = defineEmits(['open', 'open-local'])
+const emit = defineEmits(['open', 'open-local', 'link-menu'])
 
 /* `auxclick` is not `click` a second time: it is what a middle click raises
    instead of it, and it also fires for a browser's back/forward buttons on a
@@ -103,6 +103,23 @@ function onAuxClick(event, href) {
 function onLocalAuxClick(event, path, kind) {
   if (event.button === 1) emit('open-local', { path, kind })
 }
+
+/* A right click, or the menu key / Shift+F10 on a focused link, raised for
+   `ConversationView.vue` to put a menu under. `.stop` on the anchor keeps the
+   journal's selection menu from opening over it. A keyboard press arrives with
+   no pointer (0, 0), so the anchor's own box rides along for the view to anchor
+   to, which is the one case the coordinates alone cannot answer. */
+function onLocalContextMenu(event, path, kind) {
+  const rect = event.currentTarget.getBoundingClientRect()
+  emit('link-menu', {
+    path,
+    kind,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    anchorRight: rect.right,
+    anchorBottom: rect.bottom
+  })
+}
 </script>
 
 <template>
@@ -116,6 +133,7 @@ function onLocalAuxClick(event, path, kind) {
         :root="root"
         @open="emit('open', $event)"
         @open-local="emit('open-local', $event)"
+        @link-menu="emit('link-menu', $event)"
       />
     </strong>
     <em v-else-if="node.type === 'em'">
@@ -124,6 +142,7 @@ function onLocalAuxClick(event, path, kind) {
         :root="root"
         @open="emit('open', $event)"
         @open-local="emit('open-local', $event)"
+        @link-menu="emit('link-menu', $event)"
       />
     </em>
     <del v-else-if="node.type === 'del'">
@@ -132,6 +151,7 @@ function onLocalAuxClick(event, path, kind) {
         :root="root"
         @open="emit('open', $event)"
         @open-local="emit('open-local', $event)"
+        @link-menu="emit('link-menu', $event)"
       />
     </del>
     <!-- A local link with somewhere to act on it: the anchor the contract
@@ -147,6 +167,7 @@ function onLocalAuxClick(event, path, kind) {
       :href="localHref(root, node.path)"
       @click.prevent="emit('open-local', { path: node.path, kind: node.targetKind })"
       @auxclick.prevent="onLocalAuxClick($event, node.path, node.targetKind)"
+      @contextmenu.prevent.stop="onLocalContextMenu($event, node.path, node.targetKind)"
     ><span data-head>{{ node.head }}</span><span data-tail>{{ node.tail }}</span></a>
     <!-- The same node with nowhere to act on it — the task inspector's case,
          which has no session and no working tree (see this file's header).
@@ -170,6 +191,7 @@ function onLocalAuxClick(event, path, kind) {
         :root="root"
         @open="emit('open', $event)"
         @open-local="emit('open-local', $event)"
+        @link-menu="emit('link-menu', $event)"
       />
     </a>
   </template>

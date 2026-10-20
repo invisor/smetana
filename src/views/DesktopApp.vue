@@ -341,6 +341,7 @@ import { checkNewName } from '../components/files/newEntry.js'
 import { absolutePath, ancestors, isUnder, relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
 import { appendText } from '../components/conversation/draftSegments.js'
+import { linkAbsolutePath } from '../components/conversation/linkMenu.js'
 import { resolveLocalLinkPath } from '../components/conversation/localLinkTarget.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { needsReady, promotesToReady } from '../components/run/readyPromote.js'
@@ -5721,6 +5722,28 @@ function onConversationLocalLink({ path, kind }) {
   else openFile(resolved, { permanent: true })
 }
 
+/* Reveal for the conversation's link menu. An absolute path goes to the file
+   manager as it is, outside the project too — the file manager does not care
+   whose folder it is — and a relative one is joined onto the root first, so
+   the call never names something under the process's working directory. */
+async function onConversationReveal({ path }) {
+  await revealOrSay(linkAbsolutePath(filesState.root, path))
+}
+
+/* Show a path in the system file manager, or say why it could not be shown. One
+   function for the file tree, the Git panel and the conversation's link menu,
+   because it is the same refusal in all three: a browser has no file manager. */
+async function revealOrSay(abs) {
+  const ok = await revealInFileManager(abs)
+  if (!ok) {
+    sayFileMenu({
+      tone: 'error',
+      title: 'Could not show it',
+      description: 'This one needs the desktop app — a browser has no file manager to ask.'
+    })
+  }
+}
+
 /* `immediate`, and that is the startup case rather than tidiness: `activeTab` is
    restored from `settings.json` before this view is rendered at all — `App.vue`
    awaits `loadSettings` — so a watcher that only fired on a change would never
@@ -6197,16 +6220,7 @@ const onChangeMenu = async (kind, change) => {
     project.selectedPath = rel
     openFile(rel, { permanent: true })
   } else if (kind === 'reveal') {
-    const ok = await revealInFileManager(abs)
-    if (!ok) {
-      /* Word for word the sentence the file tree's own reveal says, because it
-         is the same refusal: a browser has no file manager to ask. */
-      sayFileMenu({
-        tone: 'error',
-        title: 'Could not show it',
-        description: 'This one needs the desktop app — a browser has no file manager to ask.'
-      })
-    }
+    await revealOrSay(abs)
   } else if (kind === 'copy-path') {
     await copyPath(abs, 'path')
   } else if (kind === 'copy-relative-path') {
@@ -6629,14 +6643,7 @@ const onFileAction = async ({ kind, path, target, name }) => {
   } else if (kind === 'open-terminal') {
     await newTerminal(folderOf({ path, target }))
   } else if (kind === 'reveal') {
-    const ok = await revealInFileManager(absolutePath(root, path))
-    if (!ok) {
-      sayFileMenu({
-        tone: 'error',
-        title: 'Could not show it',
-        description: 'This one needs the desktop app — a browser has no file manager to ask.'
-      })
-    }
+    await revealOrSay(absolutePath(root, path))
   } else if (kind === 'copy-path') {
     await copyPath(absolutePath(root, path), 'path')
   } else if (kind === 'copy-relative-path') {
@@ -7844,6 +7851,8 @@ const toastStackStyle = {
             :can-stop="conversationCanStop"
             :can-file="!newTaskOpen"
             @open-local="onConversationLocalLink"
+            @reveal-local="onConversationReveal"
+            @copy-path="(abs) => copyPath(abs, 'path')"
             @sign-in="signIn"
             @copy="copySelection"
             @new-task="newTaskFromSelection"
