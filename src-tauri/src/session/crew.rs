@@ -4,7 +4,7 @@
 //! is minted here and is stable for a package's life, including after a child
 //! has finished, so a Vue key never changes underneath a selected journal.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use super::journal::Journal;
 use super::model::{Event, EventKind};
@@ -300,6 +300,37 @@ impl CrewTree {
             .collect()
     }
 
+    /// Reconcile against the runtime's membership list: every provider-known
+    /// node whose id is no longer present becomes `Done`. Claude Code removes a
+    /// stopped teammate from `members[]` rather than writing a status. The
+    /// root is never touched (the lead is not a member by construction), nodes
+    /// already `Done`/`Failed` are left alone, and the node stays in the tree
+    /// with its id and journal until package cleanup. Returns the switched ids,
+    /// so a repeat call with the same set returns nothing.
+    pub fn finish_absent(&mut self, present: &HashSet<String>) -> Vec<CrewNodeId> {
+        let absent: Vec<CrewNodeId> = self
+            .provider
+            .iter()
+            .filter(|(provider, id)| !present.contains(*provider) && self.is_child(**id))
+            .map(|(_, id)| *id)
+            .collect();
+        let mut switched = Vec::new();
+        for id in absent {
+            let Some(node) = self.nodes.get_mut(&id) else { continue };
+            if matches!(node.state, CrewState::Done | CrewState::Failed) {
+                continue;
+            }
+            node.state = CrewState::Done;
+            node.can_message = false;
+            switched.push(id);
+        }
+        switched
+    }
+
+    fn is_child(&self, id: CrewNodeId) -> bool {
+        self.nodes.get(&id).is_some_and(|node| node.parent.is_some() && node.id != node.root)
+    }
+
     pub fn nodes(&self) -> Vec<CrewNode> {
         self.nodes.values().cloned().collect()
     }
@@ -362,6 +393,43 @@ mod tests {
             label: Some(id.into()),
             can_message: true,
         }
+    }
+
+    #[test]
+    fn reconciling_against_members_finishes_only_the_absent_children() {
+        let mut tree = CrewTree::default();
+        let root = tree.root("Lead");
+        assert!(tree.bind_root(root, "team-lead"));
+        let a = tree.upsert(root, worker("a", None, ProviderState::Running)).unwrap();
+        let b = tree.upsert(root, worker("b", None, ProviderState::Running)).unwrap();
+        tree.set_state(root, CrewState::Running);
+        let before_root = tree.node(root).cloned();
+        let before_b = tree.node(b).cloned();
+
+        let present: HashSet<String> = ["b".to_string()].into();
+        assert_eq!(tree.finish_absent(&present), vec![a]);
+        let done = tree.node(a).unwrap();
+        assert_eq!(done.state, CrewState::Done);
+        assert!(!done.can_message);
+        assert!(tree.nodes().iter().any(|node| node.id == a));
+        assert_eq!(tree.node(b).cloned(), before_b);
+        assert_eq!(tree.node(root).cloned(), before_root);
+
+        assert!(tree.finish_absent(&present).is_empty());
+
+        let none = HashSet::new();
+        assert_eq!(tree.finish_absent(&none), vec![b]);
+        assert_eq!(tree.node(root).cloned(), before_root);
+    }
+
+    #[test]
+    fn reconciling_leaves_failed_children_failed() {
+        let mut tree = CrewTree::default();
+        let root = tree.root("Lead");
+        let a = tree.upsert(root, worker("a", None, ProviderState::Running)).unwrap();
+        tree.fail_node(a);
+        assert!(tree.finish_absent(&HashSet::new()).is_empty());
+        assert_eq!(tree.node(a).unwrap().state, CrewState::Failed);
     }
 
     #[test]

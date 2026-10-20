@@ -47,8 +47,15 @@ lifecycle is the one `lead_lifecycle` reads for the lead, read through
 `read_new_with_lifecycle` on the child's cursor: a `user` record is
 `TurnStart` (`Running`), an `assistant` record with `stop_reason: end_turn` is
 `Ready` (`Waiting`, and `close_turn`), and a child's tokens are not counted
-into any report. `Done` for a Claude teammate still comes only with the
-package's cleanup, since nothing documented says a teammate left. Hook records
+into any report. `Done` for a Claude teammate comes from reconciling
+against the team config (`CrewTree::finish_absent`, called from
+`refresh_claude_crews` only when the config parsed with a team name and a
+`members` array): measured 2026-10-20 on Claude Code 2.1.304, a stopped
+teammate is removed from `members[]` (no `status: left`), and its transcript
+ends on a `tool_use` (`SendMessage` carrying `shutdown_response`) with no
+`end_turn`, so it would stay `Running` forever. The node is not removed — it
+keeps its id and journal until package cleanup — and its trailing transcript
+does not revive it. The lead is never reconciled. Hook records
 (`SubagentStop`, `TeammateIdle`) are deliberately not used: they exist only
 where the user's settings install those hooks.
 
