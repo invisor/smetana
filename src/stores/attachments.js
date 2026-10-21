@@ -163,7 +163,7 @@ function add(attachment) {
 
    What travels to that window is the *path*, never the bytes: `url` here is a
    `data:` URL of up to `MAX_ATTACHMENT_BYTES` of base64, which fits in no URL and
-   would be eleven megabytes over IPC on every click. `attachment_reopen` is
+   would be thirteen megabytes over IPC on every click. `attachment_reopen` is
    already the command for exactly this — it answers with the record an import
    answers with and is confined to `store_root()` by `cleanup::in_store` — so
    nothing new is allowed and no new check on a path is written.

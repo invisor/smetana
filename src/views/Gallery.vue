@@ -207,7 +207,10 @@ const ATTACHMENTS = [
 const MANY_ATTACHMENTS = Array.from({ length: 14 }, (_, i) => ({
   ...ATTACHMENTS[i % 3],
   path: `${ATTACHMENTS[i % 3].path}.${i}`,
-  name: `2026080-12131${i}-shot.png`
+  /* The base item's own name and extension, with the index in front: a file's
+     name must not wear a picture's extension, or the strip would draw a `.png`
+     chip that the store can never produce. */
+  name: `${i}-${ATTACHMENTS[i % 3].name}`
 }))
 
 /* A picture larger than any frame it is shown in, for the viewer: everything
@@ -3355,7 +3358,7 @@ const menuTargetStyle = {
         <NewTaskModal
           :open="true"
           :dragging="true"
-          error="cat.gif is 12582912 bytes; the ceiling is 8388608 bytes"
+          error="cat.gif is 12582912 bytes; the ceiling is 10485760 bytes"
           @close="() => {}"
           @submit="() => {}"
           @attach="() => {}"

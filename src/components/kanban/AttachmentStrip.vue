@@ -45,7 +45,7 @@ const props = defineProps({
    emit, exactly as it answers `attach`, `files` and `remove`.
 
    The path and the name and not the record: the window reads the file itself,
-   and the `url` beside them is up to 8 MiB of base64 that would have to cross
+   and the `url` beside them is up to 10 MiB of base64 that would have to cross
    two process boundaries to say nothing the path does not. */
 defineEmits(['remove', 'view'])
 

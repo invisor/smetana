@@ -123,7 +123,7 @@ drop or keep one — and reading through a second command changes nothing about 
 is a subscription either.
 
 **What travels to it is the path, and never the bytes.** A record's `url` is a `data:` URL of up to
-`MAX_ATTACHMENT_BYTES` of base64: it fits in no URL, and putting it on the event channel would be eleven
+`MAX_ATTACHMENT_BYTES` of base64: it fits in no URL, and putting it on the event channel would be thirteen
 megabytes over IPC per click. So Rust percent-encodes the path and the name into the window's URL
 (`image_query`), and the window reads the file itself. What confines that read has changed with the
 command: a stored attachment's path is still checked against `cleanup::in_store` on the way in, since
