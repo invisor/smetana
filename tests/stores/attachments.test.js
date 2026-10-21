@@ -41,6 +41,67 @@ describe('which paths count as pictures', () => {
   })
 })
 
+const TEN_MIB = 10 * 1024 * 1024
+
+describe('files attached to a task that has not been filed', () => {
+  it('a file that is not a picture comes back as a record with no url', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('attachment_import', () => ({
+      path: '/store/p/20261021-170907-brief.pdf',
+      name: '20261021-170907-brief.pdf',
+      bytes: 1234,
+      mime: 'application/octet-stream',
+      data: null
+    }))
+
+    await stores.attachments.importPaths(['/Users/you/Downloads/brief.pdf'])
+
+    expect(stores.attachments.attachmentsState.items).toEqual([
+      { path: '/store/p/20261021-170907-brief.pdf', name: '20261021-170907-brief.pdf', bytes: 1234, url: null }
+    ])
+  })
+
+  it('the picker offers every file, not only pictures', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('plugin:dialog|open', null)
+
+    await stores.attachments.pickImages()
+
+    const options = ipc.calls('plugin:dialog|open')[0].options
+    expect(options).not.toHaveProperty('filters')
+    expect(options.title).toBe('Attach files')
+    expect(options.multiple).toBe(true)
+  })
+
+  it('a file one byte over ten mebibytes is refused before the back end', async () => {
+    const { ipc, stores } = await loadStores()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const over = { name: 'brief.pdf', size: TEN_MIB + 1, arrayBuffer: async () => new ArrayBuffer(0) }
+
+    await stores.attachments.attachFiles([over])
+
+    expect(ipc.calls('attachment_write')).toEqual([])
+    expect(stores.attachments.attachmentsState.lastError).toContain('brief.pdf')
+    expect(stores.attachments.attachmentsState.lastError).toContain(String(TEN_MIB))
+  })
+
+  it('a file of exactly ten mebibytes is handed to the back end', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('attachment_write', () => ({
+      path: '/store/p/x.txt',
+      name: 'x.txt',
+      bytes: TEN_MIB,
+      mime: 'application/octet-stream',
+      data: null
+    }))
+    const exact = { name: 'x.txt', size: TEN_MIB, arrayBuffer: async () => new ArrayBuffer(0) }
+
+    await stores.attachments.attachFiles([exact])
+
+    expect(ipc.calls('attachment_write')).toHaveLength(1)
+  })
+})
+
 describe('images attached to a task that has not been filed', () => {
   it('a file on disk is copied and comes back as a thumbnail', async () => {
     const { ipc, stores } = await loadStores()
@@ -75,14 +136,14 @@ describe('images attached to a task that has not been filed', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     ipc.fail('attachment_import', {
       kind: 'tooLarge',
-      message: 'huge.png is 9000000 bytes; the ceiling is 8388608 bytes'
+      message: 'huge.png is 11000000 bytes; the ceiling is 10485760 bytes'
     })
 
     await stores.attachments.importPaths(['/Users/you/Downloads/huge.png'])
 
     expect(stores.attachments.attachmentsState.items).toEqual([])
     expect(stores.attachments.attachmentsState.lastError).toBe(
-      'huge.png is 9000000 bytes; the ceiling is 8388608 bytes'
+      'huge.png is 11000000 bytes; the ceiling is 10485760 bytes'
     )
   })
 

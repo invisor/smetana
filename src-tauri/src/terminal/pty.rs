@@ -1072,6 +1072,7 @@ mod tests {
                     issue_type: None,
                     priority: None,
                     images: vec![],
+                    files: Vec::new(),
                     parent: None,
                 },
             },

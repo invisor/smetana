@@ -137,6 +137,14 @@ pub struct TaskDraft {
     /// fail to deserialize.
     #[serde(default)]
     pub images: Vec<String>,
+    /// Absolute paths of the attached files that are not pictures, stored the
+    /// same way. A second list beside `images` rather than one merged
+    /// `attachments`: renaming the field would be a major bump of the phone's
+    /// protocol and an edit to every reader of `images`, for nothing. A file
+    /// reaches the agent through the prompt alone (`prompt.rs`), never through
+    /// a harness's image flag. `default` for the reason `images` is.
+    #[serde(default)]
+    pub files: Vec<String>,
     /// The issue this task is a follow-up to, when the dialog was opened from a
     /// card's own menu rather than from "+ New task".
     ///
@@ -573,12 +581,27 @@ impl Intent {
     }
 
     /// What of this intent is the person's own words, for the journal's
-    /// opening turn. A filing carries what they typed and what they attached;
-    /// every other intent was a button, and there is nothing of theirs in it.
+    /// opening turn. A filing carries what they typed and what they attached —
+    /// pictures first, then files, one chip each; every other intent was a
+    /// button, and there is nothing of theirs in it.
     pub fn opening_words(&self) -> (Option<String>, Vec<String>) {
         match self {
-            Intent::NewTask { draft, .. } => (Some(draft.text.clone()), draft.images.clone()),
+            Intent::NewTask { draft, .. } => (
+                Some(draft.text.clone()),
+                draft.images.iter().chain(draft.files.iter()).cloned().collect(),
+            ),
             _ => (None, Vec::new()),
+        }
+    }
+
+    /// The attachments a harness's driver may be handed as pictures: the
+    /// draft's `images` and nothing else. `Driver::opening_input` turns every
+    /// path it gets into an image input (Codex's `localImage`), so a PDF in
+    /// `files` must never reach it; a file gets to the agent through the prompt.
+    pub fn opening_pictures(&self) -> Vec<String> {
+        match self {
+            Intent::NewTask { draft, .. } => draft.images.clone(),
+            _ => Vec::new(),
         }
     }
 }
@@ -1415,6 +1438,7 @@ mod tests {
                 priority: None,
                 parent: None,
                 images: vec!["/tmp/shot.png".into()],
+                files: Vec::new(),
             },
         };
         assert_eq!(
@@ -1556,6 +1580,51 @@ mod tests {
         let intent: Intent = serde_json::from_str(json).expect("deserializes");
         match intent {
             Intent::NewTask { draft, .. } => assert!(draft.images.is_empty()),
+            other => panic!("expected NewTask, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn opening_words_name_pictures_then_files_and_opening_pictures_names_pictures_alone() {
+        let intent = Intent::NewTask {
+            brainstorm: Stage::Off,
+            spec: Stage::Off,
+            plan: Stage::Off,
+            draft: TaskDraft {
+                text: "Fix it".into(),
+                issue_type: None,
+                priority: None,
+                images: vec!["/a.png".into()],
+                files: vec!["/b.pdf".into()],
+                parent: None,
+            },
+        };
+        assert_eq!(intent.opening_words().0.as_deref(), Some("Fix it"));
+        assert_eq!(intent.opening_words().1, vec!["/a.png".to_string(), "/b.pdf".to_string()]);
+        assert_eq!(intent.opening_pictures(), vec!["/a.png".to_string()]);
+        assert!(Intent::Bare.opening_pictures().is_empty());
+    }
+
+    #[test]
+    fn a_draft_written_before_files_existed_still_deserializes() {
+        let json = r#"{
+            "kind": "newTask",
+            "brainstorm": "off",
+            "spec": "off",
+            "plan": "off",
+            "draft": { "text": "Fix the thing", "issue_type": null, "priority": null, "images": ["/a.png"] }
+        }"#;
+        let intent: Intent = serde_json::from_str(json).expect("deserializes");
+        match intent {
+            Intent::NewTask { draft, .. } => {
+                assert!(draft.files.is_empty());
+                assert_eq!(draft.images, vec!["/a.png"]);
+            }
+            other => panic!("expected NewTask, got {other:?}"),
+        }
+        let with_files = json.replace(r#""images": ["/a.png"]"#, r#""files": ["/b.pdf"]"#);
+        match serde_json::from_str::<Intent>(&with_files).expect("deserializes") {
+            Intent::NewTask { draft, .. } => assert_eq!(draft.files, vec!["/b.pdf"]),
             other => panic!("expected NewTask, got {other:?}"),
         }
     }
@@ -1840,6 +1909,7 @@ mod tests {
                 issue_type: Some("bug".into()),
                 priority: Some(1),
                 images: vec!["/data/attachments/20260806-121314-mock.png".into()],
+                files: Vec::new(),
                 parent: None,
             },
         };
@@ -1869,6 +1939,7 @@ mod tests {
                 issue_type: None,
                 priority: None,
                 images: vec![],
+                files: Vec::new(),
                 parent: None,
             },
         };
@@ -2154,6 +2225,7 @@ mod tests {
                         issue_type: None,
                         priority: None,
                         images: Vec::new(),
+                        files: Vec::new(),
                         parent: None,
                     },
                 },

@@ -1824,6 +1824,7 @@ mod tests {
                 issue_type: Some("bug".into()),
                 priority: Some(2),
                 images,
+                files: Vec::new(),
                 parent: None,
             },
         }
@@ -1995,6 +1996,7 @@ mod tests {
                     "/data/first image.png".into(),
                     "/data/second image.png".into(),
                 ],
+                files: Vec::new(),
                 parent: None,
             },
         };
@@ -2044,6 +2046,27 @@ mod tests {
         // prompt is what has to reach the issue description.
         let args = argv(&launch(with_images(Stage::Off, vec!["/data/a.png".into()])));
         assert!(args.last().unwrap().contains("/data/a.png"), "{args:?}");
+    }
+
+    #[test]
+    fn files_never_reach_the_image_flag() {
+        let intent = Intent::NewTask {
+            brainstorm: Stage::Off,
+            spec: Stage::Off,
+            plan: Stage::Off,
+            draft: TaskDraft {
+                text: "Swap the red for green".into(),
+                issue_type: None,
+                priority: None,
+                images: Vec::new(),
+                files: vec!["/data/brief.pdf".into()],
+                parent: None,
+            },
+        };
+        let args = argv(&launch(intent));
+        assert!(!args.iter().any(|a| a == "-i"), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--"), "{args:?}");
+        assert!(args.last().unwrap().contains("/data/brief.pdf"), "the prompt names it: {args:?}");
     }
 
     #[test]

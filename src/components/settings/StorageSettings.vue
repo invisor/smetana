@@ -3,16 +3,16 @@
    this app that deletes somebody's files.
 
    Two rows, because there are two questions and they have different answers.
-   The first is about the whole directory — every project's images and whatever
+   The first is about the whole directory — every project's attachments and whatever
    is left in its root — since a person asking how big this has got is asking
    about the folder. The second is about what a press would take, which is only
    ever the active project's own share of it: the store is laid out by project
-   and the sweep is given one directory, so another project's images are out of
+   and the sweep is given one directory, so another project's attachments are out of
    reach rather than spared by a condition.
 
    **Nothing is deleted until somebody presses.** The app removes no attachment
    at any other moment — not on start, not on a schedule, not when the new-task
-   dialog closes on images nobody filed. That is why the numbers are on screen
+   dialog closes on attachments nobody filed. That is why the numbers are on screen
    before the button rather than in a report after it.
 
    Presentational, like every component here: handed values, emitting what was
@@ -72,7 +72,7 @@ const errorStyle = {
   <div>
     <SettingsRow
       label="Attachment storage"
-      description="Images attached to a task are copied here, so a screenshot deleted from your desktop still opens from the issue."
+      description="Files attached to a task are copied here, so a screenshot or a PDF deleted from your desktop still opens from the issue."
       control-width="22ch"
     >
       <span :style="sizeStyle">{{ size }}</span>

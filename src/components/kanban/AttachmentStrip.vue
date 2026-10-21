@@ -1,9 +1,23 @@
 <script setup>
+import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
 
-/* What is attached to a task that has not been filed yet: a row of thumbnails,
-   each with a way to take it back out, and a way to ask for the picture whole.
+/* What is attached to a task that has not been filed yet: a row of thumbnails
+   for the pictures and a chip for every other file, each with a way to take it
+   back out, and for a picture a way to ask for it whole.
+
+   Which one an item is, is whether it has a `url`: Rust sends a picture's bytes
+   and nothing for a file, and the store builds the data URL only from bytes.
+
+   The chip is the attachment chip of `components/conversation/Composer.vue` —
+   a paperclip, the name in mono with an ellipsis, the same remove button — and
+   it is not a control. A file has no viewer: there is nothing to open it in that
+   this app owns, and a click that did nothing would be a button that lies. It
+   draws no file-type icon either (`catppuccinIcon.js` would take 656 SVGs into
+   a strip the phone bundles, which draws none of them). The Composer's chip
+   and this one are written out twice, the declarations the same: change a value
+   in one and look at the other.
 
    Asking is all it does. The picture opens in an OS window of its own, which
    this component neither builds nor knows about — it says which picture, and
@@ -31,7 +45,7 @@ const props = defineProps({
    emit, exactly as it answers `attach`, `files` and `remove`.
 
    The path and the name and not the record: the window reads the file itself,
-   and the `url` beside them is up to 8 MiB of base64 that would have to cross
+   and the `url` beside them is up to 10 MiB of base64 that would have to cross
    two process boundaries to say nothing the path does not. */
 defineEmits(['remove', 'view'])
 
@@ -95,12 +109,40 @@ const thumb = {
    viewer is what `contain` is for. */
 const image = { width: '100%', height: '100%', objectFit: 'cover', display: 'block' }
 
+/* The chip, token for token the Composer's, minus the name button: this one is
+   not clickable. It takes the whole strip's width as a ceiling and lets the name
+   shrink, so a long name ends in an ellipsis instead of pushing the remove
+   button out of the dialog. */
+const chip = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 'var(--space-2)',
+  maxWidth: '100%',
+  minWidth: 0,
+  height: 'var(--control-h-sm)',
+  padding: '0 var(--space-2)',
+  background: 'var(--surface-raised)',
+  border: 'var(--border-w) solid var(--border-subtle)',
+  borderRadius: 'var(--radius-3)',
+  color: 'var(--text-secondary)',
+  font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)'
+}
+const chipName = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  padding: '0 var(--space-1)'
+}
+const chipClose = { width: 'var(--icon-sm)', height: 'var(--icon-sm)', flex: '0 0 auto' }
+
 const corner = { position: 'absolute', top: 'var(--space-1)', right: 'var(--space-1)' }
 </script>
 
 <template>
   <div v-if="props.items.length" :style="strip">
-    <div v-for="item in props.items" :key="item.path" :style="cell">
+    <template v-for="item in props.items" :key="item.path">
+    <div v-if="item.url" :style="cell">
       <!-- The name hangs on the picture, not on the cell. The remove button
            sits inside the cell and carries a hint of its own, and a cell-wide
            wrapper would still be hovered while the pointer was on the button —
@@ -134,5 +176,18 @@ const corner = { position: 'absolute', top: 'var(--space-1)', right: 'var(--spac
         />
       </div>
     </div>
+    <span v-else :style="chip">
+      <Icon name="paperclip" :size="11" />
+      <span :style="chipName" :title="item.name">{{ item.name }}</span>
+      <IconButton
+        icon="x"
+        size="sm"
+        :label="`Remove ${item.name}`"
+        :disabled="props.disabled"
+        :style="chipClose"
+        @click="$emit('remove', item.path)"
+      />
+    </span>
+    </template>
   </div>
 </template>

@@ -288,8 +288,8 @@ export async function emitDialogResult(kind, name, payload) {
    rather than rebuilt, so an event is the only way to re-aim it.
 
    What travels is the path and never the bytes. The `url` on an attachment
-   record is a `data:` URL of up to 8 MiB of base64: it fits in no URL, and
-   sending it over the event channel would be eleven megabytes of base64 per
+   record is a `data:` URL of up to 10 MiB of base64: it fits in no URL, and
+   sending it over the event channel would be thirteen megabytes of base64 per
    click. The window reads the file itself, with the command that already exists
    for reading one back out of the store.
 

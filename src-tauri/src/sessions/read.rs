@@ -907,6 +907,7 @@ mod tests {
                 issue_type: None,
                 priority: None,
                 images: Vec::new(),
+                files: Vec::new(),
                 parent: None,
             },
         })

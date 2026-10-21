@@ -37,7 +37,7 @@
 
 use crate::agents::prompt::{
     CONVERSATION_TAIL, FIELDS_AUTO, FIELDS_AUTO_TAIL, FIELDS_GIVEN, FIELDS_PRIORITY, FIELDS_TYPE,
-    FOLLOW_UP, IMAGES_MANY, IMAGES_ONE, NEW_TASK_OPENING, STANDARD,
+    FILES_MANY, FILES_ONE, FOLLOW_UP, IMAGES_MANY, IMAGES_ONE, NEW_TASK_OPENING, STANDARD,
 };
 
 /// What the first human record of a transcript turns out to be.
@@ -128,6 +128,8 @@ fn end_of_words(rest: &str) -> usize {
     [
         (IMAGES_ONE, None),
         (IMAGES_MANY, None),
+        (FILES_ONE, None),
+        (FILES_MANY, None),
         (given_type.as_str(), None),
         (given_priority.as_str(), None),
         (FIELDS_AUTO, Some(FIELDS_AUTO_TAIL)),
@@ -257,6 +259,7 @@ mod tests {
             issue_type: issue_type.map(str::to_owned),
             priority,
             images: images.iter().map(|path| (*path).to_owned()).collect(),
+            files: Vec::new(),
             parent: None,
         }
     }
@@ -270,7 +273,15 @@ mod tests {
     #[test]
     fn a_real_new_task_prompt_gives_back_exactly_what_the_person_typed() {
         let picture = "/data/attachments/task/shot.png";
-        for images in [Vec::new(), vec![picture], vec![picture, picture]] {
+        let pdf = "/data/attachments/task/brief.pdf";
+        for (images, files) in [
+            (Vec::new(), Vec::new()),
+            (vec![picture], Vec::new()),
+            (vec![picture, picture], Vec::new()),
+            (Vec::new(), vec![pdf]),
+            (Vec::new(), vec![pdf, pdf]),
+            (vec![picture], vec![pdf]),
+        ] {
             for (issue_type, priority) in
                 [(Some("bug"), Some(2)), (None, None), (Some("chore"), None), (None, Some(1))]
             {
@@ -280,6 +291,7 @@ mod tests {
                             [(Stage::Off, Stage::Off, Stage::Off), (Stage::On, Stage::On, Stage::On)]
                         {
                             let mut draft = draft(&images, issue_type, priority);
+                            draft.files = files.iter().map(|path| (*path).to_owned()).collect();
                             draft.parent = parent.map(str::to_owned);
                             let (brainstorm, spec, plan) = stages;
                             let intent = Intent::NewTask { brainstorm, spec, plan, draft };
@@ -290,9 +302,10 @@ mod tests {
                                     assert_eq!(
                                         of(&text),
                                         Kickoff::Words(TYPED),
-                                        "images {}, type {issue_type:?}, priority {priority:?}, \
+                                        "images {}, files {}, type {issue_type:?}, priority {priority:?}, \
                                          parent {parent:?}, standing {}, {delivery:?}, {how:?}",
                                         images.len(),
+                                        files.len(),
                                         standing.len()
                                     );
                                 }
@@ -414,6 +427,7 @@ mod tests {
                 issue_type: None,
                 priority: None,
                 images: Vec::new(),
+                files: Vec::new(),
                 parent: None,
             },
         };

@@ -737,6 +737,7 @@ mod tests {
                     priority: None,
                     parent: None,
                     images: vec!["/tmp/shot.png".into()],
+                    files: Vec::new(),
                 },
             },
             ..launch()

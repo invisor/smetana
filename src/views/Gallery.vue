@@ -174,10 +174,13 @@ provide('smCopyText', copyText)
    `image_read` fixture is what answers it in a browser. */
 provide('smReadImage', readFigureImage)
 
-/* Two attachments for the strip and for the dialog above it. Eight-pixel PNGs
-   written out as data URLs, which is exactly the shape `attachments.js` builds
-   from what Rust stored — a fixture that pointed at a file on disk would draw
-   nothing here and nothing in the browser. */
+/* Three attachments for the strip and for the dialog above it: two pictures and
+   one file. The pictures are eight-pixel PNGs written out as data URLs, which is
+   exactly the shape `attachments.js` builds from what Rust stored — a fixture
+   that pointed at a file on disk would draw nothing here and nothing in the
+   browser. The file has `url: null`, the way Rust's `data: null` arrives, and
+   draws as a chip; its name is as long as a stored name gets (stamp, a 40-letter
+   stem, extension) so the ellipsis is checkable by eye. */
 const ATTACHMENTS = [
   {
     path: '/Users/you/Library/Application Support/com.invisor.smetana/attachments/20260806-121314-mock.png',
@@ -190,15 +193,24 @@ const ATTACHMENTS = [
     name: '20260806-121315-flow.png',
     bytes: 96,
     url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAD0lEQVR42mNwwAEYhpYEAMHWMAEiHQbtAAAAAElFTkSuQmCC'
+  },
+  {
+    path: '/Users/you/Library/Application Support/com.invisor.smetana/attachments/20261021-170907-Jira-export-of-the-sprint-review-notes.pdf',
+    name: '20261021-170907-Jira-export-of-the-sprint-review-notes.pdf',
+    bytes: 48213,
+    url: null
   }
 ]
 
 /* Enough of them to overflow the strip's two-row ceiling, which is the state
    that would otherwise push a dialog's footer off a short screen. */
 const MANY_ATTACHMENTS = Array.from({ length: 14 }, (_, i) => ({
-  ...ATTACHMENTS[i % 2],
-  path: `${ATTACHMENTS[i % 2].path}.${i}`,
-  name: `2026080-12131${i}-shot.png`
+  ...ATTACHMENTS[i % 3],
+  path: `${ATTACHMENTS[i % 3].path}.${i}`,
+  /* The base item's own name and extension, with the index in front: a file's
+     name must not wear a picture's extension, or the strip would draw a `.png`
+     chip that the store can never produce. */
+  name: `${i}-${ATTACHMENTS[i % 3].name}`
 }))
 
 /* A picture larger than any frame it is shown in, for the viewer: everything
@@ -3346,7 +3358,7 @@ const menuTargetStyle = {
         <NewTaskModal
           :open="true"
           :dragging="true"
-          error="cat.gif is 12582912 bytes; the ceiling is 8388608 bytes"
+          error="cat.gif is 12582912 bytes; the ceiling is 10485760 bytes"
           @close="() => {}"
           @submit="() => {}"
           @attach="() => {}"

@@ -261,16 +261,16 @@ impl Call {
     }
 }
 
-/// What a phone may name as a new task's pictures: files in the attachment
-/// store, and nothing else. The agent that files the task runs on the desktop
+/// What a phone may name as a new task's pictures and files: paths in the
+/// attachment store, and nothing else. The agent that files the task runs on the desktop
 /// and opens whatever path it is given, so a path outside the store would let a
 /// phone point it at any file of the desktop's. A store that cannot be located
-/// refuses every picture (nothing observable reads as "no").
+/// refuses every attachment (nothing observable reads as "no").
 fn confine_new_task(root: &Result<PathBuf, String>, intent: &Intent) -> Result<(), BridgeError> {
     let Intent::NewTask { draft, .. } = intent else {
         return Ok(());
     };
-    if draft.images.is_empty() {
+    if draft.images.is_empty() && draft.files.is_empty() {
         return Ok(());
     }
     let Ok(root) = root else {
@@ -279,6 +279,7 @@ fn confine_new_task(root: &Result<PathBuf, String>, intent: &Intent) -> Result<(
     if draft
         .images
         .iter()
+        .chain(draft.files.iter())
         .all(|path| crate::attachments::cleanup::in_store(root, std::path::Path::new(path)))
     {
         Ok(())
@@ -391,12 +392,16 @@ mod tests {
     use super::*;
 
     fn new_task(images: &[&str]) -> Intent {
+        new_task_with(images, &[])
+    }
+
+    fn new_task_with(images: &[&str], files: &[&str]) -> Intent {
         serde_json::from_value(json!({
             "kind": "newTask",
             "brainstorm": "auto",
             "spec": "auto",
             "plan": "auto",
-            "draft": { "text": "x", "issue_type": null, "priority": null, "images": images, "parent": null }
+            "draft": { "text": "x", "issue_type": null, "priority": null, "images": images, "files": files, "parent": null }
         }))
         .expect("a new task intent decodes")
     }
@@ -422,11 +427,34 @@ mod tests {
     }
 
     #[test]
+    fn a_file_outside_the_store_is_forbidden_even_when_the_pictures_are_inside() {
+        let root = Ok(PathBuf::from("/data/attachments"));
+        let intent = new_task_with(&["/data/attachments/p/a.png"], &["/Users/you/secret.txt"]);
+        assert!(matches!(confine_new_task(&root, &intent), Err(BridgeError::Forbidden)));
+        let alone = new_task_with(&[], &["/Users/you/secret.txt"]);
+        assert!(matches!(confine_new_task(&root, &alone), Err(BridgeError::Forbidden)));
+    }
+
+    #[test]
+    fn files_inside_the_store_pass() {
+        let root = Ok(PathBuf::from("/data/attachments"));
+        let intent = new_task_with(
+            &["/data/attachments/p/a.png"],
+            &["/data/attachments/p/20261021-brief.pdf", "/data/attachments/p/20261021-notes.md"],
+        );
+        assert!(confine_new_task(&root, &intent).is_ok());
+    }
+
+    #[test]
     fn an_unlocatable_store_refuses_every_picture_but_not_a_task_without_any() {
         let root: Result<PathBuf, String> = Err("no app data".into());
         assert!(confine_new_task(&root, &new_task(&[])).is_ok());
         assert!(matches!(
             confine_new_task(&root, &new_task(&["/data/attachments/p/x.png"])),
+            Err(BridgeError::Forbidden)
+        ));
+        assert!(matches!(
+            confine_new_task(&root, &new_task_with(&[], &["/data/attachments/p/x.pdf"])),
             Err(BridgeError::Forbidden)
         ));
     }

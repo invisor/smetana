@@ -151,7 +151,7 @@ is submitted as the session's first message, so it lands in Claude Code's transc
 person is down as having typed — and `sessions/kickoff.rs` reads it back out to answer the Sessions
 tab's First prompt with what somebody actually wrote (`.claude/rules/terminal.md`). What it matches on
 is `pub const` here rather than copied there: `CONVERSATION_TAIL`, which says the message is ours;
-`NEW_TASK_OPENING`, `IMAGES_ONE`, `IMAGES_MANY`, `FIELDS_GIVEN`, `FIELDS_AUTO` with
+`NEW_TASK_OPENING`, `IMAGES_ONE`, `IMAGES_MANY`, `FILES_ONE`, `FILES_MANY`, `FIELDS_GIVEN`, `FIELDS_AUTO` with
 `FIELDS_AUTO_TAIL`, `FOLLOW_UP` and `STANDARD`, which are where the person's words end. Nothing about
 the prompt an agent reads changed for it — no marker, no separator, and the output is the same to the
 character — and a test builds a real `NewTask` prompt and requires exactly `draft.text` back, which

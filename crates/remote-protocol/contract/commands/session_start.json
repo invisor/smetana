@@ -1,5 +1,5 @@
 {
-  "args": [{"intent":{"kind":"bare"},"project":"/work/smetana"},{"intent":{"id":"smetana-1","kind":"editTask","title":"A task"},"project":"/work/smetana"}],
+  "args": [{"intent":{"kind":"bare"},"project":"/work/smetana"},{"intent":{"id":"smetana-1","kind":"editTask","title":"A task"},"project":"/work/smetana"},{"intent":{"brainstorm":"auto","draft":{"files":["/data/attachments/proj-abc/20261021-brief.pdf"],"images":["/data/attachments/proj-abc/20261017-x.png"],"issue_type":null,"parent":null,"priority":null,"text":"Fix it"},"kind":"newTask","plan":"auto","spec":"auto"},"project":"/work/smetana"}],
   "reply": [
     7
   ]

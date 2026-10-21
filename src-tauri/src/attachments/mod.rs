@@ -1,4 +1,4 @@
-//! Images attached to a task before an agent files it.
+//! Files attached to a task before an agent files it: pictures, and anything else.
 //!
 //! The same shape as `files/` and `git.rs`, and for the same reason: writing a
 //! couple of megabytes holds no state that anything has to guard, so there is
@@ -69,17 +69,20 @@ use cleanup::{project_key, StoredFile, Tally};
 /// The ceiling, and deliberately **not** `files::model::MAX_FILE_BYTES`.
 ///
 /// That one is 2 MiB and answers a different question: how much text a
-/// `textarea` will open without freezing the window. This one answers how big a
-/// screenshot is, and the two have no reason to agree — a full-screen retina
-/// PNG, which is the gesture this whole feature exists for, routinely lands
-/// between 2 and 8 MB. Reusing the editor's number would have refused the
-/// primary case on ordinary input, and tying them together would guarantee that
-/// one of the two is wrong whenever the other is right.
+/// `textarea` will open without freezing the window. This one answers how big
+/// an attachment may be, and the two have no reason to agree — a full-screen
+/// retina PNG, or a PDF exported from a tracker, routinely lands between 2 MB
+/// and ten. Reusing the editor's number would have refused the primary case on
+/// ordinary input, and tying them together would guarantee that one of the two
+/// is wrong whenever the other is right.
 ///
-/// 8 MiB is where a screenshot stops being a screenshot. Past it the payload
-/// costs more to carry through the webview than the picture is worth, and the
-/// refusal names both numbers so a person can see what they are up against.
-pub const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+/// 10 MiB is a mechanical guard rather than a policy: a paste travels through
+/// the webview as base64, and a file dropped by mistake sits in the store until
+/// somebody presses the Storage tab's button. The one number covers every kind
+/// of file, and the front end's copy (`MAX_ATTACHMENT_BYTES` in
+/// `stores/attachments.js`) must never be smaller than this one. The refusal
+/// names both numbers so a person can see what they are up against.
+pub const MAX_ATTACHMENT_BYTES: u64 = 10 * 1024 * 1024;
 
 /// The directory under `app_data_dir()` everything lands in.
 const STORE: &str = "attachments";
@@ -87,7 +90,7 @@ const STORE: &str = "attachments";
 /// What a refusal calls something that arrived with no name — a screenshot off
 /// the clipboard. One copy, because the pre-check and the real check have to
 /// name it the same way or the same file would be refused in two voices.
-const PASTED: &str = "the pasted image";
+const PASTED: &str = "the pasted file";
 
 /// The smallest number of bytes a base64 string of this length can decode to.
 ///
@@ -101,7 +104,7 @@ fn decoded_at_least(len: usize) -> u64 {
     (len / 4 * 3).saturating_sub(2) as u64
 }
 
-/// What the bytes turn out to be. The name a file arrives with is not asked:
+/// What the bytes of a picture turn out to be. The name a file arrives with is not asked:
 /// a pasted screenshot has no name at all, and a `.png` that is really a JPEG
 /// would reach the agent labelled wrongly by the one party that could check.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -132,10 +135,12 @@ impl Format {
     }
 }
 
-/// The four raster formats every agent that reads an image reads. SVG is
-/// deliberately absent: it is a document rather than a picture, no harness
-/// takes it as one, and the thumbnail in the dialog would be the only party
-/// that ever rendered it.
+/// Whether the bytes are one of the four raster formats every agent that reads
+/// an image reads — and that is the whole of what this answers. It is no longer
+/// a gate on storing: a file that is not a picture is stored too, as a file.
+/// SVG is deliberately absent: it is a document rather than a picture, no
+/// harness takes it as one, and the thumbnail in the dialog would be the only
+/// party that ever rendered it, so an `.svg` is simply a file.
 pub fn sniff(bytes: &[u8]) -> Option<Format> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some(Format::Png);
@@ -180,46 +185,109 @@ fn slug(name: &str) -> String {
     out.trim_matches('-').to_owned()
 }
 
-/// The name a stored image gets: when it arrived, what it was called, and what
-/// it actually is. `n` is a collision counter and is only spelled out past
-/// zero — two files in the same second is the only way to reach it.
+/// The extensions that name a picture, and the one list Rust keeps: it is
+/// `Format::extension`'s five spellings (`jpeg` and `jpg` both) and the front
+/// end's `EXTENSIONS` in `stores/attachments.js`. A file carrying one of them
+/// must really be a picture, or the record would lack the `url` the front end's
+/// `isImagePath` promises it has.
+const PICTURE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
+
+/// How many characters of an original extension survive.
+const EXTENSION_MAX: usize = 16;
+
+/// The extension a non-picture keeps: the original name's, lowercased, ASCII
+/// letters and digits only, no longer than `EXTENSION_MAX`. A name with none
+/// (`Makefile`) yields `None`, and so does one whose extension is nothing but
+/// punctuation. Filtered for the reason `slug` is: the stored name ends up in a
+/// prompt, a shell argument and an issue description.
+fn file_extension(original: Option<&str>) -> Option<String> {
+    let ext = Path::new(original?).extension()?.to_string_lossy().to_ascii_lowercase();
+    let ext: String = ext.chars().filter(char::is_ascii_alphanumeric).take(EXTENSION_MAX).collect();
+    (!ext.is_empty()).then_some(ext)
+}
+
+/// The name a stored attachment gets: when it arrived, what it was called, and
+/// what it is. `n` is a collision counter and is only spelled out past zero —
+/// two files in the same second is the only way to reach it.
 ///
-/// The extension comes from the sniffed format rather than from the original
-/// name, so a screenshot saved as `shot.PNG` and a JPEG somebody renamed both
-/// end up labelled with what they are.
-pub fn stored_name(original: Option<&str>, format: Format, stamp: &str, n: u32) -> String {
+/// For a picture the extension comes from the sniffed format rather than from
+/// the original name, so a screenshot saved as `shot.PNG` and a JPEG somebody
+/// renamed both end up labelled with what they are. For anything else
+/// (`format` is `None`) it is the original name's own extension, cleaned by
+/// `file_extension`, or none at all.
+///
+/// Every name leads with the stamp, and `src/stores/mockBackend.js` leans on
+/// that: it refuses `attachment_reopen` for a base name beginning `missing`.
+pub fn stored_name(original: Option<&str>, format: Option<Format>, stamp: &str, n: u32) -> String {
+    let fallback = if format.is_some() { "image" } else { "file" };
     let stem = original
         .map(|name| slug(Path::new(name).file_stem().unwrap_or_default().to_string_lossy().as_ref()))
         .filter(|stem| !stem.is_empty())
-        .unwrap_or_else(|| "image".to_owned());
+        .unwrap_or_else(|| fallback.to_owned());
     let suffix = if n == 0 { String::new() } else { format!("-{n}") };
-    format!("{stamp}-{stem}{suffix}.{}", format.extension())
+    let ext = match format {
+        Some(format) => Some(format.extension().to_owned()),
+        None => file_extension(original),
+    };
+    match ext {
+        Some(ext) => format!("{stamp}-{stem}{suffix}.{ext}"),
+        None => format!("{stamp}-{stem}{suffix}"),
+    }
 }
 
-/// One stored image, as the dialog sees it.
+/// The answer for bytes already read, shared by `save_into` and
+/// `attachment_reopen` so a stored file is judged by one rule on the way in and
+/// on the way back. A picture answers with its bytes for the thumbnail; any
+/// other file answers with `data: None` and a generic mime — nothing in the
+/// dialog draws it, so carrying it through the webview would be 10 MiB for
+/// nothing.
+fn describe(path: String, name: String, bytes: &[u8], format: Option<Format>) -> Attachment {
+    Attachment {
+        path,
+        name,
+        bytes: bytes.len() as u64,
+        mime: format.map_or("application/octet-stream", Format::mime).to_owned(),
+        data: format.map(|_| base64::engine::general_purpose::STANDARD.encode(bytes)),
+    }
+}
+
+/// The one refusal that survives the opening of the store: a name that claims
+/// to be a picture over bytes that are not.
+fn lies_about_being_a_picture(original: Option<&str>, format: Option<Format>) -> bool {
+    format.is_none()
+        && file_extension(original).is_some_and(|ext| PICTURE_EXTENSIONS.contains(&ext.as_str()))
+}
+
+/// One stored attachment, as the dialog sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Attachment {
     /// Absolute, and the string that ends up in the issue description.
     pub path: String,
-    /// The stored file's own name — what the thumbnail is labelled with.
+    /// The stored file's own name — what the thumbnail or the chip is labelled with.
     pub name: String,
     pub bytes: u64,
     pub mime: String,
-    /// The file's bytes, base64. The webview cannot read a file it did not
-    /// open — no asset protocol is enabled here, and enabling one would open
-    /// the app's data directory to the page for the sake of a thumbnail — so
-    /// the bytes travel back with the answer. Both commands answer alike, which
-    /// is what leaves the strip one shape to draw.
-    pub data: String,
+    /// A picture's bytes, base64, and `None` for every other file. The webview
+    /// cannot read a file it did not open — no asset protocol is enabled here,
+    /// and enabling one would open the app's data directory to the page for the
+    /// sake of a thumbnail — so a picture's bytes travel back with the answer.
+    /// A file has no thumbnail, so its bytes stay on disk; the front end reads
+    /// `null` as "draw a chip". Serialised as `null`, never omitted.
+    pub data: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum AttachmentError {
-    #[error("{name} is {bytes} bytes; the ceiling is {MAX_IMAGE_BYTES} bytes")]
+    #[error("{name} is {bytes} bytes; the ceiling is {MAX_ATTACHMENT_BYTES} bytes")]
     TooLarge { name: String, bytes: u64 },
     #[error("{0} is not a PNG, JPEG, GIF or WebP image")]
     NotAnImage(String),
+    /// A folder dropped on the window by mistake. Reading one answers in the
+    /// operating system's own wording about directories, which a person cannot
+    /// act on.
+    #[error("{0} is a folder, not a file")]
+    NotAFile(String),
     /// A path that is not this app's to read. Only `attachment_reopen` sends
     /// it: everything it may legitimately be handed came out of the store, so
     /// anything else is a mistake rather than a refusal a person can act on.
@@ -236,12 +304,12 @@ pub enum AttachmentError {
     /// read off a project's board, so with no project open the question has no
     /// answer — and answering "nothing to delete" would be a guess dressed as a
     /// result.
-    #[error("no project is open, so there is no board to say which images are still in use")]
+    #[error("no project is open, so there is no board to say which attachments are still in use")]
     NoProject,
     /// The same absence one step in: a project is open and its board cannot be
     /// read. An unreadable board arrives as an *empty* one, so without this the
     /// sweep would find nothing referring to anything and delete the lot.
-    #[error("the board could not be read, so there is no way to tell which images are still in use")]
+    #[error("the board could not be read, so there is no way to tell which attachments are still in use")]
     NoBoard,
     #[error("{0}")]
     Io(String),
@@ -255,6 +323,7 @@ impl AttachmentError {
         match self {
             Self::TooLarge { .. } => "tooLarge",
             Self::NotAnImage(_) => "notAnImage",
+            Self::NotAFile(_) => "notAFile",
             Self::NotStored(_) => "notStored",
             Self::NetworkPath(_) => "networkPath",
             Self::NoProject => "noProject",
@@ -577,8 +646,9 @@ pub async fn attachments_clean(app: AppHandle) -> Result<Cleaned, AttachmentErro
 /// Write the bytes into `dir` and say what was written.
 ///
 /// The refusals come before the disk is touched at all: an oversized file and
-/// something that is not an image are both ordinary things for a person to
-/// hand over, and neither leaves anything behind.
+/// a picture's name over bytes that are not a picture are both ordinary things
+/// for a person to hand over, and neither leaves anything behind. Everything
+/// else is stored — `sniff` only decides whether it is stored as a picture.
 pub fn save_into(
     dir: &Path,
     original: Option<&str>,
@@ -586,12 +656,13 @@ pub fn save_into(
     stamp: &str,
 ) -> Result<Attachment, AttachmentError> {
     let label = original.unwrap_or(PASTED).to_owned();
-    if bytes.len() as u64 > MAX_IMAGE_BYTES {
+    if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
         return Err(AttachmentError::TooLarge { name: label, bytes: bytes.len() as u64 });
     }
-    let Some(format) = sniff(&bytes) else {
+    let format = sniff(&bytes);
+    if lies_about_being_a_picture(original, format) {
         return Err(AttachmentError::NotAnImage(label));
-    };
+    }
 
     // A name nothing else in the directory has. Two attachments inside one
     // second is the only way past the first turn of this loop, and the
@@ -610,13 +681,7 @@ pub fn save_into(
     std::fs::write(&full, &bytes)
         .map_err(|err| AttachmentError::Io(format!("{}: {err}", full.display())))?;
 
-    Ok(Attachment {
-        path: full.to_string_lossy().into_owned(),
-        name,
-        bytes: bytes.len() as u64,
-        mime: format.mime().to_owned(),
-        data: base64::engine::general_purpose::STANDARD.encode(&bytes),
-    })
+    Ok(describe(full.to_string_lossy().into_owned(), name, &bytes, format))
 }
 
 /// A file already on disk — what the picker and a drop on the window produce.
@@ -633,11 +698,11 @@ pub async fn attachment_import(app: AppHandle, path: String) -> Result<Attachmen
         .map_err(|err| AttachmentError::Io(format!("{path}: {err}")))?;
     // A folder is an ordinary thing to drop on a window by mistake, and reading
     // one answers with the operating system's own wording about directories.
-    // The refusal a person can act on is the one about images.
+    // The refusal a person can act on is the one that says it is a folder.
     if !meta.is_file() {
-        return Err(AttachmentError::NotAnImage(name.unwrap_or(path)));
+        return Err(AttachmentError::NotAFile(name.unwrap_or(path)));
     }
-    if meta.len() > MAX_IMAGE_BYTES {
+    if meta.len() > MAX_ATTACHMENT_BYTES {
         return Err(AttachmentError::TooLarge {
             name: name.unwrap_or(path),
             bytes: meta.len(),
@@ -648,7 +713,7 @@ pub async fn attachment_import(app: AppHandle, path: String) -> Result<Attachmen
     save_into(&dir, name.as_deref(), bytes, &stamp())
 }
 
-/// A picture already in the store, read again.
+/// An attachment already in the store, read again.
 ///
 /// `attachment_import` with the copy taken out. The one caller is a New task
 /// window being rebuilt after a project switch: the draft it is restored from
@@ -669,25 +734,23 @@ pub async fn attachment_reopen(app: AppHandle, path: String) -> Result<Attachmen
     let meta = std::fs::metadata(&source)
         .map_err(|err| AttachmentError::Io(format!("{path}: {err}")))?;
     if !meta.is_file() {
-        return Err(AttachmentError::NotAnImage(name));
+        return Err(AttachmentError::NotAFile(name));
     }
     // The same ceiling the import applies, read from the metadata for the same
     // reason: a file that grew past it is refused without being read in.
-    if meta.len() > MAX_IMAGE_BYTES {
+    if meta.len() > MAX_ATTACHMENT_BYTES {
         return Err(AttachmentError::TooLarge { name, bytes: meta.len() });
     }
     let bytes =
         std::fs::read(&source).map_err(|err| AttachmentError::Io(format!("{path}: {err}")))?;
-    let Some(format) = sniff(&bytes) else {
+    // The stored name is judged by the rule `save_into` applied on the way in:
+    // a name with a picture extension that no longer sniffs as one is refused,
+    // anything else is a file.
+    let format = sniff(&bytes);
+    if lies_about_being_a_picture(Some(&name), format) {
         return Err(AttachmentError::NotAnImage(name));
-    };
-    Ok(Attachment {
-        path,
-        name,
-        bytes: bytes.len() as u64,
-        mime: format.mime().to_owned(),
-        data: base64::engine::general_purpose::STANDARD.encode(&bytes),
-    })
+    }
+    Ok(describe(path, name, &bytes, format))
 }
 
 /// Bytes the webview is holding — a paste, and nothing else can produce them:
@@ -738,7 +801,7 @@ pub mod plain {
         name: Option<String>,
         data: String,
     ) -> Result<Attachment, AttachmentError> {
-        if decoded_at_least(data.len()) > MAX_IMAGE_BYTES {
+        if decoded_at_least(data.len()) > MAX_ATTACHMENT_BYTES {
             return Err(AttachmentError::TooLarge {
                 name: name.unwrap_or_else(|| PASTED.to_owned()),
                 // The upper bound, which is what the person actually handed over to
@@ -779,7 +842,7 @@ mod tests {
             .expect("a png is stored");
         assert!(cleanup::in_store(&root, Path::new(&saved.path)));
         assert!(Path::new(&saved.path).is_file());
-        let big = "A".repeat(((MAX_IMAGE_BYTES as usize / 3) + 8) * 4);
+        let big = "A".repeat(((MAX_ATTACHMENT_BYTES as usize / 3) + 8) * 4);
         assert!(matches!(
             plain::write(&root, None, None, big),
             Err(AttachmentError::TooLarge { .. })
@@ -808,7 +871,7 @@ mod tests {
 
     #[test]
     fn the_stored_name_says_when_what_and_which_kind() {
-        let name = stored_name(Some("Design mock.png"), Format::Png, "20260806-121314", 0);
+        let name = stored_name(Some("Design mock.png"), Some(Format::Png), "20260806-121314", 0);
         assert_eq!(name, "20260806-121314-Design-mock.png");
     }
 
@@ -816,19 +879,19 @@ mod tests {
     fn the_extension_is_what_the_bytes_are_not_what_the_name_claimed() {
         // A JPEG somebody renamed. The agent is told the truth, and so is
         // anything that opens the file by its path later.
-        let name = stored_name(Some("shot.png"), Format::Jpeg, "20260806-121314", 0);
+        let name = stored_name(Some("shot.png"), Some(Format::Jpeg), "20260806-121314", 0);
         assert!(name.ends_with(".jpg"), "{name}");
     }
 
     #[test]
     fn a_paste_has_no_name_and_gets_one() {
         assert_eq!(
-            stored_name(None, Format::Png, "20260806-121314", 0),
+            stored_name(None, Some(Format::Png), "20260806-121314", 0),
             "20260806-121314-image.png"
         );
         // And so does a name that survives sanitising as nothing at all.
         assert_eq!(
-            stored_name(Some("???.png"), Format::Png, "20260806-121314", 0),
+            stored_name(Some("???.png"), Some(Format::Png), "20260806-121314", 0),
             "20260806-121314-image.png"
         );
     }
@@ -838,7 +901,7 @@ mod tests {
         // This string ends up in a prompt, in an argument and in an issue
         // description; the one that eventually gets pasted without quotes is
         // the reason none of it survives.
-        let name = stored_name(Some("my shot; rm -rf.png"), Format::Png, "20260806-121314", 0);
+        let name = stored_name(Some("my shot; rm -rf.png"), Some(Format::Png), "20260806-121314", 0);
         assert_eq!(name, "20260806-121314-my-shot-rm-rf.png");
     }
 
@@ -846,7 +909,7 @@ mod tests {
     fn only_the_file_s_own_name_is_kept_never_the_directories_above_it() {
         // What arrives is an absolute path from a picker or a drop, and the
         // stored name has no business carrying somebody's home directory.
-        let name = stored_name(Some("/Users/you/Downloads/shot.png"), Format::Png, "20260806-121314", 0);
+        let name = stored_name(Some("/Users/you/Downloads/shot.png"), Some(Format::Png), "20260806-121314", 0);
         assert_eq!(name, "20260806-121314-shot.png");
     }
 
@@ -855,7 +918,7 @@ mod tests {
         // Any script would do; this one reads "screenshot" in Japanese. Nothing
         // survives the sanitiser, and a row of dashes is not a name.
         assert_eq!(
-            stored_name(Some("スクリーンショット.png"), Format::Png, "20260806-121314", 0),
+            stored_name(Some("スクリーンショット.png"), Some(Format::Png), "20260806-121314", 0),
             "20260806-121314-image.png"
         );
     }
@@ -863,7 +926,7 @@ mod tests {
     #[test]
     fn a_collision_is_counted_rather_than_overwritten() {
         assert_eq!(
-            stored_name(Some("a.png"), Format::Png, "20260806-121314", 2),
+            stored_name(Some("a.png"), Some(Format::Png), "20260806-121314", 2),
             "20260806-121314-a-2.png"
         );
     }
@@ -881,7 +944,7 @@ mod tests {
         assert_eq!(std::fs::read(&saved.path).unwrap(), PNG);
         assert!(Path::new(&saved.path).is_absolute(), "the issue carries this path: {}", saved.path);
         assert_eq!(
-            base64::engine::general_purpose::STANDARD.decode(saved.data.as_bytes()).unwrap(),
+            base64::engine::general_purpose::STANDARD.decode(saved.data.as_deref().expect("a picture answers with its bytes").as_bytes()).unwrap(),
             PNG,
             "the thumbnail has to be drawn from what was actually stored"
         );
@@ -907,7 +970,7 @@ mod tests {
     fn an_oversized_image_is_refused_and_leaves_nothing_behind() {
         let dir = scratch("too-large");
         let mut huge = PNG.to_vec();
-        huge.resize(MAX_IMAGE_BYTES as usize + 1, 0);
+        huge.resize(MAX_ATTACHMENT_BYTES as usize + 1, 0);
 
         let err = save_into(&dir, Some("huge.png"), huge, "20260806-121314");
 
@@ -917,17 +980,101 @@ mod tests {
     }
 
     #[test]
-    fn something_that_is_not_an_image_is_refused_by_name() {
-        let dir = scratch("not-an-image");
+    fn a_text_file_is_stored_as_a_file_not_refused() {
+        let dir = scratch("text-file");
 
-        let err = save_into(&dir, Some("notes.txt"), b"just text".to_vec(), "20260806-121314");
+        let saved = save_into(&dir, Some("notes.txt"), b"just text".to_vec(), "20260806-121314")
+            .expect("a file that is not a picture is stored");
 
-        match err {
-            Err(AttachmentError::NotAnImage(name)) => assert_eq!(name, "notes.txt"),
-            other => panic!("expected NotAnImage, got {other:?}"),
-        }
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        assert_eq!(saved.name, "20260806-121314-notes.txt");
+        assert_eq!(std::fs::read(&saved.path).unwrap(), b"just text");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pdf_is_stored_under_its_own_extension_with_no_bytes_sent_back() {
+        let dir = scratch("pdf");
+        let saved =
+            save_into(&dir, Some("Jira export.PDF"), b"%PDF-1.7 hello".to_vec(), "20261021-170907").unwrap();
+        assert_eq!(saved.name, "20261021-170907-Jira-export.pdf");
+        assert_eq!(saved.mime, "application/octet-stream");
+        assert_eq!(saved.data, None);
+        assert!(dir.join(&saved.name).exists());
+        let json = serde_json::to_value(&saved).unwrap();
+        assert!(json["data"].is_null(), "null on the wire, not omitted: {json}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_with_no_extension_keeps_none() {
+        let dir = scratch("noext");
+        let saved = save_into(&dir, Some("Makefile"), b"all:\n".to_vec(), "20261021-170907").unwrap();
+        assert_eq!(saved.name, "20261021-170907-Makefile");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_picture_name_over_bytes_that_are_not_a_picture_is_refused() {
+        for name in ["diagram.png", "a.JPG", "b.jpeg", "c.gif", "d.WebP"] {
+            let dir = scratch("liar");
+            let err = save_into(&dir, Some(name), b"<svg/>".to_vec(), "20261021-170907");
+            match err {
+                Err(AttachmentError::NotAnImage(label)) => assert_eq!(label, name),
+                other => panic!("expected NotAnImage for {name}, got {other:?}"),
+            }
+            assert!(std::fs::read_dir(&dir).unwrap().next().is_none(), "nothing is written");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn a_picture_still_answers_with_its_bytes() {
+        let dir = scratch("png-answer");
+        let saved = save_into(&dir, Some("shot.png"), PNG.to_vec(), "20261021-170907").unwrap();
+        assert_eq!(saved.mime, "image/png");
+        assert!(saved.data.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_of_exactly_the_ceiling_is_stored_and_one_byte_more_is_not() {
+        let dir = scratch("ceiling");
+        let exact = vec![b'a'; MAX_ATTACHMENT_BYTES as usize];
+        assert!(save_into(&dir, Some("big.txt"), exact, "20261021-170907").is_ok());
+        let over = vec![b'a'; MAX_ATTACHMENT_BYTES as usize + 1];
+        assert!(matches!(
+            save_into(&dir, Some("bigger.txt"), over, "20261021-170908"),
+            Err(AttachmentError::TooLarge { .. })
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pasted_file_with_no_name_is_called_file() {
+        let dir = scratch("nameless");
+        let saved = save_into(&dir, None, b"plain".to_vec(), "20261021-170907").unwrap();
+        assert_eq!(saved.name, "20261021-170907-file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_extension_is_cleaned_lowercased_and_capped() {
+        let n = |name: &str| stored_name(Some(name), None, "20261021-170907", 0);
+        assert_eq!(n("notes.md"), "20261021-170907-notes.md");
+        assert_eq!(n("a.T-X.t"), "20261021-170907-a-T-X.t");
+        assert_eq!(n("x.a b!c"), "20261021-170907-x.abc");
+        assert_eq!(n("x.!!!"), "20261021-170907-x");
+        assert_eq!(n("x.abcdefghijklmnopqrstuvwxyz"), "20261021-170907-x.abcdefghijklmnop");
+        assert_eq!(n("トップ.pdf"), "20261021-170907-file.pdf");
+    }
+
+    #[test]
+    fn a_stored_file_is_read_back_by_the_same_rule() {
+        // A stored name with a picture extension whose bytes are not a picture.
+        let name = "20261021-170907-liar.png";
+        assert!(lies_about_being_a_picture(Some(name), sniff(b"<svg/>")));
+        assert!(!lies_about_being_a_picture(Some(name), sniff(PNG)));
+        assert!(!lies_about_being_a_picture(Some("20261021-170907-brief.pdf"), sniff(b"%PDF")));
     }
 
     /// The base64 length of a file of exactly `bytes`, the way the webview
@@ -942,8 +1089,8 @@ mod tests {
         // paste never becomes 40 MB of bytes beside the 53 MB of text already
         // holding it. `attachment_import` reads `metadata().len()` for exactly
         // the same reason.
-        let huge = MAX_IMAGE_BYTES as usize * 4;
-        assert!(decoded_at_least(encoded_len(huge)) > MAX_IMAGE_BYTES);
+        let huge = MAX_ATTACHMENT_BYTES as usize * 4;
+        assert!(decoded_at_least(encoded_len(huge)) > MAX_ATTACHMENT_BYTES);
     }
 
     #[test]
@@ -952,9 +1099,9 @@ mod tests {
         // byte over it, so this check is deliberately the looser of the two:
         // everything up to and including the ceiling passes here and meets the
         // authoritative check in `save_into`.
-        for bytes in [0, 1, 1024, MAX_IMAGE_BYTES as usize - 1, MAX_IMAGE_BYTES as usize] {
+        for bytes in [0, 1, 1024, MAX_ATTACHMENT_BYTES as usize - 1, MAX_ATTACHMENT_BYTES as usize] {
             assert!(
-                decoded_at_least(encoded_len(bytes)) <= MAX_IMAGE_BYTES,
+                decoded_at_least(encoded_len(bytes)) <= MAX_ATTACHMENT_BYTES,
                 "{bytes} bytes would have been refused before anything looked at them"
             );
         }
@@ -965,8 +1112,9 @@ mod tests {
         // A screenshot is not a source file, and 2 MiB — what a textarea will
         // open — refuses the very gesture this feature exists for. If these two
         // are ever equal again it is because somebody wired them together.
-        assert_ne!(MAX_IMAGE_BYTES, crate::files::model::MAX_FILE_BYTES);
-        assert!(MAX_IMAGE_BYTES >= 8 * 1024 * 1024, "a retina screenshot reaches 8 MB");
+        assert_ne!(MAX_ATTACHMENT_BYTES, crate::files::model::MAX_FILE_BYTES);
+        assert!(MAX_ATTACHMENT_BYTES >= 8 * 1024 * 1024, "a retina screenshot reaches 8 MB");
+        assert_eq!(MAX_ATTACHMENT_BYTES, 10 * 1024 * 1024);
     }
 
     #[test]
@@ -976,9 +1124,12 @@ mod tests {
         assert_eq!(json["kind"], "tooLarge");
         let message = json["message"].as_str().unwrap();
         assert!(message.contains("huge.png"), "{message}");
-        assert!(message.contains(&MAX_IMAGE_BYTES.to_string()), "the ceiling is the actionable half: {message}");
+        assert!(message.contains(&MAX_ATTACHMENT_BYTES.to_string()), "the ceiling is the actionable half: {message}");
 
-        assert_eq!(AttachmentError::NotAnImage("a.txt".into()).kind(), "notAnImage");
+        assert_eq!(AttachmentError::NotAnImage("a.png".into()).kind(), "notAnImage");
+        let folder = serde_json::to_value(AttachmentError::NotAFile("docs".into())).unwrap();
+        assert_eq!(folder["kind"], "notAFile");
+        assert_eq!(folder["message"], "docs is a folder, not a file");
         assert_eq!(AttachmentError::NoProject.kind(), "noProject");
         assert_eq!(AttachmentError::NoBoard.kind(), "noBoard");
         assert_eq!(AttachmentError::Io("x".into()).kind(), "io");

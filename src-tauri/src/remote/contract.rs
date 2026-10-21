@@ -526,13 +526,23 @@ fn replies() -> BTreeMap<&'static str, Vec<Value>> {
     map.insert("session_since", vec![json_of(&conversation()), Value::Null]);
     map.insert(
         "attachment_write",
-        vec![json_of(&Attachment {
-            path: "/data/attachments/proj-abc/20261017-x.png".into(),
-            name: "20261017-x.png".into(),
-            bytes: 2,
-            mime: "image/png".into(),
-            data: "aGk=".into(),
-        })],
+        vec![
+            json_of(&Attachment {
+                path: "/data/attachments/proj-abc/20261017-x.png".into(),
+                name: "20261017-x.png".into(),
+                bytes: 2,
+                mime: "image/png".into(),
+                data: Some("aGk=".into()),
+            }),
+            // A file that is not a picture comes back with no bytes.
+            json_of(&Attachment {
+                path: "/data/attachments/proj-abc/20261021-brief.pdf".into(),
+                name: "20261021-brief.pdf".into(),
+                bytes: 2,
+                mime: "application/octet-stream".into(),
+                data: None,
+            }),
+        ],
     );
     map.insert("session_send", vec![Value::Null]);
     map.insert("session_answer", vec![Value::Null]);

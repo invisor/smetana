@@ -151,7 +151,14 @@ const reportDraft = () => {
          from the Storage tab in between and one the person took out. */
       images: props.restoringImages
         ? (props.draft?.images ?? [])
-        : props.attachments.map((item) => item.path),
+        : props.attachments.filter((item) => item.url).map((item) => item.path),
+      /* The files that are not pictures, split off by the same test `submit`
+         uses — a record with no `url` — and kept the same way while the
+         restore is still arriving. The interleaving of pictures and files is
+         not recorded, and a restored list draws pictures first. */
+      files: props.restoringImages
+        ? (props.draft?.files ?? [])
+        : props.attachments.filter((item) => !item.url).map((item) => item.path),
       /* What the screen says, not what the refs hold — the same reading
          `submit` sends, so a restored dialog cannot come back promising a
          stage nobody asked for. */
@@ -221,8 +228,11 @@ const submit = () => {
     issue_type: issueType.value === 'auto' ? null : issueType.value,
     priority: priority.value === 'auto' ? null : Number(priority.value),
     /* Paths, not thumbnails: what the agent is handed, and what it has to
-       write into the issue, is where the file is. */
-    images: props.attachments.map((item) => item.path),
+       write into the issue, is where the file is. Two lists, split here and
+       nowhere else: a record with a `url` is a picture (`images`), one without
+       is any other file (`files`). */
+    images: props.attachments.filter((item) => item.url).map((item) => item.path),
+    files: props.attachments.filter((item) => !item.url).map((item) => item.path),
     /* What the screen says, not what the refs hold: a stage under a parent
        that is not On is settled by that parent, and sending the remembered
        choice instead would ask for a spec nobody can see asked for. */
@@ -337,8 +347,8 @@ const field = { flex: 1, minWidth: 0 }
    gap below it belongs to the row rather than to the label. */
 const labelInline = { ...label, marginBottom: 'var(--space-0)' }
 
-/* The images block: the button, the hint that names the other two gestures,
-   and the thumbnails under them. The hint is the only place a person learns
+/* The attachments block: the button, the hint that names the other two gestures,
+   and the thumbnails and file chips under them. The hint is the only place a person learns
    that pasting and dropping work at all — neither leaves a mark on the screen
    until it is used. */
 const images = { display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }
@@ -425,7 +435,7 @@ const parentWhy = {
       </div>
       <div :style="images">
         <div :style="attachRow">
-          <div :style="labelInline">Images</div>
+          <div :style="labelInline">Attachments</div>
           <Button size="sm" icon="paperclip" :disabled="busy" @click="$emit('attach')">Attach</Button>
           <span :style="hint">{{ dragging ? 'Drop them anywhere' : 'or paste, or drop them on the window' }}</span>
         </div>

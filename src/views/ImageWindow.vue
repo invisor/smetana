@@ -20,8 +20,8 @@
    and over `image:show` when it is not.
 
    **What travels is the path, and the bytes stay where they are.** An
-   attachment's `url` is a `data:` URL of up to 8 MiB of base64: it fits in no
-   URL, and sending it over the event channel would be eleven megabytes per
+   attachment's `url` is a `data:` URL of up to 10 MiB of base64: it fits in no
+   URL, and sending it over the event channel would be thirteen megabytes per
    click. This window reads the file itself with `readImagePath`, which is
    `image_read` under one command — the same one a figure in a task's prose
    is read through, not `attachment_reopen` any more: this window shows
