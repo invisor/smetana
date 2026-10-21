@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine;
 
-use super::{sniff, Attachment, AttachmentError, MAX_IMAGE_BYTES};
+use super::{sniff, Attachment, AttachmentError, MAX_ATTACHMENT_BYTES};
 
 /// Whether `src` opens a network share rather than naming a file on this
 /// machine — the UNC form (`\\host\share\…`) and its forward-slash twin
@@ -124,7 +124,7 @@ pub async fn image_read(base: String, src: String) -> Result<Attachment, Attachm
     if !meta.is_file() {
         return Err(AttachmentError::NotAnImage(label));
     }
-    if meta.len() > MAX_IMAGE_BYTES {
+    if meta.len() > MAX_ATTACHMENT_BYTES {
         return Err(AttachmentError::TooLarge { name: label, bytes: meta.len() });
     }
     let bytes = std::fs::read(&resolved).map_err(|err| AttachmentError::Io(format!("{label}: {err}")))?;
@@ -140,7 +140,7 @@ pub async fn image_read(base: String, src: String) -> Result<Attachment, Attachm
         name,
         bytes: bytes.len() as u64,
         mime: format.mime().to_owned(),
-        data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        data: Some(base64::engine::general_purpose::STANDARD.encode(&bytes)),
     })
 }
 
@@ -252,7 +252,7 @@ mod tests {
     async fn an_oversized_file_is_refused_from_its_metadata_alone() {
         let dir = scratch("too-large");
         let mut huge = PNG.to_vec();
-        huge.resize(MAX_IMAGE_BYTES as usize + 1, 0);
+        huge.resize(MAX_ATTACHMENT_BYTES as usize + 1, 0);
         std::fs::write(dir.join("huge.png"), &huge).unwrap();
 
         let err = image_read(dir.to_string_lossy().into_owned(), "huge.png".into()).await;
