@@ -1586,6 +1586,47 @@ fn images(paths: &[String], delivery: ImageDelivery) -> String {
     out
 }
 
+/// What the agent owes us for an attached file that is not a picture: the same
+/// two halves as [`IMAGES`], for the same reason, plus the one thing a picture
+/// never needs — a way out when the agent's tools cannot open the format.
+/// Guessing at the contents of a PDF it could not read would put invented
+/// requirements into an issue, which is worse than an issue that says it could
+/// not read the file.
+const FILES: &str = "If a file cannot be read with the tools you have, say so in the issue rather \
+     than guessing at its contents. Copy each path into the issue description exactly as it is \
+     written above, and also say in words what each file is and what in it matters for the task. \
+     The paths are how whoever picks this up opens the files; the words are what is left of them \
+     on a machine that does not have the files. Neither on its own is enough.";
+
+/// The line the files block opens on, one apiece, and `pub` for the reason
+/// [`IMAGES_ONE`] is: `sessions::kickoff` matches on both to find where the
+/// person's own words stop, so a sentence built at run time out of fragments
+/// would be one that module cannot match against.
+pub const FILES_ONE: &str = "There is a file attached to this task, at this absolute path on \
+     this machine:";
+pub const FILES_MANY: &str = "There are files attached to this task, at these absolute paths on \
+     this machine:";
+
+/// The files, named, after the images. Empty when there are none. A file
+/// reaches the agent through this block and through nothing else — no harness
+/// flag carries one — so the instruction to read it is unconditional.
+fn files(paths: &[String]) -> String {
+    if paths.is_empty() {
+        return String::new();
+    }
+    let one = paths.len() == 1;
+    let mut out = String::new();
+    let _ = write!(out, "{}\n\n", if one { FILES_ONE } else { FILES_MANY });
+    for path in paths {
+        let _ = writeln!(out, "{path}");
+    }
+    out.push('\n');
+    let _ = write!(out, "Read {} before you write anything. ", if one { "it" } else { "them" });
+    out.push_str(FILES);
+    out.push_str("\n\n");
+    out
+}
+
 /// The two stages under the discussion, already cascaded. Empty when both are
 /// `Off` — a task filed with no paperwork asked for must carry no prose about
 /// paperwork at all, or an agent starts looking for a place to put a document
@@ -1683,6 +1724,7 @@ fn new_task(
     out.push_str(draft.text.trim());
     out.push_str("\n\n");
     out.push_str(&images(&draft.images, image_delivery));
+    out.push_str(&files(&draft.files));
     out.push_str(&fields(draft));
     // After the type and the priority, which are the other two things this task
     // *is*, and before STANDARD, which is about how any task is filed.
@@ -1761,6 +1803,7 @@ mod tests {
             issue_type: Some("bug".into()),
             priority: Some(2),
             images: Vec::new(),
+            files: Vec::new(),
             parent: None,
         }
     }
@@ -3222,6 +3265,57 @@ mod tests {
                 .unwrap();
         assert!(text.contains("There is an image attached to this task, at this absolute path"), "{text}");
         assert!(text.contains("Open and look at it before"), "{text}");
+    }
+
+    fn drafted_with(images: &[&str], files: &[&str]) -> String {
+        let intent = Intent::NewTask {
+            brainstorm: Stage::Off,
+            spec: Stage::Off,
+            plan: Stage::Off,
+            draft: TaskDraft {
+                images: images.iter().map(|p| (*p).to_owned()).collect(),
+                files: files.iter().map(|p| (*p).to_owned()).collect(),
+                ..draft()
+            },
+        };
+        build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "", None).unwrap()
+    }
+
+    const PDF: &str = "/data/attachments/p/20261021-170907-Jira-export.pdf";
+    const MD: &str = "/data/attachments/p/20261021-170908-notes.md";
+
+    #[test]
+    fn attached_files_reach_the_prompt_by_path_and_are_asked_to_be_read() {
+        let text = drafted_with(&[], &[PDF, MD]);
+        assert!(text.contains(FILES_MANY), "{text}");
+        assert!(text.contains(PDF), "{text}");
+        assert!(text.contains(MD), "{text}");
+        assert!(text.contains("Read them before you write anything."), "{text}");
+        assert!(text.contains(FILES), "{text}");
+        assert!(!text.contains(IMAGES_ONE) && !text.contains(IMAGES_MANY), "{text}");
+    }
+
+    #[test]
+    fn one_file_is_spoken_of_in_the_singular() {
+        let text = drafted_with(&[], &[PDF]);
+        assert!(text.contains(FILES_ONE), "{text}");
+        assert!(!text.contains(FILES_MANY), "{text}");
+        assert!(text.contains("Read it before you write anything."), "{text}");
+    }
+
+    #[test]
+    fn a_draft_with_no_files_carries_no_files_block() {
+        let text = drafted_with(&["/data/a.png"], &[]);
+        assert!(!text.contains(FILES), "{text}");
+        assert!(!text.contains(FILES_ONE) && !text.contains(FILES_MANY), "{text}");
+    }
+
+    #[test]
+    fn files_come_after_images_in_the_prompt() {
+        let text = drafted_with(&["/data/a.png", "/data/b.png"], &[PDF]);
+        let images = text.find(IMAGES_MANY).expect("the images block");
+        let files = text.find(FILES_ONE).expect("the files block");
+        assert!(images < files, "{text}");
     }
 
     #[test]

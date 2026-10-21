@@ -1,6 +1,7 @@
 {
   "args": [{"data":"aGk=","name":"shot.png"},{"data":"aGk=","name":null}],
   "reply": [
-    {"bytes":2,"data":"aGk=","mime":"image/png","name":"20261017-x.png","path":"/data/attachments/proj-abc/20261017-x.png"}
+    {"bytes":2,"data":"aGk=","mime":"image/png","name":"20261017-x.png","path":"/data/attachments/proj-abc/20261017-x.png"},
+    {"bytes":2,"data":null,"mime":"application/octet-stream","name":"20261021-brief.pdf","path":"/data/attachments/proj-abc/20261021-brief.pdf"}
   ]
 }

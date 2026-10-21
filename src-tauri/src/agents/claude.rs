@@ -1309,6 +1309,7 @@ mod tests {
                 issue_type: Some("bug".into()),
                 priority: Some(2),
                 images,
+                files: Vec::new(),
                 parent: None,
             },
         }

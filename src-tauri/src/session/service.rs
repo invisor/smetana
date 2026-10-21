@@ -953,6 +953,10 @@ fn spawn_session(
     // The person's own share of the brief, for the journal's opening turn.
     // Taken before the `Launch` consumes the intent, like `work` above.
     let (opening_text, opening_attachments) = intent.opening_words();
+    // What the driver may take as pictures: the draft's images alone. A file
+    // that is not a picture reaches the agent through the prompt, and Codex's
+    // driver would hand it to the app-server as a `localImage`.
+    let opening_pictures = intent.opening_pictures();
 
     let launch = Launch {
         profile,
@@ -1075,10 +1079,10 @@ fn spawn_session(
                 at,
             );
             // Claude's opening prose already names its images, while Codex's
-            // app-server additionally receives each path as a localImage.
+            // app-server additionally receives each *picture's* path as a localImage.
             // Passing them through here keeps that delivery decision in the
             // driver rather than making a second opening path in the worker.
-            let bytes = talking.driver.opening_input(Input::Message { text, attachments: opening_attachments.clone() });
+            let bytes = talking.driver.opening_input(Input::Message { text, attachments: opening_pictures });
             if talking.stdin.send(bytes).is_err() {
                 log::warn!("[session {id}] the child stopped reading before its brief was written");
             }
@@ -3671,6 +3675,7 @@ mod tests {
                     priority: None,
                     parent: None,
                     images: Vec::new(),
+                    files: Vec::new(),
                 },
             },
             Intent::EditTask { id: "x-1".into(), title: "T".into() },
