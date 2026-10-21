@@ -1,11 +1,11 @@
-/* Images attached to a task that has not been filed yet. One of the files in
+/* Files attached to a task that has not been filed yet — pictures, and anything else. One of the files in
    this directory that know Tauri exists — see the list in CLAUDE.md rather
    than a number written here, since an ordinal is written once and the list
    keeps growing under it (this file's own used to say "Seventh", which
    `smetana-h8vq` found already wrong against the tree it was touching for an
    unrelated reason). Components see a reactive object and a few functions.
 
-   Three gestures put a picture in this list — the picker, Cmd+V and a drop on
+   Three gestures put an attachment in this list — the picker, Cmd+V and a drop on
    the window — and they arrive as only two kinds of thing. A file already on
    disk arrives as a path, and Rust copies it (`attachment_import`); the
    clipboard exists inside the page and nowhere this process can reach, so a
@@ -49,9 +49,11 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { dirname } from '../paths.js'
 import { watchWindowDrops } from './windowDrops.js'
 
-/* What the picker offers. The list is the same four formats `sniff` in
-   `attachments.rs` recognises — a filter is a convenience, and Rust is the one
-   that decides, by looking at the bytes rather than at the name.
+/* Which paths are pictures: the same five spellings `PICTURE_EXTENSIONS` in
+   `attachments.rs` refuses to store as anything else. The picker no longer
+   filters by them — it offers every file — but a stored attachment has a `url`
+   exactly when its path passes `isImagePath`, because Rust refuses a file named
+   like a picture whose bytes are not one.
 
    Exported since smetana-4x3w: an attachment chip — in the composer, before a
    message is sent, and under a sent message once it is — has to decide
@@ -73,7 +75,7 @@ export function isImagePath(path) {
   return EXTENSIONS.includes(path.slice(dot + 1).toLowerCase())
 }
 
-/* A second copy of `MAX_IMAGE_BYTES` from `attachments.rs`, and the same bargain
+/* A second copy of `MAX_ATTACHMENT_BYTES` from `attachments.rs`, and the same bargain
    `defaults()` in settings.js makes with the Rust schema: Rust holds the
    authority and refuses every oversized payload on arrival, whatever this number
    says. It exists here only so a file that is certainly going to be refused is
@@ -87,11 +89,14 @@ export function isImagePath(path) {
    have sent, and there is no way to attach it at all — the same false refusal
    `decoded_at_least` on the Rust side is deliberately a lower bound to avoid. So
    this number must never be the smaller of the two. */
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 
 export const attachmentsState = reactive({
   /* { path, name, bytes, url } — `url` is a data URL built from what Rust
-     stored, which is how a thumbnail is drawn without an asset protocol. */
+     stored, which is how a thumbnail is drawn without an asset protocol. It is
+     `null` for a file that is not a picture (Rust answers `data: null`), and
+     that is the one test the rest of the app uses to tell the two apart: a
+     thumbnail with a `url`, a chip without, `images` and `files` in a draft. */
   items: [],
   /* What the last attempt was refused with, in one readable line. Shown inside
      the dialog rather than as a toast: the dialog is on top of everything, and
@@ -136,7 +141,7 @@ function record(attachment) {
     path: attachment.path,
     name: attachment.name,
     bytes: attachment.bytes,
-    url: `data:${attachment.mime};base64,${attachment.data}`
+    url: typeof attachment.data === 'string' ? `data:${attachment.mime};base64,${attachment.data}` : null
   }
 }
 
@@ -157,7 +162,7 @@ function add(attachment) {
    nothing is not a list.
 
    What travels to that window is the *path*, never the bytes: `url` here is a
-   `data:` URL of up to `MAX_IMAGE_BYTES` of base64, which fits in no URL and
+   `data:` URL of up to `MAX_ATTACHMENT_BYTES` of base64, which fits in no URL and
    would be eleven megabytes over IPC on every click. `attachment_reopen` is
    already the command for exactly this — it answers with the record an import
    answers with and is confined to `store_root()` by `cleanup::in_store` — so
@@ -328,9 +333,8 @@ export async function pickImages() {
   try {
     picked = await open({
       multiple: true,
-      title: 'Attach images',
-      defaultPath,
-      filters: [{ name: 'Images', extensions: EXTENSIONS }]
+      title: 'Attach files',
+      defaultPath
     })
   } catch (err) {
     /* The picker itself failing is a batch of one that went wrong, and its own
@@ -381,8 +385,8 @@ export async function attachFiles(files) {
          dropped by mistake that is hundreds of megabytes of string built to be
          thrown away. Rust refuses it again on arrival; that check is the
          authority and this one only keeps the cost down. */
-      if (file.size > MAX_IMAGE_BYTES) {
-        throw { kind: 'tooLarge', message: `${file.name || 'the pasted image'} is ${file.size} bytes; the ceiling is ${MAX_IMAGE_BYTES} bytes` }
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        throw { kind: 'tooLarge', message: `${file.name || 'the pasted file'} is ${file.size} bytes; the ceiling is ${MAX_ATTACHMENT_BYTES} bytes` }
       }
       const bytes = new Uint8Array(await file.arrayBuffer())
       add(await invoke('attachment_write', { name: file.name || null, data: toBase64(bytes) }))
@@ -455,7 +459,7 @@ export function clearAttachments() {
    against.
 
    `accepting` is a function rather than a flag this store keeps: whether
-   anything is collecting images is the view's business, and asking it is what
+   anything is collecting attachments is the view's business, and asking it is what
    keeps a drop from landing in a list nobody is looking at. The dialog window
    answers `true` and always will — a window that exists is a dialog that is
    open — and it keeps the question because the caller is the one that knows
