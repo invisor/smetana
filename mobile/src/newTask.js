@@ -43,6 +43,15 @@ export const canStart = ({ text, busy = false, attaching = false }) => !busy && 
 
 const chosen = (value) => (value === undefined || value === null || value === 'auto' || value === '' ? null : value)
 
+/* What was attached, split the way the desktop's New task window splits it: a record with a
+   `url` has a thumbnail and goes under `images`, one without is another file and goes under
+   `files`. The phone's own picker is `image/*`, so a file arrives here only when the system
+   hands over something it calls an image that Rust does not recognise (HEIC and the like). */
+const split = (attachments) => ({
+  images: attachments.filter((item) => item.url).map((item) => item.path),
+  files: attachments.filter((item) => !item.url).map((item) => item.path)
+})
+
 /* The stages sent are the ones the screen shows: a stage under an Off or an Auto parent
    travels as its parent, never as the choice remembered under a different one. */
 export function newTaskIntent({
@@ -52,7 +61,7 @@ export function newTaskIntent({
   brainstorm = STAGE_DEFAULT,
   spec = STAGE_DEFAULT,
   plan = STAGE_DEFAULT,
-  images = []
+  attachments = []
 }) {
   const stages = cascade(brainstorm, spec, plan)
   const level = chosen(priority)
@@ -65,7 +74,7 @@ export function newTaskIntent({
       text: String(text ?? '').trim(),
       issue_type: chosen(issueType),
       priority: level === null ? null : Number(level),
-      images,
+      ...split(attachments),
       parent: null
     }
   }

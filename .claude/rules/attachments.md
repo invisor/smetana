@@ -25,9 +25,10 @@ paths:
   - "src/stores/windowDrops.js"
 ---
 
-# Attachments: pictures on a task nobody has filed yet
+# Attachments: files on a task nobody has filed yet
 
-A screenshot is the fastest way to say what is wrong, so the new-task dialog takes images:
+A screenshot is the fastest way to say what is wrong, and a Jira export as a PDF is the fastest way
+to say what is wanted, so the new-task dialog takes any file:
 `src-tauri/src/attachments/`, `src/stores/attachments.js` and
 `components/kanban/AttachmentStrip.vue`, plus the Storage tab of the settings window
 (`components/settings/StorageSettings.vue` over the pure `settings/storage.js`). The Rust side is the
@@ -36,7 +37,43 @@ guards no state — and it is five commands over pure functions that carry the t
 disk and the vocabulary, `cleanup.rs` is the whole of the deleting rule with no filesystem in it,
 plus the one rule about where a path this store reads may point.
 
-Three gestures put a picture in the list and they arrive as only two kinds of thing. A file already
+**Any file is accepted, and only a picture is looked at.** There is no allow-list of "readable"
+formats: the person works locally, the agent reads the file by its path on the same machine and
+nothing is uploaded, so a list of types would protect against nothing and cost the next person their
+file (a whitelist of text by UTF-8, PDF by signature and pictures was considered and thrown away).
+`sniff` is no longer a gate on storing, only the answer to "is this a picture". A picture is stored
+as before, under the extension its bytes give, and the answer carries its base64 in `data`. Any
+other file keeps the extension of its original name — lowercased, ASCII letters and digits only, at
+most 16 characters, none if there was none — under `mime = application/octet-stream` and
+`data: null`; its stem goes through the same `slug`. There are two refusals beyond the ceiling:
+a name carrying one of the five picture extensions (`png`, `jpg`, `jpeg`, `gif`, `webp`) over bytes
+that are not a picture is `NotAnImage`, and a folder is `NotAFile`. The first is what keeps the
+invariant the front end leans on: a stored attachment has a `url` exactly when `isImagePath` says
+its path is a picture, so a chip in the journal never opens the image window on something
+`image_read` rejects.
+
+**Two lists, not one.** `TaskDraft` carries `images` and, beside it, `files` (`#[serde(default)]`).
+A merged `attachments` field was refused: renaming `images` is a major bump of the phone's protocol
+and an edit to every reader, for nothing. The front end keeps one ordered list and splits it at the
+boundary — a record with a `url` goes under `images`, one without under `files` — in `submit`, in the
+draft report, and in the phone's `newTaskIntent`. A draft restored after a project switch brings
+both back (`DialogWindow.vue` reopens `[...images, ...files]`); the interleaving between pictures
+and files is lost, which is accepted.
+
+**A file reaches the agent through the prompt and through nothing else.** `prompt.rs` writes a files
+block after the images block (`FILES_ONE` / `FILES_MANY`, both in `sessions/kickoff.rs::end_of_words`):
+the absolute paths, a request to read them first, to say so in the issue if they cannot be read, and
+to copy each path into the description verbatim and say in words what each file is. Codex's `-i` is
+for pictures only, and the driven road hands `Driver::opening_input` just `Intent::opening_pictures()`,
+since Codex's driver turns every path it gets into a `localImage`. `Intent::opening_words()` is what
+the journal draws: text, then pictures, then files. The phone's bridge confines `files` to the store
+exactly as it confines `images` (`confine_new_task`); protocol 1.6 added the field and made `data`
+nullable. A file is drawn by `AttachmentStrip.vue` as a chip modelled on the attachment chip in
+`components/conversation/Composer.vue` and is deliberately not a control: no viewer exists for it, and
+no catppuccin icon, because the strip is bundled into the phone and that import would take 656 SVGs
+with it.
+
+Three gestures put an attachment in the list and they arrive as only two kinds of thing. A file already
 on disk arrives as a path and Rust copies it (`attachment_import`); the clipboard exists inside the
 page and nowhere this process can reach, so a paste arrives as bytes (`attachment_write`). Both
 answer with the same record, which leaves the strip one shape to draw.
@@ -86,7 +123,7 @@ drop or keep one — and reading through a second command changes nothing about 
 is a subscription either.
 
 **What travels to it is the path, and never the bytes.** A record's `url` is a `data:` URL of up to
-`MAX_IMAGE_BYTES` of base64: it fits in no URL, and putting it on the event channel would be eleven
+`MAX_ATTACHMENT_BYTES` of base64: it fits in no URL, and putting it on the event channel would be eleven
 megabytes over IPC per click. So Rust percent-encodes the path and the name into the window's URL
 (`image_query`), and the window reads the file itself. What confines that read has changed with the
 command: a stored attachment's path is still checked against `cleanup::in_store` on the way in, since
@@ -141,13 +178,14 @@ dragged off their desktop. What is confined is the *destination*: always `app_da
 under a name that is not the one that arrived. `stored_name` builds it from a timestamp and a `slug`
 keeping ASCII letters and digits and nothing else, so no incoming name can climb a directory, hide
 behind a dot or need quoting — that string ends up in a prompt, in a shell argument and in an issue
-description. The extension comes from `sniff`ing the bytes, not from the name, so a JPEG somebody
-renamed `.png` reaches the agent labelled with what it is.
+description. A picture's extension comes from `sniff`ing the bytes, not from the name, so a JPEG
+somebody renamed `.png` reaches the agent labelled with what it is; any other file keeps its own.
 
-Two numbers are deliberately not shared. `MAX_IMAGE_BYTES` is 8 MiB and is **not**
-`files::model::MAX_FILE_BYTES`: that one is 2 MiB and answers how much text a textarea will open
-without freezing the window, while this one answers how big a screenshot is, and a full-screen retina
-PNG routinely lands between the two. A test asserts they are still different. The other is the copy
+Two numbers are deliberately not shared. `MAX_ATTACHMENT_BYTES` is 10 MiB for every kind of file and
+is **not** `files::model::MAX_FILE_BYTES`: that one is 2 MiB and answers how much text a textarea will
+open without freezing the window, while this one is a mechanical guard (a paste travels through the
+webview as base64, and a stray file sits in the store until the Storage tab's button), and a retina
+PNG or an exported PDF routinely lands between the two. A test asserts they are still different. The other is the copy
 of that ceiling in `attachments.js`, which exists only so a file certain to be refused is not first
 read into an ArrayBuffer and encoded a third larger again; drift there is not symmetrical, since
 above Rust's is harmless while below Rust's makes every file between the two impossible to attach at

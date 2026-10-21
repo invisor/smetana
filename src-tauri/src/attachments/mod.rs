@@ -304,12 +304,12 @@ pub enum AttachmentError {
     /// read off a project's board, so with no project open the question has no
     /// answer — and answering "nothing to delete" would be a guess dressed as a
     /// result.
-    #[error("no project is open, so there is no board to say which images are still in use")]
+    #[error("no project is open, so there is no board to say which attachments are still in use")]
     NoProject,
     /// The same absence one step in: a project is open and its board cannot be
     /// read. An unreadable board arrives as an *empty* one, so without this the
     /// sweep would find nothing referring to anything and delete the lot.
-    #[error("the board could not be read, so there is no way to tell which images are still in use")]
+    #[error("the board could not be read, so there is no way to tell which attachments are still in use")]
     NoBoard,
     #[error("{0}")]
     Io(String),

@@ -24,6 +24,10 @@ describe('draftIsEmpty', () => {
     expect(draftIsEmpty(draft({ text: '', images: ['/data/attachments/a/shot.png'] }))).toBe(false)
   })
 
+  it('a file alone is worth keeping, the same as a picture', () => {
+    expect(draftIsEmpty(draft({ text: '', images: [], files: ['/data/attachments/a/brief.pdf'] }))).toBe(false)
+  })
+
   it('typed text is worth keeping', () => {
     expect(draftIsEmpty(draft())).toBe(false)
   })

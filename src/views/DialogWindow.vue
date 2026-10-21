@@ -309,7 +309,12 @@ const title = computed(() => incoming.value.title ?? 'Smetana')
 let restoredImages = false
 
 watchEffect(() => {
-  const paths = incoming.value?.draft?.images
+  /* Pictures and files alike: both lists name things already in the store, and
+     `attachment_reopen` answers a file with a record that has no `url`, which is
+     what makes the strip draw it as a chip. The order of the two lists is the
+     order the person's list is rebuilt in — pictures first. */
+  const draft = incoming.value?.draft
+  const paths = [...(draft?.images ?? []), ...(draft?.files ?? [])]
   const store = attachments.value
   if (restoredImages || !paths?.length) return
   /* Said as soon as the draft is known to name pictures, and deliberately

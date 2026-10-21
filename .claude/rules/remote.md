@@ -128,6 +128,15 @@ than the digest recorded for the current `PROTOCOL_MAJOR.PROTOCOL_MINOR`, and sa
 MINOR for additions, MAJOR for removals and renames. The way forward is a new entry under a higher version,
 added by hand together with the constants; an existing entry is a frozen contract and is not edited.
 
+## Protocol 1.6: files beside pictures
+
+`TaskDraft` (the `newTask` intent in `session_start`) gained `files`, a list of attachment-store paths for attached
+files that are not pictures, and `attachment_write`'s reply (`Attachment`) has a nullable `data`: `null` for a file
+that is not a picture. Additions only. `confine_new_task` checks `files` exactly as it checks `images` (any path outside
+the store is `Forbidden`). The phone's `ATTACHMENTS_MINOR` stays 3 and its picker stays `image/*`; `newTaskIntent`
+splits the list by `url`. A desktop older than 1.6 ignores `files` (accepted). The mobile build's own `PROTOCOL_MINOR`
+stays where it was.
+
 ## Protocol 1.5: the session's model
 
 `session_attach`'s reply (`Attached`) gained an optional `model`: the model the session was actually started with,

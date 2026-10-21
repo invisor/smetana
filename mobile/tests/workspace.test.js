@@ -211,9 +211,10 @@ describe('talking to an agent', () => {
       attachment_write: ({ name }) => ({ path: `/store/p/${name}`, name, bytes: 2, mime: 'image/png', data: 'aGk=' })
     })
     await stores.attachments.attachFiles([new File([new Uint8Array([104, 105])], 'shot.png')])
-    const images = stores.attachments.attachmentsState.items.map((item) => item.path)
-    await stores.conversation.startConversation('/work/a', newTaskIntent({ text: 'Fix it', images }))
+    const attachments = stores.attachments.attachmentsState.items
+    await stores.conversation.startConversation('/work/a', newTaskIntent({ text: 'Fix it', attachments }))
     expect(core.bridged('session_start')[0].intent.draft.images).toEqual(['/store/p/shot.png'])
+    expect(core.bridged('session_start')[0].intent.draft.files).toEqual([])
     expect(core.bridged('attachment_import')).toEqual([])
     expect(names(core)).not.toContain('attachment_import')
   })

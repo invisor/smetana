@@ -89,7 +89,7 @@ async function start() {
       brainstorm: brainstorm.value,
       spec: spec.value,
       plan: plan.value,
-      images: attachable.value ? attachmentsState.items.map((item) => item.path) : []
+      attachments: attachable.value ? attachmentsState.items : []
     })
     const id = await startConversation(settings.activeProject, intent)
     if (id != null) {

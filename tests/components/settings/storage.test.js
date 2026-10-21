@@ -48,7 +48,7 @@ describe('what the storage section says about the store', () => {
 
   it('is counting rather than empty while the answer is on its way', () => {
     // Zero is a fact about the disk, and drawing it before anything has been
-    // read would tell a person their pictures are gone.
+    // read would tell a person their attachments are gone.
     expect(storageLine(null)).toBe('Counting…')
     expect(storageLine({})).toBe('Counting…')
   })
@@ -75,7 +75,7 @@ describe('what a person reads before pressing the button', () => {
     )
     expect(
       removalLine(survey({ removable: { files: 0, bytes: 0 }, kept: { files: 0, bytes: 0 } }))
-    ).toContain('no stored images')
+    ).toContain('no stored attachments')
   })
 
   it('says why there is nothing it can decide when no project is open', () => {
@@ -90,7 +90,7 @@ describe('what a person reads before pressing the button', () => {
 
   it('says the board could not be read instead of counting off an empty one', () => {
     // An unreadable board reaches this front end as an empty one, so a sentence
-    // about counts would be read as a fact about the pictures. Rust already
+    // about counts would be read as a fact about the attachments. Rust already
     // refuses the press; this is the same refusal said before it is pressed.
     for (const board of ['error', 'bd-version-mismatch']) {
       const line = removalLine(survey({ board, removable: { files: 0, bytes: 0 } }))

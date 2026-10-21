@@ -9,19 +9,19 @@
    already sends when the task is filed:
 
      { project, text, issue_type, priority, brainstorm, spec, plan,
-       images: [absolute path], parent: { id, title } | null }
+       images: [absolute path], files: [absolute path], parent: { id, title } | null }
 
    `project` is stamped on by the app window — the path the window was opened
    for, not whichever project is in front of somebody when the draft comes
    back. `parent` carries the title as well as the id, unlike the one `submit`
    sends: the dialog draws it, and the app window is the side that has it. */
 
-/* Nothing typed and nothing attached. An untouched window that was opened and
+/* Nothing typed and nothing attached — a picture or a file alike. An untouched window that was opened and
    switched away from is not a loss, and reopening one would be noise. */
 export function draftIsEmpty(draft) {
   if (!draft) return true
   const typed = typeof draft.text === 'string' ? draft.text.trim() : ''
-  return typed.length === 0 && !(draft.images?.length > 0)
+  return typed.length === 0 && !(draft.images?.length > 0) && !(draft.files?.length > 0)
 }
 
 /* Whether this draft may be put back right now.
