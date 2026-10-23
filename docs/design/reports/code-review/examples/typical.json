@@ -1,0 +1,96 @@
+{
+  "score": 74,
+  "pairs": [
+    { "repo": "smetana", "base": "main", "head": "feature/smetana-6tev-worktree-gc-skip-live-agents", "files": 9, "added": 318, "removed": 42, "hazards": true, "rulesSource": ".smetana/review.toml" },
+    { "repo": "bd-sync", "base": "main", "head": "feature/smetana-6tev-spawned-from-index", "files": 3, "added": 96, "removed": 11, "hazards": false }
+  ],
+  "findings": [
+    {
+      "level": "blocking",
+      "title": "Worktree GC deletes the worktree of a running agent",
+      "repo": "smetana", "path": "src-tauri/src/worktree/gc.rs", "line": 142,
+      "defect": "`collect_stale` decides staleness from the mtime of the worktree root, which does not change when an agent writes only into nested directories.",
+      "scenario": "An agent edits `wt/bd-a1b2/src/**` for 31 minutes without touching the root → GC sees root mtime older than 30m → `remove_dir_all(\"wt/bd-a1b2\")` runs under the live agent, uncommitted work is lost and the agent exits with `ENOENT`.",
+      "fix": "Before removal, read `.smetana/agent.lock` and skip the worktree if the holder PID is alive; fall back to mtime only when no lock exists.",
+      "code": {
+        "language": "rust", "startLine": 138, "highlight": [142],
+        "lines": [
+          "for wt in list_worktrees(root)? {",
+          "    let meta = fs::metadata(&wt.path)?;",
+          "    let age = now.duration_since(meta.modified()?)?;",
+          "    if age > Duration::from_secs(30 * 60) {",
+          "        fs::remove_dir_all(&wt.path)?; // no lock check",
+          "    }",
+          "}"
+        ]
+      }
+    },
+    {
+      "level": "serious",
+      "title": "Write-lock is not released when the agent task panics",
+      "repo": "smetana", "path": "src-tauri/src/agent/supervisor.rs", "line": 88,
+      "defect": "The lock is released by an explicit `unlock()` call at the end of `run_agent`, which is skipped on panic.",
+      "scenario": "The agent's tool call panics on a malformed diff → the task unwinds past `unlock()` → the task stays read-only until the app restarts.",
+      "fix": "Return a `LockGuard` from `lock()` and release in its `Drop` impl."
+    },
+    {
+      "level": "serious",
+      "title": "Status hash differs between Rust and the UI for non-ASCII names",
+      "repo": "smetana", "path": "app/src/status/hash.ts", "line": 21,
+      "defect": "The UI runs FNV-1a over UTF-16 code units, while `status.rs` hashes UTF-8 bytes.",
+      "scenario": "A user status `\"ревью\"` → Rust slot `7`, UI slot `2` → the tray badge and the board column show the same status in two different colours.",
+      "fix": "Hash `new TextEncoder().encode(name)` in the UI and add a shared fixture of 15 names checked by both test suites.",
+      "code": {
+        "language": "ts", "startLine": 19, "highlight": [21],
+        "lines": [
+          "let h = 0x811c9dc5;",
+          "for (let i = 0; i < name.length; i++) {",
+          "  h ^= name.charCodeAt(i);",
+          "  h = Math.imul(h, 0x01000193);",
+          "}"
+        ]
+      }
+    },
+    {
+      "level": "serious",
+      "title": "Migration fails when run a second time",
+      "repo": "bd-sync", "path": "crates/bd-sync-store/src/migrations/2026_10_14_000003_add_spawned_from_relation_index_to_tasks_table.rs", "line": 31,
+      "defect": "The index is created without `IF NOT EXISTS`, and the migration is not recorded until after the statement succeeds.",
+      "scenario": "The app is killed between `CREATE INDEX` and the migration-table insert → next launch reruns the migration → `index idx_tasks_spawned_from already exists`, the store refuses to open.",
+      "fix": "Use `CREATE INDEX IF NOT EXISTS` and wrap the statement and the migration record in one transaction.",
+      "code": {
+        "language": "rust", "startLine": 29, "highlight": [31],
+        "lines": [
+          "pub fn up(conn: &Connection) -> Result<()> {",
+          "    conn.execute_batch(",
+          "        \"CREATE INDEX idx_tasks_spawned_from ON tasks (spawned_from_id, relation_kind, updated_at) WHERE spawned_from_id IS NOT NULL AND relation_kind IN ('spawned-from', 'relates-to');\",",
+          "    )?;",
+          "    record_migration(conn, \"2026_10_14_000003\")",
+          "}"
+        ]
+      }
+    },
+    { "level": "minor", "title": "`gc.stale_after` setting is ignored", "repo": "smetana", "path": "src-tauri/src/worktree/gc.rs", "line": 141,
+      "defect": "The threshold is hard-coded to 30 minutes instead of reading the config value.",
+      "scenario": "`stale_after = \"2h\"` in settings → worktrees are still collected after 30m.",
+      "fix": "Pass `config.gc.stale_after` into `collect_stale`." },
+    { "level": "minor", "title": "Toast shows the path with Debug quotes", "repo": "smetana", "path": "src-tauri/src/worktree/gc.rs", "line": 201,
+      "defect": "The message formats `PathBuf` with `{:?}`.",
+      "scenario": "Collecting `wt/bd-77e1` → toast reads `Removed \"wt/bd-77e1\"`.",
+      "fix": "Use `path.display()`." },
+    { "level": "minor", "title": "Normalisation keeps a trailing dash", "repo": "smetana", "path": "app/src/status/normalize.ts", "line": 9,
+      "defect": "Runs of non-alphanumerics are collapsed before trimming, so edge dashes survive.",
+      "scenario": "`\"awaiting review \"` → `\"awaiting-review-\"` → different slot from `\"awaiting-review\"`.",
+      "fix": "Strip leading and trailing `-` after collapsing." },
+    { "level": "minor", "title": "Reconnect backoff has no jitter", "repo": "bd-sync", "path": "crates/bd-sync/src/client.rs", "line": 64,
+      "defect": "All clients retry at exactly 1s, 2s, 4s.",
+      "scenario": "Tracker restarts with 12 agents connected → 12 reconnects land in the same 10ms window on every step.",
+      "fix": "Add full jitter: `rand(0..=delay)`." },
+    { "level": "minor", "title": "GC test depends on wall-clock sleep", "repo": "smetana", "path": "src-tauri/tests/worktree_gc.rs", "line": 40,
+      "defect": "The test sleeps 2s and asserts on real mtimes.",
+      "scenario": "CI runner under load → mtime resolution and scheduling skew → intermittent failure.",
+      "fix": "Inject a clock and set mtimes with `filetime::set_file_mtime`." }
+  ],
+  "reviewer": "claude-2",
+  "date": "2026-10-23 14:02"
+}

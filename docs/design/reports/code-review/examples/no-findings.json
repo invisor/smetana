@@ -1,0 +1,18 @@
+{
+  "score": 100,
+  "pairs": [
+    {
+      "repo": "smetana", "base": "main", "head": "feature/smetana-6tev-log-tail-follow",
+      "files": 4, "added": 57, "removed": 9, "hazards": true, "rulesSource": ".smetana/review.toml",
+      "reviewedFiles": [
+        { "path": "app/src/components/agent/LogView.vue", "added": 31, "removed": 6 },
+        { "path": "app/src/components/agent/LogToolbar.vue", "added": 12, "removed": 2 },
+        { "path": "app/src/composables/useFollowTail.ts", "added": 11, "removed": 0 },
+        { "path": "app/src/components/agent/__tests__/LogView.spec.ts", "added": 3, "removed": 1 }
+      ]
+    }
+  ],
+  "findings": [],
+  "reviewer": "claude-2",
+  "date": "2026-10-23 16:40"
+}

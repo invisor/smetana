@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "smetana/run-report.schema.json",
+  "title": "Run report input",
+  "type": "object",
+  "required": ["title", "project", "scope", "finishedAt", "stop", "tasks", "batches", "totalSec", "journalPath"],
+  "additionalProperties": false,
+  "$defs": {
+    "duration": { "type": ["integer", "null"], "minimum": 0, "description": "Seconds. null → rendered as — (U+2014) with .is-none." },
+    "task": {
+      "type": "object", "required": ["id", "title", "done", "durationSec"], "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "examples": ["smetana-6tev"] },
+        "title": { "type": "string" },
+        "done": { "type": "string", "description": "Agent free text. Backtick spans → <code>." },
+        "durationSec": { "$ref": "#/$defs/duration" }
+      }
+    }
+  },
+  "properties": {
+    "title": { "type": "string", "examples": ["Run 3"] },
+    "project": { "type": "string", "description": "Absolute project path." },
+    "scope": { "type": "string", "description": "Branch or scope label, e.g. \"the queue\"." },
+    "finishedAt": { "type": "string", "description": "Rendered as YYYY-MM-DD HH:mm, local time." },
+    "stop": {
+      "type": "object", "required": ["kind", "text"], "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["queue-empty", "stopped-by-person", "crashed", "other"], "description": "Sets glyph + tone only." },
+        "text": { "type": "string", "description": "One sentence, shown as is." }
+      }
+    },
+    "summary": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Paragraphs of agent prose. null/empty → section omitted." },
+    "tasks": {
+      "type": ["object", "null"],
+      "description": "null → no task data: closed/parked cells show —, both sections omitted.",
+      "required": ["closed", "parked"], "additionalProperties": false,
+      "properties": {
+        "closed": { "type": "array", "items": { "$ref": "#/$defs/task" } },
+        "parked": { "type": "array", "items": { "$ref": "#/$defs/task" } }
+      }
+    },
+    "batches": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["n", "agent", "durationSec", "outcome"], "additionalProperties": false,
+        "properties": {
+          "n": { "type": "integer", "minimum": 1 },
+          "attempt": { "type": "integer", "minimum": 1, "description": "Shown only when > 1." },
+          "agent": { "type": "string", "examples": ["claude"] },
+          "durationSec": { "$ref": "#/$defs/duration" },
+          "notes": { "type": ["string", "null"], "description": "null → \"This batch left no account of itself.\"" },
+          "leftUnfinished": { "type": "array", "items": { "type": "string" }, "description": "Task ids." },
+          "lockReleased": {
+            "type": "object", "required": ["task", "by"], "additionalProperties": false,
+            "properties": { "task": { "type": "string" }, "by": { "type": "string", "examples": ["the lead", "a person"] } }
+          },
+          "outcome": {
+            "type": "object", "required": ["kind"], "additionalProperties": false,
+            "properties": {
+              "kind": { "enum": ["clean-exit", "exit-code", "vanished", "removed-by-person", "handed-back"] },
+              "code": { "type": "integer", "description": "Required for exit-code." }
+            }
+          }
+        }
+      }
+    },
+    "totalSec": { "$ref": "#/$defs/duration" },
+    "journalPath": { "type": "string" }
+  }
+}
