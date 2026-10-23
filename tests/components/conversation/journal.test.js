@@ -221,6 +221,48 @@ describe('the journal as rows', () => {
     expect(rows[1]).toMatchObject({ name: 'Bash', result: { ok: false, summary: 'exit 101' } })
   })
 
+  describe('an auto-mode block', () => {
+    const blocked = [
+      event(1, 'tool-use', { id: 't1', name: 'Bash', detail: 'git push --force' }),
+      event(2, 'tool-result', { id: 't1', ok: false, summary: '1 line', denial: 'denied by auto mode' })
+    ]
+
+    it('folds onto its row and stays open until the person replies', () => {
+      const rows = journalRows([...blocked, event(3, 'text', { text: 'I need your permission.' })])
+
+      expect(rows[0].result).toEqual({ ok: false, summary: '1 line', denial: 'denied by auto mode' })
+      expect(rows[0].blockOpen).toBe(true)
+    })
+
+    it('closes once any later turn is the persons, typed or sent by a button', () => {
+      const rows = journalRows([...blocked, event(3, 'user-message', { text: 'go ahead' })])
+
+      expect(rows[0].blockOpen).toBe(false)
+      expect(rows[0].result.denial).toBe('denied by auto mode')
+    })
+
+    it('is closed only for the blocks the reply came after', () => {
+      const rows = journalRows([
+        ...blocked,
+        event(3, 'user-message', { text: 'no' }),
+        event(4, 'tool-use', { id: 't2', name: 'Bash', detail: 'rm -rf build' }),
+        event(5, 'tool-result', { id: 't2', ok: false, summary: '1 line', denial: 'denied again' })
+      ])
+
+      expect(rows.filter((row) => row.kind === 'tool').map((row) => row.blockOpen)).toEqual([false, true])
+    })
+
+    it('gives an ordinary result a null denial and no open block, even without the field', () => {
+      const rows = journalRows([
+        event(1, 'tool-use', { id: 't1', name: 'Read', detail: 'a.js' }),
+        event(2, 'tool-result', { id: 't1', ok: true, summary: '3 lines' })
+      ])
+
+      expect(rows[0].result.denial).toBeNull()
+      expect(rows[0].blockOpen).toBe(false)
+    })
+  })
+
   /* `null` and not a guess: `ToolCall` draws the live glyph for it, where an
      outcome would be the panel claiming something it does not know. */
   it('leaves a call with no result yet running', () => {
@@ -536,7 +578,7 @@ describe('a streamed reply', () => {
 
     expect(rows).toEqual([
       { key: 2, kind: 'agent', text: 'Reading the file first.', streaming: false },
-      { key: 4, kind: 'tool', name: 'Read', detail: 'src/main.js', result: { ok: true, summary: '10 lines' } },
+      { key: 4, kind: 'tool', name: 'Read', detail: 'src/main.js', result: { ok: true, summary: '10 lines', denial: null }, blockOpen: false },
       { key: 6, kind: 'agent', text: 'Found it', streaming: true },
       { key: 1, kind: 'activity', state: 'streaming', startedAt: '2026-09-10T12:00:00Z' }
     ])
