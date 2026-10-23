@@ -6,13 +6,14 @@
 //! **The styling exception.** Everywhere else in this repository a visual value
 //! is a `var(--token)` reference and never a literal, and this file is the
 //! third documented exception beside `files/editor/theme.js` and
-//! `terminal/theme.js`. It is a wider one than either: there are no tokens
-//! around this document at all, because its whole purpose is to be readable in
-//! a browser with no app in the picture — no stylesheet of ours is loaded there
-//! and nothing would resolve a custom property. What replaces the rule is
-//! narrower than "anything goes": no external stylesheet, no font off a
-//! network, no script, no image. Everything the document needs it carries, and
-//! it reaches nowhere at all.
+//! `terminal/theme.js`: there are no tokens around this document at all,
+//! because its whole purpose is to be readable in a browser with no app in the
+//! picture. The stylesheet is not written here any more — it is the design
+//! handoff's own `reports.css`, carried whole as `REPORTS_CSS`, shared with the
+//! code-review report, and pinned to `docs/design/reports/reports.css` by a
+//! byte-equality test. What replaces the rule is narrower than "anything
+//! goes": no external stylesheet, no font off a network, no script, no image.
+//! The document reaches nowhere at all.
 //!
 //! The other rule with no exception to it: `did` is text an agent wrote, going
 //! into a document a person opens, so every value that reaches the output goes
@@ -230,16 +231,21 @@ pub fn task_duration(batches: &[BatchLine], id: &str) -> Option<u64> {
     last_naming(batches, id).and_then(duration_of)
 }
 
-/// Hours and minutes, or minutes, or seconds. Never a bare count of seconds
-/// past a minute — nobody reads a night as 8040.
-pub fn human(seconds: u64) -> String {
+/// A duration as the handoff writes it: under a minute is `<1m`, under an hour
+/// is `{m}m`, otherwise `{h}h {m}m` (`1h 0m` stays as it is). Minutes are
+/// floored, so the number is never an overstatement, and there is no bare count
+/// of seconds — nobody reads a night as 8040.
+///
+/// The result may hold a `<`, so it is escaped where it is written, and
+/// `reports::parse_seconds` reads the same shapes back.
+pub fn duration(seconds: u64) -> String {
     let (hours, minutes) = (seconds / 3600, (seconds % 3600) / 60);
     if hours > 0 {
         format!("{hours}h {minutes}m")
     } else if minutes > 0 {
         format!("{minutes}m")
     } else {
-        format!("{seconds}s")
+        "<1m".to_string()
     }
 }
 
@@ -297,70 +303,111 @@ pub fn prose(text: &str) -> String {
     }
 }
 
+/// The shared stylesheet of the report family — the run report here and the
+/// code-review report after it — exactly as the design handoff ships it.
+///
+/// **One file, and it is never edited here.** `docs/design/reports/reports.css`
+/// is the handoff's own copy and this is the same bytes; the test
+/// `the_stylesheet_is_the_handoffs_own_bytes` is what keeps the two from
+/// drifting. A renderer for another report takes this constant rather than a
+/// copy of it, and a change to the look is made in the design source first and
+/// carried over whole.
+///
+/// The file carries the full token set itself, in the four-block shape the
+/// app's tab relies on (a bare `:root`, `prefers-color-scheme` guarded with
+/// `:not([data-theme="light"])`, then `[data-theme]` both ways), so there is
+/// nothing for this module to add around it.
+pub const REPORTS_CSS: &str = include_str!("reports.css");
+
+/// The three tones of a status line and the one neutral. A tone is a class and
+/// a glyph together, never colour alone — the design's own rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tone {
+    Done,
+    NeedsYou,
+    Failed,
+    Neutral,
+}
+
+impl Tone {
+    fn class(self) -> &'static str {
+        match self {
+            Tone::Done => "tone-done",
+            Tone::NeedsYou => "tone-needs-you",
+            Tone::Failed => "tone-failed",
+            Tone::Neutral => "tone-neutral",
+        }
+    }
+
+    fn glyph(self) -> &'static str {
+        match self {
+            Tone::Done => "\u{25CF}",
+            Tone::NeedsYou => "\u{25B2}",
+            Tone::Failed => "\u{25A0}",
+            Tone::Neutral => "\u{25CB}",
+        }
+    }
+}
+
+/// How a stop reason is drawn. Only a clean finish is `done`, a crash is
+/// `failed`, and everything else — a person pressing stop, a limit, an
+/// unreadable board, and any reason added later — is neutral, so a new variant
+/// is never louder than anybody decided it should be.
+fn stop_tone(reason: &StopReason) -> Tone {
+    match reason {
+        StopReason::QueueEmpty | StopReason::BatchDone => Tone::Done,
+        StopReason::Crashed { .. } => Tone::Failed,
+        StopReason::Cancelled => Tone::Neutral,
+        _ => Tone::Neutral,
+    }
+}
+
 pub fn render(report: &RunReport) -> String {
     // Built with `push_str` rather than one big `format!`, so every escaped
     // value is visibly escaped at its own call site.
     let mut out = String::new();
-    out.push_str("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">");
-    out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
-    out.push_str("<title>");
+    out.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
+    out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
+    // `Run report · {title} · smetana` is the handoff's own shape, and
+    // `reports::parse_title` strips it back off again.
+    out.push_str("<title>Run report \u{00B7} ");
     out.push_str(&escape(report.title));
-    out.push_str("</title><style>");
-    out.push_str(&style());
-    out.push_str("</style></head><body><div class=\"doc\">");
+    out.push_str(" \u{00B7} smetana</title>\n<style>\n");
+    out.push_str(REPORTS_CSS);
+    out.push_str("</style>\n</head>\n<body>\n<main class=\"page\">\n");
 
-    // Header. The eyebrow is the only place the product names itself, and the
-    // heading's words are `RunMode::report_title`'s — this file places them and
-    // owns none of them.
-    out.push_str("<header><p class=\"eyebrow\">smetana &middot; run report</p><h1>");
+    // Header. The heading's words are `RunMode::report_title`'s — this file
+    // places them and owns none of them.
+    out.push_str("<header class=\"head\">\n<div class=\"eyebrow\">smetana \u{00B7} run report</div>\n<h1>");
     out.push_str(&escape(report.title));
-    out.push_str("</h1><p class=\"meta\">");
+    out.push_str("</h1>\n<p class=\"meta\">");
     out.push_str(&escape(report.project));
-    out.push_str(" &middot; ");
+    out.push_str(" \u{00B7} ");
     out.push_str(&escape(report.scope));
-    out.push_str(" &middot; finished ");
+    out.push_str(" \u{00B7} finished ");
     out.push_str(&escape(report.finished));
-    out.push_str("</p></header>");
+    out.push_str("</p>\n</header>\n");
 
-    // The strip, and the one place in the document where an unreadable board
-    // could quietly become a zero. It does not: `None` draws a dash.
-    out.push_str("<div class=\"strip\">");
-    match report.tasks {
-        Some(tasks) => {
-            cell(&mut out, "closed", &tasks.closed.len().to_string(), "cell-done");
-            cell(&mut out, "parked", &tasks.parked.len().to_string(), "cell-loud");
-        }
-        None => {
-            cell(&mut out, "closed", "&mdash;", "cell-done");
-            cell(&mut out, "parked", "&mdash;", "cell-loud");
-        }
-    }
-    cell(&mut out, "batches", &report.batches.len().to_string(), "");
-    cell(&mut out, "total", &human(report.seconds), "");
-    out.push_str("</div>");
+    strip(&mut out, report);
 
     // How the run itself ended, unconditionally: a run that stopped before its
-    // first batch — the case a failed preflight left as four zeros and a shrug
-    // — still owes a person the reason, and it is written here whether or not
-    // the board below can say anything at all. Reuses `.outcome`, the class a
-    // batch card's own ending already sets, so the stylesheet grows no rule
-    // for it.
-    out.push_str("<p class=\"outcome\">");
-    out.push_str(&stop_reason_line(report.stop_reason));
-    out.push_str("</p>");
+    // first batch still owes a person the reason, and it is written whether or
+    // not the board below can say anything at all.
+    status_line(
+        &mut out,
+        "stop",
+        stop_tone(report.stop_reason),
+        &stop_reason_line(report.stop_reason),
+    );
 
     // The lead's own plain-language account of the run, one paragraph per
-    // batch that gave one, in batch order. It stands before `closed` because
-    // it is the sentence the Reports tab draws for this document, and it
-    // comes from the batches rather than the board, so an unread board does
-    // not silence it. No section over nothing: `reports::parse_summary` falls
-    // back to the closed titles, and drawing an empty heading here would only
-    // give it an empty string to read.
+    // batch that gave one, in batch order. It comes from the batches rather
+    // than the board, so an unread board does not silence it. No section over
+    // nothing: `reports::parse_summary` falls back to the closed titles.
     //
     // Filtered on content rather than on `Option`: the prompt asks for the
     // key by name, so `"summary": ""` is a shape a lead can plausibly write,
-    // and `Some("")` must not count as "gave one" — an empty paragraph is
-    // exactly the blank cell this whole feature exists to keep off the row.
+    // and `Some("")` must not count as "gave one".
     let summaries: Vec<&str> = report
         .batches
         .iter()
@@ -368,90 +415,156 @@ pub fn render(report: &RunReport) -> String {
         .filter(|s| !s.trim().is_empty())
         .collect();
     if !summaries.is_empty() {
-        out.push_str("<div class=\"sec\"><span>summary</span></div><div class=\"summary\">");
+        out.push_str(
+            "<section class=\"group\" aria-labelledby=\"summary-h\">\n\
+             <div class=\"group-head\"><h2 id=\"summary-h\">Summary</h2></div>\n<div class=\"prose\">\n",
+        );
         for text in summaries {
             out.push_str("<p>");
             // Trimmed on the way out, not only on the way to the emptiness
-            // test above: the row draws this under `white-space: nowrap`, so
-            // a lead's stray leading or trailing space would otherwise sit
-            // inside the sentence somebody reads.
+            // test above, so a stray space never sits inside the sentence.
             out.push_str(&escape(text.trim()));
-            out.push_str("</p>");
+            out.push_str("</p>\n");
         }
-        out.push_str("</div>");
+        out.push_str("</div>\n</section>\n");
     }
 
-    match report.tasks {
-        // Not a zero, and not a silence either: the reason the lists are
-        // missing is itself the thing worth saying.
-        None => out.push_str(
-            "<p class=\"notice\">The board could not be read, so what moved on it is unknown. \
-             Nothing below is a count of zero.</p>",
-        ),
-        Some(tasks) => {
-            section(&mut out, "closed", "done", "", &tasks.closed, report.batches);
-            section(&mut out, "parked", "needs you", " card-parked", &tasks.parked, report.batches);
-        }
+    // An unread board draws neither section: the strip's two `is-none` cells
+    // are what say so, and a heading over nothing would read as an empty list.
+    if let Some(tasks) = report.tasks {
+        task_section(&mut out, Section::Closed, &tasks.closed, report.batches);
+        task_section(&mut out, Section::Parked, &tasks.parked, report.batches);
     }
 
     if !report.batches.is_empty() {
-        header(&mut out, "batches", logical_batches(report.batches));
-        out.push_str("<div class=\"list\">");
+        out.push_str("<section class=\"group\" id=\"batches\" aria-labelledby=\"batches-h\">\n");
+        out.push_str("<div class=\"group-head\"><h2 id=\"batches-h\">Batches</h2><span class=\"count\">");
+        out.push_str(&logical_batches(report.batches).to_string());
+        out.push_str("</span></div>\n");
         for b in report.batches {
-            out.push_str("<div class=\"card card-batch\"><div class=\"head\">");
-            out.push_str("<span class=\"batch-label\">batch ");
-            out.push_str(&b.n.to_string());
-            if b.attempt > 1 {
-                out.push_str(" attempt ");
-                out.push_str(&b.attempt.to_string());
-            }
-            out.push_str(" (");
-            out.push_str(&escape(&b.agent));
-            out.push(')');
-            out.push_str("</span><span class=\"right\">");
-            out.push_str(&human(b.seconds));
-            out.push_str("</span></div>");
-            // The agent's own half first, and then the run's, always. The
-            // phrase below is still about the *account* — a killed agent really
-            // did write nothing — and it is no longer the whole record of the
-            // batch, which is what left the night of smetana-pmj to `log show`.
-            if !b.reported {
-                out.push_str("<p class=\"unknown\">This batch left no account of itself.</p>");
-            } else {
-                match &b.notes {
-                    Some(notes) => {
-                        out.push_str("<p class=\"body\">");
-                        out.push_str(&prose(notes));
-                        out.push_str("</p>");
-                    }
-                    None => {
-                        out.push_str("<p class=\"unknown\">No notes on the batch as a whole.</p>");
-                    }
-                }
-            }
-            outcome(&mut out, &b.outcome);
-            held(&mut out, &b.left_behind);
-            released(&mut out, &b.lock_released);
-            out.push_str("</div>");
+            batch_card(&mut out, b);
         }
-        out.push_str("</div>");
+        out.push_str("</section>\n");
     }
 
-    out.push_str("<div class=\"total\"><span class=\"total-label\">total</span>");
-    out.push_str("<span class=\"total-n\">");
-    out.push_str(&human(report.seconds));
-    out.push_str("</span></div>");
-    // Under the rule, in the same mono the header's own line is set in — the
-    // document's other identifier. It is the one direction the pair cannot go
-    // by itself: the journal names the report at its last line, and without
-    // this a person holding the document has no way back to the mechanics.
+    // Footer. The journal is the one direction the pair cannot go by itself:
+    // the journal names the report at its last line, and without this a person
+    // holding the document has no way back to the mechanics. A path and not a
+    // link — this document reaches nowhere.
+    out.push_str("<footer class=\"foot\">\n<dl>\n<dt>Total</dt>\n<dd><span class=\"mono\">");
+    out.push_str(&escape(&duration(report.seconds)));
+    out.push_str("</span></dd>\n");
     if let Some(path) = report.journal {
-        out.push_str("<p class=\"meta\">journal: ");
+        out.push_str("<dt>Journal</dt>\n<dd><span class=\"mono\">");
         out.push_str(&escape(path));
-        out.push_str("</p>");
+        out.push_str("</span></dd>\n");
     }
-    out.push_str("</div></body></html>");
+    out.push_str("</dl>\n</footer>\n</main>\n</body>\n</html>\n");
     out
+}
+
+/// A one-line status — the stop reason or a batch's ending. `text` is already
+/// markup (it may carry `<code>` or an entity), so it is wrapped in one `<span>`:
+/// the line is a flex row and loose text beside inline markup would be split
+/// into separate flex items.
+fn status_line(out: &mut String, class: &str, tone: Tone, text: &str) {
+    out.push_str("<p class=\"");
+    out.push_str(class);
+    out.push(' ');
+    out.push_str(tone.class());
+    out.push_str("\"><span class=\"g\" aria-hidden=\"true\">");
+    out.push_str(tone.glyph());
+    out.push_str("</span><span>");
+    out.push_str(text);
+    out.push_str("</span></p>\n");
+}
+
+/// The summary strip: four cells, and the one place in the document where an
+/// unreadable board could quietly become a zero. It does not: no task data is
+/// an `is-none` cell with a dash.
+///
+/// A cell with a target is an `<a>`, and the strip is a `<nav>` only when at
+/// least one cell is; otherwise it is a `<div>`, as the handoff says. A count of
+/// zero is muted, carries no tone and links nowhere — and the parked cell is the
+/// only one that is ever `is-loud`, so the document has at most one.
+fn strip(out: &mut String, report: &RunReport) {
+    let (closed, parked) = match report.tasks {
+        Some(t) => (Some(t.closed.len()), Some(t.parked.len())),
+        None => (None, None),
+    };
+    let has_link = closed.is_some_and(|n| n > 0)
+        || parked.is_some_and(|n| n > 0)
+        || !report.batches.is_empty();
+    let tag = if has_link { "nav" } else { "div" };
+    out.push_str("<");
+    out.push_str(tag);
+    out.push_str(" class=\"strip\" aria-label=\"Run totals\">\n");
+    count_cell(out, Some(Tone::Done), "Closed", "Closed", "closed", closed, false);
+    count_cell(out, Some(Tone::NeedsYou), "Parked \u{00B7} needs you", "Parked", "parked", parked, true);
+    count_cell(out, None, "Batches", "Batches", "batches", Some(logical_batches(report.batches)), false);
+    out.push_str("<div class=\"cell\"><span class=\"cell-label\">Total</span><span class=\"cell-n\">");
+    out.push_str(&escape(&duration(report.seconds)));
+    out.push_str("</span></div>\n</");
+    out.push_str(tag);
+    out.push_str(">\n");
+}
+
+/// One counted cell. `tone` is `None` for the batches cell, which has a link and
+/// no hue. `label` is what a non-zero count says and `zero_label` what a zero or
+/// missing one does (`Parked`, without "needs you" — nobody is being asked
+/// anything).
+fn count_cell(
+    out: &mut String,
+    tone: Option<Tone>,
+    label: &str,
+    zero_label: &str,
+    target: &str,
+    count: Option<usize>,
+    loud: bool,
+) {
+    let glyph_of = |t: Tone| {
+        format!("<span class=\"g\" aria-hidden=\"true\">{}</span>", t.glyph())
+    };
+    match count {
+        None => {
+            // No data at all: no tone, no link, and `aria-label` so a screen
+            // reader says what the dash means.
+            out.push_str("<div class=\"cell is-none\"><span class=\"cell-label\">");
+            if let Some(t) = tone {
+                out.push_str(&glyph_of(t));
+            }
+            out.push_str(zero_label);
+            out.push_str("</span><span class=\"cell-n\" aria-label=\"no data\">\u{2014}</span></div>\n");
+        }
+        Some(0) => {
+            out.push_str("<div class=\"cell is-zero\"><span class=\"cell-label\">");
+            if let Some(t) = tone {
+                out.push_str(&glyph_of(t));
+            }
+            out.push_str(zero_label);
+            out.push_str("</span><span class=\"cell-n\">0</span></div>\n");
+        }
+        Some(n) => {
+            out.push_str("<a class=\"cell");
+            if let Some(t) = tone {
+                out.push(' ');
+                out.push_str(t.class());
+            }
+            if loud {
+                out.push_str(" is-loud");
+            }
+            out.push_str("\" href=\"#");
+            out.push_str(target);
+            out.push_str("\"><span class=\"cell-label\">");
+            if let Some(t) = tone {
+                out.push_str(&glyph_of(t));
+            }
+            out.push_str(label);
+            out.push_str("</span><span class=\"cell-n\">");
+            out.push_str(&n.to_string());
+            out.push_str("</span></a>\n");
+        }
+    }
 }
 
 /// One sentence naming how the run itself ended — Rust's one place for the
@@ -459,13 +572,12 @@ pub fn render(report: &RunReport) -> String {
 /// `stopReason.js`, and a run that failed its preflight shipped a document
 /// with nothing in it about why.
 ///
-/// Every variant gets its own sentence, and the test below holds both halves
-/// of that: none is empty and none repeats another's words. `Preflight`'s
-/// `detail` and `NeedsAnswer`'s `question` are text the app or the harness
-/// wrote, going into a document a person opens, so both go through `escape`
-/// the same as every other borrowed string that reaches this file — `journal`
-/// prints `{reason:?}` for a reader who already knows the machinery, which is
-/// a different job and stays untouched.
+/// Every variant gets its own sentence, and a test holds both halves of that:
+/// none is empty and none repeats another's words. `Preflight`'s `detail` and
+/// `NeedsAnswer`'s `question` are text the app or the harness wrote, going into
+/// a document a person opens, so both go through `escape` the same as every
+/// other borrowed string that reaches this file. The result is markup (it may
+/// carry an entity), which is why the caller wraps it in a `<span>`.
 fn stop_reason_line(reason: &StopReason) -> String {
     match reason {
         StopReason::QueueEmpty => {
@@ -508,405 +620,224 @@ fn stop_reason_line(reason: &StopReason) -> String {
     }
 }
 
-/// What the run saw end the batch, in a sentence, under every batch card and
-/// whether or not the agent left a file.
+/// What the run saw end the batch, as the tone and the markup of one line, under
+/// every batch card and whether or not the agent left a file.
 ///
-/// It says "the run saw" rather than stating the ending flat, and that is the
-/// honest form: this is one party's account of a process it was watching from
-/// outside, and *why* the process went is beyond it — the night this was written
-/// for had a session ending tidily, atexit handlers and all, for a reason
-/// nothing in this app could have named. What the app can promise is that it
-/// wrote down what it saw.
-fn outcome(out: &mut String, outcome: &BatchOutcome) {
-    out.push_str("<p class=\"outcome\">");
+/// The five kinds are the handoff's own and their words are its own. `Unanswered`
+/// is the one ending the handoff has no kind for — a session that stopped to ask
+/// in a run with nobody to answer — and it keeps the sentence this document
+/// already had for it, in the `needs-you` tone: a person has to come back to it,
+/// the same as to work handed back.
+///
+/// The line says what the run *saw*, and that is the honest form: this is one
+/// party's account of a process it was watching from outside, and why the
+/// process went is beyond it.
+fn outcome_line(outcome: &BatchOutcome) -> (Tone, String) {
     match outcome {
-        BatchOutcome::Exited => out.push_str("The run saw its session exit cleanly."),
+        BatchOutcome::Exited => (Tone::Done, "The run saw its session exit cleanly.".into()),
         BatchOutcome::Failed { code } => {
-            out.push_str("The run saw its session exit with code ");
-            out.push_str(&code.to_string());
-            out.push('.');
+            (Tone::Failed, format!("The session crashed with exit code <code>{code}</code>."))
         }
-        // Said in words rather than as an absent number: "no exit code" alone
-        // reads as something the app failed to look up, when it is a fact about
-        // the process.
-        BatchOutcome::NoCode => out.push_str(
-            "The run saw its session end with no exit code at all, which is what a \
-             signalled process leaves.",
-        ),
-        BatchOutcome::Removed => {
-            out.push_str("Somebody removed this session from the agents panel while the run was \
-                          waiting on it.");
+        BatchOutcome::NoCode => {
+            (Tone::Failed, "The session process disappeared without an exit code.".into())
         }
-        BatchOutcome::HandedBack => out.push_str(
-            "The lead handed the work back, and its session was left running with the \
-             conversation open.",
-        ),
+        BatchOutcome::Removed => (Tone::Neutral, "A person removed the session.".into()),
+        BatchOutcome::HandedBack => {
+            (Tone::NeedsYou, "The lead handed the work back to a person.".into())
+        }
         // The question is a harness's own text reaching a document a person
         // opens, so it goes through `escape` like everything else. `prose` is
         // not used: nobody was asked to type backticks into a dialog.
-        BatchOutcome::Unanswered { question } => {
-            out.push_str(
-                "The run ended this batch at a question it had nobody to answer: &ldquo;",
-            );
-            out.push_str(&escape(question));
-            out.push_str("&rdquo;");
-        }
+        BatchOutcome::Unanswered { question } => (
+            Tone::NeedsYou,
+            format!(
+                "The run ended this batch at a question it had nobody to answer: &ldquo;{}&rdquo;",
+                escape(question)
+            ),
+        ),
     }
-    out.push_str("</p>");
 }
 
-/// What this batch's actor was still holding on the board when the batch ended —
-/// a claimed merge lock, work left `in_progress`, work left `ready_to_merge`.
+/// One batch card: its label and time, the agent's own half, what the board held
+/// and what the run released, and last the run's own ending.
+fn batch_card(out: &mut String, b: &BatchLine) {
+    out.push_str("<article class=\"batch card\">\n<div class=\"batch-top\">\n<span class=\"batch-label\">batch ");
+    out.push_str(&b.n.to_string());
+    if b.attempt > 1 {
+        out.push_str(" \u{00B7} attempt ");
+        out.push_str(&b.attempt.to_string());
+    }
+    out.push_str(" <span class=\"agent\">(");
+    out.push_str(&escape(&b.agent));
+    out.push_str(")</span></span>\n<span class=\"dur\">");
+    out.push_str(&escape(&duration(b.seconds)));
+    out.push_str("</span>\n</div>\n");
+
+    // The agent's own half first, and then the run's, always. The phrase is
+    // about the *account* — a killed agent really did write nothing — and it is
+    // not the whole record of the batch.
+    let notes = b.notes.as_deref().filter(|n| !n.trim().is_empty());
+    match (b.reported, notes) {
+        (true, Some(notes)) => {
+            out.push_str("<p class=\"task-body\">");
+            out.push_str(&prose(notes));
+            out.push_str("</p>\n");
+        }
+        (false, _) => {
+            out.push_str("<p class=\"no-account\">This batch left no account of itself.</p>\n");
+        }
+        // A file somebody wrote, with no `notes` in it: saying the batch "left
+        // no account" over a file would be false, so this one says what is true.
+        (true, None) => {
+            out.push_str("<p class=\"no-account\">No notes on the batch as a whole.</p>\n");
+        }
+    }
+
+    left_and_released(out, &b.left_behind, &b.lock_released);
+
+    let (tone, text) = outcome_line(&b.outcome);
+    status_line(out, "outcome", tone, &text);
+    out.push_str("</article>\n");
+}
+
+/// What this batch's actor was still holding on the board when the batch ended
+/// ("Left unfinished"), and the merge lock the run gave back ("Lock released") —
+/// one `dl`, drawn only when either has something to say, since a row saying an
+/// actor held nothing would stand under every batch of every report.
 ///
-/// Drawn only when there is something to draw: a line saying an actor held
-/// nothing would stand under every batch of every report, and a line that is
-/// always there is one nobody reads.
+/// **The first is a reading of the board, never the record of an act**: what the
+/// board said a moment after the batch ended, filled only for a batch that left
+/// no account. The second is the opposite — a **write the app made**, filled
+/// whatever the batch said, and the only record of the release there will ever
+/// be, because nothing is written to the lock's own issue (a note there would
+/// move `updated_at` and make a dead claim look fresh to every lead waiting on
+/// it). It names the actor the claim was taken from; the evidence — the batch's
+/// own process group read as gone — is the same every time and is the licence
+/// for the release rather than a field.
 ///
-/// **A reading of the board, never the record of an act.** This is what the
-/// board said a moment after the batch ended, and it says nothing at all about
-/// what the run then did — the release of a lock is `released` below, on its
-/// own line, and everything else here the loop has either given back or parked
-/// by rules of its own. Without this line, a lock a dead batch was holding is
-/// discovered by the *next* run failing to take it, which is what it was
-/// written for; the release that now usually follows is the same fact acted on
-/// rather than a reason to stop naming it.
-fn held(out: &mut String, held: &[Leftover]) {
-    if held.is_empty() {
+/// The design's row is an id and nothing more, so the status each leftover had
+/// and whether one was the lock are not drawn; the lock, when the app took it
+/// back, is named by the second row.
+fn left_and_released(out: &mut String, held: &[Leftover], released: &Option<LockRelease>) {
+    if held.is_empty() && released.is_none() {
         return;
     }
-    out.push_str("<p class=\"held\">When this batch ended, its actor still held on the board: ");
-    for (nth, item) in held.iter().enumerate() {
-        if nth > 0 {
-            out.push_str(", ");
+    out.push_str("<dl class=\"f-body\">\n");
+    if !held.is_empty() {
+        out.push_str("<dt>Left unfinished</dt>\n<dd class=\"ids\">");
+        for item in held {
+            out.push_str("<code>");
+            out.push_str(&escape(&item.id));
+            out.push_str("</code>");
         }
-        out.push_str("<code>");
-        out.push_str(&escape(&item.id));
-        out.push_str("</code>");
-        if item.lock {
-            out.push_str(", the merge lock");
-        }
-        out.push_str(" (");
-        out.push_str(&escape(&item.status));
-        out.push(')');
+        out.push_str("</dd>\n");
     }
-    // The list and nothing after it. A closing sentence about the app having
-    // cleared none of it was written and taken out again, and it has aged into
-    // being plainly false besides: the run parks a stuck batch's claims after
-    // an unanswered question and gives back everything else behind a session it
-    // has finished with, both moments after this reading. What the app did is
-    // said where it was done — `released` below for the lock, and the board
-    // itself for the rest.
-    out.push_str(".</p>");
+    if let Some(release) = released {
+        out.push_str("<dt>Lock released</dt>\n<dd><code>");
+        out.push_str(&escape(&release.id));
+        out.push_str("</code> \u{00B7} by <code>");
+        out.push_str(&escape(&release.actor));
+        out.push_str("</code></dd>\n");
+    }
+    out.push_str("</dl>\n");
 }
 
-/// The merge lock this batch's actor was holding, and which the run gave back
-/// (smetana-rxzd).
-///
-/// Drawn whether or not the batch left an account of itself, unlike `held`
-/// above: that is a reading of the board, which a lead who wrote an account has
-/// already described, while this is a **write the app made** and nobody else is
-/// going to mention it. Nothing goes onto the lock's own issue — a note there
-/// would move `updated_at` and make a dead claim look fresh to every lead
-/// waiting on it — so this sentence is the only record of the release there is.
-///
-/// It names the actor it was taken from and the evidence it was taken on,
-/// because those are the two things somebody doubting the release would ask
-/// for, and the second is the entire licence: a batch whose own process group
-/// the app read as gone is not merging, so the half-merged target branch the
-/// lock exists to prevent was never on the table.
-fn released(out: &mut String, released: &Option<LockRelease>) {
-    let Some(release) = released else { return };
-    out.push_str("<p class=\"outcome\">The run released the merge lock <code>");
-    out.push_str(&escape(&release.id));
-    out.push_str("</code>, which <code>");
-    out.push_str(&escape(&release.actor));
-    out.push_str("</code> was still holding: the process group of that session was gone.</p>");
-}
-
-/// One cell of the summary strip. `extra` carries the hue that says what the
-/// number is about, and `cell-none` is added for a value that is not a count —
-/// a dash over an unreadable board, or a zero, both of which are muted so that
-/// only a real quantity is drawn in a status colour.
-fn cell(out: &mut String, label: &str, value: &str, extra: &str) {
-    out.push_str("<div class=\"cell\"><span class=\"cell-label\">");
-    out.push_str(label);
-    out.push_str("</span><span class=\"cell-n");
-    if !extra.is_empty() {
-        out.push(' ');
-        out.push_str(extra);
-    }
-    if value == "0" || value == "&mdash;" {
-        out.push_str(" cell-none");
-    }
-    out.push_str("\">");
-    out.push_str(value);
-    out.push_str("</span></div>");
-}
-
-/// A section's rule and its count. A section with no items never reaches this —
-/// the strip is what carries the zero, and an empty heading over nothing is a
-/// line asking to be read for no reason.
-fn header(out: &mut String, label: &str, count: usize) {
-    out.push_str("<div class=\"sec\"><span>");
-    out.push_str(label);
-    out.push_str("</span><span class=\"sec-n\">");
-    out.push_str(&count.to_string());
-    out.push_str("</span></div>");
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Section {
+    Closed,
+    Parked,
 }
 
 /// One list of tasks, each with whatever its batch said it did and — where the
-/// batch held it alone — how long that batch took.
+/// batch held it alone — how long that batch took. An empty list draws nothing:
+/// the strip is what carries the zero.
 ///
-/// The badge is decided by the section rather than read off the task, because
-/// the board's own status is not carried this far: `TaskLine` is an id and a
-/// title. Both words here are `RESERVED` statuses with fixed tokens, so nothing
-/// is hashed and nothing needs a two-letter code.
-fn section(
-    out: &mut String,
-    label: &str,
-    badge: &str,
-    card_extra: &str,
-    lines: &[TaskLine],
-    batches: &[BatchLine],
-) {
+/// Which section a card sits in decides its look, since the board's own status
+/// is not carried this far — `TaskLine` is an id and a title. A parked card is
+/// told apart by more than its border: a flag with a glyph and the words
+/// "Waiting on you".
+fn task_section(out: &mut String, which: Section, lines: &[TaskLine], batches: &[BatchLine]) {
     if lines.is_empty() {
         return;
     }
-    header(out, label, lines.len());
-    out.push_str("<div class=\"list\">");
-    let badge_class = if card_extra.is_empty() { "badge-done" } else { "badge-parked" };
+    let (id, name, glyph, glyph_class) = match which {
+        Section::Closed => ("closed", "Closed", Tone::Done.glyph(), "c-ok"),
+        Section::Parked => ("parked", "Parked", Tone::NeedsYou.glyph(), "c-serious"),
+    };
+    out.push_str("<section class=\"group\" id=\"");
+    out.push_str(id);
+    out.push_str("\" aria-labelledby=\"");
+    out.push_str(id);
+    out.push_str("-h\">\n<div class=\"group-head\">\n<span class=\"g ");
+    out.push_str(glyph_class);
+    out.push_str("\" aria-hidden=\"true\">");
+    out.push_str(glyph);
+    out.push_str("</span>\n<h2 id=\"");
+    out.push_str(id);
+    out.push_str("-h\">");
+    out.push_str(name);
+    out.push_str("</h2>\n<span class=\"count\">");
+    out.push_str(&lines.len().to_string());
+    out.push_str("</span>\n");
+    if which == Section::Parked {
+        out.push_str("<span class=\"hint\">Waiting on you</span>\n");
+    }
+    out.push_str("</div>\n");
     for line in lines {
         // One rule answers the whole card — both what was done and how long it
         // took — because `task_duration` is `last_naming` too. Two *rules* is
-        // what let the columns name different batches, and a duration belonging
-        // to a different piece of work is the same lie as an account belonging
-        // to one.
+        // what let the columns name different batches.
         let batch = last_naming(batches, &line.id);
-        out.push_str("<div class=\"card");
-        out.push_str(card_extra);
-        out.push_str("\"><div class=\"head\"><span class=\"chip\">");
-        out.push_str(&escape(&line.id));
-        out.push_str("</span><span class=\"badge ");
-        out.push_str(badge_class);
-        out.push_str("\">");
-        out.push_str(badge);
-        out.push_str("</span><span class=\"right\">");
-        // The public rule rather than `duration_of` on the batch above, so the
-        // number drawn here is the one the tests exercise. It resolves to the
-        // very same batch — both go through `last_naming` — so this cannot
-        // disagree with the account beside it.
-        match task_duration(batches, &line.id) {
-            Some(seconds) => out.push_str(&human(seconds)),
-            None => out.push_str("&mdash;"),
+        out.push_str("<article class=\"task card");
+        if which == Section::Parked {
+            out.push_str(" is-parked");
         }
-        out.push_str("</span></div><h3>");
+        out.push_str("\" id=\"");
+        out.push_str(&escape(&line.id));
+        out.push_str("\">\n<div class=\"task-top\">\n<div class=\"task-meta\"><span class=\"task-id\">");
+        out.push_str(&escape(&line.id));
+        out.push_str("</span>");
+        if which == Section::Parked {
+            out.push_str(
+                "<span class=\"flag tone-needs-you\"><span aria-hidden=\"true\">\u{25B2}</span>Waiting on you</span>",
+            );
+        }
+        out.push_str("</div>\n");
+        // The public rule rather than `duration_of` on the batch above, so the
+        // number drawn here is the one the tests exercise.
+        match task_duration(batches, &line.id) {
+            Some(seconds) => {
+                out.push_str("<span class=\"dur\">");
+                out.push_str(&escape(&duration(seconds)));
+                out.push_str("</span>\n");
+            }
+            None => out.push_str(
+                "<span class=\"dur is-none\" aria-label=\"duration unknown\">\u{2014}</span>\n",
+            ),
+        }
+        out.push_str("<h3>");
         out.push_str(&escape(&line.title));
-        out.push_str("</h3>");
+        out.push_str("</h3>\n</div>\n");
         let did = batch
             .and_then(|b| b.tasks.iter().find(|t| t.id == line.id))
-            .and_then(|t| t.did.as_deref());
+            .and_then(|t| t.did.as_deref())
+            .filter(|d| !d.trim().is_empty());
         match did {
             Some(text) => {
-                out.push_str("<p class=\"body\">");
+                out.push_str("<p class=\"task-body\">");
                 out.push_str(&prose(text));
-                out.push_str("</p>");
+                out.push_str("</p>\n");
             }
             // A dash rather than nothing: the batch either said nothing about
             // this task or left no account at all, and both are already named
             // under Batches.
-            None => out.push_str("<p class=\"unknown\">&mdash;</p>"),
+            None => out.push_str("<p class=\"no-account\">\u{2014}</p>\n"),
         }
-        out.push_str("</div>");
+        out.push_str("</article>\n");
     }
-    out.push_str("</div>");
+    out.push_str("</section>\n");
 }
 
-/// The document's palette, light — and the complete one, because it stands on a
-/// bare `:root` and every dark block below only redefines these names. A colour
-/// whose sole definition sat inside a media query or an attribute block would
-/// simply be absent for the reader that block does not match, and nothing on
-/// screen would say a colour had gone missing.
-///
-/// The names are the app's token names and the values are the app's values,
-/// copied from `src/styles/tokens/`. That is a change: they used to be `--doc-*`
-/// precisely because the values were not the app's, and a shared name over a
-/// different value would have drifted in silence. Now the name is a true
-/// statement. See the module comment for why literals live here and nowhere else
-/// in this repository — there is no stylesheet of ours around this document, so
-/// there is nothing for a `var()` to resolve against.
-///
-/// Only the status families this document draws are here. A closed card renders
-/// `done` and a parked one renders `needs-you`; the other four families and
-/// `--attn-live` are absent because nothing draws them, and every generated
-/// document would otherwise carry them.
-///
-/// `color-scheme` is the one declaration that is not a colour, and it earns its
-/// place: the frame's scrollbar and every default the user agent paints —
-/// selection among them — follow it rather than the rules below, so without it a
-/// dark report comes with a light scrollbar down its side.
-const LIGHT: &str = "color-scheme:light;\
---canvas:#eaeeef;--surface-sunken:#e1e6e7;--surface:#f4f7f7;--surface-raised:#ffffff;\
---border-subtle:#dde3e3;--border:#c9d1d2;--border-strong:#a9b4b6;\
---text-primary:#16201f;--text-secondary:#4a565a;--text-muted:#5e686d;\
---text-link:#1f5d8f;--text-link-hover:#123f63;\
---focus-ring:#1c6fd0;--selection-bg:#c6dcf0;--scrollbar-thumb:#c2caca;\
---status-done-fg:#3f6b54;--status-done-bg:#e6eee9;--status-done-border:#c0d3c8;\
---status-needs-you-fg:#8a5405;--status-needs-you-bg:#fbf0da;--status-needs-you-border:#e8ce94;\
---attn-loud:#b96a06;--shadow-raised:0 1px 2px rgba(22,32,31,.08)";
-
-/// The same names again, dark. Written once and placed twice, because the
-/// document has two readers that ask differently — see `style`. `--shadow-raised`
-/// collapses to `none`: a raised surface in the dark theme is told apart by its
-/// own lightness, and a shadow under it only smears the edge.
-const DARK: &str = "color-scheme:dark;\
---canvas:#10151a;--surface-sunken:#0c1116;--surface:#161b21;--surface-raised:#1b2229;\
---border-subtle:#232b33;--border:#2e3841;--border-strong:#3d4954;\
---text-primary:#e3e8ed;--text-secondary:#a8b3bd;--text-muted:#7c8b97;\
---text-link:#8fb6e8;--text-link-hover:#b3cef2;\
---focus-ring:#5fa8ff;--selection-bg:#2b4560;--scrollbar-thumb:#333e48;\
---status-done-fg:#7fa792;--status-done-bg:#16211c;--status-done-border:#2c4136;\
---status-needs-you-fg:#f2b03d;--status-needs-you-bg:#2b2010;--status-needs-you-border:#6a4e1b;\
---attn-loud:#f2b03d;--shadow-raised:none";
-
-/// What the document actually draws, through the names above and no colour of its
-/// own.
-///
-/// The scale is written out rather than referenced: these are the design system's
-/// space, type and radius steps, and there is nothing here for a `var()` to
-/// resolve them against. `box-sizing:border-box` on everything is the same first
-/// line `tokens/base.css` opens with, and everything below declares a size and
-/// adds padding and a border on top of it.
-///
-/// **The mono stack names no IBM Plex Mono, and that is a deliberate divergence
-/// from `tokens/fonts.css` rather than an omission.** The app's `--font-mono`
-/// opens with it; this document may fetch nothing, and the app's own `@font-face`
-/// does not reach across into an `<iframe sandbox="" srcdoc>`, so naming a face
-/// neither reader can load would only be a line of CSS that never applies. The
-/// handoff contradicts itself here — its first constraint says the stack falls
-/// past Plex, its typography block says to copy `--font-mono` literally — and the
-/// spec and `[merge].hazards` both resolve it as "drop Plex". Do not put it back
-/// on the grounds that the tokens have it.
-///
-/// The stack is repeated in full at every rule that needs it rather than
-/// inherited from one class: a document with no stylesheet of ours around it has
-/// no `--font-mono` to reach for, and a single shared class would have to be put
-/// on every one of these elements by hand in the markup, where forgetting it
-/// shows up as one line of prose set in sans among identifiers.
-const RULES: &str = "\
-*,*::before,*::after{box-sizing:border-box}\
-::selection{background:var(--selection-bg)}\
-::-webkit-scrollbar{width:10px;height:10px}\
-::-webkit-scrollbar-track{background:transparent}\
-::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);border-radius:5px}\
-a{color:var(--text-link);text-decoration:none}\
-a:hover{color:var(--text-link-hover);text-decoration:underline}\
-body{margin:0;padding:32px 16px 40px;background:var(--canvas);color:var(--text-primary);\
-font-family:system-ui,-apple-system,\"Segoe UI\",\"Noto Sans\",Roboto,sans-serif;\
-font-size:13px;line-height:1.5}\
-.doc{max-width:52rem;margin:0 auto;display:flex;flex-direction:column;gap:24px}\
-code{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
-\"DejaVu Sans Mono\",monospace}\
-.eyebrow{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
-\"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;text-transform:uppercase;\
-color:var(--text-muted);margin:0 0 8px}\
-h1{font-size:22px;font-weight:600;letter-spacing:-.006em;line-height:1.2;margin:0}\
-.meta{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
-\"DejaVu Sans Mono\",monospace;font-size:12px;color:var(--text-secondary);\
-word-break:break-all;margin:8px 0 0}\
-.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}\
-.cell{background:var(--surface-raised);border:1px solid var(--border-subtle);border-radius:4px;\
-box-shadow:var(--shadow-raised);padding:10px;display:flex;flex-direction:column;gap:4px}\
-.cell-label{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
-\"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;text-transform:uppercase;\
-color:var(--text-muted)}\
-.cell-n{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
-\"DejaVu Sans Mono\",monospace;font-size:22px;font-weight:500;line-height:1.2;\
-color:var(--text-primary)}\
-.cell-done{color:var(--status-done-fg)}\
-.cell-loud{color:var(--attn-loud)}\
-.cell-none{color:var(--text-muted)}\
-.sec{display:flex;align-items:baseline;gap:8px;border-bottom:1px solid var(--border);\
-padding-bottom:6px;margin:0 0 -8px;font-family:ui-monospace,\"SF Mono\",Menlo,\
-Consolas,\"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;\
-text-transform:uppercase;font-weight:400;color:var(--text-secondary)}\
-.sec-n{color:var(--text-muted);letter-spacing:0}\
-.summary{display:flex;flex-direction:column;gap:8px}\
-.summary p{margin:0;font-size:13px;line-height:1.5;color:var(--text-primary)}\
-.list{display:flex;flex-direction:column;gap:8px}\
-.card{background:var(--surface-raised);border:1px solid var(--border-subtle);border-radius:4px;\
-box-shadow:var(--shadow-raised);padding:16px;display:flex;flex-direction:column;gap:8px}\
-.card-parked{border-color:var(--status-needs-you-border)}\
-.card-batch{background:var(--surface);box-shadow:none}\
-.head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}\
-.chip{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
-\"DejaVu Sans Mono\",monospace;font-size:12px;font-weight:500;background:var(--surface-sunken);\
-border:1px solid var(--border-subtle);border-radius:3px;padding:1px 6px;white-space:nowrap}\
-.badge{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
-\"DejaVu Sans Mono\",monospace;font-size:11px;border-radius:3px;padding:1px 6px;\
-white-space:nowrap;border:1px solid}\
-.badge-done{background:var(--status-done-bg);color:var(--status-done-fg);\
-border-color:var(--status-done-border)}\
-.badge-parked{background:var(--status-needs-you-bg);color:var(--status-needs-you-fg);\
-border-color:var(--status-needs-you-border)}\
-.batch-label{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
-\"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;text-transform:uppercase;\
-color:var(--text-secondary)}\
-.right{margin-left:auto;font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
-\"DejaVu Sans Mono\",monospace;font-size:11px;color:var(--text-muted)}\
-h3{margin:0;font-size:15px;font-weight:600;line-height:1.35}\
-.body{margin:0;color:var(--text-secondary)}\
-.body code{font-size:12px;color:var(--text-primary)}\
-.unknown{margin:0;color:var(--text-muted)}\
-.outcome{margin:0;color:var(--text-secondary)}\
-.outcome code{font-size:12px}\
-.held{margin:0;color:var(--status-needs-you-fg)}\
-.held code{font-size:12px}\
-.notice{background:var(--surface);border:1px solid var(--border-subtle);border-radius:4px;\
-padding:16px;color:var(--text-muted);margin:0}\
-.total{border-top:1px solid var(--border-strong);padding-top:12px;display:flex;\
-align-items:baseline;gap:8px}\
-.total-label{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
-\"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;text-transform:uppercase;\
-color:var(--text-secondary)}\
-.total-n{margin-left:auto;font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
-\"DejaVu Sans Mono\",monospace;font-size:18px;font-weight:500;color:var(--text-primary)}";
-
-/// The document's whole appearance.
-///
-/// **The palette is placed four times because the document has two readers that
-/// ask differently.** Light on a bare `:root` and dark under the media query is
-/// the browser's pair; dark and light again under `[data-theme]` is this app's.
-/// Opened in a browser, with nothing of ours loaded, the document has
-/// only `prefers-color-scheme` to go on, and that is left exactly as it was.
-/// Opened in a tab of this app it is handed `data-theme` by
-/// `src/components/run/reportTheme.js` — the app has already resolved `system`
-/// and knows which of the two it is painting — and the attribute has to win in
-/// *both* directions.
-///
-/// Winning is said twice, and the hard direction is the one that needs it said
-/// at all: a light app on a dark machine, the mirror of the bug this fixed, where
-/// the machine's answer has to be refused rather than merely followed. The media
-/// query is guarded with `:not([data-theme="light"])`, so that reader is never
-/// told dark in the first place; and the attribute blocks are written after it,
-/// so at the equal specificity these selectors have, source order settles it.
-/// Either would carry the case alone. Both are here because they fail differently
-/// — the guard says which reader the query is for and survives being moved, and
-/// the order says nothing and does not.
-///
-/// The frame cannot be reached from our side to have an attribute set on it —
-/// `sandbox=""` gives the document its own origin — which is why the attribute
-/// goes into the string the frame is built from and not onto an element. Nothing
-/// rewrites what a past run wrote: a document already on disk carries this
-/// stylesheet only if it was written after this change.
-fn style() -> String {
-    format!(
-        ":root{{{LIGHT}}}\
-         @media(prefers-color-scheme:dark){{:root:not([data-theme=\"light\"]){{{DARK}}}}}\
-         :root[data-theme=\"dark\"]{{{DARK}}}\
-         :root[data-theme=\"light\"]{{{LIGHT}}}\
-         {RULES}"
-    )
-}
 
 #[cfg(test)]
 mod tests {
@@ -954,21 +885,6 @@ mod tests {
     }
 
     #[test]
-    fn the_document_is_named_for_what_it_covers() {
-        // A run is one task in Solo, one batch in Crew and a night of batches
-        // in Autopilot, and somebody opening the document should read which of
-        // those they are looking at. The words are `RunMode::report_title`'s and
-        // this file only places them — in the tab's title as well as the
-        // heading, since a report opened beside another one is told apart by the
-        // tab first.
-        let html = render(&RunReport { title: "Task report", ..report(90, None, &[]) });
-
-        assert!(html.contains("<title>Task report</title>"), "{html}");
-        assert!(html.contains("<h1>Task report</h1>"), "{html}");
-        assert!(!html.contains("Run report"), "and nothing is left calling it the other thing");
-    }
-
-    #[test]
     fn agent_text_is_escaped_before_it_reaches_the_document() {
         let mut batch = batch(1);
         batch.tasks = vec![BatchTask {
@@ -983,31 +899,6 @@ mod tests {
     }
 
     #[test]
-    fn a_report_with_no_diff_says_so_rather_than_showing_zero() {
-        let html = render(&report(120, None, &[]));
-        assert!(
-            html.contains("could not be read"),
-            "an unreadable board and an empty board are opposite facts"
-        );
-        // The strip's closed and parked cells are the two the board would have
-        // filled, and a dash is what stands there instead. The batches cell is
-        // a number the app measured itself and may honestly read zero, which is
-        // why the assertion names the cells rather than the digit — and names
-        // them as `cell` writes them, hue first and then `cell-none`. Forbidding
-        // `cell-done">0<` would forbid a string this file cannot produce, and an
-        // assertion that cannot fail is worse than none.
-        assert!(
-            !html.contains("cell-done cell-none\">0<") && !html.contains("cell-loud cell-none\">0<"),
-            "no confident zero over a number nobody measured: {html}"
-        );
-        assert!(html.contains("cell-none\">&mdash;<"), "a dash stands where the counts would: {html}");
-        assert!(
-            !html.contains("<div class=\"sec\">"),
-            "and no empty section standing in for one: {html}"
-        );
-    }
-
-    #[test]
     fn a_batch_that_left_no_file_is_named_rather_than_drawn_empty() {
         let mut quiet = batch(2);
         quiet.reported = false;
@@ -1015,48 +906,6 @@ mod tests {
         let html = render(&report(600, Some(&tasks), &[quiet]));
         assert!(html.contains("left no account of itself"));
         assert!(html.contains("a-1"), "and the board still says which task moved");
-    }
-
-    /// The whole outcome vocabulary, each with the words the document is
-    /// expected to carry for it. Written out once and used by both tests below,
-    /// so "every ending is named" cannot quietly become "the endings somebody
-    /// remembered to list twice".
-    fn vocabulary() -> Vec<(BatchOutcome, &'static str)> {
-        vec![
-            (BatchOutcome::Exited, "exit cleanly"),
-            (BatchOutcome::Failed { code: 137 }, "exit with code 137"),
-            (BatchOutcome::NoCode, "no exit code at all"),
-            (BatchOutcome::Removed, "removed this session from the agents panel"),
-            (BatchOutcome::HandedBack, "handed the work back"),
-            (
-                BatchOutcome::Unanswered { question: "Do you trust this folder?".into() },
-                "Do you trust this folder?",
-            ),
-        ]
-    }
-
-    #[test]
-    fn a_batch_that_left_no_account_still_says_how_the_run_saw_it_end() {
-        // smetana-pmj, and the case the whole change exists for: a batch whose
-        // agent was killed before it could write a word. The run knew what it
-        // saw and wrote none of it, so one sentence — about the *agent's*
-        // silence — was the entire record of a batch that died holding the
-        // merge lock.
-        for (outcome, words) in vocabulary() {
-            let mut quiet = batch(1);
-            quiet.reported = false;
-            quiet.outcome = outcome.clone();
-            let html = render(&report(600, None, &[quiet]));
-
-            assert!(
-                html.contains("left no account of itself"),
-                "the phrase stays, and stays about the agent: {outcome:?}"
-            );
-            assert!(
-                html.contains(words),
-                "and the run's own half stands beside it for {outcome:?}: {html}"
-            );
-        }
     }
 
     /// The whole `StopReason` vocabulary, one representative value per
@@ -1114,24 +963,6 @@ mod tests {
     }
 
     #[test]
-    fn the_stop_reason_stands_after_the_counters_and_before_the_task_sections() {
-        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
-        let reason = StopReason::NoProgress;
-        let html = render(&RunReport {
-            stop_reason: &reason,
-            ..report(600, Some(&tasks), &[batch(1)])
-        });
-
-        let strip_total = html
-            .find("<span class=\"cell-label\">total</span>")
-            .expect("the strip's last cell");
-        let reason_at = html.find("moved neither what was ready").expect("the reason line");
-        let closed_at = html.find("<div class=\"sec\"><span>closed</span>").expect("closed");
-        assert!(strip_total < reason_at, "the reason follows the counters: {html}");
-        assert!(reason_at < closed_at, "and stands before the task sections: {html}");
-    }
-
-    #[test]
     fn the_stop_reason_prints_even_when_the_board_could_not_be_read() {
         // The board's own dashes must never be the whole of what a person
         // reads — see `a_report_with_no_diff_says_so_rather_than_showing_zero`
@@ -1140,28 +971,6 @@ mod tests {
         let reason = StopReason::Unreadable;
         let html = render(&RunReport { stop_reason: &reason, ..report(600, None, &[]) });
         assert!(html.contains("could not be read twice running"), "{html}");
-    }
-
-    #[test]
-    fn every_batch_carries_the_runs_own_ending_whether_it_wrote_a_file_or_not() {
-        // Independent of the account file in both directions. A batch that did
-        // leave one is told the same thing about itself — the two halves are a
-        // pair, not a fallback, and a reader comparing "the lead says it merged
-        // three" against "the session exited with code 1" is exactly the reading
-        // this is for.
-        for (outcome, words) in vocabulary() {
-            let mut spoke = batch(1);
-            spoke.notes = Some("nothing odd".into());
-            spoke.outcome = outcome.clone();
-            let html = render(&report(600, None, &[spoke]));
-
-            assert!(html.contains("nothing odd"), "the lead's own words stay: {outcome:?}");
-            assert!(html.contains(words), "beside the run's: {html}");
-            assert!(
-                !html.contains("left no account of itself"),
-                "and nothing says it was silent when it was not"
-            );
-        }
     }
 
     #[test]
@@ -1176,212 +985,6 @@ mod tests {
 
         assert!(!html.contains("<script"), "{html}");
         assert!(html.contains("Trust &lt;script&gt;"), "{html}");
-    }
-
-    #[test]
-    fn a_batch_that_died_holding_the_board_says_what_it_was_holding() {
-        // The line that would have saved the night: a batch killed mid-merge
-        // leaves a claimed lock behind, and the next run discovers it by
-        // failing to take it. Ids, because a person has to be able to go and
-        // look — and the lock is called what it is, since it is the one leftover
-        // that costs somebody else their run rather than this one.
-        let mut killed = batch(1);
-        killed.reported = false;
-        killed.outcome = BatchOutcome::NoCode;
-        killed.left_behind = vec![
-            Leftover { id: "smetana-js4".into(), status: "in_progress".into(), lock: true },
-            Leftover { id: "smetana-42v".into(), status: "ready_to_merge".into(), lock: false },
-        ];
-        let html = render(&report(600, None, &[killed]));
-
-        assert!(html.contains("still held on the board"), "{html}");
-        assert!(html.contains("<code>smetana-js4</code>, the merge lock (in_progress)"), "{html}");
-        assert!(html.contains("<code>smetana-42v</code> (ready_to_merge)"), "{html}");
-        assert!(
-            html.contains(".held{margin:0;color:var(--status-needs-you-fg)}"),
-            "drawn loud, and at a contrast a person can read a sentence at: {html}"
-        );
-    }
-
-    #[test]
-    fn a_lock_the_run_took_back_is_named_with_the_actor_and_the_evidence() {
-        // The release is a write the app made, and this line is the only
-        // record of it there will ever be: nothing goes onto the lock's own
-        // issue, because a note there would move `updated_at` and make a dead
-        // claim look fresh to every lead waiting on it. So the two things
-        // somebody doubting the release would ask for are both here — whose
-        // claim it was, and what the app read to decide the batch was gone.
-        let mut killed = batch(1);
-        killed.reported = false;
-        killed.outcome = BatchOutcome::NoCode;
-        killed.left_behind =
-            vec![Leftover { id: "smetana-lock".into(), status: "in_progress".into(), lock: true }];
-        killed.lock_released =
-            Some(LockRelease { id: "smetana-lock".into(), actor: "smetana-run-7".into() });
-        let html = render(&report(600, None, &[killed]));
-
-        assert!(html.contains("The run released the merge lock"), "{html}");
-        assert!(html.contains("<code>smetana-lock</code>"), "{html}");
-        assert!(html.contains("<code>smetana-run-7</code>"), "{html}");
-        assert!(html.contains("process group of that session was gone"), "the evidence: {html}");
-        // The reading of the board stands beside it rather than instead of it:
-        // what the batch was holding when it ended is still true, and the
-        // release is the next sentence rather than a reason to stop saying it.
-        assert!(html.contains("still held on the board"), "{html}");
-        assert!(html.contains(".outcome code{font-size:12px}"), "the ids are set in mono: {html}");
-    }
-
-    #[test]
-    fn a_batch_that_released_nothing_says_nothing_about_a_lock() {
-        // The ordinary batch, and much the commonest: it held no lock, or the
-        // app could not prove its group gone. A line saying so would stand
-        // under nearly every batch of every report.
-        let mut held = batch(1);
-        held.reported = false;
-        held.outcome = BatchOutcome::NoCode;
-        held.left_behind =
-            vec![Leftover { id: "smetana-lock".into(), status: "in_progress".into(), lock: true }];
-        let html = render(&report(600, None, &[held]));
-
-        assert!(html.contains("still held on the board"), "{html}");
-        assert!(!html.contains("The run released the merge lock"), "{html}");
-    }
-
-    #[test]
-    fn a_batch_that_left_the_board_clean_draws_no_line_about_it() {
-        // A line under every batch saying an actor held nothing is a line
-        // nobody reads, and the one that matters would then be a line in a
-        // column of them.
-        let html = render(&report(600, None, &[batch(1)]));
-        assert!(!html.contains("still held on the board"), "{html}");
-    }
-
-    #[test]
-    fn the_document_carries_its_own_styles_and_reaches_no_network() {
-        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![line("a-2")] };
-        let html = render(&report(60, Some(&tasks), &[batch(1)]));
-        assert!(html.contains("<style>"), "self-contained: it opens with no app around it");
-        assert!(!html.contains("http://") && !html.contains("https://"));
-        assert!(!html.contains("<script"), "no script, in the document or out of it");
-        assert!(!html.contains("<img"), "and no image");
-        assert!(!html.contains("@import"), "and no stylesheet fetched from anywhere");
-        assert!(!html.contains("@font-face"), "and no font file either");
-    }
-
-    /// Everything between a selector's `{` and the `}` that closes it. No palette
-    /// block in this stylesheet holds a nested rule, so the first `}` is the
-    /// right one and a parser is not owed here.
-    fn block<'a>(html: &'a str, selector: &str) -> &'a str {
-        let at = html.find(selector).unwrap_or_else(|| panic!("no {selector} in the document"));
-        let open = at + selector.len();
-        let close = html[open..].find('}').expect("an unclosed block");
-        &html[open..open + close]
-    }
-
-    /// The custom properties a block defines, by name. `color-scheme` and any
-    /// other ordinary declaration is not a name a palette has to match on.
-    fn names(block: &str) -> Vec<&str> {
-        block
-            .split(';')
-            .filter_map(|declaration| declaration.split(':').next())
-            .map(str::trim)
-            .filter(|name| name.starts_with("--"))
-            .collect()
-    }
-
-    #[test]
-    fn the_document_carries_both_the_media_branch_and_rules_by_attribute() {
-        // The two readers of this document ask differently. In a browser, with
-        // nothing of ours loaded, it has only `prefers-color-scheme` to go on;
-        // in a tab of this app it is handed `data-theme` by `reportTheme.js`,
-        // because an empty sandbox puts the frame's own DOM out of reach and the
-        // string is the only thing our side can compose.
-        let html = render(&report(90, None, &[]));
-
-        assert!(html.contains(":root{"), "the light palette stands on a bare root");
-        assert!(
-            html.contains("@media(prefers-color-scheme:dark){"),
-            "the browser's reading of the document is untouched: {html}"
-        );
-        assert!(html.contains(":root[data-theme=\"dark\"]{"), "{html}");
-        assert!(html.contains(":root[data-theme=\"light\"]{"), "{html}");
-    }
-
-    #[test]
-    fn the_attribute_beats_the_machine_in_both_directions() {
-        // A dark app on a light machine is the easy half — the machine says
-        // nothing and the attribute block is the only dark one that applies. The
-        // mirror is what needs two mechanisms: a light app on a dark machine is
-        // told dark by the media query unless something stops it, so the query
-        // is guarded against the attribute *and* the attribute blocks are written
-        // after it, where equal specificity is settled by source order.
-        let html = render(&report(90, None, &[]));
-
-        assert!(
-            html.contains("@media(prefers-color-scheme:dark){:root:not([data-theme=\"light\"]){"),
-            "the machine's answer applies only where the app has not said light: {html}"
-        );
-        let media = html.find("@media(prefers-color-scheme:dark)").expect("the media query");
-        for selector in [":root[data-theme=\"dark\"]{", ":root[data-theme=\"light\"]{"] {
-            let at = html.find(selector).expect(selector);
-            assert!(at > media, "{selector} has to come after the media query, or it loses to it");
-        }
-    }
-
-    #[test]
-    fn no_colour_is_defined_only_where_one_of_the_readers_would_never_look() {
-        // A value whose only definition sits inside a media query or an attribute
-        // block is simply absent for the reader that block does not apply to — a
-        // light machine with no attribute would draw the document with half its
-        // palette missing, and nothing on screen would say so. So the bare root
-        // carries the complete light palette and every dark block only redefines.
-        let html = render(&report(90, None, &[]));
-        let light = names(block(&html, ":root{"));
-        assert!(!light.is_empty(), "the light palette is the one that must be complete");
-
-        // Both dark placements, and the media one is the point: it is itself a
-        // block one reader never looks in — a document opened in a browser on a
-        // light machine — and the two agreeing today is only the consequence of
-        // one constant being interpolated twice. That is the accident this test
-        // is insurance against, so checking the attribute block alone would leave
-        // it insuring nothing.
-        for selector in [":root[data-theme=\"dark\"]{", ":root:not([data-theme=\"light\"]){"] {
-            let dark = names(block(&html, selector));
-            assert!(!dark.is_empty(), "{selector} has to redefine something");
-            for name in dark {
-                assert!(light.contains(&name), "{name} is defined only under {selector}");
-            }
-        }
-    }
-
-    #[test]
-    fn the_palette_is_the_only_thing_the_rules_name_a_colour_through() {
-        // The colours are written in one place, and after this change that place
-        // is the two palette constants: a literal left behind in a rule would be
-        // a colour no attribute and no media query could move, which is exactly
-        // the bug this fixed.
-        let html = render(&report(90, None, &[]));
-        let rules = &html[html.find("*,*::before").expect("the first rule")..];
-        let rules = &rules[..rules.find("</style>").expect("the end of the stylesheet")];
-        // A hex is the shape this file has always written, and the other two are
-        // the shapes a later hand would reach for; a rule naming any of them would
-        // hold a colour no attribute and no media query could move.
-        for form in ["#", "rgb(", "hsl("] {
-            assert!(!rules.contains(form), "a colour outside the palette blocks: {rules}");
-        }
-    }
-
-    #[test]
-    fn the_total_is_the_runs_own_duration_and_stands_at_the_end() {
-        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
-        let html = render(&report(8040, Some(&tasks), &[]));
-        assert!(html.contains("class=\"total-n\">2h 14m<"), "{html}");
-        assert!(html.trim_end().ends_with("</body></html>"));
-        let total = html.find("class=\"total\"").expect("the footer");
-        assert!(
-            html.find("<div class=\"sec\"><span>closed</span>").expect("the closed section") < total,
-            "the total is the last thing said"
-        );
     }
 
     #[test]
@@ -1404,28 +1007,6 @@ mod tests {
             None,
             "dividing a batch by its task count is a number that looks measured"
         );
-    }
-
-    #[test]
-    fn a_task_alone_in_its_batch_shows_a_time_and_one_sharing_a_batch_shows_none() {
-        let mut alone = batch(1);
-        alone.seconds = 3600;
-        alone.tasks = vec![BatchTask { id: "a-1".into(), did: None }];
-        let mut shared = batch(2);
-        shared.seconds = 7260;
-        shared.tasks = vec![
-            BatchTask { id: "a-2".into(), did: None },
-            BatchTask { id: "a-3".into(), did: None },
-        ];
-        let tasks = Tasks { closed: vec![line("a-1"), line("a-2")], parked: vec![] };
-        let html = render(&report(11000, Some(&tasks), &[alone, shared]));
-        // The cards themselves, not the whole document: every batch prints its
-        // own duration under Batches, which says nothing about a task.
-        let start = html.find("<div class=\"list\">").expect("the closed list");
-        let end = html.find("<div class=\"sec\"><span>batches</span>").expect("the batches section");
-        let rows = &html[start..end];
-        assert!(rows.contains("1h 0m"), "the batch that held one task lends it its own number");
-        assert!(!rows.contains("2h 1m"), "and the batch that held two lends nothing");
     }
 
     #[test]
@@ -1455,28 +1036,6 @@ mod tests {
             Some(7260),
             "and the time beside it is that same batch's"
         );
-    }
-
-    #[test]
-    fn a_task_handed_on_to_a_shared_batch_shows_no_duration_at_all() {
-        // The other order, and the one two separate searches got wrong: batch 1
-        // held `a-1` alone, batch 2 took it on beside `a-2`. The row carries
-        // batch 2's account, so the rule has to be asked of batch 2 — which
-        // held two tasks and therefore lends none of them a number. Borrowing
-        // batch 1's hour would be a figure that looks measured and belongs to
-        // different work, which is why dividing a batch by its task count was
-        // refused in the first place.
-        let alone = batch_naming(1, 3600, &["a-1"]);
-        let shared = batch_naming(2, 7260, &["a-1", "a-2"]);
-        assert_eq!(task_duration(&[alone.clone(), shared.clone()], "a-1"), None);
-
-        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
-        let html = render(&report(11000, Some(&tasks), &[alone, shared]));
-        let start = html.find("<div class=\"list\">").expect("the closed list");
-        let end = html.find("<div class=\"sec\"><span>batches</span>").expect("the batches section");
-        let rows = &html[start..end];
-        assert!(!rows.contains("1h 0m"), "an hour measured against other work: {rows}");
-        assert!(!rows.contains("2h 1m"), "and the shared batch lends nothing either: {rows}");
     }
 
     #[test]
@@ -1545,160 +1104,6 @@ mod tests {
     }
 
     #[test]
-    fn the_summary_section_stands_before_closed_and_carries_one_paragraph_per_batch() {
-        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
-        let mut first = batch(1);
-        first.summary = Some("Fixed the login form & tidied the tests.".into());
-        let mut second = batch(2);
-        second.summary = Some("Added the export button.".into());
-        let batches = [first, second];
-        let html = render(&report(3600, Some(&tasks), &batches));
-
-        let sec = html
-            .find("<div class=\"sec\"><span>summary</span></div><div class=\"summary\">")
-            .expect("the summary section");
-        let closed = html.find("<div class=\"sec\"><span>closed</span>").expect("the closed section");
-        assert!(sec < closed, "summary comes before closed: {html}");
-        assert!(
-            html.contains("<p>Fixed the login form &amp; tidied the tests.</p><p>Added the export button.</p>"),
-            "{html}"
-        );
-    }
-
-    #[test]
-    fn a_batch_without_a_summary_is_skipped_and_no_summary_at_all_draws_no_section() {
-        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
-        let mut with = batch(1);
-        with.summary = Some("One thing.".into());
-        let batches = [with, batch(2)];
-        let html = render(&report(3600, Some(&tasks), &batches));
-        assert!(html.contains("<div class=\"summary\"><p>One thing.</p></div>"), "{html}");
-
-        let none = [batch(1), batch(2)];
-        let html = render(&report(3600, Some(&tasks), &none));
-        assert!(!html.contains("<span>summary</span>"), "no section over nothing: {html}");
-    }
-
-    #[test]
-    fn an_empty_summary_counts_as_none_given_rather_than_an_empty_paragraph() {
-        // The prompt asks for the key by name, so a lead writing `"summary": ""`
-        // is a plausible batch file, and it must not draw a blank cell — the
-        // exact fault this whole feature exists to keep off the row.
-        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
-        let mut blank = batch(1);
-        blank.summary = Some("".into());
-        let mut whitespace = batch(2);
-        whitespace.summary = Some("   ".into());
-        let html = render(&report(3600, Some(&tasks), &[blank, whitespace]));
-        assert!(!html.contains("<span>summary</span>"), "no section over nothing: {html}");
-
-        // A real summary beside a blank one draws only the real one.
-        let mut blank = batch(1);
-        blank.summary = Some("".into());
-        let mut real = batch(2);
-        real.summary = Some("Did a real thing.".into());
-        let html = render(&report(3600, Some(&tasks), &[blank, real]));
-        assert!(html.contains("<div class=\"summary\"><p>Did a real thing.</p></div>"), "{html}");
-    }
-
-    #[test]
-    fn a_summary_is_trimmed_on_the_way_out_and_not_only_on_the_way_to_the_emptiness_test() {
-        // Filtering on `s.trim().is_empty()` while writing `text` untouched
-        // would leave a lead's stray leading or trailing space sitting in a
-        // sentence the row draws under `white-space: nowrap`.
-        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
-        let mut padded = batch(1);
-        padded.summary = Some("  Real  ".into());
-        let html = render(&report(3600, Some(&tasks), &[padded]));
-        assert!(html.contains("<div class=\"summary\"><p>Real</p></div>"), "{html}");
-    }
-
-    #[test]
-    fn the_summary_is_drawn_even_when_the_board_could_not_be_read() {
-        // The summary comes from the batches, not from the board.
-        let mut b = batch(1);
-        b.summary = Some("Did a thing.".into());
-        let batches = [b];
-        let html = render(&report(3600, None, &batches));
-        assert!(html.contains("<span>summary</span>"), "{html}");
-        assert!(html.contains("class=\"notice\""), "{html}");
-    }
-
-    #[test]
-    fn duration_reads_in_hours_minutes_and_seconds() {
-        assert_eq!(human(8040), "2h 14m");
-        assert_eq!(human(840), "14m");
-        assert_eq!(human(48), "48s");
-        assert_eq!(human(0), "0s");
-    }
-
-    #[test]
-    fn the_palette_is_the_design_systems_and_is_placed_four_times() {
-        // The document has two readers that ask differently: a browser with
-        // nothing of ours loaded reads `prefers-color-scheme`, and this app hands
-        // it `data-theme`. The attribute has to win in both directions, so the
-        // guarded media query and both attribute blocks are all three required.
-        let html = render(&report(90, None, &[]));
-
-        assert!(html.contains("--canvas:#eaeeef"), "light canvas is the design system's: {html}");
-        assert!(html.contains("--canvas:#10151a"), "and so is the dark one");
-        assert!(
-            html.contains("@media(prefers-color-scheme:dark){:root:not([data-theme=\"light\"])"),
-            "the media query is guarded, so a light app on a dark machine is not overruled"
-        );
-        assert!(html.contains(":root[data-theme=\"dark\"]"));
-        assert!(html.contains(":root[data-theme=\"light\"]"));
-        assert!(
-            html.contains("color-scheme:light"),
-            "the user agent's own defaults follow the document"
-        );
-        assert!(html.contains("color-scheme:dark"));
-    }
-
-    #[test]
-    fn only_the_status_families_the_document_draws_are_emitted() {
-        // Every generated document carries this stylesheet, so a family nothing
-        // draws is dead weight in every one of them. Closed cards render `done`
-        // and parked cards render `needs-you`; nothing here renders the other four.
-        let html = render(&report(90, None, &[]));
-
-        assert!(html.contains("--status-done-fg"));
-        assert!(html.contains("--status-needs-you-fg"));
-        assert!(html.contains("--attn-loud"));
-        assert!(!html.contains("--status-running-"), "nothing in a finished report is running");
-        assert!(!html.contains("--status-blocked-"));
-        assert!(!html.contains("--status-ready-"));
-        assert!(!html.contains("--status-failed-"));
-        assert!(!html.contains("--attn-live"), "the batch takeaway that would have used it is not built");
-    }
-
-    #[test]
-    fn the_document_carries_no_density_and_no_app_wide_scale() {
-        // `ReportView.vue` refuses to carry density and the app's font size
-        // across, and the reason is in its header: those are about fitting rows
-        // into panels, while a document has a measure of its own. Nothing here
-        // may quietly reintroduce either.
-        let html = render(&report(90, None, &[]));
-
-        assert!(!html.contains("data-density"), "{html}");
-        assert!(!html.contains("--ui-scale"), "{html}");
-    }
-
-    #[test]
-    fn the_document_fetches_no_font_and_names_a_fallback_stack() {
-        let html = render(&report(90, None, &[]));
-
-        assert!(!html.contains("@import"), "no stylesheet is fetched");
-        assert!(!html.contains("@font-face"), "and no font file either");
-        assert!(!html.contains("fonts.googleapis"));
-        assert!(html.contains("ui-monospace"), "the stack opens with what every reader has");
-        assert!(
-            !html.contains("IBM Plex Mono"),
-            "the document may fetch nothing, so it does not name a face it cannot load: {html}"
-        );
-    }
-
-    #[test]
     fn a_backtick_span_becomes_code_and_the_escape_runs_first() {
         // The order is load-bearing. `escape` runs over the raw text and the
         // backtick pass runs over the escaped string; the other way round, `escape`
@@ -1747,136 +1152,730 @@ mod tests {
         assert!(out.contains("<code>&lt;script&gt;"), "{out}");
     }
 
-    #[test]
-    fn the_summary_strip_carries_the_four_numbers() {
-        let tasks = Tasks { closed: vec![line("a-1"), line("a-2")], parked: vec![line("a-3")] };
-        let html = render(&report(8040, Some(&tasks), &[batch(1)]));
-
-        assert!(html.contains("<div class=\"strip\">"), "{html}");
-        assert!(html.contains("class=\"cell-n cell-done\">2<"), "closed carries the done hue: {html}");
-        assert!(html.contains("class=\"cell-n cell-loud\">1<"), "parked is the loud one: {html}");
-        assert!(html.contains("class=\"cell-n\">1<"), "batches and total are plain: {html}");
-        assert!(html.contains("2h 14m"), "the total is a duration, not a count");
-    }
+    // -- the stylesheet --------------------------------------------------------
 
     #[test]
-    fn an_unreadable_board_shows_a_dash_in_the_strip_and_never_a_zero() {
-        // The rule `RunSummary.tasks` is an `Option` for, restated at the top of the
-        // document where a person's eye lands first: an unreadable board and an
-        // empty board are opposite facts.
-        let html = render(&report(120, None, &[batch(1)]));
-
-        assert!(html.contains("class=\"cell-n cell-done cell-none\">&mdash;<"), "{html}");
-        assert!(html.contains("class=\"cell-n cell-loud cell-none\">&mdash;<"), "{html}");
-        // Against the class string as `cell` writes it — hue first, then
-        // `cell-none` — or the assertion forbids something unreachable and holds
-        // no matter what the code does.
-        assert!(
-            !html.contains("cell-done cell-none\">0<"),
-            "no confident zero over a number nobody measured"
+    fn the_stylesheet_is_the_handoffs_own_bytes() {
+        // The design source and the copy this crate compiles in are one file in
+        // two places, and nothing but this test says so. A drift here is a
+        // report drawn in a stylesheet nobody reviewed.
+        assert_eq!(
+            REPORTS_CSS,
+            include_str!("../../../docs/design/reports/reports.css"),
+            "src-tauri/src/runs/reports.css must equal docs/design/reports/reports.css"
         );
-        assert!(!html.contains("cell-loud cell-none\">0<"));
-        assert!(html.contains("could not be read"), "and the reason is still said in words");
-        assert!(html.contains("class=\"notice\""), "drawn as a notice rather than as loose prose");
+    }
+
+    /// The markup after the stylesheet: the stylesheet itself names every class
+    /// the design has, so a test asking whether a class was *drawn* has to look
+    /// past it.
+    fn body_of(html: &str) -> &str {
+        &html[html.find("<main").expect("the page")..]
+    }
+
+    /// The text between the document's one `<style>` and its `</style>`.
+    fn style_of(html: &str) -> &str {
+        let open = html.find("<style>").expect("a style element") + "<style>".len();
+        let close = html[open..].find("</style>").expect("the end of the style element");
+        &html[open..open + close]
     }
 
     #[test]
-    fn an_empty_section_is_omitted_and_the_strip_carries_its_zero() {
-        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
-        let html = render(&report(120, Some(&tasks), &[]));
-
-        // The section headers, not the words: the strip labels its cells with
-        // these same four nouns, and it stands above every section.
-        assert!(html.contains("<div class=\"sec\"><span>closed</span>"), "{html}");
-        assert!(
-            !html.contains("<div class=\"sec\"><span>parked</span>"),
-            "an empty section is not drawn at all: {html}"
+    fn the_style_element_is_the_shared_stylesheet_byte_for_byte() {
+        let html = render(&report(90, None, &[]));
+        assert_eq!(
+            style_of(&html).trim_matches('\n'),
+            REPORTS_CSS.trim_matches('\n'),
+            "the whole of reports.css and nothing added or dropped"
         );
-        assert!(html.contains("class=\"cell-n cell-loud cell-none\">0<"), "the strip carries it: {html}");
-        assert!(!html.contains("None."), "and the old placeholder line is gone");
+        assert_eq!(html.matches("<style>\n").count(), 1, "one style element");
     }
 
     #[test]
-    fn a_closed_card_and_a_parked_card_are_told_apart_by_more_than_colour() {
-        // Status is never colour alone in this design system. The section a card
-        // sits in decides its badge, since the board's own status is not carried
-        // this far — `TaskLine` is an id and a title.
+    fn the_document_is_a_whole_page_the_apps_tab_can_stamp_a_theme_on() {
+        // `reportTheme.js` returns a rootless document untouched and otherwise
+        // writes `data-theme` onto the `<html>` tag, so both have to be there.
+        let html = render(&report(90, None, &[]));
+        assert!(html.starts_with("<!doctype html>"), "{html}");
+        assert!(html.contains("<html lang=\"en\">"), "{html}");
+        assert!(html.contains("<main class=\"page\">"), "{html}");
+        assert!(html.trim_end().ends_with("</html>"), "{html}");
+    }
+
+    #[test]
+    fn the_stylesheet_carries_the_four_palette_blocks_in_the_order_the_tab_needs() {
+        // Light on a bare `:root`; dark under the media query, guarded against an
+        // app that has said light; then the attribute blocks after it, so that at
+        // equal specificity source order lets the attribute win in both directions.
+        let css = REPORTS_CSS;
+        let bare = css.find("\n:root{").expect("a bare :root");
+        let media = css.find("@media (prefers-color-scheme: dark){").expect("the media query");
+        let guard = css.find(":root:not([data-theme=\"light\"]){").expect("the guard");
+        let dark = css.find(":root[data-theme=\"dark\"]{").expect("the dark attribute block");
+        let light = css.find(":root[data-theme=\"light\"]{").expect("the light attribute block");
+        assert!(bare < media && media < guard, "the guard sits inside the media query");
+        assert!(guard < dark && dark < light, "the attribute blocks follow the query");
+        assert!(css.contains("color-scheme:light") && css.contains("color-scheme:dark"));
+    }
+
+    #[test]
+    fn the_document_reaches_no_network() {
         let tasks = Tasks { closed: vec![line("a-1")], parked: vec![line("a-2")] };
-        let html = render(&report(120, Some(&tasks), &[]));
+        let html = render(&report(60, Some(&tasks), &[batch(1)]));
+        assert!(html.contains("<style>"), "self-contained: it opens with no app around it");
+        assert!(!html.contains("http://") && !html.contains("https://"));
+        assert!(!html.contains("<script"), "no script, in the document or out of it");
+        assert!(!html.contains("<img"), "and no image");
+        assert!(!html.contains("@import"), "and no stylesheet fetched from anywhere");
+        assert!(!html.contains("@font-face"), "and no font file either");
+        assert!(!html.contains("url("), "and nothing the stylesheet could fetch");
+        assert!(!html.contains("<link"), "and no linked file");
+        assert!(!html.contains("fonts.googleapis"));
+        assert!(html.contains("ui-monospace"), "the mono stack falls back to what every reader has");
+    }
 
-        assert!(html.contains("class=\"badge badge-done\">done<"), "{html}");
-        assert!(html.contains("class=\"badge badge-parked\">needs you<"), "{html}");
-        assert!(html.contains("class=\"card card-parked\""), "the parked card's own border: {html}");
+    #[test]
+    fn the_document_carries_no_density_and_no_app_wide_scale() {
+        // Those are about fitting rows into panels, while a document has a
+        // measure of its own. Nothing here may quietly reintroduce either.
+        let html = render(&report(90, None, &[]));
+        assert!(!html.contains("data-density"), "{html}");
+        assert!(!html.contains("--ui-scale"), "{html}");
+    }
+
+    // -- the header and the strip ----------------------------------------------
+
+    #[test]
+    fn the_document_is_named_for_what_it_covers() {
+        // A run is one task in Solo, one batch in Crew and a night of batches in
+        // Autopilot, and somebody opening the document should read which of
+        // those they are looking at. The words are `RunMode::report_title`'s and
+        // this file only places them, in the tab's title and in the heading.
+        let html = render(&RunReport { title: "Task report", ..report(90, None, &[]) });
+
+        assert!(html.contains("<title>Run report \u{00B7} Task report \u{00B7} smetana</title>"), "{html}");
+        assert!(html.contains("<h1>Task report</h1>"), "{html}");
+        assert!(html.contains("<div class=\"eyebrow\">smetana \u{00B7} run report</div>"), "{html}");
+    }
+
+    #[test]
+    fn the_meta_line_joins_project_scope_and_finish() {
+        let html = render(&report(90, None, &[]));
         assert!(
-            html.contains(".card-parked{border-color:var(--status-needs-you-border)}"),
-            "and the class is what draws it: {html}"
+            html.contains("<p class=\"meta\">/p \u{00B7} the queue \u{00B7} finished 2026-08-12 14:31</p>"),
+            "{html}"
+        );
+    }
+
+    /// An ordinary run: five closed, one parked, three batches of which one is a
+    /// second attempt, a summary, and a journal.
+    fn ordinary_run() -> (Tasks, Vec<BatchLine>) {
+        let tasks = Tasks {
+            closed: ["a-1", "a-2", "a-3", "a-4", "a-5"].iter().map(|i| line(i)).collect(),
+            parked: vec![line("a-6")],
+        };
+        let mut b1 = batch_naming(1, 1680, &["a-1"]);
+        b1.notes = Some("Nothing odd; `bd` was slow.".into());
+        b1.summary = Some("Fixed the panel.".into());
+        let mut b2 = batch_naming(2, 1140, &["a-6", "a-2"]);
+        b2.attempt = 2;
+        b2.notes = Some("Took `a-6` and `a-2`.".into());
+        b2.outcome = BatchOutcome::HandedBack;
+        b2.left_behind =
+            vec![Leftover { id: "a-6".into(), status: "in_progress".into(), lock: false }];
+        b2.lock_released = Some(LockRelease { id: "a-6".into(), actor: "smetana-run-7".into() });
+        let b3 = batch_naming(3, 1320, &["a-3", "a-4", "a-5"]);
+        // The first attempt of batch 2 is a line of its own that shares `n`.
+        let mut b2_first = batch_naming(2, 60, &[]);
+        b2_first.reported = false;
+        b2_first.outcome = BatchOutcome::NoCode;
+        (tasks, vec![b1, b2_first, b2, b3])
+    }
+
+    #[test]
+    fn an_ordinary_run_draws_every_part_of_the_design_in_order() {
+        let (tasks, batches) = ordinary_run();
+        let html = render(&RunReport {
+            journal: Some("/p/.smetana/runs/3/journal.log"),
+            ..report(4320, Some(&tasks), &batches)
+        });
+
+        // The strip: four cells, each with its tone and target.
+        assert!(html.contains("<nav class=\"strip\" aria-label=\"Run totals\">"), "{html}");
+        assert!(
+            html.contains(
+                "<a class=\"cell tone-done\" href=\"#closed\"><span class=\"cell-label\"><span class=\"g\" aria-hidden=\"true\">\u{25CF}</span>Closed</span><span class=\"cell-n\">5</span></a>"
+            ),
+            "{html}"
+        );
+        assert!(
+            html.contains(
+                "<a class=\"cell tone-needs-you is-loud\" href=\"#parked\"><span class=\"cell-label\"><span class=\"g\" aria-hidden=\"true\">\u{25B2}</span>Parked \u{00B7} needs you</span><span class=\"cell-n\">1</span></a>"
+            ),
+            "{html}"
+        );
+        assert!(
+            html.contains("<a class=\"cell\" href=\"#batches\"><span class=\"cell-label\">Batches</span><span class=\"cell-n\">3</span></a>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<div class=\"cell\"><span class=\"cell-label\">Total</span><span class=\"cell-n\">1h 12m</span></div>"),
+            "{html}"
+        );
+
+        // Then, in the order of the reference: stop line, summary, closed,
+        // parked, batches, footer.
+        let at = |needle: &str| html.find(needle).unwrap_or_else(|| panic!("missing {needle}: {html}"));
+        let order = [
+            at("<p class=\"stop tone-done\">"),
+            at("<h2 id=\"summary-h\">Summary</h2>"),
+            at("<section class=\"group\" id=\"closed\""),
+            at("<section class=\"group\" id=\"parked\""),
+            at("<section class=\"group\" id=\"batches\""),
+            at("<footer class=\"foot\">"),
+        ];
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
+
+        // A parked card is told apart by more than a border.
+        assert!(html.contains("<article class=\"task card is-parked\" id=\"a-6\">"), "{html}");
+        assert!(
+            html.contains("<span class=\"flag tone-needs-you\"><span aria-hidden=\"true\">\u{25B2}</span>Waiting on you</span>"),
+            "{html}"
+        );
+        assert!(html.contains("<span class=\"hint\">Waiting on you</span>"), "{html}");
+        assert!(html.contains("<article class=\"task card\" id=\"a-1\">"), "{html}");
+
+        // A solo batch lends its time to the task; a shared one does not.
+        assert!(
+            html.contains("<span class=\"dur\">28m</span>"),
+            "a-1 was alone in its batch: {html}"
+        );
+        assert!(html.contains("<span class=\"dur is-none\" aria-label=\"duration unknown\">\u{2014}</span>"), "{html}");
+
+        // Batch labels: an attempt past the first is named, and the agent is
+        // always in parentheses.
+        assert!(html.contains("<span class=\"batch-label\">batch 1 <span class=\"agent\">(claude)</span></span>"), "{html}");
+        assert!(
+            html.contains("<span class=\"batch-label\">batch 2 \u{00B7} attempt 2 <span class=\"agent\">(claude)</span></span>"),
+            "{html}"
+        );
+
+        // The footer.
+        assert!(html.contains("<dt>Total</dt>\n<dd><span class=\"mono\">1h 12m</span></dd>"), "{html}");
+        assert!(
+            html.contains("<dt>Journal</dt>\n<dd><span class=\"mono\">/p/.smetana/runs/3/journal.log</span></dd>"),
+            "{html}"
         );
     }
 
     #[test]
-    fn a_tasks_own_account_is_marked_up_as_prose_and_its_id_as_a_chip() {
-        let mut b = batch(1);
-        b.tasks = vec![BatchTask { id: "a-1".into(), did: Some("moved `src/main.rs`".into()) }];
+    fn a_second_attempt_is_not_counted_as_another_batch_in_the_strip_or_the_group() {
+        // An attempt shares `n` with the batch it resumes, so the strip and the
+        // group head count logical batches and agree — the handoff's own
+        // reference shows one number for both.
+        let (tasks, batches) = ordinary_run();
+        assert_eq!(batches.len(), 4, "four lines, three batches");
+        let html = render(&report(4320, Some(&tasks), &batches));
+        assert!(html.contains("<span class=\"cell-label\">Batches</span><span class=\"cell-n\">3</span>"), "{html}");
+        assert!(html.contains("<h2 id=\"batches-h\">Batches</h2><span class=\"count\">3</span>"), "{html}");
+    }
+
+    #[test]
+    fn a_run_that_crashed_on_its_first_batch_has_no_task_data_and_says_so() {
+        // The handoff's crashed fixture: no summary, no task data. Closed and
+        // parked are `is-none` with a dash, carry no tone and link nowhere, and
+        // neither section is drawn.
+        let mut crashed = batch(1);
+        crashed.reported = false;
+        crashed.outcome = BatchOutcome::Failed { code: 137 };
+        let reason = StopReason::Crashed { attempts: 1 };
+        let html = render(&RunReport { stop_reason: &reason, ..report(360, None, &[crashed]) });
+        let html = body_of(&html);
+
+        assert!(
+            html.contains("<div class=\"cell is-none\"><span class=\"cell-label\"><span class=\"g\" aria-hidden=\"true\">\u{25CF}</span>Closed</span><span class=\"cell-n\" aria-label=\"no data\">\u{2014}</span></div>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<div class=\"cell is-none\"><span class=\"cell-label\"><span class=\"g\" aria-hidden=\"true\">\u{25B2}</span>Parked</span><span class=\"cell-n\" aria-label=\"no data\">\u{2014}</span></div>"),
+            "{html}"
+        );
+        assert!(!html.contains("href=\"#closed\"") && !html.contains("href=\"#parked\""), "{html}");
+        assert!(!html.contains("id=\"closed\"") && !html.contains("id=\"parked\""), "{html}");
+        assert!(!html.contains("Summary"), "{html}");
+        assert!(!html.contains("is-loud"), "no data is never loud: {html}");
+        // Nothing turned into a confident zero.
+        assert!(!html.contains("is-zero"), "{html}");
+
+        assert!(html.contains("<p class=\"stop tone-failed\"><span class=\"g\" aria-hidden=\"true\">\u{25A0}</span>"), "{html}");
+        assert!(html.contains("<p class=\"no-account\">This batch left no account of itself.</p>"), "{html}");
+        assert!(
+            html.contains("<p class=\"outcome tone-failed\"><span class=\"g\" aria-hidden=\"true\">\u{25A0}</span><span>The session crashed with exit code <code>137</code>.</span></p>"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn nothing_parked_is_a_zero_cell_with_no_loud_and_no_link() {
         let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
+        let html = render(&report(120, Some(&tasks), &[batch(1)]));
+        let html = body_of(&html);
+
+        assert!(
+            html.contains("<div class=\"cell is-zero\"><span class=\"cell-label\"><span class=\"g\" aria-hidden=\"true\">\u{25B2}</span>Parked</span><span class=\"cell-n\">0</span></div>"),
+            "the zero cell says Parked, without asking anything of anybody: {html}"
+        );
+        assert!(!html.contains("is-loud"), "{html}");
+        assert!(!html.contains("href=\"#parked\""), "{html}");
+        assert!(!html.contains("id=\"parked\""), "an empty section is not drawn at all: {html}");
+        assert!(html.contains("id=\"closed\""), "{html}");
+    }
+
+    #[test]
+    fn a_strip_with_nothing_to_link_to_is_a_div_and_not_a_nav() {
+        let tasks = Tasks { closed: vec![], parked: vec![] };
+        let html = render(&report(5, Some(&tasks), &[]));
+        assert!(html.contains("<div class=\"strip\" aria-label=\"Run totals\">"), "{html}");
+        assert!(!html.contains("<nav"), "{html}");
+        assert!(html.contains("<span class=\"cell-n\">0</span>"), "{html}");
+    }
+
+    #[test]
+    fn at_most_one_cell_is_loud_whatever_the_run() {
+        // The design's own budget: shouting is for the one thing that needs a
+        // person, so a document never has two loud cells, and only the parked
+        // cell can be one.
+        let (tasks, batches) = ordinary_run();
+        let crashed = StopReason::Crashed { attempts: 2 };
+        let cases: Vec<String> = vec![
+            render(&report(1, Some(&tasks), &batches)),
+            render(&report(1, None, &batches)),
+            render(&RunReport { stop_reason: &crashed, ..report(1, Some(&tasks), &batches) }),
+            render(&report(1, Some(&Tasks { closed: vec![], parked: vec![line("x")] }), &[])),
+        ];
+        for html in cases {
+            // The stylesheet names `.is-loud` too, so count real uses only.
+            let body = &html[html.find("<main").unwrap()..];
+            assert!(body.matches("is-loud").count() <= 1, "{body}");
+        }
+        let (tasks, batches) = ordinary_run();
+        let html = render(&report(1, Some(&tasks), &batches));
+        let body = &html[html.find("<main").unwrap()..];
+        assert_eq!(body.matches("is-loud").count(), 1, "the parked cell is the loud one");
+    }
+
+    // -- the stop line ----------------------------------------------------------
+
+    #[test]
+    fn the_stop_reason_picks_a_tone_and_a_glyph_and_keeps_its_words() {
+        let cases = [
+            (StopReason::QueueEmpty, "tone-done", "\u{25CF}"),
+            (StopReason::BatchDone, "tone-done", "\u{25CF}"),
+            (StopReason::Cancelled, "tone-neutral", "\u{25CB}"),
+            (StopReason::Crashed { attempts: 2 }, "tone-failed", "\u{25A0}"),
+            (StopReason::NoProgress, "tone-neutral", "\u{25CB}"),
+            (StopReason::MaxIterations, "tone-neutral", "\u{25CB}"),
+            (StopReason::Unreadable, "tone-neutral", "\u{25CB}"),
+            (StopReason::SessionRemoved, "tone-neutral", "\u{25CB}"),
+            (StopReason::NothingDone { batches: 2 }, "tone-neutral", "\u{25CB}"),
+            (StopReason::Preflight { detail: "x".into() }, "tone-neutral", "\u{25CB}"),
+            (StopReason::NeedsAnswer { question: "q".into() }, "tone-neutral", "\u{25CB}"),
+        ];
+        for (reason, tone, glyph) in cases {
+            let html = render(&RunReport { stop_reason: &reason, ..report(60, None, &[]) });
+            let expected = format!(
+                "<p class=\"stop {tone}\"><span class=\"g\" aria-hidden=\"true\">{glyph}</span><span>{}</span></p>",
+                stop_reason_line(&reason)
+            );
+            assert!(html.contains(&expected), "{reason:?}: {html}");
+        }
+    }
+
+    #[test]
+    fn the_stop_line_stands_after_the_strip_and_before_the_sections() {
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
+        let reason = StopReason::NoProgress;
+        let html = render(&RunReport {
+            stop_reason: &reason,
+            ..report(600, Some(&tasks), &[batch(1)])
+        });
+
+        let strip_total = html.find(">Total</span>").expect("the strip's last cell");
+        let reason_at = html.find("moved neither what was ready").expect("the reason line");
+        let closed_at = html.find("id=\"closed\"").expect("closed");
+        assert!(strip_total < reason_at, "the reason follows the counters: {html}");
+        assert!(reason_at < closed_at, "and stands before the task sections: {html}");
+    }
+
+    // -- batches ----------------------------------------------------------------
+
+    /// The five kinds of the design, and the one this document has beside them.
+    /// Written out once, so "every ending is named" cannot quietly become "the
+    /// endings somebody remembered to list twice".
+    fn vocabulary() -> Vec<(BatchOutcome, &'static str, &'static str)> {
+        vec![
+            (BatchOutcome::Exited, "outcome tone-done", "The run saw its session exit cleanly."),
+            (
+                BatchOutcome::Failed { code: 137 },
+                "outcome tone-failed",
+                "The session crashed with exit code <code>137</code>.",
+            ),
+            (
+                BatchOutcome::NoCode,
+                "outcome tone-failed",
+                "The session process disappeared without an exit code.",
+            ),
+            (BatchOutcome::Removed, "outcome tone-neutral", "A person removed the session."),
+            (
+                BatchOutcome::HandedBack,
+                "outcome tone-needs-you",
+                "The lead handed the work back to a person.",
+            ),
+            (
+                BatchOutcome::Unanswered { question: "Do you trust this folder?".into() },
+                "outcome tone-needs-you",
+                "&ldquo;Do you trust this folder?&rdquo;",
+            ),
+        ]
+    }
+
+    #[test]
+    fn every_batch_outcome_draws_its_own_tone_glyph_and_words() {
+        for (outcome, class, words) in vocabulary() {
+            let mut b = batch(1);
+            b.outcome = outcome.clone();
+            let html = render(&report(600, None, &[b]));
+            let line_start = html.find(&format!("<p class=\"{class}\">")).unwrap_or_else(|| {
+                panic!("no `{class}` line for {outcome:?}: {html}")
+            });
+            let line = &html[line_start..html[line_start..].find("</p>").unwrap() + line_start];
+            assert!(line.contains(words), "{outcome:?}: {line}");
+            assert!(line.contains("<span class=\"g\" aria-hidden=\"true\">"), "{line}");
+        }
+    }
+
+    #[test]
+    fn the_glyph_of_each_tone_is_the_designs() {
+        let glyph = |outcome: BatchOutcome| {
+            let mut b = batch(1);
+            b.outcome = outcome;
+            let html = render(&report(600, None, &[b]));
+            let at = html.find("<p class=\"outcome ").unwrap();
+            let rest = &html[at..];
+            let g = rest.find("aria-hidden=\"true\">").unwrap() + "aria-hidden=\"true\">".len();
+            rest[g..g + rest[g..].find('<').unwrap()].to_string()
+        };
+        assert_eq!(glyph(BatchOutcome::Exited), "\u{25CF}");
+        assert_eq!(glyph(BatchOutcome::Failed { code: 1 }), "\u{25A0}");
+        assert_eq!(glyph(BatchOutcome::NoCode), "\u{25A0}");
+        assert_eq!(glyph(BatchOutcome::Removed), "\u{25CB}");
+        assert_eq!(glyph(BatchOutcome::HandedBack), "\u{25B2}");
+    }
+
+    #[test]
+    fn a_batch_that_left_no_account_still_says_how_the_run_saw_it_end() {
+        // smetana-pmj, and the case the whole change exists for: a batch whose
+        // agent was killed before it could write a word. The run knew what it
+        // saw, and the phrase about the *agent's* silence was the entire record
+        // of a batch that died holding the merge lock.
+        for (outcome, class, words) in vocabulary() {
+            let mut quiet = batch(1);
+            quiet.reported = false;
+            quiet.outcome = outcome.clone();
+            let html = render(&report(600, None, &[quiet]));
+
+            assert!(
+                html.contains("<p class=\"no-account\">This batch left no account of itself.</p>"),
+                "the phrase stays, and stays about the agent: {outcome:?}"
+            );
+            assert!(html.contains(class) && html.contains(words), "{outcome:?}: {html}");
+        }
+    }
+
+    #[test]
+    fn every_batch_carries_the_runs_own_ending_whether_it_wrote_a_file_or_not() {
+        // The two halves are a pair, not a fallback, and a reader comparing "the
+        // lead says it merged three" against "the session exited with code 1" is
+        // exactly the reading this is for.
+        for (outcome, _, words) in vocabulary() {
+            let mut spoke = batch(1);
+            spoke.notes = Some("nothing odd".into());
+            spoke.outcome = outcome.clone();
+            let html = render(&report(600, None, &[spoke]));
+
+            assert!(html.contains("nothing odd"), "the lead's own words stay: {outcome:?}");
+            assert!(html.contains(words), "beside the run's: {html}");
+            assert!(!html.contains("left no account of itself"), "{html}");
+        }
+    }
+
+    #[test]
+    fn a_batch_file_without_notes_is_not_called_silent() {
+        // A file somebody wrote with no `notes` in it is still an account; the
+        // line says what is true of it, in the muted style.
+        let html = render(&report(600, None, &[batch(1)]));
+        assert!(html.contains("<p class=\"no-account\">No notes on the batch as a whole.</p>"), "{html}");
+        assert!(!html.contains("left no account of itself"), "{html}");
+    }
+
+    #[test]
+    fn a_batch_that_died_holding_the_board_says_what_it_was_left_holding() {
+        // The row that would have saved the night: a batch killed mid-merge
+        // leaves a claimed lock behind, and the next run discovers it by failing
+        // to take it. Ids, because a person has to be able to go and look.
+        let mut killed = batch(1);
+        killed.reported = false;
+        killed.outcome = BatchOutcome::NoCode;
+        killed.left_behind = vec![
+            Leftover { id: "smetana-js4".into(), status: "in_progress".into(), lock: true },
+            Leftover { id: "smetana-42v".into(), status: "ready_to_merge".into(), lock: false },
+        ];
+        let html = render(&report(600, None, &[killed]));
+
+        assert!(
+            html.contains(
+                "<dl class=\"f-body\">\n<dt>Left unfinished</dt>\n<dd class=\"ids\"><code>smetana-js4</code><code>smetana-42v</code></dd>\n</dl>"
+            ),
+            "{html}"
+        );
+        assert!(!html.contains("Lock released"), "nothing was taken back: {html}");
+    }
+
+    #[test]
+    fn a_lock_the_run_took_back_is_named_with_the_actor() {
+        // The release is a write the app made, and this row is the only record of
+        // it there will ever be: nothing goes onto the lock's own issue, because a
+        // note there would move `updated_at` and make a dead claim look fresh to
+        // every lead waiting on it.
+        let mut killed = batch(1);
+        killed.reported = false;
+        killed.outcome = BatchOutcome::NoCode;
+        killed.lock_released =
+            Some(LockRelease { id: "smetana-lock".into(), actor: "smetana-run-7".into() });
+        let html = render(&report(600, None, &[killed]));
+
+        assert!(
+            html.contains(
+                "<dt>Lock released</dt>\n<dd><code>smetana-lock</code> \u{00B7} by <code>smetana-run-7</code></dd>"
+            ),
+            "{html}"
+        );
+        assert!(!html.contains("Left unfinished"), "{html}");
+    }
+
+    #[test]
+    fn a_batch_that_left_the_board_clean_draws_no_row_about_it() {
+        let html = render(&report(600, None, &[batch(1)]));
+        let html = body_of(&html);
+        assert!(!html.contains("Left unfinished") && !html.contains("Lock released"), "{html}");
+        assert!(!html.contains("f-body"), "{html}");
+    }
+
+    #[test]
+    fn a_batch_label_names_an_attempt_only_past_the_first() {
+        let mut second = batch(2);
+        second.attempt = 3;
+        let html = render(&report(600, None, &[batch(1), second]));
+        assert!(html.contains("batch 1 <span class=\"agent\">"), "{html}");
+        assert!(html.contains("batch 2 \u{00B7} attempt 3 <span class=\"agent\">"), "{html}");
+        assert!(!html.contains("attempt 1"), "{html}");
+    }
+
+    // -- text from agents --------------------------------------------------------
+
+    #[test]
+    fn a_long_account_with_paths_and_backticks_comes_out_as_prose_and_code() {
+        let did = "Added `denial` to `EventKind::ToolResult` and a detector in \
+                   `src-tauri/src/session/claude_driver.rs`; merged as `4e86a5bd`, \
+                   see also /Users/someone/a/very/long/path/that/must/wrap/by/itself.rs \
+                   and a stray ` backtick.";
+        let mut b = batch(1);
+        b.tasks = vec![BatchTask { id: "smetana-6tev".into(), did: Some(did.into()) }];
+        let tasks = Tasks { closed: vec![line("smetana-6tev")], parked: vec![] };
         let html = render(&report(600, Some(&tasks), &[b]));
 
-        assert!(html.contains("<span class=\"chip\">a-1</span>"), "{html}");
-        assert!(html.contains("<h3>a-1 title</h3>"), "{html}");
         assert!(
-            html.contains("<p class=\"body\">moved <code>src/main.rs</code></p>"),
-            "the backtick rule reaches the document: {html}"
+            html.contains("<p class=\"task-body\">Added <code>denial</code> to <code>EventKind::ToolResult</code> and a detector in <code>src-tauri/src/session/claude_driver.rs</code>; merged as <code>4e86a5bd</code>,"),
+            "{html}"
+        );
+        assert!(html.contains("/Users/someone/a/very/long/path/that/must/wrap/by/itself.rs"), "a bare path stays prose: {html}");
+        assert!(html.contains("and a stray ` backtick.</p>"), "an unpaired backtick is left as written: {html}");
+    }
+
+    #[test]
+    fn markup_in_did_and_in_notes_comes_out_as_text_and_not_as_a_tag() {
+        let mut b = batch(1);
+        b.tasks = vec![BatchTask {
+            id: "a-1".into(),
+            did: Some("done <script>alert(1)</script> and `<script>x</script>`".into()),
+        }];
+        b.notes = Some("notes <script>alert(2)</script> & <b>bold</b>".into());
+        b.summary = Some("summary <script>alert(3)</script>".into());
+        let tasks = Tasks {
+            closed: vec![TaskLine { id: "a-1".into(), title: "title <script>t</script>".into() }],
+            parked: vec![],
+        };
+        let html = render(&report(600, Some(&tasks), &[b]));
+        let body = &html[html.find("<main").unwrap()..];
+
+        assert!(!body.contains("<script"), "an agent wrote this and a person opens it: {body}");
+        assert!(!body.contains("<b>"), "{body}");
+        assert!(body.contains("done &lt;script&gt;alert(1)&lt;/script&gt;"), "{body}");
+        assert!(body.contains("notes &lt;script&gt;alert(2)&lt;/script&gt; &amp; &lt;b&gt;bold&lt;/b&gt;"), "{body}");
+        assert!(body.contains("summary &lt;script&gt;alert(3)&lt;/script&gt;"), "{body}");
+        assert!(body.contains("<h3>title &lt;script&gt;t&lt;/script&gt;</h3>"), "{body}");
+    }
+
+    #[test]
+    fn identifiers_and_names_are_escaped_where_they_are_written() {
+        let mut b = batch(1);
+        b.agent = "cl<aude>".into();
+        b.lock_released = Some(LockRelease { id: "<i>".into(), actor: "<a>".into() });
+        b.left_behind = vec![Leftover { id: "<l>".into(), status: "s".into(), lock: false }];
+        let tasks = Tasks { closed: vec![line("<t>")], parked: vec![] };
+        let batches = [b];
+        let run = RunReport {
+            project: "/p<q>",
+            scope: "s<c>",
+            journal: Some("/j<k>"),
+            ..report(1, Some(&tasks), &batches)
+        };
+        let html = render(&run);
+        let body = &html[html.find("<main").unwrap()..];
+        for raw in ["<aude>", "<i>", "<a>", "<l>", "<t>", "<q>", "<c>", "<k>"] {
+            assert!(!body.contains(raw), "{raw} reached the document unescaped: {body}");
+        }
+    }
+
+    // -- sections, summary, durations -------------------------------------------
+
+    #[test]
+    fn the_summary_section_stands_before_closed_and_carries_one_paragraph_per_batch() {
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
+        let mut first = batch(1);
+        first.summary = Some("Fixed the login form & tidied the tests.".into());
+        let mut second = batch(2);
+        second.summary = Some("Added the export button.".into());
+        let batches = [first, second];
+        let html = render(&report(3600, Some(&tasks), &batches));
+
+        let sec = html.find("<h2 id=\"summary-h\">Summary</h2>").expect("the summary section");
+        let closed = html.find("id=\"closed\"").expect("the closed section");
+        assert!(sec < closed, "summary comes before closed: {html}");
+        assert!(
+            html.contains("<div class=\"prose\">\n<p>Fixed the login form &amp; tidied the tests.</p>\n<p>Added the export button.</p>\n</div>"),
+            "{html}"
         );
     }
 
     #[test]
-    fn a_batch_card_is_ranked_below_a_task_card_and_says_when_it_left_no_account() {
-        let mut silent = batch(2);
-        silent.reported = false;
-        let mut spoke = batch(1);
-        spoke.notes = Some("nothing odd, though `bd` was slow".into());
-        let html = render(&report(1200, None, &[spoke, silent]));
+    fn no_summary_at_all_draws_no_section_and_a_blank_one_counts_as_none() {
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
+        let mut blank = batch(1);
+        blank.summary = Some("".into());
+        let mut whitespace = batch(2);
+        whitespace.summary = Some("   ".into());
+        let html = render(&report(3600, Some(&tasks), &[blank, whitespace, batch(3)]));
+        assert!(!body_of(&html).contains("Summary"), "no section over nothing: {html}");
 
-        assert!(html.contains("class=\"card card-batch\""), "{html}");
-        assert!(html.contains("batch 1"), "{html}");
-        assert!(
-            html.contains("nothing odd, though <code>bd</code> was slow"),
-            "the notes go through the same rule as a task's account: {html}"
-        );
-        assert!(html.contains("left no account of itself"), "{html}");
+        // A real one beside a blank one draws only the real one, trimmed.
+        let mut blank = batch(1);
+        blank.summary = Some("".into());
+        let mut real = batch(2);
+        real.summary = Some("  Did a real thing.  ".into());
+        let html = render(&report(3600, Some(&tasks), &[blank, real]));
+        assert!(html.contains("<div class=\"prose\">\n<p>Did a real thing.</p>\n</div>"), "{html}");
     }
 
     #[test]
-    fn the_footer_names_the_journal_this_run_wrote() {
-        // The one link between the two halves of a run's record, and it goes in
-        // this direction because the journal's own last line names the report:
-        // somebody who has the document open has no other way to the mechanics.
+    fn the_summary_is_drawn_even_when_the_board_could_not_be_read() {
+        // The summary comes from the batches, not from the board.
+        let mut b = batch(1);
+        b.summary = Some("Did a thing.".into());
+        let html = render(&report(3600, None, &[b]));
+        assert!(html.contains("<h2 id=\"summary-h\">Summary</h2>"), "{html}");
+    }
+
+    #[test]
+    fn a_task_with_no_account_draws_a_dash() {
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
+        let html = render(&report(600, Some(&tasks), &[]));
+        assert!(html.contains("<p class=\"no-account\">\u{2014}</p>"), "{html}");
+        assert!(html.contains("aria-label=\"duration unknown\""), "{html}");
+    }
+
+    #[test]
+    fn a_task_alone_in_its_batch_shows_a_time_and_one_sharing_a_batch_shows_none() {
+        let alone = batch_naming(1, 3600, &["a-1"]);
+        let shared = batch_naming(2, 7260, &["a-2", "a-3"]);
+        let tasks = Tasks { closed: vec![line("a-1"), line("a-2")], parked: vec![] };
+        let html = render(&report(11000, Some(&tasks), &[alone, shared]));
+        // The cards themselves, not the whole document: every batch prints its
+        // own duration under Batches, which says nothing about a task.
+        let rows = &html[html.find("id=\"closed\"").unwrap()..html.find("id=\"batches\"").unwrap()];
+        assert!(rows.contains("1h 0m"), "the batch that held one task lends it its own number");
+        assert!(!rows.contains("2h 1m"), "and the batch that held two lends nothing");
+    }
+
+    #[test]
+    fn a_task_handed_on_to_a_shared_batch_shows_no_duration_at_all() {
+        // Batch 1 held `a-1` alone, batch 2 took it on beside `a-2`. The row
+        // carries batch 2's account, so the rule is asked of batch 2 — which held
+        // two tasks and lends none of them a number. Borrowing batch 1's hour
+        // would be a figure that looks measured and belongs to different work.
+        let alone = batch_naming(1, 3600, &["a-1"]);
+        let shared = batch_naming(2, 7260, &["a-1", "a-2"]);
+        assert_eq!(task_duration(&[alone.clone(), shared.clone()], "a-1"), None);
+
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
+        let html = render(&report(11000, Some(&tasks), &[alone, shared]));
+        let rows = &html[html.find("id=\"closed\"").unwrap()..html.find("id=\"batches\"").unwrap()];
+        assert!(!rows.contains("1h 0m"), "an hour measured against other work: {rows}");
+        assert!(!rows.contains("2h 1m"), "and the shared batch lends nothing either: {rows}");
+    }
+
+    #[test]
+    fn a_duration_reads_by_the_handoffs_rule() {
+        assert_eq!(duration(0), "<1m");
+        assert_eq!(duration(59), "<1m");
+        assert_eq!(duration(60), "1m");
+        assert_eq!(duration(119), "1m", "minutes are floored");
+        assert_eq!(duration(840), "14m");
+        assert_eq!(duration(3599), "59m");
+        assert_eq!(duration(3600), "1h 0m", "`1h 0m` stays as it is");
+        assert_eq!(duration(8040), "2h 14m");
+    }
+
+    #[test]
+    fn a_duration_under_a_minute_is_escaped_in_the_document() {
+        let html = render(&report(20, None, &[]));
+        assert!(html.contains("<span class=\"cell-n\">&lt;1m</span>"), "{html}");
+        assert!(!html.contains("<1m"), "{html}");
+    }
+
+    #[test]
+    fn the_footer_names_the_journal_this_run_wrote_and_is_quiet_without_one() {
         let path = "/p/.smetana/runs/3/journal-2026-08-29-220109.log";
         let html = render(&RunReport { journal: Some(path), ..report(8040, None, &[]) });
-
-        assert!(html.contains("journal: /p/.smetana/runs/3/journal-2026-08-29-220109.log"), "{html}");
-        assert!(
-            html.find("class=\"total\"").expect("the footer")
-                < html.find("journal: ").expect("the journal line"),
-            "it belongs under the rule, with the footer"
-        );
+        assert!(html.contains(&format!("<dt>Journal</dt>\n<dd><span class=\"mono\">{path}</span></dd>")), "{html}");
         assert!(!html.contains("<a "), "a path, never a link: this document reaches nowhere");
+
+        // Naming a path that is not there sends somebody to a file that does not
+        // exist, which is worse than the document being quiet about it.
+        let html = render(&report(8040, None, &[]));
+        assert!(!html.contains("Journal"), "{html}");
     }
 
     #[test]
-    fn a_run_whose_journal_could_not_be_opened_says_nothing_about_one() {
-        // Naming a path that is not there sends somebody to a file that does
-        // not exist, which is worse than the document being quiet about it.
-        let html = render(&report(8040, None, &[]));
-        assert!(!html.contains("journal"), "{html}");
-    }
-
-    #[test]
-    fn the_header_and_footer_are_the_documents_only_uppercase_labels() {
-        let html = render(&report(8040, None, &[]));
-
-        assert!(html.contains("class=\"eyebrow\">smetana &middot; run report<"), "{html}");
-        assert!(html.contains("class=\"meta\">"), "the run's own line: {html}");
-        assert!(html.contains("class=\"total-label\">total<"), "{html}");
-        assert!(html.contains("class=\"total-n\">2h 14m<"), "{html}");
+    fn the_document_sets_no_fixed_width_of_its_own() {
+        // Everything that could force a horizontal scroll at 360px is the
+        // stylesheet's to handle, and it is not touched here: the markup carries
+        // no `style` attribute and no width of its own.
+        let (tasks, batches) = ordinary_run();
+        let html = render(&report(4320, Some(&tasks), &batches));
+        let body = &html[html.find("<main").unwrap()..];
+        assert!(!body.contains("style="), "{body}");
+        assert!(!body.contains("width"), "{body}");
+        assert!(!body.contains("<table"), "{body}");
     }
 }

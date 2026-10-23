@@ -12,7 +12,7 @@
 //!
 //! **Every field of a row is `Option`, and a dash is `None` rather than a
 //! zero**, for the reason `report::render`'s own strip carries: an unreadable
-//! board draws `&mdash;` in `closed` and `parked` so that it is never read as
+//! board draws a dash in `closed` and `parked` so that it is never read as
 //! "nothing happened", and a row here must not turn that dash back into a
 //! quiet zero. The same widens to every field this parser could simply fail to
 //! find — a document written by a version of this app that named something
@@ -48,8 +48,8 @@ pub struct Head {
     pub closed: Option<u32>,
     pub parked: Option<u32>,
     pub batches: Option<u32>,
-    /// A human duration exactly as `report::human` wrote it — `"1h 12m"`,
-    /// `"45m"`, `"30s"` — and the string is what a person reads. `seconds`
+    /// A human duration exactly as `report::duration` wrote it — `"1h 12m"`,
+    /// `"45m"`, `"<1m"` — and the string is what a person reads. `seconds`
     /// below is the one reading of it back, exact to the minute, for the
     /// tab's length order.
     pub total: Option<String>,
@@ -58,9 +58,9 @@ pub struct Head {
     /// document with no such section, the closed tasks' titles joined by
     /// `; `. `None` when there is neither: a row must not invent a sentence.
     pub summary: Option<String>,
-    /// `total` read back into seconds, exact to the minute — `human` drops
+    /// `total` read back into seconds, exact to the minute — `duration` drops
     /// the seconds past a whole minute — so the tab can order by length.
-    /// `None` whenever `total` is, or whenever it is a shape `human` never
+    /// `None` whenever `total` is, or whenever it is a shape `duration` never
     /// wrote.
     pub seconds: Option<u64>,
 }
@@ -112,15 +112,30 @@ fn between<'a>(html: &'a str, start: &str, end: &str) -> Option<&'a str> {
     Some(&after[..stop])
 }
 
-/// `<title>` and `<h1>` carry the same words in `report::render`, so either
-/// would do; the title is read because it is first in the document and
-/// therefore cheapest to find in a large one.
+/// The run's own title, which is what the row is called.
+///
+/// Two shapes of `<title>` exist on disk and both are read. A document written
+/// now carries `Run report · {title} · smetana` — the design handoff's shape —
+/// and the words a row wants are the middle of it, so the frame is peeled off.
+/// One written before that carried the bare title, which has no such frame and
+/// is returned as it stands. A bare title that merely happens to start with
+/// the frame's first words and end with its last is the one thing this cannot
+/// tell apart, and it is not a title `RunMode::report_title` produces.
 fn parse_title(html: &str) -> Option<String> {
-    between(html, "<title>", "</title>").map(unescape)
+    let title = between(html, "<title>", "</title>")?;
+    let bare = title
+        .strip_prefix("Run report \u{00B7} ")
+        .and_then(|rest| rest.strip_suffix(" \u{00B7} smetana"))
+        .unwrap_or(title);
+    Some(unescape(bare))
 }
 
-/// The one line the header writes as `PROJECT &middot; SCOPE &middot; finished
-/// FINISHED` — `render`'s own three `push_str` calls, joined back apart.
+/// The one line the header writes as `PROJECT · SCOPE · finished FINISHED` —
+/// `render`'s own three `push_str` calls, joined back apart. The separator is a
+/// literal middle dot now and was the entity `&middot;` in a document written
+/// before the design handoff; both are read. An escaped value cannot hold the
+/// entity's text (`escape` turns its `&` into `&amp;`), so folding the old
+/// separator into the new one before splitting cannot cut a value in two.
 /// `project` is read only to be discarded: see `Head`'s own header for why the
 /// row has no field for it. A meta line missing, or not shaped as exactly
 /// three parts the middle one of which is not a project this parser has no
@@ -131,7 +146,8 @@ fn parse_meta(html: &str) -> (Option<String>, Option<String>) {
     let Some(meta) = between(html, "<p class=\"meta\">", "</p>") else {
         return (None, None);
     };
-    let parts: Vec<&str> = meta.split(" &middot; ").collect();
+    let meta = meta.replace(" &middot; ", " \u{00B7} ");
+    let parts: Vec<&str> = meta.split(" \u{00B7} ").collect();
     let [_project, scope, finished] = parts[..] else {
         return (None, None);
     };
@@ -141,42 +157,57 @@ fn parse_meta(html: &str) -> (Option<String>, Option<String>) {
     (Some(unescape(scope)), Some(unescape(finished)))
 }
 
-/// One cell of the strip, by the label `cell` wrote beside it — the raw text
-/// between the value span's opening `>` and its own closing `<`, untouched:
-/// `&mdash;` for an unread board, digits for a count, a duration's own letters
-/// for `total`. `None` when this document carries no cell of that name at
-/// all, which is the whole of the answer for a page that is not a report.
-fn cell_text<'a>(html: &'a str, label: &str) -> Option<&'a str> {
-    let marker = format!("<span class=\"cell-label\">{label}</span><span class=\"cell-n");
-    let after = html.find(&marker).map(|at| &html[at + marker.len()..])?;
-    // The opening span's own classes run up to the next `>`; `cell`
-    // (`report.rs`) writes zero or more of them before it, and this is what
-    // steps past whichever it wrote without naming them here too.
+/// One cell of the strip, by the label `report.rs` wrote beside it — the raw
+/// text between the value span's opening `>` and its own closing `<`,
+/// untouched: a dash for an unread board, digits for a count, a duration's own
+/// letters for `total`. `None` when this document carries no cell of that name
+/// at all, which is the whole of the answer for a page that is not a report.
+///
+/// Two shapes are looked for, the current one first. Now the label is a
+/// capitalised word ending its `cell-label` span, perhaps after a glyph span
+/// (`Closed`, `Parked`, `Parked · needs you`, `Batches`, `Total`); before the
+/// design handoff it was the whole lower-case content of that span (`closed`).
+/// `labels` is the current spellings of the one cell, `old` the old one.
+fn cell_text<'a>(html: &'a str, labels: &[&str], old: &str) -> Option<&'a str> {
+    let mut found = labels.iter().find_map(|label| {
+        let marker = format!("{label}</span><span class=\"cell-n");
+        html.find(&marker).map(|at| &html[at + marker.len()..])
+    });
+    if found.is_none() {
+        let marker = format!("<span class=\"cell-label\">{old}</span><span class=\"cell-n");
+        found = html.find(&marker).map(|at| &html[at + marker.len()..]);
+    }
+    let after = found?;
+    // The opening span's own attributes run up to the next `>` — `cell-n`
+    // alone, or with an `aria-label` on a cell that has no data, or with the
+    // modifier classes of the old shape — and this steps past whichever there
+    // is without naming them here too.
     let at_gt = after.find('>')?;
     let value = &after[at_gt + 1..];
     let at_lt = value.find('<')?;
     Some(&value[..at_lt])
 }
 
-/// `&mdash;` reads as `None`, matching `cell`'s own reason for writing it: a
-/// board that could not be read is not a zero. Anything that does not parse
-/// as a plain non-negative count is also `None`, since a strip this parser
-/// half-recognises is not one to guess a number for.
-fn cell_count(html: &str, label: &str) -> Option<u32> {
-    match cell_text(html, label)? {
-        "&mdash;" => None,
+/// A dash — `—` now, `&mdash;` in the old shape — reads as `None`, matching the
+/// strip's own reason for writing it: a board that could not be read is not a
+/// zero. Anything that does not parse as a plain non-negative count is also
+/// `None`, since a strip this parser half-recognises is not one to guess a
+/// number for.
+fn cell_count(html: &str, labels: &[&str], old: &str) -> Option<u32> {
+    match cell_text(html, labels, old)? {
+        "&mdash;" | "\u{2014}" => None,
         text => text.parse().ok(),
     }
 }
 
-/// The `total` cell, which is prose rather than a count and is never `&mdash;`
-/// in a document `report::render` wrote — `human()` always has an answer,
+/// The `total` cell, which is prose rather than a count and is never a dash
+/// in a document `report::render` wrote — `duration()` always has an answer,
 /// even for zero seconds. Read the same way regardless, since a document this
 /// parser only partly recognises is exactly where that assumption should not
 /// be leaned on.
 fn cell_duration(html: &str) -> Option<String> {
-    match cell_text(html, "total")? {
-        "&mdash;" => None,
+    match cell_text(html, &["Total"], "total")? {
+        "&mdash;" | "\u{2014}" => None,
         text => Some(unescape(text)),
     }
 }
@@ -189,23 +220,29 @@ fn cell_duration(html: &str) -> Option<String> {
 /// hand can still hold `<p></p>`, and counting it as content would leave the
 /// row a blank cell instead of falling through to `closed_titles` below.
 fn parse_summary(html: &str) -> Option<String> {
-    let body = between(
-        html,
-        "<div class=\"sec\"><span>summary</span></div><div class=\"summary\">",
-        "</div>",
-    )?;
+    // The section the design handoff draws (`Summary` heading, a `prose`
+    // block), and failing that the one drawn before it.
+    let body = between(html, "<div class=\"prose\">", "</div>")
+        .or_else(|| {
+            between(
+                html,
+                "<div class=\"sec\"><span>summary</span></div><div class=\"summary\">",
+                "</div>",
+            )
+        })?;
     let paragraphs: Vec<String> = body
         .split("</p>")
-        .filter_map(|p| p.strip_prefix("<p>"))
+        .filter_map(|p| p.trim_start().strip_prefix("<p>"))
         .map(unescape)
         .filter(|p| !p.trim().is_empty())
         .collect();
     (!paragraphs.is_empty()).then(|| paragraphs.join("\n\n"))
 }
 
-/// Every `<h3>` between the `closed` section header and the next section
-/// header (or the end of the document), which is exactly the closed cards'
-/// titles: `section` writes one `<h3>` per card and nothing else does.
+/// Every `<h3>` in the `closed` section — up to its `</section>` now, or up to
+/// the next section header in the old shape — which is exactly the closed
+/// cards' titles: `task_section` writes one `<h3>` per card and nothing else
+/// in that stretch does.
 ///
 /// A blank title is dropped rather than joined in, the same shape
 /// `parse_summary`'s own guard takes: `TaskLine.title` is `issue.title`
@@ -216,9 +253,14 @@ fn parse_summary(html: &str) -> Option<String> {
 /// keep off the row, walking back in through this fallback — and a blank
 /// beside a real title joins into `"; Real"` with a stray leading `; `.
 fn closed_titles(html: &str) -> Option<String> {
-    let after = html.find("<div class=\"sec\"><span>closed</span>").map(|at| &html[at..])?;
-    let end = after[1..].find("<div class=\"sec\">").map(|at| at + 1).unwrap_or(after.len());
-    let block = &after[..end];
+    let block = if let Some(at) = html.find("<section class=\"group\" id=\"closed\"") {
+        let after = &html[at..];
+        &after[..after.find("</section>").unwrap_or(after.len())]
+    } else {
+        let after = html.find("<div class=\"sec\"><span>closed</span>").map(|at| &html[at..])?;
+        let end = after[1..].find("<div class=\"sec\">").map(|at| at + 1).unwrap_or(after.len());
+        &after[..end]
+    };
     let mut titles = Vec::new();
     let mut rest = block;
     while let Some(text) = between(rest, "<h3>", "</h3>") {
@@ -232,8 +274,10 @@ fn closed_titles(html: &str) -> Option<String> {
     (!titles.is_empty()).then(|| titles.join("; "))
 }
 
-/// The inverse of `report::human`: `"1h 12m"`, `"1h"`, `"45m"`, `"30s"`.
-/// Anything else — a shape `human` never wrote — is `None`.
+/// The inverse of `report::duration`: `"1h 12m"`, `"45m"`, and `"<1m"`, which is
+/// read as zero — it is a measured "under a minute", not an unknown. The old
+/// shapes `"1h"` and `"30s"` that `human` wrote are still read, for documents
+/// already on disk. Anything else — a shape neither writer wrote — is `None`.
 ///
 /// Peeled with `strip_suffix` rather than sliced by a byte offset: a part
 /// whose last *character* is multi-byte (a Cyrillic `"5м"`, a bare `"—"`)
@@ -248,6 +292,9 @@ fn closed_titles(html: &str) -> Option<String> {
 /// The multiplication is checked as well, so a number too large to be a
 /// real duration answers `None` instead of wrapping.
 fn parse_seconds(text: &str) -> Option<u64> {
+    if text.trim() == "<1m" {
+        return Some(0);
+    }
     let mut total: u64 = 0;
     let mut any = false;
     for part in text.split_whitespace() {
@@ -275,9 +322,9 @@ pub fn parse_head(html: &str) -> Head {
         title,
         scope,
         finished,
-        closed: cell_count(html, "closed"),
-        parked: cell_count(html, "parked"),
-        batches: cell_count(html, "batches"),
+        closed: cell_count(html, &["Closed"], "closed"),
+        parked: cell_count(html, &["Parked \u{00B7} needs you", "Parked"], "parked"),
+        batches: cell_count(html, &["Batches"], "batches"),
         seconds: total.as_deref().and_then(parse_seconds),
         total,
         summary: parse_summary(html).or_else(|| closed_titles(html)),
@@ -537,9 +584,9 @@ mod tests {
 
     #[test]
     fn a_hand_edited_empty_paragraph_falls_through_to_the_closed_titles() {
-        // `render` never writes an empty `<p></p>` any more, but a document
-        // edited by hand still can, and it must read as "no summary" rather
-        // than as a blank line — which is exactly what lets the fallback fire.
+        // `render` never writes an empty `<p></p>`, but a document edited by
+        // hand still can, and it must read as "no summary" rather than as a
+        // blank line — which is exactly what lets the fallback fire.
         let tasks = Tasks {
             closed: vec![TaskLine { id: "a-1".into(), title: "Fix the thing".into() }],
             parked: vec![],
@@ -547,24 +594,105 @@ mod tests {
         let batches = [batch(1)];
         let html = render(&report(Some(&tasks), &batches));
         let doctored = html.replacen(
-            "<div class=\"sec\"><span>closed</span>",
-            "<div class=\"sec\"><span>summary</span></div><div class=\"summary\"><p></p></div><div class=\"sec\"><span>closed</span>",
+            "<section class=\"group\" id=\"closed\"",
+            "<div class=\"prose\"><p></p></div>\n<section class=\"group\" id=\"closed\"",
             1,
         );
+        assert_ne!(doctored, html, "the doctoring has to land");
         assert_eq!(parse_head(&doctored).summary.as_deref(), Some("Fix the thing"));
     }
 
     #[test]
-    fn the_total_reads_back_into_the_seconds_human_was_given() {
+    fn a_duration_under_a_minute_reads_back_as_zero_and_not_as_unknown() {
+        let batches = [batch(1)];
+        let html = render(&RunReport { seconds: 20, ..report(None, &batches) });
+        let head = parse_head(&html);
+        assert_eq!(head.total.as_deref(), Some("<1m"));
+        assert_eq!(head.seconds, Some(0));
+    }
+
+    #[test]
+    fn the_total_reads_back_into_the_seconds_duration_was_given() {
         for seconds in [0u64, 30, 60, 45 * 60, 3600, 8040, 7 * 3600 + 40 * 60] {
             let batches = [batch(1)];
             let html = render(&RunReport { seconds, ..report(None, &batches) });
             let head = parse_head(&html);
-            // `human` drops the seconds past a whole minute, so the round trip
-            // is exact only to the minute; below a minute it is exact.
-            let expected = if seconds < 60 { seconds } else { seconds - seconds % 60 };
+            // `duration` drops the seconds past a whole minute, so the round trip
+            // is exact only to the minute.
+            let expected = seconds - seconds % 60;
             assert_eq!(head.seconds, Some(expected), "{seconds}s rendered as {:?}", head.total);
         }
+    }
+
+    /// A document exactly as `report::render` wrote it before the design
+    /// handoff, kept as a literal rather than rendered: nothing rewrites the
+    /// reports already on disk, so the shape has to go on parsing after the
+    /// writer has moved on, and only a literal can say so.
+    const OLD_SHAPE: &str = concat!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">",
+        "<title>Task report</title><style>.doc{max-width:52rem}</style></head>",
+        "<body><div class=\"doc\"><header><p class=\"eyebrow\">smetana &middot; run report</p>",
+        "<h1>Task report</h1><p class=\"meta\">/p &middot; backend &amp; frontend &middot; ",
+        "finished 2026-08-12 14:31</p></header>",
+        "<div class=\"strip\">",
+        "<div class=\"cell\"><span class=\"cell-label\">closed</span><span class=\"cell-n cell-done\">2</span></div>",
+        "<div class=\"cell\"><span class=\"cell-label\">parked</span><span class=\"cell-n cell-loud cell-none\">&mdash;</span></div>",
+        "<div class=\"cell\"><span class=\"cell-label\">batches</span><span class=\"cell-n\">3</span></div>",
+        "<div class=\"cell\"><span class=\"cell-label\">total</span><span class=\"cell-n\">2h 14m</span></div>",
+        "</div><p class=\"outcome\">The run ended.</p>",
+        "<div class=\"sec\"><span>summary</span></div><div class=\"summary\"><p>Fixed the form &amp; tests.</p>",
+        "<p>Added the export.</p></div>",
+        "<div class=\"sec\"><span>closed</span><span class=\"sec-n\">2</span></div><div class=\"list\">",
+        "<div class=\"card\"><h3>Fix &lt;form&gt;</h3></div></div>",
+        "<div class=\"sec\"><span>batches</span><span class=\"sec-n\">3</span></div>",
+        "<div class=\"total\"><span class=\"total-label\">total</span><span class=\"total-n\">2h 14m</span></div>",
+        "</div></body></html>"
+    );
+
+    #[test]
+    fn a_document_in_the_old_shape_still_reads_every_field() {
+        let head = parse_head(OLD_SHAPE);
+        assert_eq!(head.title.as_deref(), Some("Task report"));
+        assert_eq!(head.scope.as_deref(), Some("backend & frontend"));
+        assert_eq!(head.finished.as_deref(), Some("2026-08-12 14:31"));
+        assert_eq!(head.closed, Some(2));
+        assert_eq!(head.parked, None, "the old dash is still a dash");
+        assert_eq!(head.batches, Some(3));
+        assert_eq!(head.total.as_deref(), Some("2h 14m"));
+        assert_eq!(head.seconds, Some(8040));
+        assert_eq!(head.summary.as_deref(), Some("Fixed the form & tests.\n\nAdded the export."));
+    }
+
+    #[test]
+    fn an_old_document_without_a_summary_still_falls_back_to_its_closed_titles() {
+        let no_summary = {
+            let start = OLD_SHAPE.find("<div class=\"sec\"><span>summary").unwrap();
+            let end = OLD_SHAPE.find("<div class=\"sec\"><span>closed").unwrap();
+            format!("{}{}", &OLD_SHAPE[..start], &OLD_SHAPE[end..])
+        };
+        assert_eq!(parse_head(&no_summary).summary.as_deref(), Some("Fix <form>"));
+        // And a total written by the old `human` in bare seconds is still a
+        // shape this reads.
+        assert_eq!(parse_seconds("30s"), Some(30));
+    }
+
+    #[test]
+    fn a_rendered_title_is_read_back_without_the_frame_around_it() {
+        let html = render(&report(None, &[]));
+        assert!(html.contains("<title>Run report \u{00B7} Task report \u{00B7} smetana</title>"));
+        assert_eq!(parse_head(&html).title.as_deref(), Some("Task report"));
+
+        let odd = RunReport { title: "Backend & <frontend>", ..report(None, &[]) };
+        assert_eq!(parse_head(&render(&odd)).title.as_deref(), Some("Backend & <frontend>"));
+    }
+
+    #[test]
+    fn a_rendered_zero_and_a_rendered_dash_are_told_apart() {
+        let none = Tasks { closed: vec![], parked: vec![] };
+        let head = parse_head(&render(&report(Some(&none), &[batch(1)])));
+        assert_eq!((head.closed, head.parked), (Some(0), Some(0)), "a measured zero is a zero");
+        let head = parse_head(&render(&report(None, &[batch(1)])));
+        assert_eq!((head.closed, head.parked), (None, None), "an unmeasured one is a dash");
     }
 
     #[test]

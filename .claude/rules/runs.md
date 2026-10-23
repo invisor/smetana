@@ -699,9 +699,11 @@ document of `closed 0 · parked 0 · batches 0 · total 22s` and nothing else �
 in the one document meant to outlive both. `report::stop_reason_line` is Rust's one place for the
 words, one sentence per `StopReason` variant, printed unconditionally — even over `tasks: None`, where
 every section below it stays silent. `Preflight`'s `detail` and `NeedsAnswer`'s `question` are carried
-verbatim through `escape`, the same rule every other borrowed string in this file follows. It reuses
-`.outcome`, the class a batch card's own ending already draws with, so the line costs the stylesheet
-nothing new to keep in step across the three mirrors this file's own header names.
+verbatim through `escape`, the same rule every other borrowed string in this file follows. It is drawn as
+`p.stop` with a tone — `done` and its filled circle for `QueueEmpty` and `BatchDone`, `failed` and a
+square for `Crashed`, and the neutral open circle for everything else, `Cancelled` and every reason
+added later included, so a new variant is never louder than somebody decided — and the sentence is
+`stop_reason_line`'s, unchanged.
 
 **A batch in the document carries two halves, and only one of them is the agent's** (smetana-pmj).
 The other is `report::BatchOutcome`: what the loop saw end the batch, drawn under every batch card
@@ -714,13 +716,31 @@ reconstructed afterwards from `log show`, a transcript under `~/.claude/projects
 stays and stays about the *account* — the agent really did write nothing — it simply stops being the
 whole entry.
 
+**The document's look is the design handoff's, and the stylesheet is not ours to edit.** The handoff
+lives whole in `docs/design/reports/` (README, `reports.css`, reference markup, schemas and fixtures,
+the code-review half included). `reports.css` is compiled in from `src/runs/reports.css` as
+`report::REPORTS_CSS` — one public constant, so the code-review renderer takes it rather than copying
+it — and a test holds that file byte-equal to the one under `docs/`. The old `LIGHT`/`DARK`/`RULES`
+constants and `style()` are gone, along with the tests that pinned their text. The palette keeps the
+four-block shape `reportTheme.js` depends on, inside that file. Durations follow the handoff's rule
+(`report::duration`: `<1m`, `{m}m`, `{h}h {m}m`), not the old seconds-bearing `human`. The Batches
+cell and the group head both count logical batches, so a second attempt is not a third batch.
+The handoff's five outcome kinds are `BatchOutcome`'s first five; `Unanswered` has no kind of its
+own there and is drawn in the `needs-you` tone with its old sentence.
+
+**`reports.rs` reads this markup back, so the two move together.** The title is peeled out of
+`Run report · {title} · smetana`, the meta line is split on ` · `, strip cells are found by the
+capitalised label ending their `cell-label` span, and the summary and the closed titles are read from
+`.prose` and `#closed`. Every one of those also still reads the shape written before the handoff —
+nothing rewrites a past run's report — and a test holds a literal old-shape document to prove it.
+
 **The batch file's fifth field is `summary`, and it is the one the Reports tab draws a row from**
 (smetana-hb96). `did` and `notes` are written for somebody reading the document itself, identifiers
 and all; `summary` is written for the person scanning the *list* of every report the project has, and
 is asked for in `agents::prompt` as two or three plain sentences with no paths, no symbols, no
 commands and no shas in it — the opposite discipline from `did`. `render` draws every batch's summary
-that gave one, in batch order, as `<div class="sec"><span>summary</span></div><div class="summary">`
-right after the strip's four numbers and before `closed` — before the board even, so an unread board
+that gave one, in batch order, as a `Summary` section (`<div class="prose">`, one `<p>` per batch)
+right after the stop line and before `closed` — before the board even, so an unread board
 does not silence a sentence that came from the batches rather than from it. A batch without one is
 skipped, and a document where no batch gave one draws no section at all: there is nothing here for
 `reports::parse_summary` to read, and that reader has its own fallback, so the section is not drawn
@@ -763,9 +783,11 @@ also why the lock cannot travel on that arm, its group being alive by constructi
 
 A release is **named in the document too**, and it has to be: nothing is written to the lock's own
 issue, so `report::LockRelease` is the only record there will ever be that the app took a claim off
-somebody. The line sits under the batch card, in `.outcome`'s secondary text beside the `.held`
-reading above it, and carries the two things a person doubting the release would ask for — the actor
-it was taken from, and the evidence it was taken on.
+somebody. It is the batch card's "Lock released" row (`<code>id</code> · by <code>actor</code>`), beside
+the "Left unfinished" row that carries the board reading above it. The row names the actor the claim
+was taken from; the evidence it was taken on — the batch's own process group read as gone — used to
+be a sentence of its own and is no longer drawn, because the design's row has no place for it. It is
+the same evidence every time and is the licence for the release in `queue::release`, not a field.
 
 **Every ending the loop task reaches goes through one `finish(...)` in `service.rs`, and that
 consolidation is the feature.** A dozen exits into `RunState::Stopped` is how the next ending
