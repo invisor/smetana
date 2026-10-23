@@ -846,15 +846,9 @@ fn absorb(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk
             // records in place for the next launch.
             forget_session(live);
             // A finished branch review gets its page drawn **before** the exit
-            // goes out: the front end opens `{report}.html` the moment it
-            // hears the session has exited, so the file has to be there by
-            // then. Thin on purpose — `review_report::write_html` owns the
-            // reading, the drawing and the fallback page.
-            if let super::model::SessionWork::ReviewBranch { report } = &live.session.work {
-                if let Err(e) = crate::runs::review_report::write_html(Path::new(&live.session.project), report) {
-                    log::warn!("[terminal] review report {report}: {e}");
-                }
-            }
+            // goes out: the front end opens `{report}.html` the moment it hears
+            // the session has exited. The driven road does the same call.
+            crate::runs::review_report::on_session_end(&live.session.work, &live.session.project);
             emit_state(app, &live.session);
             // Whatever this session left running under a group its own exit
             // could never reach — `setsid yes &`, the case this exists for.

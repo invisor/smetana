@@ -23,6 +23,8 @@
 use std::fmt::Write as _;
 use std::path::{Component, Path};
 
+use crate::terminal::model::SessionWork;
+
 use serde::Deserialize;
 
 use crate::runs::report::{escape, prose, REPORTS_CSS};
@@ -222,7 +224,12 @@ impl Range {
 /// Parse the agent's file. The error is serde's own sentence, which is what the
 /// fallback page prints: it names the missing field.
 pub fn parse(text: &str) -> Result<Review, String> {
-    serde_json::from_str(text).map_err(|e| e.to_string())
+    let review: Review = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    // `minItems: 1` in the schema: a review of nothing has no header to draw.
+    if review.pairs.is_empty() {
+        return Err("`pairs` must hold at least one entry".to_owned());
+    }
+    Ok(review)
 }
 
 /// The footer's date: the schema asks for local time already
@@ -520,16 +527,28 @@ fn footer(out: &mut String, review: &Review) {
     out.push_str("<footer class=\"foot\">\n<dl>\n<dt>Project rules</dt>\n<dd><span class=\"mono\">[merge].hazards</span>");
     let several = review.pairs.len() > 1;
     for pair in &review.pairs {
-        out.push_str(" \u{00B7} ");
+        let source = pair.rules_source.as_deref().filter(|s| !s.trim().is_empty());
+        let verdict = if pair.hazards { "<span class=\"yes\">yes</span>" } else { "<span class=\"no\">no</span>" };
         if several {
+            // `· repo yes`, then the source when there is one.
+            out.push_str(" \u{00B7} ");
             out.push_str(&escape(&pair.repo));
             out.push(' ');
-        }
-        out.push_str(if pair.hazards { "<span class=\"yes\">yes</span>" } else { "<span class=\"no\">no</span>" });
-        if let Some(source) = pair.rules_source.as_deref().filter(|s| !s.trim().is_empty()) {
-            out.push_str(" <span class=\"mono\">");
-            out.push_str(&escape(source));
-            out.push_str("</span>");
+            out.push_str(verdict);
+            if let Some(source) = source {
+                out.push_str(" <span class=\"mono\">");
+                out.push_str(&escape(source));
+                out.push_str("</span>");
+            }
+        } else {
+            // The reference's single-repo shape: `hazards yes · source`.
+            out.push(' ');
+            out.push_str(verdict);
+            if let Some(source) = source {
+                out.push_str(" \u{00B7} <span class=\"mono\">");
+                out.push_str(&escape(source));
+                out.push_str("</span>");
+            }
         }
     }
     out.push_str("</dd>\n<dt>Reviewer</dt>\n<dd><span class=\"mono\">");
@@ -567,6 +586,17 @@ pub fn render_fallback(reason: &str, json_path: &str, md_path: &str) -> String {
     out
 }
 
+/// The hook both session workers call when a session's output has ended,
+/// before the exited state is emitted: a `ReviewBranch` gets its page drawn,
+/// anything else is left alone. A failure is a log line and nothing more.
+pub fn on_session_end(work: &SessionWork, project: &str) {
+    if let SessionWork::ReviewBranch { report } = work {
+        if let Err(e) = write_html(Path::new(project), report) {
+            log::warn!("[review-report] {report}: {e}");
+        }
+    }
+}
+
 /// Draw the page for a finished review: read `{report}.json` under `project`,
 /// and write `{report}.html` beside it — the report if it parsed, the fallback
 /// page if it did not, so that a file is on disk whatever the agent did.
@@ -576,7 +606,7 @@ pub fn render_fallback(reason: &str, json_path: &str, md_path: &str) -> String {
 /// the project, or a write that failed.
 pub fn write_html(project: &Path, report: &str) -> Result<(), String> {
     let relative = Path::new(report);
-    if relative.is_absolute() || relative.components().any(|c| matches!(c, Component::ParentDir | Component::Prefix(_))) {
+    if relative.is_absolute() || relative.has_root() || relative.components().any(|c| matches!(c, Component::ParentDir | Component::Prefix(_) | Component::RootDir)) {
         return Err(format!("report path {report:?} is not inside the project"));
     }
     let json = project.join(format!("{report}.json"));
@@ -773,7 +803,7 @@ mod tests {
         assert!(html.contains("<div class=\"score-label c-ok\">"));
         assert!(html.contains("<div class=\"marker\" style=\"left:calc(100% - 2px)\"><span style=\"transform:translateX(-90%)\">100</span></div>"));
         assert!(html.contains("class=\"band b-high is-current\""));
-        assert!(html.contains("<span class=\"yes\">yes</span> <span class=\"mono\">.smetana/review.toml</span>"), "{html}");
+        assert!(html.contains("<span class=\"mono\">[merge].hazards</span> <span class=\"yes\">yes</span> \u{00B7} <span class=\"mono\">.smetana/review.toml</span>"), "{html}");
     }
 
     // -- states from the README --------------------------------------------------
@@ -960,6 +990,18 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_pairs_list_is_an_error_naming_the_field() {
+        let json = r#"{"score":1,"pairs":[],"findings":[],"reviewer":"x","date":"d"}"#;
+        assert!(parse(json).unwrap_err().contains("pairs"));
+        let dir = scratch("nopairs");
+        std::fs::write(dir.join("r.json"), json).unwrap();
+        write_html(&dir, "r").unwrap();
+        let html = std::fs::read_to_string(dir.join("r.html")).unwrap();
+        assert!(html.contains("Report could not be built") && html.contains("pairs"), "{html}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn an_unknown_level_is_an_error_rather_than_a_guess() {
         let json = r#"{"score":1,"pairs":[],"reviewer":"x","date":"d","findings":[{"level":"huge","title":"t","repo":"r","path":"p","line":1,"defect":"d","scenario":"s","fix":"f"}]}"#;
         assert!(parse(json).is_err());
@@ -1046,7 +1088,20 @@ mod tests {
         let dir = scratch("escape");
         assert!(write_html(&dir, "../outside").is_err());
         assert!(write_html(&dir, "/abs/outside").is_err());
+        assert!(write_html(&dir, "\\rooted").is_err() || cfg!(unix), "a backslash root is a root only on Windows");
         assert!(!dir.parent().unwrap().join("outside.html").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_schema_pasted_into_the_skill_is_the_design_sources_schema() {
+        const SKILL: &str = include_str!("../../resources/smetana/skills/reviewing-branch-changes/SKILL.md");
+        const SCHEMA: &str = include_str!("../../../docs/design/reports/code-review/schema.json");
+        let section = &SKILL[SKILL.find("## 8.").expect("section 8")..];
+        let open = section.find("```json\n").expect("a json fence in section 8") + "```json\n".len();
+        let close = section[open..].find("\n```").expect("the end of the fence");
+        let pasted: serde_json::Value = serde_json::from_str(&section[open..open + close]).expect("the pasted schema parses");
+        let source: serde_json::Value = serde_json::from_str(SCHEMA).unwrap();
+        assert_eq!(pasted, source, "SKILL.md section 8 must carry docs/design/reports/code-review/schema.json whole");
     }
 }

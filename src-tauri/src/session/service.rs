@@ -2799,6 +2799,9 @@ fn absorb(
             // The journal stays: a session that has ended is still one somebody
             // opens a tab on to read.
             live.talking = None;
+            // The page of a finished branch review, drawn before the exited
+            // state goes out — the PTY road makes the same call.
+            crate::runs::review_report::on_session_end(&live.work, &live.project);
             refresh_state(app, id, live);
             // The package lifetime ends with its lead. Finished children were
             // retained until here; now drop the complete tree and all provider

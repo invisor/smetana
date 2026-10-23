@@ -735,8 +735,9 @@ own there and is drawn in the `needs-you` tone with its old sentence.
 `runs/review_report.rs` is the renderer: pure `render`/`render_fallback`, the same `REPORTS_CSS`
 constant (never a copy; a test holds the `<style>` byte-equal to the run report's), `escape` on every
 field and `prose` for backticks (`<span class="io">` in "Fails when"). `write_html` is the file half and
-`terminal/service.rs` calls it from the `Chunk::Gone` arm for a `SessionWork::ReviewBranch`, **before**
-`emit_state` goes out, because `reviewReportPath` opens `{report}.html` the moment the front end hears
+`review_report::on_session_end(&SessionWork, project)` calls it for a `SessionWork::ReviewBranch`, and it
+is called from both session roads — `terminal/service.rs`'s `Chunk::Gone` arm and the driven worker's
+`session/service.rs` `Chunk::Eof` arm — **before** the exited state is emitted, because `reviewReportPath` opens `{report}.html` the moment the front end hears
 of the exit. It always leaves a file: a missing, unparsable or incomplete JSON becomes a "Report could
 not be built" page naming the reason and both paths, since an empty tab is worse. Parsing ignores
 unknown fields and fails on a missing required one; a score of 70 or more beside a blocking finding is
