@@ -749,7 +749,7 @@ paragraphs joined by a blank line, and for a document with none — every report
 field existed — falls back to the closed cards' own `<h3>` titles joined by `; `, since that is the
 sentence a person would have read off the board anyway. Neither reader touches `parked`: a parked
 title is a question still open, not an account of what got done. `Head.seconds` rides beside it, the
-inverse of `report::human` read off `total` to the minute, and it exists for the same tab: a third
+inverse of `report::duration` read off `total` to the minute, and it exists for the same tab: a third
 sort order, `longest`, wanted a number `report.rs` had only ever written as a string.
 
 The vocabulary is deliberately not a new one: `service::outcome_of` reads out `Batch` and `Exit`,
