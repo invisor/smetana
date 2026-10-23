@@ -2957,6 +2957,13 @@ fn append(app: &AppHandle, id: SessionId, live: &mut Live, kinds: Vec<EventKind>
 /// Kept apart from the state it reads so it can be pinned without building a
 /// `Live` — a `Talking` inside it holds a `Box<dyn Driver>`, which nothing in
 /// this module's tests constructs.
+/// Whether a change of state is the session ending: into `Exited` or `Failed`
+/// from something that was neither. Pure, so it can be pinned without a `Live`.
+fn turns_terminal(before: SessionState, after: SessionState) -> bool {
+    let terminal = |s| matches!(s, SessionState::Exited | SessionState::Failed);
+    terminal(after) && !terminal(before)
+}
+
 fn wants_first_words_title(title: &Option<String>, work: &crate::terminal::model::SessionWork) -> bool {
     title.is_none() && matches!(work, crate::terminal::model::SessionWork::Bare)
 }
@@ -2980,6 +2987,13 @@ fn refresh_state(app: &AppHandle, id: SessionId, live: &mut Live) {
     }
     let before = live.state;
     live.state = state;
+    // A session can turn terminal here before `Chunk::Eof` is reached (`lost`
+    // marks the child gone first), and the front end opens a review's page the
+    // moment it hears so. The `Eof` arm draws it again, so a page drawn early
+    // while the agent was still writing its JSON is overwritten by the final one.
+    if turns_terminal(before, state) {
+        crate::runs::review_report::on_session_end(&live.work, &live.project);
+    }
     // On the change of state and not on the event, so a second question queued behind the first, or
     // any event while the wait goes on, does not reach the person's phone again.
     if crate::remote::push::waiting_began(before, state) {
@@ -3240,6 +3254,19 @@ mod tests {
         let root = scratch("bare");
         assert_eq!(resume_title(&Intent::Bare, &root), None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn only_the_first_step_into_a_terminal_state_counts_as_ending() {
+        use SessionState::*;
+        for before in [Starting, Running, Ready, NeedsYou] {
+            assert!(turns_terminal(before, Exited), "{before:?}");
+            assert!(turns_terminal(before, Failed), "{before:?}");
+            assert!(!turns_terminal(before, Running), "{before:?}");
+        }
+        assert!(!turns_terminal(Exited, Exited));
+        assert!(!turns_terminal(Exited, Failed));
+        assert!(!turns_terminal(Failed, Exited));
     }
 
     #[test]

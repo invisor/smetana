@@ -1003,7 +1003,7 @@ mod tests {
 
     #[test]
     fn an_unknown_level_is_an_error_rather_than_a_guess() {
-        let json = r#"{"score":1,"pairs":[],"reviewer":"x","date":"d","findings":[{"level":"huge","title":"t","repo":"r","path":"p","line":1,"defect":"d","scenario":"s","fix":"f"}]}"#;
+        let json = r#"{"score":1,"pairs":[{"repo":"r","base":"a","head":"b","files":1,"added":1,"removed":0,"hazards":true}],"reviewer":"x","date":"d","findings":[{"level":"huge","title":"t","repo":"r","path":"p","line":1,"defect":"d","scenario":"s","fix":"f"}]}"#;
         assert!(parse(json).is_err());
     }
 
