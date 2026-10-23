@@ -2801,6 +2801,8 @@ fn absorb(
             live.talking = None;
             // The page of a finished branch review, drawn before the exited
             // state goes out — the PTY road makes the same call.
+            // `refresh_state` draws it too when the state first turns terminal, so a
+            // second write here is expected, and it is the one that has the final JSON.
             crate::runs::review_report::on_session_end(&live.work, &live.project);
             refresh_state(app, id, live);
             // The package lifetime ends with its lead. Finished children were
@@ -2938,6 +2940,13 @@ fn append(app: &AppHandle, id: SessionId, live: &mut Live, kinds: Vec<EventKind>
     refresh_state(app, id, live);
 }
 
+/// Whether a change of state is the session ending: into `Exited` or `Failed`
+/// from something that was neither. Pure, so it can be pinned without a `Live`.
+fn turns_terminal(before: SessionState, after: SessionState) -> bool {
+    let terminal = |s| matches!(s, SessionState::Exited | SessionState::Failed);
+    terminal(after) && !terminal(before)
+}
+
 /// One emit for every reader of `session:state`: `refresh_state`,
 /// `note_conversation` and the first `Request::Send` that learns a `Bare`
 /// session's title, so the three cannot drift into carrying different fields
@@ -2957,13 +2966,6 @@ fn append(app: &AppHandle, id: SessionId, live: &mut Live, kinds: Vec<EventKind>
 /// Kept apart from the state it reads so it can be pinned without building a
 /// `Live` — a `Talking` inside it holds a `Box<dyn Driver>`, which nothing in
 /// this module's tests constructs.
-/// Whether a change of state is the session ending: into `Exited` or `Failed`
-/// from something that was neither. Pure, so it can be pinned without a `Live`.
-fn turns_terminal(before: SessionState, after: SessionState) -> bool {
-    let terminal = |s| matches!(s, SessionState::Exited | SessionState::Failed);
-    terminal(after) && !terminal(before)
-}
-
 fn wants_first_words_title(title: &Option<String>, work: &crate::terminal::model::SessionWork) -> bool {
     title.is_none() && matches!(work, crate::terminal::model::SessionWork::Bare)
 }
