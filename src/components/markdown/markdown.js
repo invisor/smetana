@@ -295,9 +295,22 @@ function parseBlocks(lines, depth = 0) {
     while (i < lines.length && lines[i].trim() && !startsBlock(lines, i, pairs)) {
       body.push(lines[i++])
     }
-    blocks.push({ type: 'paragraph', children: parseInline(body.join('\n')) })
+    blocks.push({ type: 'paragraph', children: markAlone(parseInline(body.join('\n'))) })
   }
   return blocks
+}
+
+/* Whether a local link is the whole of its paragraph. The stylesheet stretches
+   such a link over the full column so its head truncates as late as possible,
+   and CSS cannot tell: `:only-child` counts elements and never sees the text
+   around one, so `a path here` would match it. The fact is decided here and
+   written onto the node as `alone`; whitespace-only text beside the link does
+   not count as content. Anything else in the paragraph, an external link
+   included, leaves the node unmarked. */
+function markAlone(children) {
+  const content = children.filter((node) => node.type !== 'text' || node.value.trim() !== '')
+  if (content.length !== 1 || content[0].type !== 'link' || !content[0].local) return children
+  return children.map((node) => (node === content[0] ? { ...node, alone: true } : node))
 }
 
 /* What ends a paragraph without a blank line before it. A list is deliberately
