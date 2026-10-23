@@ -1,0 +1,41 @@
+{
+  "title": "Run 3",
+  "project": "/Users/flexo/Desktop/Projects/smetana",
+  "scope": "the queue",
+  "finishedAt": "2026-10-23 11:50",
+  "stop": { "kind": "queue-empty", "text": "The run ended with nothing ready; 1 task is parked." },
+  "summary": [
+    "Исправлена панель разговора: путь к файлу внутри предложения больше не растягивается на всю строку и остаётся в тексте. Добавлена карточка для действий, которые заблокировал автоматический режим прав Claude: под строкой инструмента видна причина и кнопки «разрешить» и «запретить», а все такие блоки записываются в файл для последующей настройки.",
+    "Тосты больше не висят после ответа в другой вкладке, порядок колонок канбана переживает перезапуск. Переименование worktree при коллизии имён отложено: оба варианта теряют что-то важное, выбор за человеком."
+  ],
+  "tasks": {
+    "closed": [
+      { "id": "smetana-6tev", "title": "Карточка «Заблокировано auto-режимом» с кнопками Allow/Refuse под строкой тула и журнал таких блоков", "durationSec": 1860,
+        "done": "Добавлены поле `denial` у `EventKind::ToolResult` и детектор по фразе `denied by the Claude Code auto mode classifier` в `claude_driver.rs`, файл статистики `auto-mode-blocks.jsonl` (`src-tauri/src/session/blocks.rs`), карточка «Blocked by auto mode» с Allow/Refuse в `ToolCall.vue` (тексты в `autoModeBlock.js`, правило `blockOpen` в `journal.js`); протокол телефона поднят до 1.7. Свежий захват CLI блока не дал, поэтому текст отказа в фикстуре взят дословно из реального транскрипта CLI 2.1.304; влито в `main` коммитом `4e86a5bd`, все три гейта зелёные." },
+      { "id": "smetana-p4nx", "title": "Панель разговора: ссылка-путь внутри предложения растягивается на всю строку", "durationSec": 840,
+        "done": "Признак «ссылка одна в абзаце» теперь ставит парсер (`markAlone` в `src/components/markdown/markdown.js`, атрибут `data-alone` в `MarkdownInline.vue`), а правило полной колонки в `src/styles/sm-prose.css` перешло с `:only-child` на `a[data-path][data-alone]`. Добавлены тесты, два абзаца в `MARKDOWN_LINKS_SAMPLE` и обновлён `markup-contract.md`; влито в `main` коммитом `7bacdc36`, все три гейта зелёные." },
+      { "id": "smetana-k2wd", "title": "Тост «claude-1 needs you» не исчезает после ответа в другой вкладке", "durationSec": 540,
+        "done": "Подписка тоста перенесена с вкладки на сессию (`useSessionToasts` в `src/composables/toasts.js`); событие `question.answered` из любой вкладки закрывает тост. Влито коммитом `91c0e2f4`." },
+      { "id": "smetana-r81m", "title": "Порядок колонок канбана сбрасывается после перезапуска", "durationSec": 420,
+        "done": "Порядок сохраняется в `board.columns_order` (`src-tauri/src/settings/board.rs`), настройки мигрированы до версии 12. Влито коммитом `0d6b7a1e`." },
+      { "id": "smetana-q0zt", "title": "Пустая колонка показывает «Empty» без подсказки", "durationSec": null,
+        "done": "Добавлена вторая строка «Nothing in ready.» по образцу остальных пустых состояний; снапшоты обновлены." }
+    ],
+    "parked": [
+      { "id": "smetana-w5ha", "title": "Переименование worktree при коллизии имён", "durationSec": 660,
+        "done": "Остановился на выборе поведения: при коллизии с `wt/bd-77e1` можно перезаписать каталог или добавить суффикс `-2`. Перезапись теряет незакоммиченные файлы другого агента, суффикс ломает соглашение `wt/<task-id>` в `[merge].hazards`. Черновики обоих вариантов лежат в ветке `park/smetana-w5ha`." }
+    ]
+  },
+  "batches": [
+    { "n": 1, "agent": "claude", "durationSec": 1680, "outcome": { "kind": "clean-exit" },
+      "notes": "Живой проверки в этом прогоне не было: нажатие Allow/Refuse в настоящем приложении и вид карточек во всех сочетаниях темы и плотности проверены только исполнителями в галерее. В `[merge].hazards` добавлена пара файлов про форму отказа auto-режима; два замечания по файлу статистики записаны дайджестом на `smetana-6tev`." },
+    { "n": 2, "attempt": 2, "agent": "claude", "durationSec": 1140, "outcome": { "kind": "handed-back" },
+      "notes": "Первая попытка упала до начала работы; повтор взял `smetana-w5ha` и `smetana-k2wd`. `smetana-k2wd` закрыт, по `smetana-w5ha` лид решил не выбирать за человека.",
+      "leftUnfinished": ["smetana-w5ha"],
+      "lockReleased": { "task": "smetana-w5ha", "by": "the lead" } },
+    { "n": 3, "agent": "claude", "durationSec": 1320, "outcome": { "kind": "clean-exit" },
+      "notes": "Закрыты `smetana-r81m` и `smetana-q0zt`; после этого в очереди не осталось готовых задач." }
+  ],
+  "totalSec": 4320,
+  "journalPath": "/Users/flexo/Desktop/Projects/smetana/.smetana/runs/3/journal-2026-10-23-105610.log"
+}

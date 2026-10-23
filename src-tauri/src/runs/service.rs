@@ -3509,7 +3509,10 @@ mod tests {
             batches: &account.batches,
             journal: account.journal.path(),
         });
-        assert!(html.contains("batch 3 attempt 2 (codex)"), "the report retains the attempt");
+        assert!(
+            html.contains("batch 3 \u{00B7} attempt 2 <span class=\"agent\">(codex)</span>"),
+            "the report retains the attempt"
+        );
         let text = std::fs::read_to_string(journal_path).expect("journal text");
         assert!(text.contains("handoff interrupted before writers were quiet"));
         assert!(text.contains("board (after batch) unreadable"));

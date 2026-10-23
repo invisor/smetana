@@ -1,0 +1,14 @@
+{
+  "title": "Run 4",
+  "project": "/Users/flexo/Desktop/Projects/smetana",
+  "scope": "the queue",
+  "finishedAt": "2026-10-23 12:07",
+  "stop": { "kind": "crashed", "text": "The run stopped: batch 1 crashed." },
+  "summary": null,
+  "tasks": null,
+  "batches": [
+    { "n": 1, "agent": "claude", "durationSec": 360, "notes": null, "outcome": { "kind": "exit-code", "code": 137 } }
+  ],
+  "totalSec": 360,
+  "journalPath": "/Users/flexo/Desktop/Projects/smetana/.smetana/runs/4/journal-2026-10-23-120112.log"
+}

@@ -738,8 +738,8 @@ left no account of itself. An identifier inside a line travels unchanged for the
 commit message, and `report::prose` draws it as `<code>`. The last clause names the *other* report —
 what the lead says back in the conversation stays under the conversation language — because the two
 reports come out of the same batch, and somebody who set this and then watched the terminal would
-otherwise have been told nothing at all. `report.rs`'s own labels (`smetana · run report`, `closed`,
-`parked`, `batch N`, `<html lang="en">`) do not move and are not mentioned in the prompt: they are
+otherwise have been told nothing at all. `report.rs`'s own labels (`smetana · run report`, `Closed`,
+`Parked`, `batch N`, `<html lang="en">`) do not move and are not mentioned in the prompt: they are
 this product's interface copy, CLAUDE.md says interface copy is English, and translating them would
 be a table of twelve languages in Rust for words one long. The switch that hides the report changes
 none of this — `runs::service::finish` renders the document whatever it says, so the setting goes on

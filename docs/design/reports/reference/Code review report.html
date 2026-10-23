@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code review · smetana, bd-sync · 74%</title>
+<style>
+/* Shared stylesheet for the smetana report family: code review report + run report.
+   Keep this <style> byte-identical in both documents.
+   Tokens: Smetana design system. Full set in :root (light); dark overrides follow. */
+:root{
+  color-scheme:light;
+  --canvas:#eaeeef;--surface-sunken:#e1e6e7;--surface:#f4f7f7;--surface-raised:#ffffff;--surface-hover:#e4e9ea;
+  --border-subtle:#dde3e3;--border:#c9d1d2;--border-strong:#a9b4b6;
+  --text-primary:#16201f;--text-secondary:#4a565a;--text-muted:#6b777c;
+  --text-link:#1f5d8f;--text-link-hover:#123f63;
+  --focus-ring:#1c6fd0;--selection-bg:#c6dcf0;
+  --scrollbar-thumb:#c2caca;--scrollbar-thumb-hover:#a3adae;
+  --shadow-raised:0 1px 2px rgba(20,28,28,.06),0 1px 1px rgba(20,28,28,.04);
+  --status-failed-fg:#a33224;--status-failed-bg:#fbe8e5;--status-failed-border:#edbfb8;
+  --status-needs-you-fg:#8a5405;--status-needs-you-bg:#fbf0da;--status-needs-you-border:#e8ce94;
+  --status-neutral-fg:#4a565a;--status-neutral-bg:#e1e6e7;--status-neutral-border:#c9d1d2;
+  --status-done-fg:#3f6b54;--status-done-bg:#e6eee9;--status-done-border:#c0d3c8;
+  --editor-bg:#f7faf9;--editor-line-number:#8b979b;--editor-hl:#fbe4e0;--editor-hl-gutter:#c94a34;
+  --syn-keyword:#8a3a96;--syn-string:#48762f;--syn-number:#a3560f;--syn-comment:#6b777c;
+  --syn-function:#2a5da8;--syn-type:#13707a;
+  --diff-added-fg:#2f5c1c;--diff-removed-fg:#8f2a1c;
+  --font-sans:system-ui,-apple-system,"Segoe UI","Noto Sans",Roboto,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+  --text-2xs:10px;--text-xs:11px;--text-sm:12px;--text-md:13px;--text-lg:15px;--text-xl:18px;--text-2xl:22px;--text-3xl:28px;
+  --tracking-caps:.07em;
+  --space-1:2px;--space-2:4px;--space-3:6px;--space-4:8px;--space-5:12px;--space-6:16px;--space-7:20px;--space-8:24px;--space-9:32px;--space-10:48px;
+  --radius-sm:2px;--radius-md:4px;--radius-lg:6px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --canvas:#10151a;--surface-sunken:#0c1116;--surface:#161b21;--surface-raised:#1b2229;--surface-hover:#202932;
+    --border-subtle:#232b33;--border:#2e3841;--border-strong:#3d4954;
+    --text-primary:#e3e8ed;--text-secondary:#a8b3bd;--text-muted:#7c8b97;
+    --text-link:#8fb6e8;--text-link-hover:#b3cef2;
+    --focus-ring:#5fa8ff;--selection-bg:#2b4560;
+    --scrollbar-thumb:#333e48;--scrollbar-thumb-hover:#465360;
+    --shadow-raised:none;
+    --status-failed-fg:#ee8878;--status-failed-bg:#2c1815;--status-failed-border:#653029;
+    --status-needs-you-fg:#f2b03d;--status-needs-you-bg:#2b2010;--status-needs-you-border:#6a4e1b;
+    --status-neutral-fg:#a8b3bd;--status-neutral-bg:#0c1116;--status-neutral-border:#2e3841;
+    --status-done-fg:#7fa792;--status-done-bg:#16211c;--status-done-border:#2c4136;
+    --editor-bg:#0e1317;--editor-line-number:#5b6771;--editor-hl:#25150f;--editor-hl-gutter:#c94a34;
+    --syn-keyword:#c58bd6;--syn-string:#8fbf7a;--syn-number:#e0a45c;--syn-comment:#7c8b97;
+    --syn-function:#9bc0f0;--syn-type:#6bc5ce;
+    --diff-added-fg:#a8d693;--diff-removed-fg:#ff9384;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --canvas:#10151a;--surface-sunken:#0c1116;--surface:#161b21;--surface-raised:#1b2229;--surface-hover:#202932;
+  --border-subtle:#232b33;--border:#2e3841;--border-strong:#3d4954;
+  --text-primary:#e3e8ed;--text-secondary:#a8b3bd;--text-muted:#7c8b97;
+  --text-link:#8fb6e8;--text-link-hover:#b3cef2;
+  --focus-ring:#5fa8ff;--selection-bg:#2b4560;
+  --scrollbar-thumb:#333e48;--scrollbar-thumb-hover:#465360;
+  --shadow-raised:none;
+  --status-failed-fg:#ee8878;--status-failed-bg:#2c1815;--status-failed-border:#653029;
+  --status-needs-you-fg:#f2b03d;--status-needs-you-bg:#2b2010;--status-needs-you-border:#6a4e1b;
+  --status-neutral-fg:#a8b3bd;--status-neutral-bg:#0c1116;--status-neutral-border:#2e3841;
+  --status-done-fg:#7fa792;--status-done-bg:#16211c;--status-done-border:#2c4136;
+  --editor-bg:#0e1317;--editor-line-number:#5b6771;--editor-hl:#25150f;--editor-hl-gutter:#c94a34;
+  --syn-keyword:#c58bd6;--syn-string:#8fbf7a;--syn-number:#e0a45c;--syn-comment:#7c8b97;
+  --syn-function:#9bc0f0;--syn-type:#6bc5ce;
+  --diff-added-fg:#a8d693;--diff-removed-fg:#ff9384;
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --canvas:#eaeeef;--surface-sunken:#e1e6e7;--surface:#f4f7f7;--surface-raised:#ffffff;--surface-hover:#e4e9ea;
+  --border-subtle:#dde3e3;--border:#c9d1d2;--border-strong:#a9b4b6;
+  --text-primary:#16201f;--text-secondary:#4a565a;--text-muted:#6b777c;
+  --text-link:#1f5d8f;--text-link-hover:#123f63;
+  --focus-ring:#1c6fd0;--selection-bg:#c6dcf0;
+  --scrollbar-thumb:#c2caca;--scrollbar-thumb-hover:#a3adae;
+  --shadow-raised:0 1px 2px rgba(20,28,28,.06),0 1px 1px rgba(20,28,28,.04);
+  --status-failed-fg:#a33224;--status-failed-bg:#fbe8e5;--status-failed-border:#edbfb8;
+  --status-needs-you-fg:#8a5405;--status-needs-you-bg:#fbf0da;--status-needs-you-border:#e8ce94;
+  --status-neutral-fg:#4a565a;--status-neutral-bg:#e1e6e7;--status-neutral-border:#c9d1d2;
+  --status-done-fg:#3f6b54;--status-done-bg:#e6eee9;--status-done-border:#c0d3c8;
+  --editor-bg:#f7faf9;--editor-line-number:#8b979b;--editor-hl:#fbe4e0;--editor-hl-gutter:#c94a34;
+  --syn-keyword:#8a3a96;--syn-string:#48762f;--syn-number:#a3560f;--syn-comment:#6b777c;
+  --syn-function:#2a5da8;--syn-type:#13707a;
+  --diff-added-fg:#2f5c1c;--diff-removed-fg:#8f2a1c;
+}
+
+/* Base */
+*,*::before,*::after{box-sizing:border-box}
+html{background:var(--canvas);-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--canvas);color:var(--text-primary);font:var(--text-md)/1.5 var(--font-sans);overflow-wrap:break-word}
+::selection{background:var(--selection-bg)}
+a{color:var(--text-link);text-decoration:none}
+a:hover{color:var(--text-link-hover);text-decoration:underline}
+a:focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px;border-radius:var(--radius-sm)}
+code,.mono{font-family:var(--font-mono);font-size:.94em}
+:not(pre)>code{background:var(--surface-sunken);padding:0 .25em;border-radius:var(--radius-sm);overflow-wrap:anywhere}
+h1,h2,h3,p{margin:0}
+*{scrollbar-width:thin;scrollbar-color:var(--scrollbar-thumb) transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);border-radius:999px;border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background-color:var(--scrollbar-thumb-hover)}
+
+.page{max-width:880px;margin:0 auto;padding:var(--space-9) var(--space-7) var(--space-10);display:flex;flex-direction:column;gap:var(--space-8)}
+.eyebrow{font:500 var(--text-2xs)/1.2 var(--font-mono);letter-spacing:var(--tracking-caps);text-transform:uppercase;color:var(--text-muted)}
+.card{background:var(--surface-raised);border:1px solid var(--border);border-radius:var(--radius-md);box-shadow:var(--shadow-raised)}
+
+/* Header + ref pairs */
+.head{display:flex;flex-direction:column;gap:var(--space-5)}
+.head h1{font-size:var(--text-2xl);font-weight:600;line-height:1.2;letter-spacing:-.006em;text-wrap:pretty}
+.refs{list-style:none;margin:0;padding:0}
+.ref{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--space-2) var(--space-6);align-items:baseline;padding:var(--space-4) var(--space-6);border-top:1px solid var(--border-subtle)}
+.ref:first-child{border-top:0}
+.ref-repo{font:600 var(--text-sm)/1.35 var(--font-mono);color:var(--text-primary)}
+.ref-pair{grid-column:1;font:var(--text-sm)/1.45 var(--font-mono);color:var(--text-secondary);overflow-wrap:anywhere}
+.ref-pair .arrow{color:var(--text-muted);padding:0 .35em}
+.ref-stat{grid-column:2;grid-row:1 / span 2;align-self:center;font:var(--text-sm)/1.35 var(--font-mono);color:var(--text-secondary);white-space:nowrap;text-align:right}
+.add{color:var(--diff-added-fg)}.del{color:var(--diff-removed-fg)}
+
+/* Verdict */
+.verdict{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--space-8);padding:var(--space-7) var(--space-7) var(--space-6)}
+.score{display:flex;flex-direction:column;gap:var(--space-3);min-width:150px}
+.score-num{font:600 calc(var(--text-3xl) * 2.3)/1 var(--font-mono);letter-spacing:-.03em;color:var(--text-primary)}
+.score-num small{font-size:.45em;font-weight:500;color:var(--text-secondary);margin-left:2px}
+.score-label{display:flex;align-items:center;gap:var(--space-3);font-size:var(--text-md);font-weight:500}
+.scale{display:flex;flex-direction:column;gap:var(--space-5);min-width:0}
+.bar{position:relative;display:flex;height:10px;margin-top:22px}
+.band{height:100%;border:1px solid;border-left-width:0}
+.band:first-child{border-left-width:1px;border-radius:var(--radius-sm) 0 0 var(--radius-sm)}
+.band:last-child{border-radius:0 var(--radius-sm) var(--radius-sm) 0}
+.band.b-low{flex:0 0 70%;background:var(--status-failed-bg);border-color:var(--status-failed-border)}
+.band.b-mid{flex:0 0 20%;background:var(--status-needs-you-bg);border-color:var(--status-needs-you-border)}
+.band.b-high{flex:0 0 10%;background:var(--status-done-bg);border-color:var(--status-done-border)}
+.band.is-current{border-width:2px;border-color:currentColor}
+.band.b-low.is-current{color:var(--status-failed-fg)}.band.b-mid.is-current{color:var(--status-needs-you-fg)}.band.b-high.is-current{color:var(--status-done-fg)}
+.marker{position:absolute;top:-22px;bottom:-4px;width:0;border-left:2px solid var(--text-primary)}
+.marker span{position:absolute;top:0;transform:translateX(-50%);font:600 var(--text-xs)/1 var(--font-mono);color:var(--text-primary);background:var(--surface-raised);padding:0 2px;margin-left:-1px}
+.ticks{position:relative;height:12px;font:var(--text-2xs)/1 var(--font-mono);color:var(--text-muted);margin-top:-8px}
+.ticks span{position:absolute;transform:translateX(-50%)}
+.ticks span:first-child{transform:none}.ticks span:last-child{transform:translateX(-100%)}
+.legend{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--space-1)}
+.legend li{display:grid;grid-template-columns:16px 64px minmax(0,1fr) auto;gap:var(--space-4);align-items:baseline;padding:var(--space-2) var(--space-4);border:1px solid transparent;border-radius:var(--radius-md);color:var(--text-secondary)}
+.legend .range{font:var(--text-sm)/1.4 var(--font-mono)}
+.legend .now{font:500 var(--text-2xs)/1.4 var(--font-mono);letter-spacing:var(--tracking-caps);text-transform:uppercase}
+.legend li.is-current{color:var(--text-primary);font-weight:500}
+.legend li.is-current.l-low{background:var(--status-failed-bg);border-color:var(--status-failed-border)}
+.legend li.is-current.l-mid{background:var(--status-needs-you-bg);border-color:var(--status-needs-you-border)}
+.legend li.is-current.l-high{background:var(--status-done-bg);border-color:var(--status-done-border)}
+
+/* Severity glyphs: never colour alone — glyph + word always */
+.g{display:inline-block;width:1em;text-align:center;font-family:var(--font-mono);line-height:1}
+.c-blocking{color:var(--status-failed-fg)}.c-serious{color:var(--status-needs-you-fg)}.c-minor{color:var(--status-neutral-fg)}.c-ok{color:var(--status-done-fg)}
+
+/* Groups + findings */
+.group{display:flex;flex-direction:column;gap:var(--space-5)}
+.group-head{display:flex;align-items:baseline;gap:var(--space-4);padding-bottom:var(--space-3);border-bottom:1px solid var(--border)}
+.group-head h2{font-size:var(--text-lg);font-weight:600}
+.group-head .count{font:var(--text-sm)/1 var(--font-mono);color:var(--text-muted)}
+.group-head .hint{margin-left:auto;font-size:var(--text-sm);color:var(--text-muted)}
+.finding{padding:var(--space-6) var(--space-7);display:flex;flex-direction:column;gap:var(--space-5);min-width:0}
+.f-top{display:flex;flex-direction:column;gap:var(--space-2);min-width:0}
+.f-title{display:flex;gap:var(--space-4);align-items:baseline}
+.f-id{font:600 var(--text-xs)/1.4 var(--font-mono);flex:none}
+.f-title h3{font-size:var(--text-lg);font-weight:600;line-height:1.35;text-wrap:pretty}
+.f-loc{font:var(--text-sm)/1.45 var(--font-mono);color:var(--text-secondary);overflow-wrap:anywhere;padding-left:calc(var(--space-4) + 2.4em)}
+.f-loc .repo{color:var(--text-muted)}
+.f-loc .line{color:var(--text-primary);font-weight:500}
+.f-body{display:grid;grid-template-columns:96px minmax(0,1fr);gap:var(--space-4) var(--space-6);margin:0}
+.f-body dt{font:500 var(--text-2xs)/1.9 var(--font-mono);letter-spacing:var(--tracking-caps);text-transform:uppercase;color:var(--text-muted)}
+.f-body dd{margin:0;color:var(--text-primary);text-wrap:pretty}
+.f-body dd.defect{font-size:var(--text-md)}
+.f-body .io{font-family:var(--font-mono);font-size:.94em;color:var(--text-secondary)}
+.code{grid-column:2;margin:0;background:var(--editor-bg);border:1px solid var(--border-subtle);border-radius:var(--radius-md);overflow-x:auto;max-width:100%}
+.code pre{margin:0;padding:var(--space-4) 0;font:var(--text-sm)/1.55 var(--font-mono);color:var(--text-primary);width:max-content;min-width:100%}
+.code .l{display:block;padding:0 var(--space-6) 0 0;border-left:2px solid transparent}
+.code .l.hl{background:var(--editor-hl);border-left-color:var(--editor-hl-gutter)}
+.code .n{display:inline-block;width:5ch;padding-right:1.5ch;text-align:right;color:var(--editor-line-number);user-select:none;-webkit-user-select:none}
+.code figcaption{font:var(--text-2xs)/1 var(--font-mono);color:var(--text-muted);padding:var(--space-3) var(--space-5);border-bottom:1px solid var(--border-subtle);letter-spacing:.02em}
+.k{color:var(--syn-keyword)}.s{color:var(--syn-string)}.nu{color:var(--syn-number)}.cm{color:var(--syn-comment)}.fn{color:var(--syn-function)}.ty{color:var(--syn-type)}
+.group-minor .finding{padding:var(--space-5) var(--space-7)}
+.group-minor .f-title h3{font-size:var(--text-md)}
+
+/* Footer */
+.foot{border-top:1px solid var(--border);padding-top:var(--space-6);display:flex;flex-direction:column;gap:var(--space-5)}
+.foot dl{display:grid;grid-template-columns:150px minmax(0,1fr);gap:var(--space-3) var(--space-6);margin:0;font-size:var(--text-sm)}
+.foot dt{color:var(--text-muted)}
+.foot dd{margin:0;color:var(--text-secondary);overflow-wrap:anywhere}
+.foot dd .mono{color:var(--text-primary)}
+.yes,.no{font:500 var(--text-xs)/1 var(--font-mono);padding:2px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);background:var(--surface)}
+.no{color:var(--text-secondary);background:transparent;border-style:dashed}
+
+@media (max-width:640px){
+  .page{padding:var(--space-7) var(--space-5) var(--space-9)}
+  .verdict{grid-template-columns:minmax(0,1fr);gap:var(--space-6);padding:var(--space-6)}
+  .ref{grid-template-columns:minmax(0,1fr)}
+  .ref-stat{grid-column:1;grid-row:auto;text-align:left}
+  .finding,.group-minor .finding{padding:var(--space-5)}
+  .f-loc{padding-left:0}
+  .f-body{grid-template-columns:minmax(0,1fr);gap:var(--space-1)}
+  .f-body dd{margin-bottom:var(--space-4)}
+  .code{grid-column:1}
+  .foot dl{grid-template-columns:minmax(0,1fr);gap:var(--space-1)}
+  .foot dd{margin-bottom:var(--space-3)}
+  .legend li{grid-template-columns:16px 56px minmax(0,1fr)}
+  .legend .now{grid-column:3}
+}
+/* Header meta line (run report) */
+.meta{font:var(--text-sm)/1.45 var(--font-mono);color:var(--text-secondary);overflow-wrap:anywhere}
+
+/* Tones — status colour, always paired with a glyph and a word */
+.tone-failed{--tone-fg:var(--status-failed-fg);--tone-bg:var(--status-failed-bg);--tone-border:var(--status-failed-border)}
+.tone-needs-you{--tone-fg:var(--status-needs-you-fg);--tone-bg:var(--status-needs-you-bg);--tone-border:var(--status-needs-you-border)}
+.tone-done{--tone-fg:var(--status-done-fg);--tone-bg:var(--status-done-bg);--tone-border:var(--status-done-border)}
+.tone-neutral{--tone-fg:var(--text-secondary);--tone-bg:var(--surface-sunken);--tone-border:var(--border)}
+
+/* Summary strip — shared by both reports */
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:var(--space-4)}
+.cell{display:flex;flex-direction:column;gap:var(--space-2);padding:10px var(--space-5);background:var(--surface-raised);border:1px solid var(--border);border-radius:var(--radius-md);box-shadow:var(--shadow-raised);color:var(--text-primary);text-decoration:none;min-width:0}
+a.cell:hover{text-decoration:none;color:var(--text-primary);background:var(--surface-hover)}
+a.cell:focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px}
+.cell-label{display:flex;align-items:center;gap:var(--space-3);font:500 var(--text-2xs)/1.4 var(--font-mono);letter-spacing:var(--tracking-caps);text-transform:uppercase;color:var(--text-secondary)}
+.cell-n{font:500 var(--text-2xl)/1.2 var(--font-mono);color:var(--text-primary)}
+.cell[class*="tone-"]{border-color:var(--tone-border)}
+.cell[class*="tone-"] .cell-n,.cell[class*="tone-"] .g{color:var(--tone-fg)}
+.cell.is-loud,a.cell.is-loud:hover{background:var(--tone-bg)}
+a.cell.is-loud:hover{border-color:var(--tone-fg)}
+.cell.is-loud .cell-label{color:var(--tone-fg)}
+.cell.is-zero .cell-n,.cell.is-none .cell-n{color:var(--text-muted)}
+
+/* One-line outcome / stop reason */
+.stop,.outcome{display:flex;gap:var(--space-3);align-items:baseline;color:var(--text-primary);text-wrap:pretty}
+.stop{font-size:var(--text-lg)}
+.stop .g,.outcome .g{flex:none;color:var(--tone-fg,var(--text-muted))}
+
+/* Agent prose */
+.prose{display:flex;flex-direction:column;gap:var(--space-4);max-width:72ch}
+.prose p{text-wrap:pretty}
+
+/* Task card (closed / parked) */
+.task{padding:var(--space-6) var(--space-7);display:flex;flex-direction:column;gap:var(--space-4);min-width:0}
+.task-top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--space-2) var(--space-6);align-items:baseline}
+.task-meta{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-4);min-width:0}
+.task-id{font:600 var(--text-xs)/1.4 var(--font-mono);color:var(--text-secondary)}
+.task-top h3{grid-column:1 / -1;font-size:var(--text-lg);font-weight:600;line-height:1.35;text-wrap:pretty}
+.dur{font:var(--text-sm)/1.4 var(--font-mono);color:var(--text-secondary);white-space:nowrap}
+.dur.is-none{color:var(--text-muted)}
+.task-body{color:var(--text-secondary);text-wrap:pretty}
+.task-body code,.prose code{color:var(--text-primary)}
+.task.is-parked{border-color:var(--status-needs-you-border);box-shadow:0 0 0 1px var(--status-needs-you-border),var(--shadow-raised)}
+.flag{display:inline-flex;align-items:center;gap:var(--space-2);height:20px;padding:0 var(--space-3);border:1px solid var(--tone-border);border-radius:var(--radius-sm);background:var(--tone-bg);color:var(--tone-fg);font:500 var(--text-2xs)/1 var(--font-mono);letter-spacing:var(--tracking-caps);text-transform:uppercase}
+
+/* Batch card */
+.batch{padding:var(--space-5) var(--space-7);display:flex;flex-direction:column;gap:var(--space-4);min-width:0}
+.batch-top{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--space-2) var(--space-6)}
+.batch-label{font:600 var(--text-sm)/1.4 var(--font-mono);color:var(--text-primary)}
+.batch-label .agent{font-weight:400;color:var(--text-muted)}
+.batch-top .dur{margin-left:auto}
+.batch .f-body{grid-template-columns:120px minmax(0,1fr)}
+.ids{display:flex;flex-wrap:wrap;gap:var(--space-2)}
+.no-account{color:var(--text-muted)}
+.outcome{padding-top:var(--space-4);border-top:1px solid var(--border-subtle)}
+
+@media (max-width:640px){
+  .task,.batch{padding:var(--space-5)}
+  .batch .f-body{grid-template-columns:minmax(0,1fr)}
+}
+@media print{.task,.batch{break-inside:avoid}}
+
+@media print{
+  html,body{background:#fff}
+  .card{box-shadow:none}
+  .finding{break-inside:avoid}
+  .code{overflow:visible}.code pre{width:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+}
+
+/* Zero-findings state */
+.clean{padding:var(--space-7);display:flex;flex-direction:column;gap:var(--space-6)}
+.clean-head{display:flex;gap:var(--space-4);align-items:baseline}
+.clean-head h2{font-size:var(--text-lg);font-weight:600}
+.clean p{color:var(--text-secondary);max-width:60ch;text-wrap:pretty}
+.files{list-style:none;margin:0;padding:0;border-top:1px solid var(--border-subtle)}
+.files li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--space-6);padding:var(--space-3) 0;border-bottom:1px solid var(--border-subtle);font:var(--text-sm)/1.45 var(--font-mono);color:var(--text-secondary)}
+.files li span:first-child{overflow-wrap:anywhere;color:var(--text-primary)}
+.files li span:last-child{white-space:nowrap}
+</style>
+</head>
+<body>
+<main class="page">
+
+  <!-- ═══ HEADER ═══ -->
+  <header class="head">
+    <div class="eyebrow">smetana · code review</div>
+    <!-- FIELD: title — repo names joined with ", " -->
+    <h1>smetana, bd-sync</h1>
+
+    <ul class="refs card" aria-label="Compared refs">
+      <!-- REPEAT: ref-pair — one per repository.
+           FIELDS: repo · base ref · head ref · files changed · lines added · lines removed -->
+      <li class="ref">
+        <span class="ref-repo">smetana</span>
+        <span class="ref-pair">main<span class="arrow" aria-label="from">←</span>feature/smetana-6tev-worktree-gc-skip-live-agents</span>
+        <span class="ref-stat">9 files · <span class="add">+318</span> <span class="del">−42</span></span>
+      </li>
+      <!-- /REPEAT ref-pair -->
+      <li class="ref">
+        <span class="ref-repo">bd-sync</span>
+        <span class="ref-pair">main<span class="arrow" aria-label="from">←</span>feature/smetana-6tev-spawned-from-index</span>
+        <span class="ref-stat">3 files · <span class="add">+96</span> <span class="del">−11</span></span>
+      </li>
+    </ul>
+  </header>
+
+  <!-- ═══ VERDICT ═══
+       FIELDS: score (0–100) · current range class on .band + .legend li (is-current on one of low/mid/high)
+       · marker left:% = score · range label + glyph -->
+  <section class="verdict card" aria-labelledby="verdict-h">
+    <div class="score">
+      <div class="eyebrow" id="verdict-h">Readiness</div>
+      <div class="score-num">74<small>%</small></div>
+      <div class="score-label c-serious"><span class="g" aria-hidden="true">▲</span>Serious issues, nothing blocking</div>
+    </div>
+    <div class="scale">
+      <div class="bar" role="img" aria-label="Readiness 74 percent, range 70 to 89">
+        <div class="band b-low"></div>
+        <div class="band b-mid is-current"></div>
+        <div class="band b-high"></div>
+        <div class="marker" style="left:74%"><span>74</span></div>
+      </div>
+      <div class="ticks" aria-hidden="true"><span style="left:0">0</span><span style="left:70%">70</span><span style="left:90%">90</span><span style="left:100%">100</span></div>
+      <ul class="legend">
+        <li class="l-high"><span class="g c-ok" aria-hidden="true">●</span><span class="range">90–100</span><span>Ready as is</span><span class="now"></span></li>
+        <li class="l-mid is-current"><span class="g c-serious" aria-hidden="true">▲</span><span class="range">70–89</span><span>Serious issues, nothing blocking</span><span class="now c-serious">Current</span></li>
+        <li class="l-low"><span class="g c-blocking" aria-hidden="true">■</span><span class="range">&lt;70</span><span>Blocking issue — returned for rework</span><span class="now"></span></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ═══ SUMMARY STRIP ═══ (shared with run report)
+       FIELDS: count per level. Count > 0 → <a href="#level">; 0 → <div> with .is-zero and no tone.
+       Blocking > 0 is the only loud cell (.is-loud). Last cell: total findings. -->
+  <nav class="strip" aria-label="Findings by level">
+    <a class="cell tone-failed is-loud" href="#blocking"><span class="cell-label"><span class="g" aria-hidden="true">■</span>Blocking</span><span class="cell-n">1</span></a>
+    <a class="cell tone-needs-you" href="#serious"><span class="cell-label"><span class="g" aria-hidden="true">▲</span>Serious</span><span class="cell-n">3</span></a>
+    <a class="cell tone-neutral" href="#minor"><span class="cell-label"><span class="g" aria-hidden="true">○</span>Minor</span><span class="cell-n">5</span></a>
+    <div class="cell"><span class="cell-label">Findings</span><span class="cell-n">9</span></div>
+  </nav>
+
+  <!-- ═══ GROUP: blocking ═══
+       REPEAT: group — one per level that has findings, order blocking → serious → minor; omit empty levels.
+       FIELDS: level name · glyph · count · group-<level> class -->
+  <section class="group group-blocking" id="blocking" aria-labelledby="blocking-h">
+    <div class="group-head">
+      <span class="g c-blocking" aria-hidden="true">■</span>
+      <h2 id="blocking-h">Blocking</h2>
+      <span class="count">1</span>
+      <span class="hint">Must be fixed before merge</span>
+    </div>
+
+    <!-- REPEAT: finding
+         FIELDS: id (B1/S1/M1…) · title · repo · path · line · defect (one sentence)
+         · failure scenario (input → result) · fix · optional <figure class="code"> (highlight the defect line with .hl) -->
+    <article class="finding card" id="B1">
+      <div class="f-top">
+        <div class="f-title"><span class="f-id c-blocking">■ B1</span><h3>Worktree GC deletes the worktree of a running agent</h3></div>
+        <div class="f-loc"><span class="repo">smetana/</span>src-tauri/src/worktree/gc.rs:<span class="line">142</span></div>
+      </div>
+      <dl class="f-body">
+        <dt>Defect</dt>
+        <dd class="defect"><code>collect_stale</code> decides staleness from the mtime of the worktree root, which does not change when an agent writes only into nested directories.</dd>
+        <dt>Fails when</dt>
+        <dd>An agent edits <span class="io">wt/bd-a1b2/src/**</span> for 31 minutes without touching the root → GC sees root mtime older than 30m → <span class="io">remove_dir_all("wt/bd-a1b2")</span> runs under the live agent, uncommitted work is lost and the agent exits with <span class="io">ENOENT</span>.</dd>
+        <dt>Fix</dt>
+        <dd>Before removal, read <code>.smetana/agent.lock</code> and skip the worktree if the holder PID is alive; fall back to mtime only when no lock exists.</dd>
+        <figure class="code">
+          <figcaption>src-tauri/src/worktree/gc.rs</figcaption>
+<pre><span class="l"><span class="n">138</span><span class="k">for</span> wt <span class="k">in</span> <span class="fn">list_worktrees</span>(root)? {</span><span class="l"><span class="n">139</span>    <span class="k">let</span> meta = fs::<span class="fn">metadata</span>(&amp;wt.path)?;</span><span class="l"><span class="n">140</span>    <span class="k">let</span> age = now.<span class="fn">duration_since</span>(meta.<span class="fn">modified</span>()?)?;</span><span class="l"><span class="n">141</span>    <span class="k">if</span> age &gt; <span class="ty">Duration</span>::<span class="fn">from_secs</span>(<span class="nu">30</span> * <span class="nu">60</span>) {</span><span class="l hl"><span class="n">142</span>        fs::<span class="fn">remove_dir_all</span>(&amp;wt.path)?; <span class="cm">// no lock check</span></span><span class="l"><span class="n">143</span>    }</span><span class="l"><span class="n">144</span>}</span></pre>
+        </figure>
+      </dl>
+    </article>
+    <!-- /REPEAT finding -->
+  </section>
+  <!-- /REPEAT group -->
+
+  <!-- ═══ GROUP: serious ═══ -->
+  <section class="group group-serious" id="serious" aria-labelledby="serious-h">
+    <div class="group-head">
+      <span class="g c-serious" aria-hidden="true">▲</span>
+      <h2 id="serious-h">Serious</h2>
+      <span class="count">3</span>
+      <span class="hint">Fix before merge or file a follow-up</span>
+    </div>
+
+    <article class="finding card" id="S1">
+      <div class="f-top">
+        <div class="f-title"><span class="f-id c-serious">▲ S1</span><h3>Write-lock is not released when the agent task panics</h3></div>
+        <div class="f-loc"><span class="repo">smetana/</span>src-tauri/src/agent/supervisor.rs:<span class="line">88</span></div>
+      </div>
+      <dl class="f-body">
+        <dt>Defect</dt>
+        <dd class="defect">The lock is released by an explicit <code>unlock()</code> call at the end of <code>run_agent</code>, which is skipped on panic.</dd>
+        <dt>Fails when</dt>
+        <dd>The agent's tool call panics on a malformed diff → the task unwinds past <span class="io">unlock()</span> → the task stays read-only with "Read-only while an agent is working." until the app restarts.</dd>
+        <dt>Fix</dt>
+        <dd>Return a <code>LockGuard</code> from <code>lock()</code> and release in its <code>Drop</code> impl.</dd>
+      </dl>
+    </article>
+
+    <article class="finding card" id="S2">
+      <div class="f-top">
+        <div class="f-title"><span class="f-id c-serious">▲ S2</span><h3>Status hash differs between Rust and the UI for non-ASCII names</h3></div>
+        <div class="f-loc"><span class="repo">smetana/</span>app/src/status/hash.ts:<span class="line">21</span></div>
+      </div>
+      <dl class="f-body">
+        <dt>Defect</dt>
+        <dd class="defect">The UI runs FNV-1a over UTF-16 code units, while <code>status.rs</code> hashes UTF-8 bytes.</dd>
+        <dt>Fails when</dt>
+        <dd>A user status <span class="io">"ревью"</span> → Rust slot <span class="io">7</span>, UI slot <span class="io">2</span> → the tray badge and the board column show the same status in two different colours.</dd>
+        <dt>Fix</dt>
+        <dd>Hash <code>new TextEncoder().encode(name)</code> in the UI and add a shared fixture of 15 names checked by both test suites.</dd>
+        <figure class="code">
+          <figcaption>app/src/status/hash.ts</figcaption>
+<pre><span class="l"><span class="n">19</span><span class="k">let</span> h = <span class="nu">0x811c9dc5</span>;</span><span class="l"><span class="n">20</span><span class="k">for</span> (<span class="k">let</span> i = <span class="nu">0</span>; i &lt; name.length; i++) {</span><span class="l hl"><span class="n">21</span>  h ^= name.<span class="fn">charCodeAt</span>(i);</span><span class="l"><span class="n">22</span>  h = Math.<span class="fn">imul</span>(h, <span class="nu">0x01000193</span>);</span><span class="l"><span class="n">23</span>}</span></pre>
+        </figure>
+      </dl>
+    </article>
+
+    <article class="finding card" id="S3">
+      <div class="f-top">
+        <div class="f-title"><span class="f-id c-serious">▲ S3</span><h3>Migration fails when run a second time</h3></div>
+        <div class="f-loc"><span class="repo">bd-sync/</span>crates/bd-sync-store/src/migrations/2026_10_14_000003_add_spawned_from_relation_index_to_tasks_table.rs:<span class="line">31</span></div>
+      </div>
+      <dl class="f-body">
+        <dt>Defect</dt>
+        <dd class="defect">The index is created without <code>IF NOT EXISTS</code>, and the migration is not recorded until after the statement succeeds.</dd>
+        <dt>Fails when</dt>
+        <dd>The app is killed between <span class="io">CREATE INDEX</span> and the migration-table insert → next launch reruns the migration → <span class="io">index idx_tasks_spawned_from already exists</span>, the store refuses to open.</dd>
+        <dt>Fix</dt>
+        <dd>Use <code>CREATE INDEX IF NOT EXISTS</code> and wrap the statement and the migration record in one transaction.</dd>
+        <figure class="code">
+          <figcaption>crates/bd-sync-store/src/migrations/2026_10_14_000003_add_spawned_from_relation_index_to_tasks_table.rs</figcaption>
+<pre><span class="l"><span class="n">29</span><span class="k">pub fn</span> <span class="fn">up</span>(conn: &amp;<span class="ty">Connection</span>) -&gt; <span class="ty">Result</span>&lt;()&gt; {</span><span class="l"><span class="n">30</span>    conn.<span class="fn">execute_batch</span>(</span><span class="l hl"><span class="n">31</span>        <span class="s">"CREATE INDEX idx_tasks_spawned_from ON tasks (spawned_from_id, relation_kind, updated_at) WHERE spawned_from_id IS NOT NULL AND relation_kind IN ('spawned-from', 'relates-to');"</span>,</span><span class="l"><span class="n">32</span>    )?;</span><span class="l"><span class="n">33</span>    <span class="fn">record_migration</span>(conn, <span class="s">"2026_10_14_000003"</span>)</span><span class="l"><span class="n">34</span>}</span></pre>
+        </figure>
+      </dl>
+    </article>
+  </section>
+
+  <!-- ═══ GROUP: minor ═══ (compact padding via .group-minor) -->
+  <section class="group group-minor" id="minor" aria-labelledby="minor-h">
+    <div class="group-head">
+      <span class="g c-minor" aria-hidden="true">○</span>
+      <h2 id="minor-h">Minor</h2>
+      <span class="count">5</span>
+      <span class="hint">Optional</span>
+    </div>
+
+    <article class="finding card" id="M1">
+      <div class="f-top">
+        <div class="f-title"><span class="f-id c-minor">○ M1</span><h3><code>gc.stale_after</code> setting is ignored</h3></div>
+        <div class="f-loc"><span class="repo">smetana/</span>src-tauri/src/worktree/gc.rs:<span class="line">141</span></div>
+      </div>
+      <dl class="f-body">
+        <dt>Defect</dt>
+        <dd class="defect">The threshold is hard-coded to 30 minutes instead of reading the config value.</dd>
+        <dt>Fails when</dt>
+        <dd><span class="io">stale_after = "2h"</span> in settings → worktrees are still collected after 30m.</dd>
+        <dt>Fix</dt>
+        <dd>Pass <code>config.gc.stale_after</code> into <code>collect_stale</code>.</dd>
+      </dl>
+    </article>
+
+    <article class="finding card" id="M2">
+      <div class="f-top">
+        <div class="f-title"><span class="f-id c-minor">○ M2</span><h3>Toast shows the path with Debug quotes</h3></div>
+        <div class="f-loc"><span class="repo">smetana/</span>src-tauri/src/worktree/gc.rs:<span class="line">201</span></div>
+      </div>
+      <dl class="f-body">
+        <dt>Defect</dt>
+        <dd class="defect">The message formats <code>PathBuf</code> with <code>{:?}</code>.</dd>
+        <dt>Fails when</dt>
+        <dd>Collecting <span class="io">wt/bd-77e1</span> → toast reads <span class="io">Removed "wt/bd-77e1"</span>.</dd>
+        <dt>Fix</dt>
+        <dd>Use <code>path.display()</code>.</dd>
+      </dl>
+    </article>
+
+    <article class="finding card" id="M3">
+      <div class="f-top">
+        <div class="f-title"><span class="f-id c-minor">○ M3</span><h3>Normalisation keeps a trailing dash</h3></div>
+        <div class="f-loc"><span class="repo">smetana/</span>app/src/status/normalize.ts:<span class="line">9</span></div>
+      </div>
+      <dl class="f-body">
+        <dt>Defect</dt>
+        <dd class="defect">Runs of non-alphanumerics are collapsed before trimming, so edge dashes survive.</dd>
+        <dt>Fails when</dt>
+        <dd><span class="io">"awaiting review "</span> → <span class="io">"awaiting-review-"</span> → different slot from <span class="io">"awaiting-review"</span>.</dd>
+        <dt>Fix</dt>
+        <dd>Strip leading and trailing <code>-</code> after collapsing.</dd>
+      </dl>
+    </article>
+
+    <article class="finding card" id="M4">
+      <div class="f-top">
+        <div class="f-title"><span class="f-id c-minor">○ M4</span><h3>Reconnect backoff has no jitter</h3></div>
+        <div class="f-loc"><span class="repo">bd-sync/</span>crates/bd-sync/src/client.rs:<span class="line">64</span></div>
+      </div>
+      <dl class="f-body">
+        <dt>Defect</dt>
+        <dd class="defect">All clients retry at exactly 1s, 2s, 4s.</dd>
+        <dt>Fails when</dt>
+        <dd>Tracker restarts with 12 agents connected → 12 reconnects land in the same 10ms window on every step.</dd>
+        <dt>Fix</dt>
+        <dd>Add full jitter: <code>rand(0..=delay)</code>.</dd>
+      </dl>
+    </article>
+
+    <article class="finding card" id="M5">
+      <div class="f-top">
+        <div class="f-title"><span class="f-id c-minor">○ M5</span><h3>GC test depends on wall-clock sleep</h3></div>
+        <div class="f-loc"><span class="repo">smetana/</span>src-tauri/tests/worktree_gc.rs:<span class="line">40</span></div>
+      </div>
+      <dl class="f-body">
+        <dt>Defect</dt>
+        <dd class="defect">The test sleeps 2s and asserts on real mtimes.</dd>
+        <dt>Fails when</dt>
+        <dd>CI runner under load → mtime resolution and scheduling skew → intermittent failure.</dd>
+        <dt>Fix</dt>
+        <dd>Inject a clock and set mtimes with <code>filetime::set_file_mtime</code>.</dd>
+      </dl>
+    </article>
+  </section>
+
+  <!-- ═══ FOOTER ═══
+       FIELDS: project rules per repo (yes + source file / no) · reviewer · date · ref pairs repeated (REPEAT inside dd) -->
+  <footer class="foot">
+    <dl>
+      <dt>Project rules</dt>
+      <dd><span class="mono">[merge].hazards</span> · smetana <span class="yes">yes</span> · bd-sync <span class="no">no</span></dd>
+      <dt>Reviewer</dt>
+      <dd><span class="mono">claude-2</span></dd>
+      <dt>Date</dt>
+      <dd><span class="mono">2026-10-23 14:02</span></dd>
+      <dt>Refs</dt>
+      <dd>
+        <div class="mono">smetana · main ← feature/smetana-6tev-worktree-gc-skip-live-agents</div>
+        <div class="mono">bd-sync · main ← feature/smetana-6tev-spawned-from-index</div>
+      </dd>
+    </dl>
+  </footer>
+
+</main>
+</body>
+</html>
