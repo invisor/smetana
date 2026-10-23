@@ -13,7 +13,7 @@
    `PermissionRequest.vue` is the one place that wraps instead, and the
    difference is the point: there, the exact command is what is being agreed to.
 
-   The result is `null` while the call is still open, and `{ ok, summary }`
+   The result is `null` while the call is still open, and `{ ok, summary, denial }`
    once it is not. **The outcome pair — the tick or the cross with the summary
    beside it — is drawn only with a result behind it**, never as a guess: a tick
    that appeared before the tool had finished would be the panel claiming
@@ -31,18 +31,39 @@
    deliberately: one unbroken token with a separator in it and an extension on
    its last segment. `rm -rf /tmp/x` holds a path and is a command; `--workspace`
    is neither; and the cost of guessing wrong either way is one glyph, never a
-   wrong answer about what happened. */
+   wrong answer about what happened.
+
+   **A `denial` draws a card under the row**, and only under it: the call was
+   refused by Claude Code's auto-mode classifier, nobody is held waiting (the
+   agent has already gone on and written its prose), and so it is deliberately
+   not loud. It uses the failed idiom the row already has, never `needs-you`,
+   whose fill is budgeted at one or two a screen for things that hold a
+   session open. The two buttons exist only while `blockOpen` and the session
+   takes messages; they emit and `ConversationView` sends, since this file
+   knows no store. A closed block keeps the card without the buttons so what
+   happened stays readable. */
 import { computed } from 'vue'
+import Button from '../core/Button.vue'
 import Icon from '../core/Icon.vue'
+import { denialReason } from './autoModeBlock.js'
 import { fileIconUrl } from '../../catppuccinIcon.js'
 import { documentTheme } from '../../documentTheme.js'
 
 const props = defineProps({
   name: { type: String, required: true },
   detail: { type: String, default: '' },
-  /* `null` while the call is still running, `{ ok, summary }` once it is not. */
-  result: { type: Object, default: null }
+  /* `null` while the call is still running, `{ ok, summary, denial }` once it is not. */
+  result: { type: Object, default: null },
+  /* True while an auto-mode block has had no reply from the person yet. */
+  blockOpen: { type: Boolean, default: false },
+  canMessage: { type: Boolean, default: false }
 })
+
+const emit = defineEmits(['allow-block', 'refuse-block'])
+
+const denial = computed(() => props.result?.denial ?? null)
+const reason = computed(() => denialReason(denial.value))
+const showButtons = computed(() => props.blockOpen && props.canMessage)
 
 const FILE_PATH = /^\S*[/\\][^\s/\\]*\.[^\s/\\]+$/
 
@@ -102,10 +123,45 @@ const outcomeGlyph = computed(() => ({
   color: ok.value ? 'var(--status-done-fg)' : 'var(--status-failed-fg)'
 }))
 
+const column = { display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', minWidth: 0 }
+
+const card = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-3)',
+  minWidth: 0,
+  padding: 'var(--space-4)',
+  background: 'var(--surface-raised)',
+  border: 'var(--border-w) solid var(--status-failed-fg)',
+  borderRadius: 'var(--radius-4)'
+}
+
+const heading = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-3)',
+  font: 'var(--weight-medium) var(--text-sm)/1.2 var(--font-sans)',
+  color: 'var(--text-primary)'
+}
+
+/* `anywhere` and `pre-wrap` together: a 140-character command with no break
+   in it and a reason of several lines both stay inside the column. */
+const reasonStyle = {
+  minWidth: 0,
+  margin: 0,
+  whiteSpace: 'pre-wrap',
+  overflowWrap: 'anywhere',
+  font: 'var(--weight-regular) var(--text-sm)/1.4 var(--font-sans)',
+  color: 'var(--text-secondary)'
+}
+
+const buttons = { display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)' }
+
 const summaryStyle = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 </script>
 
 <template>
+  <div :style="column">
   <div :style="row">
     <!-- 15px and not the row's usual 13, for the reason `FileTreeRow` gives:
          this set draws on a 16 grid with padding of its own, where a lucide
@@ -122,5 +178,17 @@ const summaryStyle = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis'
       <Icon :name="ok ? 'check' : 'x'" :size="11" :stroke-width="2.25" :style="outcomeGlyph" />
       <span v-if="result.summary" :style="summaryStyle">{{ result.summary }}</span>
     </span>
+  </div>
+  <div v-if="denial" :style="card" data-auto-mode-block>
+    <div :style="heading">
+      <Icon name="x" :size="13" :stroke-width="2.25" :style="{ color: 'var(--status-failed-fg)' }" />
+      <span>Blocked by auto mode</span>
+    </div>
+    <p :style="reasonStyle">{{ reason }}</p>
+    <div v-if="showButtons" :style="buttons">
+      <Button variant="primary" size="sm" @click="emit('allow-block')">Allow</Button>
+      <Button variant="secondary" size="sm" @click="emit('refuse-block')">Refuse</Button>
+    </div>
+  </div>
   </div>
 </template>

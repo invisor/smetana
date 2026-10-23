@@ -68,6 +68,7 @@ import Icon from '../core/Icon.vue'
 import StatusBadge from '../status/StatusBadge.vue'
 import { isAskUserQuestion } from './askUserQuestion.js'
 import { attachmentAction } from './attachmentAction.js'
+import { approvalText, refusalText } from './autoModeBlock.js'
 import { appendQuote, quoteFromSelection } from './draftSegments.js'
 import { isBusy, journalRows } from './journal.js'
 import { SELECTION_MENU_W, selectionMenuItems } from './selectionMenu.js'
@@ -594,6 +595,18 @@ async function send() {
 
 const stop = () => stopConversation(props.sessionId)
 
+/* One press of Allow or Refuse on an auto-mode block card: an ordinary turn of
+   the person's, through the same path the composer uses, so it lands in the
+   journal as a `user-message` and in the agent's transcript as their words.
+   Re-sticks first, for the reason `send()` does. The draft in the composer is
+   untouched: this is not that message. */
+async function replyToBlock(text) {
+  stick = true
+  await nextTick()
+  toEnd()
+  await sendMessage(props.sessionId, text, [])
+}
+
 async function answer(decision, answers) {
   const id = question.value.id
   /* Same re-stick as `send()`, before the call and for the same reason:
@@ -919,6 +932,10 @@ const refusal = computed(() => ({
             :name="row.name"
             :detail="row.detail"
             :result="row.result"
+            :block-open="row.blockOpen"
+            :can-message="canMessage"
+            @allow-block="replyToBlock(approvalText(row.name, row.detail, row.result.denial))"
+            @refuse-block="replyToBlock(refusalText(row.name, row.detail))"
           />
           <TurnResult
             v-else-if="row.kind === 'activity'"
