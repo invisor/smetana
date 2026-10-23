@@ -22,3 +22,13 @@ export function denialReason(denial) {
   const bracket = /Reason: \[([^\]]+)\]/.exec(denial ?? '')
   return bracket ? bracket[1] : (denial ?? '')
 }
+
+/* Whether a block card offers Allow and Refuse. `composerShown` is the panel's
+   own "may a turn be sent right now" (a session the person may write into, no
+   card waiting on an answer), so the card never offers a turn the composer
+   would refuse. `replying` is the panel's in-flight flag: from the first press
+   until the journal closes the block, so two quick presses, or Allow then
+   Refuse, cannot send two turns. */
+export function blockButtonsShown({ blockOpen, composerShown, replying }) {
+  return !!blockOpen && !!composerShown && !replying
+}

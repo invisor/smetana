@@ -68,7 +68,7 @@ import Icon from '../core/Icon.vue'
 import StatusBadge from '../status/StatusBadge.vue'
 import { isAskUserQuestion } from './askUserQuestion.js'
 import { attachmentAction } from './attachmentAction.js'
-import { approvalText, refusalText } from './autoModeBlock.js'
+import { approvalText, blockButtonsShown, refusalText } from './autoModeBlock.js'
 import { appendQuote, quoteFromSelection } from './draftSegments.js'
 import { isBusy, journalRows } from './journal.js'
 import { SELECTION_MENU_W, selectionMenuItems } from './selectionMenu.js'
@@ -601,11 +601,30 @@ const stop = () => stopConversation(props.sessionId)
    Re-sticks first, for the reason `send()` does. The draft in the composer is
    untouched: this is not that message. */
 async function replyToBlock(text) {
+  if (replying.value) return
+  /* Set before the first await: the block only closes when the person's turn
+     comes back through the journal, and a second press in that gap would send
+     a second turn. */
+  replying.value = true
   stick = true
-  await nextTick()
-  toEnd()
-  await sendMessage(props.sessionId, text, [])
+  try {
+    await nextTick()
+    toEnd()
+    await sendMessage(props.sessionId, text, [])
+    if (conversationState.lastError) replying.value = false
+  } catch {
+    replying.value = false
+  }
 }
+
+/* True from a press on a block card until the journal closes that block. */
+const replying = ref(false)
+const anyBlockOpen = computed(() => rows.value.some((row) => row.kind === 'tool' && row.blockOpen))
+/* The block closing is what ends the wait; so does there being none to wait
+   on (a switched session). */
+watch(anyBlockOpen, (open) => {
+  if (!open) replying.value = false
+})
 
 async function answer(decision, answers) {
   const id = question.value.id
@@ -933,7 +952,7 @@ const refusal = computed(() => ({
             :detail="row.detail"
             :result="row.result"
             :block-open="row.blockOpen"
-            :can-message="canMessage"
+            :can-message="blockButtonsShown({ blockOpen: row.blockOpen, composerShown, replying })"
             @allow-block="replyToBlock(approvalText(row.name, row.detail, row.result.denial))"
             @refuse-block="replyToBlock(refusalText(row.name, row.detail))"
           />

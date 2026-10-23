@@ -132,7 +132,7 @@ added by hand together with the constants; an existing entry is a frozen contrac
 
 `EventKind::ToolResult` gained `denial`: `null`, or the reason Claude Code's auto-mode classifier gave when it refused the
 call (`conversation-panel.md`, the block card). It rides every `session:events` and `crew:events` payload and the replies
-that replay a journal. Additions only; a phone that ignores it draws the row as a failed tool, as before. The mobile
+that replay a journal. Additions only. The phone imports the same `ConversationView` and `journal.js`, so a phone built from this tree draws the card too; only an older phone build ignores the field and draws a plain failed row. The mobile
 build's own `PROTOCOL_MINOR` stays where it was.
 
 ## Protocol 1.6: files beside pictures

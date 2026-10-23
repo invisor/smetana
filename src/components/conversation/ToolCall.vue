@@ -64,6 +64,8 @@ const emit = defineEmits(['allow-block', 'refuse-block'])
 const denial = computed(() => props.result?.denial ?? null)
 const reason = computed(() => denialReason(denial.value))
 const showButtons = computed(() => props.blockOpen && props.canMessage)
+/* `canMessage` is whatever the panel decided: `blockButtonsShown` there folds
+   the composer's own condition and the in-flight press into it. */
 
 const FILE_PATH = /^\S*[/\\][^\s/\\]*\.[^\s/\\]+$/
 

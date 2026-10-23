@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { approvalText, denialReason, refusalText } from '../../../src/components/conversation/autoModeBlock.js'
+import { approvalText, blockButtonsShown, denialReason, refusalText } from '../../../src/components/conversation/autoModeBlock.js'
 
 describe('the auto-mode block replies', () => {
   it('names the tool and the command, then quotes the block', () => {
@@ -20,5 +20,13 @@ describe('the auto-mode block replies', () => {
     expect(denialReason(denial)).toBe('Modify Shared Resources')
     expect(denialReason('some other text')).toBe('some other text')
     expect(denialReason(null)).toBe('')
+  })
+
+  it('offers the buttons only while the block is open, a turn may be sent and none is in flight', () => {
+    const open = { blockOpen: true, composerShown: true, replying: false }
+    expect(blockButtonsShown(open)).toBe(true)
+    expect(blockButtonsShown({ ...open, blockOpen: false })).toBe(false)
+    expect(blockButtonsShown({ ...open, composerShown: false })).toBe(false)
+    expect(blockButtonsShown({ ...open, replying: true })).toBe(false)
   })
 })
