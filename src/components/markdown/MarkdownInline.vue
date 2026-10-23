@@ -164,6 +164,7 @@ function onLocalContextMenu(event, path, kind) {
       :data-path="node.path"
       :data-kind="node.targetKind"
       :data-code="node.code ? '' : undefined"
+      :data-alone="node.alone ? '' : undefined"
       :href="localHref(root, node.path)"
       @click.prevent="emit('open-local', { path: node.path, kind: node.targetKind })"
       @auxclick.prevent="onLocalAuxClick($event, node.path, node.targetKind)"

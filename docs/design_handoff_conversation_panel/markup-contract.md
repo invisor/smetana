@@ -226,8 +226,10 @@ Decisions worth knowing:
 - **Middle truncation** is done in the markup, because CSS cannot do it: the
   renderer splits the path into `[data-head]` (truncates with an ellipsis) and
   `[data-tail]` (never truncates — the file name and line number). Inline, the
-  link is an `inline-flex` that yields to the sentence; as the only child of a
-  `p` it takes the full column, so the head truncates as late as possible.
+  link is an `inline-flex` that yields to the sentence; with **`data-alone`**
+  (set by the renderer when the local link is the only content of its
+  paragraph) it takes the full column, so the head truncates as late as
+  possible. The stylesheet never guesses this: `:only-child` ignores text.
 - A link the agent wrote in backticks carries **`data-code`** on the same
   anchor (local or external): inline code's background, padding and radius, so
   it still reads as code while being pressable. Colour and underline are the
@@ -419,7 +421,7 @@ summary article div span time button`
 
 Attributes: `class` (`sm-prose` only), `data-turn data-attachments data-task
 data-checked data-align data-wide data-table-scroll data-code data-lang
-data-copy data-state data-path data-kind data-head data-tail data-figure
+data-copy data-state data-path data-kind data-alone data-head data-tail data-figure
 data-figures data-placeholder data-activity data-mark data-edge data-reasoning data-disclosure
 data-icon data-expand data-session`, plus `href src alt width height type
 role aria-label aria-hidden open datetime` and the SVG geometry/presentation

@@ -2073,7 +2073,11 @@ const MARKDOWN_LINKS_SAMPLE = [
   'Written with no markup, a path becomes a link too: .smetana/reviews/2026-10-20-review.md and',
   'docs/ are found in the running text, and so is https://example.com/a_b.',
   'Inside backticks it keeps the look of code: `src/components/markdown/links.js:40` and',
-  '`https://example.com/docs`, while `taxCalculationMixin` stays plain code.'
+  '`https://example.com/docs`, while `taxCalculationMixin` stays plain code.',
+  '',
+  'A new page `src/views/Gallery.vue` with placeholders stays inline in its sentence.',
+  '',
+  '`src-tauri/src/session/claude_driver/history/transcripts/replay/stitching/merge.rs:184`'
 ].join('\n')
 
 /* The active project's absolute path this page pretends to have, so the

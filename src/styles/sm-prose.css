@@ -667,8 +667,11 @@
   font-size:var(--text-code-size);
   overflow-wrap:anywhere;
 }
-/* On a line of its own: takes the full column so the head truncates late. */
-.sm-prose p > a[data-path]:only-child{
+/* On a line of its own: takes the full column so the head truncates late.
+   Keyed on `data-alone`, which the parser sets when the link is the whole of
+   its paragraph. `:only-child` was used before and is wrong here: it counts
+   elements only, so a link with words on either side matched it too. */
+.sm-prose a[data-path][data-alone]{
   display:flex;
   width:100%;
 }

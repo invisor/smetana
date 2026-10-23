@@ -1055,7 +1055,8 @@ describe('bare paths, bare URLs and code spans that name one', () => {
         path: 'src/a.js',
         targetKind: 'file',
         head: 'src/',
-        tail: 'a.js'
+        tail: 'a.js',
+        alone: true
       }
     ])
   })
@@ -1161,5 +1162,34 @@ describe('bare paths, bare URLs and code spans that name one', () => {
     const strong = para('**src/a.js**')[0]
     expect(strong.type).toBe('strong')
     expect(strong.children[0]).toMatchObject({ type: 'link', path: 'src/a.js' })
+  })
+})
+
+describe('parseMarkdown alone', () => {
+  const link = (md) => parseMarkdown(md)[0].children.filter((n) => n.type === 'link')
+
+  it('marks a local link that is the whole paragraph', () => {
+    const [node] = link('`src/views/Gallery.vue`')
+    expect(node.local).toBe(true)
+    expect(node.alone).toBe(true)
+  })
+
+  it('does not mark the same link with text on either side', () => {
+    expect(link('A new page `src/views/Gallery.vue` with stubs')[0].alone).toBeUndefined()
+  })
+
+  it('marks neither of two links in one paragraph', () => {
+    const nodes = link('`src/a.js` `src/b.js`')
+    expect(nodes).toHaveLength(2)
+    expect(nodes.every((n) => n.alone === undefined)).toBe(true)
+  })
+
+  it('ignores whitespace-only text around a lone link', () => {
+    const children = parseMarkdown('`src/views/Gallery.vue` ')[0].children
+    expect(children.find((n) => n.type === 'link').alone).toBe(true)
+  })
+
+  it('does not mark an external link on its own', () => {
+    expect(link('[docs](https://example.com)')[0].alone).toBeUndefined()
   })
 })
