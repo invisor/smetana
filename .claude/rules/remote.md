@@ -128,6 +128,13 @@ than the digest recorded for the current `PROTOCOL_MAJOR.PROTOCOL_MINOR`, and sa
 MINOR for additions, MAJOR for removals and renames. The way forward is a new entry under a higher version,
 added by hand together with the constants; an existing entry is a frozen contract and is not edited.
 
+## Protocol 1.7: a tool result's denial
+
+`EventKind::ToolResult` gained `denial`: `null`, or the reason Claude Code's auto-mode classifier gave when it refused the
+call (`conversation-panel.md`, the block card). It rides every `session:events` and `crew:events` payload and the replies
+that replay a journal. Additions only; a phone that ignores it draws the row as a failed tool, as before. The mobile
+build's own `PROTOCOL_MINOR` stays where it was.
+
 ## Protocol 1.6: files beside pictures
 
 `TaskDraft` (the `newTask` intent in `session_start`) gained `files`, a list of attachment-store paths for attached

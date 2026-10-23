@@ -1,6 +1,7 @@
 //! Driving an agent over its own protocol, rather than reading the terminal it
 //! paints. See `docs/superpowers/specs/2026-09-10-conversation-ui-design.md`.
 
+pub mod blocks;
 pub mod commands;
 pub mod crew;
 pub mod driver;
