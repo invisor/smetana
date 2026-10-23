@@ -168,6 +168,11 @@ pub struct ClaudeDriver {
     /// interrupts in the same session never repeat one. Uniqueness within
     /// this process is all the CLI was measured to need.
     interrupts: u64,
+    /// Auto-mode refusals and near-misses seen since the service last asked,
+    /// drained by `block_sightings`. Kept beside the events rather than in
+    /// them because the statistics file wants the raw text whole, and an event
+    /// is deliberately small.
+    sightings: Vec<(String, String, bool)>,
 }
 
 /// The config file handed to the child, alive for as long as the driver is.
@@ -247,6 +252,7 @@ impl ClaudeDriver {
             lines: LineBuffer::new(),
             permission: permission.as_ref().and_then(write_mcp_config),
             interrupts: 0,
+            sightings: Vec::new(),
         }
     }
 }
@@ -339,6 +345,92 @@ pub(crate) fn result_summary(content: Option<&Value>) -> String {
     }
 }
 
+/// The sentence Claude Code's auto-mode classifier opens a refusal with.
+///
+/// Copied from a real `tool_result` in a 2.1.304 session transcript (see
+/// `tests/fixtures/claude-auto-mode-denial.jsonl`), not typed from memory: the
+/// full text reads "Permission for this action was denied by the Claude Code
+/// auto mode classifier. Reason: [Modify Shared Resources]. ..." and the
+/// bracketed category is what differs between refusals.
+pub(crate) const AUTO_MODE_PHRASE: &str = "denied by the Claude Code auto mode classifier";
+
+/// The longest reason a `ToolResult` carries. The journal promises small events.
+pub(crate) const MAX_DENIAL: usize = 400;
+
+/// A `tool_result`'s prose, whichever of `string | ContentBlock[]` it is.
+pub(crate) fn result_text(block: &Value) -> String {
+    match block.get("content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .filter(|block| str_at(block, "type") == "text")
+            .map(|block| str_at(block, "text"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+fn is_error(block: &Value) -> bool {
+    block.get("is_error").and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// The classifier's reason when this `tool_result` is one of its refusals: a
+/// failed result whose text contains `AUTO_MODE_PHRASE`. The reason is the
+/// refusal's first two sentences, up to and including `Reason: [...]`, because
+/// the rest is instructions to the model that a person has no use for; text
+/// without a `Reason: [` falls back to the whole text. Clipped to `MAX_DENIAL`.
+pub(crate) fn auto_mode_denial(block: &Value) -> Option<String> {
+    if !is_error(block) {
+        return None;
+    }
+    let text = result_text(block);
+    let start = text.find(AUTO_MODE_PHRASE)?;
+    let head_start = text[..start].rfind(|c| c == '\n').map_or(0, |at| at + 1);
+    let text = text[head_start..].trim();
+    let end = text
+        .find("Reason: [")
+        .and_then(|at| text[at..].find(']').map(|close| at + close + 1))
+        .map(|close| if text[close..].starts_with('.') { close + 1 } else { close })
+        .unwrap_or(text.len());
+    Some(clip(text[..end].trim(), MAX_DENIAL))
+}
+
+/// A failed result that talks about auto mode or the classifier, refusal or not.
+/// The statistics file's looser net: what it catches beyond `auto_mode_denial`
+/// is the material for tuning the exact phrase later.
+pub(crate) fn mentions_auto_mode(block: &Value) -> bool {
+    if !is_error(block) {
+        return false;
+    }
+    let text = result_text(block).to_lowercase();
+    text.contains("auto mode") || text.contains("classifier")
+}
+
+/// Every `(tool_use_id, raw text, matched)` in one stream line worth recording.
+fn block_sightings(event: &Value) -> Vec<(String, String, bool)> {
+    if str_at(event, "type") != "user" {
+        return Vec::new();
+    }
+    event
+        .pointer("/message/content")
+        .and_then(Value::as_array)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter(|block| str_at(block, "type") == "tool_result" && mentions_auto_mode(block))
+                .map(|block| {
+                    (
+                        str_at(block, "tool_use_id").to_string(),
+                        result_text(block),
+                        auto_mode_denial(block).is_some(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// One decoded line of the stream, as events.
 ///
 /// Zero events is an ordinary answer and the commonest one: hook chatter, a
@@ -415,6 +507,7 @@ pub(crate) fn one_event(event: &Value) -> Vec<EventKind> {
                         id: str_at(block, "tool_use_id").to_string(),
                         ok: !block.get("is_error").and_then(Value::as_bool).unwrap_or(false),
                         summary: result_summary(block.get("content")),
+                        denial: auto_mode_denial(block),
                     })
                     .collect()
             })
@@ -567,12 +660,21 @@ impl Driver for ClaudeDriver {
         // A line that does not parse as JSON produces nothing rather than an
         // error row: a harness printing a warning to stdout must not put a red
         // row in somebody's conversation.
-        self.lines
+        let mut out = Vec::new();
+        for event in self
+            .lines
             .feed(bytes)
             .iter()
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .flat_map(|event| one_event(&event))
-            .collect()
+        {
+            self.sightings.extend(block_sightings(&event));
+            out.extend(one_event(&event));
+        }
+        out
+    }
+
+    fn block_sightings(&mut self) -> Vec<(String, String, bool)> {
+        std::mem::take(&mut self.sightings)
     }
 
     fn send(&mut self, input: Input) -> Vec<u8> {
@@ -680,6 +782,86 @@ mod tests {
     /// A turn that mostly hit the cache, which is the ordinary case rather than
     /// the exception once a session has any length to it.
     const RESULT_CACHED: &str = r#"{"type":"result","subtype":"success","duration_ms":4200,"total_cost_usd":0.031,"usage":{"input_tokens":19,"cache_read_input_tokens":43336,"cache_creation_input_tokens":10000,"output_tokens":40}}"#;
+
+    const DENIAL_FIXTURE: &str = include_str!("../../tests/fixtures/claude-auto-mode-denial.jsonl");
+
+    fn denial_events() -> Vec<EventKind> {
+        // The fixture's first line is a header note; the driver skips it as it
+        // skips any line of a type it has not been told about.
+        let mut driver = ClaudeDriver::new(None);
+        driver.feed(DENIAL_FIXTURE.as_bytes())
+    }
+
+    #[test]
+    fn a_blocked_tool_result_carries_the_classifiers_reason() {
+        let result = denial_events()
+            .into_iter()
+            .find(|kind| matches!(kind, EventKind::ToolResult { .. }))
+            .expect("the fixture holds one tool result");
+        let EventKind::ToolResult { ok, denial, .. } = result else { unreachable!() };
+        assert!(!ok);
+        let denial = denial.expect("a block carries its reason");
+        assert!(denial.contains(AUTO_MODE_PHRASE), "{denial}");
+        assert!(denial.contains("Reason: [Modify Shared Resources]"), "{denial}");
+        assert!(denial.chars().count() <= MAX_DENIAL);
+        assert!(!denial.contains("IMPORTANT"), "the model's instructions are not the reason: {denial}");
+    }
+
+    #[test]
+    fn a_denial_in_the_array_of_text_form_is_found_too() {
+        let line = serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,
+            "content":[{"type":"text","text":"Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Irreversible Local Destruction]. Other text."}]}]}});
+        let mut driver = ClaudeDriver::new(None);
+        let event = events(&mut driver, &line.to_string()).pop().expect("one result");
+        let EventKind::ToolResult { denial, .. } = event else { panic!("{event:?}") };
+        assert_eq!(
+            denial.as_deref(),
+            Some("Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Irreversible Local Destruction].")
+        );
+    }
+
+    #[test]
+    fn an_ordinary_failed_tool_result_carries_no_denial() {
+        let mut driver = ClaudeDriver::new(None);
+        let line = TOOL_RESULT.replace("\"is_error\":false", "\"is_error\":true");
+        let event = events(&mut driver, &line).pop().expect("one result");
+        assert!(matches!(event, EventKind::ToolResult { ok: false, denial: None, .. }), "{event:?}");
+        assert!(driver.block_sightings().is_empty());
+    }
+
+    #[test]
+    fn a_failure_that_merely_mentions_auto_mode_is_noticed_but_not_a_block() {
+        let line = serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t9","is_error":true,
+            "content":"Hook refused the call. Auto mode could not evaluate the rewritten call."}]}});
+        let mut driver = ClaudeDriver::new(None);
+        let event = events(&mut driver, &line.to_string()).pop().expect("one result");
+        assert!(matches!(event, EventKind::ToolResult { denial: None, .. }), "{event:?}");
+        let seen = driver.block_sightings();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, "t9");
+        assert!(!seen[0].2);
+        assert!(driver.block_sightings().is_empty(), "drained once");
+    }
+
+    #[test]
+    fn the_fixture_denial_is_sighted_as_matched_with_its_whole_text() {
+        let mut driver = ClaudeDriver::new(None);
+        driver.feed(DENIAL_FIXTURE.as_bytes());
+        let seen = driver.block_sightings();
+        assert_eq!(seen.len(), 1);
+        assert!(seen[0].2);
+        assert!(seen[0].1.contains("To allow this type of action in the future"), "raw text kept whole");
+    }
+
+    #[test]
+    fn a_successful_result_is_never_a_block_whatever_it_says() {
+        let line = serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t9","is_error":false,
+            "content":format!("echo {AUTO_MODE_PHRASE}")}]}});
+        let mut driver = ClaudeDriver::new(None);
+        let event = events(&mut driver, &line.to_string()).pop().expect("one result");
+        assert!(matches!(event, EventKind::ToolResult { denial: None, .. }), "{event:?}");
+        assert!(driver.block_sightings().is_empty());
+    }
 
     const CHOSEN: &str = "11111111-2222-3333-4444-555555555555";
 
@@ -871,7 +1053,7 @@ mod tests {
         let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, TOOL_RESULT),
-            vec![EventKind::ToolResult { id: "t1".into(), ok: true, summary: "3 lines".into() }]
+            vec![EventKind::ToolResult { id: "t1".into(), ok: true, summary: "3 lines".into(), denial: None }]
         );
     }
 
@@ -883,7 +1065,7 @@ mod tests {
         let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, TOOL_RESULT_BLOCKS),
-            vec![EventKind::ToolResult { id: "t2".into(), ok: true, summary: "2 lines".into() }]
+            vec![EventKind::ToolResult { id: "t2".into(), ok: true, summary: "2 lines".into(), denial: None }]
         );
     }
 
@@ -895,7 +1077,7 @@ mod tests {
         let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, TOOL_RESULT_IMAGE),
-            vec![EventKind::ToolResult { id: "t3".into(), ok: true, summary: "1 image".into() }]
+            vec![EventKind::ToolResult { id: "t3".into(), ok: true, summary: "1 image".into(), denial: None }]
         );
     }
 
@@ -909,7 +1091,7 @@ mod tests {
             vec![EventKind::ToolResult {
                 id: "t4".into(),
                 ok: true,
-                summary: "2 lines, 1 image".into()
+                summary: "2 lines, 1 image".into(), denial: None
             }]
         );
     }

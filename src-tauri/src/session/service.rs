@@ -2606,9 +2606,10 @@ fn absorb(
     match chunk {
         Chunk::Data(id, bytes) => {
             let Some(live) = sessions.get_mut(&id) else { return };
-            let (kinds, crew_records, crew_journal_records, crew_send_results, mut outgoing, startup, discovered) = {
+            let (kinds, sightings, crew_records, crew_journal_records, crew_send_results, mut outgoing, startup, discovered) = {
                 let Some(talking) = live.talking.as_mut() else { return };
                 let kinds = talking.driver.feed(&bytes);
+                let sightings = talking.driver.block_sightings();
                 let crew_records = talking.driver.crew_records();
                 let crew_journal_records = talking.driver.crew_journal_records();
                 let crew_send_results = talking.driver.crew_send_results();
@@ -2620,8 +2621,16 @@ fn absorb(
             // somewhere, and the moment its protocol confirms one is exactly
             // the moment this fires.
                 let discovered = talking.driver.discovered_id();
-                (kinds, crew_records, crew_journal_records, crew_send_results, outgoing, startup, discovered)
+                (kinds, sightings, crew_records, crew_journal_records, crew_send_results, outgoing, startup, discovered)
             };
+            if !sightings.is_empty() {
+                // Beside `settings.json`, for a person to open. Looked up
+                // before `append` so a call and its refusal arriving in one
+                // read still find each other.
+                if let Some(dir) = crate::settings::commands::settings_path(app).ok().and_then(|path| path.parent().map(std::path::Path::to_path_buf)) {
+                    crate::session::blocks::record_sightings(&dir, &id.to_string(), &chrono::Utc::now().to_rfc3339(), live.journal.events(), &kinds, sightings);
+                }
+            }
             let lead_kinds = kinds.clone();
             append(app, id, live, kinds);
             if let Some(conversation) = discovered.as_ref() {

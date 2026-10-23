@@ -101,7 +101,19 @@ pub enum EventKind {
     TextDelta { text: String },
     Reasoning { text: String },
     ToolUse { id: String, name: String, detail: String },
-    ToolResult { id: String, ok: bool, summary: String },
+    /// `denial` is the reason Claude Code's auto-mode classifier gave when it
+    /// refused the call, and `None` on every result that is not such a refusal.
+    /// It exists because `summary` is a line count only: the harness returns a
+    /// block to the model as an ordinary failed result, so without this field
+    /// the panel could not tell a block from a failure. Absent on an older
+    /// journal, hence `default`.
+    ToolResult {
+        id: String,
+        ok: bool,
+        summary: String,
+        #[serde(default)]
+        denial: Option<String>,
+    },
     /// The tool call's own arguments, untouched, **for the short list of
     /// tools that need them structured** — today just `AskUserQuestion`,
     /// whose own card (`src/components/conversation/AskUserQuestion.vue`)
@@ -383,7 +395,7 @@ mod tests {
             "text-question" => EventKind::TextQuestion,
             "reasoning" => EventKind::Reasoning { text: text() },
             "tool-use" => EventKind::ToolUse { id: id(), name: text(), detail: text() },
-            "tool-result" => EventKind::ToolResult { id: id(), ok: true, summary: text() },
+            "tool-result" => EventKind::ToolResult { id: id(), ok: true, summary: text(), denial: None },
             "permission" => EventKind::Permission {
                 id: id(),
                 tool: text(),

@@ -65,6 +65,12 @@ pub trait Driver: Send {
     /// Crew package; ordinary conversations leave the default empty.
     fn crew_records(&mut self) -> Vec<Value> { Vec::new() }
 
+    /// Failed tool results that talk about the permission classifier, drained
+    /// since the last call, as `(tool_use_id, raw text, matched)`. `matched`
+    /// is whether the exact refusal phrase was found, i.e. whether the event
+    /// also carries a `denial`. Feeds the statistics file and nothing else.
+    fn block_sightings(&mut self) -> Vec<(String, String, bool)> { Vec::new() }
+
     /// Live provider records that belong to a native child rather than this
     /// driver's lead conversation. They stay opaque until the Crew owner has
     /// resolved the provider id to one stable Smetana node.

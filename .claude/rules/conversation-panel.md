@@ -644,3 +644,25 @@ reuses the `selectionMenu` prop as its gate, so the phone's `:selection-menu="fa
 
 **A kept task draft is appended to, never replaced**: a draft left by a project switch gets the
 selection after a blank line, its other fields untouched.
+
+## A tool the auto-mode classifier refused draws a card under its row
+
+A session started with no `--permission-mode` inherits the person's own, and with `"defaultMode": "auto"` Claude
+Code's classifier, not a person, judges each call. `--permission-prompt-tool` (`permission.rs`) is not consulted for
+what it refuses: the harness returns the refusal as a failed `tool_result`, the agent writes prose, and the panel used
+to draw a failed row with a line count. `claude_driver.rs` now keeps the reason: `EventKind::ToolResult.denial`
+is set when `is_error` is true and the text contains `AUTO_MODE_PHRASE`, trimmed to the sentence through
+`Reason: [...]` and clipped to `MAX_DENIAL`. The phrase is copied from a real 2.1.304 transcript
+(`tests/fixtures/claude-auto-mode-denial.jsonl`, whose first line says where it came from), never typed from memory.
+
+`journal.js` folds `denial` onto the tool row (`result.denial`, `null` when absent) with `blockOpen`, true while no
+`user` row follows. `ToolCall.vue` draws `Blocked by auto mode`, the bracketed category as the reason, and Allow and
+Refuse while `blockOpen && canMessage`. The card is deliberately **not** loud: the session holds nobody, so it uses the
+failed idiom and never `--status-needs-you-*`. The buttons send an ordinary person's turn through `sendMessage`;
+`autoModeBlock.js` words them (an approval has to name the action and the reason, which is how Claude Code's
+documentation says the classifier reads one). An approval is a heuristic, not a guarantee, and `agents/claude.rs`
+`autonomy` is untouched.
+
+Every failed result that mentions auto mode or the classifier is appended whole to `auto-mode-blocks.jsonl` beside
+`settings.json` (`session/blocks.rs`), with `matched` saying whether the exact phrase hit: the material for tuning the
+detector. Adding `denial` raised the remote protocol to 1.7 (`remote.md`).

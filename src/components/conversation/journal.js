@@ -92,6 +92,12 @@ import { isAskUserQuestion, parseQuestions } from './askUserQuestion.js'
    or joins `isAskUserQuestion` there is what both branches above read, so
    this file follows without a second edit.
 
+   **An auto-mode block rides on its tool row.** A `tool-result` whose `denial`
+   is set is Claude Code's classifier refusing the call, and the row carries it
+   as `result.denial` with `blockOpen`: true while no `user` row follows it in
+   the journal. The person's reply, from a button or typed, is what closes it;
+   nothing is stored for that, so the rule cannot drift from the journal.
+
    A tool call and its result are **one row**, folded by the id they share:
    `tool-result` carries no name and no detail of its own, so a row of its own
    would split one thing the agent did across two. `result: null` is the running
@@ -445,13 +451,20 @@ export function journalRows(events = [], state) {
         kind: 'tool',
         name: event.name,
         detail: event.detail,
-        result: null
+        result: null,
+        blockOpen: false
       }
       calls.set(event.id, row)
       rows.push(row)
     } else if (event.kind === 'tool-result') {
       const row = calls.get(event.id)
-      if (row) row.result = { ok: event.ok, summary: event.summary }
+      if (row) {
+        /* `?? null`, never the bare field: an event from before the field
+           existed (or a phone-era replay) has no `denial` at all, and an
+           `undefined` reaching the template would read as a different state
+           from the `null` every other result carries. */
+        row.result = { ok: event.ok, summary: event.summary, denial: event.denial ?? null }
+      }
     } else if (event.kind === 'permission') {
       // No row of its own — `held.question` at the foot of the panel already
       // draws the open question, and this file's own header says why drawing
@@ -557,6 +570,16 @@ export function journalRows(events = [], state) {
     // activity strip for, but the row already in `rows` still carries a
     // caret nothing above this point would otherwise ever clear.
     streamingRow.streaming = false
+  }
+
+  /* Walked backwards so one flag answers "is there a person's turn after
+     me": a block stays open only until the next `user` row, however it got
+     there. */
+  let personSpoke = false
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]
+    if (row.kind === 'user') personSpoke = true
+    else if (row.kind === 'tool' && row.result?.denial) row.blockOpen = !personSpoke
   }
 
   return rows

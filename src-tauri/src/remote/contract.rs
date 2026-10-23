@@ -352,7 +352,7 @@ fn conversation() -> Vec<Event> {
         EventKind::TextDelta { text: "H".into() },
         EventKind::Reasoning { text: "Thinking".into() },
         EventKind::ToolUse { id: "t1".into(), name: "Bash".into(), detail: "ls".into() },
-        EventKind::ToolResult { id: "t1".into(), ok: true, summary: "3 files".into() },
+        EventKind::ToolResult { id: "t1".into(), ok: true, summary: "3 files".into(), denial: None },
         EventKind::Permission {
             id: "p1".into(),
             tool: "Bash".into(),

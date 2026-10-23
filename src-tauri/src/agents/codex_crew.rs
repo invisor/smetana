@@ -308,6 +308,7 @@ fn completed(item: &Value) -> Vec<EventKind> {
                 id,
                 ok,
                 summary: kind.into(),
+                denial: None,
             }]
         }
         _ => Vec::new(),

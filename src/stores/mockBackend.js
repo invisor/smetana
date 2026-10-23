@@ -657,8 +657,25 @@ const MOCK_CONVERSATION = [
     at: recentAt(9000)
   }),
   journalEvent(21, 'tool-result', { id: 't2', ok: true, summary: '2 edits', at: recentAt(8000) }),
-  journalEvent(22, 'tool-use', { id: 't3', name: 'Grep', detail: 'fn worktree_path', at: recentAt(6000) }),
-  journalEvent(23, 'permission', {
+  /* An action Claude Code's auto-mode classifier refused: the card under the
+     row, with its Allow and Refuse buttons, open because no turn of the
+     person's follows it. The text is the classifier's real wording. */
+  journalEvent(22, 'tool-use', {
+    id: 't-blocked',
+    name: 'Bash',
+    detail: "psql -h db.example.invalid -c \"UPDATE accounts SET plan = 'free'\"",
+    at: recentAt(7000)
+  }),
+  journalEvent(23, 'tool-result', {
+    id: 't-blocked',
+    ok: false,
+    summary: '1 line',
+    denial:
+      'Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Modify Shared Resources].',
+    at: recentAt(6800)
+  }),
+  journalEvent(24, 'tool-use', { id: 't3', name: 'Grep', detail: 'fn worktree_path', at: recentAt(6000) }),
+  journalEvent(25, 'permission', {
     id: 'q1',
     tool: 'Bash',
     detail: 'cargo test --manifest-path src-tauri/Cargo.toml worktree',

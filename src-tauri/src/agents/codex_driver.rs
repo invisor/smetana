@@ -386,7 +386,7 @@ impl Driver for CodexDriver {
                             let id = item.get("id").and_then(Value::as_str).unwrap_or(kind).to_owned();
                             self.items.remove(&id);
                             let (ok, summary) = tool_result_outcome(kind, item);
-                            events.push(EventKind::ToolResult { id, ok, summary });
+                            events.push(EventKind::ToolResult { id, ok, summary, denial: None });
                         },
                         _ => {}
                     }
@@ -670,7 +670,7 @@ pub(crate) fn translate_history(turns: &[Value]) -> Vec<EventKind> {
                         events.push(EventKind::ToolUse { id: id.clone(), name: name.into(), detail });
                     }
                     let (ok, summary) = tool_result_outcome(kind, item);
-                    events.push(EventKind::ToolResult { id, ok, summary });
+                    events.push(EventKind::ToolResult { id, ok, summary, denial: None });
                 }
                 _ => {}
             }
@@ -1000,14 +1000,14 @@ mod tests {
             "command": "git status", "commandActions": [], "cwd": "/p",
             "aggregatedOutput": "On branch main\nnothing to commit"
         })));
-        assert_eq!(ok, vec![EventKind::ToolResult { id: "cmd".into(), ok: true, summary: "On branch main".into() }]);
+        assert_eq!(ok, vec![EventKind::ToolResult { id: "cmd".into(), ok: true, summary: "On branch main".into(), denial: None }]);
 
         let declined = driver.feed(&item_completed(json!({
             "id": "cmd2", "type": "commandExecution", "status": "declined",
             "command": "rm -rf build", "commandActions": [], "cwd": "/p",
             "aggregatedOutput": null
         })));
-        assert_eq!(declined, vec![EventKind::ToolResult { id: "cmd2".into(), ok: false, summary: String::new() }]);
+        assert_eq!(declined, vec![EventKind::ToolResult { id: "cmd2".into(), ok: false, summary: String::new(), denial: None }]);
     }
 
     #[test]
@@ -1036,7 +1036,7 @@ mod tests {
             "id": "fc", "type": "fileChange", "status": "completed",
             "changes": [{"path": "src/main.rs", "kind": {"type": "update"}, "diff": "@@ -1 +1 @@\n-old\n+new"}]
         })));
-        assert_eq!(one_file, vec![EventKind::ToolResult { id: "fc".into(), ok: true, summary: "1 file changed".into() }]);
+        assert_eq!(one_file, vec![EventKind::ToolResult { id: "fc".into(), ok: true, summary: "1 file changed".into(), denial: None }]);
 
         let several_files = driver.feed(&item_completed(json!({
             "id": "fc2", "type": "fileChange", "status": "completed",
@@ -1045,18 +1045,18 @@ mod tests {
                 {"path": "b.rs", "kind": {"type": "add"}, "diff": "@@"}
             ]
         })));
-        assert_eq!(several_files, vec![EventKind::ToolResult { id: "fc2".into(), ok: true, summary: "2 files changed".into() }]);
+        assert_eq!(several_files, vec![EventKind::ToolResult { id: "fc2".into(), ok: true, summary: "2 files changed".into(), denial: None }]);
 
         let declined = driver.feed(&item_completed(json!({
             "id": "fc3", "type": "fileChange", "status": "declined",
             "changes": [{"path": "c.rs", "kind": {"type": "update"}, "diff": "@@"}]
         })));
-        assert_eq!(declined, vec![EventKind::ToolResult { id: "fc3".into(), ok: false, summary: "1 file changed".into() }]);
+        assert_eq!(declined, vec![EventKind::ToolResult { id: "fc3".into(), ok: false, summary: "1 file changed".into(), denial: None }]);
 
         let empty = driver.feed(&item_completed(json!({
             "id": "fc4", "type": "fileChange", "status": "completed", "changes": []
         })));
-        assert_eq!(empty, vec![EventKind::ToolResult { id: "fc4".into(), ok: true, summary: "0 files changed".into() }]);
+        assert_eq!(empty, vec![EventKind::ToolResult { id: "fc4".into(), ok: true, summary: "0 files changed".into(), denial: None }]);
     }
 
     #[test]
@@ -1079,7 +1079,7 @@ mod tests {
             "server": "docs", "tool": "search_docs", "arguments": {"q": "vue"},
             "result": {"content": [{"type": "text", "text": "3 matches found"}]}
         })));
-        assert_eq!(ok, vec![EventKind::ToolResult { id: "mcp".into(), ok: true, summary: "3 matches found".into() }]);
+        assert_eq!(ok, vec![EventKind::ToolResult { id: "mcp".into(), ok: true, summary: "3 matches found".into(), denial: None }]);
 
         let failed = driver.feed(&item_completed(json!({
             "id": "mcp2", "type": "mcpToolCall", "status": "failed",
@@ -1088,7 +1088,7 @@ mod tests {
         })));
         assert_eq!(
             failed,
-            vec![EventKind::ToolResult { id: "mcp2".into(), ok: false, summary: "the docs server is not responding".into() }]
+            vec![EventKind::ToolResult { id: "mcp2".into(), ok: false, summary: "the docs server is not responding".into(), denial: None }]
         );
 
         // `status` alone is the verdict — the schema states no relationship
@@ -1103,7 +1103,7 @@ mod tests {
         })));
         assert_eq!(
             completed_with_a_note,
-            vec![EventKind::ToolResult { id: "mcp3".into(), ok: true, summary: "partial index, results may be stale".into() }]
+            vec![EventKind::ToolResult { id: "mcp3".into(), ok: true, summary: "partial index, results may be stale".into(), denial: None }]
         );
 
         // A successful call that carries **both** — a result and a note —
@@ -1118,7 +1118,7 @@ mod tests {
         })));
         assert_eq!(
             completed_with_a_result_and_a_note,
-            vec![EventKind::ToolResult { id: "mcp4".into(), ok: true, summary: "3 matches found".into() }]
+            vec![EventKind::ToolResult { id: "mcp4".into(), ok: true, summary: "3 matches found".into(), denial: None }]
         );
     }
 
@@ -1141,14 +1141,14 @@ mod tests {
             "tool": "run_lints", "arguments": {},
             "contentItems": [{"type": "inputText", "text": "no lint errors"}]
         })));
-        assert_eq!(ok, vec![EventKind::ToolResult { id: "dyn".into(), ok: true, summary: "no lint errors".into() }]);
+        assert_eq!(ok, vec![EventKind::ToolResult { id: "dyn".into(), ok: true, summary: "no lint errors".into(), denial: None }]);
 
         let failed = driver.feed(&item_completed(json!({
             "id": "dyn2", "type": "dynamicToolCall", "status": "failed", "success": false,
             "tool": "run_lints", "arguments": {},
             "contentItems": [{"type": "inputText", "text": "3 lint errors"}]
         })));
-        assert_eq!(failed, vec![EventKind::ToolResult { id: "dyn2".into(), ok: false, summary: "3 lint errors".into() }]);
+        assert_eq!(failed, vec![EventKind::ToolResult { id: "dyn2".into(), ok: false, summary: "3 lint errors".into(), denial: None }]);
 
         // `success: null` falls back to `status` rather than defaulting to
         // either outcome outright.
@@ -1156,7 +1156,7 @@ mod tests {
             "id": "dyn3", "type": "dynamicToolCall", "status": "failed", "success": null,
             "tool": "run_lints", "arguments": {}, "contentItems": null
         })));
-        assert_eq!(unknown_success, vec![EventKind::ToolResult { id: "dyn3".into(), ok: false, summary: String::new() }]);
+        assert_eq!(unknown_success, vec![EventKind::ToolResult { id: "dyn3".into(), ok: false, summary: String::new(), denial: None }]);
 
         // And a `status: "failed"` a stray `success: true` disagrees with
         // still draws a cross: taking `success` alone here is the trap this
@@ -1165,7 +1165,7 @@ mod tests {
             "id": "dyn4", "type": "dynamicToolCall", "status": "failed", "success": true,
             "tool": "run_lints", "arguments": {}, "contentItems": null
         })));
-        assert_eq!(status_overrules_a_stray_success, vec![EventKind::ToolResult { id: "dyn4".into(), ok: false, summary: String::new() }]);
+        assert_eq!(status_overrules_a_stray_success, vec![EventKind::ToolResult { id: "dyn4".into(), ok: false, summary: String::new(), denial: None }]);
     }
 
     #[test]
@@ -1190,7 +1190,7 @@ mod tests {
         })));
         assert_eq!(
             with_results,
-            vec![EventKind::ToolResult { id: "web".into(), ok: true, summary: "2 results for rust async book".into() }]
+            vec![EventKind::ToolResult { id: "web".into(), ok: true, summary: "2 results for rust async book".into(), denial: None }]
         );
 
         let no_results = driver.feed(&item_completed(json!({
@@ -1198,7 +1198,7 @@ mod tests {
         })));
         assert_eq!(
             no_results,
-            vec![EventKind::ToolResult { id: "web2".into(), ok: true, summary: "an unanswerable query".into() }]
+            vec![EventKind::ToolResult { id: "web2".into(), ok: true, summary: "an unanswerable query".into(), denial: None }]
         );
     }
 
@@ -1253,7 +1253,7 @@ mod tests {
         assert_eq!(events, vec![
             EventKind::ToolUse { id: "cmd".into(), name: "commandExecution".into(), detail: "git status".into() },
             EventKind::Reasoning { text: "Checking".into() },
-            EventKind::ToolResult { id: "cmd".into(), ok: true, summary: "On branch main".into() },
+            EventKind::ToolResult { id: "cmd".into(), ok: true, summary: "On branch main".into(), denial: None },
             EventKind::Text { text: "Done.".into() },
             EventKind::Result { tokens_in: 12, tokens_out: 7, cost_usd: None, ms: 9 },
         ]);
@@ -1465,7 +1465,7 @@ mod tests {
         assert_eq!(events, vec![
             EventKind::UserMessage { text: "Rename the worktree when the branch changes.".into(), attachments: Vec::new() },
             EventKind::ToolUse { id: "cmd".into(), name: "commandExecution".into(), detail: "git status".into() },
-            EventKind::ToolResult { id: "cmd".into(), ok: true, summary: "On branch main".into() },
+            EventKind::ToolResult { id: "cmd".into(), ok: true, summary: "On branch main".into(), denial: None },
             EventKind::Text { text: "Renamed it already.".into() },
         ]);
         assert_eq!(driver.startup(), Some(Ok(())), "the history is what makes this conversation usable");
@@ -1689,7 +1689,7 @@ mod tests {
             EventKind::UserMessage { text: "look at this".into(), attachments: vec!["/tmp/shot.png".into()] },
             EventKind::Reasoning { text: "Checked the tests".into() },
             EventKind::ToolUse { id: "web".into(), name: "webSearch".into(), detail: "rust async book".into() },
-            EventKind::ToolResult { id: "web".into(), ok: true, summary: "1 result for rust async book".into() },
+            EventKind::ToolResult { id: "web".into(), ok: true, summary: "1 result for rust async book".into(), denial: None },
             EventKind::Text { text: "Found it.".into() },
         ]);
         assert!(!events.iter().any(|event| matches!(event, EventKind::TurnStart { .. })), "{events:?}");

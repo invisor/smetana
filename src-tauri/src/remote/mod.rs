@@ -49,7 +49,7 @@ pub const DEFAULT_RELAY_URL: &str = "https://relay.smetana.io";
 /// The protocol this desktop speaks. A phone on another major is answered with
 /// this and disconnected.
 pub const PROTOCOL_MAJOR: u16 = 1;
-pub const PROTOCOL_MINOR: u16 = 6;
+pub const PROTOCOL_MINOR: u16 = 7;
 
 /// Below this the phone shows one screen, "Update the app", and calls nothing.
 pub const MIN_MOBILE_VERSION: &str = "0.1.0";

@@ -306,7 +306,7 @@ mod tests {
                     name: "Read".into(),
                     detail: "src-tauri/src/vcs/worktree.rs".into()
                 },
-                EventKind::ToolResult { id: "t1".into(), ok: true, summary: "2 lines".into() },
+                EventKind::ToolResult { id: "t1".into(), ok: true, summary: "2 lines".into(), denial: None },
             ],
             "the meta record, the sidechain turn, the title, the snapshot, the summary and the \
              line that is not JSON all produce nothing"
@@ -449,7 +449,7 @@ mod tests {
         let result = r#"{"type":"user","isSidechain":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"one\ntwo"}]}}"#;
         assert_eq!(
             child_kinds(result),
-            vec![EventKind::ToolResult { id: "t1".into(), ok: true, summary: "2 lines".into() }]
+            vec![EventKind::ToolResult { id: "t1".into(), ok: true, summary: "2 lines".into(), denial: None }]
         );
     }
 }
