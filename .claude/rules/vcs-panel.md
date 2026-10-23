@@ -2355,8 +2355,9 @@ stopping would trade a slightly stale review for none. The repositories that cou
 named in the window while it is up and in a toast that outlives it.
 
 Then the pairs, then `reportPath(the first row's branch, now)` — `.smetana/reviews/2026-08-31-1345-…`,
-without an extension, because the agent writes `<path>.md` and `<path>.html` and the app composed the
-path so that the tab it opens afterwards is somewhere it already knows. The branch's own name and not
+without an extension, because the agent writes `<path>.md` and `<path>.json`, the app draws `<path>.html`
+from the JSON when the session ends (`runs/review_report.rs`, see `.claude/rules/runs.md`), and the app
+composed the path so that the tab it opens afterwards is somewhere it already knows. The branch's own name and not
 the ref it resolved to: `origin-feature-x` would be naming a remote in a filename. The name is reduced
 to `a-z0-9` and hyphens, which is not tidiness — it lands in a path, a branch name may hold a slash, a
 space, a hash or a word in another alphabet, and any of those is either a directory nobody asked for

@@ -2799,6 +2799,11 @@ fn absorb(
             // The journal stays: a session that has ended is still one somebody
             // opens a tab on to read.
             live.talking = None;
+            // The page of a finished branch review, drawn before the exited
+            // state goes out — the PTY road makes the same call.
+            // `refresh_state` draws it too when the state first turns terminal, so a
+            // second write here is expected, and it is the one that has the final JSON.
+            crate::runs::review_report::on_session_end(&live.work, &live.project);
             refresh_state(app, id, live);
             // The package lifetime ends with its lead. Finished children were
             // retained until here; now drop the complete tree and all provider
@@ -2935,6 +2940,13 @@ fn append(app: &AppHandle, id: SessionId, live: &mut Live, kinds: Vec<EventKind>
     refresh_state(app, id, live);
 }
 
+/// Whether a change of state is the session ending: into `Exited` or `Failed`
+/// from something that was neither. Pure, so it can be pinned without a `Live`.
+fn turns_terminal(before: SessionState, after: SessionState) -> bool {
+    let terminal = |s| matches!(s, SessionState::Exited | SessionState::Failed);
+    terminal(after) && !terminal(before)
+}
+
 /// One emit for every reader of `session:state`: `refresh_state`,
 /// `note_conversation` and the first `Request::Send` that learns a `Bare`
 /// session's title, so the three cannot drift into carrying different fields
@@ -2977,6 +2989,13 @@ fn refresh_state(app: &AppHandle, id: SessionId, live: &mut Live) {
     }
     let before = live.state;
     live.state = state;
+    // A session can turn terminal here before `Chunk::Eof` is reached (`lost`
+    // marks the child gone first), and the front end opens a review's page the
+    // moment it hears so. The `Eof` arm draws it again, so a page drawn early
+    // while the agent was still writing its JSON is overwritten by the final one.
+    if turns_terminal(before, state) {
+        crate::runs::review_report::on_session_end(&live.work, &live.project);
+    }
     // On the change of state and not on the event, so a second question queued behind the first, or
     // any event while the wait goes on, does not reach the person's phone again.
     if crate::remote::push::waiting_began(before, state) {
@@ -3237,6 +3256,19 @@ mod tests {
         let root = scratch("bare");
         assert_eq!(resume_title(&Intent::Bare, &root), None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn only_the_first_step_into_a_terminal_state_counts_as_ending() {
+        use SessionState::*;
+        for before in [Starting, Running, Ready, NeedsYou] {
+            assert!(turns_terminal(before, Exited), "{before:?}");
+            assert!(turns_terminal(before, Failed), "{before:?}");
+            assert!(!turns_terminal(before, Running), "{before:?}");
+        }
+        assert!(!turns_terminal(Exited, Exited));
+        assert!(!turns_terminal(Exited, Failed));
+        assert!(!turns_terminal(Failed, Exited));
     }
 
     #[test]

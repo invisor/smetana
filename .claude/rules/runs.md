@@ -728,6 +728,23 @@ cell and the group head both count logical batches, so a second attempt is not a
 The handoff's five outcome kinds are `BatchOutcome`'s first five; `Unanswered` has no kind of its
 own there and is drawn in the `needs-you` tone with its old sentence.
 
+**The branch review's page is drawn the same way, from data.** An agent used to lay out its own
+`{report}.html`, and every review looked different. It now writes `{report}.md` (text, as before) and
+`{report}.json` (`docs/design/reports/code-review/schema.json`, pasted whole into the
+`reviewing-branch-changes` skill, since the skill also travels inline into projects with no `docs/`).
+`runs/review_report.rs` is the renderer: pure `render`/`render_fallback`, the same `REPORTS_CSS`
+constant (never a copy; a test holds the `<style>` byte-equal to the run report's), `escape` on every
+field and `prose` for backticks (`<span class="io">` in "Fails when"). `write_html` is the file half and
+`review_report::on_session_end(&SessionWork, project)` calls it for a `SessionWork::ReviewBranch`, and it
+is called from both session roads — `terminal/service.rs`'s `Chunk::Gone` arm and the driven worker's
+`session/service.rs` `Chunk::Eof` arm — **before** the exited state is emitted, because `reviewReportPath` opens `{report}.html` the moment the front end hears
+of the exit. It always leaves a file: a missing, unparsable or incomplete JSON becomes a "Report could
+not be built" page naming the reason and both paths, since an empty tab is worse. Parsing ignores
+unknown fields and fails on a missing required one; a score of 70 or more beside a blocking finding is
+a `log::warn!`, not a refusal. The tab is the same sandboxed frame the run report uses, so the
+document carries the same four palette blocks through `REPORTS_CSS` and `reportTheme.js` needs nothing
+new.
+
 **`reports.rs` reads this markup back, so the two move together.** The title is peeled out of
 `Run report · {title} · smetana`, the meta line is split on ` · `, strip cells are found by the
 capitalised label ending their `cell-label` span, and the summary and the closed titles are read from

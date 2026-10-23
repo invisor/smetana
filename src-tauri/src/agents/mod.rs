@@ -425,7 +425,8 @@ pub enum Intent {
     ReviewBranch {
         pairs: Vec<ReviewPair>,
         /// The report's path relative to the project, without an extension:
-        /// the agent writes `<report>.md` and `<report>.html`. The app chooses
+        /// the agent writes `<report>.md` and `<report>.json`, and the app draws
+        /// `<report>.html` from the JSON when the session ends. The app chooses
         /// the name rather than the agent, so that the tab it opens afterwards
         /// is at a path the app already knows.
         report: String,

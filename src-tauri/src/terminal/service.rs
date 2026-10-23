@@ -845,6 +845,10 @@ fn absorb(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk
             // its hangups reaches this function, which is what leaves the
             // records in place for the next launch.
             forget_session(live);
+            // A finished branch review gets its page drawn **before** the exit
+            // goes out: the front end opens `{report}.html` the moment it hears
+            // the session has exited. The driven road does the same call.
+            crate::runs::review_report::on_session_end(&live.session.work, &live.session.project);
             emit_state(app, &live.session);
             // Whatever this session left running under a group its own exit
             // could never reach — `setsid yes &`, the case this exists for.
