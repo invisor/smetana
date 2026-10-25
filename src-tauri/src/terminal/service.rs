@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use base64::Engine;
-use tauri::{AppHandle, Emitter, Manager};
+use crate::context::Context;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 
@@ -309,7 +309,7 @@ struct Capture {
 /// time here would be a second place that could disagree with the first.
 /// Point 4 is Linux's and macOS's alone: Windows costs it nothing at all —
 /// see the module note on `runs::procs`.
-pub fn start(app: AppHandle, known_projects: Vec<PathBuf>) -> TerminalHandle {
+pub fn start(ctx: Context, known_projects: Vec<PathBuf>) -> TerminalHandle {
     // Fixes `procs::own_dedicated_coalition`'s answer for the whole of this
     // launch, before either of its two callers (`mac_app_exit_candidates`
     // below, `recovery::note_run` whenever a run first starts) can possibly
@@ -342,7 +342,7 @@ pub fn start(app: AppHandle, known_projects: Vec<PathBuf>) -> TerminalHandle {
     // here, so a stray left over from last night never delays the first
     // session this launch starts.
     #[cfg(target_os = "linux")]
-    tauri::async_runtime::spawn(sweep_strays());
+    crate::context::spawn(sweep_strays());
     #[cfg(target_os = "macos")]
     {
         // The coalition ids of every dead writer this launch's projects still
@@ -357,14 +357,14 @@ pub fn start(app: AppHandle, known_projects: Vec<PathBuf>) -> TerminalHandle {
         // caller: a project's `runs.json` is small and this runs once, at
         // start, well before the first session exists to race it.
         let coalitions = crate::runs::recovery::dead_writer_coalitions(&known_projects);
-        tauri::async_runtime::spawn(sweep_coalitions(coalitions));
+        crate::context::spawn(sweep_coalitions(coalitions));
     }
     // Linux reads its own answer off the live process table and Windows
     // needs nothing here at all, so neither one touches the argument.
     #[cfg(not(target_os = "macos"))]
     let _ = &known_projects;
 
-    tauri::async_runtime::spawn(async move {
+    crate::context::spawn(async move {
         let mut sessions: HashMap<SessionId, Live> = HashMap::new();
         let mut captures: Vec<Capture> = Vec::new();
         let mut exit_waiters: Vec<ExitWaiter> = Vec::new();
@@ -402,7 +402,7 @@ pub fn start(app: AppHandle, known_projects: Vec<PathBuf>) -> TerminalHandle {
                         let _ = tx.send(());
                         return;
                     }
-                    handle(&app, &mut sessions, &mut captures, &mut exit_waiters, &mut active, &mut next_id, &chunks_tx, &requests, request);
+                    handle(&ctx, &mut sessions, &mut captures, &mut exit_waiters, &mut active, &mut next_id, &chunks_tx, &requests, request);
                 }
                 chunk = chunks_rx.recv() => {
                     // Cannot happen while this task owns the sender it hands
@@ -411,13 +411,13 @@ pub fn start(app: AppHandle, known_projects: Vec<PathBuf>) -> TerminalHandle {
                     // continuing is a branch that is instantly ready
                     // forever, i.e. a spinning core.
                     let Some(chunk) = chunk else { break };
-                    absorb(&app, &mut sessions, chunk);
+                    absorb(&ctx, &mut sessions, chunk);
                 }
                 _ = tick.tick() => {
-                    flush(&app, &mut sessions, active);
+                    flush(&ctx, &mut sessions, active);
                     ticks = ticks.wrapping_add(1);
                     if ticks % REASSESS_EVERY == 0 {
-                        reassess(&app, &mut sessions);
+                        reassess(&ctx, &mut sessions);
                     }
                     // Captures are closed on every tick, unlike detection:
                     // `settle` comes from the caller and may well be shorter
@@ -669,8 +669,7 @@ async fn sweep_coalitions(coalitions: Vec<u64>) {
 /// process-lifetime static that outlives this callback. If the worker has
 /// already stopped, its receiver is gone and the send returns an error at once
 /// instead of blocking.
-pub fn shutdown(app: &AppHandle) {
-    let Some(handle) = app.try_state::<TerminalHandle>() else { return };
+pub fn shutdown(handle: &TerminalHandle) {
     let (tx, rx) = std::sync::mpsc::channel();
     if handle.0.blocking_send(Request::ShutDown(tx)).is_err() {
         return;
@@ -783,13 +782,13 @@ pub(crate) fn removed_payload(id: SessionId) -> serde_json::Value {
     serde_json::json!({ "id": id })
 }
 
-fn emit_state(app: &AppHandle, session: &Session) {
-    crate::remote::emit(app, "terminal:state", session);
+fn emit_state(ctx: &Context, session: &Session) {
+    ctx.emit("terminal:state", session);
 }
 
 /// Output chunks: into the ring for the human, into the screen for the app,
 /// into the send queue for the active session.
-fn absorb(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk) {
+fn absorb(ctx: &Context, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk) {
     match chunk {
         Chunk::Data(id, bytes) => {
             let Some(live) = sessions.get_mut(&id) else { return };
@@ -849,7 +848,7 @@ fn absorb(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk
             // goes out: the front end opens `{report}.html` the moment it hears
             // the session has exited. The driven road does the same call.
             crate::runs::review_report::on_session_end(&live.session.work, &live.session.project);
-            emit_state(app, &live.session);
+            emit_state(ctx, &live.session);
             // Whatever this session left running under a group its own exit
             // could never reach — `setsid yes &`, the case this exists for.
             // A task of its own: the worker has other sessions to keep
@@ -877,7 +876,7 @@ fn reap_session_descendants(id: SessionId, why: &'static str) {
     let Some(mark) = procs::mark(id) else { return };
     let pids = procs::marked(&mark);
     if !pids.is_empty() {
-        tauri::async_runtime::spawn(reap_marked(pids, why));
+        crate::context::spawn(reap_marked(pids, why));
     }
 }
 
@@ -914,7 +913,7 @@ fn reap_mac_descendants(
         .collect();
     let pids = descendants.candidates(&snapshot, &exclude);
     if !pids.is_empty() {
-        tauri::async_runtime::spawn(reap_marked(pids, why));
+        crate::context::spawn(reap_marked(pids, why));
     }
 }
 
@@ -969,7 +968,7 @@ fn poll_mac_descendants(_sessions: &mut HashMap<SessionId, Live>) {}
 /// The active session's accumulated output — as one event. Background
 /// sessions do not leak to the front end: their screen is for the app, not
 /// for the human, and it is already here.
-fn flush(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, active: Option<SessionId>) {
+fn flush(ctx: &Context, sessions: &mut HashMap<SessionId, Live>, active: Option<SessionId>) {
     for (id, live) in sessions.iter_mut() {
         // The log follows the bytes' rule: a background session's is for the
         // app, which already holds it in the deque, not for a window nobody
@@ -977,7 +976,7 @@ fn flush(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, active: Optio
         if !live.pending_log.is_empty() {
             if Some(*id) == active {
                 let entries = std::mem::take(&mut live.pending_log);
-                let _ = app.emit("terminal:log", serde_json::json!({ "id": id, "entries": entries }));
+                ctx.emit_json("terminal:log", serde_json::json!({ "id": id, "entries": entries }));
             } else {
                 live.pending_log.clear();
             }
@@ -994,7 +993,7 @@ fn flush(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, active: Optio
         live.seq += 1;
         let data = base64::engine::general_purpose::STANDARD.encode(&live.pending);
         live.pending.clear();
-        let _ = app.emit(
+        ctx.emit_json(
             "terminal:output",
             serde_json::json!({ "id": id, "seq": live.seq, "data": data }),
         );
@@ -1010,7 +1009,7 @@ fn flush(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, active: Optio
 /// it on. `Starting` is therefore brief, which is right — it means "created,
 /// nothing seen yet", and a session that failed to spawn never gets here to
 /// be called running.
-fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
+fn reassess(ctx: &Context, sessions: &mut HashMap<SessionId, Live>) {
     for live in sessions.values_mut() {
         if live.session.state == SessionState::Exited {
             // The second poll for an exit code, and the only one there is.
@@ -1023,7 +1022,7 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
             if live.session.exit_code.is_none() {
                 if let Some(code) = live.pty.exit_code() {
                     live.session.finish(Some(code));
-                    emit_state(app, &live.session);
+                    emit_state(ctx, &live.session);
                 }
             }
             continue;
@@ -1057,20 +1056,20 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
         // a session that stays in `NeedsYou` for a minute of ticks reaches the phone once.
         announce_wait(before.0, live.session.state, || {
             crate::remote::push::notify_terminal_needs_you(
-                app,
+                ctx,
                 live.session.id,
                 &live.session.project,
                 &live.session.agent,
             );
         });
         if before != (live.session.state, live.session.question.clone()) {
-            emit_state(app, &live.session);
+            emit_state(ctx, &live.session);
         }
     }
 }
 
 /// Runs `notify` when this change of state is the start of a wait. Split out of `reassess` so the
-/// once-per-transition rule can be tested without an `AppHandle`.
+/// once-per-transition rule can be tested without a `Context`.
 fn announce_wait(before: SessionState, after: SessionState, notify: impl FnOnce()) {
     // `waiting_began` is written against the conversation session's state enum; only the wait itself
     // matters to it, so a terminal state is carried over as waiting or as not waiting.
@@ -1258,7 +1257,7 @@ fn peek(sessions: &HashMap<SessionId, Live>, id: SessionId) -> Result<Attached, 
 /// Everything the worker does synchronously. `ShutDown` is handled by the
 /// loop instead — see there.
 fn handle(
-    app: &AppHandle,
+    ctx: &Context,
     sessions: &mut HashMap<SessionId, Live>,
     captures: &mut Vec<Capture>,
     exit_waiters: &mut Vec<ExitWaiter>,
@@ -1301,7 +1300,7 @@ fn handle(
             // disagree about which harness and which model this kind of call
             // gets. A run's own snapshot is what `pinned` carries.
             let (agent, model) =
-                crate::settings::role_model(app, Some(&project), &intent, pinned.as_deref());
+                crate::settings::role_model(ctx, Some(&project), &intent, pinned.as_deref());
             // The login shell's PATH, not this process's: a bundled app started
             // from Finder inherits launchd's, where nothing a person installed
             // is reachable and every agent would look uninstalled.
@@ -1405,7 +1404,7 @@ fn handle(
                 profile,
                 cwd: dir.clone(),
                 intent,
-                skills: agents::library::resolve(app),
+                skills: agents::library::resolve(ctx),
                 facts,
                 // Read from the file here, and here only: this is the one place
                 // every session in the app is built, so a manual session and a
@@ -1431,13 +1430,13 @@ fn handle(
                 // oversight — snapshotting them onto `Intent::Run` would put
                 // the languages back on a second road into a session, which is
                 // exactly what reading them here exists to prevent.
-                languages: crate::settings::languages(app),
+                languages: crate::settings::languages(ctx),
                 // Read here rather than taken from `terminal_create`'s
                 // arguments, for the reason written on the line above: this is
                 // the one place every session in the app is built, so a
                 // person's session and a run's batch cannot disagree about it.
                 // It lives with the same debounce.
-                agent_prompt: crate::settings::agent_prompt(app),
+                agent_prompt: crate::settings::agent_prompt(ctx),
                 session_id,
                 // Resolved at the top of this arm, off the same file and in the
                 // same breath as the harness beside it: the two are one choice
@@ -1450,7 +1449,7 @@ fn handle(
                 // that is sometimes meaningful and never says which is the
                 // shape this `Launch` keeps out deliberately.
                 worker_model: leads_a_run
-                    .then(|| crate::settings::worker_model(app, Some(&project)))
+                    .then(|| crate::settings::worker_model(ctx, Some(&project)))
                     .flatten(),
             };
             // Both of these are taken **before the process exists**, and the
@@ -1471,7 +1470,7 @@ fn handle(
             let started = SystemTime::now();
             let before =
                 if discovering { profile.sessions_before_start() } else { Vec::new() };
-            let spawned = Pty::spawn(id, &launch, DEFAULT_COLS, DEFAULT_ROWS, chunks.clone());
+            let spawned = Pty::spawn(id, &launch, ctx.sidecar_dir(), DEFAULT_COLS, DEFAULT_ROWS, chunks.clone());
             let _ = tx.send(match spawned {
                 Ok(pty) => {
                     // The name of what actually started, which is not always
@@ -1585,7 +1584,7 @@ fn handle(
                         });
                     }
                     sessions.insert(id, live);
-                    emit_state(app, &session);
+                    emit_state(ctx, &session);
                     Ok(session)
                 }
                 // The agent is not on PATH — a legitimate outcome, not a
@@ -1608,7 +1607,7 @@ fn handle(
             }
             live.session.conversation = Some(conversation.clone());
             let session = live.session.clone();
-            emit_state(app, &session);
+            emit_state(ctx, &session);
             // The record the spawn could not write, written now that there is
             // an id to key it by: this is what puts the session in
             // `.smetana/agents.json` and offers it back in the sidebar after a
@@ -1644,7 +1643,7 @@ fn handle(
             // as it is for a shell that would not start: ids are a counter, not
             // a resource, and reusing one is how two sessions come to share it.
             let spawned = dir.and_then(|dir| {
-                Pty::spawn_shell(id, &dir, DEFAULT_COLS, DEFAULT_ROWS, chunks.clone())
+                Pty::spawn_shell(id, &dir, ctx.sidecar_dir(), DEFAULT_COLS, DEFAULT_ROWS, chunks.clone())
                     .map(|pty| (pty, dir))
             });
             let _ = tx.send(match spawned {
@@ -1693,7 +1692,7 @@ fn handle(
                         handoff_ready: false,
                     };
                     sessions.insert(id, live);
-                    emit_state(app, &session);
+                    emit_state(ctx, &session);
                     Ok(session)
                 }
                 // A shell that would not start is the same kind of outcome an
@@ -1722,7 +1721,7 @@ fn handle(
                 // switch. The front end's own remove has already dropped the
                 // row by the time this arrives, and filtering an absent id is
                 // a no-op, which is what makes one event serve both callers.
-                crate::remote::emit(app, "terminal:removed", &removed_payload(id));
+                ctx.emit("terminal:removed", &removed_payload(id));
                 // The same sweep a self-exit gets, for the row a person took
                 // away instead: `live.pty.kill()` above reaches the session's
                 // own process group and nothing outside it. `sessions` no
@@ -2002,7 +2001,7 @@ mod tests {
 
     fn shell_live(id: SessionId, dir: &Path, ring_bytes: &[u8]) -> Live {
         let (out, _chunks) = mpsc::unbounded_channel();
-        let pty = Pty::spawn_shell(id, dir, DEFAULT_COLS, DEFAULT_ROWS, out).expect("a shell starts");
+        let pty = Pty::spawn_shell(id, dir, None, DEFAULT_COLS, DEFAULT_ROWS, out).expect("a shell starts");
         let mut ring = Ring::new(RING_CAP);
         ring.push(ring_bytes);
         Live {

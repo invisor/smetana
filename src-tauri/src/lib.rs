@@ -1,8 +1,10 @@
 mod agents;
 mod attachments;
 mod autostart;
+mod context;
 mod files;
 mod git;
+mod host;
 mod project;
 mod remote;
 mod rlimit;
@@ -181,7 +183,12 @@ pub fn run() {
       // empty list, means we take the directory the app was launched from if it
       // is tracked; otherwise there is no project, and that is a normal state,
       // not a failure.
-      let stored = settings::path(app.handle()).map(|path| settings::file::load(&path).0);
+      // What the workers are given instead of this handle: the data directory, a sink for
+      // events and the path of the bd sidecar. Built once, here, and managed so that a command
+      // wrapper holding an `AppHandle` can hand the same one on (`host::context`).
+      let ctx = host::build(app.handle());
+      app.manage(ctx.clone());
+      let stored = ctx.settings_path().map(|path| settings::file::load(&path).0);
       let initial = stored
         .as_ref()
         .and_then(|settings| settings.last_project.clone())
@@ -215,7 +222,7 @@ pub fn run() {
         .chain(initial.clone())
         .collect();
 
-      let tracker = tracker::service::start(app.handle().clone(), initial);
+      let tracker = tracker::service::start(ctx.clone(), initial);
       app.manage(tracker.clone());
 
       // The terminal worker knows no project of its own: a session carries
@@ -225,7 +232,7 @@ pub fn run() {
       // for a dead instance's coalition id) — the identical list
       // `runs::service::start` below sweeps its registries against, computed
       // once above rather than read a second time here.
-      let terminal = terminal::service::start(app.handle().clone(), known.clone());
+      let terminal = terminal::service::start(ctx.clone(), known.clone());
       app.manage(terminal.clone());
 
       // The session worker: the driven half of the same idea, one tokio task
@@ -233,7 +240,7 @@ pub fn run() {
       // of its own either — a session carries the directory it was started in.
       // What it owns that the terminal does not is the in-app permission
       // listener, which it binds once when it starts.
-            let session = session::service::start(app.handle().clone());
+            let session = session::service::start(ctx.clone());
             app.manage(session.clone());
 
       // The run worker drives the other two rather than owning anything of its
@@ -241,7 +248,7 @@ pub fn run() {
       // batch through the terminal. Handed clones of both, so it queues behind
       // them like every other caller.
             let runs = runs::service::start(
-                app.handle().clone(),
+                ctx.clone(),
                 tracker.clone(),
                 terminal,
                 session,
@@ -300,13 +307,13 @@ pub fn run() {
       files::commands::files_rename,
       files::commands::files_clipboard_write,
       files::commands::files_clipboard_read,
-      attachments::attachment_import,
-      attachments::attachment_reopen,
-      attachments::attachment_write,
-      attachments::attachments_survey,
-      attachments::attachments_clean,
-      attachments::figure::image_read,
-      git::git_head,
+      attachments::commands::attachment_import,
+      attachments::commands::attachment_reopen,
+      attachments::commands::attachment_write,
+      attachments::commands::attachments_survey,
+      attachments::commands::attachments_clean,
+      attachments::commands::image_read,
+      git::commands::git_head,
       vcs::commands::vcs_repos,
       vcs::commands::vcs_status,
       vcs::commands::vcs_in_progress,
@@ -407,12 +414,16 @@ pub fn run() {
       // be prevented, while agents must be killed once leaving is settled.
       // The callback runs before cleanup_before_exit, so the app is still whole.
       if let tauri::RunEvent::Exit = event {
-        terminal::service::shutdown(app_handle);
+        if let Some(terminal) = app_handle.try_state::<terminal::service::TerminalHandle>() {
+          terminal::service::shutdown(&terminal);
+        }
         // The driven sessions' children are agents too, and an app that left
         // them running would leave a `claude` in the process list every time it
         // closed. Beside the terminal's rather than inside it: the two workers
         // share no state, and each kills what it started.
-        session::service::shutdown(app_handle);
+        if let Some(session) = app_handle.try_state::<session::service::SessionHandle>() {
+          session::service::shutdown(&session);
+        }
         // And the phone endpoint, so connected phones are told rather than left
         // to time out.
         remote::shutdown(app_handle);

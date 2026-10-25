@@ -64,10 +64,10 @@ const UTF8_LOCALE: &str = "C.UTF-8";
 /// and anything sent into an input that is not reading yet is simply lost —
 /// there is no acknowledgement to wait for and no way to tell that it went. As
 /// an argument it is handed over by the OS before the process starts.
-pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
+pub fn build_command(id: SessionId, launch: &Launch, sidecar_dir: Option<&Path>) -> CommandBuilder {
     let mut cmd = launch.profile.command(launch);
     cmd.cwd(&launch.cwd);
-    apply_environment(&mut cmd);
+    apply_environment(&mut cmd, sidecar_dir);
     // This app's own pid, its start stamp, and this session's id, so that
     // whatever the agent starts can be found again by `runs::procs::marked`
     // and `strays` long after its own process group has stopped meaning
@@ -93,9 +93,9 @@ pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
 /// What every agent's `PATH` is: the login shell's, with the bundled `bd` in
 /// front of it. Shared with the driven spawn in `session::service`, which
 /// used to reach whatever `bd` the machine had instead of this app's own.
-pub(crate) fn agent_path() -> Option<OsString> {
+pub(crate) fn agent_path(sidecar_dir: Option<&Path>) -> Option<OsString> {
     let base = crate::shell_env::path().map(OsString::from);
-    match sidecar_dir() {
+    match sidecar_dir {
         Some(dir) => Some(path_with(&dir, base.as_deref())),
         None => base,
     }
@@ -178,10 +178,10 @@ fn vitest_max_workers(intent: &Intent) -> usize {
 ///
 /// `cwd` is the project root, the same directory an agent starts in. A task's
 /// worktree would be another answer and is not this one — see the rule file.
-pub fn build_shell_command(program: &str, cwd: &Path) -> CommandBuilder {
+pub fn build_shell_command(program: &str, cwd: &Path, sidecar_dir: Option<&Path>) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(program);
     cmd.cwd(cwd);
-    apply_environment(&mut cmd);
+    apply_environment(&mut cmd, sidecar_dir);
     cmd
 }
 
@@ -194,7 +194,7 @@ pub fn build_shell_command(program: &str, cwd: &Path) -> CommandBuilder {
 /// one, and the most expensive way to drift is the quietest: a shell without the
 /// sidecar in front of its `PATH` runs whatever `bd` the machine happens to have
 /// against a board whose version this app pins and checks.
-fn apply_environment(cmd: &mut CommandBuilder) {
+fn apply_environment(cmd: &mut CommandBuilder, sidecar_dir: Option<&Path>) {
     cmd.env("TERM", "xterm-256color");
     // What encoding the bytes in that terminal are in, which is the second half
     // of `TERM` and is missing for the same launchd reason `PATH` is: a bundled
@@ -238,42 +238,15 @@ fn apply_environment(cmd: &mut CommandBuilder) {
     // `PATH` the command was built with kept: `CommandBuilder::new` has
     // snapshotted the parent's environment, so that is the value the child
     // would otherwise have had.
-    let path = agent_path().or_else(|| cmd.get_env("PATH").map(OsStr::to_owned));
+    let path = agent_path(sidecar_dir).or_else(|| cmd.get_env("PATH").map(OsStr::to_owned));
     if let Some(path) = path {
         cmd.env("PATH", path);
     }
 }
 
-/// The directory the bundled `bd` sits in — `None` only when the running
-/// executable has no discoverable location, in which case the agent is left
-/// with whatever `PATH` it inherited, which is where it was before.
-///
-/// `tracker/bd.rs` reaches bd through `app.shell().sidecar("bd")`, and that is
-/// `dirname(current_exe())` joined with the name and nothing else —
-/// `relative_command_path` in tauri-plugin-shell is those two lines. Deriving
-/// the directory the same way is what makes it the same directory by
-/// construction rather than by a rule copied out of that crate: in a bundle it
-/// is `Smetana.app/Contents/MacOS`, beside the app executable, where the
-/// bundler drops the external binary with its target triple stripped; under
-/// `npm run tauri dev` it is `src-tauri/target/debug`, where the Tauri CLI
-/// drops the same file.
-///
-/// `tauri::utils::platform::current_exe` rather than `std::env::current_exe`,
-/// again because it is what the plugin calls: it answers with the path captured
-/// at start-up, before anything could have moved, and it resolves an AppImage's
-/// mount point back to the image.
-fn sidecar_dir() -> Option<PathBuf> {
-    let exe = tauri::utils::platform::current_exe().ok()?;
-    let dir = exe.parent()?;
-    // A test binary lives one level below the sidecar, in `target/debug/deps`.
-    // The plugin steps up out of that directory; not doing the same here would
-    // make the two disagree in precisely the case a test can observe.
-    Some(if dir.ends_with("deps") {
-        dir.parent().unwrap_or(dir).to_path_buf()
-    } else {
-        dir.to_path_buf()
-    })
-}
+// Where the bundled `bd` sits is the context's to say (`Context::sidecar_dir`), derived in `host.rs`
+// the way `tauri-plugin-shell` derives a sidecar's path, so that the directory an agent's `PATH` is
+// put in front of and the file the tracker runs are one location by construction.
 
 /// `PATH` with `dir` at the front. Pure, and the part of this worth a test.
 ///
@@ -522,11 +495,12 @@ impl Pty {
     pub fn spawn(
         id: SessionId,
         launch: &Launch,
+        sidecar_dir: Option<&Path>,
         cols: u16,
         rows: u16,
         out: mpsc::UnboundedSender<Chunk>,
     ) -> Result<Self, TerminalError> {
-        Self::start(id, build_command(id, launch), launch.profile.binary(), cols, rows, out, true)
+        Self::start(id, build_command(id, launch, sidecar_dir), launch.profile.binary(), cols, rows, out, true)
     }
 
     /// A session running the person's own shell, with no agent behind it. The
@@ -539,12 +513,13 @@ impl Pty {
     pub fn spawn_shell(
         id: SessionId,
         cwd: &Path,
+        sidecar_dir: Option<&Path>,
         cols: u16,
         rows: u16,
         out: mpsc::UnboundedSender<Chunk>,
     ) -> Result<Self, TerminalError> {
         let program = crate::shell_env::shell();
-        Self::start(id, build_shell_command(&program, cwd), &program, cols, rows, out, false)
+        Self::start(id, build_shell_command(&program, cwd, sidecar_dir), &program, cols, rows, out, false)
     }
 
     /// The spawn itself. `what` names the program only so a failure can say what
@@ -724,6 +699,14 @@ mod tests {
     use crate::agents::library::Skills;
     use crate::agents::{self, Intent, Launch};
 
+    /// Where the bundled `bd` sits in these tests. A made-up directory rather than the test
+    /// binary's own: the point is that whatever the caller gives is what ends up in front.
+    const BUNDLE: &str = "/app/Contents/MacOS";
+
+    fn sidecar() -> Option<&'static Path> {
+        Some(Path::new(BUNDLE))
+    }
+
     fn launch(id: &str) -> Launch {
         with_intent(id, Intent::EditTask { id: "smetana-7".into(), title: "x y".into() })
     }
@@ -798,14 +781,14 @@ mod tests {
 
     #[test]
     fn the_binary_comes_from_the_profile() {
-        assert_eq!(build_command(7, &launch("claude")).get_argv()[0], "claude");
-        assert_eq!(build_command(7, &launch("codex")).get_argv()[0], "codex");
+        assert_eq!(build_command(7, &launch("claude"), sidecar()).get_argv()[0], "claude");
+        assert_eq!(build_command(7, &launch("codex"), sidecar()).get_argv()[0], "codex");
     }
 
     #[test]
     fn every_agent_is_given_a_terminal_it_can_paint_in() {
         for id in agents::IDS {
-            let cmd = build_command(7, &launch(id));
+            let cmd = build_command(7, &launch(id), sidecar());
             // `iter_extra_env_as_str` and not `get_env`, for the reason the
             // test below spells out: `get_env` answers out of the snapshot of
             // this process's own environment, where a `TERM` is all but certain.
@@ -835,7 +818,7 @@ mod tests {
     #[test]
     fn every_agent_is_told_what_encoding_the_stream_carries() {
         for id in agents::IDS {
-            let cmd = build_command(7, &launch(id));
+            let cmd = build_command(7, &launch(id), sidecar());
             let told: Vec<_> = cmd
                 .iter_extra_env_as_str()
                 .filter(|(key, _)| crate::shell_env::LOCALE_KEYS.contains(key))
@@ -860,7 +843,7 @@ mod tests {
             return;
         }
         for id in agents::IDS {
-            let cmd = build_command(7, &launch(id));
+            let cmd = build_command(7, &launch(id), sidecar());
             let (key, value) = cmd
                 .iter_extra_env_as_str()
                 .find(|(key, _)| crate::shell_env::LOCALE_KEYS.contains(key))
@@ -897,9 +880,9 @@ mod tests {
         // Without this the agent's `bd create` is "command not found" on any
         // machine that never installed bd — which is every machine the 128 MB
         // sidecar exists to serve.
-        let dir = sidecar_dir().expect("the test binary has a location");
+        let dir = PathBuf::from(BUNDLE);
         for id in agents::IDS {
-            let cmd = build_command(7, &launch(id));
+            let cmd = build_command(7, &launch(id), sidecar());
             let path = cmd.get_env("PATH").expect("PATH must reach the agent");
             let mut entries = std::env::split_paths(path);
             assert_eq!(entries.next(), Some(dir.clone()), "{id}");
@@ -914,7 +897,7 @@ mod tests {
     #[test]
     fn every_agent_session_carries_the_apps_own_mark() {
         for id in agents::IDS {
-            let cmd = build_command(11, &launch(id));
+            let cmd = build_command(11, &launch(id), sidecar());
             let found = cmd
                 .iter_extra_env_as_str()
                 .find(|(key, _)| *key == crate::runs::procs::MARK_KEY)
@@ -933,7 +916,7 @@ mod tests {
         let base: Vec<_> = crate::shell_env::path()
             .map(|p| std::env::split_paths(p).collect())
             .unwrap_or_default();
-        let cmd = build_command(7, &launch("claude"));
+        let cmd = build_command(7, &launch("claude"), sidecar());
         let given: Vec<_> =
             std::env::split_paths(cmd.get_env("PATH").expect("PATH must reach the agent")).collect();
         assert_eq!(given[1..], base[..]);
@@ -945,7 +928,7 @@ mod tests {
     /// asked again of the branch that has no profile behind it.
     #[test]
     fn a_shell_is_given_the_same_environment_an_agent_is() {
-        let cmd = build_shell_command("/bin/zsh", Path::new("/tmp/project"));
+        let cmd = build_shell_command("/bin/zsh", Path::new("/tmp/project"), sidecar());
 
         // What runs is the person's own shell, with no argument telling it what
         // to be: a PTY is what makes it interactive.
@@ -955,7 +938,7 @@ mod tests {
         // The bundled bd in front, which is the expensive one to lose: without
         // it a shell runs whatever bd the machine has against a board whose
         // version this app pins and checks.
-        let dir = sidecar_dir().expect("the test binary has a location");
+        let dir = PathBuf::from(BUNDLE);
         let path = cmd.get_env("PATH").expect("PATH must reach the shell");
         assert_eq!(std::env::split_paths(path).next(), Some(dir));
 
@@ -983,7 +966,7 @@ mod tests {
     /// terminal application.
     #[test]
     fn a_shell_is_told_nothing_about_agents_or_runs() {
-        let cmd = build_shell_command("/bin/zsh", Path::new("/tmp/project"));
+        let cmd = build_shell_command("/bin/zsh", Path::new("/tmp/project"), sidecar());
         let keys: Vec<_> = cmd.iter_extra_env_as_str().map(|(key, _)| key).collect();
         assert_eq!(keys.len(), 3, "{keys:?} — the shared piece is TERM, a locale and PATH");
         assert!(!keys.contains(&"BEADS_ACTOR"), "{keys:?}");
@@ -1000,7 +983,7 @@ mod tests {
     fn a_run_session_divides_the_vitest_worker_cap_by_its_own_concurrency() {
         let cpus = std::thread::available_parallelism().map(std::num::NonZeroUsize::get).unwrap_or(1);
         let want = (cpus.saturating_sub(1) / 3).max(1).to_string();
-        let cmd = build_command(42, &with_intent("claude", run_intent()));
+        let cmd = build_command(42, &with_intent("claude", run_intent()), sidecar());
         let value = cmd.iter_extra_env_as_str().find(|(key, _)| *key == "VITEST_MAX_WORKERS");
         assert_eq!(value, Some(("VITEST_MAX_WORKERS", want.as_str())));
     }
@@ -1013,7 +996,7 @@ mod tests {
         let cpus = std::thread::available_parallelism().map(std::num::NonZeroUsize::get).unwrap_or(1);
         let want = cpus.saturating_sub(1).max(1).to_string();
         for intent in [solo_run_intent(), Intent::EditTask { id: "smetana-7".into(), title: "x y".into() }] {
-            let cmd = build_command(42, &with_intent("claude", intent));
+            let cmd = build_command(42, &with_intent("claude", intent), sidecar());
             let value = cmd.iter_extra_env_as_str().find(|(key, _)| *key == "VITEST_MAX_WORKERS");
             assert_eq!(value, Some(("VITEST_MAX_WORKERS", want.as_str())));
         }
@@ -1023,14 +1006,14 @@ mod tests {
     /// calls `build_command`, so nothing here ever divides its worker count.
     #[test]
     fn a_shell_gets_no_vitest_worker_cap() {
-        let cmd = build_shell_command("/bin/zsh", Path::new("/tmp/project"));
+        let cmd = build_shell_command("/bin/zsh", Path::new("/tmp/project"), sidecar());
         let value = cmd.iter_extra_env_as_str().find(|(key, _)| *key == "VITEST_MAX_WORKERS");
         assert_eq!(value, None, "{value:?}");
     }
 
     #[test]
     fn the_prompt_is_an_argument_and_not_bytes_written_afterwards() {
-        let cmd = build_command(7, &launch("codex"));
+        let cmd = build_command(7, &launch("codex"), sidecar());
         let argv = cmd.get_argv();
         // What is checked is where the prompt is, not how it is worded: the
         // wording belongs to `prompt.rs` and is pinned by its own tests, and a
@@ -1050,7 +1033,7 @@ mod tests {
     #[test]
     fn a_run_session_carries_the_runs_own_bd_actor() {
         for id in agents::IDS {
-            let cmd = build_command(42, &with_intent(id, run_intent()));
+            let cmd = build_command(42, &with_intent(id, run_intent()), sidecar());
             let actor = cmd.iter_extra_env_as_str().find(|(key, _)| *key == "BEADS_ACTOR");
             assert_eq!(actor, Some(("BEADS_ACTOR", "smetana-run-42")), "{id}");
         }
@@ -1080,7 +1063,7 @@ mod tests {
             Intent::Setup,
         ];
         for intent in intents {
-            let cmd = build_command(42, &with_intent("claude", intent));
+            let cmd = build_command(42, &with_intent("claude", intent), sidecar());
             let actor = cmd.iter_extra_env_as_str().find(|(key, _)| *key == "BEADS_ACTOR");
             assert_eq!(actor, None);
         }
@@ -1120,7 +1103,7 @@ mod tests {
         let dir = scratch("start-missing");
         let program = dir.join("an-agent-that-was-never-installed").display().to_string();
         let (chunks, _rx) = mpsc::unbounded_channel();
-        match Pty::start(1, build_shell_command(&program, &dir), &program, 120, 30, chunks, false) {
+        match Pty::start(1, build_shell_command(&program, &dir, sidecar()), &program, 120, 30, chunks, false) {
             Err(TerminalError::Spawn(why)) => assert!(why.contains(&program), "{why}"),
             Err(other) => panic!("{other}"),
             Ok(_) => panic!("a program that is not on disk answered with a session"),
@@ -1148,7 +1131,7 @@ mod tests {
         executable(&script, "#!/nonexistent/interpreter\nexit 0\n");
         let program = script.display().to_string();
         let (chunks, _rx) = mpsc::unbounded_channel();
-        match Pty::start(1, build_shell_command(&program, &dir), &program, 120, 30, chunks, false) {
+        match Pty::start(1, build_shell_command(&program, &dir, sidecar()), &program, 120, 30, chunks, false) {
             Err(TerminalError::Spawn(why)) => {
                 assert!(why.contains("/nonexistent/interpreter"), "{why}")
             }
@@ -1280,7 +1263,7 @@ mod tests {
         // on `agents::resolve` or a real `Launch`.
         let mut agent_pty = Pty::start(
             1,
-            build_shell_command("cmd.exe", &dir),
+            build_shell_command("cmd.exe", &dir, sidecar()),
             "cmd.exe",
             120,
             30,
@@ -1297,7 +1280,7 @@ mod tests {
         agent_pty.kill();
 
         let mut shell_pty =
-            Pty::start(2, build_shell_command("cmd.exe", &dir), "cmd.exe", 120, 30, chunks, false)
+            Pty::start(2, build_shell_command("cmd.exe", &dir, sidecar()), "cmd.exe", 120, 30, chunks, false)
                 .expect("cmd.exe is on every Windows machine");
         assert!(shell_pty.job.is_none(), "build_shell_command's own session gets no job at all");
         shell_pty.kill();
@@ -1321,8 +1304,8 @@ mod tests {
 
     #[test]
     fn the_agent_path_puts_the_sidecar_first() {
-        let path = agent_path().expect("a test binary has a location");
+        let path = agent_path(sidecar()).expect("a sidecar directory was given");
         let first = std::env::split_paths(&path).next().expect("at least one entry");
-        assert_eq!(first, sidecar_dir().expect("the test binary has a location"));
+        assert_eq!(first, PathBuf::from(BUNDLE));
     }
 }

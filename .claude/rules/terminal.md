@@ -139,9 +139,9 @@ that is not reading yet is lost with no acknowledgement to wait for and no way t
 That `PATH` line is load-bearing rather than tidy. Filing a task is the agent running `bd create`,
 and this app's bd is a sidecar in the bundle: on a machine that never installed one there is nothing
 on `PATH` to find, and the flow works in `npm run tauri dev` only because a development machine
-happens to have bd of its own. `sidecar_dir` derives the directory as tauri-plugin-shell does,
-`dirname(current_exe())`, so it is the same directory `app.shell().sidecar("bd")` resolves to by
-construction. It goes in front of the inherited value, never behind: the app pins a bd version and
+happens to have bd of its own. `host::sidecar_path` derives the file as tauri-plugin-shell does,
+`dirname(current_exe())`, and the context hands its directory to the PTY builders, so the directory an
+agent's `PATH` gets and the file the tracker spawns are one location by construction. It goes in front of the inherited value, never behind: the app pins a bd version and
 checks it, and an agent that found some other bd first would be writing to the board through a
 version that handshake never verified.
 

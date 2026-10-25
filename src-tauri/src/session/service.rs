@@ -37,7 +37,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use portable_pty::CommandBuilder;
-use tauri::{AppHandle, Emitter, Manager};
+use crate::context::Context;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Child;
 use tokio::sync::{mpsc, oneshot};
@@ -469,11 +469,11 @@ struct CrewSendWaiter {
     reply: oneshot::Sender<Result<(), SessionError>>,
 }
 
-pub fn start(app: AppHandle) -> SessionHandle {
+pub fn start(ctx: Context) -> SessionHandle {
     let (tx, mut rx) = mpsc::channel::<Request>(32);
     let (chunks_tx, mut chunks_rx) = mpsc::unbounded_channel::<Chunk>();
 
-    tauri::async_runtime::spawn(async move {
+    crate::context::spawn(async move {
         let (asked_tx, mut asked_rx) = mpsc::channel::<Asked>(16);
         // One listener for the whole app, bound once here: `register` is what
         // gives each session its own URL and its own token. A machine that will
@@ -553,7 +553,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         return;
                     }
                     handle(
-                        &app,
+                        &ctx,
                         &mut sessions,
                         &mut crews,
                         &mut crew_ptys,
@@ -587,7 +587,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                     // breaking is a stopped worker, whereas continuing is a
                     // branch that is instantly ready forever.
                     let Some(chunk) = chunk else { break };
-                    absorb(&app, &mut sessions, &mut crews, &mut crew_leads, &mut crew_waiters, &mut crew_exits, &mut crew_send_waiters, &mut exit_waiters, &mut exits, &chunks_tx, &mut codex_hydrated, &mut codex_hydration_requested, &mut codex_buffered, &mut codex_seen, &mut codex_reconciled, &mut starting, &mut crew_starting, permission.as_ref(), chunk);
+                    absorb(&ctx, &mut sessions, &mut crews, &mut crew_leads, &mut crew_waiters, &mut crew_exits, &mut crew_send_waiters, &mut exit_waiters, &mut exits, &chunks_tx, &mut codex_hydrated, &mut codex_hydration_requested, &mut codex_buffered, &mut codex_seen, &mut codex_reconciled, &mut starting, &mut crew_starting, permission.as_ref(), chunk);
                 }
                 asked = asked_rx.recv(), if asked_open => {
                     let Some(asked) = asked else {
@@ -597,15 +597,15 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         asked_open = false;
                         continue;
                     };
-                    question(&app, &mut sessions, asked);
+                    question(&ctx, &mut sessions, asked);
                 }
                 _ = crew_tick.tick(), if !claude_crews.is_empty() => {
                     let mut admission_failures = Vec::new();
-                    refresh_claude_crews(&app, &mut crews, &mut crew_ptys, &claude_crews, &mut claude_teams, &claude_team_baselines, &claude_expected_sessions, &mut claude_bootstrap_members, &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes, &mut claude_starting, &mut claude_sent_briefs, &mut admission_failures);
+                    refresh_claude_crews(&ctx, &mut crews, &mut crew_ptys, &claude_crews, &mut claude_teams, &claude_team_baselines, &claude_expected_sessions, &mut claude_bootstrap_members, &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes, &mut claude_starting, &mut claude_sent_briefs, &mut admission_failures);
                     for (root, reason) in admission_failures {
                         let Some(admission) = claude_starting.remove(&root) else { continue };
                         clear_crew(
-                            &app, &mut sessions, &mut crews, &mut crew_ptys, &mut claude_crews,
+                            &ctx, &mut sessions, &mut crews, &mut crew_ptys, &mut claude_crews,
                             &mut claude_teams, &mut claude_team_baselines, &mut claude_expected_sessions, &mut claude_bootstrap_members, &mut claude_starting,
                             &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes, &mut claude_sent_briefs,
                             &mut crew_leads, &mut crew_waiters, &mut crew_exits, &mut crew_send_waiters,
@@ -621,7 +621,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                         let expected_session = claude_expected_sessions.get(&root).cloned().unwrap_or_default();
                         log::info!("[crew] root {root}: admission timed out waiting on: {} (expected session {expected_session})", admission.wait_reason);
                         clear_crew(
-                            &app, &mut sessions, &mut crews, &mut crew_ptys, &mut claude_crews,
+                            &ctx, &mut sessions, &mut crews, &mut crew_ptys, &mut claude_crews,
                             &mut claude_teams, &mut claude_team_baselines, &mut claude_expected_sessions, &mut claude_bootstrap_members, &mut claude_starting,
                             &mut claude_tails, &mut claude_lead_tails, &mut claude_transcript_nodes, &mut claude_sent_briefs,
                             &mut crew_leads, &mut crew_waiters, &mut crew_exits, &mut crew_send_waiters,
@@ -641,7 +641,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
                     for (root, code) in exited {
                         let admitted = !claude_starting.contains_key(&root);
                         clear_crew(
-                            &app,
+                            &ctx,
                             &mut sessions,
                             &mut crews,
                             &mut crew_ptys,
@@ -683,8 +683,7 @@ pub fn start(app: AppHandle) -> SessionHandle {
 /// be flushed, and the whole conversation is already in a journal that dies
 /// with the app anyway. So there is no grace period here — the app is leaving,
 /// and what this is for is not leaving a `claude` process behind.
-pub fn shutdown(app: &AppHandle) {
-    let Some(handle) = app.try_state::<SessionHandle>() else { return };
+pub fn shutdown(handle: &SessionHandle) {
     let (tx, rx) = std::sync::mpsc::channel();
     if handle.0.blocking_send(Request::ShutDown(tx)).is_err() {
         return;
@@ -782,13 +781,13 @@ fn session_cwd(project: &str, intent: &Intent) -> Result<PathBuf, SessionError> 
 /// discovered from its structured files by the Crew watcher, so routing this
 /// through `ClaudeDriver` would be a protocol lie.
 fn spawn_claude_crew(
-    app: &AppHandle,
+    ctx: &Context,
     project: &str,
     intent: Intent,
     pinned_agent: &str,
     lead_session: String,
 ) -> Result<(crate::terminal::pty::Pty, Option<String>), SessionError> {
-    let (_, model) = crate::settings::role_model(app, Some(project), &intent, None);
+    let (_, model) = crate::settings::role_model(ctx, Some(project), &intent, None);
     let Some(profile) = agents::resolve(pinned_agent)
         .filter(|profile| profile.id() == pinned_agent)
         .filter(|profile| agents::on_path(profile.binary(), crate::shell_env::path()))
@@ -809,9 +808,9 @@ fn spawn_claude_crew(
         profile,
         cwd: cwd.clone(),
         intent,
-        skills: agents::library::resolve(app),
-        languages: crate::settings::languages(app),
-        agent_prompt: crate::settings::agent_prompt(app),
+        skills: agents::library::resolve(ctx),
+        languages: crate::settings::languages(ctx),
+        agent_prompt: crate::settings::agent_prompt(ctx),
         facts,
         session_id: Some(lead_session),
         model,
@@ -855,7 +854,7 @@ fn resume_title(intent: &Intent, project: &Path) -> Option<String> {
 
 /// Start a child for this session, or say why not.
 fn spawn_session(
-    app: &AppHandle,
+    ctx: &Context,
     id: SessionId,
     project: &str,
     intent: Intent,
@@ -867,7 +866,7 @@ fn spawn_session(
     // in its own `Create` arm: this is where a driven session is built, so what
     // a person configured is what starts, rather than a harness this file
     // picked for itself.
-    let (configured_agent, model) = crate::settings::role_model(app, Some(project), &intent, None);
+    let (configured_agent, model) = crate::settings::role_model(ctx, Some(project), &intent, None);
     let agent = pinned_agent.unwrap_or(&configured_agent);
     // The login shell's `PATH`, not this process's: a bundled app started from
     // Finder inherits launchd's, where nothing a person installed is reachable
@@ -962,15 +961,15 @@ fn spawn_session(
         profile,
         cwd: cwd.clone(),
         intent,
-        skills: agents::library::resolve(app),
+        skills: agents::library::resolve(ctx),
         // Read from the file here for the reason `terminal::service` reads them
         // there: a session built anywhere else in the app gets the same answers
         // by construction rather than because two call sites were kept in step.
         // They live with the front end's 400 ms debounce, which costs a session
         // started in the same fraction of a second as an edit the previous
         // value.
-        languages: crate::settings::languages(app),
-        agent_prompt: crate::settings::agent_prompt(app),
+        languages: crate::settings::languages(ctx),
+        agent_prompt: crate::settings::agent_prompt(ctx),
         facts,
         session_id,
         model: model.clone(),
@@ -990,7 +989,7 @@ fn spawn_session(
     // worker's own name for it. No `SMETANA_SESSION` mark: it is keyed by a
     // session id, the two workers' id spaces collide, and a driven child is
     // ended by this worker's `kill_all`.
-    if let Some(path) = crate::terminal::pty::agent_path() {
+    if let Some(path) = crate::terminal::pty::agent_path(ctx.sidecar_dir()) {
         builder.env("PATH", path);
     }
     for (key, value) in crate::terminal::pty::run_environment(&super::model::driven_run_actor(id), &launch) {
@@ -1134,7 +1133,7 @@ fn write_stdin(
     mut stdin: tokio::process::ChildStdin,
     mut queue: mpsc::UnboundedReceiver<Vec<u8>>,
 ) {
-    tauri::async_runtime::spawn(async move {
+    crate::context::spawn(async move {
         while let Some(bytes) = queue.recv().await {
             if let Err(error) = stdin.write_all(&bytes).await {
                 log::warn!("[session {id}] the child stopped reading its input: {error}");
@@ -1153,7 +1152,7 @@ fn read_stdout(
     mut stdout: tokio::process::ChildStdout,
     chunks: mpsc::UnboundedSender<Chunk>,
 ) {
-    tauri::async_runtime::spawn(async move {
+    crate::context::spawn(async move {
         let mut buf = vec![0u8; READ_CHUNK];
         loop {
             match stdout.read(&mut buf).await {
@@ -1187,7 +1186,7 @@ fn read_stdout(
 /// caps an unterminated line at `driver::MAX_LINE`, which is the same pair of
 /// problems already solved once in this subsystem.
 fn read_stderr(id: SessionId, mut stderr: tokio::process::ChildStderr) {
-    tauri::async_runtime::spawn(async move {
+    crate::context::spawn(async move {
         let mut buf = vec![0u8; READ_CHUNK];
         let mut lines = LineBuffer::new();
         loop {
@@ -1231,9 +1230,9 @@ fn say(live: &mut Live, bytes: Vec<u8>) -> bool {
 /// `talking` is deliberately **not** dropped here, unlike at `Chunk::Eof`: a
 /// broken stdin says nothing about stdout, and whatever the agent was in the
 /// middle of saying is still worth decoding into the journal.
-fn lost(app: &AppHandle, id: SessionId, live: &mut Live) {
+fn lost(ctx: &Context, id: SessionId, live: &mut Live) {
     live.child_alive = false;
-    append(app, id, live, vec![EventKind::Error { text: UNREACHABLE.into() }]);
+    append(ctx, id, live, vec![EventKind::Error { text: UNREACHABLE.into() }]);
 }
 
 /// Which intents this road starts at the front door, `Request::Start`.
@@ -1269,10 +1268,10 @@ pub(crate) struct CrewEventsChange {
     pub(crate) events: Vec<Event>,
 }
 
-fn emit_crew(app: &AppHandle, package: &CrewPackage) {
-    let _ = app.emit(
+fn emit_crew(ctx: &Context, package: &CrewPackage) {
+    ctx.emit(
         "crew:tree",
-        CrewTreeChange {
+        &CrewTreeChange {
             project: package.project.clone(),
             root: package.root,
             nodes: package.tree.nodes(),
@@ -1285,14 +1284,14 @@ pub(crate) fn events_payload(id: SessionId, events: &[Event]) -> serde_json::Val
     serde_json::json!({ "id": id, "events": events })
 }
 
-fn emit_crew_events(app: &AppHandle, root: u64, node: u64, events: Vec<Event>) {
+fn emit_crew_events(ctx: &Context, root: u64, node: u64, events: Vec<Event>) {
     if !events.is_empty() {
-        crate::remote::emit(app, "crew:events", &CrewEventsChange { root, node, events });
+        ctx.emit("crew:events", &CrewEventsChange { root, node, events });
     }
 }
 
 fn record_crew_message(
-    app: &AppHandle,
+    ctx: &Context,
     crews: &mut HashMap<u64, CrewPackage>,
     root: u64,
     node: u64,
@@ -1301,16 +1300,16 @@ fn record_crew_message(
     let Some(package) = crews.get_mut(&root) else { return };
     let events = package.record_message(node, text);
     if let Some(events) = events {
-        emit_crew_events(app, root, node, events);
+        emit_crew_events(ctx, root, node, events);
     }
-    emit_crew(app, package);
+    emit_crew(ctx, package);
 }
 
 /// Apply only Codex's documented structured app-server records. The driver
 /// has already translated turn output into the lead journal; these records are
 /// for topology/lifecycle, never a second parsing of rendered output.
 fn absorb_codex_crew(
-    app: &AppHandle,
+    ctx: &Context,
     crews: &mut HashMap<u64, CrewPackage>,
     root: u64,
     lead_provider: Option<&str>,
@@ -1331,14 +1330,14 @@ fn absorb_codex_crew(
             package.tree.update_provider(&id, state, can_message);
         }
     }
-    emit_crew(app, package);
+    emit_crew(ctx, package);
 }
 
 /// Route every Codex child record through the backend's provider-id index
 /// before appending it. The front end receives only the stable node id and can
 /// therefore switch between two simultaneous children without a shared log.
 fn absorb_codex_journals(
-    app: &AppHandle,
+    ctx: &Context,
     crews: &mut HashMap<u64, CrewPackage>,
     root: u64,
     records: Vec<serde_json::Value>,
@@ -1353,11 +1352,11 @@ fn absorb_codex_journals(
                     seen.insert((root, provider.clone(), key));
                 }
             }
-            append_codex_journal(app, crews, root, &provider, kinds, seen, &record, false);
+            append_codex_journal(ctx, crews, root, &provider, kinds, seen, &record, false);
             hydrated.insert((root, provider.clone()));
             for live in buffered.remove(&(root, provider)).unwrap_or_default() {
                 if let Some((provider, kinds)) = crate::agents::codex_crew::journal(&live) {
-                    append_codex_journal(app, crews, root, &provider, kinds, seen, &live, true);
+                    append_codex_journal(ctx, crews, root, &provider, kinds, seen, &live, true);
                 }
             }
             continue;
@@ -1367,7 +1366,7 @@ fn absorb_codex_journals(
             buffered.entry((root, provider)).or_default().push(record);
             continue;
         }
-        append_codex_journal(app, crews, root, &provider, kinds, seen, &record, false);
+        append_codex_journal(ctx, crews, root, &provider, kinds, seen, &record, false);
     }
 }
 
@@ -1375,7 +1374,7 @@ fn absorb_codex_journals(
 /// behind it and collapse only records with a stable provider-local identity.
 /// Deltas and unkeyed provider errors are occurrences, not duplicates.
 fn append_codex_journal(
-    app: &AppHandle,
+    ctx: &Context,
     crews: &mut HashMap<u64, CrewPackage>,
     root: u64,
     provider: &str,
@@ -1395,7 +1394,7 @@ fn append_codex_journal(
         .find_map(|(id, node)| (id == provider).then_some(node));
     let Some(node) = node else { return };
     if let Some(events) = package.append(node, kinds) {
-        emit_crew_events(app, root, node, events);
+        emit_crew_events(ctx, root, node, events);
     }
 }
 
@@ -1468,7 +1467,7 @@ fn crew_root_opening(package: &mut CrewPackage) -> Option<Vec<Event>> {
 /// ordinary answer on every tick but the one where `starting.remove(root)`
 /// actually found this admission, which is the caller's own guarantee that
 /// this runs at most once per root. Kept separate from `refresh_claude_crews`
-/// so it can be proved directly, with no `AppHandle` and no PTY: the caller
+/// so it can be proved directly, with no `Context` and no PTY: the caller
 /// alone is responsible for writing `input` to the child and for publishing
 /// `events` through `emit_crew_events`.
 fn admit_claude_crew(
@@ -1547,7 +1546,7 @@ fn drop_sent_brief_echo(kinds: Vec<EventKind>, sent_briefs: &mut HashMap<u64, Se
 /// launches in one project are therefore distinct before either creates a
 /// teammate, rather than attaching a package to its neighbour.
 fn refresh_claude_crews(
-    app: &AppHandle,
+    ctx: &Context,
     crews: &mut HashMap<u64, CrewPackage>,
     crew_ptys: &mut HashMap<u64, crate::terminal::pty::Pty>,
     roots: &HashSet<u64>,
@@ -1641,7 +1640,7 @@ fn refresh_claude_crews(
             if starting.contains_key(root) {
                 admission_failures.push((*root, "Claude Crew runtime config has no team name".into()));
             }
-            emit_crew(app, package);
+            emit_crew(ctx, package);
             continue;
         };
         // The directory was discovered from the runtime; still require that
@@ -1652,7 +1651,7 @@ fn refresh_claude_crews(
             if starting.contains_key(root) {
                 admission_failures.push((*root, "Claude Crew runtime config changed during admission".into()));
             }
-            emit_crew(app, package);
+            emit_crew(ctx, package);
             continue;
         }
         teams.insert(*root, team.clone());
@@ -1673,13 +1672,13 @@ fn refresh_claude_crews(
                     if let Some(admission) = starting.get_mut(root) {
                         admission.wait_reason = reason.into();
                     }
-                    emit_crew(app, package);
+                    emit_crew(ctx, package);
                     continue;
                 }
                 crate::agents::claude_crew::AdmissionStep::Failed(message) => {
                     package.tree.fail_node(*root);
                     admission_failures.push((*root, message));
-                    emit_crew(app, package);
+                    emit_crew(ctx, package);
                     continue;
                 }
                 crate::agents::claude_crew::AdmissionStep::Ready { bootstrap, subagents, lead_transcript } => {
@@ -1695,12 +1694,12 @@ fn refresh_claude_crews(
             // `leadSessionId` — the two never name the same session (see
             // `claude_crew::lead_subagents`'s own comment for the measurement).
             let Some(subagents) = crate::agents::claude_crew::lead_subagents(&home, expected_session) else {
-                emit_crew(app, package);
+                emit_crew(ctx, package);
                 continue;
             };
             let Some(lead_session_dir) = subagents.parent() else {
                 package.tree.fail_node(*root);
-                emit_crew(app, package);
+                emit_crew(ctx, package);
                 continue;
             };
             if let Err(error) = crate::agents::claude_crew::preflight(
@@ -1710,13 +1709,13 @@ fn refresh_claude_crews(
             ) {
                 package.tree.fail_node(*root);
                 log::warn!("[crew] root {root}: Claude runtime preflight failed: {error}");
-                emit_crew(app, package);
+                emit_crew(ctx, package);
                 continue;
             }
             let Some(lead_transcript) = crate::agents::claude_crew::lead_transcript(&home, expected_session) else {
                 package.tree.fail_node(*root);
                 log::warn!("[crew] root {root}: lead transcript is unavailable");
-                emit_crew(app, package);
+                emit_crew(ctx, package);
                 continue;
             };
             (subagents, lead_transcript)
@@ -1772,7 +1771,7 @@ fn refresh_claude_crews(
                         *root,
                     );
                     if let Some(events) = package.append(package.root, kinds) {
-                        emit_crew_events(app, *root, package.root, events);
+                        emit_crew_events(ctx, *root, package.root, events);
                     }
                     for state in lifecycle {
                         match state {
@@ -1782,7 +1781,7 @@ fn refresh_claude_crews(
                             crate::agents::claude_crew::LeadLifecycle::Ready { tokens_in, tokens_out } => {
                                 package.tree.set_state(package.root, CrewState::Waiting);
                                 if let Some(events) = package.close_turn(package.root, tokens_in, tokens_out) {
-                                    emit_crew_events(app, *root, package.root, events);
+                                    emit_crew_events(ctx, *root, package.root, events);
                                 }
                             }
                             crate::agents::claude_crew::LeadLifecycle::Failed => {
@@ -1798,7 +1797,7 @@ fn refresh_claude_crews(
                 if starting.contains_key(root) {
                     admission_failures.push((*root, format!("Claude Crew lead transcript could not be read: {error}")));
                 }
-                emit_crew(app, package);
+                emit_crew(ctx, package);
                 continue;
             }
         }
@@ -1808,7 +1807,7 @@ fn refresh_claude_crews(
                 *root,
                 "Claude Crew lead ended before its structured runtime was admitted".into(),
             ));
-            emit_crew(app, package);
+            emit_crew(ctx, package);
             continue;
         }
         if starting.get(root).is_some_and(|admission| !admission.gate.bootstrap_sent) {
@@ -1817,14 +1816,14 @@ fn refresh_claude_crews(
                 *root,
                 "Claude Crew bootstrap was not delivered before runtime admission".into(),
             ));
-            emit_crew(app, package);
+            emit_crew(ctx, package);
             continue;
         }
         if let Some(mut admission) = starting.remove(root) {
             let pty = crew_ptys.get_mut(root).expect("admitted Claude lead owns its PTY");
             if let Some((input, events)) = admit_claude_crew(package, &mut admission.gate, sent_briefs, *root) {
                 if let Some(events) = events {
-                    emit_crew_events(app, *root, package.root, events);
+                    emit_crew_events(ctx, *root, package.root, events);
                 }
                 // Only the admitted interactive runtime receives the Run
                 // prompt. Removing the pending admission makes delivery
@@ -1835,7 +1834,7 @@ fn refresh_claude_crews(
             let _ = admission.reply.send(Ok((*root, *root)));
         }
         let Ok(entries) = std::fs::read_dir(&subagents) else {
-            emit_crew(app, package);
+            emit_crew(ctx, package);
             continue;
         };
         for entry in entries.flatten() {
@@ -1901,7 +1900,7 @@ fn refresh_claude_crews(
                 Ok((events, lifecycle)) => {
                     let kinds = events.into_iter().map(|(kind, _)| kind).collect();
                     if let Some(events) = package.append(node, kinds) {
-                        emit_crew_events(app, *root, node, events);
+                        emit_crew_events(ctx, *root, node, events);
                     }
                     // The teammate's own transcript is its lifecycle: the
                     // config carries no status on 2.1.28x. Tokens are the
@@ -1922,7 +1921,7 @@ fn refresh_claude_crews(
                                     package.tree.set_state(node, CrewState::Waiting);
                                 }
                                 if let Some(events) = package.close_turn(node, tokens_in, tokens_out) {
-                                    emit_crew_events(app, *root, node, events);
+                                    emit_crew_events(ctx, *root, node, events);
                                 }
                             }
                             crate::agents::claude_crew::LeadLifecycle::Failed => {
@@ -1939,7 +1938,7 @@ fn refresh_claude_crews(
                 }
             }
         }
-        emit_crew(app, package);
+        emit_crew(ctx, package);
     }
 }
 
@@ -1948,7 +1947,7 @@ fn refresh_claude_crews(
 /// provider subscriptions: keeping a transcript cursor after its root is gone
 /// would let a later path reuse a stale node id.
 fn clear_crew(
-    app: &AppHandle,
+    ctx: &Context,
     sessions: &mut HashMap<SessionId, Live>,
     crews: &mut HashMap<u64, CrewPackage>,
     crew_ptys: &mut HashMap<u64, crate::terminal::pty::Pty>,
@@ -2004,12 +2003,12 @@ fn clear_crew(
     }
     if let Some(mut package) = crews.remove(&root) {
         package.tree.clear();
-        emit_crew(app, &package);
+        emit_crew(ctx, &package);
     }
 }
 
 fn handle(
-    app: &AppHandle,
+    ctx: &Context,
     sessions: &mut HashMap<SessionId, Live>,
     crews: &mut HashMap<u64, CrewPackage>,
     crew_ptys: &mut HashMap<u64, crate::terminal::pty::Pty>,
@@ -2056,7 +2055,7 @@ fn handle(
                     .map(|home| crate::agents::claude_crew::team_dirs(&home))
                     .unwrap_or_default();
                 log::info!("[crew] root {id}: expecting Claude Code session {lead_session}");
-                match spawn_claude_crew(app, &project, intent, agent, lead_session.clone()) {
+                match spawn_claude_crew(ctx, &project, intent, agent, lead_session.clone()) {
                     Ok((mut pty, prompt)) => {
                         // The brief goes to a file now and only the line
                         // pointing at it is typed later — see
@@ -2083,7 +2082,7 @@ fn handle(
                         let mut gate = ClaudePromptGate::new(prompt);
                         pty.write(&gate.bootstrap());
                         let package = CrewPackage::new(project, id, "Crew lead");
-                        emit_crew(app, &package);
+                        emit_crew(ctx, &package);
                         crews.insert(id, package);
                         crew_ptys.insert(id, pty);
                         claude_crews.insert(id);
@@ -2102,7 +2101,7 @@ fn handle(
                 }
                 return;
             }
-            match spawn_session(app, id, &project, intent, permission, chunks, Some(agent)) {
+            match spawn_session(ctx, id, &project, intent, permission, chunks, Some(agent)) {
                 Ok(live) => {
                     let waits = live.talking.as_ref().is_some_and(|talking| talking.driver.awaits_startup());
                     let mut package = CrewPackage::new(project, id, "Crew lead");
@@ -2115,9 +2114,9 @@ fn handle(
                     // the two Crew leads cannot draw two different first
                     // bubbles.
                     if let Some(events) = crew_root_opening(&mut package) {
-                        emit_crew_events(app, id, package.root, events);
+                        emit_crew_events(ctx, id, package.root, events);
                     }
-                    emit_crew(app, &package);
+                    emit_crew(ctx, &package);
                     crews.insert(id, package);
                     crew_leads.insert(id, id);
                     sessions.insert(id, live);
@@ -2216,7 +2215,7 @@ fn handle(
                             .and_then(|transcript| std::fs::metadata(transcript).ok())
                             .map_or(0, |meta| meta.len());
                         claude_sent_briefs.insert(root, SentBrief { text: normalize_brief_text(&typed), submitted: false, from });
-                        record_crew_message(app, crews, root, node, text);
+                        record_crew_message(ctx, crews, root, node, text);
                         Ok(())
                     } else {
                         Err(SessionError::Spawn(ENDED.into()))
@@ -2239,7 +2238,7 @@ fn handle(
                 )
                 .map_err(|error| SessionError::Spawn(error.to_string()));
                 if result.is_ok() {
-                    record_crew_message(app, crews, root, node, text);
+                    record_crew_message(ctx, crews, root, node, text);
                 }
                 let _ = tx.send(result);
                 return;
@@ -2282,7 +2281,7 @@ fn handle(
             }
             let admitted = !claude_starting.contains_key(&root);
             clear_crew(
-                app, sessions, crews, crew_ptys, claude_crews, claude_teams, claude_team_baselines, claude_expected_sessions, claude_bootstrap_members, claude_starting, claude_tails,
+                ctx, sessions, crews, crew_ptys, claude_crews, claude_teams, claude_team_baselines, claude_expected_sessions, claude_bootstrap_members, claude_starting, claude_tails,
                 claude_lead_tails, claude_transcript_nodes, claude_sent_briefs, crew_leads, crew_waiters, crew_exits, crew_send_waiters, root,
                 crate::terminal::model::Exit::Removed, admitted,
             );
@@ -2293,14 +2292,14 @@ fn handle(
                 let settled = package.tree.settle_unstarted();
                 if !settled.is_empty() {
                     log::info!("[crew] root {root}: batch handed back, {} never-started child(ren) settled to waiting", settled.len());
-                    emit_crew(app, package);
+                    emit_crew(ctx, package);
                 }
             }
         }
         Request::CrewClear(root) => {
             let admitted = !claude_starting.contains_key(&root);
             clear_crew(
-                app,
+                ctx,
                 sessions,
                 crews,
                 crew_ptys,
@@ -2328,7 +2327,7 @@ fn handle(
             // spawn and the same startup wait as `Start` otherwise.
             let id = *next_id;
             *next_id += 1;
-            match spawn_session(app, id, &project, intent, permission, chunks, Some(&pinned)) {
+            match spawn_session(ctx, id, &project, intent, permission, chunks, Some(&pinned)) {
                 Ok(mut live) => {
                     live.run_started = true;
                     sessions.insert(id, live);
@@ -2362,7 +2361,7 @@ fn handle(
             }
             let id = *next_id;
             *next_id += 1;
-            let started = spawn_session(app, id, &project, intent, permission, chunks, None);
+            let started = spawn_session(ctx, id, &project, intent, permission, chunks, None);
             match started {
                 Ok(live) => {
                     sessions.insert(id, live);
@@ -2427,7 +2426,7 @@ fn handle(
                 // The message itself is deliberately not journalled: a
                 // `UserMessage` here would open a turn that nothing can close,
                 // which `state_of` reads as a crash.
-                append(app, id, live, vec![EventKind::Error { text: ENDED.into() }]);
+                append(ctx, id, live, vec![EventKind::Error { text: ENDED.into() }]);
                 let _ = tx.send(Err(SessionError::Spawn(ENDED.into())));
                 return;
             }
@@ -2435,7 +2434,7 @@ fn handle(
             // does not echo a turn back, and a conversation showing only the
             // agent's half is not one.
             append(
-                app,
+                ctx,
                 id,
                 live,
                 vec![
@@ -2457,7 +2456,7 @@ fn handle(
             if wants_first_words_title(&live.title, &live.work) {
                 if let Some(title) = super::model::first_words(&text) {
                     live.title = Some(title);
-                    emit_state(app, id, live);
+                    emit_state(ctx, id, live);
                     record_live(live);
                 }
             }
@@ -2471,7 +2470,7 @@ fn handle(
             let _ = tx.send(if delivered {
                 Ok(())
             } else {
-                lost(app, id, live);
+                lost(ctx, id, live);
                 Err(SessionError::Spawn(UNREACHABLE.into()))
             });
         }
@@ -2503,7 +2502,7 @@ fn handle(
             // never retain their plaintext. Non-secret answers stay readable.
             let journal_answers = redact_secret_answers(live.journal.events(), &question, answers.clone());
             append(
-                app,
+                ctx,
                 id,
                 live,
                 vec![EventKind::PermissionAnswered { id: question.clone(), decision, answers: journal_answers }],
@@ -2521,7 +2520,7 @@ fn handle(
             let driver_delivered = bytes.is_some();
             if let Some(bytes) = bytes {
                 if !say(live, bytes) {
-                    lost(app, id, live);
+                    lost(ctx, id, live);
                 }
             }
             let delivered = driver_delivered || permission.is_some_and(|server| server.answer(&question, decision, answers));
@@ -2546,7 +2545,7 @@ fn handle(
             match bytes {
                 Some(bytes) => {
                     if !say(live, bytes) {
-                        lost(app, id, live);
+                        lost(ctx, id, live);
                     }
                 }
                 None => {
@@ -2583,7 +2582,7 @@ fn handle(
 
 /// A chunk off a child, as events.
 fn absorb(
-    app: &AppHandle,
+    ctx: &Context,
     sessions: &mut HashMap<SessionId, Live>,
     crews: &mut HashMap<u64, CrewPackage>,
     crew_leads: &mut HashMap<SessionId, u64>,
@@ -2627,25 +2626,25 @@ fn absorb(
                 // Beside `settings.json`, for a person to open. Looked up
                 // before `append` so a call and its refusal arriving in one
                 // read still find each other.
-                if let Some(dir) = crate::settings::commands::settings_path(app).ok().and_then(|path| path.parent().map(std::path::Path::to_path_buf)) {
+                if let Some(dir) = crate::settings::commands::settings_path(ctx).ok().and_then(|path| path.parent().map(std::path::Path::to_path_buf)) {
                     crate::session::blocks::record_sightings(&dir, &id.to_string(), &chrono::Utc::now().to_rfc3339(), live.journal.events(), &kinds, sightings);
                 }
             }
             let lead_kinds = kinds.clone();
-            append(app, id, live, kinds);
+            append(ctx, id, live, kinds);
             if let Some(conversation) = discovered.as_ref() {
-                note_conversation(app, id, live, conversation.clone());
+                note_conversation(ctx, id, live, conversation.clone());
             }
             if let Some(root) = crew_leads.get(&id).copied() {
                 if let Some(package) = crews.get_mut(&root) {
                     if let Some(events) = package.append(package.root, lead_kinds) {
                         if !events.is_empty() {
-                            emit_crew_events(app, root, package.root, events);
+                            emit_crew_events(ctx, root, package.root, events);
                         }
                     }
                 }
-                absorb_codex_crew(app, crews, root, discovered.as_deref(), crew_records);
-                absorb_codex_journals(app, crews, root, crew_journal_records, codex_hydrated, codex_buffered, codex_seen);
+                absorb_codex_crew(ctx, crews, root, discovered.as_deref(), crew_records);
+                absorb_codex_journals(ctx, crews, root, crew_journal_records, codex_hydrated, codex_buffered, codex_seen);
                 for (request, receipt) in crew_send_results {
                     // Responses are ordered by one app-server stream. A send
                     // is never reported successful merely because its bytes
@@ -2653,7 +2652,7 @@ fn absorb(
                     let Some(waiter) = crew_send_waiters.remove(&(root, request)) else { continue };
                     match receipt {
                         Ok(()) => {
-                            record_crew_message(app, crews, root, waiter.node, waiter.text);
+                            record_crew_message(ctx, crews, root, waiter.node, waiter.text);
                             let _ = waiter.reply.send(Ok(()));
                         }
                         Err(error) => {
@@ -2679,7 +2678,7 @@ fn absorb(
                 }
             }
             for bytes in outgoing {
-                if !say(live, bytes) { lost(app, id, live); break; }
+                if !say(live, bytes) { lost(ctx, id, live); break; }
             }
             if let Some(result) = startup {
                 if let Some((root, tx)) = crew_starting.remove(&id) {
@@ -2691,7 +2690,7 @@ fn absorb(
                             crew_leads.remove(&id);
                             if let Some(mut package) = crews.remove(&root) {
                                 package.tree.clear();
-                                emit_crew(app, &package);
+                                emit_crew(ctx, &package);
                             }
                             let _ = tx.send(Err(SessionError::Spawn(text.clone())));
                         }
@@ -2774,7 +2773,7 @@ fn absorb(
             // zombie for the life of the app.
             if let Some(mut child) = live.child.take() {
                 let chunks = chunks.clone();
-                tauri::async_runtime::spawn(async move {
+                crate::context::spawn(async move {
                     match child.wait().await {
                         Ok(status) => {
                             log::info!("[session {id}] the child ended: {status}");
@@ -2804,7 +2803,7 @@ fn absorb(
             // `refresh_state` draws it too when the state first turns terminal, so a
             // second write here is expected, and it is the one that has the final JSON.
             crate::runs::review_report::on_session_end(&live.work, &live.project);
-            refresh_state(app, id, live);
+            refresh_state(ctx, id, live);
             // The package lifetime ends with its lead. Finished children were
             // retained until here; now drop the complete tree and all provider
             // indexes together so no row is orphaned after Stop/exit.
@@ -2829,7 +2828,7 @@ fn absorb(
                 }
                 if let Some(mut package) = crews.remove(&root) {
                     package.tree.clear();
-                    emit_crew(app, &package);
+                    emit_crew(ctx, &package);
                 }
             }
             // A failed pre-creation startup was never a conversation. Its
@@ -2881,7 +2880,7 @@ fn redact_secret_answers(events: &[Event], id: &str, answers: Option<BTreeMap<St
 /// A question from the permission listener. It becomes a `Permission` event and
 /// nothing else: the answer is a person's, and until they give one this session
 /// says nothing further — the harness is holding its own tool call open.
-fn question(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, asked: Asked) {
+fn question(ctx: &Context, sessions: &mut HashMap<SessionId, Live>, asked: Asked) {
     let Asked { session, id, tool, detail, input } = asked;
     let Some(live) = sessions.get_mut(&session) else {
         log::warn!("[session {session}] a question arrived for a session that is not here");
@@ -2903,7 +2902,7 @@ fn question(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, asked: Ask
         serde_json::Value::Null
     };
     append(
-        app,
+        ctx,
         session,
         live,
         vec![EventKind::Permission {
@@ -2925,7 +2924,7 @@ fn question(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, asked: Ask
 /// The one door into the journal, and the reason `state_of`'s note about a
 /// third producer holds: the stream reader and the permission listener both
 /// come through here, in the worker's own order.
-fn append(app: &AppHandle, id: SessionId, live: &mut Live, kinds: Vec<EventKind>) {
+fn append(ctx: &Context, id: SessionId, live: &mut Live, kinds: Vec<EventKind>) {
     if kinds.is_empty() {
         return;
     }
@@ -2936,8 +2935,8 @@ fn append(app: &AppHandle, id: SessionId, live: &mut Live, kinds: Vec<EventKind>
     let events: Vec<Event> =
         kinds.into_iter().map(|kind| live.journal.append(kind, at.clone())).collect();
     // For every session, attached or not. See this file's header.
-    crate::remote::emit(app, "session:events", &events_payload(id, &events));
-    refresh_state(app, id, live);
+    ctx.emit("session:events", &events_payload(id, &events));
+    refresh_state(ctx, id, live);
 }
 
 /// Whether a change of state is the session ending: into `Exited` or `Failed`
@@ -2970,10 +2969,10 @@ fn wants_first_words_title(title: &Option<String>, work: &crate::terminal::model
     title.is_none() && matches!(work, crate::terminal::model::SessionWork::Bare)
 }
 
-fn emit_state(app: &AppHandle, id: SessionId, live: &Live) {
-    let _ = app.emit(
+fn emit_state(ctx: &Context, id: SessionId, live: &Live) {
+    ctx.emit(
         "session:state",
-        StateChange {
+        &StateChange {
             id,
             state: live.state,
             conversation: live.conversation.clone(),
@@ -2982,7 +2981,7 @@ fn emit_state(app: &AppHandle, id: SessionId, live: &Live) {
     );
 }
 
-fn refresh_state(app: &AppHandle, id: SessionId, live: &mut Live) {
+fn refresh_state(ctx: &Context, id: SessionId, live: &mut Live) {
     let state = state_of(live.journal.events(), live.child_alive);
     if state == live.state {
         return;
@@ -2999,7 +2998,7 @@ fn refresh_state(app: &AppHandle, id: SessionId, live: &mut Live) {
     // On the change of state and not on the event, so a second question queued behind the first, or
     // any event while the wait goes on, does not reach the person's phone again.
     if crate::remote::push::waiting_began(before, state) {
-        crate::remote::push::notify_needs_you(app, id, &live.project, &live.agent, live.title.as_deref());
+        crate::remote::push::notify_needs_you(ctx, id, &live.project, &live.agent, live.title.as_deref());
     }
     // Claude Code's own title, taken once a turn actually settles — `Ready`
     // or `NeedsYou` — and never chased again: every `ai-title` record of one
@@ -3019,7 +3018,7 @@ fn refresh_state(app: &AppHandle, id: SessionId, live: &mut Live) {
             }
         }
     }
-    emit_state(app, id, live);
+    emit_state(ctx, id, live);
 }
 
 /// The id a harness picked for itself, the moment its own protocol confirms
@@ -3037,7 +3036,7 @@ fn refresh_state(app: &AppHandle, id: SessionId, live: &mut Live) {
 /// a plain resume's redundant report of the id it was already given at the
 /// spawn is exactly the case this guard turns into a no-op rather than a
 /// second, identical record write.
-fn note_conversation(app: &AppHandle, id: SessionId, live: &mut Live, conversation: String) {
+fn note_conversation(ctx: &Context, id: SessionId, live: &mut Live, conversation: String) {
     if live.conversation.is_some() {
         return;
     }
@@ -3060,7 +3059,7 @@ fn note_conversation(app: &AppHandle, id: SessionId, live: &mut Live, conversati
     // holding, the same way `refresh_state`'s emit is not the only place a
     // state reaches a window either.
 
-    emit_state(app, id, live);
+    emit_state(ctx, id, live);
     // The record the spawn could not write, written now that there is an id
     // to key it by — through `record_live`, so this write and the spawn's own
     // cannot disagree about a field, including a title already known before
@@ -3402,7 +3401,7 @@ mod tests {
     /// `Request::CrewStart`'s Codex arm and `admit_claude_crew` now call, so
     /// there is one place, not two, that can draw the wordless first bubble
     /// wrong. The Codex arm itself is `handle()`, which needs a real
-    /// `AppHandle` to spawn and reply through and so is not exercised here
+    /// `Context` to spawn and reply through and so is not exercised here
     /// (this file's own header: no unit test for the worker's I/O and
     /// orchestration) — this pins the shared helper it calls instead.
     #[test]

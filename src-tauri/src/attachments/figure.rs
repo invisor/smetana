@@ -80,7 +80,6 @@ fn resolve(base: &str, src: &str) -> PathBuf {
 /// from; `src` itself is taken as-is when it already names an absolute
 /// location, exactly the way `markdown.js`'s own image node carries it —
 /// unmodified — out of the parser.
-#[tauri::command]
 pub async fn image_read(base: String, src: String) -> Result<Attachment, AttachmentError> {
     if is_network_path(&src) {
         return Err(AttachmentError::NetworkPath(src));

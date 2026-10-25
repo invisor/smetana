@@ -107,9 +107,11 @@ over the worker's handle (`tracker::commands::snapshot`, `session::commands::pla
 error is `serde_json::to_value(err)`, which is how Tauri hands it to the webview, and travels as
 `BridgeError::Handler`.
 
-**One emission point.** The seven allowlisted events leave through `remote::emit(app, name, &payload)`,
-which emits to the windows as `app.emit` did and then to the phones listening (`Hub::publish`). A new
-emitter of an allowlisted event must use it; an event off the list may still use `app.emit`. A phone whose
+**One emission point.** Every event a worker sends leaves through `Context::emit(name, &payload)`
+(`src-tauri/src/context.rs`), whose Tauri sink (`host.rs`) emits to the windows as `app.emit` did and then
+offers the payload to the phones listening (`Hub::publish`), which drops a name that is not on the
+allowlist. So there is one road for every event and the seven allowlisted ones reach the phones by it;
+nothing in a worker holds an `AppHandle` any more. A phone whose
 queue fills (512 messages) is closed with `CLOSE_SLOW` and reads its snapshots again, as after any dropped
 connection. Calls run concurrently (32 per phone); replies carry the phone's id and come in any order.
 

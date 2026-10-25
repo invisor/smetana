@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use tauri::AppHandle;
+use crate::context::Context;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::awake;
@@ -261,7 +261,7 @@ impl Drop for Ending {
 /// rather than read here, because `lib.rs` has already loaded that file to
 /// decide which project to open.
 pub fn start(
-    app: AppHandle,
+    ctx: Context,
     tracker: TrackerHandle,
     terminal: TerminalHandle,
     session: SessionHandle,
@@ -270,7 +270,7 @@ pub fn start(
     let (tx, mut rx) = mpsc::channel::<Request>(8);
     let (report_tx, mut report_rx) = mpsc::unbounded_channel::<Report>();
 
-    tauri::async_runtime::spawn(async move {
+    crate::context::spawn(async move {
         // Before the first request is served, and on this task rather than a
         // task of its own: this worker is the only thing that writes the
         // registry, which is what makes its read-modify-write safe, and a run
@@ -289,7 +289,7 @@ pub fn start(
         // will not name an app data directory at all, which `usage::read`
         // already treats as an unreadable probe — the gate never blocks on
         // it.
-        let probe = crate::agents::probe_dir(&app).ok();
+        let probe = crate::agents::probe_dir(&ctx).ok();
 
         // Keyed by each run's token: several runs share a project now, and the
         // token is the one name that is never two runs'. Which project an
@@ -307,7 +307,7 @@ pub fn start(
                 request = rx.recv() => {
                     let Some(request) = request else { break };
                     handle(
-                        &app,
+                        &ctx,
                         &mut active,
                         &mut next_token,
                         &tracker,
@@ -324,7 +324,7 @@ pub fn start(
                 // writes one out.
                 report = report_rx.recv() => {
                     let Some(report) = report else { break };
-                    handle_report(&app, &mut active, report);
+                    handle_report(&ctx, &mut active, report);
                 }
             }
             // The end of the pass, whichever arm was taken: a start has just
@@ -342,8 +342,8 @@ pub fn start(
     RunHandle(tx)
 }
 
-fn emit(app: &AppHandle, run: &Run) {
-    crate::remote::emit(app, "run:state", run);
+fn emit(ctx: &Context, run: &Run) {
+    ctx.emit("run:state", run);
 }
 
 /// Read only the provider's advertised version before a Crew package can
@@ -352,7 +352,7 @@ fn emit(app: &AppHandle, run: &Run) {
 /// lead; this early check prevents a known-old executable from ever reaching
 /// the board loop.
 fn select_run_session(
-    app: &AppHandle,
+    ctx: &Context,
     settings: &RunSettings,
     agent: &str,
 ) -> Result<RunSession, RunError> {
@@ -361,7 +361,7 @@ fn select_run_session(
             "the configured run provider '{agent}' is unavailable"
         )));
     };
-    let panel = crate::settings::conversation_panel(app);
+    let panel = crate::settings::conversation_panel(ctx);
     if settings.mode != super::model::RunMode::Supervised || !panel {
         let mut selected = session::select(
             settings.mode,
@@ -420,7 +420,7 @@ fn codex_version_supported(version: &str) -> bool {
 }
 
 fn handle(
-    app: &AppHandle,
+    ctx: &Context,
     active: &mut HashMap<u64, Active>,
     next_token: &mut u64,
     tracker: &TrackerHandle,
@@ -463,7 +463,7 @@ fn handle(
                 answer = Some(current.run.clone());
             }
             if let Some(run) = &answer {
-                emit(app, run);
+                emit(ctx, run);
             }
             // The entry stays whether or not the run is over. It leaves in one
             // place only — `Report::Ended`, when the loop task is actually gone.
@@ -530,12 +530,12 @@ fn handle(
             // same row, and drops it if this snapshot and the file have since
             // come to disagree.
             let (agent, _) =
-                crate::settings::role_pair(app, Some(&project), crate::agents::Role::RunLead);
+                crate::settings::role_pair(ctx, Some(&project), crate::agents::Role::RunLead);
             // Freeze the transport while no task has been claimed and no
             // worktree has been made. In particular, an unsupported Crew
             // provider cannot fall through to the terminal TUI later in the
             // loop: that would put two incompatible UIs over one package.
-            let run_session = match select_run_session(app, &settings, &agent) {
+            let run_session = match select_run_session(ctx, &settings, &agent) {
                 Ok(session) => session,
                 Err(error) => {
                     let _ = tx.send(Err(error));
@@ -546,13 +546,13 @@ fn handle(
             // silently changed its mind about worktrees between batches would
             // leave half a night's checkouts on the disk and sweep the other
             // half away, with nothing in either report saying which.
-            let remove_worktrees = crate::settings::git_remove_worktrees(app);
+            let remove_worktrees = crate::settings::git_remove_worktrees(ctx);
             // Not read here the way the two above are: the *path* is taken
             // once and the file is asked again at every gate check, so a
             // threshold moved while a run is paused takes effect on that run
             // rather than on the next one. See `usage::Limits` for why this
             // field is the exception to their snapshot.
-            let settings_path = crate::settings::path(app);
+            let settings_path = crate::settings::path(ctx);
             let settings_changed = crate::settings::run_settings_changes();
 
             let token = *next_token;
@@ -599,20 +599,20 @@ fn handle(
                 // not.
                 probe.map(Path::to_path_buf),
             );
-            tauri::async_runtime::spawn(async move {
+            crate::context::spawn(async move {
                 // Bound rather than dropped: it has to outlive the loop, since
                 // its whole job is to fire when the loop is over.
                 let _ending = ending;
                 driving.await;
             });
 
-            emit(app, &run);
+            emit(ctx, &run);
             let _ = tx.send(Ok(run));
         }
     }
 }
 
-fn handle_report(app: &AppHandle, active: &mut HashMap<u64, Active>, report: Report) {
+fn handle_report(ctx: &Context, active: &mut HashMap<u64, Active>, report: Report) {
     // The disk half first, because an ending takes its entry out of the map and
     // the project this run belongs to is on that entry. Kept out of `absorb`,
     // which stays pure.
@@ -624,12 +624,12 @@ fn handle_report(app: &AppHandle, active: &mut HashMap<u64, Active>, report: Rep
         _ => None,
     };
     if let Some(run) = absorb(active, report) {
-        emit(app, &run);
+        emit(ctx, &run);
         // One push per ending. A person pressing stop with nothing in flight ends the run on the
         // `Request::Stop` side and is not announced to their own phone; the loop's later report of
         // that ending finds `was_over` already true.
         if crate::remote::push::run_ended(was_over, run.is_over()) {
-            crate::remote::push::notify_run_finished(app, &run);
+            crate::remote::push::notify_run_finished(ctx, &run);
         }
     }
 }
@@ -3221,7 +3221,7 @@ async fn await_exit(transport: &RunTransport, session: u64) -> Exit {
 /// the tree reaches — plus the scope rule that turned "one run per project"
 /// into "one run per scope" (smetana-5hf). Everything here is `absorb`,
 /// `permit`, `admit`, `runs_in` and `browser_candidates` over a plain
-/// `HashMap` — no worker, no runtime, no `AppHandle`.
+/// `HashMap` — no worker, no runtime, no `Context`.
 #[cfg(test)]
 mod tests {
     use super::*;

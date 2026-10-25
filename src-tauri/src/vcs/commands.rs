@@ -13,8 +13,10 @@ use super::model::{
 use super::run::Attempt;
 use super::{merged, model, repos, run};
 use crate::agents::oneshot::{self, OneshotError};
+use crate::context::Context;
 use crate::files::model::{looks_binary, BINARY_SNIFF_BYTES, MAX_FILE_BYTES};
 use crate::git;
+use tauri::State;
 
 /// **Every command in this file runs its work here, and none of it in the body
 /// of the `async fn`.** `spawn_blocking`, rather than making the commands
@@ -1008,7 +1010,7 @@ fn at_head(repo: &Path, path: &str) -> Result<AtHead, VcsError> {
 /// passing it.
 #[tauri::command]
 pub async fn vcs_suggest_message(
-    app: tauri::AppHandle,
+    ctx: State<'_, Context>,
     repo: String,
     project: Option<String>,
 ) -> Result<String, OneshotError> {
@@ -1019,6 +1021,7 @@ pub async fn vcs_suggest_message(
     // settings file, probing the login shell for a `PATH` and the four git
     // calls of `describe` are every one of them blocking, and the ask itself
     // then waits on a model for as long as ninety seconds.
+    let ctx = ctx.inner().clone();
     tokio::task::spawn_blocking(move || {
         // A one-shot with no session behind it, so there is no `Intent` to ask
         // a role with: it takes the Default row, which is the root pair, and
@@ -1029,7 +1032,7 @@ pub async fn vcs_suggest_message(
         // reads the root table exactly as before, and `project` staying empty
         // until the front end starts sending it is the whole point of the
         // argument being `Option<String>` here.
-        let (agent, model) = crate::settings::default_pair(&app, project.as_deref());
+        let (agent, model) = crate::settings::default_pair(&ctx, project.as_deref());
         // `pick_with_model`, which is `pick` with the pair rule on it: the
         // fallback to whatever is installed is unchanged, and the model goes
         // with it only if it was the harness that ran. See that function.
@@ -1040,7 +1043,7 @@ pub async fn vcs_suggest_message(
         // same way — a session's own commits are told this language by
         // `agents::prompt`, so the button and the run agree by construction
         // rather than by two people remembering to keep them in step.
-        let language = crate::agents::language_name(&crate::settings::languages(&app).commit);
+        let language = crate::agents::language_name(&crate::settings::languages(&ctx).commit);
         // Nothing to describe is this command's own refusal and never a
         // question put to a model — `OneshotError::Nothing` carries the whole
         // of why, and what it costs to get this one wrong.
@@ -1050,7 +1053,7 @@ pub async fn vcs_suggest_message(
         // Never the project's own root and never '/' — an empty folder of the
         // app's own, so the harness indexes nothing on the way to answering
         // one line. `runs::usage`'s header carries the whole of why.
-        let cwd = crate::agents::probe_dir(&app).map_err(OneshotError::Io)?;
+        let cwd = crate::agents::probe_dir(&ctx).map_err(OneshotError::Io)?;
         oneshot::ask(profile, model.as_deref(), &prompt, &cwd)
     })
     .await

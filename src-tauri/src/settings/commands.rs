@@ -11,9 +11,10 @@
 
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 
 use super::file;
+use crate::context::Context;
 use super::model::{merge, resolve, ResolvedSettings};
 use crate::project;
 
@@ -35,11 +36,51 @@ impl serde::Serialize for SettingsError {
     }
 }
 
-pub(crate) fn settings_path(app: &AppHandle) -> Result<PathBuf, SettingsError> {
-    app.path()
-        .app_config_dir()
+pub(crate) fn settings_path(ctx: &Context) -> Result<PathBuf, SettingsError> {
+    ctx.config_dir()
         .map(|dir| dir.join("settings.json"))
-        .map_err(|err| SettingsError::Dir(err.to_string()))
+        .map_err(|err| SettingsError::Dir(err.to_owned()))
+}
+
+/// Where the file is, for the two readers that hold an `AppHandle` and not a context.
+fn path(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join("settings.json"))
+}
+
+/// Whether the update timer may ask the release feed by itself.
+///
+/// Beside `role_pair` above and read the same way, from the disk on each call — and
+/// here that is not merely acceptable but the mechanism: `updates::schedule`
+/// asks at every tick, which is what lets the switch stop and restart the
+/// scheduled check without a restart of the app. The opposite of
+/// `git_remove_worktrees`' caller, which reads once and carries the answer for
+/// the whole of a run.
+///
+/// A platform that will not name a config directory answers `true`, the shipped
+/// state — the same fallback `file::updates_auto_check` makes, and for the
+/// reason written there.
+pub fn updates_auto_check(app: &AppHandle) -> bool {
+    path(app)
+        .map(|path| file::updates_auto_check(&path))
+        .unwrap_or_else(|| super::model::Settings::default().updates.auto_check)
+}
+
+/// How big one dialog window was left. `None` — including when there is no
+/// settings path at all — asks for the height the content comes to.
+pub fn dialog_size(app: &AppHandle, kind: &str) -> Option<super::model::DialogSize> {
+    file::dialog_size(&path(app)?, kind)
+}
+
+/// Keeps how big one dialog window was left. A failure is a warning and nothing
+/// more: the window on screen is the size the person made it either way, and
+/// what is lost is that size at the next opening.
+pub fn remember_dialog_size(app: &AppHandle, kind: &str, size: super::model::DialogSize) {
+    let Some(path) = path(app) else {
+        return;
+    };
+    if let Err(err) = file::remember_dialog_size(&path, kind, size) {
+        log::warn!("settings: the dialog size was not kept: {err}");
+    }
 }
 
 /// The successful end of `settings_save`, kept as a seam so the wake contract
@@ -54,17 +95,17 @@ fn saved_settings() {
 /// about the active project from the file.
 #[tauri::command]
 pub async fn settings_load(
-    app: AppHandle,
+    ctx: State<'_, Context>,
     project: Option<String>,
 ) -> Result<ResolvedSettings, SettingsError> {
-    let path = settings_path(&app)?;
+    let path = settings_path(&ctx)?;
     load_from(&path, project)
 }
 
 /// The body of `settings_load` once the file is located, for the phone bridge:
 /// the allowlisted commands are plain functions that the Tauri wrapper and
 /// `remote::bridge` both call. The path is an argument because finding it takes
-/// an `AppHandle`.
+/// the context.
 pub fn load_from(path: &std::path::Path, project: Option<String>) -> Result<ResolvedSettings, SettingsError> {
     let (settings, problem) = file::load(path);
     match problem {
@@ -94,8 +135,8 @@ pub fn load_from(path: &std::path::Path, project: Option<String>) -> Result<Reso
 /// The file is re-read on every write: a person may have edited it between two
 /// saves, and other projects' entries in it must not be lost.
 #[tauri::command]
-pub async fn settings_save(app: AppHandle, settings: ResolvedSettings) -> Result<(), SettingsError> {
-    let path = settings_path(&app)?;
+pub async fn settings_save(ctx: State<'_, Context>, settings: ResolvedSettings) -> Result<(), SettingsError> {
+    let path = settings_path(&ctx)?;
     let (mut stored, problem) = file::load(&path);
 
     /* The asymmetry is deliberate. A broken or too-new file has already gone

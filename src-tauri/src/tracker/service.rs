@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use notify::RecommendedWatcher;
-use tauri::AppHandle;
+use crate::context::Context;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 
@@ -168,7 +168,7 @@ fn own_bd(current: &Option<Project>, dir: &Path) -> Option<Bd> {
 /// "no project selected" are about the open folder: they have to survive a
 /// successful call, but die together with the project they belonged to.
 struct HealthReporter {
-    app: AppHandle,
+    ctx: Context,
     current: Health,
     bd: Option<Health>,
     project: Option<Health>,
@@ -189,9 +189,9 @@ struct HealthReporter {
 }
 
 impl HealthReporter {
-    fn new(app: AppHandle) -> Self {
+    fn new(ctx: Context) -> Self {
         Self {
-            app,
+            ctx,
             current: Health { state: HealthState::Ok, message: None },
             bd: None,
             project: None,
@@ -272,7 +272,7 @@ impl HealthReporter {
             return;
         }
         self.current = next;
-        crate::remote::emit(&self.app, "tracker:health", &self.current);
+        self.ctx.emit("tracker:health", &self.current);
     }
 }
 
@@ -288,9 +288,9 @@ fn no_tracker(health: &HealthReporter) -> TrackerError {
     )
 }
 
-fn emit_delta(app: &AppHandle, delta: Delta) {
+fn emit_delta(ctx: &Context, delta: Delta) {
     if !delta.is_empty() {
-        crate::remote::emit(app, "tracker:delta", &delta);
+        ctx.emit("tracker:delta", &delta);
     }
 }
 
@@ -309,7 +309,7 @@ fn since_with_overlap(last_seen: &str) -> String {
 /// out the first error. Success is an event too: without it one failed bd call
 /// would leave health in `error` for the rest of the process's life.
 async fn full_sync(
-    app: &AppHandle,
+    ctx: &Context,
     bd: &Bd,
     store: &mut Store,
     health: &mut HealthReporter,
@@ -317,7 +317,7 @@ async fn full_sync(
     let columns = match bd.columns().await {
         Ok(columns) => {
             if store.set_columns(columns) {
-                emit_delta(app, store.columns_delta());
+                emit_delta(ctx, store.columns_delta());
             }
             Ok(())
         }
@@ -325,7 +325,7 @@ async fn full_sync(
     };
     let issues = match bd.list_all().await {
         Ok(issues) => {
-            emit_delta(app, store.apply_full(issues));
+            emit_delta(ctx, store.apply_full(issues));
             Ok(())
         }
         Err(e) => Err(e),
@@ -393,7 +393,7 @@ async fn full_sync(
 /// genuinely broken is already saying so through the sweep above. The task
 /// simply stays where it is and the next tick tries again, which is what makes
 /// this idempotent rather than merely repeated.
-async fn close_merged(app: &AppHandle, current: &Option<Project>, store: &mut Store) {
+async fn close_merged(ctx: &Context, current: &Option<Project>, store: &mut Store) {
     let Some(project) = current.as_ref().filter(|p| p.tracked) else { return };
     let mut ids = store.ids_with_status(crate::runs::queue::READY_TO_MERGE);
     if ids.is_empty() {
@@ -416,7 +416,7 @@ async fn close_merged(app: &AppHandle, current: &Option<Project>, store: &mut St
             return;
         }
     }
-    let Some(target) = target_branch(app, &project.dir) else { return };
+    let Some(target) = target_branch(ctx, &project.dir) else { return };
 
     let dir = project.dir.clone();
     let aimed_at = target.clone();
@@ -439,7 +439,7 @@ async fn close_merged(app: &AppHandle, current: &Option<Project>, store: &mut St
         match project.bd.close(&task.id, Some(&reason)).await {
             Ok(issue) => {
                 log::info!("[tracker] closed {}: {reason}", task.id);
-                emit_delta(app, store.upsert_one(issue));
+                emit_delta(ctx, store.upsert_one(issue));
             }
             Err(e) => log::warn!("[tracker] could not close {}: {e}", task.id),
         }
@@ -462,9 +462,9 @@ async fn close_merged(app: &AppHandle, current: &Option<Project>, store: &mut St
 /// are what `settings::role_pair` and `runs::config::load` already cost every other
 /// caller, and reading them at each tick is what lets a branch chosen a minute
 /// ago take effect without a restart.
-fn target_branch(app: &AppHandle, dir: &Path) -> Option<String> {
+fn target_branch(ctx: &Context, dir: &Path) -> Option<String> {
     let project = dir.to_string_lossy();
-    if let Some(branch) = crate::settings::target_branch(app, &project) {
+    if let Some(branch) = crate::settings::target_branch(ctx, &project) {
         return Some(branch);
     }
     match crate::runs::config::load(dir) {
@@ -473,11 +473,11 @@ fn target_branch(app: &AppHandle, dir: &Path) -> Option<String> {
     }
 }
 
-async fn incremental_sync(app: &AppHandle, bd: &Bd, store: &mut Store, health: &mut HealthReporter) {
+async fn incremental_sync(ctx: &Context, bd: &Bd, store: &mut Store, health: &mut HealthReporter) {
     let since = since_with_overlap(store.last_seen());
     match bd.list_updated_after(&since).await {
         Ok(issues) => {
-            emit_delta(app, store.apply_incremental(issues));
+            emit_delta(ctx, store.apply_incremental(issues));
             health.recovered();
         }
         Err(e) => health.failed(&e, Some(bd.cwd())),
@@ -493,7 +493,7 @@ async fn incremental_sync(app: &AppHandle, bd: &Bd, store: &mut Store, health: &
 /// command's answer wholesale; otherwise the new project's issues would land on
 /// top of the old project's.
 async fn open(
-    app: &AppHandle,
+    ctx: &Context,
     dir: Option<PathBuf>,
     store: &mut Store,
     health: &mut HealthReporter,
@@ -501,14 +501,14 @@ async fn open(
 ) -> Option<Project> {
     // First of all, before anything else: a reset is a delta too, and the gap
     // in numbering it carries has to leave before any other.
-    emit_delta(app, store.reset());
+    emit_delta(ctx, store.reset());
 
     let Some(dir) = dir else {
         health.degrade_project(HealthState::NoProject, "no project selected".to_string());
         return None;
     };
 
-    let bd = Bd::new(app.clone(), dir.clone());
+    let bd = Bd::new(ctx.clone(), dir.clone());
 
     // Before asking whether there is a tracker in here at all, because a folder
     // the operating system is refusing answers "no" to every question about
@@ -561,14 +561,14 @@ async fn open(
 
     let project = Project { dir, bd, _watcher: watcher, tracked: true };
     // Nobody awaits the first sweep: health has already told the story of a failure.
-    let _ = full_sync(app, &project.bd, store, health).await;
+    let _ = full_sync(ctx, &project.bd, store, health).await;
     Some(project)
 }
 
 /// The bd version is a property of the binary, not of a folder: we ask once per
 /// launch and from any working directory — `bd --version` does not read the tracker.
-async fn check_version(app: &AppHandle, health: &mut HealthReporter) {
-    let probe = Bd::new(app.clone(), std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+async fn check_version(ctx: &Context, health: &mut HealthReporter) {
+    let probe = Bd::new(ctx.clone(), std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     match probe.version().await {
         Ok(Some(version)) if version == EXPECTED_BD_VERSION => {}
         Ok(other) => health.degrade_bd(
@@ -585,16 +585,16 @@ async fn check_version(app: &AppHandle, health: &mut HealthReporter) {
 /// The only place with mutable state — and it is single-threaded. A bd call
 /// costs about two seconds, so a request queue gives a comprehensible order
 /// instead of unpredictable blocking on a mutex.
-pub fn start(app: AppHandle, initial: Option<PathBuf>) -> TrackerHandle {
+pub fn start(ctx: Context, initial: Option<PathBuf>) -> TrackerHandle {
     let (tx_req, mut rx_req) = mpsc::channel::<Request>(32);
     let (tx_tick, mut rx_tick) = mpsc::channel::<WatchEvent>(16);
 
-    tauri::async_runtime::spawn(async move {
+    crate::context::spawn(async move {
         let mut store = Store::default();
-        let mut health = HealthReporter::new(app.clone());
+        let mut health = HealthReporter::new(ctx.clone());
 
-        check_version(&app, &mut health).await;
-        let mut current = open(&app, initial, &mut store, &mut health, &tx_tick).await;
+        check_version(&ctx, &mut health).await;
+        let mut current = open(&ctx, initial, &mut store, &mut health, &tx_tick).await;
 
         let mut ticker = tokio::time::interval(FULL_RESYNC);
         // By default missed ticks (the machine slept, a bd call dragged on) fire
@@ -614,7 +614,7 @@ pub fn start(app: AppHandle, initial: Option<PathBuf>) -> TrackerHandle {
                     // The senders are gone — there is no front end left, and
                     // nobody to work for.
                     let Some(request) = request else { break };
-                    let switched = handle(&app, &mut current, &mut store, &mut health, &tx_tick, request).await;
+                    let switched = handle(&ctx, &mut current, &mut store, &mut health, &tx_tick, request).await;
                     if switched {
                         // The folder changed: the previous project's deadline is
                         // void, and the accumulated watcher ticks belong partly
@@ -648,19 +648,19 @@ pub fn start(app: AppHandle, initial: Option<PathBuf>) -> TrackerHandle {
                 _ = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
                     due = None;
                     if let Some(bd) = tracked(&current) {
-                        incremental_sync(&app, bd, &mut store, &mut health).await;
+                        incremental_sync(&ctx, bd, &mut store, &mut health).await;
                     }
                 }
                 _ = ticker.tick() => {
                     // Nobody awaits the periodic sweep either.
                     if let Some(bd) = tracked(&current) {
-                        let _ = full_sync(&app, bd, &mut store, &mut health).await;
+                        let _ = full_sync(&ctx, bd, &mut store, &mut health).await;
                     }
                     // And after it, on the same tick rather than on a timer of
                     // its own: what this asks about is the board the sweep has
                     // just made current, so a second timer could only ask the
                     // same question of a staler answer.
-                    close_merged(&app, &current, &mut store).await;
+                    close_merged(&ctx, &current, &mut store).await;
                 }
             }
         }
@@ -677,7 +677,7 @@ pub fn start(app: AppHandle, initial: Option<PathBuf>) -> TrackerHandle {
 /// deferred catch-up deadline and drain the accumulated watcher ticks — both
 /// belong to a folder that may already be gone.
 async fn handle(
-    app: &AppHandle,
+    ctx: &Context,
     current: &mut Option<Project>,
     store: &mut Store,
     health: &mut HealthReporter,
@@ -710,7 +710,7 @@ async fn handle(
             // open() takes, and an event from the old folder would land in the
             // new one's health.
             *current = None;
-            *current = open(app, dir, store, health, tx_tick).await;
+            *current = open(ctx, dir, store, health, tx_tick).await;
             let _ = reply.send(store.snapshot());
             true
         }
@@ -726,7 +726,7 @@ async fn handle(
                     // The same order as in SetProject: the old Project (with no
                     // tracker, so there was no watcher either) is dropped before open().
                     *current = None;
-                    *current = open(app, dir, store, health, tx_tick).await;
+                    *current = open(ctx, dir, store, health, tx_tick).await;
                     let _ = reply.send(Ok(store.snapshot()));
                     true
                 }
@@ -839,7 +839,7 @@ async fn handle(
             // drop-then-open order SetProject uses, for the same reason — the
             // old watcher must not outlive the folder's state.
             *current = None;
-            *current = open(app, Some(dir), store, health, tx_tick).await;
+            *current = open(ctx, Some(dir), store, health, tx_tick).await;
             let _ = reply.send(Ok(Repair {
                 backup: backup.to_string_lossy().into_owned(),
                 output,
@@ -883,7 +883,7 @@ async fn handle(
         }
         Request::Resync(reply) => {
             let result = match tracked(current) {
-                Some(bd) => full_sync(app, bd, store, health).await,
+                Some(bd) => full_sync(ctx, bd, store, health).await,
                 None => Err(no_tracker(health)),
             };
             let _ = reply.send(result.map(|()| store.snapshot()));
@@ -891,7 +891,7 @@ async fn handle(
         }
         Request::BoardAt { dir, fresh, reply } => {
             let result = match own_bd(current, &dir) {
-                Some(bd) if fresh => full_sync(app, &bd, store, health)
+                Some(bd) if fresh => full_sync(ctx, &bd, store, health)
                     .await
                     .map(|()| (store.snapshot().issues, BoardSource::Cache)),
                 Some(_) => Ok((store.snapshot().issues, BoardSource::Cache)),
@@ -900,7 +900,7 @@ async fn handle(
                 // board in the background has no business putting a red line
                 // under somebody else's, and there is nothing drawn from this
                 // answer to redraw.
-                None => Bd::new(app.clone(), dir)
+                None => Bd::new(ctx.clone(), dir)
                     .list_all()
                     .await
                     .map(|issues| (issues, BoardSource::Direct)),
@@ -913,7 +913,7 @@ async fn handle(
                 Some(bd) => bd.update(&id, &patch).await,
                 None => Err(no_tracker(health)),
             };
-            let _ = reply.send(finish(app, store, result));
+            let _ = reply.send(finish(ctx, store, result));
             false
         }
         Request::UpdateAt { dir, id, patch, reply } => {
@@ -921,8 +921,8 @@ async fn handle(
                 // `finish` and not a bare write: this is the board on screen,
                 // so the delta has to go out exactly as it does for a write
                 // somebody made in the window.
-                Some(bd) => finish(app, store, bd.update(&id, &patch).await),
-                None => Bd::new(app.clone(), dir).update(&id, &patch).await,
+                Some(bd) => finish(ctx, store, bd.update(&id, &patch).await),
+                None => Bd::new(ctx.clone(), dir).update(&id, &patch).await,
             };
             let _ = reply.send(result);
             false
@@ -932,7 +932,7 @@ async fn handle(
                 Some(bd) => bd.close(&id, reason.as_deref()).await,
                 None => Err(no_tracker(health)),
             };
-            let _ = reply.send(finish(app, store, result));
+            let _ = reply.send(finish(ctx, store, result));
             false
         }
         Request::Reopen(id, reply) => {
@@ -940,7 +940,7 @@ async fn handle(
                 Some(bd) => bd.reopen(&id).await,
                 None => Err(no_tracker(health)),
             };
-            let _ = reply.send(finish(app, store, result));
+            let _ = reply.send(finish(ctx, store, result));
             false
         }
         Request::Delete(id, reply) => {
@@ -949,7 +949,7 @@ async fn handle(
                 None => Err(no_tracker(health)),
             };
             if result.is_ok() {
-                emit_delta(app, store.remove_one(&id));
+                emit_delta(ctx, store.remove_one(&id));
             }
             let _ = reply.send(result);
             false
@@ -960,12 +960,12 @@ async fn handle(
 /// The result of our own write goes into the snapshot at once, without waiting
 /// for the watcher: the tick that follows will produce an empty diff.
 fn finish(
-    app: &AppHandle,
+    ctx: &Context,
     store: &mut Store,
     result: Result<Issue, TrackerError>,
 ) -> Result<Issue, TrackerError> {
     if let Ok(issue) = &result {
-        emit_delta(app, store.upsert_one(issue.clone()));
+        emit_delta(ctx, store.upsert_one(issue.clone()));
     }
     result
 }

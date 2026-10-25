@@ -61,19 +61,18 @@ impl Services {
     /// The managed state of a running app. `None` while any of it is missing,
     /// which at the end of `setup` it never is.
     pub fn from_app(app: &AppHandle) -> Option<Self> {
+        let ctx = crate::host::context(app);
         Some(Self {
             tracker: app.try_state::<TrackerHandle>()?.inner().clone(),
             runs: app.try_state::<RunHandle>()?.inner().clone(),
             sessions: app.try_state::<SessionHandle>()?.inner().clone(),
             terminal: app.try_state::<TerminalHandle>()?.inner().clone(),
-            settings_path: crate::settings::commands::settings_path(app)
+            settings_path: crate::settings::commands::settings_path(&ctx)
                 .map_err(|err| err.to_string()),
-            attachments_root: crate::attachments::store_root(app).map_err(|err| err.to_string()),
+            attachments_root: crate::attachments::store_root(&ctx).map_err(|err| err.to_string()),
             project_switched: Some({
-                use tauri::Emitter;
-                let app = app.clone();
                 std::sync::Arc::new(move |path: Option<String>| {
-                    let _ = app.emit(PROJECT_SWITCHED_EVENT, json!({ "path": path }));
+                    ctx.emit_json(PROJECT_SWITCHED_EVENT, json!({ "path": path }));
                 })
             }),
         })

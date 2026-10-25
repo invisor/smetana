@@ -1,4 +1,6 @@
 use tauri::State;
+
+use crate::context::Context;
 use tokio::sync::oneshot;
 
 use crate::runs::service::{Request as RunRequest, RunHandle};
@@ -317,7 +319,7 @@ pub async fn tracker_access_reset(
 /// passing it.
 #[tauri::command]
 pub async fn tracker_search_semantic(
-    app: tauri::AppHandle,
+    ctx: State<'_, Context>,
     handle: State<'_, TrackerHandle>,
     query: String,
     project: Option<String>,
@@ -326,10 +328,11 @@ pub async fn tracker_search_semantic(
         .await
         .map_err(|err| OneshotError::Io(err.to_string()))?;
 
+    let ctx = ctx.inner().clone();
     tokio::task::spawn_blocking(move || {
         // The Default row, for the reason `vcs_suggest_message` records: a
         // one-shot has no session and therefore no `Intent` to ask a role with.
-        let (agent, model) = crate::settings::default_pair(&app, project.as_deref());
+        let (agent, model) = crate::settings::default_pair(&ctx, project.as_deref());
         // `pick_with_model` for the reason `vcs_suggest_message` records: the
         // substitution stays, the model does not cross it.
         let (profile, model) =
@@ -344,7 +347,7 @@ pub async fn tracker_search_semantic(
         // Never the project's own root and never '/' — see `runs::usage`'s
         // header for why a headless probe gets an empty folder of the app's
         // own to run in.
-        let cwd = crate::agents::probe_dir(&app).map_err(OneshotError::Io)?;
+        let cwd = crate::agents::probe_dir(&ctx).map_err(OneshotError::Io)?;
         let raw = agent_oneshot::ask_raw(profile, model.as_deref(), &question, &cwd)?;
         let known: std::collections::HashSet<String> =
             issues.iter().map(|issue| issue.id.clone()).collect();

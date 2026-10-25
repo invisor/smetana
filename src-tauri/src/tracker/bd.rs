@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
-use tauri::AppHandle;
-use tauri_plugin_shell::ShellExt;
+use crate::context::Context;
 
 use super::model::{ColumnDef, Issue, IssuePatch, TrackerError};
 
@@ -155,17 +154,21 @@ pub fn migrate_schema_args() -> Vec<String> {
     vec!["migrate".to_string(), "schema".to_string()]
 }
 
+/// `CREATE_NO_WINDOW`, from the Windows process-creation flags.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// A wrapper around the bundled bd binary. The only place that knows what the
 /// CLI arguments look like.
 #[derive(Clone)]
 pub struct Bd {
-    app: AppHandle,
+    ctx: Context,
     cwd: PathBuf,
 }
 
 impl Bd {
-    pub fn new(app: AppHandle, cwd: PathBuf) -> Self {
-        Self { app, cwd }
+    pub fn new(ctx: Context, cwd: PathBuf) -> Self {
+        Self { ctx, cwd }
     }
 
     /// The folder every call is made in. Read by the worker when a call fails,
@@ -189,16 +192,18 @@ impl Bd {
         // `TrackerError::Command` in model.rs for what may and may not go in
         // this string.
         let command = args.join(" ");
-        let output = self
-            .app
-            .shell()
-            .sidecar("bd")
-            .map_err(|e| TrackerError::Spawn(e.to_string()))?
-            .current_dir(self.cwd.clone())
-            .args(args)
-            .output()
-            .await
-            .map_err(|e| TrackerError::Spawn(e.to_string()))?;
+        let program = self
+            .ctx
+            .sidecar()
+            .ok_or_else(|| TrackerError::Spawn("the bundled bd has no known location".to_owned()))?;
+        let mut child = tokio::process::Command::new(program);
+        child.current_dir(&self.cwd).args(args);
+        // The shell plugin this used to go through starts the sidecar with no console window on
+        // Windows; a console flashing up for every one of the worker's calls would be the first
+        // thing a person on that platform noticed.
+        #[cfg(windows)]
+        child.creation_flags(CREATE_NO_WINDOW);
+        let output = child.output().await.map_err(|e| TrackerError::Spawn(e.to_string()))?;
 
         if !output.status.success() {
             return Err(TrackerError::Command {

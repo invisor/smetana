@@ -214,10 +214,11 @@ pub async fn browser_tools(app: AppHandle, project: String) -> BrowserTools {
 /// not one project.
 #[tauri::command]
 pub async fn agent_usage(app: AppHandle, agent: Option<String>, project: Option<String>) -> AgentUsage {
-    let limits = crate::settings::subscription(&app);
-    // Cloned rather than moved in whole: the probe below needs the handle
+    let ctx = crate::host::context(&app);
+    let limits = crate::settings::subscription(&ctx);
+    // Cloned rather than moved in whole: the probe below needs the context
     // again once the first blocking call has already taken it.
-    let app_for_probe = app.clone();
+    let ctx_for_probe = ctx.clone();
     let profile = tokio::task::spawn_blocking(move || {
         // The run lead's row, which is the harness a run would actually
         // start, and therefore the subscription a run would actually spend.
@@ -248,7 +249,7 @@ pub async fn agent_usage(app: AppHandle, agent: Option<String>, project: Option<
         // blocks can now disagree on purpose — the footer follows the
         // project on screen, the settings window's own block never does.
         let id = wanted(agent, || {
-            crate::settings::role_pair(&app, project.as_deref(), crate::agents::Role::RunLead).0
+            crate::settings::role_pair(&ctx, project.as_deref(), crate::agents::Role::RunLead).0
         });
         crate::agents::pick(&id, crate::shell_env::path())
     })
@@ -264,7 +265,7 @@ pub async fn agent_usage(app: AppHandle, agent: Option<String>, project: Option<
     // The probe's own working directory is resolved here and handed in — never
     // `/`, never the project root — see `runs::usage`'s header for why.
     let reading = tokio::task::spawn_blocking(move || {
-        let cwd = crate::agents::probe_dir(&app_for_probe).map_err(|_| usage::Unavailable::InvalidResponse)?;
+        let cwd = crate::agents::probe_dir(&ctx_for_probe).map_err(|_| usage::Unavailable::InvalidResponse)?;
         usage::read_detail(profile, &cwd)
     })
     .await

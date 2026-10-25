@@ -135,7 +135,7 @@ pub fn refusal(dir: &Path) -> Option<String> {
 ///
 /// The one place the two states are told apart, and it is a function rather
 /// than three lines inside `HealthReporter::failed` so that it can be tested:
-/// the reporter holds an `AppHandle` and nothing in a unit test has one.
+/// the reporter holds a `Context` and nothing in a unit test has one.
 ///
 /// The filesystem is asked only when bd has already failed. A folder is not
 /// probed on the happy path — a successful `bd list` is proof the folder could
