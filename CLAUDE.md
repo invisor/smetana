@@ -35,7 +35,8 @@ npm run fetch-bd     # download the bd binary explicitly (fails hard, unlike pos
 node scripts/fetch-icon-associations.mjs   # re-vendor the file-type icons; output is committed
 npm test             # front-end tests (vitest), single run
 npm run test:watch   # the same, in watch mode
-cd src-tauri && cargo test
+cd src-tauri && cargo test    # the shell: wrappers, windows, updates, the phone endpoint
+cd crates/core && cargo test  # everything that does the work: tracker, runs, sessions, files, git
 ```
 
 One file, or one test, rather than the lot:
@@ -43,8 +44,8 @@ One file, or one test, rather than the lot:
 ```sh
 npm test -- tests/stores/tracker.test.js   # positional argument: a regex over the file paths
 npm test -- -t "stale response"            # by the text of an it()/describe()
-cd src-tauri && cargo test parse_commondir # by test name
-cd src-tauri && cargo test settings::model # by module path
+cd crates/core && cargo test parse_commondir # by test name
+cd crates/core && cargo test settings::model # by module path
 ```
 
 Two test runners: `npm test` covers the front end's pure logic — the plain modules and the stores —
@@ -92,7 +93,10 @@ travels is the path and never the bytes — see `.claude/rules/attachments.md`.
 ## Architecture
 
 A desktop app for supervising autonomous AI coding agents: a Tauri 2 shell (`src-tauri/`, Rust)
-around a Vue 3 front end (`src/`). The front end is ported from the **Smetana Design System**
+around a Vue 3 front end (`src/`). Everything on the Rust side that does the work lives in
+`crates/core/`, a path dependency with no `tauri` in its manifest and no root workspace (the reason is
+in `.claude/rules/remote.md`); `src-tauri/` keeps the `#[tauri::command]` wrappers in
+`src/commands/`, the windows, the updater, the login item, the clipboard and the phone endpoint. The front end is ported from the **Smetana Design System**
 (`claude.ai/design`, project `5da5ca35`). Tokens are copied from the design system verbatim;
 components are ports of its React sources, keeping prop names, computed styles and behaviour. React
 `value`/`onChange` became `v-model` (`modelValue`); React `children` props became named slots. When
@@ -238,7 +242,7 @@ release, verifies it against the sha256 digests committed next to `BD_VERSION` (
 
 `postinstall` runs it with `--optional` and only warns on failure — a contributor who wants the
 front end alone should not need a Rust toolchain and a 43 MB download. `npm run fetch-bd` and CI
-fail hard instead. `EXPECTED_BD_VERSION` in `service.rs` must stay in step with `BD_VERSION` in the
+fail hard instead. `EXPECTED_BD_VERSION` in `crates/core/src/tracker/service.rs` must stay in step with `BD_VERSION` in the
 script; a mismatch surfaces as `bd-version-mismatch` in health, not as a crash.
 
 An agent files a task by running `bd create` itself, and reaches the same binary because
@@ -292,7 +296,7 @@ consequence has no parallel in the editor — flipping `data-theme` does **not**
 for free, which is why `TerminalView.vue` carries a `MutationObserver` on the root's attributes. The
 rule is narrowed the same way: every value still comes from a token.
 
-The third is `src-tauri/src/runs/report.rs`, the widest of the three because its output is not this
+The third is `crates/core/src/runs/report.rs`, the widest of the three because its output is not this
 app's screen at all: it renders the run report, a self-contained HTML document somebody opens in a
 browser with nothing of ours loaded, so there is no stylesheet around it and a token reference would
 simply be an unresolved variable. What replaces the rule rather than lifting it: no external

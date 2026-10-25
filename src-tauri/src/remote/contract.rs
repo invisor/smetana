@@ -326,10 +326,10 @@ fn report_entries() -> Vec<ReportEntry> {
     ]
 }
 
-fn branch_options() -> Vec<crate::git::BranchOption> {
+fn branch_options() -> Vec<smetana_core::git::BranchOption> {
     vec![
-        crate::git::BranchOption { name: "main".into(), missing_in: vec!["web".into()], touched_at: Some(1_760_000_000) },
-        crate::git::BranchOption { name: "old".into(), missing_in: Vec::new(), touched_at: None },
+        smetana_core::git::BranchOption { name: "main".into(), missing_in: vec!["web".into()], touched_at: Some(1_760_000_000) },
+        smetana_core::git::BranchOption { name: "old".into(), missing_in: Vec::new(), touched_at: None },
     ]
 }
 

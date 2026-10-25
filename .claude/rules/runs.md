@@ -1,6 +1,7 @@
 ---
 paths:
-  - "src-tauri/src/runs/**"
+  - "crates/core/src/runs/**"
+  - "src-tauri/src/commands/runs.rs"
   - "src/stores/runs.js"
   - "src/components/run/**"
 ---
@@ -47,7 +48,7 @@ own completion and disappear together only when the root package exits or is
 cleared.
 
 A *run* is the app driving itself — read the board, start an agent session on a batch of it, wait for
-that session to end, read the board again — and it is `src-tauri/src/runs/` plus `src/stores/runs.js`
+that session to end, read the board again — and it is `crates/core/src/runs/` plus `src/stores/runs.js`
 plus `src/components/run/`. It sits on top of the other two workers rather than beside them: it owns
 no board and no PTY, and `lib.rs` hands it clones of both handles so it queues behind them like every
 other caller.
@@ -78,7 +79,7 @@ touching any of the three.
 | `journal.rs` | every decision the loop made, stamped and written as it is made — the line builders are pure and carry the tests, `Journal` is the write-through |
 | `awake.rs` | one power assertion for as long as any run is live anywhere — the counting rule, pure, and where those tests are |
 | `service.rs` | the worker: the loop, one run per scope per project |
-| `commands.rs` | thin `#[tauri::command]`s, shaped exactly like the tracker's |
+| `commands.rs` | what the commands do, as plain functions, shaped exactly like the tracker's; the `#[tauri::command]` wrappers are `src-tauri/src/commands/runs.rs` |
 
 `service.rs` is the same single-tokio-task shape as the other two workers. The deciding is `queue.rs`
 and that is pure; the map's own lifecycle — `absorb`, `permit`, `admit` and the browser-candidate

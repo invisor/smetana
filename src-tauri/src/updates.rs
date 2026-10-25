@@ -631,7 +631,7 @@ pub fn schedule(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(FIRST_CHECK_DELAY).await;
         loop {
-            if crate::settings::updates_auto_check(&app) {
+            if crate::commands::settings::updates_auto_check(&app) {
                 request_check(&app, &updates);
             }
             tokio::time::sleep(CHECK_INTERVAL).await;

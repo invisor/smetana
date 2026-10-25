@@ -130,7 +130,7 @@ it is why the certificate is not cosmetic.
 
 Releases up to and including v0.1.23 were ad-hoc signed and every one of them is affected. Nothing
 repairs a grant already lost that way except the reset the app offers itself — see
-`.claude/rules/tracker.md` and `src-tauri/src/tracker/access.rs`, which is the mitigation and not a
+`.claude/rules/tracker.md` and `crates/core/src/tracker/access.rs`, which is the mitigation and not a
 replacement for this.
 
 ### What was done, once

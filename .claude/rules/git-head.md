@@ -1,13 +1,14 @@
 ---
 paths:
-  - "src-tauri/src/git.rs"
+  - "crates/core/src/git/**"
+  - "src-tauri/src/commands/git.rs"
   - "src/stores/git.js"
 ---
 
 # The branch in the scope bar
 
 The bar over everything names the active project and the branch it is on. The branch comes from
-`src-tauri/src/git.rs` — one file, the same no-worker shape as `files/` and for a stronger version of
+`crates/core/src/git/mod.rs` — one file, the same no-worker shape as `files/` and for a stronger version of
 the same reason: `git rev-parse` would spawn a process for one line git already keeps in plain form
 on disk. So `.git/HEAD` is read directly, and a `.git` that is a file rather than a directory is
 followed to the linked worktree's own HEAD, which is where a worktree's branch actually lives.

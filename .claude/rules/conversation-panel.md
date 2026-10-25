@@ -101,7 +101,7 @@ tree.
 
 Every intent a person talks to can open a driven session now, not only `Bare` and `ResumeSession`
 (`.claude/rules/terminal.md`), and the panel's first bubble is what says so. `EventKind::Opening
-{ text: Option<String>, attachments: Vec<String> }` (`src-tauri/src/session/model.rs`) is the journal's
+{ text: Option<String>, attachments: Vec<String> }` (`crates/core/src/session/model.rs`) is the journal's
 own record of it, appended by the worker right after a `TurnStart { by: Person }` and just before the
 same text is written to the child's stdin through `Driver::opening`
 (`.claude/rules/agents.md`). `Intent::opening_words()` is what decides the two fields: `Some(draft.text)`

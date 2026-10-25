@@ -1,6 +1,7 @@
 ---
 paths:
-  - "src-tauri/src/agents/**"
+  - "crates/core/src/agents/**"
+  - "src-tauri/src/commands/agents.rs"
   - "src-tauri/resources/**"
   # The front end's whole knowledge of the harnesses, and the one file in `src/`
   # this rule is about: it reads `agents::catalogue` once at startup, which is
@@ -80,7 +81,7 @@ the panel (`CrewSend`), which used to end in an LF and never send. And the lead
 runs with `--disallowedTools AskUserQuestion`: its question dialog would be
 drawn in a TUI nobody sees, so it asks in prose, which the panel shows.
 
-`src-tauri/src/agents/` is what the app knows about the CLI coding agents it runs, one file per
+`crates/core/src/agents/` is what the app knows about the CLI coding agents it runs, one file per
 agent, and everything harness-specific lives in it. Claude Code and Codex are supported; which one
 runs is the `agent` field in `settings.json` — or, for a project carrying its own `agents` block,
 that project's own copy of the field, taken whole in place of the root's. `.claude/rules/settings.md`
@@ -462,7 +463,7 @@ sender that thread holds is a `WeakSender`, so nothing about this keeps the work
 What it buys is one thing and it is worth naming precisely: a Codex conversation comes back as a
 **restored-session row in the agents panel** after a restart, and pressing it runs `codex resume`
 rather than starting a fresh agent in that worktree. It does **not** reach the Sessions tab.
-`src-tauri/src/sessions/` reads `~/.claude/projects` and parses Claude Code's transcript format;
+`crates/core/src/sessions/` reads `~/.claude/projects` and parses Claude Code's transcript format;
 Codex writes a different format in a different place, so with Codex configured that tab lists nothing
 and its cards' Resume and Fork rows are not the road this capability is reached by. A second source
 for that tab is its own subsystem and deliberately not part of this. Codex's allowance is separate

@@ -35,15 +35,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use devices::{Device, Devices};
 use pairing::Pairing;
 
-/// The relay a desktop uses until its owner names another, and the one put in
-/// every ticket it issues.
-///
-/// Ours: the relay in `server/`, behind Caddy on the project's own VPS
-/// (`server/README.md`, "Our deployment").
-/// It is written out twice in the tree, here and as `DEFAULT_RELAY_URL` in
-/// `components/settings/devices.js`, which every front-end default imports;
-/// `tests/components/settings/devices.test.js` holds the two equal.
-pub const DEFAULT_RELAY_URL: &str = "https://relay.smetana.io";
+pub use smetana_core::remote::DEFAULT_RELAY_URL;
 
 /// The protocol this desktop speaks. A phone on another major is answered with
 /// this and disconnected.

@@ -1,6 +1,7 @@
 ---
 paths:
-  - "src-tauri/src/attachments/**"
+  - "crates/core/src/attachments/**"
+  - "src-tauri/src/commands/attachments.rs"
   - "src/stores/attachments.js"
   # The store's only consumer in `src/` since the dialog became a window: the
   # host loads it, subscribes it to that window's drops and answers the three
@@ -29,7 +30,7 @@ paths:
 
 A screenshot is the fastest way to say what is wrong, and a Jira export as a PDF is the fastest way
 to say what is wanted, so the new-task dialog takes any file:
-`src-tauri/src/attachments/`, `src/stores/attachments.js` and
+`crates/core/src/attachments/`, `src/stores/attachments.js` and
 `components/kanban/AttachmentStrip.vue`, plus the Storage tab of the settings window
 (`components/settings/StorageSettings.vue` over the pure `settings/storage.js`). The Rust side is the
 same no-worker shape as `files/` and `git.rs`, for the same reason — writing a couple of megabytes
@@ -109,7 +110,7 @@ true.** Clicking a thumbnail shows the picture whole in an OS window of its own 
 `image`, one per app and re-aimed by `image:show` rather than rebuilt. That window calls exactly one
 thing here, `readImagePath(path)`, which is `image_read` under a name that says what this window
 actually shows: not only a stored attachment any more, but any picture a click can name, including
-one an agent wrote into a task's prose (`src-tauri/src/attachments/figure.rs`, smetana-je5v). The
+one an agent wrote into a task's prose (`crates/core/src/attachments/figure.rs`, smetana-je5v). The
 path is always absolute by the time it reaches this window — a figure hands over the one `image_read`
 itself already resolved, and the New task window's own thumbnails carry absolute paths out of the
 store — so `image_read` is asked with no base at all, and it takes the path as it stands whichever

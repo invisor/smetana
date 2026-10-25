@@ -1,0 +1,2344 @@
+//! The terminal worker: a single owner of mutable state. Commands, output
+//! chunks from the reader threads and the detection tick meet in one
+//! `select!` — the same reason as in the tracker: operations of
+//! unpredictable length must not block one another.
+
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+use base64::Engine;
+use crate::context::Context;
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::{Instant, MissedTickBehavior};
+
+use super::detect::{detect, DetectInput, Quiet};
+use super::model::{Exit, LogEntry, Session, SessionId, SessionMark, SessionState, TerminalError};
+use super::pty::{Chunk, Pty};
+use super::ring::Ring;
+use super::screen::Screen;
+use crate::agents::{self, Intent};
+use crate::runs::{procs, registry};
+
+/// How much raw output every session remembers — this is what xterm.js
+/// repaints itself from when it attaches.
+const RING_CAP: usize = 1024 * 1024;
+/// The geometry of a session that has never been shown yet.
+const DEFAULT_COLS: u16 = 120;
+const DEFAULT_ROWS: u16 = 30;
+/// Output is coalesced into this tick, so that one event does not go out per
+/// chunk.
+const FLUSH: Duration = Duration::from_millis(16);
+/// Detection runs every Nth flush tick, not every tick, because the two have
+/// different needs. A human's eye wants output at ~60 Hz; detection's own
+/// thresholds are `SETTLE` (150 ms) and `IDLE_AFTER` (3 s), against which the
+/// ~64 ms of latency this adds is nothing. And it is not free: `reassess`
+/// dumps the whole screen of every live session into fresh `String`s and
+/// clones its question, which at 60 Hz is a lot of burn for an app that is
+/// idle most of the time.
+///
+/// This is also the rate at which the screen is compared with the one before
+/// it, and therefore the resolution of layer A's clock. A screen that changed
+/// and changed back inside one interval reads as still — with the interval
+/// free-running against whatever the agent is drawing, that would have to hold
+/// across the forty-odd samples an `IDLE_AFTER` is made of, and the cost of
+/// being wrong is one dot drawn dashed instead of spinning. Lengthening this
+/// interval also lengthens how late `Idle` can arrive — see the note at the top
+/// of `detect.rs`.
+const REASSESS_EVERY: u32 = 4;
+/// The longest a capture may wait, whatever the caller asked for. A timeout
+/// is clamped to it before it becomes a deadline, so an absurd number costs a
+/// long wait rather than a capture that never expires at all.
+const CAPTURE_CEILING: Duration = Duration::from_secs(3600);
+/// How long the exit path waits for the worker to kill its PTYs. The same
+/// ceiling the settings store puts on its own flush when the window closes,
+/// for the same reason: the app always exits, and a wedged worker costs a
+/// cleanup rather than the app.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
+/// How long a signalled agent is given to leave on its own, and how often it
+/// is asked. Both live well inside `SHUTDOWN_WAIT`: the grace period is the
+/// mechanism, that ceiling is the backstop for a worker that never gets here
+/// at all, and a mechanism that spends its own backstop leaves nothing to
+/// catch it.
+const KILL_GRACE: Duration = Duration::from_millis(1200);
+const KILL_POLL: Duration = Duration::from_millis(50);
+
+/// macOS only: how often the descendant poller takes one `KERN_PROC_ALL`
+/// snapshot and folds it into every live agent session's own
+/// `runs::procs::Descendants` — smetana-kkz2's points 1 and 2. Two seconds,
+/// because that is what the incident this task was filed over actually
+/// needed: the `yes` processes it left behind lived for the whole of a
+/// multi-minute `vitest` run under their bash tool's own subshell before that
+/// subshell exited, so a poll well under a minute was always going to catch
+/// them — two seconds leaves headroom the width of an order of magnitude
+/// without asking `sysctl` for the whole process table any faster than a
+/// person would ever notice the difference. What this interval does *not*
+/// catch is a `bash -c 'yes &'` whose own parent exits between two polls,
+/// entirely inside the gap: that one escapes points 1 and 2 by construction
+/// and is left to point 3, the coalition sweep on the app's own exit, which
+/// has no such gap because it reads a fresh snapshot rather than a folded
+/// one.
+const MAC_DESCENDANT_POLL: Duration = Duration::from_secs(2);
+
+/// How long to keep asking a harness what it called the session, and how often.
+/// Ten tries half a second apart: the rollout file appears within a second on
+/// the machine this was measured on, and five seconds sits well inside the time
+/// somebody spends reading the agent's first output. Giving up is silent — a
+/// session with no id recorded is the session this harness had before the
+/// lookup existed.
+const DISCOVERY_TRIES: u32 = 10;
+const DISCOVERY_GAP: Duration = Duration::from_millis(500);
+
+/// The answer to `terminal_attach`: everything the session has said so far,
+/// plus the sequence number that output arriving after it will continue from.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attached {
+    /// base64: a `Vec<u8>` serialised as a JSON array of numbers would
+    /// inflate every chunk about fivefold.
+    pub data: String,
+    pub seq: u64,
+    /// The whole structured log of a timeline session (`Session::timeline`),
+    /// empty for any other. The ring snapshot above still travels for a
+    /// timeline session and is simply not drawn: a second attach path was the
+    /// dearer way to save those bytes.
+    pub log: Vec<LogEntry>,
+    /// The `seq` of the newest entry the budget dropped, or 0.
+    pub log_trimmed: u64,
+}
+
+/// How many structured entries a session keeps. Past it the oldest go, like
+/// the ring's bytes; a night's batch is thousands of tool calls.
+pub const LOG_BUDGET: usize = 4000;
+
+/// Append one entry, dropping from the front past the budget and recording the
+/// `seq` of the newest one dropped.
+fn push_log(log: &mut VecDeque<LogEntry>, trimmed: &mut u64, entry: LogEntry) {
+    log.push_back(entry);
+    while log.len() > LOG_BUDGET {
+        if let Some(dropped) = log.pop_front() {
+            *trimmed = dropped.seq;
+        }
+    }
+}
+
+pub enum Request {
+    List(String, oneshot::Sender<Vec<Session>>),
+    /// Every session the worker holds, whatever project it belongs to, reduced
+    /// to what the project rail draws. `List` answers about one project because
+    /// the agents panel is about one project; the rail is about all of them,
+    /// and asking `List` once per open project would be a command per row.
+    Marks(oneshot::Sender<Vec<SessionMark>>),
+    /// Project, a harness the caller insists on, and the intent.
+    ///
+    /// The harness is `None` for every caller but one, and that is the point:
+    /// which harness an intent's role asks for is read here, in the `Create`
+    /// arm, so that the one resolver decides it for a person's session and a
+    /// run's batch alike. A run is the exception — it snapshots its own harness
+    /// when it starts and carries it for the whole of the run, so that its
+    /// allowance gate and its batches cannot land on two different ones
+    /// (smetana-3fi) — and `settings::role_model` is where a pinned harness
+    /// meets the pair rule.
+    ///
+    /// Either way it is what was *asked for* and not necessarily what runs:
+    /// see the `Create` arm and `agents::pick`.
+    Create(String, Option<String>, Intent, oneshot::Sender<Result<Session, TerminalError>>),
+    /// The project to open a shell in, and where inside it to start — a shell
+    /// takes no agent and no intent, because there is nothing this app is asking
+    /// it to do. The second field is a path relative to the project's root, or
+    /// `None` for the root itself, which is what every caller but the file
+    /// tree's menu means. It is checked with `resolve_within` like every other
+    /// path this app takes from the front end; see `shell_cwd`.
+    CreateShell(String, Option<String>, oneshot::Sender<Result<Session, TerminalError>>),
+    Remove(SessionId, oneshot::Sender<()>),
+    Attach(SessionId, oneshot::Sender<Result<Attached, TerminalError>>),
+    /// The same answer as `Attach`, from a reader that is not the window: it
+    /// takes no seat. `active` and the pending output are left alone, because
+    /// `flush` throws away the output of every session that is not `active` —
+    /// an `Attach` from a phone would freeze the tab the desktop has on screen.
+    /// Used by the phone bridge's `terminal_attach`; nothing in the window sends it.
+    Peek(SessionId, oneshot::Sender<Result<Attached, TerminalError>>),
+    /// Carries the id it is leaving, and not for symmetry: see the handler.
+    Detach(SessionId),
+    Resize(SessionId, u16, u16),
+    Write(SessionId, String, oneshot::Sender<Result<(), TerminalError>>),
+    /// Tell this session's harness to forget the conversation so far, in that
+    /// harness's own words (`Profile::clear_command`).
+    ///
+    /// Its own request rather than a `Write` the front end composes, and that
+    /// is the whole point of the task: which line clears a conversation is a
+    /// fact about the harness, the front end never learns which harness a
+    /// session runs (`agents::pick` may have substituted one), and a wrong line
+    /// is not refused anywhere — it is prompt text.
+    Clear(SessionId, oneshot::Sender<Result<(), TerminalError>>),
+    RunCapture(SessionId, String, u64, u64, oneshot::Sender<Result<Vec<String>, TerminalError>>),
+    /// The pid of this session's process group, for the run registry to write
+    /// down — `None` for a session the worker does not have, or one whose
+    /// process never had a pid to give. Asked for rather than carried on
+    /// `Session`, which is serialized to the front end: nothing on screen draws
+    /// a pid, and the one caller is the run worker recording what to hang up
+    /// after an unclean exit.
+    Group(SessionId, oneshot::Sender<Option<u32>>),
+    /// Answer once this session's process is gone, with how it ended. See
+    /// `ExitWaiter` for why it is a request and not a subscription, and `Exit`
+    /// for why the answer is three-valued rather than an exit code.
+    AwaitExit(SessionId, oneshot::Sender<Exit>),
+    /// Did the terminal worker terminate this exited agent session's Windows
+    /// Job Object? This is the proof a run needs before handing its work to a
+    /// replacement on a platform without Unix process groups.
+    HandoffReady(SessionId, oneshot::Sender<bool>),
+    /// The id a harness chose for itself, arriving after the spawn — see
+    /// `discovers_its_own_id` and `Profile::session_id_after_start`.
+    ///
+    /// The one request nothing outside this module sends: it comes from a
+    /// thread this worker started, because the lookup reads somebody else's
+    /// disk and the worker answers every other command in the app.
+    SessionIdFound(SessionId, String),
+    /// The one reply that is not a `oneshot`: it is awaited from the exit
+    /// event, on a synchronous thread, and only `std::sync::mpsc` can put a
+    /// ceiling on a blocking receive.
+    ShutDown(std::sync::mpsc::Sender<()>),
+}
+
+#[derive(Clone)]
+pub struct TerminalHandle(pub mpsc::Sender<Request>);
+
+struct Live {
+    session: Session,
+    /// Which agent this session runs — layer B's own dialog reader comes
+    /// from here, not from a name hardcoded in `detect.rs`. `None` for a
+    /// session that runs no agent, which is the person's own shell: it has no
+    /// profile to be read by, deliberately (see `Request::CreateShell`).
+    profile: Option<&'static dyn agents::Profile>,
+    pty: Pty,
+    ring: Ring,
+    screen: Screen,
+    /// Set for a batch whose harness prints a machine format — see
+    /// `terminal::transcript`. `None` for every session a person is sitting in
+    /// front of, whose harness is already drawing for them.
+    transcript: Option<crate::terminal::transcript::Transcript>,
+    /// Plain-text questions belong only to interactive launches. An unattended
+    /// batch has no person to answer and must keep its non-interactive contract.
+    text_questions: bool,
+    /// A bell rang and has not been cleared yet. It is cleared by a write
+    /// into the session — a human answering, from the keyboard or with a
+    /// button — by a view attaching, which is a human looking at it, and by
+    /// the process exiting. Detection only reads it.
+    bell_pending: bool,
+    /// Layer A's clock: how long the screen has looked the way it looks now.
+    /// Deliberately not the same thing as `last_output` — an agent waiting on
+    /// a person can keep repainting the very screen it is waiting on, and used
+    /// to read as busy for it. See the note at the top of `detect.rs`.
+    quiet: Quiet,
+    /// When bytes last arrived, whether or not they changed anything. Only
+    /// `close_captures` reads it: a capture is waiting for its own write to
+    /// come back, and the stream is what tells it the write was heard at all.
+    last_output: Instant,
+    /// Accumulated since the last flush — leaves as a single event on the
+    /// tick.
+    pending: Vec<u8>,
+    seq: u64,
+    /// The structured log of a timeline session (`Session::timeline`): bounded
+    /// by `LOG_BUDGET`, numbered from 1 by `log_seq`, with `log_trimmed` the
+    /// `seq` of the newest entry the budget dropped. `pending_log` is what has
+    /// not left in a `terminal:log` event yet, on the same rule as `pending`.
+    log: VecDeque<LogEntry>,
+    log_seq: u64,
+    log_trimmed: u64,
+    pending_log: Vec<LogEntry>,
+    /// macOS only: what the two-second poller below has accumulated about
+    /// this session's own descendants — see `runs::procs::Descendants` for
+    /// what it remembers and why. Present on every session, including a
+    /// shell's, but only ever fed by the poller for an agent session
+    /// (`profile.is_some()`); a shell's stays empty for its whole life,
+    /// which is `candidates` answering nothing rather than a second flag to
+    /// keep in step with `profile`.
+    #[cfg(target_os = "macos")]
+    descendants: crate::runs::procs::Descendants,
+    /// `Chunk::Gone` terminated this agent session's Windows Job Object.
+    /// Meaningful only on Windows; retained everywhere so the request handler
+    /// has one shape and its safety contract is testable without that host.
+    handoff_ready: bool,
+}
+
+/// Somebody waiting for a session to end — in practice the run worker, which
+/// starts one session per batch and has nothing to do until it is over.
+///
+/// A request rather than a subscription, and that is the race it exists to
+/// settle: the run worker creates a session and asks in the next breath, and
+/// the process may already be gone by then. A subscriber would have missed the
+/// event and waited forever; a request looks at the state that is here.
+///
+/// `grace` is set the first time the session is seen `Exited` **without** an
+/// exit code. End of stream can arrive before the child has been reaped, and
+/// `reassess` re-polls for the code every detection tick until it comes — so
+/// answering the instant the state flips would report a clean batch as a crash.
+/// A code that never arrives at all (a signal) answers `Exit::NoCode` once the
+/// grace is spent, and that is a crash, which is what being signalled is.
+struct ExitWaiter {
+    id: SessionId,
+    tx: oneshot::Sender<Exit>,
+    grace: Option<Instant>,
+}
+
+/// How long to keep re-polling for an exit code before answering without one.
+const EXIT_CODE_GRACE: Duration = Duration::from_secs(5);
+
+/// An unclosed capture: wait until this session's output has stopped for
+/// `settle`, then hand back its screen. It lives in the worker's loop rather
+/// than in a task of its own, because the screen is the worker's state and is
+/// never handed out.
+///
+/// The stream and not the picture, which is the opposite of what layer A
+/// measures now, and deliberately: a capture has just written into the session
+/// and is waiting for an answer to arrive at all, and a screen that happens to
+/// look unchanged for a moment mid-answer is not one. Reading a half-finished
+/// reply as a settled one would be handing a caller the wrong text with nothing
+/// to say so.
+struct Capture {
+    id: SessionId,
+    settle: Duration,
+    deadline: Instant,
+    tx: oneshot::Sender<Result<Vec<String>, TerminalError>>,
+}
+
+/// `known_projects` is point 4's own evidence: every project this launch
+/// knows about, the same list `runs::service::start` sweeps its own registry
+/// against, and for the identical reason — `lib.rs` has already loaded
+/// `settings.json` to decide which project to open, and reading it a second
+/// time here would be a second place that could disagree with the first.
+/// Point 4 is Linux's and macOS's alone: Windows costs it nothing at all —
+/// see the module note on `runs::procs`.
+pub fn start(ctx: Context, known_projects: Vec<PathBuf>) -> TerminalHandle {
+    // Fixes `procs::own_dedicated_coalition`'s answer for the whole of this
+    // launch, before either of its two callers (`mac_app_exit_candidates`
+    // below, `recovery::note_run` whenever a run first starts) can possibly
+    // run — see that function's own header for why the comparison it makes
+    // has to happen while whatever launched this app, if anything did, is
+    // still certain to be alive, and why asking fresh at each caller's own
+    // moment answered the same launch two different ways. A no-op on every
+    // platform but macOS.
+    #[cfg(target_os = "macos")]
+    crate::runs::procs::force_own_dedicated_coalition();
+
+    let (tx, mut rx) = mpsc::channel::<Request>(32);
+    let (chunks_tx, mut chunks_rx) = mpsc::unbounded_channel::<Chunk>();
+    // A way back into this worker for the one answer that arrives after the
+    // request it belongs to has been replied to: the id a harness gave itself.
+    //
+    // **Weak** deliberately. A strong clone held by the worker would be a
+    // sender that never drops, so `rx.recv()` could never answer `None` and the
+    // "the senders are gone" arm below would become unreachable — a fallback
+    // quietly deleted by a feature that has nothing to do with it.
+    let requests = tx.downgrade();
+
+    // What a dead instance of this very app left running: sessions end at
+    // `RunEvent::Exit` by hanging up every process *group* they hold, and
+    // that reaches everything an agent started except what asked for a group
+    // of its own — `setsid`, `nohup`, a shell's `&` — which is reparented
+    // under pid 1 the moment its own leader goes, with no group left that
+    // still names the session. Point 4 — see the module note on
+    // `runs::procs` for the three backends. A task of its own, never awaited
+    // here, so a stray left over from last night never delays the first
+    // session this launch starts.
+    #[cfg(target_os = "linux")]
+    crate::context::spawn(sweep_strays());
+    #[cfg(target_os = "macos")]
+    {
+        // The coalition ids of every dead writer this launch's projects still
+        // name in their own `runs.json` — see `runs::recovery::note_run` for
+        // where the id was written and `dead_writer_coalitions` for why this
+        // is the *only* evidence point 4 has on macOS: a manually started
+        // agent session that never joined a run leaves nothing on disk for a
+        // restarted app to read its coalition id back out of, which is the
+        // scope this backend actually has rather than the one Linux's
+        // system-wide mark gives it. Read synchronously, before the sweep
+        // task starts, and off the worker's own task rather than this one's
+        // caller: a project's `runs.json` is small and this runs once, at
+        // start, well before the first session exists to race it.
+        let coalitions = crate::runs::recovery::dead_writer_coalitions(&known_projects);
+        crate::context::spawn(sweep_coalitions(coalitions));
+    }
+    // Linux reads its own answer off the live process table and Windows
+    // needs nothing here at all, so neither one touches the argument.
+    #[cfg(not(target_os = "macos"))]
+    let _ = &known_projects;
+
+    crate::context::spawn(async move {
+        let mut sessions: HashMap<SessionId, Live> = HashMap::new();
+        let mut captures: Vec<Capture> = Vec::new();
+        let mut exit_waiters: Vec<ExitWaiter> = Vec::new();
+        let mut active: Option<SessionId> = None;
+        let mut next_id: SessionId = 1;
+        let mut tick = tokio::time::interval(FLUSH);
+        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut ticks: u32 = 0;
+        // Built on every platform — `tokio::select!` takes a fixed set of
+        // arms, and gating one with `#[cfg]` is not a shape the macro
+        // accepts — but `poll_mac_descendants` below is macOS's alone and a
+        // no-op everywhere else, so the tick this costs elsewhere is the
+        // interval firing into an empty function. See `MAC_DESCENDANT_POLL`
+        // for the reasoning behind the two seconds, and that function for
+        // the resource-usage guarantee "the poller is not running" is
+        // actually about on the one platform it does anything on.
+        let mut mac_poll = tokio::time::interval(MAC_DESCENDANT_POLL);
+        mac_poll.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+        loop {
+            tokio::select! {
+                request = rx.recv() => {
+                    // The senders are gone — there is nobody left to work for.
+                    let Some(request) = request else { break };
+                    // Shutting down is the one request that cannot be served
+                    // inside `handle`: killing gracefully means waiting, and
+                    // waiting means `.await`. The reply goes back only once
+                    // the PTYs are gone, because that is what the caller is
+                    // holding the exit for. Then `return`, not `break`: the
+                    // sweep below is for the other ways out of this loop, and
+                    // running it here would be a second grace period spent on
+                    // sessions this one has already dealt with.
+                    if let Request::ShutDown(tx) = request {
+                        kill_all(&mut sessions).await;
+                        let _ = tx.send(());
+                        return;
+                    }
+                    handle(&ctx, &mut sessions, &mut captures, &mut exit_waiters, &mut active, &mut next_id, &chunks_tx, &requests, request);
+                }
+                chunk = chunks_rx.recv() => {
+                    // Cannot happen while this task owns the sender it hands
+                    // to every reader thread — and if that ownership ever
+                    // moves, breaking is a stopped worker, whereas
+                    // continuing is a branch that is instantly ready
+                    // forever, i.e. a spinning core.
+                    let Some(chunk) = chunk else { break };
+                    absorb(&ctx, &mut sessions, chunk);
+                }
+                _ = tick.tick() => {
+                    flush(&ctx, &mut sessions, active);
+                    ticks = ticks.wrapping_add(1);
+                    if ticks % REASSESS_EVERY == 0 {
+                        reassess(&ctx, &mut sessions);
+                    }
+                    // Captures are closed on every tick, unlike detection:
+                    // `settle` comes from the caller and may well be shorter
+                    // than the detection interval.
+                    close_captures(&mut captures, &sessions);
+                    close_exit_waiters(&mut exit_waiters, &sessions);
+                }
+                _ = mac_poll.tick() => {
+                    poll_mac_descendants(&mut sessions);
+                }
+            }
+        }
+
+        // The worker lost its senders or its chunk channel rather than being
+        // asked to stop — nobody is waiting on this, but an agent left alive
+        // is an orphan in the process list all the same. The requested exit
+        // returns above and does not come through here.
+        kill_all(&mut sessions).await;
+    });
+
+    TerminalHandle(tx)
+}
+
+/// Signal, wait, then kill — not because killing is unreliable, but because
+/// killing first is a lie about what happened. An agent that gets SIGKILL
+/// flushes nothing, and this runs every single time the app closes; a hangup
+/// is what a person closing a terminal window sends, and every CLI is built
+/// for it. The wait is bounded because the window is already going: an agent
+/// that will not leave in a second is not going to be talked out of it, and
+/// the app must not hang on the argument. What is above this — `SHUTDOWN_WAIT`
+/// in `shutdown` — is not a longer version of the same wait: it guards against
+/// a worker that never reaches this function at all, which is why the grace
+/// period here has to stay well under it.
+async fn kill_all(sessions: &mut HashMap<SessionId, Live>) {
+    // Only the living are signalled. A session that has already exited sits
+    // in the map until `Request::Remove` takes it out, and its pid can by
+    // then belong to somebody else — signalling a process group that is not
+    // ours is not a thing to do on the way out, however unlikely.
+    let mut signalled = false;
+    for live in sessions.values_mut() {
+        if live.pty.exit_code().is_none() {
+            signalled |= live.pty.hangup();
+        }
+        // Windows point 3: this session's own Job Object, gone at once. A
+        // no-op everywhere else and for a session that never got one — see
+        // `runs::procs`'s module note for the three backends.
+        live.pty.terminate_job();
+    }
+    // Point 3's own candidates, whatever a group signal alone cannot reach —
+    // gathered for every session rather than only the ones just hung up: a
+    // session already `Exited` can still have left something running, and
+    // this is the one moment the app can still go looking for it. Linux
+    // reads its own mark; macOS reads its coalition plus the residue of
+    // every session's own accumulated snapshot (`mac_app_exit_candidates`);
+    // Windows already handled its own leavings above and leaves this empty.
+    #[cfg(target_os = "linux")]
+    let candidates: Vec<i32> =
+        sessions.keys().copied().filter_map(procs::mark).flat_map(|mark| procs::marked(&mark)).collect();
+    #[cfg(target_os = "macos")]
+    let candidates: Vec<i32> = mac_app_exit_candidates(sessions);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let candidates: Vec<i32> = Vec::new();
+
+    // Nothing was asked to leave — on a platform with no such signal, or
+    // because everything here is already gone — so there is nothing to wait
+    // for, and waiting would only make closing the window slower.
+    let pty_wait = async {
+        if !signalled {
+            return;
+        }
+        let deadline = Instant::now() + KILL_GRACE;
+        while Instant::now() < deadline {
+            // `exit_code` is the same non-blocking `try_wait` the rest of the
+            // worker uses, so this also reaps whoever has already left.
+            if sessions.values_mut().all(|live| live.pty.exit_code().is_some()) {
+                return;
+            }
+            tokio::time::sleep(KILL_POLL).await;
+        }
+    };
+    // Signalled beside the groups and waited out inside the very same call —
+    // `reap_marked` runs its own hangup, grace and kill entirely on its own,
+    // so joining it here rather than spawning it is what keeps the app's own
+    // exit from finishing before its wait does.
+    tokio::join!(pty_wait, reap_marked(candidates, "app exit"));
+
+    for live in sessions.values_mut() {
+        if live.pty.exit_code().is_none() {
+            live.pty.kill();
+        }
+    }
+}
+
+/// macOS point 3's own candidates: every process sharing this app's own
+/// coalition and reparented under pid 1, plus whatever every live session's
+/// own accumulated `Descendants` still finds in one fresh snapshot — the
+/// coalition read alone is not asked to carry the whole of this by itself,
+/// since it answers `Unknown` under exactly the same conditions any other
+/// `proc_pidinfo` call here might. Own pid and the pid of every session this
+/// worker still holds are excluded; nothing else at point 3 needs an
+/// exclusion this wide, because everything here is ending together.
+#[cfg(target_os = "macos")]
+fn mac_app_exit_candidates(sessions: &HashMap<SessionId, Live>) -> Vec<i32> {
+    let Some(snapshot) = procs::snapshot_all() else {
+        log::info!("[terminal] app exit sweep: snapshot_all unreadable, nothing swept");
+        return Vec::new();
+    };
+    let exclude: Vec<i32> = std::iter::once(std::process::id() as i32)
+        .chain(sessions.values().filter_map(|live| live.pty.pid().map(|pid| pid as i32)))
+        .collect();
+    let mut pids: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    // `own_dedicated_coalition`, not `own_coalition` bare: in a dev build the
+    // two answer the identical id, and sweeping that would be sweeping the
+    // launching terminal's whole coalition — see that function's own header.
+    // Read once into a local so the log line below can name what it
+    // answered without asking `getppid` a second time — harmless either way
+    // since the answer is cached, but there is only one fact to state.
+    let coalition = procs::own_dedicated_coalition();
+    if let procs::Coalition::Known(id) = coalition {
+        pids.extend(procs::coalition_candidates(&snapshot, id, &exclude));
+    }
+    for live in sessions.values() {
+        pids.extend(live.descendants.candidates(&snapshot, &exclude));
+    }
+    // Named so a coalition channel that has gone silently `Unknown` — the
+    // one half of this sweep nothing but a person watching a real installed
+    // build could ever catch being wrongly refused, since an empty sweep
+    // and a channel that answered nothing look identical otherwise — shows
+    // up in the log rather than in a candidate list indistinguishable from
+    // "there was nothing to find".
+    log::info!(
+        "[terminal] app exit sweep: coalition {}, {} candidate(s) found",
+        match coalition {
+            procs::Coalition::Known(id) => format!("answered ({id})"),
+            procs::Coalition::Unknown => "unknown, per-session snapshot only".to_string(),
+        },
+        pids.len()
+    );
+    pids.into_iter().collect()
+}
+
+/// Hang up every one of these pids, wait `KILL_GRACE` for them to leave, then
+/// send what remains `SIGKILL` — the same two-stage shape `kill_all` gives a
+/// session's own process group and `recovery::hang_up` gives a dead run's,
+/// aimed here at pids found by whichever backend answered rather than at a
+/// group nothing can reach any more — Linux's mark, macOS's snapshot or
+/// coalition, both producing an ordinary `Vec<i32>` this function does not
+/// need to tell apart. `why` is for the log line only; the four call sites
+/// differ in when they run and nothing else.
+async fn reap_marked(pids: Vec<i32>, why: &str) {
+    let mut signalled: Vec<registry::Proc> = Vec::new();
+    for pid in pids {
+        let Some(proc) = procs::snapshot(pid) else { continue };
+        if procs::hangup_pid(pid) {
+            log::info!("[terminal] hung up pid {pid} ({why})");
+            signalled.push(proc);
+        }
+    }
+    if signalled.is_empty() {
+        return;
+    }
+    let deadline = Instant::now() + KILL_GRACE;
+    while Instant::now() < deadline {
+        signalled.retain(still_alive);
+        if signalled.is_empty() {
+            return;
+        }
+        tokio::time::sleep(KILL_POLL).await;
+    }
+    for proc in signalled {
+        if still_alive(&proc) && procs::kill_pid(proc.pid) {
+            log::warn!("[terminal] killed pid {} ({why}), which did not leave on its own", proc.pid);
+        }
+    }
+}
+
+/// Whether the pid a `Proc` was snapshotted from is still the very process
+/// that was snapshotted — the same question `registry::sweep` asks of a run's
+/// process groups, asked here of one pid instead.
+fn still_alive(proc: &registry::Proc) -> bool {
+    registry::liveness(proc, procs::look(proc.pid)) == registry::Liveness::Alive
+}
+
+/// What a dead instance of this very app left running, found by the mark
+/// alone — Linux only, see the module note on `runs::procs` for why a
+/// process group cannot find these, and `pub fn start` above for why this
+/// runs as a task of its own rather than in front of the worker's first
+/// request.
+#[cfg(target_os = "linux")]
+async fn sweep_strays() {
+    let pids: Vec<i32> = procs::strays().into_iter().map(|(pid, _mark)| pid).collect();
+    reap_marked(pids, "previous app; its own process is gone").await;
+}
+
+/// macOS's own point 4: whatever is left, reparented under pid 1, in the
+/// coalition of an app instance `recovery::dead_writer_coalitions` could
+/// prove dead — the only evidence this launch has about a launch it never
+/// saw running, since there is no snapshot to have polled and no mark to
+/// have read. See that function's own header for the scope this actually
+/// reaches (a project a run has touched), and `pub fn start` above for why
+/// this is a task of its own.
+#[cfg(target_os = "macos")]
+async fn sweep_coalitions(coalitions: Vec<u64>) {
+    // Named for the identical reason `mac_app_exit_candidates` names its own
+    // answer, though this one line cannot tell every case apart on its own:
+    // "no dead writer's coalition id on disk" covers both no project having
+    // ever held a run and every one of them having written under an
+    // `Unknown` coalition, since both leave nothing here to distinguish.
+    // What still recovers the difference is that `note_run`'s own write and
+    // this sweep's own read draw on the identical cached
+    // `own_dedicated_coalition` for one launch, so a previous launch's own
+    // "coalition: unknown" line at point 3 (`mac_app_exit_candidates`)
+    // settles which case that launch's project files are actually in.
+    if coalitions.is_empty() {
+        log::info!(
+            "[terminal] start-up coalition sweep: no dead writer's coalition id on disk, nothing to sweep"
+        );
+        return;
+    }
+    let Some(snapshot) = procs::snapshot_all() else {
+        log::info!("[terminal] start-up coalition sweep: snapshot_all unreadable, nothing swept");
+        return;
+    };
+    let mut pids: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    for id in &coalitions {
+        pids.extend(procs::coalition_candidates(&snapshot, *id, &[]));
+    }
+    log::info!(
+        "[terminal] start-up coalition sweep: {} dead writer coalition(s) on disk, {} candidate(s) found",
+        coalitions.len(),
+        pids.len()
+    );
+    reap_marked(pids.into_iter().collect(), "previous app; its own process is gone").await;
+}
+
+/// The exit path. Called from `RunEvent::Exit` — the event loop is already
+/// leaving and nothing can prevent it — on the main thread, outside async;
+/// hence the blocking send and the timed receive rather than `.await`.
+///
+/// The wait is worth having because an agent left alive is an orphan in the
+/// process list. It is worth exactly two seconds because the window has to
+/// close either way — and it is a ceiling on a worker that never answers, not
+/// the grace period itself: that one is `kill_all`'s, and deliberately
+/// shorter.
+///
+/// The blocking send cannot hang: the queue is only full while the worker is
+/// not draining it, the one place the worker awaits inside its loop is the
+/// grace period this very request starts, and the global async runtime is a
+/// process-lifetime static that outlives this callback. If the worker has
+/// already stopped, its receiver is gone and the send returns an error at once
+/// instead of blocking.
+pub fn shutdown(handle: &TerminalHandle) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    if handle.0.blocking_send(Request::ShutDown(tx)).is_err() {
+        return;
+    }
+    let _ = rx.recv_timeout(SHUTDOWN_WAIT);
+}
+
+/// Whether a session started under this intent is one to offer back after a
+/// restart, and it is a person's own agent alone.
+///
+/// A run's session is deliberately out, whatever its mode: `runs::registry`
+/// already owns the liveness of those processes and `smetana:running-tasks`
+/// Phase R already recovers their tracker half, and two mechanisms on one fact
+/// drift. Deliberately **not** `agents::is_batch`, which is the neighbouring
+/// question and a narrower one — that asks whether the harness runs in its
+/// non-interactive form, and would let a supervised run's session through here
+/// as if a person had started it.
+///
+/// A shell does not reach this at all: it comes through `Request::CreateShell`,
+/// has no intent and no profile, and has no row in the panel this feature is
+/// about.
+///
+/// A sign-in is out too: it is a login dialog, not a conversation, and there is
+/// nothing to resume once the person has signed in.
+fn records_a_restorable(intent: &Intent) -> bool {
+    !matches!(intent, Intent::Run { .. } | Intent::SignIn { .. })
+}
+
+/// The conversation id this session is to be recorded under **at the
+/// spawn**, or `None` for one this function cannot name yet.
+///
+/// Three answers in one place, because the three would otherwise be three
+/// scattered conditions saying one thing. A resume carries the id it reopened,
+/// so its record is rewritten under that id and the row survives a second
+/// restart. A **fork** answers `None` here regardless of harness, because at
+/// the spawn nobody has told this app the new id yet. On the PTY road that is
+/// the whole of the story: `discovers_its_own_id` excludes every
+/// `ResumeSession`, fork included, so a PTY fork's record stays empty for the
+/// life of the session — and a Claude Code fork never gets one at all, on
+/// either road, since `--fork-session` has it invent an id this app never
+/// learns. **A driven Codex fork is not the same story any more**: its
+/// app-server hands the new id back in `thread/fork`'s own reply, and
+/// `session::service`'s `note_conversation` picks it up from there and writes
+/// the record this function could not — see `Driver::discovered_id`. So "a
+/// fork records nothing" is still true of this function's own answer, and of
+/// every road but that one; it stopped being true of the app as a whole.
+/// Everything else gets a fresh id, when the profile can be told one and the
+/// machine will give the bytes.
+///
+/// **`pub(crate)` because the driven worker asks it too**, for whichever
+/// intent it is building a session for — not a fixed count of them, which
+/// would be wrong again the next time one changes. A driven session records
+/// into the very same `.smetana/agents.json`, under the same key, and an
+/// offline row cannot know which road made it — so the decision of *whether*
+/// to record, and under what name, has to be one function rather than two
+/// that agree today.
+pub(crate) fn conversation_for(
+    profile: &'static dyn agents::Profile,
+    intent: &Intent,
+) -> Option<String> {
+    match intent {
+        Intent::ResumeSession { id, fork: false, .. } => Some(id.clone()),
+        Intent::ResumeSession { .. } => None,
+        _ if records_a_restorable(intent) => super::conversation::new_id()
+            .filter(|id| profile.session_id_args(id).is_some()),
+        _ => None,
+    }
+}
+
+/// Whether this session's id is one to go looking for after the start.
+///
+/// The same gate `conversation_for` applies — a session nobody would be offered
+/// back is not one to record — with the harness question the other way round:
+/// there is an id to discover exactly when the profile could not be told one
+/// and says it names its own. A resume already knows its id, and a fork
+/// deliberately records nothing, so neither is here.
+fn discovers_its_own_id(profile: &'static dyn agents::Profile, intent: &Intent) -> bool {
+    !matches!(intent, Intent::ResumeSession { .. })
+        && records_a_restorable(intent)
+        && profile.session_id_args("probe").is_none()
+        && profile.discovers_session_id()
+}
+
+/// Why a sign-in cannot start on this profile, or `None` for every other intent
+/// and for a sign-in that can. Two refusals: the picked harness is not the one
+/// named (a substitution), and the named harness has no login command for the
+/// variant — launching it anyway would start the bare agent under a "Sign in"
+/// caption.
+fn sign_in_refusal(profile: &'static dyn agents::Profile, intent: &Intent) -> Option<TerminalError> {
+    let Intent::SignIn { agent: wanted, variant } = intent else { return None };
+    if profile.id() != wanted || profile.login_args(*variant).is_none() {
+        return Some(TerminalError::NoAgent(wanted.clone()));
+    }
+    None
+}
+
+/// Take this session's record out of its project's registry, if it had one.
+///
+/// The id is read off the session rather than held a second time beside it:
+/// `Session::conversation` is the same value, it crosses to the front end
+/// anyway, and the registry is keyed by it while the worker knows a session by
+/// its own counter — so there is nothing else here to look one up by.
+fn forget_session(live: &Live) {
+    let Some(id) = live.session.conversation.as_deref() else { return };
+    super::restore::drop_record(Path::new(&live.session.project), id);
+}
+
+/// The payload of `terminal:removed`.
+pub fn removed_payload(id: SessionId) -> serde_json::Value {
+    serde_json::json!({ "id": id })
+}
+
+fn emit_state(ctx: &Context, session: &Session) {
+    ctx.emit("terminal:state", session);
+}
+
+/// Output chunks: into the ring for the human, into the screen for the app,
+/// into the send queue for the active session.
+fn absorb(ctx: &Context, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk) {
+    match chunk {
+        Chunk::Data(id, bytes) => {
+            let Some(live) = sessions.get_mut(&id) else { return };
+            // Before the ring, the screen and the queue, so that all three go on
+            // seeing one identical stream — the invariant this subsystem is
+            // built on. A session with no transcript is every session a person
+            // started, and its bytes are its own.
+            let bytes = match live.transcript.as_mut() {
+                Some(transcript) => {
+                    let fed = transcript.feed(&bytes);
+                    for (at, kind) in fed.entries {
+                        live.log_seq += 1;
+                        let entry = LogEntry { seq: live.log_seq, at, kind };
+                        push_log(&mut live.log, &mut live.log_trimmed, entry.clone());
+                        live.pending_log.push(entry);
+                    }
+                    fed.bytes
+                }
+                None => bytes,
+            };
+            live.ring.push(&bytes);
+            if live.screen.feed(&bytes) {
+                live.bell_pending = true;
+            }
+            live.pending.extend_from_slice(&bytes);
+            live.last_output = Instant::now();
+            // Leaving `Starting` is the tick's business, not this function's:
+            // `reassess` reaches a new session before its first byte does.
+        }
+        Chunk::Gone(id) => {
+            let Some(live) = sessions.get_mut(&id) else { return };
+            // The chunk carries no exit code — end of stream arrives before
+            // the child has necessarily been reaped, so the code is asked for
+            // separately, here, where the wait lives.
+            let code = live.pty.exit_code();
+            live.session.finish(code);
+            // The process is gone: there is nobody left to call for.
+            live.bell_pending = false;
+            // Windows point 1: this session's own Job Object, gone at once —
+            // a no-op everywhere else, see `runs::procs`'s module note.
+            live.handoff_ready = live.pty.terminate_job();
+            // macOS point 1's own evidence, taken before `live` goes out of
+            // scope below: a clone rather than a borrow, because the second
+            // call site for this same sweep (`Request::Remove`) has already
+            // taken its `Live` out of `sessions` by the time it needs this,
+            // and one shape shared by both is simpler than two.
+            #[cfg(target_os = "macos")]
+            let mac_descendants = live.descendants.clone();
+            // And nothing left to offer back: the conversation ended on its own,
+            // so the row it would draw after the next restart would be an offer
+            // to reopen a finished agent. **This is not the path the app's own
+            // exit takes** — `kill_all` returns out of the loop before any of
+            // its hangups reaches this function, which is what leaves the
+            // records in place for the next launch.
+            forget_session(live);
+            // A finished branch review gets its page drawn **before** the exit
+            // goes out: the front end opens `{report}.html` the moment it hears
+            // the session has exited. The driven road does the same call.
+            crate::runs::review_report::on_session_end(&live.session.work, &live.session.project);
+            emit_state(ctx, &live.session);
+            // Whatever this session left running under a group its own exit
+            // could never reach — `setsid yes &`, the case this exists for.
+            // A task of its own: the worker has other sessions to keep
+            // serving, and a grace period is not something to make them wait
+            // through. Linux only; macOS's own equivalent follows once
+            // `live`'s borrow of `sessions` has ended.
+            reap_session_descendants(id, "session exited");
+            #[cfg(target_os = "macos")]
+            reap_mac_descendants(mac_descendants, sessions, "session exited");
+        }
+    }
+}
+
+/// Every process carrying this session's own mark, hung up on a task of its
+/// own — see `reap_marked` for the two-stage shape and `runs::procs` for what
+/// a group signal cannot reach. Linux only — macOS's own equivalent is
+/// `reap_mac_descendants` below, called separately because it needs this
+/// session's accumulated `Descendants` and the rest of `sessions` rather
+/// than the session id alone. Shared by the two points that end one session
+/// at a time; `kill_all` gathers every session's own leavings itself
+/// instead, since it is already waiting for the groups and there is nothing
+/// left to keep the worker's loop free for.
+#[cfg(target_os = "linux")]
+fn reap_session_descendants(id: SessionId, why: &'static str) {
+    let Some(mark) = procs::mark(id) else { return };
+    let pids = procs::marked(&mark);
+    if !pids.is_empty() {
+        crate::context::spawn(reap_marked(pids, why));
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn reap_session_descendants(_id: SessionId, _why: &'static str) {}
+
+/// macOS's own points 1 and 2: whatever `descendants` — a clone of the
+/// ending session's own accumulated state, taken by the caller before its
+/// `Live` left scope — still finds in one snapshot taken *right now*, not
+/// the poller's last one. A fresh table matters here specifically: the very
+/// shape this exists for (`setsid`) can reparent a descendant under pid 1 in
+/// the instant between the last poll and this session actually ending, and
+/// only a snapshot taken after that instant can still find it by `ppid`
+/// rather than needing the pgid fallback a moment early. `sessions` is
+/// whatever remains in the worker's map, read only for the pid of every
+/// session still alive, which `candidates` must never signal — the ending
+/// session's own entry is gone from it at the `Request::Remove` call site,
+/// but still present (with `state` already `Exited`, which is exactly what
+/// keeps `poll_mac_descendants` from absorbing under it again) at `absorb`'s
+/// `Chunk::Gone`; either way `descendants` was already taken out as an owned
+/// value, so which one holds does not change what this function reads.
+#[cfg(target_os = "macos")]
+fn reap_mac_descendants(
+    descendants: procs::Descendants,
+    sessions: &HashMap<SessionId, Live>,
+    why: &'static str,
+) {
+    if descendants.is_empty() {
+        return;
+    }
+    let Some(snapshot) = procs::snapshot_all() else { return };
+    let exclude: Vec<i32> = std::iter::once(std::process::id() as i32)
+        .chain(sessions.values().filter_map(|live| live.pty.pid().map(|pid| pid as i32)))
+        .collect();
+    let pids = descendants.candidates(&snapshot, &exclude);
+    if !pids.is_empty() {
+        crate::context::spawn(reap_marked(pids, why));
+    }
+}
+
+/// `MAC_DESCENDANT_POLL`'s own tick: one `KERN_PROC_ALL` snapshot, folded
+/// into every *agent* session's own `Descendants` — never a shell's, for the
+/// identical reason `build_command` never gives a shell the Linux mark (see
+/// `runs::procs`'s module note): a shell's own background jobs are meant to
+/// survive the window closing, and a poller that tracked them would end up
+/// reaping one on the shell's own exit.
+///
+/// **No agent session live means no `sysctl` call at all**, which is the
+/// resource-usage half of "the poller is not running" this task's acceptance
+/// criteria ask for; the interval itself still ticks every
+/// `MAC_DESCENDANT_POLL` regardless — see the comment where it is built —
+/// and on every platform but macOS this function is the whole of what that
+/// tick costs.
+#[cfg(target_os = "macos")]
+fn poll_mac_descendants(sessions: &mut HashMap<SessionId, Live>) {
+    // An exited session's own pid keeps answering `Some` from `Pty::pid` —
+    // that method's own doc says so — long after `absorb`'s `Chunk::Gone`
+    // arm has read the exit code, which is what reaps the child and hands
+    // the pid back to the kernel; that arm sets `live.session.state` to
+    // `Exited` but leaves the entry in `sessions` for good (only
+    // `Request::Remove` actually takes it out). Absorbing against a reaped
+    // pid here would fold a stranger's children into `seen` and a
+    // stranger's group into `groups` the moment macOS hands that pid to
+    // somebody else, which is exactly what this whole mechanism exists to
+    // never do — so `live.session.state != Exited` is what both halves
+    // below gate on, never `pty.pid().is_some()` alone. Points 1 through 3
+    // must still be able to read what an exited session already
+    // accumulated (`reap_mac_descendants`, `mac_app_exit_candidates`); only
+    // the *absorbing* stops here, since absorbing is the one step that can
+    // fold a stranger in.
+    let live_agent =
+        |live: &Live| live.profile.is_some() && live.session.state != SessionState::Exited;
+    if !sessions.values().any(live_agent) {
+        return;
+    }
+    let Some(snapshot) = procs::snapshot_all() else { return };
+    for live in sessions.values_mut() {
+        if !live_agent(live) {
+            continue;
+        }
+        let Some(root) = live.pty.pid() else { continue };
+        live.descendants.absorb(&snapshot, root as i32);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn poll_mac_descendants(_sessions: &mut HashMap<SessionId, Live>) {}
+
+/// The active session's accumulated output — as one event. Background
+/// sessions do not leak to the front end: their screen is for the app, not
+/// for the human, and it is already here.
+fn flush(ctx: &Context, sessions: &mut HashMap<SessionId, Live>, active: Option<SessionId>) {
+    for (id, live) in sessions.iter_mut() {
+        // The log follows the bytes' rule: a background session's is for the
+        // app, which already holds it in the deque, not for a window nobody
+        // has open on it.
+        if !live.pending_log.is_empty() {
+            if Some(*id) == active {
+                let entries = std::mem::take(&mut live.pending_log);
+                ctx.emit_json("terminal:log", serde_json::json!({ "id": id, "entries": entries }));
+            } else {
+                live.pending_log.clear();
+            }
+        }
+        if live.pending.is_empty() {
+            continue;
+        }
+        if Some(*id) != active {
+            live.pending.clear();
+            continue;
+        }
+        // The resync anchor: the front end throws away what it has and
+        // re-attaches the moment it sees a gap in this number.
+        live.seq += 1;
+        let data = base64::engine::general_purpose::STANDARD.encode(&live.pending);
+        live.pending.clear();
+        ctx.emit_json(
+            "terminal:output",
+            serde_json::json!({ "id": id, "seq": live.seq, "data": data }),
+        );
+    }
+}
+
+/// Recomputing state from the screen and the timings. The event goes out only
+/// on a change — a row that repaints sixty times a second is of no use to
+/// anyone.
+///
+/// This is also where a session stops being `Starting`: detection knows only
+/// `Running`, `Idle` and `NeedsYou`, so the first tick after creation moves
+/// it on. `Starting` is therefore brief, which is right — it means "created,
+/// nothing seen yet", and a session that failed to spawn never gets here to
+/// be called running.
+fn reassess(ctx: &Context, sessions: &mut HashMap<SessionId, Live>) {
+    for live in sessions.values_mut() {
+        if live.session.state == SessionState::Exited {
+            // The second poll for an exit code, and the only one there is.
+            // End of stream can arrive before the child has been reaped, and
+            // `exit_code` is a non-blocking `try_wait` that answers `None`
+            // until it has been — so the poll in `absorb` loses that race
+            // often enough to matter. Without asking again the session would
+            // keep `exitCode: null` for good, and the front end, which tells
+            // done from failed by exactly that number, could tell neither.
+            if live.session.exit_code.is_none() {
+                if let Some(code) = live.pty.exit_code() {
+                    live.session.finish(Some(code));
+                    emit_state(ctx, &live.session);
+                }
+            }
+            continue;
+        }
+        let (lines, entry_style) = live.screen.lines_with_entry_style();
+        // The screen against the one this session showed last tick — the
+        // clock is restarted by a change to the picture, not by the arrival of
+        // bytes. `into_std` because `Quiet` keeps no clock of its own and is
+        // driven from here, which is what makes it testable without sleeping.
+        let still_for = live.quiet.still_for(&lines, Instant::now().into_std());
+        let out = detect(DetectInput {
+            bell_pending: live.bell_pending,
+            still_for,
+            screen: &lines,
+            // The one fact layer A needs about where this picture comes from:
+            // a rendered transcript holds still between tool calls without the
+            // agent having stopped. See `DetectInput::transcript`.
+            transcript: live.transcript.is_some(),
+            text_questions: live.text_questions,
+            entry_style: &entry_style,
+            profile: live.profile,
+            // The state as it stands *before* this tick's `apply`, which is
+            // the whole of what layer B's threshold is asymmetric about: a
+            // session already waiting on a person keeps that reading while
+            // they type an answer into it. See `detect`.
+            was: live.session.state,
+        });
+        let before = (live.session.state, live.session.question.clone());
+        live.session.apply(out.state, out.question);
+        // The same predicate a conversation session uses, on the change of state and not on the tick:
+        // a session that stays in `NeedsYou` for a minute of ticks reaches the phone once.
+        announce_wait(before.0, live.session.state, || {
+            crate::remote::push::notify_terminal_needs_you(
+                ctx,
+                live.session.id,
+                &live.session.project,
+                &live.session.agent,
+            );
+        });
+        if before != (live.session.state, live.session.question.clone()) {
+            emit_state(ctx, &live.session);
+        }
+    }
+}
+
+/// Runs `notify` when this change of state is the start of a wait. Split out of `reassess` so the
+/// once-per-transition rule can be tested without a `Context`.
+fn announce_wait(before: SessionState, after: SessionState, notify: impl FnOnce()) {
+    // `waiting_began` is written against the conversation session's state enum; only the wait itself
+    // matters to it, so a terminal state is carried over as waiting or as not waiting.
+    use crate::session::model::SessionState as Wire;
+    let wire = |state| if state == SessionState::NeedsYou { Wire::NeedsYou } else { Wire::Running };
+    if crate::remote::push::waiting_began(wire(before), wire(after)) {
+        notify();
+    }
+}
+
+/// On every tick, check each unclosed capture: no output for `settle` — hand
+/// the screen over; the deadline has passed — hand back Timeout. The answer
+/// goes out exactly once.
+fn close_captures(captures: &mut Vec<Capture>, sessions: &HashMap<SessionId, Live>) {
+    let now = Instant::now();
+    let mut keep = Vec::new();
+    for capture in captures.drain(..) {
+        match sessions.get(&capture.id) {
+            None => {
+                let _ = capture.tx.send(Err(TerminalError::NoSession(capture.id)));
+            }
+            Some(live) if live.last_output.elapsed() >= capture.settle => {
+                let _ = capture.tx.send(Ok(live.screen.lines()));
+            }
+            Some(_) if now >= capture.deadline => {
+                let _ = capture.tx.send(Err(TerminalError::Timeout));
+            }
+            Some(_) => keep.push(capture),
+        }
+    }
+    *captures = keep;
+}
+
+/// Answer whoever is waiting for a session to end. Run on the same tick as the
+/// captures, and deliberately after `reassess`, so a code that arrived on this
+/// tick is handed over on this tick rather than the next.
+fn close_exit_waiters(waiters: &mut Vec<ExitWaiter>, sessions: &HashMap<SessionId, Live>) {
+    let now = Instant::now();
+    let mut keep = Vec::new();
+    for mut waiter in waiters.drain(..) {
+        match sessions.get(&waiter.id) {
+            // Gone from the map, and `Request::Remove` is the only thing that
+            // takes a session out of it — so this is a person removing the row,
+            // never a process falling over. Said as its own answer rather than
+            // as a missing exit code: the waiter cannot tell the two apart from
+            // here, and the responses they deserve are opposite ones.
+            None => {
+                let _ = waiter.tx.send(Exit::Removed);
+            }
+            Some(live) if live.session.state != SessionState::Exited => keep.push(waiter),
+            Some(live) => match live.session.exit_code {
+                Some(code) => {
+                    let _ = waiter.tx.send(Exit::Code(code));
+                }
+                None => {
+                    let deadline = *waiter.grace.get_or_insert(now + EXIT_CODE_GRACE);
+                    if now >= deadline {
+                        let _ = waiter.tx.send(Exit::NoCode);
+                    } else {
+                        keep.push(waiter);
+                    }
+                }
+            },
+        }
+    }
+    *waiters = keep;
+}
+
+/// Where a shell is to start: the project's own root when nobody said, and
+/// otherwise the folder named by a path relative to it.
+///
+/// The check is `files::fs::resolve_within`, the same one every other command
+/// taking a path from the front end goes through — it refuses `..` and an
+/// absolute path outright, and canonicalizes, so a symlink inside the project
+/// pointing outward cannot open a shell on the rest of the disk. The extra
+/// `is_dir` is not redundant with it: `resolve_within` answers about a path, and
+/// a PTY handed a file for a working directory fails inside the child, where the
+/// only thing left to show a person is a spawn error about a shell.
+///
+/// The root itself is deliberately not resolved when there is nothing to check
+/// against it. Every other caller passes `None`, and canonicalizing on their
+/// behalf would silently change what `Session::cwd` reads as — the project's
+/// path as the front end knows it — for the sake of a check they do not need.
+fn shell_cwd(root: &Path, rel: Option<&str>) -> Result<PathBuf, TerminalError> {
+    let Some(rel) = rel else { return Ok(root.to_path_buf()) };
+    let full = crate::files::fs::resolve_within(root, rel)
+        .map_err(|err| TerminalError::BadCwd(err.to_string()))?;
+    if !full.is_dir() {
+        return Err(TerminalError::BadCwd(rel.to_owned()));
+    }
+    Ok(full)
+}
+
+/// Where a resumed session starts: the directory the recorded session ran in.
+///
+/// **Not the project root, and never a fallback to it.** `claude --resume`
+/// resolves a session id against the directory it is run in, so the same id
+/// somewhere else is a session Claude Code has never heard of; and a worktree
+/// session started at the root would be an agent reading a tree its own
+/// transcript never mentions. A directory that has gone — a worktree removed
+/// after the merge, with the transcript left behind, which is the ordinary case
+/// on any machine that has done a few tasks — is a refusal, not a substitution.
+///
+/// This worker's half of it: the shared rule, with this subsystem's own word
+/// for a refusal put on it.
+///
+/// **The rule itself lives in `sessions::model::resume_cwd`**, beside the
+/// `belongs_to` it is built out of, because the driven worker asks the same
+/// question of the same path and a second copy is two chances to have exactly
+/// one of them right. The whole question is there, the project's second
+/// spelling included — this is a `Result` and nothing else.
+///
+/// What stays here is the error *type*: `BadCwd` is this subsystem's
+/// vocabulary, and `session::service` has a variant of its own under the same
+/// name. What a person reads is neither, and is not a Rust string at all —
+/// each store's `ERRORS` table answers `badCwd` with the same sentence, which
+/// is where the two roads are held to one wording.
+fn resume_cwd(root: &Path, cwd: &str) -> Result<PathBuf, TerminalError> {
+    crate::sessions::model::resume_cwd(root, cwd)
+        .ok_or_else(|| TerminalError::BadCwd(cwd.to_owned()))
+}
+
+/// A window takes a session on screen: it becomes `active`, and the ring comes
+/// back with the `seq` that output arriving after it continues from.
+fn attach(
+    sessions: &mut HashMap<SessionId, Live>,
+    active: &mut Option<SessionId>,
+    id: SessionId,
+) -> Result<Attached, TerminalError> {
+    match sessions.get_mut(&id) {
+        None => Err(TerminalError::NoSession(id)),
+        Some(live) => {
+            *active = Some(id);
+            // A human now has this session on screen, and that is a
+            // reasonable acknowledgement of a bell. It has to be
+            // acknowledged by something: a CLI agent rings on
+            // finishing a task just as readily as on asking a
+            // question, and with only a write and an exit clearing
+            // it, one completion bell would hold the row at
+            // `needs-you` for the rest of the session's life and
+            // refuse every `run_capture` with `busy` alongside it —
+            // an afternoon of that and every row is loud, which is
+            // the design failing quietly.
+            //
+            // Clearing it here is safe because the two detection
+            // layers are independent: if a permission dialog really
+            // is on the screen, the profile raises `needs-you` again
+            // from that screen on the next tick. A real question
+            // survives the acknowledgement; only a bell whose reason
+            // has already been read is lost.
+            live.bell_pending = false;
+            // Everything accumulated before attaching is already in
+            // the ring — sending it as a second event would mean
+            // showing it twice.
+            live.pending.clear();
+            // The same for the log: the snapshot below carries all of it.
+            live.pending_log.clear();
+            Ok(Attached {
+                data: base64::engine::general_purpose::STANDARD.encode(live.ring.snapshot()),
+                seq: live.seq,
+                log: live.log.iter().cloned().collect(),
+                log_trimmed: live.log_trimmed,
+            })
+        }
+    }
+}
+
+/// What `attach` answers, changing nothing. The sessions are borrowed shared and
+/// `active` is not a parameter, so a read cannot move the seat, drop the active
+/// session's pending output or touch `seq`. The bell is left too: acknowledging
+/// one is what a person looking at the session on the desktop does, and a
+/// phone's read is not that.
+fn peek(sessions: &HashMap<SessionId, Live>, id: SessionId) -> Result<Attached, TerminalError> {
+    match sessions.get(&id) {
+        None => Err(TerminalError::NoSession(id)),
+        Some(live) => Ok(Attached {
+            data: base64::engine::general_purpose::STANDARD.encode(live.ring.snapshot()),
+            seq: live.seq,
+            log: live.log.iter().cloned().collect(),
+            log_trimmed: live.log_trimmed,
+        }),
+    }
+}
+
+/// Everything the worker does synchronously. `ShutDown` is handled by the
+/// loop instead — see there.
+fn handle(
+    ctx: &Context,
+    sessions: &mut HashMap<SessionId, Live>,
+    captures: &mut Vec<Capture>,
+    exit_waiters: &mut Vec<ExitWaiter>,
+    active: &mut Option<SessionId>,
+    next_id: &mut SessionId,
+    chunks: &mpsc::UnboundedSender<Chunk>,
+    requests: &mpsc::WeakSender<Request>,
+    request: Request,
+) {
+    match request {
+        Request::List(project, tx) => {
+            let mut list: Vec<Session> = sessions
+                .values()
+                .filter(|l| l.session.project == project)
+                .map(|l| l.session.clone())
+                .collect();
+            list.sort_by_key(|s| s.id);
+            let _ = tx.send(list);
+        }
+        Request::Marks(tx) => {
+            let mut list: Vec<SessionMark> = sessions
+                .values()
+                .map(|l| SessionMark {
+                    id: l.session.id,
+                    project: l.session.project.clone(),
+                    state: l.session.state,
+                    // The variant of the work and none of its payload: this is
+                    // every session of every project, and a filing agent's
+                    // `work` holds the whole of a person's draft prose.
+                    kind: l.session.work.kind(),
+                })
+                .collect();
+            list.sort_by_key(|m| m.id);
+            let _ = tx.send(list);
+        }
+        Request::Create(project, pinned, intent, tx) => {
+            // The one resolver, read here for the reason the languages below
+            // are read here: this is the single place every session in the app
+            // is built, so a person's session and a run's batch cannot come to
+            // disagree about which harness and which model this kind of call
+            // gets. A run's own snapshot is what `pinned` carries.
+            let (agent, model) =
+                crate::settings::role_model(ctx, Some(&project), &intent, pinned.as_deref());
+            // The login shell's PATH, not this process's: a bundled app started
+            // from Finder inherits launchd's, where nothing a person installed
+            // is reachable and every agent would look uninstalled.
+            // `pick_with_model` rather than `pick`: the fallback to whatever
+            // is installed is untouched and still silent, and the model is
+            // dropped when it fires, because a model id chosen against one
+            // harness is not one the substitute has ever heard of. That
+            // function carries the whole of the argument.
+            let picked = agents::pick_with_model(&agent, model, crate::shell_env::path());
+            let Some((profile, model)) = picked else {
+                let _ = tx.send(Err(TerminalError::NoAgent(agents::IDS.join(", "))));
+                return;
+            };
+            // A sign-in is for one harness and no other. `pick_with_model`
+            // substitutes whatever is installed when the asked-for binary is
+            // missing, which is right for a session that only needs *an* agent
+            // and wrong here: `codex login` run as `claude auth login` would
+            // sign the person into the wrong product and leave the failed
+            // session exactly as it was.
+            if let Some(err) = sign_in_refusal(profile, &intent) {
+                let _ = tx.send(Err(err));
+                return;
+            }
+            // A resume is refused here or nowhere: the front end greys the row
+            // when the project's agent cannot be told to do it, but the front
+            // end is not what this guard is for — a request that arrives all
+            // the same must not become a *fresh* agent in the worktree, under a
+            // card promising the conversation somebody left. `pick` may also
+            // have substituted another harness for the configured one, which is
+            // exactly the case nothing on screen can see.
+            //
+            // Which of the two capabilities is asked for is `fork`, and either
+            // way it is the profile's own answer: a harness that reopens a
+            // transcript and cannot branch one refuses the second verb alone,
+            // and each refusal reaches the person as its own sentence.
+            if let agents::Intent::ResumeSession { id, fork, .. } = &intent {
+                let refused = if *fork {
+                    profile
+                        .fork_args(id)
+                        .is_none()
+                        .then(|| TerminalError::NoFork(profile.id().to_owned()))
+                } else {
+                    profile
+                        .resume_args(id)
+                        .is_none()
+                        .then(|| TerminalError::NoResume(profile.id().to_owned()))
+                };
+                if let Some(err) = refused {
+                    let _ = tx.send(Err(err));
+                    return;
+                }
+            }
+            // The session's own directory, and only for a resume: every other
+            // intent runs at the project root. Before the id is spent, since
+            // nothing is spawned when this refuses.
+            let dir = match &intent {
+                agents::Intent::ResumeSession { cwd, .. } => {
+                    let root = PathBuf::from(&project);
+                    match resume_cwd(&root, cwd) {
+                        Ok(dir) => dir,
+                        Err(err) => {
+                            let _ = tx.send(Err(err));
+                            return;
+                        }
+                    }
+                }
+                _ => PathBuf::from(&project),
+            };
+            let id = *next_id;
+            *next_id += 1;
+            // Only a Setup or a Bootstrap session pays for the walk, and it
+            // happens here rather than in the front end so that what the
+            // agent is told is what the disk says at the moment the session
+            // starts. The walk itself is `runs::setup_facts`, shared with the
+            // session worker.
+            let facts = crate::runs::setup_facts::for_intent(Path::new(&project), &intent);
+            // Taken before the intent is handed to the launch, which consumes
+            // it. Nothing else is kept from it: the rest is the agent's
+            // briefing, not the panel's caption.
+            let work = intent.work();
+            // And the id this app writes the conversation under, so that the
+            // session can be offered back after a restart. Taken here for the
+            // same reason `work` is — the launch consumes the intent — and
+            // spent twice below: once on the command line, through the
+            // `Launch`, and once on the record, after the spawn has succeeded.
+            let conversation = conversation_for(profile, &intent);
+            // A resume's id is already on its command line, behind `--resume`.
+            // The profile refuses a second one as well; this is the half that
+            // says the worker never asks for it, and the two guards are about
+            // different things — that one about somebody else's argument
+            // grammar, this one about what is being requested.
+            let session_id = match &intent {
+                agents::Intent::ResumeSession { .. } => None,
+                _ => conversation.clone(),
+            };
+            // Before the `Launch` takes the intent: the struct literal moves
+            // it, and this question has to be asked of it while it is still
+            // here.
+            let leads_a_run = matches!(intent, agents::Intent::Run { .. });
+            let launch = agents::Launch {
+                profile,
+                cwd: dir.clone(),
+                intent,
+                skills: agents::library::resolve(ctx),
+                facts,
+                // Read from the file here, and here only: this is the one place
+                // every session in the app is built, so a manual session and a
+                // run's batch get the same answer by construction rather than
+                // because two call sites were kept in step.
+                //
+                // Two costs, both accepted rather than discovered later. The
+                // front end owns the truth of the settings and writes them on a
+                // 400 ms debounce, so a session started in the same fraction of
+                // a second as a language change reads the previous language —
+                // one session, and the same lag the harness and the model at
+                // the top of this arm now live with. That parenthetical used to
+                // exempt the harness, because the front end sent it down from
+                // its own live store; it does not any more, and it must not be
+                // put back — which half of an indivisible pair had no lag was
+                // never the interesting question, and the answer today is that
+                // neither half has an exemption. `terminal_create`'s own header
+                // records the trade. And a run reads these per
+                // batch, where it snapshots its agent and its whole
+                // `RunSettings` once and carries them: a language changed at
+                // 2am reaches the next batch, so one run's issues can end up
+                // written in two languages. That is accepted and not an
+                // oversight — snapshotting them onto `Intent::Run` would put
+                // the languages back on a second road into a session, which is
+                // exactly what reading them here exists to prevent.
+                languages: crate::settings::languages(ctx),
+                // Read here rather than taken from `terminal_create`'s
+                // arguments, for the reason written on the line above: this is
+                // the one place every session in the app is built, so a
+                // person's session and a run's batch cannot disagree about it.
+                // It lives with the same debounce.
+                agent_prompt: crate::settings::agent_prompt(ctx),
+                session_id,
+                // Resolved at the top of this arm, off the same file and in the
+                // same breath as the harness beside it: the two are one choice
+                // and reading them apart is what would let a model meant for
+                // one harness reach another.
+                model,
+                // Only for a run, and `None` everywhere else rather than a
+                // value nothing reads: every other intent delegates to nobody,
+                // so there are no subagents for a model to be about. A field
+                // that is sometimes meaningful and never says which is the
+                // shape this `Launch` keeps out deliberately.
+                worker_model: leads_a_run
+                    .then(|| crate::settings::worker_model(ctx, Some(&project)))
+                    .flatten(),
+            };
+            // Both of these are taken **before the process exists**, and the
+            // order is the whole of what they are for. `sessions_before_start`
+            // is "whatever this harness had already recorded", and the arm
+            // below cannot be where it is asked: by then the child is running,
+            // `Session::new` and the `Live` have been built and a restore
+            // record may have been written, and a harness that got its rollout
+            // onto disk inside that window would find its own file in the set
+            // it is being told to ignore — so its id would never be discovered
+            // at all. Same for the instant: a rollout written in that window
+            // would read as older than the spawn it came from.
+            //
+            // The walk costs one pass over somebody else's directory on the
+            // worker, and this is the one place it is paid for; the polling
+            // that follows is on a thread of its own.
+            let discovering = discovers_its_own_id(profile, &launch.intent);
+            let started = SystemTime::now();
+            let before =
+                if discovering { profile.sessions_before_start() } else { Vec::new() };
+            let spawned = Pty::spawn(id, &launch, ctx.sidecar_dir(), DEFAULT_COLS, DEFAULT_ROWS, chunks.clone());
+            let _ = tx.send(match spawned {
+                Ok(pty) => {
+                    // The name of what actually started, which is not always
+                    // the name that was asked for: `pick` falls back to an
+                    // installed agent, and the row in the panel is where that
+                    // becomes visible.
+                    // `cwd` and `project` differ for a resumed session and
+                    // for nothing else here — the same divergence a shell
+                    // opened from a folder in the tree has, one arm down. The
+                    // project is what the panel, the rail and `List` read; the
+                    // directory is where the agent actually is.
+                    let mut session = Session::new(
+                        id,
+                        profile.id(),
+                        &dir.to_string_lossy(),
+                        &project,
+                        work,
+                        conversation.clone(),
+                    );
+                    // The structured translator rides the same predicate as the
+                    // text one, and whether it exists is the one fact the front
+                    // end needs before it mounts a pane. Set here, before the
+                    // clone below, and never revised.
+                    let log_entries = agents::is_batch(&launch.intent)
+                        .then(|| profile.batch_log())
+                        .flatten();
+                    session.timeline = log_entries.is_some();
+                    let live = Live {
+                        session: session.clone(),
+                        profile: Some(profile),
+                        pty,
+                        ring: Ring::new(RING_CAP),
+                        screen: Screen::new(DEFAULT_COLS, DEFAULT_ROWS),
+                        transcript: agents::is_batch(&launch.intent)
+                            .then(|| profile.transcript())
+                            .flatten()
+                            .map(|render| {
+                                crate::terminal::transcript::Transcript::new(render, log_entries)
+                            }),
+                        text_questions: !agents::is_batch(&launch.intent),
+                        bell_pending: false,
+                        quiet: Quiet::new(),
+                        last_output: Instant::now(),
+                        pending: Vec::new(),
+                        seq: 0,
+                        log: VecDeque::new(),
+                        log_seq: 0,
+                        log_trimmed: 0,
+                        pending_log: Vec::new(),
+                        #[cfg(target_os = "macos")]
+                        descendants: crate::runs::procs::Descendants::default(),
+                        handoff_ready: false,
+                    };
+                    // After the spawn and not before it: a record for a session
+                    // that never started would be a row offering a conversation
+                    // the harness never opened. `conversation` is `None` for
+                    // everything that is not a person's own agent, so this is
+                    // the whole of what decides who gets a record.
+                    if let Some(session_id) = conversation {
+                        // This road never sets a title of its own — it carries
+                        // only runs and unsupported harnesses — but a resume
+                        // falling through to it reopens the very id a driven
+                        // session may have already titled, and a fresh `None`
+                        // here would erase that title rather than merely fail
+                        // to add one. `existing_title` is what tells the two
+                        // cases apart: nothing for a session that never had a
+                        // name, the name back unchanged for one that did.
+                        let title =
+                            super::restore::existing_title(Path::new(&session.project), &session_id);
+                        super::restore::record(
+                            Path::new(&session.project),
+                            super::restore::Restorable {
+                                session_id,
+                                agent: session.agent.clone(),
+                                cwd: session.cwd.clone(),
+                                project: session.project.clone(),
+                                work: session.work.clone(),
+                                started_at: session.started_at.clone(),
+                                title,
+                            },
+                        );
+                    }
+                    // A harness that names its own conversation is asked
+                    // what it chose, on a thread of its own: the file does not
+                    // exist at the instant of the spawn, and the worker must
+                    // never wait on somebody else's disk. Giving up is silent,
+                    // and so is a worker that has already stopped — the sender
+                    // is weak, so nothing here holds the app open.
+                    // `before` and `started` were taken above, in front of
+                    // the spawn — see there for why they cannot be taken here.
+                    // What that set buys is the whole of the separation: only a
+                    // resume runs in a directory of its own, so two agent
+                    // sessions in one project share a `cwd` as a matter of
+                    // course, and an older one still writing has the newer
+                    // modification time and would otherwise be claimed.
+                    if discovering {
+                        let requests = requests.clone();
+                        let dir = dir.clone();
+                        std::thread::spawn(move || {
+                            for _ in 0..DISCOVERY_TRIES {
+                                std::thread::sleep(DISCOVERY_GAP);
+                                let Some(found) =
+                                    profile.session_id_after_start(&dir, started, &before)
+                                else {
+                                    continue;
+                                };
+                                let Some(requests) = requests.upgrade() else { return };
+                                let _ = requests.blocking_send(Request::SessionIdFound(id, found));
+                                return;
+                            }
+                        });
+                    }
+                    sessions.insert(id, live);
+                    emit_state(ctx, &session);
+                    Ok(session)
+                }
+                // The agent is not on PATH — a legitimate outcome, not a
+                // panic. Nothing is inserted and the failure goes back as the
+                // command's error: an id was spent, but no half-built session
+                // is left behind for the list to carry. Nothing is recorded
+                // either — the record is written on the branch above, where a
+                // process exists.
+                Err(err) => Err(err),
+            });
+        }
+        // The session may be gone by now — somebody can close a tab in five
+        // seconds — so a missing one is an ordinary outcome and not a fault. An
+        // id already set wins: nothing else should be able to have set one, and
+        // overwriting would be this app renaming a conversation it did not name.
+        Request::SessionIdFound(id, conversation) => {
+            let Some(live) = sessions.get_mut(&id) else { return };
+            if live.session.conversation.is_some() {
+                return;
+            }
+            live.session.conversation = Some(conversation.clone());
+            let session = live.session.clone();
+            emit_state(ctx, &session);
+            // The record the spawn could not write, written now that there is
+            // an id to key it by: this is what puts the session in
+            // `.smetana/agents.json` and offers it back in the sidebar after a
+            // restart. Same fields as the spawn-time record one arm above — the
+            // only difference is when the id was known, and the same title
+            // guard for the same reason.
+            let title = super::restore::existing_title(Path::new(&session.project), &conversation);
+            super::restore::record(
+                Path::new(&session.project),
+                super::restore::Restorable {
+                    session_id: conversation,
+                    agent: session.agent.clone(),
+                    cwd: session.cwd.clone(),
+                    project: session.project.clone(),
+                    work: session.work.clone(),
+                    started_at: session.started_at.clone(),
+                    title,
+                },
+            );
+        }
+        Request::CreateShell(project, cwd, tx) => {
+            // Everything the agent branch above does about *which* agent — the
+            // pick, the profile, the skills, the languages, the facts — has no
+            // counterpart here, and that absence is the whole of what a shell
+            // is. What the two do share is the environment, and they share it as
+            // one piece of code rather than as two copies: see
+            // `pty::apply_environment`.
+            let root = PathBuf::from(&project);
+            let dir = shell_cwd(&root, cwd.as_deref());
+            let id = *next_id;
+            *next_id += 1;
+            // The id is spent whether or not the directory was usable, exactly
+            // as it is for a shell that would not start: ids are a counter, not
+            // a resource, and reusing one is how two sessions come to share it.
+            let spawned = dir.and_then(|dir| {
+                Pty::spawn_shell(id, &dir, ctx.sidecar_dir(), DEFAULT_COLS, DEFAULT_ROWS, chunks.clone())
+                    .map(|pty| (pty, dir))
+            });
+            let _ = tx.send(match spawned {
+                Ok((pty, dir)) => {
+                    // `agent` is the field a session's row would have been
+                    // captioned by before rows were captioned by their work, and
+                    // nothing draws it now. The shell's own program is the honest
+                    // answer for anything reading a session dump.
+                    // `cwd` and `project` differ here for the first time: a
+                    // shell opened from a folder in the tree runs in that folder
+                    // and still belongs to the project it was opened from, which
+                    // is what the tab row, the rail and `List` all read.
+                    let session = Session::new(
+                        id,
+                        &crate::shell_env::shell(),
+                        &dir.to_string_lossy(),
+                        &project,
+                        crate::terminal::model::SessionWork::Shell,
+                        // A shell is not an agent and has no conversation to
+                        // reopen — there is no transcript, no harness and no
+                        // row in the panel that field is about.
+                        None,
+                    );
+                    let live = Live {
+                        session: session.clone(),
+                        // No agent, so no layer B — see `DetectInput::profile`.
+                        profile: None,
+                        pty,
+                        ring: Ring::new(RING_CAP),
+                        screen: Screen::new(DEFAULT_COLS, DEFAULT_ROWS),
+                        // A shell prints for the person in front of it and for
+                        // nobody else; there is no machine format to translate.
+                        transcript: None,
+                        text_questions: false,
+                        bell_pending: false,
+                        quiet: Quiet::new(),
+                        last_output: Instant::now(),
+                        pending: Vec::new(),
+                        seq: 0,
+                        log: VecDeque::new(),
+                        log_seq: 0,
+                        log_trimmed: 0,
+                        pending_log: Vec::new(),
+                        #[cfg(target_os = "macos")]
+                        descendants: crate::runs::procs::Descendants::default(),
+                        handoff_ready: false,
+                    };
+                    sessions.insert(id, live);
+                    emit_state(ctx, &session);
+                    Ok(session)
+                }
+                // A shell that would not start is the same kind of outcome an
+                // agent that is not installed is: an id was spent and nothing
+                // is left in the map.
+                Err(err) => Err(err),
+            });
+        }
+        Request::Remove(id, tx) => {
+            if let Some(mut live) = sessions.remove(&id) {
+                live.pty.kill();
+                // Windows point 2: this session's own Job Object, gone at
+                // once — a no-op everywhere else.
+                live.pty.terminate_job();
+                // A person took the row away, so the offer goes with it. The
+                // front end has its own verb for a row with *no* session behind
+                // it — `terminal_forget` — and this is the same act one session
+                // earlier.
+                forget_session(&live);
+                // Announced, because not every removal is the front end's own
+                // doing any more: a run kills the session of a batch that
+                // stopped on a question (`runs/service.rs`), and without an
+                // event the panel would keep drawing that session's last
+                // state — `needs-you`, with a question nobody can answer
+                // behind a process that is gone — until the next project
+                // switch. The front end's own remove has already dropped the
+                // row by the time this arrives, and filtering an absent id is
+                // a no-op, which is what makes one event serve both callers.
+                ctx.emit("terminal:removed", &removed_payload(id));
+                // The same sweep a self-exit gets, for the row a person took
+                // away instead: `live.pty.kill()` above reaches the session's
+                // own process group and nothing outside it. `sessions` no
+                // longer holds this session's own entry, so it is free to
+                // borrow here for macOS's own exclusion list.
+                reap_session_descendants(id, "session removed");
+                #[cfg(target_os = "macos")]
+                reap_mac_descendants(live.descendants.clone(), sessions, "session removed");
+            }
+            if *active == Some(id) {
+                *active = None;
+            }
+            let _ = tx.send(());
+        }
+        Request::Attach(id, tx) => {
+            let _ = tx.send(attach(sessions, active, id));
+        }
+        Request::Peek(id, tx) => {
+            let _ = tx.send(peek(sessions, id));
+        }
+        // Only when `active` still points at that session. Switching tabs is
+        // two calls — detach the old, attach the new — with no ordering
+        // guarantee by the time they reach here, and a detach that landed
+        // after the attach would clear it: the front end would believe it was
+        // attached while `flush` threw away that session's output every tick
+        // and `seq` never moved. Nothing would report it — the terminal would
+        // simply be frozen.
+        Request::Detach(id) => {
+            if *active == Some(id) {
+                *active = None;
+            }
+        }
+        Request::Resize(id, cols, rows) => {
+            if let Some(live) = sessions.get_mut(&id) {
+                live.pty.resize(cols, rows);
+                // The same size goes into the parsing: the app is obliged to
+                // read the screen the human sees.
+                live.screen.resize(cols, rows);
+            }
+        }
+        Request::Write(id, data, tx) => {
+            let _ = tx.send(match sessions.get_mut(&id) {
+                None => Err(TerminalError::NoSession(id)),
+                Some(live) => {
+                    live.pty.write(data.as_bytes());
+                    // The human has answered — there is nobody left to call.
+                    live.bell_pending = false;
+                    Ok(())
+                }
+            });
+        }
+        Request::Clear(id, tx) => {
+            let outcome = match sessions.get_mut(&id) {
+                None => Err(TerminalError::NoSession(id)),
+                Some(live) => match live.profile.and_then(|profile| profile.clear_command()) {
+                    // The harness is asked before anything about this session,
+                    // which is `sessionMenu.js`'s order for its own refusals and
+                    // is kept here so the two sides word a doubly-refused row
+                    // the same way: a harness with no such line refuses every
+                    // row of the project alike, and there is nothing about any
+                    // one of them left to explain. A shell arrives here as
+                    // `profile: None` and is refused by the same arm — it runs
+                    // no agent, so there is no conversation to clear.
+                    None => Err(TerminalError::NoClear(live.session.agent.clone())),
+                    // An agent waiting for an answer reads the next line written
+                    // into it as that answer, so the clearing command would be a
+                    // pick in somebody else's dialog rather than a command at
+                    // all. Drawn as a greyed menu row too, and this is still not
+                    // redundant: a row greyed a round trip ago is a row somebody
+                    // can press in the meantime.
+                    //
+                    // Deliberately *not* `RunCapture`'s stricter pair. That one
+                    // also refuses on an unrung-out bell, because it writes a
+                    // question and then reads the answer back; this writes one
+                    // line and reads nothing, and a bell is rung at the end of
+                    // every turn — which is exactly the moment somebody clears.
+                    // Refusing there would refuse the ordinary case.
+                    Some(_) if live.session.state == SessionState::NeedsYou => {
+                        Err(TerminalError::Busy)
+                    }
+                    Some(command) => {
+                        // The carriage return is added here rather than carried
+                        // by the profile, which describes a command and not a
+                        // keyboard — see `Profile::clear_command`.
+                        live.pty.write(format!("{command}\r").as_bytes());
+                        // `bell_pending` is deliberately left as it was, unlike
+                        // in `Write` above: nobody has answered anything. The
+                        // bell says a person was called and has not yet read
+                        // what about; clearing the conversation is the app
+                        // forwarding a command, and taking the mark away would
+                        // spend a signal `RunCapture` reads as its own guard.
+                        Ok(())
+                    }
+                },
+            };
+            let _ = tx.send(outcome);
+        }
+        Request::RunCapture(id, input, settle_ms, timeout_ms, tx) => {
+            match sessions.get_mut(&id) {
+                None => {
+                    let _ = tx.send(Err(TerminalError::NoSession(id)));
+                }
+                // Writing into an open permission dialog would mean
+                // answering, on a human's behalf, a question the app never
+                // read. The state alone is not a tight enough guard: it lags
+                // by up to `SETTLE` plus a tick, and a dialog that appeared
+                // inside that window is just as open. An unrung-out bell is
+                // the same fact arriving sooner — it is already on the `Live`,
+                // and only a human clears it: by answering, or by putting the
+                // session on screen and reading what it rang about.
+                //
+                // What this does not catch, and cannot: a dialog whose agent
+                // rang no bell and whose profile failed to read it. Layer A now
+                // calls that session `Idle` rather than `Running`, which is the
+                // truth but not a refusal — an idle session is exactly what a
+                // capture expects to write into, so `Idle` can never be part of
+                // this guard. Only the profile can tell the two apart.
+                Some(live) if live.session.state == SessionState::NeedsYou || live.bell_pending => {
+                    let _ = tx.send(Err(TerminalError::Busy));
+                }
+                Some(live) => {
+                    live.pty.write(input.as_bytes());
+                    // The count of silence starts over: a screen that settled
+                    // before our write is not an answer to it. Both clocks —
+                    // the capture is waiting on the stream, detection on the
+                    // picture, and neither may credit this session for having
+                    // been quiet before we spoke to it.
+                    let now = Instant::now();
+                    live.last_output = now;
+                    live.quiet.restart(now.into_std());
+                    // Waiting inline would stop the worker serving every
+                    // other session for as long as the wait; the tick closes
+                    // this instead.
+                    captures.push(Capture {
+                        id,
+                        settle: Duration::from_millis(settle_ms),
+                        // Clamped first, so a caller's absurd number costs an
+                        // hour rather than a capture that outlives the app.
+                        // And `checked_add` rather than plain addition
+                        // because that panics on an unrepresentable instant,
+                        // and a panic here unwinds the whole loop body: past
+                        // `kill_all`, so every PTY is orphaned, and out of
+                        // the worker, so every later command reports it gone.
+                        // With the clamp in front of it that fallback is
+                        // unreachable in practice; closing on the next tick
+                        // is simply the harmless way to be wrong.
+                        deadline: now
+                            .checked_add(Duration::from_millis(timeout_ms).min(CAPTURE_CEILING))
+                            .unwrap_or(now),
+                        tx,
+                    });
+                }
+            }
+        }
+        Request::Group(id, tx) => {
+            let _ = tx.send(sessions.get(&id).and_then(|live| live.pty.pid()));
+        }
+        Request::AwaitExit(id, tx) => {
+            // No answer here even for a session that is already gone: the tick
+            // is the only place that knows whether an exit code is still on its
+            // way, and duplicating that judgement here is how the two would
+            // drift apart. A session that ended long ago is answered on the
+            // next tick, sixteen milliseconds later.
+            exit_waiters.push(ExitWaiter { id, tx, grace: None });
+        }
+        Request::HandoffReady(id, tx) => {
+            let ready = sessions
+                .get(&id)
+                .is_some_and(|live| live.session.state == SessionState::Exited && live.handoff_ready);
+            let _ = tx.send(ready);
+        }
+        // Handled by the loop, which is the only place that can await the
+        // grace period; it never reaches here.
+        Request::ShutDown(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_log_keeps_the_newest_budget_and_records_what_it_dropped() {
+        let mut log = VecDeque::new();
+        let mut trimmed = 0;
+        for seq in 1..=(LOG_BUDGET as u64 + 3) {
+            let kind = crate::terminal::model::LogKind::Note { text: seq.to_string() };
+            push_log(&mut log, &mut trimmed, LogEntry { seq, at: String::new(), kind });
+        }
+        assert_eq!(log.len(), LOG_BUDGET);
+        assert_eq!(log.front().map(|e| e.seq), Some(4));
+        assert_eq!(log.back().map(|e| e.seq), Some(LOG_BUDGET as u64 + 3));
+        assert_eq!(trimmed, 3);
+    }
+
+    use super::*;
+
+    /// A directory of its own per test, with the pid in the name so parallel
+    /// runs do not collide — the same trick `files/fs.rs` uses, canonical for
+    /// the same reason: on macOS /var is a symlink to /private/var.
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("smetana-shell-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the temp directory");
+        dir.canonicalize().expect("canonicalize the temp directory")
+    }
+
+    /// Feeds a run of per-tick states through `announce_wait` and counts the pushes.
+    fn pushes_for(ticks: &[SessionState]) -> usize {
+        let mut state = SessionState::Starting;
+        let mut pushes = 0;
+        for &next in ticks {
+            announce_wait(state, next, || pushes += 1);
+            state = next;
+        }
+        pushes
+    }
+
+    #[test]
+    fn a_pty_session_entering_needs_you_pushes_once_however_many_ticks_follow() {
+        use SessionState::{NeedsYou, Running};
+        assert_eq!(pushes_for(&[Running, Running, NeedsYou, NeedsYou, NeedsYou, NeedsYou]), 1);
+    }
+
+    #[test]
+    fn a_pty_session_waiting_again_after_running_pushes_a_second_time() {
+        use SessionState::{NeedsYou, Running};
+        assert_eq!(pushes_for(&[Running, NeedsYou, NeedsYou, Running, NeedsYou, NeedsYou]), 2);
+    }
+
+    #[test]
+    fn no_cwd_is_the_project_root() {
+        let root = scratch("root");
+        assert_eq!(shell_cwd(&root, None).unwrap(), root);
+    }
+
+    #[test]
+    fn a_folder_in_the_project_is_where_the_shell_starts() {
+        let root = scratch("folder");
+        std::fs::create_dir_all(root.join("src/components")).unwrap();
+        assert_eq!(shell_cwd(&root, Some("src/components")).unwrap(), root.join("src/components"));
+    }
+
+    #[test]
+    fn a_path_outside_the_project_is_refused() {
+        let root = scratch("outside");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        for rel in ["../..", "..", "src/../..", "/etc"] {
+            assert!(
+                matches!(shell_cwd(&root, Some(rel)), Err(TerminalError::BadCwd(_))),
+                "{rel} should not be a working directory"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_is_refused_rather_than_handed_to_the_pty() {
+        let root = scratch("file");
+        std::fs::write(root.join("app.js"), "x").unwrap();
+        assert!(matches!(shell_cwd(&root, Some("app.js")), Err(TerminalError::BadCwd(_))));
+    }
+
+    #[test]
+    fn a_folder_that_is_not_there_is_refused() {
+        let root = scratch("missing");
+        assert!(matches!(shell_cwd(&root, Some("nowhere")), Err(TerminalError::BadCwd(_))));
+    }
+
+    /// The empty string is the tree's own name for the root, and it arrives as
+    /// a `Some` from a menu opened on the root row rather than on empty space.
+    #[test]
+    fn the_empty_path_is_the_root() {
+        let root = scratch("empty");
+        assert_eq!(shell_cwd(&root, Some("")).unwrap(), root);
+    }
+
+    /* ---- reading a session without taking the seat ------------------------ */
+
+    fn shell_live(id: SessionId, dir: &Path, ring_bytes: &[u8]) -> Live {
+        let (out, _chunks) = mpsc::unbounded_channel();
+        let pty = Pty::spawn_shell(id, dir, None, DEFAULT_COLS, DEFAULT_ROWS, out).expect("a shell starts");
+        let mut ring = Ring::new(RING_CAP);
+        ring.push(ring_bytes);
+        Live {
+            session: Session::new(
+                id,
+                "sh",
+                &dir.to_string_lossy(),
+                &dir.to_string_lossy(),
+                crate::terminal::model::SessionWork::Shell,
+                None,
+            ),
+            profile: None,
+            pty,
+            ring,
+            screen: Screen::new(DEFAULT_COLS, DEFAULT_ROWS),
+            transcript: None,
+            text_questions: false,
+            bell_pending: true,
+            quiet: Quiet::new(),
+            last_output: Instant::now(),
+            pending: b"not yet flushed".to_vec(),
+            seq: 4,
+            log: VecDeque::new(),
+            log_seq: 0,
+            log_trimmed: 0,
+            pending_log: Vec::new(),
+            #[cfg(target_os = "macos")]
+            descendants: crate::runs::procs::Descendants::default(),
+            handoff_ready: false,
+        }
+    }
+
+    #[test]
+    fn a_peek_answers_like_an_attach_and_leaves_the_seat_and_the_output_alone() {
+        let dir = scratch("peek");
+        let mut sessions = HashMap::new();
+        sessions.insert(1, shell_live(1, &dir, b"on screen"));
+        sessions.insert(2, shell_live(2, &dir, b"read by a phone"));
+        let mut active = None;
+
+        // The desktop has session 1 on screen.
+        attach(&mut sessions, &mut active, 1).unwrap();
+        sessions.get_mut(&1).unwrap().pending = b"next tick".to_vec();
+        assert_eq!(active, Some(1));
+
+        // A phone reads session 2, then session 1.
+        let other = peek(&sessions, 2).unwrap();
+        let same = peek(&sessions, 1).unwrap();
+        assert_eq!(other.data, base64::engine::general_purpose::STANDARD.encode(b"read by a phone"));
+        assert_eq!((other.seq, same.seq), (4, 4));
+        assert_eq!(active, Some(1), "the seat did not move");
+        assert_eq!(sessions[&1].pending, b"next tick", "the active session's output was not dropped");
+        assert_eq!(sessions[&2].pending, b"not yet flushed", "nor was the peeked session's");
+        assert!(sessions[&2].bell_pending, "a phone's read does not acknowledge a bell");
+        assert!(matches!(peek(&sessions, 9), Err(TerminalError::NoSession(9))));
+
+        // Contrast: an attach is what takes the seat and clears the rest.
+        attach(&mut sessions, &mut active, 2).unwrap();
+        assert_eq!(active, Some(2));
+        assert!(sessions[&2].pending.is_empty());
+
+        for live in sessions.values_mut() {
+            live.pty.kill();
+        }
+    }
+
+    /* ---- what a session leaves behind ------------------------------------ */
+
+    fn run_intent(mode: crate::runs::model::RunMode) -> Intent {
+        use crate::runs::model::{RunScope, RunSettings};
+        Intent::Run {
+            settings: RunSettings {
+                scope: RunScope::Queue,
+                mode,
+                target_branch: "main".into(),
+                create_target: false,
+                min_priority: None,
+                max_parallel_tasks: None,
+                batch_pause_min: None,
+                batch_pause_max: None,
+                live_check: false,
+                file_findings: false,
+                instructions: None,
+            },
+            reports: PathBuf::from("/p/.smetana/runs/1"),
+            batch: 1,
+            continuation: None,
+            remove_worktrees: false,
+        }
+    }
+
+    #[test]
+    fn a_sign_in_is_refused_on_the_wrong_harness_or_without_a_login_command() {
+        use agents::SignInVariant::{Browser, DeviceCode};
+        let sign_in = |agent: &str, variant| Intent::SignIn { agent: agent.into(), variant };
+        assert!(sign_in_refusal(profile("codex"), &sign_in("codex", DeviceCode)).is_none());
+        assert!(sign_in_refusal(profile("claude"), &sign_in("claude", Browser)).is_none());
+        // Substituted harness.
+        assert!(sign_in_refusal(profile("claude"), &sign_in("codex", Browser)).is_some());
+        // Claude Code has no device-code login.
+        assert!(sign_in_refusal(profile("claude"), &sign_in("claude", DeviceCode)).is_some());
+        // Other intents are none of this guard's business.
+        assert!(sign_in_refusal(profile("claude"), &Intent::Bare).is_none());
+    }
+
+    #[test]
+    fn only_a_persons_own_agent_is_offered_back() {
+        use crate::runs::model::RunMode;
+        for intent in [
+            Intent::Bare,
+            Intent::Setup,
+            Intent::EditTask { id: "smetana-42".into(), title: "x".into() },
+        ] {
+            assert!(records_a_restorable(&intent), "{intent:?}");
+        }
+        let sign_in = Intent::SignIn { agent: "codex".into(), variant: agents::SignInVariant::Browser };
+        assert!(!records_a_restorable(&sign_in), "a login dialog is not offered back");
+        // Both modes, because `is_batch` — the neighbouring question — answers
+        // only for the unattended one, and a supervised run's session is still
+        // the runs registry's rather than this file's.
+        for mode in [RunMode::Auto, RunMode::Supervised, RunMode::Solo] {
+            assert!(!records_a_restorable(&run_intent(mode)), "a run's session is not offered back");
+        }
+    }
+
+    /// The profile a test needs to ask `conversation_for` anything: the real
+    /// `claude`, which answers `session_id_args`, and the real `codex`, which
+    /// does not.
+    fn profile(id: &str) -> &'static dyn agents::Profile {
+        agents::resolve(id).expect("a listed id resolves")
+    }
+
+    #[test]
+    fn a_harness_that_cannot_be_told_an_id_gets_none_on_its_command_line() {
+        // What this function decides is what goes on the *command line*, and for
+        // a harness with no flag for it the answer is nothing. That used to be
+        // the whole story for codex — no id, so no record, so no row — and it no
+        // longer is: the id arrives afterwards through `Request::SessionIdFound`
+        // and the record is written then, which is what
+        // `a_harness_that_names_its_own_conversation_is_asked_after_the_start`
+        // pins. A harness answering neither question is still the one that
+        // records nothing at all.
+        assert!(conversation_for(profile("codex"), &Intent::Bare).is_none());
+        assert!(conversation_for(profile("claude"), &Intent::Bare).is_some());
+    }
+
+    #[test]
+    fn a_harness_that_names_its_own_conversation_is_asked_after_the_start() {
+        // `conversation_for` answers `None` for such a harness, because there
+        // is no id to put on the command line — and that is not the same as
+        // "records nothing": the id arrives later, through
+        // `Request::SessionIdFound`, and the record is written then.
+        let intent = Intent::Bare;
+        assert_eq!(conversation_for(profile("codex"), &intent), None);
+        assert!(
+            discovers_its_own_id(profile("codex"), &intent),
+            "a bare Codex session is exactly the session whose id is worth finding"
+        );
+        assert!(
+            !discovers_its_own_id(profile("claude"), &intent),
+            "a harness told its id in advance has nothing to discover"
+        );
+    }
+
+    #[test]
+    fn a_resumed_session_already_knows_which_conversation_it_is() {
+        // Both halves of a `ResumeSession`, because they take different roads
+        // to the same answer: a plain resume carries its id already, and a fork
+        // deliberately records nothing at all, so neither is a session to go
+        // looking for an id for.
+        for fork in [false, true] {
+            let intent = Intent::ResumeSession {
+                id: "01a0765f-f205-74d0-8dc9-61006c68767f".into(),
+                cwd: "/p".into(),
+                title: None,
+                fork,
+            };
+            assert!(!discovers_its_own_id(profile("codex"), &intent), "fork: {fork}");
+        }
+    }
+
+    #[test]
+    fn a_run_leaves_no_id_to_go_looking_for_either() {
+        // The same gate `conversation_for` applies, and for its reason: the
+        // runs registry owns those sessions, so a discovered id would put a
+        // second mechanism on one fact.
+        use crate::runs::model::RunMode;
+        for mode in [RunMode::Auto, RunMode::Supervised, RunMode::Solo] {
+            assert!(!discovers_its_own_id(profile("codex"), &run_intent(mode)), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn a_run_is_recorded_by_its_own_registry_and_not_by_this_one() {
+        use crate::runs::model::RunMode;
+        assert!(conversation_for(profile("claude"), &run_intent(RunMode::Auto)).is_none());
+    }
+
+    #[test]
+    fn a_resumed_session_is_recorded_under_the_id_it_reopened() {
+        // And not under a fresh one: the row has to survive a second restart,
+        // and the transcript this session goes on writing into is the one the
+        // `--resume` named.
+        let intent = Intent::ResumeSession {
+            id: "9f1c0a2e-0000-4000-8000-000000000000".into(),
+            cwd: "/p".into(),
+            title: None,
+            fork: false,
+        };
+        assert_eq!(
+            conversation_for(profile("claude"), &intent).as_deref(),
+            Some("9f1c0a2e-0000-4000-8000-000000000000")
+        );
+    }
+
+    #[test]
+    fn a_forked_session_is_not_recorded_under_the_transcript_it_branched_from() {
+        // `--fork-session` has Claude Code invent an id for the new transcript,
+        // which this app never learns. A record under the original's id would
+        // offer a row that reopens the wrong conversation, so a fork records
+        // nothing at all.
+        let intent = Intent::ResumeSession {
+            id: "9f1c0a2e-0000-4000-8000-000000000000".into(),
+            cwd: "/p".into(),
+            title: None,
+            fork: true,
+        };
+        assert!(conversation_for(profile("claude"), &intent).is_none());
+    }
+
+    /* ---- where a resumed session starts ---------------------------------- */
+
+    /// The case the feature is named after: a session out of a worktree comes
+    /// back in that worktree and nowhere else.
+    #[test]
+    fn a_worktree_session_resumes_in_its_own_worktree() {
+        let root = scratch("resume-worktree");
+        let worktree = root.join(".worktrees/smetana-0cj");
+        std::fs::create_dir_all(&worktree).unwrap();
+        assert_eq!(
+            resume_cwd(&root, &worktree.to_string_lossy()).unwrap(),
+            worktree
+        );
+    }
+
+    /// A session out of the project root is an ordinary session too, and the
+    /// rule is the same one: the directory the transcript recorded.
+    #[test]
+    fn a_root_session_resumes_at_the_root() {
+        let root = scratch("resume-root");
+        assert_eq!(resume_cwd(&root, &root.to_string_lossy()).unwrap(), root);
+    }
+
+    /// **The refusal this feature exists to make.** A worktree is removed once
+    /// its task is merged and the transcript stays behind, so a directory that
+    /// is gone is the ordinary case rather than an exotic one — and starting
+    /// the agent at the project root instead would be an agent reading a tree
+    /// its own transcript never mentions.
+    #[test]
+    fn a_worktree_that_has_been_removed_is_refused_rather_than_replaced() {
+        let root = scratch("resume-gone");
+        let gone = root.join(".worktrees/smetana-merged-long-ago");
+        let answer = resume_cwd(&root, &gone.to_string_lossy());
+        assert!(matches!(answer, Err(TerminalError::BadCwd(_))), "{answer:?}");
+    }
+
+    #[test]
+    fn a_directory_outside_the_project_is_refused() {
+        let root = scratch("resume-outside");
+        let sibling = root.parent().unwrap().join("somebody-elses-project");
+        std::fs::create_dir_all(&sibling).unwrap();
+        for cwd in [sibling.to_string_lossy().into_owned(), "/etc".to_owned(), String::new()] {
+            assert!(
+                matches!(resume_cwd(&root, &cwd), Err(TerminalError::BadCwd(_))),
+                "{cwd} is not a directory this project may be resumed in"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&sibling);
+    }
+
+    /// `belongs_to` is `Path::starts_with`, which is lexical: without the `..`
+    /// clause this path is "inside" the project and names somewhere else
+    /// entirely. The transcript's own `cwd` never looks like this — which is
+    /// exactly why the guard is written for the request that did not come from
+    /// one.
+    #[test]
+    fn a_path_that_walks_back_out_of_the_project_is_refused() {
+        let root = scratch("resume-escape");
+        let escape = format!("{}/../..", root.display());
+        assert!(matches!(resume_cwd(&root, &escape), Err(TerminalError::BadCwd(_))));
+    }
+
+    /// A file is not a working directory. `Pty::spawn` handed one would fail
+    /// inside the child, where the only thing left to show a person is a spawn
+    /// error about an agent.
+    #[test]
+    fn a_file_is_not_a_directory_to_resume_in() {
+        let root = scratch("resume-file");
+        let file = root.join("transcript.jsonl");
+        std::fs::write(&file, "{}\n").unwrap();
+        assert!(matches!(
+            resume_cwd(&root, &file.to_string_lossy()),
+            Err(TerminalError::BadCwd(_))
+        ));
+    }
+
+    /// The two spellings of one path: `/tmp` on macOS is `/private/tmp`, so the
+    /// project can be held under one name while the transcript recorded the
+    /// other. `sessions::read::list_in` compares against both for the same
+    /// reason, and a resume that refused what the list was happy to draw would
+    /// be the two disagreeing about one session.
+    ///
+    /// A real symlink rather than a pair of strings, because the second
+    /// spelling is `resume_cwd`'s own to derive now — it canonicalises the root
+    /// itself, so a test that handed it one would be testing nothing the
+    /// callers do.
+    #[cfg(unix)]
+    #[test]
+    fn the_projects_other_spelling_is_accepted_too() {
+        let real = scratch("resume-symlink");
+        let alias = real.parent().unwrap().join("resume-symlink-alias");
+        let _ = std::fs::remove_file(&alias);
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        // The transcript recorded the path behind the link; the front end holds
+        // the link.
+        let cwd = real.canonicalize().unwrap().join("src");
+        std::fs::create_dir_all(&cwd).unwrap();
+        assert_eq!(resume_cwd(&alias, &cwd.to_string_lossy()).unwrap(), cwd);
+
+        // And a project that is genuinely somewhere else is still refused:
+        // canonicalising widens the comparison, it does not open it.
+        let elsewhere = scratch("resume-symlink-elsewhere");
+        assert!(matches!(
+            resume_cwd(&elsewhere, &cwd.to_string_lossy()),
+            Err(TerminalError::BadCwd(_))
+        ));
+        let _ = std::fs::remove_file(&alias);
+        let _ = std::fs::remove_dir_all(&elsewhere);
+    }
+}

@@ -1,7 +1,8 @@
 ---
 paths:
-  - "src-tauri/src/tracker/**"
-  - "src-tauri/src/project.rs"
+  - "crates/core/src/tracker/**"
+  - "crates/core/src/project.rs"
+  - "src-tauri/src/commands/tracker.rs"
   - "src/stores/tracker.js"
   - "src/views/folderAccess.js"
   - "src/stores/projects.js"
@@ -17,7 +18,7 @@ paths:
 The board shows the **bd** issue tracker of the active project's directory — chosen from the project
 list, and remembered between runs — and follows it as it changes, no matter who changed it: this
 window, an agent, or a person in a terminal. bd has no daemon and no API — its CLI is the API, and
-one call costs about two seconds. Hence the shape of `src-tauri/src/tracker/`:
+one call costs about two seconds. Hence the shape of `crates/core/src/tracker/`:
 
 | file | what it does |
 |---|---|
@@ -28,7 +29,7 @@ one call costs about two seconds. Hence the shape of `src-tauri/src/tracker/`:
 | `store.rs` | the in-memory snapshot and the delta computation |
 | `watcher.rs` | `notify` on `.beads/`, path filter, failure reporting |
 | `service.rs` | the worker: one owner of mutable state, a request queue, deltas and health events |
-| `commands.rs` | thin `#[tauri::command]`s that put a request on the queue and await the reply |
+| `commands.rs` | what the `#[tauri::command]`s do, as plain functions that put a request on the queue and await the reply; the commands themselves are thin wrappers in `src-tauri/src/commands/tracker.rs` |
 
 `service.rs` is a single tokio task holding the snapshot; commands, watcher ticks and the 60-second
 safety sweep meet in one `select!`. Nothing shares mutable state with it — that is what keeps
@@ -59,7 +60,7 @@ trigger, because two copies would have drifted the first time bd grew a status. 
 `bd delete -f` — irreversible, and `-f` is not about skipping a prompt: without it bd prints a
 preview, deletes nothing and exits zero.
 
-Which directory that is comes from `src-tauri/src/project.rs` — the vocabulary the tracker and the
+Which directory that is comes from `crates/core/src/project.rs` — the vocabulary the tracker and the
 settings share: `has_tracker`, `nearest_tracked_ancestor` and `default_project` for the very first
 run. `has_tracker` answers whether `bd list` can actually read something here, not whether `bd where`
 accepts the folder as a workspace — the two questions differ, and only the first one is what this app

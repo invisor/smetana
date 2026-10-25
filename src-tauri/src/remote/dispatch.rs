@@ -332,7 +332,7 @@ impl Services {
                     message.clone(),
                 ))),
             },
-            Call::AgentsCatalog => plain(blocking(crate::agents::commands::agents_catalog).await?),
+            Call::AgentsCatalog => plain(blocking(crate::agents::catalogue).await?),
             Call::AgentsInstalled => plain(blocking(crate::agents::commands::agents_installed).await?),
             Call::ProjectConfig(a) => {
                 plain(blocking(move || runs::commands::project_config(a.project)).await?)

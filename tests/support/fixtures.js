@@ -1,5 +1,5 @@
-/* The shapes mirror the Rust models word for word: src-tauri/src/tracker/model.rs
-   and src-tauri/src/files/model.rs. An issue's fields are snake_case
+/* The shapes mirror the Rust models word for word: crates/core/src/tracker/model.rs
+   and crates/core/src/files/model.rs. An issue's fields are snake_case
    (updated_at, issue_type): the struct has no rename_all. */
 
 export const issue = (over = {}) => ({

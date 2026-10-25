@@ -1,6 +1,8 @@
 ---
 paths:
-  - "src-tauri/src/files/**"
+  - "crates/core/src/files/**"
+  - "src-tauri/src/commands/files.rs"
+  - "src-tauri/src/clipboard.rs"
   - "src/components/files/**"
   - "src/stores/files.js"
   - "src/stores/tabs.js"
@@ -23,15 +25,15 @@ paths:
 # Files: the tree and the editor
 
 The left panel's tree and the file tabs in the centre read the active project's directory through
-`src-tauri/src/files/`, and it is deliberately the opposite of the tracker: no worker, no queue, no
+`crates/core/src/files/`, and it is deliberately the opposite of the tracker: no worker, no queue, no
 watcher. `read_dir` costs milliseconds and holds no state, so there is nothing for a queue to guard —
 the same reasoning that keeps settings out of a worker. `model.rs` is the vocabulary and the pure
 logic (entry sorting, the `..` check, the name check, the binary sniff, the ceilings: 1000 entries
 per directory, 2 MB per file) and carries most of the tests; `fs.rs` is the disk; `commands.rs` is
-thin commands over it — the reads (`files_list`, `files_read`, `files_stat`) and the writes
+the commands' bodies over it (the `#[tauri::command]` wrappers are `src-tauri/src/commands/files.rs`) — the reads (`files_list`, `files_read`, `files_stat`) and the writes
 (`files_write`, `files_create`, `files_mkdir`, `files_trash`, `files_copy`, `files_copy_external`,
-`files_move`, `files_rename`). `clipboard.rs` is the one file in that directory
-that is not about this project's files at all — see the end of this document.
+`files_move`, `files_rename`). `src-tauri/src/clipboard.rs` is the one file of this subsystem
+that is not about this project's files at all, and the one that stays in the desktop shell — see the end of this document.
 
 **Four of those are four verbs and not one with a flag**, and the split is by what the argument
 is. `files_rename` takes a **name**, so what checks it is `resolve_new_within` — the folder-and-name
@@ -386,7 +388,7 @@ muted would be promising otherwise. The mirror it is drawn from is refreshed on 
 the menu opens (`@menu`, an event carrying nothing), which is the tree's own freshness model; a paste
 re-reads for itself, so the decision that matters is never made from a copy.
 
-`src-tauri/src/files/clipboard.rs` is the other side, and it is **three formats, one per platform,
+`src-tauri/src/clipboard.rs` is the other side, and it is **three formats, one per platform,
 none interchangeable**: `NSPasteboard` with `public.file-url` on macOS, `CF_HDROP` plus the registered
 `Preferred DropEffect` on Windows, and the GTK clipboard's `text/uri-list` plus
 `x-special/gnome-copied-files` on Linux. `tauri-plugin-clipboard-manager` is untouched by all of it

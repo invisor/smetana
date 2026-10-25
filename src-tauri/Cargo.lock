@@ -104,27 +104,20 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.23.0",
- "chrono",
- "chrono-tz",
  "data-encoding",
- "futures-core",
  "gtk",
  "iroh",
- "keepawake",
- "libc",
  "log",
- "notify",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
- "portable-pty",
  "rand",
  "remote-protocol",
  "reqwest",
  "rustls",
  "serde",
  "serde_json",
+ "smetana-core",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
@@ -136,14 +129,8 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
- "tempfile",
  "thiserror 2.0.19",
  "tokio",
- "toml 1.1.4+spec-1.1.0",
- "toml_edit 0.25.13+spec-1.1.0",
- "trash",
- "urlencoding",
- "vt100",
  "windows 0.61.3",
 ]
 
@@ -5506,6 +5493,32 @@ name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+
+[[package]]
+name = "smetana-core"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.0",
+ "chrono",
+ "chrono-tz",
+ "futures-core",
+ "keepawake",
+ "libc",
+ "log",
+ "notify",
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "toml 1.1.4+spec-1.1.0",
+ "toml_edit 0.25.13+spec-1.1.0",
+ "trash",
+ "urlencoding",
+ "vt100",
+ "windows 0.61.3",
+]
 
 [[package]]
 name = "socket2"
