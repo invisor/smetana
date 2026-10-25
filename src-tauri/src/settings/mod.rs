@@ -2,7 +2,7 @@
 //! rules, `file.rs` is the disk, `commands.rs` is the two thin commands the
 //! front end calls.
 //!
-//! The fourteen functions here are for the rest of the app rather than for the
+//! The functions here are for the rest of the app rather than for the
 //! front end: a caller that wants one value out of the file and nobody to
 //! report a failure to.
 
@@ -10,11 +10,16 @@ pub mod commands;
 pub mod file;
 pub mod model;
 
+// The three reads that belong to the window and the updater, which stay with the desktop shell and
+// still hold an `AppHandle`; they live beside the other Tauri code in `commands.rs`.
+pub use commands::{dialog_size, remember_dialog_size, updates_auto_check};
+
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use tauri::{AppHandle, Manager};
 use tokio::sync::watch;
+
+use crate::context::Context;
 
 /// A successful settings write wakes runs waiting at a safe failover boundary.
 /// The counter avoids a stale `true` flag waking every future run.
@@ -38,14 +43,14 @@ pub fn notify_run_settings_changed() {
 ///
 /// `commands::settings_path` builds the same path and keeps its own error type,
 /// because a command has somebody to tell and these callers do not.
-pub fn path(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_config_dir().ok().map(|dir| dir.join("settings.json"))
+pub fn path(ctx: &Context) -> Option<PathBuf> {
+    ctx.settings_path()
 }
 
 /// The RunSession transport is chosen once, before a run can touch the board.
 /// A missing settings file keeps the shipped conversation-panel default.
-pub fn conversation_panel(app: &AppHandle) -> bool {
-    path(app)
+pub fn conversation_panel(ctx: &Context) -> bool {
+    path(ctx)
         .map(|path| file::load(&path).0.conversation_panel)
         .unwrap_or_else(|| model::Settings::default().conversation_panel)
 }
@@ -68,8 +73,8 @@ pub fn conversation_panel(app: &AppHandle) -> bool {
 ///
 /// The rule itself is `Settings::role_pair`, which is pure; this is the half
 /// that touches the file, and it is the head of the family below.
-pub fn role_pair(app: &AppHandle, project: Option<&str>, role: crate::agents::Role) -> (String, String) {
-    path(app).map(|path| file::role_pair(&path, project, role)).unwrap_or_else(|| {
+pub fn role_pair(ctx: &Context, project: Option<&str>, role: crate::agents::Role) -> (String, String) {
+    path(ctx).map(|path| file::role_pair(&path, project, role)).unwrap_or_else(|| {
         let shipped = model::Settings::default();
         (shipped.agent, shipped.model)
     })
@@ -98,12 +103,12 @@ pub fn role_pair(app: &AppHandle, project: Option<&str>, role: crate::agents::Ro
 /// project this session is starting in, so a project with its own `agents`
 /// block gets that table's answer rather than the root's.
 pub fn role_model(
-    app: &AppHandle,
+    ctx: &Context,
     project: Option<&str>,
     intent: &crate::agents::Intent,
     chosen: Option<&str>,
 ) -> (String, Option<String>) {
-    let table = role_pair(app, project, crate::agents::role_of(intent));
+    let table = role_pair(ctx, project, crate::agents::role_of(intent));
     resolve_role_model(table, intent, chosen)
 }
 
@@ -159,8 +164,8 @@ pub(crate) fn resolve_role_model(
 /// nothing here. `agents::prompt` turns this into one line of the run policy.
 ///
 /// `project` is the run's own root, passed to `role_pair` unchanged.
-pub fn worker_model(app: &AppHandle, project: Option<&str>) -> Option<String> {
-    let (_, model) = role_pair(app, project, crate::agents::Role::Code);
+pub fn worker_model(ctx: &Context, project: Option<&str>) -> Option<String> {
+    let (_, model) = role_pair(ctx, project, crate::agents::Role::Code);
     (!model.is_empty()).then_some(model)
 }
 
@@ -171,8 +176,8 @@ pub fn worker_model(app: &AppHandle, project: Option<&str>) -> Option<String> {
 /// `role_pair` all the same, so that one place decides what "the default"
 /// means. `project` is passed straight through, so a one-shot call made from
 /// a project with its own `agents` block answers from that block.
-pub fn default_pair(app: &AppHandle, project: Option<&str>) -> (String, Option<String>) {
-    let (agent, model) = role_pair(app, project, crate::agents::Role::Default);
+pub fn default_pair(ctx: &Context, project: Option<&str>) -> (String, Option<String>) {
+    let (agent, model) = role_pair(ctx, project, crate::agents::Role::Default);
     (agent, (!model.is_empty()).then_some(model))
 }
 
@@ -183,8 +188,8 @@ pub fn default_pair(app: &AppHandle, project: Option<&str>) -> (String, Option<S
 /// arguments: `terminal::service` builds every session in the app, a person's
 /// and a run's alike, so reading it once there is what keeps the two from
 /// disagreeing. See the `Create` arm for the debounce this lives with.
-pub fn languages(app: &AppHandle) -> crate::agents::Languages {
-    path(app).map(|path| file::languages(&path)).unwrap_or_default()
+pub fn languages(ctx: &Context) -> crate::agents::Languages {
+    path(ctx).map(|path| file::languages(&path)).unwrap_or_default()
 }
 
 /// What the person wants said in every session they are in.
@@ -198,8 +203,8 @@ pub fn languages(app: &AppHandle) -> crate::agents::Languages {
 ///
 /// A platform that will not name a config directory answers with the empty
 /// string, which is the shipped state and changes nothing.
-pub fn agent_prompt(app: &AppHandle) -> String {
-    path(app).map(|path| file::agent_prompt(&path)).unwrap_or_default()
+pub fn agent_prompt(ctx: &Context) -> String {
+    path(ctx).map(|path| file::agent_prompt(&path)).unwrap_or_default()
 }
 
 /// The run gate's thresholds as `runs::usage` wants them. The schema's type and
@@ -210,8 +215,8 @@ pub fn agent_prompt(app: &AppHandle) -> String {
 /// here, as with `updates_auto_check` below, that is the mechanism rather than
 /// merely acceptable: the run loop asks at every gate check, which is what lets
 /// a threshold moved while a run is paused take effect on *that* run.
-pub fn subscription(app: &AppHandle) -> crate::runs::usage::Limits {
-    subscription_at(path(app).as_deref())
+pub fn subscription(ctx: &Context) -> crate::runs::usage::Limits {
+    subscription_at(path(ctx).as_deref())
 }
 
 /// The same read, for a caller that already holds the path — the run loop,
@@ -243,28 +248,10 @@ pub fn run_failover_at(
 /// A platform that will not name a config directory answers `true`, the shipped
 /// state — the same fallback `file::git_remove_worktrees` makes, and for the
 /// reason written there.
-pub fn git_remove_worktrees(app: &AppHandle) -> bool {
-    path(app)
+pub fn git_remove_worktrees(ctx: &Context) -> bool {
+    path(ctx)
         .map(|path| file::git_remove_worktrees(&path))
         .unwrap_or_else(|| model::Settings::default().git.remove_worktrees)
-}
-
-/// Whether the update timer may ask the release feed by itself.
-///
-/// Beside `role_pair` above and read the same way, from the disk on each call — and
-/// here that is not merely acceptable but the mechanism: `updates::schedule`
-/// asks at every tick, which is what lets the switch stop and restart the
-/// scheduled check without a restart of the app. The opposite of
-/// `git_remove_worktrees`' caller, which reads once and carries the answer for
-/// the whole of a run.
-///
-/// A platform that will not name a config directory answers `true`, the shipped
-/// state — the same fallback `file::updates_auto_check` makes, and for the
-/// reason written there.
-pub fn updates_auto_check(app: &AppHandle) -> bool {
-    path(app)
-        .map(|path| file::updates_auto_check(&path))
-        .unwrap_or_else(|| model::Settings::default().updates.auto_check)
 }
 
 /// Which branch this project's work is aimed at, as the run dialog was last
@@ -278,26 +265,8 @@ pub fn updates_auto_check(app: &AppHandle) -> bool {
 /// `None` where the file names none, and the caller falls back to the project's
 /// own `[defaults] target_branch` — the two sources, in that order, that the run
 /// dialog itself opens on.
-pub fn target_branch(app: &AppHandle, project: &str) -> Option<String> {
-    file::run_target_branch(&path(app)?, project)
-}
-
-/// How big one dialog window was left. `None` — including when there is no
-/// settings path at all — asks for the height the content comes to.
-pub fn dialog_size(app: &AppHandle, kind: &str) -> Option<model::DialogSize> {
-    file::dialog_size(&path(app)?, kind)
-}
-
-/// Keeps how big one dialog window was left. A failure is a warning and nothing
-/// more: the window on screen is the size the person made it either way, and
-/// what is lost is that size at the next opening.
-pub fn remember_dialog_size(app: &AppHandle, kind: &str, size: model::DialogSize) {
-    let Some(path) = path(app) else {
-        return;
-    };
-    if let Err(err) = file::remember_dialog_size(&path, kind, size) {
-        log::warn!("settings: the dialog size was not kept: {err}");
-    }
+pub fn target_branch(ctx: &Context, project: &str) -> Option<String> {
+    file::run_target_branch(&path(ctx)?, project)
 }
 
 #[cfg(test)]

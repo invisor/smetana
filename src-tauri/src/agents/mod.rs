@@ -26,8 +26,8 @@ pub mod prompt;
 use std::path::PathBuf;
 
 use portable_pty::CommandBuilder;
-use tauri::{AppHandle, Manager};
 
+use crate::context::Context;
 use crate::terminal::model::Question;
 
 /// How a harness accepts a skill library.
@@ -1374,16 +1374,15 @@ pub fn pick_with_model(
 /// `runs::usage`'s header carries the rest of that argument, including why the
 /// project root and `std::env::temp_dir()` were both refused.
 ///
-/// `app_data_dir()` for `attachments::store_root`'s reason: it is the folder
+/// The data directory for `attachments::store_root`'s reason: it is the folder
 /// this app already owns, so nothing else is indexed by accident. `usage.rs`
 /// and `oneshot.rs` take the path in rather than resolving it themselves so
-/// that neither needs an `AppHandle` to be tested — which is what keeps their
-/// pure half testable at all — and this function is where the `AppHandle`
+/// that neither needs a `Context` to be tested — which is what keeps their
+/// pure half testable at all — and this function is where the `Context`
 /// half of the job lives instead.
-pub fn probe_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
+pub fn probe_dir(ctx: &Context) -> Result<PathBuf, String> {
+    let dir = ctx
+        .data_dir()
         .map_err(|err| format!("no app data directory: {err}"))?
         .join("probe");
     std::fs::create_dir_all(&dir).map_err(|err| format!("could not make {}: {err}", dir.display()))?;

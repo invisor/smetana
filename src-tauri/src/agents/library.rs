@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Manager};
+use crate::context::Context;
 
 /// The skill library as this run sees it.
 pub struct Skills {
@@ -58,8 +58,8 @@ pub fn read_skill(root: &Path, name: &str) -> Option<String> {
 }
 
 /// Where everything is for this run.
-pub fn resolve(app: &AppHandle) -> Skills {
-    let resources = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
+pub fn resolve(ctx: &Context) -> Skills {
+    let resources = ctx.resource_dir().map(Path::to_path_buf).unwrap_or_else(|_| PathBuf::from("."));
     let installed = claude_plugins_file()
         .and_then(|path| std::fs::read_to_string(path).ok())
         .is_some_and(|json| has_superpowers(&json));

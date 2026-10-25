@@ -24,7 +24,6 @@ mod contract;
 #[cfg(test)]
 mod tests;
 
-pub use bridge::emit;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -267,7 +266,7 @@ pub fn start(app: AppHandle) {
             return;
         }
     };
-    let settings_path = crate::settings::path(&app);
+    let settings_path = crate::host::context(&app).settings_path();
     let relay = Box::new(move || {
         settings_path
             .as_ref()

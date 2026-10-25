@@ -33,7 +33,6 @@ use remote_protocol::{
 };
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
@@ -189,18 +188,6 @@ pub const DESKTOP_COMMANDS: &[&str] = &[
     "remote_devices",
     "remote_device_revoke",
 ];
-
-/// Emits an allowlisted event: to the windows, exactly as `app.emit` does, and to
-/// every phone that has listened for it. The only way these events leave the
-/// desktop, so that a phone and the window cannot be told different things.
-///
-/// An event that is not on the allowlist reaches the windows and no phone.
-pub fn emit<S: Serialize + ?Sized>(app: &AppHandle, name: &str, payload: &S) {
-    let _ = app.emit(name, payload);
-    if let Some(remote) = app.try_state::<Arc<Remote>>() {
-        remote.hub.publish(name, payload);
-    }
-}
 
 struct Subscriber {
     events: HashSet<String>,

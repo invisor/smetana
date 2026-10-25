@@ -4,7 +4,7 @@
 //! process spawn for one line of text that git keeps in plain form on disk,
 //! and the scope bar asks for it on every window focus. So this is the same
 //! shape as `files/`: no worker, no queue, no watcher — a couple of pure
-//! functions that carry the tests, and one thin command over them. Freshness
+//! functions that carry the tests, and one thin command over them in `commands.rs`. Freshness
 //! comes from window focus, exactly like the file tree's.
 //!
 //! Nothing here is an error. A folder that is not a repository, a `.git` that
@@ -12,6 +12,8 @@
 //! mean the same thing to the bar: it has no branch to show. A failure toast
 //! for "this folder is not a git repository" would be noise about a state
 //! that is perfectly ordinary.
+
+pub mod commands;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -128,11 +130,6 @@ pub(crate) fn common_dir(git_dir: &Path) -> PathBuf {
 pub fn head(project: &Path) -> Head {
     let Some(dir) = git_dir(project) else { return Head::default() };
     std::fs::read_to_string(dir.join("HEAD")).map(|text| parse_head(&text)).unwrap_or_default()
-}
-
-#[tauri::command]
-pub fn git_head(project: String) -> Head {
-    head(Path::new(&project))
 }
 
 /// The prefix every local branch ref carries.

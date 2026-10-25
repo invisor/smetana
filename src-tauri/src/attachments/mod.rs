@@ -51,6 +51,7 @@
 //! coming in can climb a directory, hide behind a dot or need quoting.
 
 pub(crate) mod cleanup;
+pub mod commands;
 pub mod figure;
 
 use std::path::{Path, PathBuf};
@@ -58,9 +59,9 @@ use std::time::Duration;
 
 use base64::Engine;
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
 use tokio::sync::oneshot;
 
+use crate::context::Context;
 use crate::tracker::model::{Health, HealthState, Issue, Snapshot};
 use crate::tracker::service::{Request, TrackerHandle};
 
@@ -84,7 +85,7 @@ use cleanup::{project_key, StoredFile, Tally};
 /// names both numbers so a person can see what they are up against.
 pub const MAX_ATTACHMENT_BYTES: u64 = 10 * 1024 * 1024;
 
-/// The directory under `app_data_dir()` everything lands in.
+/// The directory under the data directory everything lands in.
 const STORE: &str = "attachments";
 
 /// What a refusal calls something that arrived with no name — a screenshot off
@@ -351,10 +352,9 @@ fn stamp() -> String {
 }
 
 /// The whole store: every project's folder lives under this one.
-pub(crate) fn store_root(app: &AppHandle) -> Result<PathBuf, AttachmentError> {
-    Ok(app
-        .path()
-        .app_data_dir()
+pub(crate) fn store_root(ctx: &Context) -> Result<PathBuf, AttachmentError> {
+    Ok(ctx
+        .data_dir()
         .map_err(|err| AttachmentError::Io(format!("no app data directory: {err}")))?
         .join(STORE))
 }
@@ -367,8 +367,8 @@ pub(crate) fn store_root(app: &AppHandle) -> Result<PathBuf, AttachmentError> {
 /// the honest place for it rather than a fallback: the root is exactly the part
 /// of the store no cleanup can reach, and a file whose project is unknown must
 /// not be filed under a project that would later decide nothing refers to it.
-fn store_dir(app: &AppHandle, project: Option<&Path>) -> Result<PathBuf, AttachmentError> {
-    let dir = project_dir(&store_root(app)?, project);
+fn store_dir(ctx: &Context, project: Option<&Path>) -> Result<PathBuf, AttachmentError> {
+    let dir = project_dir(&store_root(ctx)?, project);
     std::fs::create_dir_all(&dir)
         .map_err(|err| AttachmentError::Io(format!("{}: {err}", dir.display())))?;
     Ok(dir)
@@ -410,11 +410,12 @@ const ASK_TIMEOUT: Duration = Duration::from_secs(10);
 /// end is the same decision `runs::commands::target_branches` records — a
 /// project threaded down through the webview is a second copy of a fact, and
 /// the two get out of step in exactly the window that matters.
-async fn current(app: &AppHandle) -> Result<(Option<PathBuf>, Health, Snapshot), AttachmentError> {
-    let handle = app
-        .try_state::<TrackerHandle>()
+async fn current(
+    tracker: Option<&TrackerHandle>,
+) -> Result<(Option<PathBuf>, Health, Snapshot), AttachmentError> {
+    let handle = tracker
         .ok_or_else(|| AttachmentError::Io("the tracker worker is not running".to_owned()))?;
-    current_of(&handle).await
+    current_of(handle).await
 }
 
 async fn current_of(
@@ -609,20 +610,24 @@ fn survey(root: &Path, project: Option<&Path>, board: &Health, issues: &[Issue])
 /// A read, so it answers rather than refusing when there is no project or no
 /// readable board: the section still has a size to show, and the button under
 /// it has a reason to be disabled that a person can read.
-#[tauri::command]
-pub async fn attachments_survey(app: AppHandle) -> Result<Survey, AttachmentError> {
-    let root = store_root(&app)?;
-    let (project, board, snapshot) = current(&app).await?;
+pub async fn survey_store(
+    ctx: &Context,
+    tracker: Option<&TrackerHandle>,
+) -> Result<Survey, AttachmentError> {
+    let root = store_root(ctx)?;
+    let (project, board, snapshot) = current(tracker).await?;
     Ok(survey(&root, project.as_deref(), &board, &snapshot.issues))
 }
 
 /// The one thing in this app that deletes somebody's pictures, and it happens
 /// only here, only when a person presses the button, and only inside the active
 /// project's own folder.
-#[tauri::command]
-pub async fn attachments_clean(app: AppHandle) -> Result<Cleaned, AttachmentError> {
-    let root = store_root(&app)?;
-    let (project, board, snapshot) = current(&app).await?;
+pub async fn clean_store(
+    ctx: &Context,
+    tracker: Option<&TrackerHandle>,
+) -> Result<Cleaned, AttachmentError> {
+    let root = store_root(ctx)?;
+    let (project, board, snapshot) = current(tracker).await?;
     // The gate is asked before anything is listed, let alone deleted. Both
     // refusals it can give are absences of the one thing that could vouch for
     // these files — a board — and neither may be softened into "there was
@@ -690,8 +695,11 @@ pub fn save_into(
 /// mistake is refused without being read into memory — and, since the project's
 /// folder is asked of the tracker worker, without queueing behind a bd call for
 /// something that was never going to be stored.
-#[tauri::command]
-pub async fn attachment_import(app: AppHandle, path: String) -> Result<Attachment, AttachmentError> {
+pub async fn import_file(
+    ctx: &Context,
+    tracker: Option<&TrackerHandle>,
+    path: String,
+) -> Result<Attachment, AttachmentError> {
     let source = PathBuf::from(&path);
     let name = source.file_name().map(|n| n.to_string_lossy().into_owned());
     let meta = std::fs::metadata(&source)
@@ -709,7 +717,7 @@ pub async fn attachment_import(app: AppHandle, path: String) -> Result<Attachmen
         });
     }
     let bytes = std::fs::read(&source).map_err(|err| AttachmentError::Io(format!("{path}: {err}")))?;
-    let dir = store_dir(&app, current_project_of(&app).await.as_deref())?;
+    let dir = store_dir(ctx, current_project_of(tracker).await.as_deref())?;
     save_into(&dir, name.as_deref(), bytes, &stamp())
 }
 
@@ -721,10 +729,9 @@ pub async fn attachment_import(app: AppHandle, path: String) -> Result<Attachmen
 /// it did not open — so the bytes come back the same way they do from an import.
 /// Copying instead would leave a second file behind on every switch, and nothing
 /// in this app deletes an attachment except the Storage tab's own button.
-#[tauri::command]
-pub async fn attachment_reopen(app: AppHandle, path: String) -> Result<Attachment, AttachmentError> {
+pub async fn reopen_stored(ctx: &Context, path: String) -> Result<Attachment, AttachmentError> {
     let source = PathBuf::from(&path);
-    if !cleanup::in_store(&store_root(&app)?, &source) {
+    if !cleanup::in_store(&store_root(ctx)?, &source) {
         return Err(AttachmentError::NotStored(path));
     }
     let name = source
@@ -765,21 +772,21 @@ pub async fn attachment_reopen(app: AppHandle, path: String) -> Result<Attachmen
 /// `attachment_import` — and it matters more here, not less: a paste is the
 /// gesture most likely to be oversized, and decoding first would allocate the
 /// whole picture a second time only to throw it away.
-#[tauri::command]
-pub async fn attachment_write(
-    app: AppHandle,
+pub async fn write_pasted(
+    ctx: &Context,
+    tracker: Option<&TrackerHandle>,
     name: Option<String>,
     data: String,
 ) -> Result<Attachment, AttachmentError> {
-    let root = store_root(&app)?;
-    let project = current_project_of(&app).await;
+    let root = store_root(ctx)?;
+    let project = current_project_of(tracker).await;
     plain::write(&root, project.as_deref(), name, data)
 }
 
-/// `current_project` for a caller that holds the app rather than the worker's handle.
-async fn current_project_of(app: &AppHandle) -> Option<PathBuf> {
-    match app.try_state::<TrackerHandle>() {
-        Some(handle) => current_project(&handle).await,
+/// `current_project` for a caller that may not have a worker's handle to give.
+async fn current_project_of(tracker: Option<&TrackerHandle>) -> Option<PathBuf> {
+    match tracker {
+        Some(handle) => current_project(handle).await,
         None => {
             log::warn!("attachments: no tracker worker for this image; storing it in the root");
             None

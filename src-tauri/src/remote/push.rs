@@ -17,10 +17,10 @@ use std::time::Duration;
 use remote_protocol::push::seal;
 use remote_protocol::Platform;
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
 
 use super::devices::Device;
 use super::Remote;
+use crate::context::Context;
 use crate::runs::summary::RunSummary;
 use crate::session::model::SessionState;
 
@@ -198,16 +198,17 @@ fn client() -> Option<reqwest::Client> {
     reqwest::Client::builder().timeout(GATEWAY_TIMEOUT).build().ok()
 }
 
-/// Hands `message` to every paired phone without waiting for it. Does nothing when the companion is
-/// off or no phone has a token.
-fn dispatch(app: &AppHandle, message: Message) {
-    let Some(remote) = app.try_state::<Arc<Remote>>() else { return };
+/// Hands `message` to every paired phone without waiting for it. Does nothing when no phone has a token.
+///
+/// Called with the companion's own `Remote` by whoever owns it: the context's sink finds it, so the
+/// workers that want a push sent say so through `notify_*` below and never hold the `Remote`.
+pub fn dispatch(remote: &Arc<Remote>, message: Message) {
     let devices: Vec<Device> =
         remote.devices.all().into_iter().filter(|device| device.push_token.is_some()).collect();
     if devices.is_empty() {
         return;
     }
-    tauri::async_runtime::spawn(async move {
+    crate::context::spawn(async move {
         let Some(client) = client() else {
             log::warn!("remote: push not sent: no HTTP client");
             return;
@@ -216,16 +217,16 @@ fn dispatch(app: &AppHandle, message: Message) {
     });
 }
 
-pub fn notify_run_finished(app: &AppHandle, run: &crate::runs::model::Run) {
-    dispatch(app, run_finished(&run.project, run.summary.as_ref()));
+pub fn notify_run_finished(ctx: &Context, run: &crate::runs::model::Run) {
+    ctx.push(run_finished(&run.project, run.summary.as_ref()));
 }
 
-pub fn notify_needs_you(app: &AppHandle, session: u64, project: &str, agent: &str, title: Option<&str>) {
-    dispatch(app, needs_you(project, session, agent, title));
+pub fn notify_needs_you(ctx: &Context, session: u64, project: &str, agent: &str, title: Option<&str>) {
+    ctx.push(needs_you(project, session, agent, title));
 }
 
-pub fn notify_terminal_needs_you(app: &AppHandle, terminal: u64, project: &str, agent: &str) {
-    dispatch(app, terminal_needs_you(project, terminal, agent));
+pub fn notify_terminal_needs_you(ctx: &Context, terminal: u64, project: &str, agent: &str) {
+    ctx.push(terminal_needs_you(project, terminal, agent));
 }
 
 #[cfg(test)]

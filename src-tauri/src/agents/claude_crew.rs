@@ -473,7 +473,7 @@ pub enum AdmissionStep {
 }
 
 /// The whole of one admission tick's readiness decision, pure so a test can
-/// drive it tick by tick without a worker, a `AppHandle` or a real Claude
+/// drive it tick by tick without a worker, a `Context` or a real Claude
 /// process behind it. `refresh_claude_crews` calls this only while a package
 /// is still in `starting`; an already-admitted package keeps its own,
 /// unchanged health checks, which is deliberate — see this type's own
