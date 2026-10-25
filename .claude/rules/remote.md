@@ -2,6 +2,7 @@
 paths:
   - "crates/remote-protocol/**"
   - "src-tauri/src/remote/**"
+  - "crates/core/src/remote/**"
   - "src/stores/remote.js"
   - "src/components/settings/DevicesSettings.vue"
   - "src/components/settings/devices.js"
@@ -25,6 +26,11 @@ commands and listens to allowlisted events on the same stream.
   checked against `MAX_FRAME` — 16 MiB, since a board snapshot passes a megabyte — before the body is
   read) and `ALPN = b"smetana/remote/1"`. It has no clock and no policy. `contract/` holds the pinned
   shape of every allowlisted command and event.
+- `crates/core/` — package `smetana-core`, module `smetana_core`, a path dependency of `src-tauri` on the
+  same terms (no root workspace; `cd crates/core && cargo test`). It holds every worker and has no
+  `tauri` in its manifest, directly or by a feature. Its `remote/` is only the push half the workers
+  reach for — `push.rs` (the messages, `waiting_began`, `run_ended`, the `notify_*` calls) and
+  `DEFAULT_RELAY_URL`, which `settings/model.rs` needs; the shell re-exports the constant.
 - `src-tauri/src/remote/` — `mod.rs` (the `Remote` service, constants), `endpoint.rs` (binding,
   accept loop, the three kinds of connection), `pairing.rs` (secrets), `devices.rs`
   (`remote-devices.json`), `commands.rs`, `bridge.rs` (the per-connection loop, the event hub, `emit`),
@@ -77,7 +83,7 @@ field refuses what Rust would silently replace with the default.
 **`DEFAULT_RELAY_URL` is ours** (`https://relay.smetana.io`), and `GATEWAY_URL` in `remote/push.rs`
 is `https://push.smetana.io/v1/push`: both run from `server/` on the project's VPS, behind one Caddy
 (`server/README.md`, "Our deployment"). The front end imports one copy from
-`devices.js`, and `tests/components/settings/devices.test.js` reads `remote/mod.rs` to keep the pair equal.
+`devices.js`, and `tests/components/settings/devices.test.js` reads `crates/core/src/remote/mod.rs` to keep the pair equal.
 
 **The QR is drawn from the module matrix by the component**, not from the library's SVG string: that
 string carries colours as attributes, which cannot be `var(--token)`, and the only way to place it is
@@ -108,7 +114,7 @@ error is `serde_json::to_value(err)`, which is how Tauri hands it to the webview
 `BridgeError::Handler`.
 
 **One emission point.** Every event a worker sends leaves through `Context::emit(name, &payload)`
-(`src-tauri/src/context.rs`), whose Tauri sink (`host.rs`) emits to the windows as `app.emit` did and then
+(`crates/core/src/context.rs`), whose Tauri sink (`host.rs`) emits to the windows as `app.emit` did and then
 offers the payload to the phones listening (`Hub::publish`), which drops a name that is not on the
 allowlist. So there is one road for every event and the seven allowlisted ones reach the phones by it;
 nothing in a worker holds an `AppHandle` any more. A phone whose
@@ -180,7 +186,8 @@ whatever path it is given.
 
 ## Push
 
-`remote/push.rs` sends a run's ending and a session's start of waiting to every device with a `push_token`.
+`remote/push.rs` (the shell's half: the sealing and the POST; what is said, and when, is
+`crates/core/src/remote/push.rs`) sends a run's ending and a session's start of waiting to every device with a `push_token`.
 The text is sealed in `remote_protocol::push` (X25519 to the device's `push_key`, BLAKE3-derived key,
 XChaCha20-Poly1305) and posted to `GATEWAY_URL` as `{ platform, token, blob }` — the body
 `server/push-gateway` accepts. The gateway URL is a constant and a **placeholder** (`.example`), not a

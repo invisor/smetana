@@ -413,7 +413,7 @@ const openMenu = (row, event) => {
   menu.value?.open(event, agentKey(row))
 }
 
-/* Pairs with `MAX_AGENT_NAME_LEN` in `src-tauri/src/settings/model.rs`,
+/* Pairs with `MAX_AGENT_NAME_LEN` in `crates/core/src/settings/model.rs`,
    written out a second time for the reason every doubled ceiling in this app
    is: Rust validates on save, this is what stops the field accepting more
    than a save would keep. Both sides count **characters** rather than bytes,

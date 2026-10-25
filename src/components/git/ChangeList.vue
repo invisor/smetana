@@ -49,7 +49,7 @@
    later task, so a single stop with nothing to move it would be a state pointing
    at a row and no way to reach the next one. What it costs is real and is not
    bounded by anything here — this list is `tree.changes` whole, git truncates
-   nothing and neither does `src-tauri/src/vcs/`, and a tree an agent has just
+   nothing and neither does `crates/core/src/vcs/`, and a tree an agent has just
    swept is routinely dozens of rows, every one of them a press of Tab to get
    past. It is not "a short list"; it is a long one whose keyboard is half
    built. Whoever adds the arrows adds the roving stop with them.

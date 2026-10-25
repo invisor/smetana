@@ -99,7 +99,7 @@ describe('fontVars', () => {
 
 describe('the theme choices', () => {
   it('offers exactly what settings.json accepts', () => {
-    // The twin of THEMES in src-tauri/src/settings/model.rs. A value offered
+    // The twin of THEMES in crates/core/src/settings/model.rs. A value offered
     // here and unknown there would be picked and come back as dark.
     expect(THEME_CHOICES.map((choice) => choice.value)).toEqual(['system', 'dark', 'light'])
   })

@@ -11,7 +11,7 @@
    `RunSettings::validate` and `RunDefaults::validate` on the Rust side, which is
    what refuses a pair that arrives anyway. */
 
-/* The same pair `RunDefaults` defaults to in src-tauri/src/settings/model.rs.
+/* The same pair `RunDefaults` defaults to in crates/core/src/settings/model.rs.
    Frozen so a field filled from it has to take a copy. */
 export const BATCH_PAUSE_DEFAULTS = Object.freeze({ min: 10, max: 30 })
 

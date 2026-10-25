@@ -6,7 +6,7 @@
    exists: a `.vue` file is the one thing no test in this repository can reach,
    so the whole of a rule lives outside the component that draws it.
 
-   **The measuring is Rust's and the wording is this file's.** `src-tauri/src/vcs/`
+   **The measuring is Rust's and the wording is this file's.** `crates/core/src/vcs/`
    is the only place in the tree that can read the repository at the two moments
    this needs — immediately before the operation and immediately after — so what
    arrives here is a `Landed` record and never a repository to ask questions of.

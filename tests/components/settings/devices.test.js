@@ -133,9 +133,9 @@ describe('the relay address', () => {
   /* The front end holds one copy of the default and Rust holds the other; this
      is the only thing that notices when they part. */
   it('ships the relay the desktop ships', () => {
-    const rust = readFileSync(resolve(process.cwd(), 'src-tauri/src/remote/mod.rs'), 'utf8')
+    const rust = readFileSync(resolve(process.cwd(), 'crates/core/src/remote/mod.rs'), 'utf8')
     const shipped = rust.match(/pub const DEFAULT_RELAY_URL: &str = "([^"]+)";/)
-    expect(shipped, 'DEFAULT_RELAY_URL must be a string constant in remote/mod.rs').not.toBeNull()
+    expect(shipped, 'DEFAULT_RELAY_URL must be a string constant in crates/core/src/remote/mod.rs').not.toBeNull()
     expect(DEFAULT_RELAY_URL).toBe(shipped[1])
     expect(validRelayUrl(DEFAULT_RELAY_URL)).toBe(true)
   })

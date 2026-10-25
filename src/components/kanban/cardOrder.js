@@ -21,7 +21,7 @@ const DONE = 'done'
 
    `closedAt` is the answer to the question the column asks. `updatedAt` stands
    in when it cannot be read, because the field is optional in the model
-   (`src-tauri/src/tracker/model.rs`) and a rule with a hole in it would leave a
+   (`crates/core/src/tracker/model.rs`) and a rule with a hole in it would leave a
    card wherever the `Map` happened to put it. `null` is neither being readable,
    and it sends the card to the bottom rather than off the board — losing a card
    over an unreadable date costs more than drawing it out of place. */

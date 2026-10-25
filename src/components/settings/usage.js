@@ -17,7 +17,7 @@
    since that sentence promises nothing about the allowance.
 
    **No threshold is written here.** Which band a reading falls in is decided in
-   `src-tauri/src/runs/usage.rs`, by the same `decide` the run gate uses, and
+   `crates/core/src/runs/usage.rs`, by the same `decide` the run gate uses, and
    travels in the answer as a name. The two thresholds that produced it are
    spelled nowhere in this directory: a second copy of them here would be one
    that drifts from the first with nothing on screen to say it has. */

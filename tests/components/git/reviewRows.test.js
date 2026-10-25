@@ -492,7 +492,7 @@ describe('the labels a side is drawn with', () => {
 
 describe('reviewPairs', () => {
   /* The exit, and it has not moved: `{ repo, base, head }` apiece with the refs
-     resolved, which is `src-tauri/src/agents/mod.rs`' `ReviewPair`. */
+     resolved, which is `crates/core/src/agents/mod.rs`' `ReviewPair`. */
   it('resolves every row into the pair of refs git takes', () => {
     let form = opened()
     form = withPick(form, { side: 'base', repoId: null }, origin('main'))

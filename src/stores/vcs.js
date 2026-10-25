@@ -5,7 +5,7 @@
 
    Beside git.js rather than inside it, mirroring the split on the Rust side:
    git.js is the branch in the scope bar, read straight off `HEAD` with no
-   process behind it, and everything here needs the git binary (`src-tauri/src/vcs/`).
+   process behind it, and everything here needs the git binary (`crates/core/src/vcs/`).
 
    No worker and no watcher: `git status` costs tens of milliseconds and this
    store holds the list, so freshness is window focus, a project switch and the

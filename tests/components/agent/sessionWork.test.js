@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { workOf } from '../../../src/components/agent/sessionWork.js'
 
-/* The mirror of `Intent::work` in `src-tauri/src/agents/mod.rs`, field for
+/* The mirror of `Intent::work` in `crates/core/src/agents/mod.rs`, field for
    field: the placeholder row a start draws for a second and the session's own
    row a moment later must say the same thing. */
 describe('what a start will call its work', () => {

@@ -1,0 +1,184 @@
+//! The commands are deliberately thin: they put a request on the worker's
+//! queue and wait for the reply — exactly as the tracker's do. The outer
+//! Result is about delivery to the worker, the inner one (where there is one)
+//! about the operation itself.
+
+use tokio::sync::oneshot;
+
+use super::model::{Session, SessionId, SessionMark, TerminalError};
+use super::service::{Attached, Request, TerminalHandle};
+use crate::agents::Intent;
+
+async fn ask<T>(
+    handle: &TerminalHandle,
+    make: impl FnOnce(oneshot::Sender<T>) -> Request,
+) -> Result<T, TerminalError> {
+    let (tx, rx) = oneshot::channel();
+    handle
+        .0
+        .send(make(tx))
+        .await
+        .map_err(|_| TerminalError::Spawn("the terminal worker is not running".into()))?;
+    rx.await
+        .map_err(|_| TerminalError::Spawn("the terminal worker did not answer".into()))
+}
+
+/// The requests that carry no reply channel: nothing to wait for, so only
+/// delivery to the worker can fail.
+async fn tell(handle: &TerminalHandle, request: Request) -> Result<(), TerminalError> {
+    handle
+        .0
+        .send(request)
+        .await
+        .map_err(|_| TerminalError::Spawn("the terminal worker is not running".into()))
+}
+
+
+/// Every session the worker holds, of every project, as the project rail draws
+/// them. Read once when a window opens. There is no second read and no polling:
+/// the `terminal:state` and `terminal:removed` events are emitted for every
+/// session of every project already, so the front end maintains this from
+/// them — this command exists because a window that has just opened has been
+/// told about nothing.
+pub async fn terminal_marks(handle: &TerminalHandle) -> Result<Vec<SessionMark>, TerminalError> {
+    ask(&handle, Request::Marks).await
+}
+
+/// `intent` is why the session is being started; the profile turns it into a
+/// command line.
+///
+/// No agent id crosses this boundary any more, and its absence is the design
+/// rather than a simplification. Which harness — and which model — a kind of
+/// call gets is a role's answer now (`settings::role_model`), and the front end
+/// knows nothing about roles: it used to send the root `agent` out of its own
+/// live store, which would have meant one half of an indivisible pair arriving
+/// from one place and the other half being read off the file. The cost is that
+/// a session started in the same fraction of a second as a harness change reads
+/// the previous choice — the 400 ms the languages and the standing instruction
+/// already live with, and the same one session.
+///
+/// What is asked for is still not necessarily what runs: an unknown or
+/// uninstalled harness falls back to whatever is installed rather than failing.
+pub async fn terminal_create(
+    handle: &TerminalHandle,
+    project: String,
+    intent: Intent,
+) -> Result<Session, TerminalError> {
+    ask(&handle, |tx| Request::Create(project, None, intent, tx)).await?
+}
+
+/// A shell in the project, with no agent and no intent behind it. Its own
+/// command rather than an `Intent` variant on the one above: `terminal_create`
+/// takes an agent id and turns it into a command line through a profile, and a
+/// shell has none of that — the request it puts on the queue is a different one.
+///
+/// `cwd` is a path relative to the project's root, or absent for the root
+/// itself. Absent is what the `+` menu's "New terminal" means and what this
+/// command meant before the file tree's own menu could name a folder; a path
+/// that is not a folder inside the root is refused and no session is made, in
+/// `shell_cwd`.
+pub async fn terminal_shell(
+    handle: &TerminalHandle,
+    project: String,
+    cwd: Option<String>,
+) -> Result<Session, TerminalError> {
+    ask(&handle, |tx| Request::CreateShell(project, cwd, tx)).await?
+}
+
+pub async fn terminal_remove(handle: &TerminalHandle, id: SessionId) -> Result<(), TerminalError> {
+    ask(&handle, |tx| Request::Remove(id, tx)).await
+}
+
+
+/// Takes the id being left, not just "stop sending": switching tabs is a
+/// detach and an attach that reach the worker in no guaranteed order, and a
+/// detach without an id could unset the attach that overtook it.
+pub async fn terminal_detach(handle: &TerminalHandle, id: SessionId) -> Result<(), TerminalError> {
+    tell(&handle, Request::Detach(id)).await
+}
+
+pub async fn terminal_resize(
+    handle: &TerminalHandle,
+    id: SessionId,
+    cols: u16,
+    rows: u16,
+) -> Result<(), TerminalError> {
+    tell(&handle, Request::Resize(id, cols, rows)).await
+}
+
+pub async fn terminal_write(
+    handle: &TerminalHandle,
+    id: SessionId,
+    data: String,
+) -> Result<(), TerminalError> {
+    ask(&handle, |tx| Request::Write(id, data, tx)).await?
+}
+
+/// Tell a live session's harness to forget the conversation so far, in that
+/// harness's own words.
+///
+/// Takes the session and nothing else: what to send is `Profile::clear_command`
+/// and the front end never learns which harness a session runs, so a command
+/// taking the line would be asking the caller to know something it cannot.
+///
+/// Three refusals and each is a `Result::Err` the store can tell apart:
+/// `noSession` for a row with nothing behind it, `noClear` for a harness with
+/// no such line, `busy` for one waiting on a person — writing into an open
+/// dialog would answer, on their behalf, a question nobody read.
+pub async fn terminal_clear(handle: &TerminalHandle, id: SessionId) -> Result<(), TerminalError> {
+    ask(&handle, |tx| Request::Clear(id, tx)).await?
+}
+
+/// Send and wait for the output to stop, then hand back the screen. Refuses
+/// with `busy` when the session is waiting for a human: see the comment in
+/// service.rs.
+pub async fn terminal_run_capture(
+    handle: &TerminalHandle,
+    id: SessionId,
+    input: String,
+    settle_ms: u64,
+    timeout_ms: u64,
+) -> Result<Vec<String>, TerminalError> {
+    ask(&handle, |tx| Request::RunCapture(id, input, settle_ms, timeout_ms, tx)).await?
+}
+
+/// The agent sessions this project had when the app last closed, as rows the
+/// sidebar can offer back.
+///
+/// The two below take no `TerminalHandle` and put nothing on the worker's
+/// queue, which is the whole shape of them: the registry is a file, nothing
+/// here touches the sessions the worker holds, and a project the worker has
+/// never heard of answers exactly as well as one it has.
+pub async fn terminal_restorable(project: String) -> Result<Vec<super::restore::Restorable>, TerminalError> {
+    Ok(super::restore::read(std::path::Path::new(&project)).sessions)
+}
+
+/// A person took a restored row away. The registry alone, and deliberately not
+/// `terminal_remove`: there is no session behind the row, so asking the worker
+/// to end one would be the wrong verb and would answer `noSession`.
+pub async fn terminal_forget(project: String, session_id: String) -> Result<(), TerminalError> {
+    super::restore::drop_record(std::path::Path::new(&project), &session_id);
+    Ok(())
+}
+
+/// The bodies of the two terminal commands the phone may call, over the worker's
+/// handle rather than Tauri's `State`; see `session::commands::plain`. There is
+/// no write or resize here and there will not be: a terminal is read-only on
+/// the phone.
+pub mod plain {
+    use super::*;
+
+    pub async fn list(handle: &TerminalHandle, project: String) -> Result<Vec<Session>, TerminalError> {
+        ask(handle, |tx| Request::List(project, tx)).await
+    }
+
+    pub async fn attach(handle: &TerminalHandle, id: SessionId) -> Result<Attached, TerminalError> {
+        ask(handle, |tx| Request::Attach(id, tx)).await?
+    }
+
+    /// `terminal_attach` for a reader that is not the window: the same reply, and
+    /// no seat taken. See `Request::Peek`.
+    pub async fn peek(handle: &TerminalHandle, id: SessionId) -> Result<Attached, TerminalError> {
+        ask(handle, |tx| Request::Peek(id, tx)).await?
+    }
+}

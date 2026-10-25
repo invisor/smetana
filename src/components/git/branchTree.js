@@ -199,7 +199,7 @@ export function liftedOut(branch, favorites) {
 
 /**
  * How many branches may be marked, and it is **`MAX_FAVORITE_BRANCHES` in
- * `src-tauri/src/settings/model.rs`, written out again on this side**.
+ * `crates/core/src/settings/model.rs`, written out again on this side**.
  *
  * The pair has to be kept in step by hand, and the direction of a divergence is
  * what matters: this side may be stricter than Rust and must never be more
@@ -293,7 +293,7 @@ export function toggleFolder(stored, branches, path) {
 
    **A closed list duplicated across the IPC boundary**, exactly as `SIDE_TABS`
    and `RIGHT_TABS` are one column over: `BRANCH_TABS` in
-   `src-tauri/src/settings/model.rs` holds the same two words, and
+   `crates/core/src/settings/model.rs` holds the same two words, and
    `ProjectState::validate` rewrites anything else back to `local` with nothing
    logged and nothing on screen. A third tab added only here would work all
    session and come back as Local after a restart. The default is written out on

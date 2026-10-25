@@ -5,7 +5,7 @@
    inside one is a rule nothing checks.
 
    Pure: no Vue, no DOM, no store. The events are the worker's own
-   (`src-tauri/src/session/model.rs`), unchanged, and what comes back is a list
+   (`crates/core/src/session/model.rs`), unchanged, and what comes back is a list
    of rows a template can `v-for` over. */
 
 import { isAskUserQuestion, parseQuestions } from './askUserQuestion.js'
@@ -49,9 +49,9 @@ import { isAskUserQuestion, parseQuestions } from './askUserQuestion.js'
 
    **A non-empty `answers` is not proof of the tool on its own, and the wire
    does not hold that invariant for this fold to lean on.** `session_answer`
-   (`src-tauri/src/session/commands.rs`) takes `answers: Option<BTreeMap<String,
+   (`crates/core/src/session/commands.rs`) takes `answers: Option<BTreeMap<String,
    String>>` straight from the front end, and `Request::Answer`
-   (`src-tauri/src/session/service.rs`) writes it into `PermissionAnswered`
+   (`crates/core/src/session/service.rs`) writes it into `PermissionAnswered`
    unchanged — there is no check anywhere on that road that the id it is
    answering named `AskUserQuestion`. What keeps `answers` non-empty for that
    tool alone today is the road a press down `AskUserQuestion.vue` takes —

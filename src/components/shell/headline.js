@@ -18,7 +18,7 @@
 
 /* A run counts as under way while it has not stopped, which makes this the
    eighth place in the front end comparing against the serde tag of
-   `RunState::Stopped` in src-tauri/src/runs/model.rs. The comparison is that
+   `RunState::Stopped` in crates/core/src/runs/model.rs. The comparison is that
    way round rather than a list of the four live states (`preflight`,
    `working`, `deciding`, `paused`) on purpose: a state this front end has not
    heard of belongs to a run that is still going, and enumerating the live ones

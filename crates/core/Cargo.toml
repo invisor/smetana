@@ -1,0 +1,219 @@
+[package]
+name = "smetana-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.2"
+description = "The part of Smetana that does the work: the tracker, runs, sessions, terminals, files and git, with no window"
+publish = false
+
+# No `tauri` and no `tauri-plugin-*`, directly or through a feature, and keep it that way: this crate
+# is what the headless `smetanad` is built from (docs/superpowers/specs/2026-10-25-headless-server-design.md),
+# and a server has no webview to link. The desktop shell reaches it by path, with no workspace at the
+# root, exactly as it reaches `crates/remote-protocol`; the crate is built and tested on its own
+# (`cd crates/core && cargo test`).
+#
+# The prices below were counted against the desktop shell's `Cargo.lock` when each line was added.
+# This crate's own lock file was seeded from that one, so the versions are the same ones.
+
+[dependencies]
+serde_json = "1"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+thiserror = "2"
+notify = "8"
+tokio = { version = "1", features = [
+  "sync",
+  "time",
+  "rt",
+  "macros",
+  # The three the permission listener adds. `net` is its `TcpListener`; the
+  # other two are what a driven session's child is run and read through, since
+  # that worker lives on this runtime rather than on the PTY thread the
+  # terminal's sessions use.
+  "net",
+  "process",
+  "io-util",
+] }
+chrono = "0.4"
+chrono-tz = "0.10"
+vt100 = "0.16.2"
+portable-pty = "0.9.0"
+base64 = "0.23.0"
+toml = "1.0.7"
+# Editing `.smetana/project.toml` in place, for the project settings dialog.
+# The obvious implementation — deserialize, change a field, `toml::to_string`
+# — is the wrong one: that file is written by the setup agent, which puts prose
+# in it (`[merge].hazards` is explicitly text a lead reads), and people write
+# comments in it besides. A serde round trip keeps neither, so somebody who
+# changed one number would find the file reordered and a colleague's note gone.
+# `runs/config.rs::with_defaults` touches four keys and leaves the rest of the
+# bytes exactly where they were.
+#
+# The price, counted against `Cargo.lock` the way every other line here is:
+# **nothing at all**. 0.25.13 is already in the lock file under
+# `proc-macro-crate`, and the one feature this adds to it — `display`, which is
+# what turns an edited document back into text — takes `toml_writer`, which is
+# already there for `toml`'s own sake. No new `[[package]]` entry, no download,
+# and no other crate moves version. The version is pinned to the major already
+# in the tree for exactly that reason: `0.23` would have been a second copy of
+# a format-preserving TOML parser for no gain.
+toml_edit = "0.25"
+# Delete in the file tree's menu, which puts an entry in the system trash rather
+# than removing it. A deletion somebody can undo from their own file manager is
+# a smaller promise than a permanent one, and this is a tree of somebody's
+# sources — `std::fs::remove_dir_all` would be the whole of a folder gone with
+# nothing anywhere to get it back from.
+#
+# The price, counted the way the clipboard plugin's is in the shell's manifest: seven entries in
+# `Cargo.lock`, and only two of them build on any one machine. `trash` itself
+# and `urlencoding`; the other five are the `windows` 0.56 family, which the
+# Recycle Bin is reached through and which no other target compiles. On macOS it
+# takes `objc2` and `objc2-foundation`, and on Linux `zbus` — all three are
+# already here for Tauri's own sake, so the added weight is the crate itself.
+trash = "5"
+
+# Percent-decoding for a figure's `src`: an agent writes `garage%20decor` in a
+# markdown image address and the file on disk is `garage decor`. Already in the
+# lock as a dependency of `trash`, so declaring it here adds no package.
+urlencoding = "2"
+
+# What stops the machine falling asleep under a run. A run is the app driving
+# itself for hours, usually at night, with nobody touching the keyboard or the
+# mouse — which is precisely what an idle timer reads as "nobody is here", and
+# the pause that waits out a spent allowance (`runs/usage.rs`) is the longest
+# such silence in the whole app. `runs/awake.rs` holds one assertion for as long
+# as any run is live anywhere.
+#
+# A crate rather than the child process this repository's habit would suggest
+# — `caffeinate -i -w <pid>` on macOS, `systemd-inhibit … sleep infinity` on
+# Linux, killed to release — which costs no dependency at all and sits beside
+# the bd, PTY and preflight processes already spawned here. It breaks on
+# Windows, which has no equivalent utility: `SetThreadExecutionState` is an API
+# call, and a thread-affine one, so that third of the feature would have been
+# raw FFI whatever else was done, and hand-written FFI for a platform nobody
+# builds this project for is code no one is in a position to notice is wrong.
+#
+# `default-features = false` is about what sits behind the crate's `bin`
+# feature: `clap`, `clap_complete`, `anyhow`, `ctrlc`, `sysinfo`, `shadow-rs`
+# and `winresource`, every one of them for its own command-line tool. Checked
+# rather than assumed, the way the clipboard plugin's features were: 0.6.1
+# carries no `default` key at all and `bin` is opt-in, so the flag changes
+# nothing today — it is written so that a release making `bin` a default cannot
+# quietly put those seven in the lock file.
+#
+# The price, counted against `Cargo.lock` rather than guessed at: one power
+# assertion costs 13 `[[package]]` entries, and only one of them is the crate
+# itself. `zbus` is **not** among them, contrary to the obvious guess — this
+# tree already carries 5.19.0 behind `tauri-plugin-opener`'s own Linux gate, so
+# the D-Bus implementation arrives with nothing new under it. What does arrive
+# lands on *every* platform, this macOS build included: `derive_builder` with
+# its `_core` and `_macro` halves, whose 0.20.2 wants `darling ^0.20` and so
+# puts a **second** `darling`, `darling_core` and `darling_macro` at 0.20.11
+# beside the 0.23.0 already here — six crates of build-time proc macro for a
+# builder over a struct of six fields. macOS then adds `objc2-io-kit`, and
+# Windows a second `windows` major, 0.62.2 against the 0.61.3 in the tree, with
+# `windows-collections`, `windows-future`, `windows-numerics` and
+# `windows-threading` to match, none of which anything here ever compiles.
+# Nothing is removed and no other crate moves version.
+keepawake = { version = "0.6", default-features = false }
+
+# The permission listener (`session/permission.rs`): the HTTP server this app
+# hosts so that a driven Claude Code session can ask it whether to run a tool.
+# Outside its own SDK that harness has exactly one documented way to route a
+# permission to a client — `--permission-prompt-tool`, naming a tool on an MCP
+# server — so the app has to be one, and an MCP server over HTTP is an HTTP
+# server. Writing the parser by hand to save the line was considered and
+# refused: a hand-rolled HTTP parser on the socket that answers questions about
+# running `rm -rf` is the worst place in this tree to save a dependency.
+#
+# The price, counted against `Cargo.lock` the way every other line in this file
+# counts one: **five `[[package]]` entries**, 602 to 607, and one of them is
+# axum. Traced with `cargo tree -i` rather than guessed at, the other four are
+# `axum-core` (its own split-out traits), `matchit` (the router's path matcher),
+# `serde_path_to_error` (what the `json` feature answers a malformed body with)
+# and `httpdate` — which is **`hyper`'s** rather than axum's, and is the one
+# entry that says something: hyper 1.11 was already in this tree as a client,
+# and this is the first thing here to turn its server half on. The rest of the
+# HTTP stack is not part of the bill for exactly that reason — `hyper`, `tower`,
+# `tower-http`, `http-body-util` and `futures-core` were all already in the lock
+# file through Tauri itself. Nothing is removed and no other crate moves
+# version: the diff over `Cargo.lock` is 75 insertions and no deletions.
+#
+# `default-features = false` because the default set is a web framework's and
+# this is one route: `form`, `query`, `matched-path`, `original-uri`, `tracing`
+# and `tower-log` are all for an application with a surface. What is named is
+# what the listener actually uses — `http1` for the protocol, `tokio` for
+# `axum::serve`, and `json` for both the `Json` response and
+# `sse::Event::json_data`.
+axum = { version = "0.8", default-features = false, features = [
+  "http1",
+  "json",
+  "tokio",
+] }
+
+# The `Stream` trait, and nothing else. `axum::response::sse::Sse` is generic
+# over one and axum does not re-export the trait, so the listener's own
+# heartbeat stream — which polls a `oneshot` for the person's answer and an
+# interval for the next `notifications/progress` — cannot name what it
+# implements without this line.
+#
+# It is **not** a second dependency in the sense the spec forbids: axum depends
+# on `futures-core` itself, so this crate was already in `Cargo.lock` before
+# axum arrived, and naming it here adds no `[[package]]` entry and no download.
+# What is deliberately not taken is `futures-util`, the combinator half, which
+# is where the weight of that family is; a hand-written `poll_next` over two
+# things is smaller than the reason to pull it in.
+futures-core = "0.3"
+
+# Process control the standard library does not expose, and it is described
+# here by subject rather than by call site on purpose: a comment that counts
+# the users or names the files reads as exhaustive, so the next person to reach
+# for libc trusts it instead of correcting it, and the version of this note
+# that named two callers was wrong about the tree it shipped in. What libc is
+# for here is signalling a process group, so that killing something does not
+# leave behind what it started; reading a process's own facts from the kernel,
+# so that a recovered pid can be told from a recycled one; and the descriptor
+# limit (`rlimit.rs`), which decides what every agent this app spawns inherits.
+#
+# Windows reaches none of it through this crate. Two of those subjects are
+# simply absent there — no process group to signal, and nothing rationing
+# descriptors to raise — while the third is only out of libc's reach rather
+# than out of the platform's: a process's start time exists on Windows and is
+# asked for by an API this dependency does not carry, so the answer there is
+# that the question goes unasked. That is why the gate is not a portability
+# shim but the honest shape of the subject, and why it would still be the right
+# gate if somebody ever went and got those facts another way. What is behind it
+# for the descriptor limit is a `raise()` with an empty body; the pure part of
+# that module still compiles, and is still tested, on every platform.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Windows: `runs::procs::SessionJob` is a Job Object with `KILL_ON_JOB_CLOSE`, one per agent session,
+# the platform's own answer to a descendant a signal to its process group can no longer reach — see
+# that module's header (smetana-kkz2). `windows` 0.61.3 is the version already in the shell's lock
+# file under `tao`, deliberately that one and not the 0.56 under `trash` or the 0.62 under
+# `keepawake`. The features are modules of that one crate rather than crates of their own, so they
+# cost compile time on a Windows build and no `[[package]]` entry anywhere. `Win32_Security` is
+# `CreateJobObjectW`'s own `cfg(feature = "Win32_Security")` gate (it takes an optional
+# `SECURITY_ATTRIBUTES`), not anything this app reads for itself.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+# A directory of somebody else's making, for `agents::codex_sessions`: that
+# module walks Codex's own session tree, so its tests need a tree they may
+# create and destroy rather than the person's.
+#
+# The price, counted the way every other line in this file counts one:
+# **nothing at all**. `tempfile` 3.27.0 is already in `Cargo.lock` under
+# `tauri-plugin-updater`, and a dev-dependency reaches no shipped binary.
+tempfile = "3"
+# Virtual time for the run loop's waits: `start_paused` lets a test that waits
+# twenty minutes finish at once. It is a feature of a crate already compiled in,
+# and a dev-dependency reaches no shipped binary.
+tokio = { version = "1", features = ["test-util"] }

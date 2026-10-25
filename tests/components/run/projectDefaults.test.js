@@ -13,7 +13,7 @@ import {
 
 describe('draftFrom', () => {
   it('falls back to the same values the Rust side defaults to', () => {
-    // `Defaults::default()` in `src-tauri/src/runs/config.rs`: no branch, 2, 3,
+    // `Defaults::default()` in `crates/core/src/runs/config.rs`: no branch, 2, 3,
     // 5. Two copies of one fact, so this is the test that keeps them one.
     expect(draftFrom(null)).toEqual({
       target_branch: null,

@@ -263,7 +263,7 @@ describe('usageTooltip', () => {
   })
 })
 
-/* The thresholds behind the band are decided in `src-tauri/src/runs/usage.rs`
+/* The thresholds behind the band are decided in `crates/core/src/runs/usage.rs`
    and travel in the answer as a name. A second copy of them in the front end
    would be one that drifts from the first with nothing on screen to say it
    has. */

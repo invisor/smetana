@@ -28,12 +28,12 @@ const REMOTE = 'origin'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const confPath = join(root, CONF)
 
-/* All three of the project's gates, in the order they are cheapest to fail in.
+/* All four of the project's gates, in the order they are cheapest to fail in.
    The asymmetry is deliberate: a local run costs a couple of minutes, and
    withdrawing a release that has already been published costs far more than
    that — plugins.updater.endpoints points at /releases/latest/, so a broken
    release is what an updater sees. main is green by construction, since work
-   reaches it only through a merge that ran these same three; but the commit a
+   reaches it only through a merge that ran these same four; but the commit a
    release is tagged on is a new one that no gate has ever seen.
 
    cargo is pointed at the manifest rather than run from inside src-tauri so
@@ -46,6 +46,13 @@ const GATES = [
     label: 'cargo test',
     command: 'cargo',
     args: ['test', '--manifest-path', 'src-tauri/Cargo.toml']
+  },
+  /* The workers live in their own crate, and a dependent's `cargo test` does not run a path
+     dependency's tests, so the shell's gate alone no longer covers them. */
+  {
+    label: 'cargo test (core)',
+    command: 'cargo',
+    args: ['test', '--manifest-path', 'crates/core/Cargo.toml']
   }
 ]
 
@@ -210,7 +217,7 @@ function main() {
      rather than at the top because up to this line there is nothing to undo. */
   process.on('SIGINT', () => {})
 
-  /* Raised before the gates rather than after, so that what the three of them
+  /* Raised before the gates rather than after, so that what the four of them
      check is the tree that is about to be committed and tagged. Everything as
      far as the commit is inside the try, and the commit belongs there as much
      as the gates do: it fails for reasons that are nothing to do with a

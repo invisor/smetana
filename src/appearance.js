@@ -18,7 +18,7 @@
    put it in. */
 
 /* What the theme control offers, and what `settings.json` may hold. Written out
-   here as well as in `THEMES` in `src-tauri/src/settings/model.rs`: what crosses
+   here as well as in `THEMES` in `crates/core/src/settings/model.rs`: what crosses
    the IPC boundary is validated there, and this copy is what the dropdown draws.
    A value added to one and not the other is the familiar silent failure — it
    would be offered here and quietly become `dark` on the way to disk. */

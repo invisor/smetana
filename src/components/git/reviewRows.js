@@ -44,7 +44,7 @@
    asked about would be a second vocabulary.
 
    **The exit is unchanged.** `reviewPairs` answers `{ repo, base, head }`
-   apiece, which is `src-tauri/src/agents/mod.rs`' `ReviewPair`, with the same
+   apiece, which is `crates/core/src/agents/mod.rs`' `ReviewPair`, with the same
    fields and the same reading of `origin/`. What changed is where a person's
    answer is kept on the way to it. */
 import { pickBranch } from '../run/branchChoice.js'
@@ -360,7 +360,7 @@ export function canReview(form) {
 }
 
 /* The form as the intent carries it: one `ReviewPair` per row, refs resolved.
-   `src-tauri/src/agents/mod.rs` is the other end of this shape, and it has not
+   `crates/core/src/agents/mod.rs` is the other end of this shape, and it has not
    moved. */
 export function reviewPairs(form) {
   return list(form?.repoIds).map((repoId) => {

@@ -295,7 +295,7 @@ export function themed(html, theme) {
    all refused by the fallback rather than by a list somebody has to keep.
    `style-src 'unsafe-inline'` is the one thing given back, because the documents
    this frame exists for carry their entire appearance in one inline `<style>`
-   (`src-tauri/src/runs/report.rs`, a documented exception to the token rule for
+   (`crates/core/src/runs/report.rs`, a documented exception to the token rule for
    exactly that reason) — it permits an inline block and a `style` attribute and
    still refuses a stylesheet off a URL. `img-src data:` allows a picture that is
    already in the document and no picture that has to be fetched.

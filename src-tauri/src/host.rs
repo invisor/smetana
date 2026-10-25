@@ -28,7 +28,7 @@ impl Sink for TauriSink {
         }
     }
 
-    fn push(&self, message: push::Message) {
+    fn push(&self, message: smetana_core::remote::push::Message) {
         if let Some(remote) = self.app.try_state::<Arc<Remote>>() {
             push::dispatch(&remote, message);
         }

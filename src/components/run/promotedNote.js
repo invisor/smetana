@@ -17,7 +17,7 @@
    promoted this" from "the status slipped", read it as the second, and wrote
    it back to `deferred` — undoing somebody's decision three times running on
    the same three tasks. The status write already carries `append_notes`
-   (`IssuePatch` in `src-tauri/src/tracker/bd.rs`), so the trace costs no new
+   (`IssuePatch` in `crates/core/src/tracker/bd.rs`), so the trace costs no new
    field and no second call: one `bd update` sets the status and appends this
    note in the same breath.
 

@@ -1253,7 +1253,7 @@ export function installMockBackend() {
     /* One project per state — set up, not set up, and damaged: without one of
        each there is nowhere to see any of them under npm run dev. The `ok` branch
        is the whole struct Rust serializes, defaults included, not just the
-       fields something reads today — src-tauri/src/runs/config.rs's
+       fields something reads today — crates/core/src/runs/config.rs's
        Defaults::default() is where target_branch/min_priority/
        max_parallel_tasks/review_passes come from, and repo/preflight/merge/
        live_check are its own empty-map and None. A narrower shape here would
@@ -1884,7 +1884,7 @@ export function installMockBackend() {
           conversation: '5f2d9c31-8a4e-4b6f-9c0d-1e2f3a4b5c6d',
           timeline: false,
           /* The draft rides in the session — see `SessionWork` in
-             `src-tauri/src/terminal/model.rs`. There is no issue behind it and
+             `crates/core/src/terminal/model.rs`. There is no issue behind it and
              nothing else on the front end holds these words, so without this
              the right-hand draft panel would be unreachable in a browser.
              Priority is set and the type is left on Auto, so both halves of
@@ -2045,7 +2045,7 @@ export function installMockBackend() {
     /* The driven session's two reads. Nothing here is `sessions_list` above,
        despite the neighbouring name: that one lists Claude Code's transcripts
        off the disk, and these two are one live conversation the worker is
-       driving — `src-tauri/src/session/`.
+       driving — `crates/core/src/session/`.
 
        The journal is `MOCK_CONVERSATION`, and its own header says why a browser
        is answered with a conversation rather than with the emptiness this

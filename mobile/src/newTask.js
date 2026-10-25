@@ -2,7 +2,7 @@
 
    It is the desktop's own: the "New task" window sends `{ kind: 'newTask', brainstorm, spec,
    plan, draft }` to `startAgent` (views/DesktopApp.vue, `submitNewTask`), and
-   `Intent::NewTask` in src-tauri/src/agents/mod.rs is what reads it. The phone offers the
+   `Intent::NewTask` in crates/core/src/agents/mod.rs is what reads it. The phone offers the
    window's fields: what the person wants, pictures, a type, a priority and the three stages.
    Type and priority on Auto arrive as absence, and the stages on Auto are the agent's own
    judgement about whether the task wants a discussion, a design and a plan. There is no parent.

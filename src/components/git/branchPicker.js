@@ -75,7 +75,7 @@ export const PICKER_KEY_HINT = '↑↓ move · enter select · esc close'
 
 /* The two sides a list can be showing, as the strings they are stored under.
    The same two words `settings.json` carries in `layout.branchSide` and the
-   same two `BRANCH_SIDES` in `src-tauri/src/settings/model.rs` validates
+   same two `BRANCH_SIDES` in `crates/core/src/settings/model.rs` validates
    against — a third spelling on either side of that seam is a preference the
    app quietly forgets on the next load, with nothing on screen to say so. */
 export const LOCAL_SIDE = 'local'

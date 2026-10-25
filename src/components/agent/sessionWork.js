@@ -1,7 +1,7 @@
 /* What a start will call its work once it is a session, worked out from the
    very intent that is being sent. The `kind` tags on this side and on
    `SessionWork`'s are the same words by construction — `Intent::work` in
-   `src-tauri/src/agents/mod.rs` maps one onto the other — so the placeholder
+   `crates/core/src/agents/mod.rs` maps one onto the other — so the placeholder
    row and the session's own row say the same thing, and the handover a
    moment later changes nothing on screen.
 

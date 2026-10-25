@@ -16,11 +16,11 @@ number is not accepted as an argument at all, and that absence is the point rath
 number is computed from `version` in `src-tauri/tauri.conf.json`, so the only way to get it wrong —
 naming it yourself — is not available.
 
-`scripts/release.mjs` raises that one field, runs all three gates (`npm test`, `npm run build`,
-`cargo test --manifest-path src-tauri/Cargo.toml`), then commits, pushes `main`, tags `v<x.y.z>` and
+`scripts/release.mjs` raises that one field, runs all four gates (`npm test`, `npm run build`,
+`cargo test --manifest-path src-tauri/Cargo.toml` and `cargo test --manifest-path crates/core/Cargo.toml`), then commits, pushes `main`, tags `v<x.y.z>` and
 pushes the tag, in that order. That is the same sequence a person used to run by hand, and it is
 still exactly what happens — what the script adds is that it cannot misremember the number and will
-not tag a commit no gate has seen. The version is raised *before* the gates so that what the three of
+not tag a commit no gate has seen. The version is raised *before* the gates so that what the four of
 them check is the tree that is about to be committed and tagged; a red gate, an interrupted run or a
 refused commit stops the release before the tag exists and puts `tauri.conf.json` back at the version
 it started from.
@@ -130,7 +130,7 @@ it is why the certificate is not cosmetic.
 
 Releases up to and including v0.1.23 were ad-hoc signed and every one of them is affected. Nothing
 repairs a grant already lost that way except the reset the app offers itself — see
-`.claude/rules/tracker.md` and `src-tauri/src/tracker/access.rs`, which is the mitigation and not a
+`.claude/rules/tracker.md` and `crates/core/src/tracker/access.rs`, which is the mitigation and not a
 replacement for this.
 
 ### What was done, once

@@ -138,7 +138,7 @@ of being wrong is an agent killed mid-task.
 ## One switch, over the timer alone
 
 `updates.autoCheck` in `settings.json` decides whether `schedule` reaches the network by itself and
-decides nothing else. `settings::updates_auto_check` is asked **at every tick** rather than read once,
+decides nothing else. `commands::settings::updates_auto_check` is asked **at every tick** rather than read once,
 which is the whole of why the switch takes effect with no restart; the timer keeps ticking either
 way, so there is nothing to start up when it comes back on. A platform that will not name a config
 directory, or a file that will not parse, answers `true` — the switch exists to *stop* a request, so
@@ -265,7 +265,7 @@ certificate, the key and the secrets.
 **Releases up to and including v0.1.23 were ad-hoc signed**, so a grant given to one of those is
 already bound to a cdhash and is lost on the next update whatever this change does. The repair for
 one that has been lost is the app's own reset — `.claude/rules/tracker.md` and
-`src-tauri/src/tracker/access.rs` — which is the mitigation and not a replacement.
+`crates/core/src/tracker/access.rs` — which is the mitigation and not a replacement.
 
 One claim written before there was an updater is still standing: the `releaseBody`'s "There is no
 in-app updater yet". There were four. README's `## First launch` and `## Releases` went when

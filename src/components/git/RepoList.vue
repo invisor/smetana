@@ -4,7 +4,7 @@
 
    A project is often one repository and sometimes five — `[project].repos` in
    `.smetana/project.toml`, or every folder one level down that git can see
-   (`src-tauri/src/vcs/repos.rs`). One row each either way: a list of one is a
+   (`crates/core/src/vcs/repos.rs`). One row each either way: a list of one is a
    list, and hiding it would leave the branch beside the changes with nothing
    saying which repository they belong to.
 

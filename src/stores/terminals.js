@@ -37,7 +37,7 @@ import { effectiveAgents, settings } from './settings.js'
 import { isLockIssue, trackerState } from './tracker.js'
 
 /* The one word that tells a person's own shell from an agent, as `SessionWork`
-   and `WorkKind` in `src-tauri/src/terminal/model.rs` spell it on the wire.
+   and `WorkKind` in `crates/core/src/terminal/model.rs` spell it on the wire.
 
    A constant rather than the literal at each site, because two shapes carry it
    now and both have to read it the same: a session, whose `work` is the whole
@@ -160,7 +160,7 @@ export const lastHandover = ref(null)
 
    A run's sessions are the one kind this window does not ask for: the run
    worker sends `TerminalRequest::Create` to the terminal worker itself
-   (`src-tauri/src/runs/service.rs`), so there is no ticket, no handover and no
+   (`crates/core/src/runs/service.rs`), so there is no ticket, no handover and no
    caller — the whole of what the front end ever sees is a state event about a
    session that was not there a moment ago. Selection has to follow it here or
    nowhere, and "nowhere" is what it was: the row appeared unselected while the
@@ -194,7 +194,7 @@ const visibleStarts = () =>
 
 /* Whether a session is the person's own shell rather than an agent. One
    variant of `SessionWork` is the whole of the difference — see
-   `SessionWork::Shell` in `src-tauri/src/terminal/model.rs` — and it is asked
+   `SessionWork::Shell` in `crates/core/src/terminal/model.rs` — and it is asked
    here rather than spelled out at each of the three places that care, because
    the three have to agree: a shell has no row in the agents panel, does not
    count towards the centre's Agent tab, and gets a centre tab of its own.
@@ -216,7 +216,7 @@ export const shellSessions = computed(() => terminalState.sessions.filter(isShel
    that are already on screen alive.
 
    The registry is written at the spawn rather than at the exit (see the header
-   of `src-tauri/src/terminal/restore.rs`), which is what makes an offer survive
+   of `crates/core/src/terminal/restore.rs`), which is what makes an offer survive
    a kill, a panic or a machine switched off at the wall — and it also means a
    running session has a record in the file the whole time it runs. The first
    read of a project happens before anything has been started in it, so nothing
@@ -378,7 +378,7 @@ function startClock() {
    `--claim` stamps that actor as the issue's **assignee**, so "everything
    in_progress" — which was the whole filter while a project held one run — would
    caption both rows with both batches' work. The actor's shape is `run_actor` in
-   src-tauri/src/terminal/model.rs, written out here a second time because Rust
+   crates/core/src/terminal/model.rs, written out here a second time because Rust
    holds the only other copy; drift costs a caption going quiet, which the row
    survives as a bare "Agent".
 
@@ -386,7 +386,7 @@ function startClock() {
    smetana-a5b: `owner` is the issue's owner and a claim never touches it, so
    while this read `owner` the filter matched nothing on any board and every run
    row read a bare "Agent" — the reported symptom. Both fields ride on the issue
-   (`Issue` in src-tauri/src/tracker/model.rs); only this one answers "who is
+   (`Issue` in crates/core/src/tracker/model.rs); only this one answers "who is
    holding it right now".
 
    The merge lock is claimed under that same actor while a batch merges, and it
@@ -1139,7 +1139,7 @@ export function resumeRefused(record) {
 
 /* A shell of the person's own. A worker session like any other and not an
    agent: no intent, no agent id, no profile — see `terminal_shell` in
-   `src-tauri/src/terminal/commands.rs`.
+   `crates/core/src/terminal/commands.rs`.
 
    Nothing here touches `activeId`: a shell has no row in the agents panel to
    select, and the tab it opens comes from the session appearing in the list.
@@ -1158,7 +1158,7 @@ export function resumeRefused(record) {
    what this function meant before there was one: the project's own root. It is
    checked on the Rust side with `resolve_within`, like every other path this app
    takes from the front end, so a path leading outside the project is refused and
-   no session is made — see `shell_cwd` in `src-tauri/src/terminal/service.rs`.
+   no session is made — see `shell_cwd` in `crates/core/src/terminal/service.rs`.
    Not checked here as well: two copies of that rule is one to keep true, and the
    one that matters is the one standing next to the spawn. */
 export async function createShell(project, cwd = null) {

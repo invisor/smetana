@@ -1,0 +1,3001 @@
+//! Codex.
+//!
+//! Codex has a skills system of its own — `~/.codex/skills/`, `skills.config`,
+//! `skills.bundled.enabled` — and `-c key=value` overrides any config value on
+//! the command line. What it has no way to do is name an extra skills
+//! directory: `SkillsConfig` carries no filesystem roots, and the only
+//! mechanism that does, `skills/extraRoots/set`, belongs to the app-server, a
+//! different process from the TUI this app runs in a PTY. Writing into
+//! `~/.codex/skills/` or repointing `CODEX_HOME` would reach into the person's
+//! own setup, so neither is done. The skill text rides in the prompt instead.
+//!
+//! Layer B — Codex's own approval dialog, read off the vt100 grid — is at the
+//! bottom of this file. It reads someone else's interface and an update to that
+//! CLI can break it; when it does it breaks softly, leaving layer A in place.
+
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
+use std::time::SystemTime;
+
+use portable_pty::CommandBuilder;
+use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+
+use super::library::read_skill;
+use super::{
+    cascade, prompt, Autonomy, ImageDelivery, Intent, Launch, McpConfigFormat, Profile,
+    SignInVariant, SkillDelivery, Stage,
+};
+use crate::runs::model::RunMode;
+use crate::runs::usage::Usage;
+use crate::terminal::model::{Question, QuestionOption};
+
+/// The static, pre-success fallback models this harness offers, the id first
+/// and the name a person reads. `agents_catalog` uses this Profile answer only
+/// for capabilities and the first picker paint. Each Settings opening makes a
+/// separate `codex_models` app-server request; only a complete valid result
+/// replaces the last good list, and a saved unknown slug remains selectable as
+/// unavailable until the person explicitly chooses another model.
+///
+/// Read off the installed CLI at 0.146.0 on 2026-09-06 rather than recalled.
+/// `codex --help` documents `-m, --model <MODEL>` and no ids at all — it names
+/// no vocabulary the way Claude Code's help does — so the ids come from the
+/// model catalogue that CLI ships **inside its own binary**, which is the table
+/// its `/model` picker is drawn from.
+///
+/// **Where to look, because "0.146.0" is not something the next person can diff
+/// against.** The catalogue is a JSON document embedded in the executable
+/// `codex` resolves to (`~/.codex/packages/standalone/current/bin/codex` on
+/// this machine, a symlink into the installed release). Its top-level key is
+/// `models`, and each entry carries `slug`, `display_name`, `visibility` and
+/// `priority` among much else. A re-reading is:
+///
+/// ```sh
+/// strings -a "$(readlink -f "$(command -v codex)")" |
+///   grep -nE '^ +"(slug|display_name|visibility|priority)": '
+/// ```
+///
+/// What is taken from it: every entry whose `visibility` is `list`, in that
+/// catalogue's own ascending `priority` order, each with its `display_name`
+/// exactly as written there. At 0.146.0 that was priorities 1, 2, 3, 7 and 29;
+/// the entries left out were the three marked `hide` (`gpt-5.4`,
+/// `gpt-5.4-mini`, `codex-auto-review`), and they are left out for the reason
+/// they are hidden — this app has no standing to offer what that CLI has
+/// stopped offering.
+///
+/// Getting one of these ids wrong is quiet rather than loud: `known_model` in
+/// `settings/model.rs` would empty a person's chosen model on the next read of
+/// the file, with nothing on screen to say why. So check them against the
+/// command above rather than against memory.
+///
+/// The `-c model="o3"` in that help is an example of the config-override syntax
+/// and not a model this CLI proposes; taking an id out of it would be exactly
+/// the guess `.claude/rules/agents.md` records the cost of.
+const MODELS: &[(&str, &str)] = &[
+    ("gpt-5.6-sol", "GPT-5.6-Sol"),
+    ("gpt-5.6-terra", "GPT-5.6-Terra"),
+    ("gpt-5.6-luna", "GPT-5.6-Luna"),
+    ("gpt-5.5", "GPT-5.5"),
+    ("gpt-5.2", "GPT-5.2"),
+];
+
+const MODEL_LIST_TIMEOUT: Duration = Duration::from_secs(10);
+
+pub async fn listed_models() -> Result<Vec<(String, String)>, String> {
+    listed_models_with("codex", crate::shell_env::path(), MODEL_LIST_TIMEOUT).await
+}
+
+async fn listed_models_with(binary: &str, path: Option<&str>, timeout: Duration) -> Result<Vec<(String, String)>, String> {
+    let mut command = tokio::process::Command::new(binary);
+    command.args(["app-server", "--stdio"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    if let Some(path) = path { command.env("PATH", path); }
+    let mut child = command.spawn().map_err(|err| format!("Could not start Codex: {err}"))?;
+    let result = tokio::time::timeout(timeout, async {
+        let stdin = child.stdin.take().ok_or_else(|| "Codex stdin was unavailable".to_string())?;
+        let stdout = child.stdout.take().ok_or_else(|| "Codex stdout was unavailable".to_string())?;
+        request_models(stdin, stdout).await
+    }).await.map_err(|_| "Codex model list timed out".to_string()).and_then(|result| result);
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+    result
+}
+
+/// The app-server protocol itself, over whatever carries it: `initialize`,
+/// its response, `initialized`, then `model/list` paged through until a null
+/// cursor. Generic over the transport rather than tied to a child process's
+/// pipes, which is what lets `model_list_tests` drive it over an in-process
+/// `tokio::io::duplex()` pair with no spawn and no wall clock anywhere in the
+/// assertion. `listed_models_with` above is the only caller handing it a real
+/// child's stdin and stdout, and it alone owns the timeout and the kill —
+/// this function knows nothing of either.
+async fn request_models<W, R>(mut stdin: W, stdout: R) -> Result<Vec<(String, String)>, String>
+where
+    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+{
+    let mut lines = BufReader::new(stdout).lines();
+    let init = serde_json::json!({ "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "Smetana", "version": "0.1.0" } } });
+    stdin.write_all(init.to_string().as_bytes()).await.map_err(|err| err.to_string())?;
+    stdin.write_all(b"\n").await.map_err(|err| err.to_string())?;
+    stdin.flush().await.map_err(|err| err.to_string())?;
+    next_response(&mut lines, 0).await?;
+    stdin.write_all(b"{\"method\":\"initialized\",\"params\":{}}\n").await.map_err(|err| err.to_string())?;
+    stdin.flush().await.map_err(|err| err.to_string())?;
+    let mut cursor: Option<String> = None;
+    let mut models = Vec::new();
+    for request_id in 1_u64.. {
+        let request = serde_json::json!({ "id": request_id, "method": "model/list", "params": cursor.as_ref().map_or_else(serde_json::Map::new, |cursor| serde_json::Map::from_iter([(String::from("cursor"), serde_json::Value::String(cursor.clone()))])) });
+        stdin.write_all(request.to_string().as_bytes()).await.map_err(|err| err.to_string())?;
+        stdin.write_all(b"\n").await.map_err(|err| err.to_string())?;
+        stdin.flush().await.map_err(|err| err.to_string())?;
+        let (page, next) = model_list_page(&next_response(&mut lines, request_id).await?)?;
+        models.extend(page);
+        if next.as_deref().map_or(true, str::is_empty) { break; }
+        cursor = next;
+    }
+    (!models.is_empty()).then_some(models).ok_or_else(|| "Codex returned no visible models".to_string())
+}
+
+async fn next_response<R>(lines: &mut tokio::io::Lines<BufReader<R>>, id: u64) -> Result<String, String>
+where
+    R: AsyncRead + Unpin,
+{
+    while let Some(line) = lines.next_line().await.map_err(|err| err.to_string())? {
+        if serde_json::from_str::<serde_json::Value>(&line).ok().and_then(|value| value.get("id").and_then(serde_json::Value::as_u64)) == Some(id) { return Ok(line); }
+    }
+    Err("Codex closed the model list stream".into())
+}
+
+fn model_list_page(line: &str) -> Result<(Vec<(String, String)>, Option<String>), String> {
+    let value: serde_json::Value = serde_json::from_str(line).map_err(|_| "Codex returned an invalid model list".to_string())?;
+    if value.get("error").is_some() { return Err("Codex refused the model list request".into()); }
+    let result = value.get("result").ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+    let entries = result.get("data").and_then(serde_json::Value::as_array).ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+    let mut models = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let hidden = entry.get("hidden").and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+        let model = entry.get("model").and_then(serde_json::Value::as_str)
+            .filter(|model| !model.is_empty()).ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+        let label = entry.get("displayName").and_then(serde_json::Value::as_str)
+            .filter(|label| !label.is_empty()).ok_or_else(|| "Codex returned an invalid model list".to_string())?;
+        if !hidden { models.push((model.to_owned(), label.to_owned())); }
+    }
+    let next = match result.get("nextCursor") {
+        Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(cursor)) if !cursor.is_empty() => Some(cursor.to_owned()),
+        _ => return Err("Codex returned an invalid model list".into()),
+    };
+    Ok((models, next))
+}
+
+#[cfg(test)]
+mod model_list_tests {
+    use super::{listed_models_with, model_list_page, request_models};
+    use std::{fs, os::unix::fs::PermissionsExt, time::{Duration, SystemTime}};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    fn fake(body: &str) -> String {
+        let path = std::env::temp_dir().join(format!("smetana-codex-{}", SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::write(&path, format!("#!/bin/sh\n{}", body)).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+    #[test]
+    fn keeps_visible_models_in_response_order_and_uses_model_not_id() {
+        let (models, next) = model_list_page(r#"{"result":{"data":[{"id":"wrong","model":"gpt-6-astra","displayName":"GPT-6-Astra","hidden":false},{"model":"hidden","displayName":"Hidden","hidden":true}],"nextCursor":"page-two"}}"#).unwrap();
+        assert_eq!(models, vec![("gpt-6-astra".into(), "GPT-6-Astra".into())]);
+        assert_eq!(next.as_deref(), Some("page-two"));
+    }
+
+    #[test]
+    fn refuses_malformed_visible_items_and_cursors() {
+        assert!(model_list_page(r#"{"result":{"data":[{"hidden":false,"model":"gpt-6-astra"}]}}"#).is_err());
+        assert!(model_list_page(r#"{"result":{"data":[],"nextCursor":7}}"#).is_err());
+        assert!(model_list_page(r#"{"error":{"message":"refused"}}"#).is_err());
+        assert!(model_list_page("not json").is_err());
+    }
+
+    /* The protocol test, entirely in process. `tokio::io::duplex` stands in
+       for a child's stdin/stdout pair, with the fake side driven by this
+       same test task rather than by a spawned `/bin/sh` — which is what
+       removes both races the spawned stand used to carry: a one-second
+       budget shared with a sibling test's own process spawn, and a script
+       that closed its stdout the moment its last `echo` returned, racing the
+       reader for the final line. Neither failure mode has anything left to
+       attack here — the fake half stays open for exactly as long as this
+       task keeps it, and the outer timeout below is a safety net against a
+       genuine protocol bug hanging the test, not a budget the assertion
+       depends on. */
+    #[tokio::test]
+    async fn duplex_transport_aggregates_paginated_model_list_requests() {
+        let (client, server) = tokio::io::duplex(4096);
+        let (client_read, client_write) = tokio::io::split(client);
+        let (server_read, server_write) = tokio::io::split(server);
+
+        let fake_server = tokio::spawn(async move {
+            let mut lines = BufReader::new(server_read).lines();
+            let mut writer = server_write;
+            lines.next_line().await.unwrap().unwrap(); // initialize, id 0
+            writer.write_all(b"{\"id\":0,\"result\":{}}\n").await.unwrap();
+            writer.flush().await.unwrap();
+            lines.next_line().await.unwrap().unwrap(); // initialized notification
+            lines.next_line().await.unwrap().unwrap(); // model/list, id 1, no cursor
+            writer
+                .write_all(b"{\"id\":1,\"result\":{\"data\":[{\"hidden\":false,\"model\":\"gpt-6-astra\",\"displayName\":\"GPT-6-Astra\"}],\"nextCursor\":\"next\"}}\n")
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+            lines.next_line().await.unwrap().unwrap(); // model/list, id 2, cursor "next"
+            writer
+                .write_all(b"{\"id\":2,\"result\":{\"data\":[{\"hidden\":false,\"model\":\"gpt-5.6-sol\",\"displayName\":\"GPT-5.6-Sol\"}],\"nextCursor\":null}}\n")
+                .await
+                .unwrap();
+            writer.flush().await.unwrap();
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(5), request_models(client_write, client_read))
+            .await
+            .expect("the in-process protocol exchange should never hang")
+            .unwrap();
+        assert_eq!(
+            result,
+            vec![("gpt-6-astra".into(), "GPT-6-Astra".into()), ("gpt-5.6-sol".into(), "GPT-5.6-Sol".into())]
+        );
+        fake_server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fake_app_server_timeout_is_killed_and_reaped() {
+        let pidfile = std::env::temp_dir().join(format!("smetana-codex-pid-{}", SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
+        let binary = fake(&format!("echo $$ > {}; read a; echo '{{\"id\":0,\"result\":{{}}}}'; read b; sleep 30", pidfile.display()));
+        // A budget in seconds and not the fake pagination test's old one —
+        // measured against this stand's own worst case: `fork`/`exec`ing a
+        // one-line `/bin/sh` script took up to 800ms end to end under this
+        // sandbox, so a tight budget would fire `start_kill` before the
+        // script had run its first statement, and the pid below would never
+        // be written whether or not the kill itself behaved.
+        let started = std::time::Instant::now();
+        assert_eq!(listed_models_with(&binary, None, Duration::from_secs(3)).await.unwrap_err(), "Codex model list timed out");
+        // The fake sleeps 30s and answers nothing on its own; the only way
+        // this call returns inside that window is `start_kill` actually
+        // ending the child rather than `wait` merely outliving it. Without
+        // this the ESRCH check below cannot tell "we killed it" from "we sat
+        // in `wait()` until the fake's own sleep ended on its own" — both
+        // reach the same reaped, gone pid, and only the wall clock tells
+        // them apart. 10s leaves 3x clearance under the fake's 30s sleep and
+        // over this call's own 3s budget.
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the call must end the child rather than outlive it: the fake sleeps 30s, this returned after {:?}",
+            started.elapsed()
+        );
+
+        // The fake records its own pid before it ever blocks — since it runs
+        // directly off its shebang rather than under a wrapping shell, that
+        // pid names the exact process `start_kill` was asked to end. `wait`
+        // in `listed_models_with` reaps it; a killed-but-unreaped process is
+        // a zombie and still answers `kill(pid, 0)` with success, so only a
+        // process actually reaped answers ESRCH. That is what running the
+        // fake a second time, the previous shape of this test, never pinned:
+        // a second shell spawn succeeds or fails on its own merits whether
+        // or not the first child had been waited on.
+        let mut pid = None;
+        for _ in 0..100 {
+            if let Ok(text) = fs::read_to_string(&pidfile) {
+                if let Ok(parsed) = text.trim().parse::<libc::pid_t>() {
+                    pid = Some(parsed);
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let pid = pid.expect("the fake should have recorded its own pid before this assertion runs");
+        // errno is read immediately after the call it describes, before
+        // anything else can overwrite it.
+        let kill_result = unsafe { libc::kill(pid, 0) };
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        assert_eq!((kill_result, errno), (-1, Some(libc::ESRCH)), "pid {pid} should be gone: killed and reaped, not a lingering zombie");
+
+        let _ = fs::remove_file(binary);
+        let _ = fs::remove_file(pidfile);
+    }
+}
+
+pub struct Codex;
+
+impl Codex {
+    /// The whole of what a session opens on, composed exactly as `command`
+    /// puts it on the command line — the seam `claude.rs`'s own `prompt_text`
+    /// cuts for the identical reason: `CodexDriver::opening` (the app-server
+    /// road) needs this text without rebuilding a `CommandBuilder` and
+    /// reading its last argument back off it, which is what it used to do.
+    /// Reading the argument back assumed the prompt is the final positional
+    /// one; that held only because nothing else had reason to land after it,
+    /// and on `codex` (this branch was cut before it) `eb62a3e` has already
+    /// put `--sandbox workspace-write` on this same line, ahead of the prompt
+    /// — still true today, but a silent assumption rather than a fact the
+    /// compiler checks, and the next flag to land here would break it with
+    /// nothing anywhere to say so: the session's opening turn would become
+    /// `workspace-write`, or an image path. Asking for the text directly
+    /// removes the assumption instead of re-verifying it.
+    pub(crate) fn prompt_text(&self, launch: &Launch) -> Option<String> {
+        let filing_a_task = matches!(launch.intent, Intent::NewTask { .. });
+        // Only the mode that actually uses the whole process pays for reading
+        // it: `Auto` is handed the path and decides for itself.
+        let discussing = matches!(
+            launch.intent,
+            Intent::NewTask { brainstorm: Stage::On, .. }
+        );
+        // The plan's own process, and only where a plan was actually asked
+        // for: the cascade decides that, never the raw switch, so an `On`
+        // sitting under a discussion nobody wanted costs nothing here either.
+        let planning = matches!(
+            &launch.intent,
+            Intent::NewTask { brainstorm, spec, plan, .. }
+                if cascade(*brainstorm, *spec, *plan).1 == Stage::On
+        );
+        let filing =
+            filing_a_task.then(|| read_skill(&launch.skills.smetana, "filing-a-task")).flatten();
+        // The whole of what a resolving session does, so it is read whenever
+        // one is being started and never otherwise.
+        let resolving = matches!(launch.intent, Intent::ResolveTask { .. })
+            .then(|| read_skill(&launch.skills.smetana, "resolving-questions"))
+            .flatten();
+        // The whole of what a branch review does, so it is read whenever one is
+        // being started and never otherwise — the same reading `resolving`
+        // above gets.
+        let reviewing_branch = matches!(launch.intent, Intent::ReviewBranch { .. })
+            .then(|| read_skill(&launch.skills.smetana, "reviewing-branch-changes"))
+            .flatten();
+        let brainstorming_text =
+            discussing.then(|| read_skill(&launch.skills.superpowers, "brainstorming")).flatten();
+        let plans_text =
+            planning.then(|| read_skill(&launch.skills.superpowers, "writing-plans")).flatten();
+        let text = prompt::SkillText {
+            filing: filing.as_deref(),
+            resolving: resolving.as_deref(),
+            brainstorming: brainstorming_text.as_deref(),
+            plans: plans_text.as_deref(),
+            reviewing_branch: reviewing_branch.as_deref(),
+        };
+        prompt::build(
+            &launch.intent,
+            self.delivery(),
+            self.images(),
+            &launch.skills,
+            launch.facts.as_deref(),
+            text,
+            &launch.languages,
+            &launch.agent_prompt,
+            launch.worker_model.as_deref(),
+        )
+    }
+}
+
+impl Profile for Codex {
+    fn id(&self) -> &'static str {
+        "codex"
+    }
+
+    fn label(&self) -> &'static str {
+        "Codex"
+    }
+
+    fn binary(&self) -> &'static str {
+        "codex"
+    }
+
+    fn usage_source(&self) -> Option<super::UsageSource> {
+        Some(super::UsageSource::AppServer)
+    }
+
+    fn parse_usage_response(&self, response: &Value) -> Option<Usage> {
+        rate_limits(response)
+    }
+
+    fn delivery(&self) -> SkillDelivery {
+        SkillDelivery::Inline
+    }
+
+    /// `MODELS` carries where this list was read from.
+    fn models(&self) -> &'static [(&'static str, &'static str)] {
+        MODELS
+    }
+
+    /// `-m, --model <MODEL>` — "Model the agent should use", read off this
+    /// CLI's own help at 0.146.0. The short form is what that help documents
+    /// first, and it is accepted by the bare invocation and by `exec` alike,
+    /// which are the two shapes this profile's `command` builds.
+    ///
+    /// **This is Codex's grammar and nobody else's**, exactly as `resume_args`
+    /// is: `claude.rs` answers `--model`, and neither is composed out of the
+    /// other's answer.
+    fn model_args<'a>(&self, model: &'a str) -> Vec<&'a str> {
+        vec!["-m", model]
+    }
+
+    /// `-i, --image <FILE>...` — verified against the installed CLI's own help.
+    /// Repeated once per file rather than given a list: a repeated flag is the
+    /// one form every argument parser agrees on, and this app does not get to
+    /// assume anything about somebody else's separator.
+    fn images(&self) -> ImageDelivery {
+        ImageDelivery::Flag("-i")
+    }
+
+    fn command(&self, launch: &Launch) -> CommandBuilder {
+        let mut cmd = CommandBuilder::new(self.binary());
+        // A sign-in is `codex login [--device-auth]` and nothing else: no
+        // sandbox flag, no model, no prompt. Those are arguments of the
+        // interactive agent, and `login` is a different subcommand that would
+        // refuse them.
+        if let Intent::SignIn { variant, .. } = &launch.intent {
+            for arg in self.login_args(*variant).into_iter().flatten() {
+                cmd.arg(arg);
+            }
+            return cmd;
+        }
+        // First of all, and this is what makes an unattended batch end by
+        // itself: `codex exec --json`. `exec` is a **subcommand**, not a flag,
+        // so its position is not a preference — it has exactly one legal place
+        // and this is it. See `agents::is_batch` for which sessions get it, and
+        // `batch_args` for why the non-interactive form is what a run's loop
+        // needs at all.
+        //
+        // Read back through `self.batch_args()` rather than written out again,
+        // the same way the image flag below is read back through
+        // `self.images()`: the profile's answer and the command line cannot
+        // then come to disagree, which is exactly what
+        // `a_translator_is_only_ever_installed_over_a_stream_that_was_asked_for`
+        // is about — `terminal::service` installs the translator on `is_batch`
+        // alone, so a profile that answers `transcript` and forgets to apply
+        // `batch_args` gets a JSONL reader over an interactive TUI's ANSI
+        // stream and every row of the pane renders as nothing.
+        if crate::agents::is_batch(&launch.intent) {
+            for arg in self.batch_args() {
+                cmd.arg(arg);
+            }
+        }
+        // Codex's own native multi-agent, turned on for this invocation alone —
+        // only for a batch's lead, and only in `Auto` and `Supervised`, where
+        // there are workers to spawn at all. `Solo` never delegates, so a
+        // concurrency cap would be a promise about workers that are never
+        // going to exist, the same reasoning that keeps it out of the
+        // worker-model line in the prompt (`.claude/rules/runs.md`). `-c
+        // key=value` overrides Codex's own `~/.codex/config.toml` for this
+        // process and writes nothing to it — the boundary `SkillDelivery::Inline`
+        // already draws around a person's own Codex setup — so a higher or a
+        // lower number sitting in that file loses either way. `N` is read off
+        // `settings.max_parallel_tasks`, the exact field `prompt::build` reads
+        // a few lines later for the same `Launch`: `spawn_batch` has already
+        // capped it against the subscription-limit reduction before this
+        // `Intent::Run` was built, so there is one number rather than two
+        // computations of it — `the_multi_agent_cap_on_the_line_is_the_one_the_prompt_names`
+        // pins the two reads against each other rather than against a literal.
+        //
+        // Read off the installed CLI at 0.155.1 on 2026-09-21 rather than recalled,
+        // the same standard `MODELS` above holds itself to: `--enable <FEATURE>` is
+        // documented as equivalent to `-c features.<name>=true`, `codex features list`
+        // shows `multi_agent` as `stable true`, and `agents.enabled` and
+        // `agents.max_concurrent_threads_per_session` both parse, the latter with its
+        // own "must be at least 1" validator. This is the first fact in this profile
+        // that needs a Codex newer than the 0.146.0 the rest of the file was read
+        // against, and not caught here: `codex features list --enable definitely_not_a_feature`
+        // on 0.155.1 answers `Error: Unknown feature flag`, but that is a claim about
+        // a CLI that knows `--enable` and not about one older than it — this tree has
+        // no captured `--help` at 0.146.0 to say whether that flag existed then, only
+        // the screen fixtures under `crates/core/tests/fixtures/`, none of which answer
+        // this. So the honest floor is: an older Codex refuses these arguments and the
+        // run dies at spawn either way, with `Error: Unknown feature flag` where it
+        // knows `--enable` and refuses the feature name, and its own parser's
+        // `unexpected argument` where it does not know the flag at all. Either string
+        // in a run report means the same thing — this CLI predates `multi_agent` —
+        // and there is no version floor anywhere in this tree to turn that into a named
+        // health state the way `EXPECTED_BD_VERSION` in `tracker::service` turns a
+        // sidecar mismatch into `bd-version-mismatch`.
+        if let Intent::Run { settings, .. } = &launch.intent {
+            if matches!(settings.mode, RunMode::Auto | RunMode::Supervised) {
+                if let Some(max_agents) = settings.max_parallel_tasks {
+                    cmd.arg("--enable");
+                    cmd.arg("multi_agent");
+                    cmd.arg("-c");
+                    cmd.arg("agents.enabled=true");
+                    cmd.arg("-c");
+                    cmd.arg(format!("agents.max_concurrent_threads_per_session={max_agents}"));
+                }
+            }
+        }
+        // Then the resume, if this is one, and in the same leading position for
+        // the same reason: `codex resume <id>` and `codex fork <id>` are
+        // subcommands too. The two cannot both fire — `is_batch` is only ever
+        // true of `Intent::Run` — so there is one subcommand on this line or
+        // none.
+        //
+        // Which of the two capabilities the profile is asked for is the whole
+        // of the difference between the Sessions tab's two launching verbs, and
+        // it is asked as one question either way: neither branch composes a
+        // command line out of the other's answer plus a flag. Without this the
+        // spawn would be a bare `codex` in the recorded worktree with no prompt
+        // behind it — a fresh interactive session under a card promising the
+        // conversation somebody left, which is the outcome
+        // `TerminalError::NoResume` exists to prevent and which this profile's
+        // refusal used to provide for free.
+        if let Intent::ResumeSession { id, fork, .. } = &launch.intent {
+            let resume = if *fork { self.fork_args(id) } else { self.resume_args(id) };
+            for arg in resume.into_iter().flatten() {
+                cmd.arg(arg);
+            }
+        }
+        // No counterpart to `claude.rs`'s `session_id_args` block, and that is
+        // an absence rather than an omission: this harness cannot be told which
+        // conversation to write, so the loop would add nothing on every
+        // session. It finds out afterwards instead — `session_id_after_start`
+        // and `agents::codex_sessions`. `nothing_of_a_chosen_id_reaches_this_command_line`
+        // pins that a `Launch` carrying an id all the same puts no flag here.
+        //
+        // Before the prompt, which is positional — see the same line in
+        // `claude.rs` for why the order is not left to the parser. Both
+        // subcommands above accept this flag, checked against 0.146.0 rather
+        // than assumed, and only `Intent::Run` reaches it anyway.
+        if let Intent::Run { settings, .. } = &launch.intent {
+            for arg in self.autonomy(settings.mode).args {
+                cmd.arg(arg);
+            }
+        }
+        // Every attended launch gets an explicit workspace sandbox, rather
+        // than inheriting the person's global Codex setting. `Auto` already
+        // has the intentionally broader bypass above, so the two must never
+        // be combined.
+        let is_auto_run = matches!(
+            &launch.intent,
+            Intent::Run { settings, .. } if settings.mode == RunMode::Auto
+        );
+        if !is_auto_run {
+            cmd.arg("--sandbox");
+            cmd.arg("workspace-write");
+        }
+        // Which model, where somebody has chosen one. Before the prompt for the
+        // reason the autonomy arguments above it are — the prompt is positional
+        // — and read back through `self.model_args` rather than written out
+        // again, the same way the image flag below is read back through
+        // `self.images()`, so the profile's answer and the command line cannot
+        // come to disagree. Nothing at all when no model was chosen, which is
+        // this app's behaviour to the letter before the field existed.
+        // Never on a resume, whatever the `Launch` carries. Two guards rather
+        // than one, exactly as the chosen session id above has: that one is
+        // `settings::role_model`, which refuses this intent a model at all, and
+        // this one stands where the flag would go on the line. A recorded
+        // conversation already has a model, and this app arriving with a second
+        // opinion is the intrusion `prompt::build` refuses when it declines to
+        // compose a prompt for the same intent.
+        if !matches!(launch.intent, Intent::ResumeSession { .. }) {
+            if let Some(model) = launch.model.as_deref() {
+                for arg in self.model_args(model) {
+                    cmd.arg(arg);
+                }
+            }
+        }
+        // The pixels, on the command line. The paths are in the prompt as well,
+        // and that is not a duplicate: what rides here is what Codex looks at,
+        // and what rides there is what has to end up in the issue description.
+        // Read back through `self.images()` rather than written out again, so
+        // the flag and the profile's answer about it cannot drift apart.
+        let images_need_prompt_separator =
+            if let (Intent::NewTask { draft, .. }, ImageDelivery::Flag(flag)) =
+                (&launch.intent, self.images())
+        {
+            for image in &draft.images {
+                cmd.arg(flag);
+                cmd.arg(image);
+            }
+            !draft.images.is_empty()
+        } else {
+            false
+        };
+        if let Some(built) = self.prompt_text(launch) {
+            // `-i, --image <FILE>...` accepts more than one value. The
+            // separator is how this CLI distinguishes the final, positional
+            // prompt from another image path; without it, commas in a prompt
+            // can be treated as image separators. It is needed only for a new
+            // task that actually supplied images, so every other invocation
+            // keeps its existing argv.
+            if images_need_prompt_separator {
+                cmd.arg("--");
+            }
+            cmd.arg(built);
+        }
+        cmd
+    }
+
+    fn question(&self, screen: &[String]) -> Option<Question> {
+        question(screen)
+    }
+
+    /// `codex login` opens the browser; `codex login --device-auth` prints a
+    /// code to enter elsewhere. Both are interactive and meant for a terminal.
+    fn login_args(&self, variant: SignInVariant) -> Option<Vec<&'static str>> {
+        Some(match variant {
+            SignInVariant::Browser => vec!["login"],
+            SignInVariant::DeviceCode => vec!["login", "--device-auth"],
+        })
+    }
+
+    fn text_question(&self, screen: &[String], entry_style: &[crate::terminal::screen::EntryStyle]) -> bool {
+        completed_text_question(screen, entry_style)
+    }
+
+    /// `--dangerously-bypass-approvals-and-sandbox` rather than the gentler
+    /// `--ask-for-approval never --sandbox workspace-write`, and the difference
+    /// is not caution but reach: a run cuts worktrees in sibling repositories
+    /// and installs dependencies, so it writes outside any one workspace and
+    /// needs the network. Under `workspace-write` both are refused, and what
+    /// the person would see is every task parked for a reason that is about
+    /// the sandbox rather than about their code.
+    ///
+    /// `--full-auto` is not used: Codex removed it, and a build that still
+    /// passed it would get a deprecation warning today and an unknown argument
+    /// tomorrow.
+    ///
+    /// `Supervised` and `Solo` keep their ordinary approval policy. Their
+    /// explicit `workspace-write` sandbox is applied by `command`, alongside
+    /// every other non-Auto launch.
+    fn autonomy(&self, mode: RunMode) -> Autonomy {
+        Autonomy {
+            args: match mode {
+                RunMode::Auto => vec!["--dangerously-bypass-approvals-and-sandbox"],
+                RunMode::Supervised | RunMode::Solo => vec![],
+            },
+            env: vec![],
+        }
+    }
+
+    /// `codex resume [SESSION_ID] [PROMPT]` — read out of that CLI's own help
+    /// at 0.146.0. A **subcommand** rather than a flag, which is the shape
+    /// difference from Claude Code's `--resume`: it goes in front of everything
+    /// else on the line, which is where `terminal::service` puts what these
+    /// methods answer.
+    ///
+    /// The prompt is deliberately not given: `prompt::build` refuses
+    /// `ResumeSession` a prompt at all, since a resumed conversation already
+    /// has somebody's words in it.
+    fn resume_args(&self, session: &str) -> Option<Vec<String>> {
+        Some(vec!["resume".to_owned(), session.to_owned()])
+    }
+
+    /// `codex fork [SESSION_ID] [PROMPT]`, its own subcommand — not `resume`
+    /// with a flag behind it, which is how Claude Code spells the same
+    /// capability. Written out whole for the reason `Profile::fork_args`
+    /// records: the two are separate answers to separate questions.
+    fn fork_args(&self, session: &str) -> Option<Vec<String>> {
+        Some(vec!["fork".to_owned(), session.to_owned()])
+    }
+
+    /// `codex exec --json`. `exec` is Codex's non-interactive form: it carries
+    /// the work out and **exits**, which is the whole of what `agents::is_batch`
+    /// needs — an interactive session sits at its prompt for ever and a loop
+    /// waiting on the process would never come round. `--json` is what makes
+    /// the output a stream a machine can read; without it the same run prints
+    /// prose meant for a person.
+    fn batch_args(&self) -> &'static [&'static str] {
+        &["exec", "--json"]
+    }
+
+    /// Codex's stream is JSONL of its own vocabulary and shares nothing with
+    /// Claude Code's, so this shares no code with `claude::transcript_line`
+    /// either — an event name one harness happens to use is exactly what
+    /// drifts.
+    fn transcript(&self) -> Option<fn(&str) -> Vec<String>> {
+        Some(transcript_line)
+    }
+
+    /// `codex exec --json --skip-git-repo-check`, the same non-interactive form
+    /// a batch uses and a different question: a batch is "carry this out and
+    /// exit", this is "answer this and exit". `--json` is here for the
+    /// answer's sake rather than the stream's — see `oneshot_answer`. The
+    /// one-shot runs from the app's isolated probe directory, not a repository,
+    /// so it alone skips Codex's repository check.
+    fn oneshot_args(&self) -> Option<&'static [&'static str]> {
+        Some(&["exec", "--json", "--skip-git-repo-check"])
+    }
+
+    /// The last `agent_message` in the stream, which is Codex's own answer.
+    ///
+    /// Reading the plain-text form instead was the version thrown away: `codex
+    /// exec` writes its progress, and on the machine this was measured on a
+    /// models-cache warning, to the same stdout — so the commit-message button
+    /// would have offered a paragraph of log. A line that is not JSON is
+    /// skipped for that reason rather than refused.
+    fn oneshot_answer(&self, stdout: &str) -> String {
+        stdout
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|event| {
+                event.get("type").and_then(serde_json::Value::as_str) == Some("item.completed")
+            })
+            .filter_map(|event| {
+                let item = event.get("item")?;
+                (item.get("type").and_then(serde_json::Value::as_str) == Some("agent_message"))
+                    .then(|| {
+                        item.get("text")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned()
+                    })
+            })
+            .last()
+            .unwrap_or_default()
+    }
+
+    fn discovers_session_id(&self) -> bool {
+        true
+    }
+
+    /// The rollout files this person's Codex had already written. Empty when
+    /// there is no such directory, which is an ordinary machine rather than a
+    /// failure — and the honest answer either way, since an empty snapshot only
+    /// widens what the search below will consider.
+    fn sessions_before_start(&self) -> Vec<PathBuf> {
+        super::codex_sessions::sessions_root()
+            .map(|root| super::codex_sessions::rollouts(&root))
+            .unwrap_or_default()
+    }
+
+    /// Codex names its own conversation and writes the name into the first line
+    /// of its rollout file, so the id is read back off disk rather than handed
+    /// over — see `agents::codex_sessions`, which also carries why `before` is
+    /// the condition that actually separates this session from the one that was
+    /// already running in the same folder.
+    fn session_id_after_start(
+        &self,
+        cwd: &Path,
+        started_after: SystemTime,
+        before: &[PathBuf],
+    ) -> Option<String> {
+        let root = super::codex_sessions::sessions_root()?;
+        super::codex_sessions::newest_session_id(&root, cwd, started_after, before)
+    }
+
+    /// `~/.codex/config.toml`, where the same servers live under
+    /// `[mcp_servers.<name>]` — Codex's own spelling of the idea Claude Code
+    /// writes as `mcpServers`.
+    fn mcp_config(&self) -> Option<(&'static str, McpConfigFormat)> {
+        Some((".codex/config.toml", McpConfigFormat::Toml))
+    }
+}
+
+/// Normalize Codex's account-wide subscription bucket from its app-server
+/// response. The server can additionally report model-specific buckets; those
+/// deliberately do not reach Smetana because a run has one ChatGPT allowance,
+/// not an allowance selected by the model it happened to launch with.
+///
+/// Newer servers return a map keyed by limit id. Older ones return only the
+/// historical `rateLimits` snapshot, which is safe only when it identifies
+/// itself as the Codex bucket (or predates `limitId` altogether).
+pub fn rate_limits(response: &Value) -> Option<Usage> {
+    let snapshot = response
+        .get("rateLimitsByLimitId")
+        .and_then(Value::as_object)
+        .and_then(|buckets| buckets.get("codex"))
+        .or_else(|| response.get("rateLimits").filter(|snapshot| compatible_rate_limits(snapshot)))?;
+
+    let primary = rate_limit_window(snapshot, "primary", "Primary");
+    let secondary = rate_limit_window(snapshot, "secondary", "Secondary");
+    (primary.is_some() || secondary.is_some()).then(|| Usage {
+        session_pct: primary.as_ref().map(|window| window.pct),
+        session_reset: primary.as_ref().and_then(|window| window.resets.clone()),
+        session_reset_at: primary.as_ref().and_then(|window| window.reset_at),
+        session_label: primary.as_ref().map(|window| window.label.clone()),
+        week_pct: secondary.as_ref().map(|window| window.pct),
+        week_reset: secondary.as_ref().and_then(|window| window.resets.clone()),
+        week_reset_at: secondary.as_ref().and_then(|window| window.reset_at),
+        week_label: secondary.as_ref().map(|window| window.label.clone()),
+    })
+}
+
+fn compatible_rate_limits(snapshot: &Value) -> bool {
+    match snapshot.get("limitId") {
+        None | Some(Value::Null) => true,
+        Some(id) => id.as_str() == Some("codex"),
+    }
+}
+
+struct RateLimitWindow {
+    pct: u8,
+    resets: Option<String>,
+    reset_at: Option<chrono::DateTime<chrono::Utc>>,
+    label: String,
+}
+
+fn rate_limit_window(snapshot: &Value, field: &str, fallback: &str) -> Option<RateLimitWindow> {
+    let window = snapshot.get(field)?.as_object()?;
+    let pct = window.get("usedPercent")?.as_u64().filter(|pct| *pct <= 100)? as u8;
+    let minutes = window.get("windowDurationMins").and_then(Value::as_i64).filter(|mins| *mins > 0);
+    let reset_at = window
+        .get("resetsAt")
+        .and_then(Value::as_i64)
+        .filter(|seconds| *seconds >= 0)
+        .and_then(|seconds| chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0));
+    let resets = reset_at.map(|time| time.with_timezone(&chrono::Local).format("%b %-d at %-I:%M%P (%Z)").to_string());
+    Some(RateLimitWindow { pct, resets, reset_at, label: duration_label(minutes, fallback) })
+}
+
+/// Codex names a window by its length, not by a fixed "session" or "week"
+/// vocabulary. Keep that fact with the decoder so the two UI surfaces and the
+/// run gate receive exactly the same two normalized halves.
+fn duration_label(minutes: Option<i64>, fallback: &str) -> String {
+    let Some(minutes) = minutes else { return fallback.to_owned() };
+    if minutes % (24 * 60) == 0 {
+        return plural(minutes / (24 * 60), "day");
+    }
+    if minutes % 60 == 0 {
+        return plural(minutes / 60, "hour");
+    }
+    plural(minutes, "minute")
+}
+
+fn plural(amount: i64, unit: &str) -> String {
+    if amount == 1 { format!("1 {unit}") } else { format!("{amount} {unit}s") }
+}
+
+
+/// The glyph Codex draws against the option the cursor is on: U+203A, a single
+/// right-pointing angle quotation mark. Not Claude Code's U+276F, and the two
+/// readers deliberately do not share one: a glyph one harness happens to use
+/// today is exactly the kind of thing that would drift.
+///
+/// Codex uses the same glyph in two other places, and both are why this reader
+/// insists on the numbering as well: it prefixes the person's own submitted
+/// prompt in the transcript, and it prefixes the placeholder inside the empty
+/// composer at the foot of the screen. Neither is numbered.
+const CURSOR: char = '\u{203A}';
+
+/// One option of a dialog: `› 1. Yes, proceed (y)` or
+/// `  3. No, and tell Codex what to do differently (esc)`.
+/// Returns (index, label, whether the cursor is on it).
+///
+/// The cursor has to be the first non-blank character of the line rather than
+/// merely present in it, which is where this parts company with the Claude
+/// reader: `›` is a character Codex writes into ordinary lines, so a label
+/// containing one would otherwise read as the selected option and the app would
+/// point a person at the wrong answer.
+///
+/// The label is only the head row; a label long enough to wrap continues on the
+/// rows beneath, and `wrapped` below puts it back together. Whatever comes back
+/// keeps the shortcut hint Codex prints after it — `(y)`, `(p)`, `(esc)`. It is
+/// what a person reads on the screen, and trimming it would mean this app
+/// deciding which part of somebody else's wording is the real label.
+fn option_line(line: &str) -> Option<(usize, String, bool)> {
+    let rest = line.trim_start();
+    let selected = rest.starts_with(CURSOR);
+    let rest = if selected { rest[CURSOR.len_utf8()..].trim_start() } else { rest };
+    let dot = rest.find(". ")?;
+    let index: usize = rest[..dot].parse().ok()?;
+    let label = rest[dot + 2..].trim_end().to_owned();
+    if label.is_empty() {
+        return None;
+    }
+    Some((index, label, selected))
+}
+
+fn is_blank(line: &str) -> bool {
+    line.trim().is_empty()
+}
+
+/// The first row of a transcript entry: the person's prompt behind `›`, one of
+/// the agent's `•` bullets, a rule, the session banner. Codex draws every one
+/// of them hard against column 0 and indents everything that continues one, and
+/// on a screen with no frame anywhere on it that is the only structural
+/// boundary there is between the transcript and a dialog.
+fn is_entry(line: &str) -> bool {
+    !is_blank(line) && !line.starts_with(char::is_whitespace)
+}
+
+/// A transcript entry specifically — a turn of the conversation, rather than
+/// any old thing at column 0.
+///
+/// The distinction earns its keep in exactly one place, and without it that
+/// place cannot work at all. An agent's entry and the trust prompt are the same
+/// shape to the row: something at column 0, a blank, indented prose ending in a
+/// question mark, a blank, the options. Rejecting everything that hangs off a
+/// column-0 line would take the trust prompt with it; rejecting only what hangs
+/// off a turn of the conversation keeps it, because the trust prompt's anchor is
+/// `> You are in …` and a turn's is `•` or `›`.
+///
+/// `◦` is the same bullet in the hollow state Codex alternates it into while a
+/// turn is still running — `codex-0.146-working.txt` caught the filled form of
+/// the very same line. Naming a glyph that never appears would cost nothing
+/// here anyway: everything in this set only ever adds refusals.
+fn is_turn(line: &str) -> bool {
+    is_entry(line) && line.starts_with(['\u{2022}', '\u{25E6}', CURSOR])
+}
+
+/// Is the last completed Codex turn a plain-text question for the person?
+///
+/// A completed turn ends at an empty composer. Its immediately preceding
+/// top-level transcript entry must be a filled assistant bullet; a later
+/// person entry or hollow working bullet means the previous reply is already
+/// stale. Codex's assistant bullet stays default-colour dim. `Ran` and
+/// `Called` use a coloured bold bullet; `Explored` keeps the dim bullet but
+/// gives its header a bold span and draws a tree detail below it. Those
+/// renderer structures, not the English word that follows them, fence tool
+/// output before the shared paragraph predicate sees its `?`.
+fn completed_text_question(screen: &[String], entry_style: &[crate::terminal::screen::EntryStyle]) -> bool {
+    let Some(composer) = screen.iter().rposition(|line| line.trim() == CURSOR.to_string()) else {
+        return false;
+    };
+    let Some(turn) = screen[..composer]
+        .iter()
+        .rposition(|line| is_entry(line))
+    else {
+        return false;
+    };
+    let Some(first) = screen[turn].strip_prefix('\u{2022}').map(str::trim_start) else {
+        return false;
+    };
+    let end = screen[turn + 1..composer]
+        .iter()
+        .position(|line| is_entry(line))
+        .map_or(composer, |offset| turn + 1 + offset);
+    let style = entry_style.get(turn).copied().unwrap_or_default();
+    if style.is_coloured_bold_marker() || explored_tree(style, first, &screen[turn + 1..end]) {
+        return false;
+    }
+    let mut text = first.to_owned();
+    for line in &screen[turn + 1..end] {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(line);
+    }
+    crate::session::model::text_waits_for_reply(&text)
+}
+
+/// `Explored` is the one completed Codex activity whose marker looks like an
+/// assistant's dim/default bullet. Its bold header is followed by the TUI's
+/// indented tree (`└`, `├`, or `│`), which ordinary assistant prose — even a
+/// bold introduction — does not own.
+fn explored_tree(
+    style: crate::terminal::screen::EntryStyle,
+    header: &str,
+    detail: &[String],
+) -> bool {
+    style.dim
+        && !style.foreground
+        && style.header_bold
+        && !style.header_foreground
+        && header.split_whitespace().next() == Some("Explored")
+        && detail.iter().any(|line| {
+            matches!(line.trim_start().chars().next(), Some('\u{2514}' | '\u{251C}' | '\u{2502}'))
+        })
+}
+
+/// The whole of an option's label, head row and any rows it wrapped onto.
+///
+/// A continuation row is anything directly under the option that is not blank,
+/// not a transcript entry and not an option of its own — measured on the update
+/// prompt at 60 columns, which wraps its first option over three rows and
+/// numbers none of them. Gathering it is not cosmetic: skipping it, which is
+/// what the first version of this did, cut every long label at whatever column
+/// the pane happened to wrap, so `Update now (runs \`sh -c 'curl -fsSL` was the
+/// whole of what a person would have been offered.
+///
+/// The blank row is what ends the list, and it is also all that stands between
+/// the last option and the footer under it. A dialog that ever drew the two
+/// without one between them would fold the footer into the last label — a
+/// cosmetic cost, and the direction to be wrong in, since the alternative is
+/// guessing at wording.
+fn wrapped(screen: &[String], row: usize, head: &str) -> String {
+    let mut words: Vec<&str> = head.split_whitespace().collect();
+    for line in &screen[row + 1..] {
+        if is_blank(line) || is_entry(line) || option_line(line).is_some() {
+            break;
+        }
+        words.extend(line.split_whitespace());
+    }
+    words.join(" ")
+}
+
+/// Is there a break in the layout strictly between these two rows — a transcript
+/// entry of its own, or the double blank Codex puts between one top-level block
+/// and the next?
+///
+/// Measured, on real screens at 60 and 120 columns: **one** blank row separates
+/// two paragraphs of the same block, **two** separate one block from another.
+/// That is the difference between the second paragraph of an agent's answer and
+/// a dialog drawn under it, and there is nothing else to tell them apart —
+/// both are prose indented by two under a `•` at column 0.
+fn parted(screen: &[String], from: usize, to: usize) -> bool {
+    let mut blanks = 0;
+    for line in &screen[from + 1..to] {
+        if is_entry(line) {
+            return true;
+        }
+        if is_blank(line) {
+            blanks += 1;
+            if blanks >= 2 {
+                return true;
+            }
+        } else {
+            blanks = 0;
+        }
+    }
+    false
+}
+
+/// The question inside one paragraph of a dialog, or `None` if there is none.
+///
+/// Two shapes, both taken from real screens. `Would you like to run the
+/// following command?` is the whole paragraph — that is `whole`. The trust
+/// prompt is a question followed by two sentences explaining it, and only the
+/// first is what a person is being asked, so a question mark with whitespace
+/// after it ends the question too — that is `opening`.
+///
+/// They are two functions and the caller tries every paragraph against `whole`
+/// before it tries any against `opening`, which is not a detail: in the command
+/// dialog the preview sits *below* the question, so the nearest paragraph is
+/// the command itself, and a command carrying `x ? 1 : 2` would otherwise hand
+/// back `$ node -e "console.log(x ?` as what a person is being asked. Preferring
+/// a paragraph that is a question outright leaves `opening` doing only the job
+/// it was written for.
+fn whole(text: &str) -> Option<String> {
+    text.ends_with('?').then(|| text.to_owned())
+}
+
+/// The first sentence of a paragraph, if it is a question.
+///
+/// The "followed by whitespace" is not decoration: the paragraph above the
+/// options can be a shell command Codex is asking to run, and `grep "what?"
+/// file` must not be read as a question. A question mark that ends a sentence
+/// is followed by a space; one inside a quoted argument is followed by the
+/// quote.
+fn opening(text: &str) -> Option<String> {
+    let mut chars = text.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        if c == '?' && chars.peek().is_some_and(|(_, next)| next.is_whitespace()) {
+            return Some(text[..=at].to_owned());
+        }
+    }
+    None
+}
+
+/// The dialogs that name themselves and ask nothing, one literal per dialog.
+///
+/// There is one so far: the update prompt Codex draws on the day a newer
+/// version is out, before the session has started at all. It has everything a
+/// dialog has — numbered options from 1, a cursor on one of them, a block of
+/// its own at the top of the screen — except a question. There is no question
+/// mark anywhere on it: the banner states, the options act
+/// (`codex-0.146-update-prompt.txt`). So the ordinary reading declined it, and
+/// a session that opened on that day simply stood there with nothing on screen
+/// to say a person was needed (smetana-9qp).
+///
+/// This is the same shape `claude.rs` carries for the folder-trust dialog and
+/// it keeps the same two rules, because the thing being protected is the same:
+/// a loud row is budgeted at one or two a screen, and dropping the
+/// question-mark requirement for **everything** would leave the cursor as the
+/// only guard against a numbered list in the agent's own prose. So the
+/// requirement stays in force for every dialog that does not name itself, and
+/// the narrower reading opens only after the ordinary one has declined, fenced
+/// on a literal string this dialog prints and ordinary output does not.
+///
+/// The literal is a substring rather than a prefix, which is where this parts
+/// company with the Claude table: the banner opens with a decorative glyph
+/// (U+2728 and a hair space) and closes with the two version numbers, so the
+/// only stable part is the middle. Matching the glyph would pin a decoration,
+/// and matching the versions would pin the one thing guaranteed to change.
+const HEADINGS: &[&str] = &["Update available!"];
+
+/// The question of a dialog that named itself with one of `HEADINGS`, when
+/// nothing in its block reads as a question at all.
+///
+/// What comes back is the heading's own paragraph, as the screen draws it —
+/// glyph, versions and all. Nothing else on that screen is a candidate: the
+/// only other line is a link to the release notes, and the two things a person
+/// needs in order to answer are which version is on offer and what the options
+/// do, which is exactly the banner and the labels. Composing a question of our
+/// own ("Update Codex now?") would put words on the screen that Codex never
+/// wrote, and trimming the glyph would be this app deciding which part of
+/// somebody else's wording is the real one — the same reason `option_line`
+/// keeps the `(y)` and `(esc)` hints.
+///
+/// The search is fenced by its caller: `paragraphs` is the dialog's own block,
+/// already cut away from the transcript above it, so nothing the agent wrote
+/// can be handed back here.
+fn headed(paragraphs: &[String]) -> Option<String> {
+    let heading =
+        paragraphs.iter().rposition(|p| HEADINGS.iter().any(|heading| p.contains(heading)))?;
+    Some(paragraphs[heading].clone())
+}
+
+/// Codex's approval dialog: a paragraph of text and numbered options, drawn
+/// straight onto the transcript with no frame around it.
+///
+/// Read off Codex CLI 0.146.0 — the command dialog, the edit dialog, the
+/// trust-this-directory prompt, the update prompt, a session at work and a
+/// draft left in the composer are all in `tests/fixtures/`, captured under a
+/// PTY at 60 and 120 columns and rendered through the same vt100 the worker
+/// reads. Every discriminator below is a property of those screens.
+///
+/// **What this aims at, and what it does not promise.** The direction that
+/// matters is missing rather than matching: a session wrongly turned
+/// `needs-you` claims one of the one or two loud rows the design budgets, and
+/// makes `terminal_run_capture` refuse to write to a session with nothing open
+/// on it. So every rule here is written to fail closed, and a change to that
+/// CLI should cost a miss.
+///
+/// That is an aim and not a guarantee, and saying otherwise here would be worse
+/// than saying nothing — the next person would read it as a contract and stop
+/// checking. It has been untrue twice already. Both times the shape was the
+/// same: something the app had never seen on a screen turned out to be built
+/// out of the same rows a dialog is. The known open case is written out under
+/// the rules below; the unknown ones are why this is a list of properties of
+/// six screens rather than a specification of an interface nobody here owns.
+///
+/// - the options number themselves 1, 2, 3 … and the **last** such run on the
+///   screen is the dialog, since anything the agent merely printed sits above
+///   it. Same reasoning as the Claude reader, and it holds for the same reason:
+///   the dialog replaces the composer at the foot of the screen;
+/// - **exactly one** option carries the cursor. Prose never does, and a live
+///   dialog always does. More than one would not be this dialog at all;
+/// - there are **at least two** options, and nothing parts them from one
+///   another — a wrapped label may sit between two of them, a blank pair or
+///   another transcript entry may not;
+/// - the question is in the block directly above the options, and that block is
+///   what is left after the transcript is cut away: the walk up stops at a
+///   line drawn at column 0 or at the double blank between two top-level
+///   blocks, and if it stopped on a **turn of the conversation** — a `•` or a
+///   `›` rather than any old column-0 line — then everything it gathered is
+///   that turn's own continuation and is thrown away whole;
+/// - and something in that block has to read as a question — a paragraph that
+///   is one outright for preference, and only failing that a paragraph that
+///   opens with one. The one exception is a block that names itself as one of
+///   the dialogs in `HEADINGS`, which are the ones that ask nothing at all;
+///   that reading opens only once this one has declined.
+///
+/// The block rules are the third version of this, and both earlier ones were
+/// wrong in the same direction: they matched a screen with nothing on it to
+/// answer.
+///
+/// The first bounded the block by indentation alone, which holds while the turn
+/// above fits on one row and fails the moment it wraps — at a narrow centre
+/// pane, the common case. `codex-0.146-draft-in-the-composer.txt` is that
+/// failure captured: an agent still working, its answer's last paragraph ending
+/// in a question mark on an indented row, and a two-line numbered draft sitting
+/// unsent in the composer below.
+///
+/// The second threw the block away only when its first row was glued to the
+/// turn above with no blank between, which misses whenever that turn's first
+/// paragraph is a single row — the row under it is then the blank before its
+/// *second* paragraph, and the block looks unanchored. `• Done — tests pass.`
+/// followed by a blank, a question and a numbered draft is the whole of it.
+/// Hence a turn, not a gap: the block is refused for what it hangs off, rather
+/// than for how closely.
+///
+/// **Known open: a scrolled screen with no anchor on it at all.** When the turn
+/// that owns the prose has scrolled off the top, the walk reaches row 0 without
+/// meeting anything, and an indented `is that alright with you?` above a
+/// numbered draft still reads as a dialog —
+/// `a_scrolled_screen_with_nothing_to_anchor_it_is_a_known_gap` pins it.
+/// Closing it means requiring a block to be anchored at all, which would then
+/// refuse a dialog drawn at the top of an unscrolled screen — the update prompt
+/// is one, and it starts at row 0. That is a trade between a false match in a
+/// rare scroll position and a miss in an ordinary one, with no measurement
+/// available to settle it, so it is recorded rather than guessed at.
+fn question(screen: &[String]) -> Option<Question> {
+    // Every numbered line on the screen, the agent's own among them.
+    let marks: Vec<(usize, (usize, String, bool))> = screen
+        .iter()
+        .enumerate()
+        .filter_map(|(i, line)| option_line(line).map(|parsed| (i, parsed)))
+        .collect();
+
+    // The dialog is the last block that starts its numbering over at 1.
+    let start = marks.iter().rposition(|(_, (index, _, _))| *index == 1)?;
+
+    let mut options = Vec::new();
+    let mut selected = None;
+    let mut cursors = 0;
+    let mut expected = 1;
+    let mut previous = None;
+    for (row, (index, label, is_selected)) in &marks[start..] {
+        // A gap in the numbering is the end of this block, not a hole in it.
+        // Rows are not required to be adjacent: a long label wraps, and the
+        // continuation line is neither an option nor the end of the list — the
+        // update prompt at 60 columns wraps its first option over three rows.
+        // What may not sit between two options is a break in the layout, which
+        // is what stops a stray `4.` further down the screen from joining a
+        // list it has nothing to do with.
+        if *index != expected || previous.is_some_and(|last| parted(screen, last, *row)) {
+            break;
+        }
+        if *is_selected {
+            cursors += 1;
+            selected = Some(options.len());
+        }
+        // Verified against 0.146.0 by answering a live dialog with these very
+        // bytes: the digit selects and the return confirms, the same as Claude
+        // Code, which is what the footer means by "press enter to confirm".
+        options.push(QuestionOption {
+            label: wrapped(screen, *row, label),
+            send: format!("{index}\r"),
+        });
+        expected += 1;
+        previous = Some(*row);
+    }
+
+    if cursors != 1 || options.len() < 2 {
+        return None;
+    }
+
+    // Upwards from the options: first over the blank rows the dialog leaves
+    // between its text and its options, then over its own rows, stopping at a
+    // transcript entry at column 0 or at the double blank that separates one
+    // top-level block from the next.
+    let first = marks[start].0;
+    let mut top = first;
+    while top > 0 && is_blank(&screen[top - 1]) {
+        top -= 1;
+    }
+    while top > 0 {
+        if is_entry(&screen[top - 1]) {
+            break;
+        }
+        if is_blank(&screen[top - 1]) && top >= 2 && is_blank(&screen[top - 2]) {
+            top -= 1;
+            break;
+        }
+        top -= 1;
+    }
+
+    // What is left may still be the tail of the transcript rather than a block
+    // of its own: a turn's continuation rows are indented exactly as a dialog's
+    // are, and its later paragraphs are parted from its first by the same
+    // single blank a dialog uses inside itself. Hanging off that turn at all is
+    // what says so — not how closely, which was the second version of this rule
+    // and missed every turn whose first paragraph was one row. It throws the
+    // whole run away rather than trimming it, because a dialog hangs off
+    // nothing.
+    //
+    // A dialog reached its own block over the double blank between top-level
+    // blocks, so `top` sits on that blank and this never fires; the trust
+    // prompt reaches it over `> You are in …`, which is not a turn.
+    if top > 0 && is_turn(&screen[top - 1]) {
+        return None;
+    }
+
+    // `split_whitespace` drops the dialog's own indent and collapses any run of
+    // whitespace to one space, so a question wrapped across rows comes back as
+    // one line.
+    let mut paragraphs: Vec<String> = Vec::new();
+    for line in &screen[top..first] {
+        if is_blank(line) {
+            paragraphs.push(String::new());
+        } else {
+            let joined = line.split_whitespace().collect::<Vec<_>>().join(" ");
+            match paragraphs.last_mut() {
+                Some(last) if !last.is_empty() => {
+                    last.push(' ');
+                    last.push_str(&joined);
+                }
+                _ => paragraphs.push(joined),
+            }
+        }
+    }
+
+    // Bottom-most paragraph first, because a command preview sits *below* the
+    // question in the command dialog and a diff sits *above* it in the edit
+    // one, so the nearest one that reads as a question is the right answer for
+    // both. A whole question beats an opening one anywhere on the screen.
+    //
+    // Only when neither finds anything does `headed` look, and only for a block
+    // that named itself: the dialogs in `HEADINGS` ask nothing, and everything
+    // else on this screen still has to.
+    let text = paragraphs
+        .iter()
+        .rev()
+        .find_map(|paragraph| whole(paragraph))
+        .or_else(|| paragraphs.iter().rev().find_map(|paragraph| opening(paragraph)))
+        .or_else(|| headed(&paragraphs))?;
+    Some(Question { text, options, selected })
+}
+
+/// One line of `codex exec --json` as the lines a person reads in the pane.
+///
+/// Every shape here was read off the CLI at 0.146.0:
+///
+/// ```text
+/// {"type":"thread.started","thread_id":"…"}
+/// {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"…"}}
+/// {"type":"turn.started"}
+/// {"type":"turn.failed","error":{"message":"…"}}
+/// ```
+///
+/// **An event this function does not know draws nothing**, which is the same
+/// answer a line that is not JSON gets: a batch is watched by somebody, and a
+/// stream that grew a new event should cost a missing line rather than a pane
+/// full of raw JSON.
+pub fn transcript_line(line: &str) -> Vec<String> {
+    let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+        return Vec::new();
+    };
+    let str_at = |value: &serde_json::Value, key: &str| {
+        value.get(key).and_then(serde_json::Value::as_str).unwrap_or("").to_owned()
+    };
+    // Collapsed and clipped before the prefix goes on, never after: a prefix is
+    // this app's own character and must not be what the ellipsis eats, and the
+    // ceiling is meant to bound the agent's words rather than the row.
+    let said = |text: &str, max: usize| clip(&one_line(text), max);
+    match str_at(&event, "type").as_str() {
+        // An id, so it is neither collapsed nor clipped in the ordinary sense —
+        // a truncated conversation id is one nobody can resume by — but it goes
+        // through the same hygiene, since it is still a field off somebody
+        // else's stream.
+        "thread.started" => {
+            one(format!("· thread {}", said(&str_at(&event, "thread_id"), MAX_TEXT)))
+        }
+        "item.completed" => {
+            let Some(item) = event.get("item") else { return Vec::new() };
+            match str_at(item, "type").as_str() {
+                "agent_message" => one(said(&str_at(item, "text"), MAX_TEXT)),
+                "command_execution" => {
+                    one(format!("› {}", said(&str_at(item, "command"), MAX_DETAIL)))
+                }
+                "error" => one(format!("! {}", said(&str_at(item, "message"), MAX_TEXT))),
+                _ => Vec::new(),
+            }
+        }
+        "error" => one(format!("! {}", said(&str_at(&event, "message"), MAX_TEXT))),
+        "turn.failed" => {
+            let message =
+                event.get("error").map(|error| str_at(error, "message")).unwrap_or_default();
+            one(format!("! {}", said(&message, MAX_TEXT)))
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// A line with nothing but its own prefix in it is no line at all — a pane's
+/// rows are a person's screen, and an empty one spends a row on nothing.
+fn one(text: String) -> Vec<String> {
+    let bare = text.trim_start_matches(['·', '›', '!', ' ']).trim();
+    if bare.is_empty() {
+        Vec::new()
+    } else {
+        vec![text]
+    }
+}
+
+/// The agent's own words, and the command it ran: two ceilings, and they are
+/// `claude.rs`'s two, kept at the same numbers because they were chosen against
+/// real output rather than picked. A `command_execution` item carries whatever
+/// was typed — a heredoc, a `git commit -F -` with a whole message inside it —
+/// and an `agent_message` is routinely a paragraph. Unclipped, either is one
+/// unbounded row in a pane whose rows are a person's screen.
+const MAX_TEXT: usize = 200;
+const MAX_DETAIL: usize = 140;
+
+/// Whitespace collapsed and the whole thing on one line — a pane row is a row —
+/// and every other control character dropped.
+///
+/// Deliberately the same rule as `claude::one_line`, down to the wording of why,
+/// and it is worth saying that this is **not** the no-shared-code rule being
+/// broken: that rule is about the event *vocabulary*, where an event name one
+/// harness happens to use today is exactly what drifts. String hygiene is about
+/// this app's own pane and is the same fact for every harness that writes into
+/// it.
+///
+/// Collapsing rather than filtering is the half that was wrong here first. A
+/// dropped newline is not a smaller mistake than a rendered one: it welds two
+/// sentences together, so a two-line `agent_message` reached the pane as
+/// "…the tests pass.Next I will…" and read as a typo of the agent's.
+///
+/// The rest is not tidiness either. Everything reaching this function is
+/// **agent-authored**, and `serde_json` decodes an escaped escape or bell in the
+/// JSON into a live byte. Passed through, they would be colour and cursor
+/// movement in a transcript specified as plain text, and a bell would set
+/// `bell_pending`, turning the session's row `needs-you` and spending one of the
+/// one or two loud rows the whole design budgets for a screen. `char::is_control`
+/// covers C0, DEL and C1, and C1 is worth taking with them: U+009B is a CSI in
+/// its own right.
+fn one_line(text: &str) -> String {
+    text.split_whitespace()
+        .map(|word| word.chars().filter(|c| !c.is_control()).collect::<String>())
+        // A word that was nothing but control bytes leaves no gap of its own.
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Counted in characters rather than bytes: an agent answering in Russian is
+/// two bytes a letter, and slicing a string mid-character panics.
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(max.saturating_sub(3)).collect();
+    format!("{kept}...")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::library::Skills;
+    use crate::agents::{Intent, Launch, Stage, TaskDraft};
+    use std::path::PathBuf;
+
+    /// The real bundle resources, the way `claude.rs` reaches its own screen
+    /// fixtures. A made-up path would leave `read_skill` answering `None` in
+    /// every test here, and the gating in `command` — which decides that filing
+    /// guidance reaches an `Inline` harness whatever the Brainstorming switch
+    /// says — would never be observed at all.
+    fn resources(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/resources").join(name)
+    }
+
+    fn launch(intent: Intent) -> Launch {
+        Launch {
+            profile: &Codex,
+            cwd: PathBuf::from("/tmp/project"),
+            intent,
+            skills: Skills {
+                smetana: resources("smetana"),
+                superpowers: resources("superpowers"),
+                superpowers_installed: false,
+            },
+            facts: None,
+            session_id: None,
+            languages: crate::agents::Languages::default(),
+            agent_prompt: String::new(),
+            model: None,
+            worker_model: None,
+        }
+    }
+
+    #[test]
+    fn a_sign_in_is_the_login_subcommand_and_nothing_else() {
+        use crate::agents::SignInVariant;
+        let mut browser = launch(Intent::SignIn { agent: "codex".into(), variant: SignInVariant::Browser });
+        // Things that would ride on any other launch must not reach this one.
+        browser.model = Some("gpt-5.6-sol".into());
+        browser.agent_prompt = "Be brief.".into();
+        assert_eq!(argv(&browser), ["codex", "login"]);
+        let device = launch(Intent::SignIn { agent: "codex".into(), variant: SignInVariant::DeviceCode });
+        assert_eq!(argv(&device), ["codex", "login", "--device-auth"]);
+    }
+
+    #[test]
+    fn codex_has_both_sign_in_variants() {
+        use crate::agents::SignInVariant;
+        assert_eq!(Codex.login_args(SignInVariant::Browser), Some(vec!["login"]));
+        assert_eq!(Codex.login_args(SignInVariant::DeviceCode), Some(vec!["login", "--device-auth"]));
+    }
+
+    #[test]
+    fn rate_limits_reads_only_the_account_wide_codex_bucket() {
+        let response = serde_json::json!({
+            "rateLimitsByLimitId": {
+                "gpt-5.6-sol": { "primary": { "usedPercent": 100, "windowDurationMins": 60 } },
+                "codex": {
+                    "primary": { "usedPercent": 41, "windowDurationMins": 300, "resetsAt": 0 },
+                    "secondary": { "usedPercent": 79, "windowDurationMins": 10080, "resetsAt": 60 }
+                }
+            }
+        });
+        let usage = rate_limits(&response).expect("the Codex bucket is a reading");
+        assert_eq!(usage.session_pct, Some(41));
+        assert_eq!(usage.session_label.as_deref(), Some("5 hours"));
+        assert!(usage.session_reset.is_some());
+        assert_eq!(usage.session_reset_at, chrono::DateTime::from_timestamp(0, 0));
+        assert_eq!(usage.week_pct, Some(79));
+        assert_eq!(usage.week_label.as_deref(), Some("7 days"));
+        assert!(usage.week_reset.is_some());
+        assert_eq!(usage.week_reset_at, chrono::DateTime::from_timestamp(60, 0));
+    }
+
+    #[test]
+    fn rate_limits_accepts_the_compatible_legacy_bucket_and_one_window() {
+        let response = serde_json::json!({
+            "rateLimits": { "primary": { "usedPercent": 0, "windowDurationMins": 60 } }
+        });
+        let usage = rate_limits(&response).expect("a missing limit id is the old Codex shape");
+        assert_eq!(usage.session_pct, Some(0));
+        assert_eq!(usage.session_label.as_deref(), Some("1 hour"));
+        assert_eq!(usage.week_pct, None);
+        assert_eq!(usage.week_label, None);
+    }
+
+    #[test]
+    fn rate_limits_refuses_other_buckets_and_invalid_values() {
+        let model_bucket = serde_json::json!({
+            "rateLimits": {
+                "limitId": "gpt-5.6-sol",
+                "primary": { "usedPercent": 99, "windowDurationMins": 60 }
+            }
+        });
+        assert_eq!(rate_limits(&model_bucket), None);
+
+        let invalid = serde_json::json!({
+            "rateLimitsByLimitId": {
+                "codex": { "primary": { "usedPercent": 101, "windowDurationMins": 60 } }
+            }
+        });
+        assert_eq!(rate_limits(&invalid), None);
+    }
+
+    /// A line from the middle of each shipped `SKILL.md`, far enough in to be
+    /// the body rather than the front matter: finding it in the prompt is the
+    /// only proof that the file was read and pasted, not merely named.
+    /// A sentinel from the shipped file, and deliberately its heading rather
+    /// than a sentence out of the body: the prose gets rewritten, and a test
+    /// that fails on wording says nothing about what it is actually guarding —
+    /// that the body travelled at all. It must also be a string the prompt
+    /// itself never writes, or the test would pass with the skill missing.
+    const FILING_BODY: &str = "# Filing a task in bd";
+    const BRAINSTORMING_BODY: &str = "ask questions one at a time";
+    const PLANS_BODY: &str = "# Writing Plans";
+
+    fn argv(launch: &Launch) -> Vec<String> {
+        Codex
+            .command(launch)
+            .get_argv()
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn new_task(brainstorm: Stage) -> Intent {
+        with_images(brainstorm, Vec::new())
+    }
+
+    #[test]
+    fn a_recorded_session_is_reopened_by_the_subcommand_this_cli_documents() {
+        // `codex resume [SESSION_ID] [PROMPT]`, read out of that CLI's own help
+        // at 0.146.0. A subcommand rather than a flag, which is why the answer
+        // is written out whole rather than composed from Claude Code's shape.
+        use crate::agents::Profile;
+        let args = Codex
+            .resume_args("01a0765f-f205-74d0-8dc9-61006c68767f")
+            .expect("this harness resumes");
+        assert_eq!(
+            args,
+            vec!["resume".to_owned(), "01a0765f-f205-74d0-8dc9-61006c68767f".to_owned()]
+        );
+    }
+
+    #[test]
+    fn branching_a_session_is_its_own_subcommand_and_not_the_resume_with_a_flag() {
+        // Two capabilities and two answers: `codex fork [SESSION_ID]` at
+        // 0.146.0, which is a different word from `resume` rather than the same
+        // word with something appended.
+        use crate::agents::Profile;
+        let args = Codex
+            .fork_args("01a0765f-f205-74d0-8dc9-61006c68767f")
+            .expect("this harness forks");
+        assert_eq!(
+            args,
+            vec!["fork".to_owned(), "01a0765f-f205-74d0-8dc9-61006c68767f".to_owned()]
+        );
+        assert!(
+            !args.iter().any(|arg| arg == "resume"),
+            "a fork is not a resume with something appended"
+        );
+    }
+
+    #[test]
+    fn a_batch_is_the_non_interactive_subcommand_with_a_machine_readable_stream() {
+        use crate::agents::Profile;
+        assert_eq!(Codex.batch_args(), &["exec", "--json"]);
+    }
+
+    #[test]
+    fn the_start_of_a_thread_names_the_conversation_it_opened() {
+        let lines = transcript_line(
+            r#"{"type":"thread.started","thread_id":"01a0765f-f205-74d0-8dc9-61006c68767f"}"#,
+        );
+        assert_eq!(lines, vec!["\u{b7} thread 01a0765f-f205-74d0-8dc9-61006c68767f".to_owned()]);
+    }
+
+    #[test]
+    fn an_agents_own_message_reaches_the_pane_as_its_text() {
+        let lines = transcript_line(
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Done, the tests pass."}}"#,
+        );
+        assert_eq!(lines, vec!["Done, the tests pass.".to_owned()]);
+    }
+
+    #[test]
+    fn a_command_the_agent_ran_is_drawn_with_the_command_and_nothing_else() {
+        let lines = transcript_line(
+            r#"{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"cargo test","exit_code":0}}"#,
+        );
+        assert_eq!(lines, vec!["\u{203a} cargo test".to_owned()]);
+    }
+
+    #[test]
+    fn an_error_item_and_a_failed_turn_both_carry_their_reason_across() {
+        assert_eq!(
+            transcript_line(
+                r#"{"type":"item.completed","item":{"type":"error","message":"the sandbox refused"}}"#
+            ),
+            vec!["! the sandbox refused".to_owned()]
+        );
+        assert_eq!(
+            transcript_line(r#"{"type":"error","message":"the stream broke"}"#),
+            vec!["! the stream broke".to_owned()]
+        );
+        assert_eq!(
+            transcript_line(r#"{"type":"turn.failed","error":{"message":"the model refused"}}"#),
+            vec!["! the model refused".to_owned()]
+        );
+    }
+
+    #[test]
+    fn an_event_this_translator_has_never_heard_of_draws_nothing_at_all() {
+        assert!(transcript_line(r#"{"type":"turn.started"}"#).is_empty());
+        assert!(transcript_line("not json at all").is_empty());
+        assert!(transcript_line("").is_empty());
+    }
+
+    #[test]
+    fn control_characters_never_reach_a_pane_that_was_promised_plain_text() {
+        // The two escapes are spelled the way JSON spells them, so `serde_json`
+        // decodes them into live bytes exactly as a real stream would, and the
+        // assertion says what a person must see once they are gone. One space
+        // where the bell stood and not two: a word that was nothing but control
+        // bytes leaves no gap of its own.
+        let raw = format!(
+            r#"{{"type":"item.completed","item":{{"type":"agent_message","text":"red {}[31m and a bell {} here"}}}}"#,
+            "\\u001b", "\\u0007"
+        );
+        let lines = transcript_line(&raw);
+        assert_eq!(lines, vec!["red [31m and a bell here".to_owned()]);
+    }
+
+    #[test]
+    fn a_newline_inside_a_message_becomes_a_gap_and_never_nothing() {
+        // Dropping it is not the smaller mistake: it welds two sentences
+        // together, and "the tests pass.Next I will" reads as a typo of the
+        // agent's rather than as this app's doing. A tab and a run of spaces
+        // collapse the same way, since a pane row is a row.
+        let raw = format!(
+            r#"{{"type":"item.completed","item":{{"type":"agent_message","text":"Done.{}Next{}I will run    it"}}}}"#,
+            "\\n", "\\t"
+        );
+        assert_eq!(transcript_line(&raw), vec!["Done. Next I will run it".to_owned()]);
+    }
+
+    #[test]
+    fn a_paragraph_the_agent_wrote_is_clipped_rather_than_spilt_down_the_pane() {
+        // A pane's rows are a person's screen and an unbounded one spends the
+        // lot. The ceilings are `claude.rs`'s, chosen there against real output,
+        // and the agent's own words get the wider of the two.
+        let long = "x".repeat(400);
+        let lines = transcript_line(&format!(
+            r#"{{"type":"item.completed","item":{{"type":"agent_message","text":"{long}"}}}}"#
+        ));
+        assert_eq!(lines[0].chars().count(), MAX_TEXT);
+        assert!(lines[0].ends_with("..."));
+
+        // A command carries whatever was typed — a heredoc, a commit message on
+        // stdin — and takes the tighter ceiling. The prefix is this app's own
+        // character and deliberately not what the ellipsis eats, so the row is
+        // the ceiling plus that prefix rather than the command cut two shorter.
+        let lines = transcript_line(&format!(
+            r#"{{"type":"item.completed","item":{{"type":"command_execution","command":"{long}"}}}}"#
+        ));
+        assert_eq!(lines[0].chars().count(), MAX_DETAIL + 2);
+        assert!(lines[0].ends_with("..."));
+    }
+
+    #[test]
+    fn a_message_of_nothing_but_control_bytes_spends_no_row_at_all() {
+        // `one` refuses a line with nothing but its own prefix in it, and this
+        // is one way to reach that: an agent message the hygiene empties, and a
+        // failure whose reason is blank.
+        let raw = format!(
+            r#"{{"type":"item.completed","item":{{"type":"agent_message","text":"{}{}"}}}}"#,
+            "\\u001b", "\\u0007"
+        );
+        assert!(transcript_line(&raw).is_empty());
+        assert!(transcript_line(r#"{"type":"turn.failed","error":{"message":"   "}}"#).is_empty());
+    }
+
+    #[test]
+    fn a_one_shot_question_uses_json_and_skips_the_probe_directory_git_check() {
+        use crate::agents::Profile;
+        assert_eq!(
+            Codex.oneshot_args(),
+            Some(&["exec", "--json", "--skip-git-repo-check"][..])
+        );
+    }
+
+    #[test]
+    fn the_answer_is_the_last_thing_the_agent_said_and_never_the_log_around_it() {
+        use crate::agents::Profile;
+        let stdout = concat!(
+            r#"{"type":"thread.started","thread_id":"01a0"}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"type":"command_execution","command":"git diff"}}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"first thought"}}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"fix: reread the branch"}}"#,
+            "\n",
+            r#"{"type":"turn.completed"}"#,
+            "\n",
+        );
+        assert_eq!(Codex.oneshot_answer(stdout), "fix: reread the branch");
+    }
+
+    #[test]
+    fn a_stream_that_failed_before_saying_anything_answers_with_nothing() {
+        use crate::agents::Profile;
+        let stdout = concat!(
+            r#"{"type":"thread.started","thread_id":"01a0"}"#,
+            "\n",
+            r#"{"type":"turn.failed","error":{"message":"the model refused"}}"#,
+            "\n",
+        );
+        assert_eq!(Codex.oneshot_answer(stdout), "");
+    }
+
+    #[test]
+    fn a_line_of_ordinary_prose_in_the_stream_is_not_mistaken_for_the_answer() {
+        // `codex exec` writes its own diagnostics to stdout beside the JSONL — a
+        // models-cache warning was there on the machine this was measured on.
+        use crate::agents::Profile;
+        let stdout = concat!(
+            "2026-09-06T10:59:52Z ERROR codex_models_manager::cache: failed to load\n",
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"fix: reread the branch"}}"#,
+            "\n",
+        );
+        assert_eq!(Codex.oneshot_answer(stdout), "fix: reread the branch");
+    }
+
+    #[test]
+    fn this_harness_finds_out_its_own_conversations_id() {
+        // The pair `session_id_args` cannot answer: Codex has no flag for an id
+        // it was given, and names its own instead — so the capability question
+        // is answered here and the lookup itself in `agents::codex_sessions`.
+        use crate::agents::Profile;
+        assert!(Codex.discovers_session_id());
+    }
+
+    #[test]
+    fn codex_cannot_be_given_a_conversation_id_and_finds_out_its_own_instead() {
+        // The third of the same family, and the one with a consequence rather
+        // than a refusal behind it. The consequence used to be that a codex
+        // session recorded nothing in `.smetana/agents.json` and so never came
+        // back as a row offering a resume it could not make; it is now that the
+        // id is learnt after the start instead, from the harness's own rollout
+        // file. The two halves are asserted together because it is the *pair*
+        // that has to hold — a harness answering neither is the one that
+        // records nothing.
+        use crate::agents::Profile;
+        assert_eq!(Codex.session_id_args("9f1c0a2e-0000-4000-8000-000000000000"), None);
+        assert!(Codex.discovers_session_id());
+    }
+
+    #[test]
+    fn this_harness_is_given_no_clearing_command_nobody_has_confirmed() {
+        // The fourth of the same family, and the rule is `resume_args`' rule:
+        // what clears a conversation is this harness's own vocabulary and this
+        // app does not get to guess it. The failure a guess buys is the quiet
+        // one — an unknown slash command is ordinary text to a CLI, so it would
+        // reach the agent as a line of a prompt rather than as an error — which
+        // is why the answer stays `None` until somebody reads it out of the
+        // CLI's own help. The menu row is greyed with a reason on it meanwhile.
+        //
+        // The help was read, at 0.146.0, and carries no such command: `codex
+        // --help` lists no subcommand that clears or starts a conversation
+        // over, and no option does either. Whatever the TUI's own composer
+        // accepts is not in anything this CLI prints, so it stays unanswered.
+        use crate::agents::Profile;
+        assert_eq!(Codex.clear_command(), None);
+    }
+
+    #[test]
+    fn nothing_of_a_chosen_id_reaches_this_command_line() {
+        // The half of that pair which is about the *command line*: a `Launch`
+        // carrying an id all the same puts no flag on it, since this harness's
+        // `command` never asks for one. The other half — that the profile
+        // answers `None` when it is asked — is next door, in
+        // `codex_cannot_be_given_a_conversation_id_and_finds_out_its_own_instead`.
+        let carried = Launch {
+            session_id: Some("9f1c0a2e-0000-4000-8000-000000000000".to_owned()),
+            ..launch(Intent::Bare)
+        };
+        let args = argv(&carried);
+        assert!(!args.iter().any(|a| a.contains("session-id")), "{args:?}");
+    }
+
+    fn with_images(brainstorm: Stage, images: Vec<String>) -> Intent {
+        staged(brainstorm, Stage::Off, Stage::Off, images)
+    }
+
+    fn staged(brainstorm: Stage, spec: Stage, plan: Stage, images: Vec<String>) -> Intent {
+        Intent::NewTask {
+            brainstorm,
+            spec,
+            plan,
+            draft: TaskDraft {
+                text: "Swap the red for green".into(),
+                issue_type: Some("bug".into()),
+                priority: Some(2),
+                images,
+                files: Vec::new(),
+                parent: None,
+            },
+        }
+    }
+
+    #[test]
+    fn a_new_task_has_the_binary_workspace_sandbox_and_prompt() {
+        // Codex has no per-session flag for a skill library — verified against
+        // 0.146.0. The sandbox is separate: it fixes the workspace access
+        // policy without adding a skill registry.
+        let args = argv(&launch(new_task(Stage::Off)));
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[0], "codex");
+        assert_eq!(args[1], "--sandbox");
+        assert_eq!(args[2], "workspace-write");
+    }
+
+    #[test]
+    fn prompt_text_answers_byte_for_byte_what_command_puts_on_the_line() {
+        // `CodexDriver::opening` asks `prompt_text` directly instead of
+        // rebuilding a `CommandBuilder` and reading its last argument back —
+        // the seam only earns its keep if the two answers cannot drift.
+        let new_task_launch = launch(new_task(Stage::Off));
+        let args = argv(&new_task_launch);
+        let last = args.last().cloned();
+        assert_eq!(Codex.prompt_text(&new_task_launch), last);
+
+        // A resumed session opens on no prompt at all — `prompt::build`
+        // refuses it one, and `prompt_text` carries that refusal through
+        // rather than answering something `command` never puts on the line.
+        let resume_launch = launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", false));
+        assert_eq!(Codex.prompt_text(&resume_launch), None);
+        assert!(!argv(&resume_launch).iter().any(|arg| arg.contains("Talk to me")));
+    }
+
+    #[test]
+    fn a_bare_session_is_the_binary_and_the_language_sentence() {
+        // It was the binary alone until the conversation language reached every
+        // intent. Still nothing about the work — a bare session has none — and
+        // its only flags name the workspace sandbox, not a skill mechanism.
+        let args = argv(&launch(Intent::Bare));
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[0], "codex");
+        assert_eq!(args[1], "--sandbox");
+        assert_eq!(args[2], "workspace-write");
+        assert!(args[3].contains("Talk to me in English"), "{args:?}");
+    }
+
+    #[test]
+    fn it_never_names_a_skill_registry_it_does_not_have() {
+        let args = argv(&launch(new_task(Stage::On)));
+        assert!(!args.last().unwrap().contains("superpowers:"));
+    }
+
+    #[test]
+    fn auto_points_at_the_file_instead_of_pasting_it() {
+        let args = argv(&launch(new_task(Stage::Auto)));
+        let pointer = resources("superpowers").join("skills/brainstorming/SKILL.md");
+        assert!(args.last().unwrap().contains(&pointer.display().to_string()));
+    }
+
+    #[test]
+    fn the_filing_skill_is_pasted_in_whatever_the_switch_says() {
+        // The branch's headline behaviour for a harness with no skill registry:
+        // how this project wants a task worded is not part of the brainstorming
+        // question, so the text travels in all three positions of the switch.
+        // Reading it under `Stage::On` alone would still satisfy every
+        // other test in this file.
+        for mode in [Stage::Off, Stage::Auto, Stage::On] {
+            let args = argv(&launch(new_task(mode)));
+            assert!(
+                args.last().unwrap().contains(FILING_BODY),
+                "{mode:?}: the shipped filing skill never reached the prompt"
+            );
+        }
+    }
+
+    #[test]
+    fn the_brainstorming_process_is_pasted_in_only_when_it_is_switched_on() {
+        // 10 KB the agent may never use: `Off` has no business with it at all,
+        // and `Auto` is handed the path instead so it pays only if it decides
+        // the task warrants a conversation.
+        for mode in [Stage::Off, Stage::Auto] {
+            let args = argv(&launch(new_task(mode)));
+            assert!(
+                !args.last().unwrap().contains(BRAINSTORMING_BODY),
+                "{mode:?}: the whole process was pasted in unasked"
+            );
+        }
+        let args = argv(&launch(new_task(Stage::On)));
+        assert!(
+            args.last().unwrap().contains(BRAINSTORMING_BODY),
+            "on must carry the process itself, there being no registry to name it in"
+        );
+    }
+
+    #[test]
+    fn the_plan_process_is_pasted_in_only_when_the_cascade_leaves_it_on() {
+        // 7 KB, and the same rule the brainstorming body follows: `On` gets
+        // the process, `Auto` gets the path, `Off` gets nothing — and none of
+        // it is read from disk at all unless the two stages above it left the
+        // plan standing.
+        let asked = argv(&launch(staged(Stage::On, Stage::On, Stage::On, Vec::new())));
+        assert!(
+            asked.last().unwrap().contains(PLANS_BODY),
+            "on must carry the process itself, there being no registry to name it in"
+        );
+
+        for intent in [
+            staged(Stage::On, Stage::On, Stage::Auto, Vec::new()),
+            staged(Stage::On, Stage::On, Stage::Off, Vec::new()),
+            // The cascade's own cases: a plan asked for under a spec, or a
+            // discussion, that is not On costs nothing either.
+            staged(Stage::On, Stage::Off, Stage::On, Vec::new()),
+            staged(Stage::Off, Stage::On, Stage::On, Vec::new()),
+            staged(Stage::Auto, Stage::On, Stage::On, Vec::new()),
+        ] {
+            let args = argv(&launch(intent));
+            assert!(
+                !args.last().unwrap().contains(PLANS_BODY),
+                "the whole process was pasted in unasked"
+            );
+        }
+    }
+
+    #[test]
+    fn an_auto_plan_is_pointed_at_the_shipped_file() {
+        let args = argv(&launch(staged(Stage::On, Stage::On, Stage::Auto, Vec::new())));
+        let pointer = resources("superpowers").join("skills/writing-plans/SKILL.md");
+        assert!(args.last().unwrap().contains(&pointer.display().to_string()), "{args:?}");
+    }
+
+    #[test]
+    fn every_attached_image_rides_as_its_own_flag_in_front_of_the_prompt() {
+        let args = argv(&launch(with_images(
+            Stage::Off,
+            vec!["/data/a.png".into(), "/data/b.png".into()],
+        )));
+
+        assert_eq!(
+            args,
+            vec![
+                "codex",
+                "--sandbox",
+                "workspace-write",
+                "-i",
+                "/data/a.png",
+                "-i",
+                "/data/b.png",
+                "--",
+                args.last().unwrap(),
+            ],
+            "the prompt is positional and everything else goes in front of it: {args:?}"
+        );
+    }
+
+    #[test]
+    fn image_flags_are_separated_from_one_literal_composed_prompt() {
+        let user_text = "Keep commas, intact, across lines.\nUse `literal` text.";
+        let intent = Intent::NewTask {
+            brainstorm: Stage::Off,
+            spec: Stage::Off,
+            plan: Stage::Off,
+            draft: TaskDraft {
+                text: user_text.to_owned(),
+                issue_type: Some("bug".into()),
+                priority: Some(2),
+                images: vec![
+                    "/data/first image.png".into(),
+                    "/data/second image.png".into(),
+                ],
+                files: Vec::new(),
+                parent: None,
+            },
+        };
+        let launched = launch(intent.clone());
+        let args = argv(&launched);
+        let filing = read_skill(&launched.skills.smetana, "filing-a-task");
+        let expected = prompt::build(
+            &intent,
+            Codex.delivery(),
+            Codex.images(),
+            &launched.skills,
+            launched.facts.as_deref(),
+            prompt::SkillText {
+                filing: filing.as_deref(),
+                resolving: None,
+                brainstorming: None,
+                plans: None,
+                reviewing_branch: None,
+            },
+            &launched.languages,
+            &launched.agent_prompt,
+            launched.worker_model.as_deref(),
+        )
+        .expect("a new task has a prompt");
+
+        assert_eq!(
+            args,
+            vec![
+                "codex".to_owned(),
+                "--sandbox".to_owned(),
+                "workspace-write".to_owned(),
+                "-i".to_owned(),
+                "/data/first image.png".to_owned(),
+                "-i".to_owned(),
+                "/data/second image.png".to_owned(),
+                "--".to_owned(),
+                expected.clone(),
+            ]
+        );
+        assert_eq!(args.last(), Some(&expected));
+        assert!(expected.contains(user_text));
+    }
+
+    #[test]
+    fn the_paths_are_in_the_prompt_as_well_as_on_the_command_line() {
+        // Not a duplicate: the flag is what Codex looks at, the path in the
+        // prompt is what has to reach the issue description.
+        let args = argv(&launch(with_images(Stage::Off, vec!["/data/a.png".into()])));
+        assert!(args.last().unwrap().contains("/data/a.png"), "{args:?}");
+    }
+
+    #[test]
+    fn files_never_reach_the_image_flag() {
+        let intent = Intent::NewTask {
+            brainstorm: Stage::Off,
+            spec: Stage::Off,
+            plan: Stage::Off,
+            draft: TaskDraft {
+                text: "Swap the red for green".into(),
+                issue_type: None,
+                priority: None,
+                images: Vec::new(),
+                files: vec!["/data/brief.pdf".into()],
+                parent: None,
+            },
+        };
+        let args = argv(&launch(intent));
+        assert!(!args.iter().any(|a| a == "-i"), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--"), "{args:?}");
+        assert!(args.last().unwrap().contains("/data/brief.pdf"), "the prompt names it: {args:?}");
+    }
+
+    #[test]
+    fn a_task_with_no_images_gets_no_image_flag() {
+        let args = argv(&launch(new_task(Stage::Off)));
+        assert!(!args.iter().any(|a| a == "-i"), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--"), "{args:?}");
+    }
+
+    // The four fixtures below are whole 120x30 screens captured off a real
+    // Codex CLI 0.146.0 under a PTY and rendered through the same vt100 the
+    // worker reads: the update banner, the session header, the person's own
+    // prompt, the agent's transcript and the dialog at the bottom. That is the
+    // shape this reader actually has to survive, and a hand-written excerpt of
+    // it would prove only that it survives an excerpt. Only the working
+    // directory in them is edited, to keep somebody's home directory out of the
+    // repository.
+    fn fixture(name: &str) -> Vec<String> {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
+        std::fs::read_to_string(path).unwrap().lines().map(str::to_owned).collect()
+    }
+
+    fn raw_fixture(name: &str) -> (Vec<String>, Vec<crate::terminal::screen::EntryStyle>) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
+        let mut terminal = crate::terminal::screen::Screen::new(160, 8);
+        terminal.feed(&std::fs::read(path).unwrap());
+        terminal.lines_with_entry_style()
+    }
+
+    #[test]
+    fn recognises_the_command_approval_dialog() {
+        let q = question(&fixture("codex-0.146-approval-command.txt"))
+            .expect("the dialog went unrecognised");
+        assert_eq!(q.text, "Would you like to run the following command?");
+        assert_eq!(q.options.len(), 3);
+        assert_eq!(q.options[0].label, "Yes, proceed (y)");
+        assert_eq!(q.options[0].send, "1\r");
+        assert_eq!(q.options[2].label, "No, and tell Codex what to do differently (esc)");
+        assert_eq!(q.selected, Some(0));
+    }
+
+    #[test]
+    fn the_command_preview_under_the_question_does_not_become_the_question() {
+        // The command dialog puts `Environment: local` and `$ touch probe.txt`
+        // *between* the question and the options, which is the opposite of
+        // Claude Code's layout. Reading the run of text directly above the
+        // options — which is exactly what the Claude reader does — would hand
+        // back the shell command and then reject the whole dialog for not
+        // ending in a question mark.
+        let q = question(&fixture("codex-0.146-approval-command.txt"))
+            .expect("the dialog went unrecognised");
+        assert!(!q.text.contains("touch probe.txt"), "{}", q.text);
+    }
+
+    #[test]
+    fn recognises_the_edit_approval_dialog() {
+        // Here the preview is a diff and it sits *above* the question, inside
+        // the agent's own transcript entry.
+        let q = question(&fixture("codex-0.146-approval-patch.txt"))
+            .expect("the dialog went unrecognised");
+        assert_eq!(q.text, "Would you like to make the following edits?");
+        assert_eq!(q.options.len(), 3);
+        assert_eq!(q.options[1].label, "Yes, and don't ask again for these files (a)");
+        assert_eq!(q.selected, Some(0));
+    }
+
+    #[test]
+    fn a_diff_above_the_question_does_not_reach_the_text() {
+        let q = question(&fixture("codex-0.146-approval-patch.txt"))
+            .expect("the dialog went unrecognised");
+        assert!(!q.text.contains("hello"), "{}", q.text);
+        assert!(!q.text.contains("bye"), "{}", q.text);
+    }
+
+    #[test]
+    fn recognises_the_trust_prompt_a_session_opens_on() {
+        // The first thing Codex draws in a directory it has not been trusted
+        // in, before the agent has done anything at all. It is a question with
+        // a person's answer required, so it is one of these — and reading it is
+        // worth as much as reading an approval, since a session sat on this one
+        // never starts.
+        let q = question(&fixture("codex-0.146-trust-directory.txt"))
+            .expect("the trust prompt went unrecognised");
+        assert_eq!(q.text, "Do you trust the contents of this directory?");
+        assert_eq!(q.options.len(), 2);
+        assert_eq!(q.options[1].label, "No, quit");
+        assert_eq!(q.selected, Some(0));
+    }
+
+    #[test]
+    fn the_explanation_under_the_trust_prompt_is_not_part_of_the_question() {
+        // Two sentences of prose follow the question mark in the same
+        // paragraph, wrapped across two rows. What a person is being asked is
+        // the first sentence.
+        let q = question(&fixture("codex-0.146-trust-directory.txt"))
+            .expect("the trust prompt went unrecognised");
+        assert!(!q.text.contains("prompt injection"), "{}", q.text);
+    }
+
+    #[test]
+    fn an_agent_at_work_is_not_waiting_on_anybody() {
+        // A whole real screen mid-turn: the banner, the person's prompt behind
+        // the cursor glyph, the spinner, and the composer's own placeholder
+        // behind that same glyph at the foot. Two `›` on it and nothing to
+        // answer.
+        assert!(
+            question(&fixture("codex-0.146-working.txt")).is_none(),
+            "an agent at work was read as waiting on a person"
+        );
+    }
+
+    #[test]
+    fn a_numbered_list_the_agent_printed_is_not_a_dialog() {
+        // Ends in a question mark and is numbered. Nothing points at it, which
+        // is what a dialog always has and prose never does.
+        let screen: Vec<String> = [
+            "• Which of these would you like me to do first?",
+            "  1. Rename the module",
+            "  2. Split the test file",
+            "  3. Neither, stop here",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none(), "prose with a numbered list was taken for a dialog");
+    }
+
+    #[test]
+    fn a_list_in_the_output_above_does_not_shadow_the_dialog() {
+        // Both blocks number themselves from 1. The dialog is the lower one —
+        // it replaces the composer at the foot of the screen, and whatever the
+        // agent printed is by definition above it.
+        let screen: Vec<String> = [
+            "• I considered three options:",
+            "  1. Rename the module",
+            "  2. Split the test file",
+            "",
+            "",
+            "  Would you like to run the following command?",
+            "",
+            "  $ ls",
+            "",
+            "\u{203a} 1. Yes, proceed (y)",
+            "  2. No, and tell Codex what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let q = question(&screen).expect("the dialog was shadowed by the output above it");
+        assert_eq!(q.text, "Would you like to run the following command?");
+        assert_eq!(q.options.len(), 2, "the printed list was swept in with the dialog's own");
+        assert_eq!(q.options[0].label, "Yes, proceed (y)");
+    }
+
+    #[test]
+    fn a_persons_own_numbered_prompt_is_not_a_dialog() {
+        // Typed into the composer, it is a numbered line with the cursor glyph
+        // in front of it and a question directly above. One option is not a
+        // dialog: every one Codex draws offers a way out as well as a way on.
+        let screen: Vec<String> = [
+            "  Which module should this live in?",
+            "",
+            "\u{203a} 1. the one you suggested",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none(), "a person's own prompt was taken for a dialog");
+    }
+
+    #[test]
+    fn a_numbered_draft_left_in_the_composer_is_not_a_dialog() {
+        // The false positive this reader's first version had, captured whole
+        // rather than argued about: a real session at 60 columns with a
+        // two-line numbered draft sitting unsent in the composer, and the
+        // agent's own answer above it ending — on an indented continuation row
+        // — in a question mark. Two options, the cursor on the first, prose
+        // above indented exactly as a dialog's is. Everything a dialog has
+        // except being one.
+        //
+        // The agent was asked for two paragraphs each ending in a question
+        // mark, so the shape was provoked rather than stumbled on; every row of
+        // it is Codex's own rendering, which is the part that had to be real.
+        //
+        // What tells them apart is that those rows hang off the `•` at column 0
+        // that owns them, and a dialog hangs off nothing.
+        assert!(
+            question(&fixture("codex-0.146-draft-in-the-composer.txt")).is_none(),
+            "a busy agent with a draft in its composer was read as waiting on a person"
+        );
+    }
+
+    #[test]
+    fn a_later_paragraph_of_the_agents_own_answer_is_not_the_dialogs_question() {
+        // The same shape reduced to its bones. Measured on real screens at 60
+        // and 120 columns: one blank row parts two paragraphs of the same
+        // entry, two part one block from the next — so the blank above the
+        // second paragraph says nothing, and the glue to the bullet says
+        // everything.
+        let screen: Vec<String> = [
+            "• I can rename it, but the test file carries the old",
+            "  name too. Should I rename that one as well?",
+            "",
+            "  A second paragraph of the same answer, which also",
+            "  happens to end in a question mark, correct?",
+            "",
+            "",
+            "\u{203a} 1. rename the module",
+            "  2. split the test file",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none(), "the agent's own prose was read as a dialog");
+    }
+
+    #[test]
+    fn a_question_mark_used_as_an_operator_is_not_the_question() {
+        // The command preview sits below the question in this dialog, so it is
+        // the paragraph reached first, and a ternary in it carries a question
+        // mark followed by a space. Detection would be right either way; the
+        // text handed over would be a shell fragment. A paragraph that is a
+        // question outright wins over one that merely opens with something
+        // shaped like one.
+        let screen: Vec<String> = [
+            "  Would you like to run the following command?",
+            "",
+            "  $ node -e \"console.log(x ? 1 : 2)\"",
+            "",
+            "\u{203a} 1. Yes, proceed (y)",
+            "  2. No, and tell Codex what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let q = question(&screen).expect("the dialog went unrecognised");
+        assert_eq!(q.text, "Would you like to run the following command?");
+    }
+
+    #[test]
+    fn a_stray_number_further_down_the_screen_does_not_join_the_list() {
+        // Nothing consumes `options` today, but a list that quietly swallows
+        // whatever is below it would hand a person an answer that is not on
+        // their screen the day something does.
+        let screen: Vec<String> = [
+            "  Would you like to run the following command?",
+            "",
+            "\u{203a} 1. Yes, proceed (y)",
+            "  2. No, and tell Codex what to do differently (esc)",
+            "",
+            "",
+            "• 3. something the agent printed underneath",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let q = question(&screen).expect("the dialog went unrecognised");
+        assert_eq!(q.options.len(), 2, "a line from below the dialog joined its options");
+    }
+
+    #[test]
+    fn the_update_prompt_names_itself_and_is_read_without_asking_anything() {
+        // A real screen at 60 columns, and the named exception in one place.
+        // This prompt states rather than asks — there is no question mark
+        // anywhere on it — so the ordinary reading declines, and what answers
+        // is the `HEADINGS` table: the banner is a string this dialog prints
+        // and ordinary output does not. Before that a session started on the
+        // day an update was out simply stood here, read as idle, with nothing
+        // on screen to say a person was needed (smetana-9qp).
+        //
+        // The text is the banner as Codex draws it, glyph and versions and
+        // all — see `headed` for why nothing is composed and nothing trimmed.
+        let q = question(&fixture("codex-0.146-update-prompt.txt"))
+            .expect("the update prompt went unrecognised");
+        assert_eq!(q.text, "\u{2728} Update available! 0.146.0 -> 0.147.0");
+        assert_eq!(q.options.len(), 3);
+        assert_eq!(
+            q.options[0].label,
+            "Update now (runs `sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | \
+             CODEX_NON_INTERACTIVE=1 sh'`)",
+            "the wrapped first option was cut at the column the pane happened to wrap"
+        );
+        assert_eq!(q.options[1].label, "Skip");
+        assert_eq!(q.options[2].label, "Skip until next version");
+        assert_eq!(q.selected, Some(0));
+    }
+
+    #[test]
+    fn the_same_screen_without_its_banner_is_still_refused() {
+        // The general rule did not move. This is the update prompt with the one
+        // line that names it swapped for ordinary prose: same options, same
+        // cursor, same block, and still no question mark anywhere. A dialog
+        // that does not name itself has to ask, and this one does not, so it is
+        // declined exactly as it was before the exception existed.
+        let screen: Vec<String> = [
+            "",
+            "  Release notes: https://github.com/openai/codex/releases/la",
+            "",
+            "\u{203a} 1. Update now",
+            "  2. Skip",
+            "  3. Skip until next version",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(
+            question(&screen).is_none(),
+            "the named exception was widened into the general rule"
+        );
+    }
+
+    #[test]
+    fn a_banner_does_not_excuse_a_list_nobody_is_pointing_at() {
+        // The heading opens one narrower reading of the *text* and nothing
+        // else. Every structural guard is still in front of it, and the cursor
+        // is the one that keeps a numbered list in the agent's own output from
+        // reading as a dialog — a heading must not buy its way past that.
+        let screen: Vec<String> = [
+            "",
+            "  \u{2728} Update available! 0.146.0 -> 0.147.0",
+            "",
+            "  1. Update now",
+            "  2. Skip",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(
+            question(&screen).is_none(),
+            "an unpointed list under a banner was read as a dialog"
+        );
+    }
+
+    #[test]
+    fn a_question_mark_inside_a_command_preview_is_not_a_question() {
+        // The paragraph directly above the options is the command Codex is
+        // asking to run, and it happens to carry a question mark inside a
+        // quoted argument. The real question is the paragraph above that.
+        let screen: Vec<String> = [
+            "  Would you like to run the following command?",
+            "",
+            "  $ grep -n \"what?\" README.md",
+            "",
+            "\u{203a} 1. Yes, proceed (y)",
+            "  2. No, and tell Codex what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let q = question(&screen).expect("the dialog went unrecognised");
+        assert_eq!(q.text, "Would you like to run the following command?");
+    }
+
+    #[test]
+    fn a_dialog_with_nothing_pointing_at_it_is_not_read() {
+        // The same screen as the one that matches, with the cursor taken off
+        // it. Nothing is waiting on a list nobody is pointing at, and this is
+        // what a half-drawn dialog looks like on the way in.
+        let screen: Vec<String> = [
+            "  Would you like to run the following command?",
+            "",
+            "  1. Yes, proceed (y)",
+            "  2. No, and tell Codex what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none(), "an unpointed list was taken for a dialog");
+    }
+
+    #[test]
+    fn a_turn_whose_first_paragraph_is_one_row_is_still_a_turn() {
+        // The second version of the block rules refused a block only when its
+        // first row was glued to the turn above with no blank between. When the
+        // turn's first paragraph is a single row, the row under it is the blank
+        // before the turn's *second* paragraph, so nothing looked glued and
+        // this read as a dialog with nothing to answer.
+        let screen: Vec<String> = [
+            "• Done — tests pass.",
+            "",
+            "  Do you want me to also update the changelog?",
+            "",
+            "",
+            "\u{203a} 1. yes update it",
+            "  2. no leave it",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none(), "the agent's own one-line turn was read as a dialog");
+    }
+
+    #[test]
+    fn a_completed_text_turn_reads_its_last_paragraph_as_a_question() {
+        let (completed, style) = raw_fixture("codex-0.155-completed-assistant-question.ansi");
+        assert!(completed_text_question(&completed, &style));
+
+        let earlier_paragraph: Vec<String> = [
+            "• Do you confirm the document?",
+            "",
+            "  I will make the plan.",
+            "",
+            "›",
+        ]
+        .iter()
+        .map(|line| (*line).to_owned())
+        .collect();
+        assert!(!completed_text_question(&earlier_paragraph, &[]));
+    }
+
+    #[test]
+    fn a_later_person_entry_releases_an_earlier_text_question() {
+        let screen = fixture("codex-0.146-text-question-after-user-entry.txt");
+        assert!(
+            !completed_text_question(&screen, &[]),
+            "an earlier answer stayed loud after the person had sent their next turn"
+        );
+    }
+
+    #[test]
+    fn activity_blocks_with_question_marks_are_not_text_questions() {
+        for capture in [
+            "codex-0.155-completed-ran-question.ansi",
+            "codex-0.155-completed-called-question.ansi",
+            "codex-0.155-completed-explored-question.ansi",
+        ] {
+            let (screen, style) = raw_fixture(capture);
+            assert!(
+                !completed_text_question(&screen, &style),
+                "a completed tool activity was read as an agent question: {capture}"
+            );
+        }
+    }
+
+    #[test]
+    fn assistant_prose_starting_with_an_activity_verb_is_still_a_question() {
+        for capture in [
+            "codex-0.155-completed-assistant-question.ansi",
+            "codex-0.155-completed-assistant-working-question.ansi",
+        ] {
+            let (screen, style) = raw_fixture(capture);
+            assert!(
+                completed_text_question(&screen, &style),
+                "assistant prose was rejected for its opening verb: {capture}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bold_assistant_intro_and_tree_do_not_impersonate_explored_activity() {
+        let (screen, style) = raw_fixture("codex-0.155-assistant-bold-tree-question.ansi");
+        assert!(
+            completed_text_question(&screen, &style),
+            "a renderer-unowned bold header and tree suppressed the assistant's final question"
+        );
+    }
+
+    #[test]
+    fn a_working_turn_or_a_non_empty_composer_is_not_a_completed_text_question() {
+        let working = fixture("codex-0.146-working.txt");
+        assert!(!completed_text_question(&working, &[]));
+        let draft = fixture("codex-0.146-draft-in-the-composer.txt");
+        assert!(!completed_text_question(&draft, &[]));
+    }
+
+    #[test]
+    fn a_scrolled_screen_with_nothing_to_anchor_it_is_a_known_gap() {
+        // Pinned as it behaves, not as it should: when the turn that owns the
+        // prose has scrolled off the top there is no anchor on the screen at
+        // all, and this reads as a dialog. Closing it means requiring a block
+        // to hang off something, which would refuse a dialog drawn at the top
+        // of an unscrolled screen — `codex-0.146-update-prompt.txt` is one, and
+        // it starts at row 0. Recorded rather than guessed at; if this
+        // assertion ever needs inverting, that is the trade being made.
+        let screen: Vec<String> =
+            ["  is that alright with you?", "", "", "\u{203a} 1. yes", "  2. no"]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect();
+        assert!(question(&screen).is_some(), "the known gap closed on its own — read the doc");
+    }
+
+    #[test]
+    fn a_wrapped_option_label_is_gathered_whole() {
+        // A real wrapped label, three rows of it, off the update prompt at 60
+        // columns. Skipping the continuations — which the first version of this
+        // did — left a person being offered
+        // `Update now (runs \`sh -c 'curl -fsSL`, cut at whatever column the
+        // pane happened to wrap. The two pieces are called directly here, so
+        // that a regression in the gathering is told apart from one in the
+        // reading around it.
+        let screen = fixture("codex-0.146-update-prompt.txt");
+        let row = screen.iter().position(|l| option_line(l).is_some()).expect("an option is there");
+        let (index, head, selected) = option_line(&screen[row]).expect("an option is there");
+        assert_eq!(index, 1);
+        assert!(selected, "the cursor is on the first option");
+        assert_eq!(
+            wrapped(&screen, row, &head),
+            "Update now (runs `sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | \
+             CODEX_NON_INTERACTIVE=1 sh'`)"
+        );
+    }
+
+    #[test]
+    fn a_wrapped_option_label_does_not_end_the_list() {
+        // A narrow pane wraps the long second option, and the continuation row
+        // is neither an option nor the end of the block. Losing option 3 would
+        // hide the only way out of the dialog.
+        let screen: Vec<String> = [
+            "  Would you like to run the following command?",
+            "",
+            "\u{203a} 1. Yes, proceed (y)",
+            "  2. Yes, and don't ask again for commands that start",
+            "     with `touch probe.txt` (p)",
+            "  3. No, and tell Codex what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let q = question(&screen).expect("the dialog went unrecognised");
+        assert_eq!(q.options.len(), 3);
+        assert_eq!(
+            q.options[1].label,
+            "Yes, and don't ask again for commands that start with `touch probe.txt` (p)",
+            "the label was cut at the column the pane happened to wrap"
+        );
+        assert_eq!(q.options[2].label, "No, and tell Codex what to do differently (esc)");
+    }
+
+    #[test]
+    fn a_question_the_agent_asked_in_prose_above_the_dialog_is_not_the_dialogs() {
+        // The turn directly above ends in a question mark of its own. What
+        // separates it from the dialog here is the double blank Codex puts
+        // between one top-level block and the next — the walk stops on that and
+        // never reaches the `•`, so this pins the blank-pair rule rather than
+        // the column-0 one. Without it the dialog's question would be whatever
+        // the agent last said.
+        let screen: Vec<String> = [
+            "• Should I also rename the test file?",
+            "",
+            "",
+            "  Would you like to run the following command?",
+            "",
+            "\u{203a} 1. Yes, proceed (y)",
+            "  2. No, and tell Codex what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let q = question(&screen).expect("the dialog went unrecognised");
+        assert_eq!(q.text, "Would you like to run the following command?");
+    }
+
+    #[test]
+    fn a_dialog_with_no_question_in_it_is_not_read() {
+        // Options and a cursor, and nothing above them that reads as a
+        // question. Layer A still says somebody is waiting; this reader says
+        // nothing rather than handing over a line of preview as the question.
+        let screen: Vec<String> = [
+            "  Environment: local",
+            "",
+            "\u{203a} 1. Yes, proceed (y)",
+            "  2. No, and tell Codex what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none());
+    }
+
+    #[test]
+    fn it_does_not_read_a_dialog_drawn_by_another_cli() {
+        // Claude Code's boxed dialog, frame and all. Reading it would be a lie
+        // about which agent is running, and `detect` picks the reader by the
+        // session's own profile precisely so that it cannot happen.
+        let q = question(&fixture("claude-permission-dialog.txt"));
+        assert!(q.is_none(), "codex read a dialog drawn by another CLI");
+    }
+
+    /// The intent behind both of the Sessions tab's launching verbs, built the
+    /// way `claude.rs`'s own helper builds it — one shape, and `fork` is the
+    /// whole of the difference between the two rows.
+    fn resuming(id: &str, fork: bool) -> Intent {
+        Intent::ResumeSession {
+            id: id.to_owned(),
+            cwd: "/tmp/project/.worktrees/smetana-0cj".into(),
+            title: Some("Move the card to done".into()),
+            fork,
+        }
+    }
+
+    fn run(mode: crate::runs::model::RunMode) -> Intent {
+        Intent::Run {
+            settings: crate::runs::model::RunSettings {
+                scope: crate::runs::model::RunScope::Queue,
+                mode,
+                target_branch: "staging".into(),
+                create_target: false,
+                min_priority: Some(2),
+                // None in Solo, the way `RunSettings::validate` requires.
+                max_parallel_tasks: (!matches!(mode, crate::runs::model::RunMode::Solo)).then_some(3),
+                batch_pause_min: None,
+                batch_pause_max: None,
+                live_check: true,
+                file_findings: true,
+                instructions: None,
+            },
+            reports: std::path::PathBuf::from("/p/.smetana/runs/1"),
+            batch: 1,
+            continuation: None,
+            remove_worktrees: true,
+        }
+    }
+
+    #[test]
+    fn an_auto_batch_gets_only_the_current_bypass_flag_and_never_the_removed_one() {
+        use crate::runs::model::RunMode;
+        let args = argv(&launch(run(RunMode::Auto)));
+        assert!(args.iter().any(|a| a == "--dangerously-bypass-approvals-and-sandbox"), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--sandbox"), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--full-auto"), "Codex removed it");
+    }
+
+    /// `run` above with a chosen cap rather than the fixed 3 — what a run's own
+    /// settings carry once `spawn_batch` has already applied `usage::cap`
+    /// against the subscription-limit reduction, which is the number this
+    /// module's overrides must repeat rather than invent a second time.
+    fn run_with_cap(
+        mode: crate::runs::model::RunMode,
+        max_parallel_tasks: Option<u8>,
+    ) -> Intent {
+        match run(mode) {
+            Intent::Run { settings, reports, batch, continuation, remove_worktrees } => Intent::Run {
+                settings: crate::runs::model::RunSettings { max_parallel_tasks, ..settings },
+                reports,
+                batch,
+                continuation,
+                remove_worktrees,
+            },
+            _ => unreachable!("run() always answers Intent::Run"),
+        }
+    }
+
+    #[test]
+    fn only_an_auto_or_supervised_run_turns_on_codexs_native_multi_agent() {
+        use crate::runs::model::RunMode;
+        let unaffected = [
+            ("ordinary session", launch(Intent::Bare)),
+            ("task creation", launch(new_task(Stage::Off))),
+            ("project setup", launch(Intent::Setup)),
+            (
+                "resumed session",
+                launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", false)),
+            ),
+            ("solo run", launch(run(RunMode::Solo))),
+            // `run(Solo)` itself already answers `max_parallel_tasks: None`, so on
+            // its own this case would pass on the inner `if let Some` alone and
+            // never reach the `matches!(settings.mode, Auto | Supervised)` guard
+            // above it — `RunSettings::validate` refuses Solo a number today, but
+            // the mode guard is what would still refuse it if that validation were
+            // ever relaxed, and this is what would say so.
+            ("solo run with a number anyway", launch(run_with_cap(RunMode::Solo, Some(2)))),
+        ];
+        for (kind, launch) in unaffected {
+            let args = argv(&launch);
+            assert!(!args.iter().any(|a| a == "--enable"), "{kind}: {args:?}");
+            assert!(!args.iter().any(|a| a == "multi_agent"), "{kind}: {args:?}");
+            assert!(!args.iter().any(|a| a.starts_with("agents.")), "{kind}: {args:?}");
+        }
+
+        for mode in [RunMode::Auto, RunMode::Supervised] {
+            let args = argv(&launch(run(mode)));
+            assert!(
+                args.windows(2).any(|pair| pair == ["--enable", "multi_agent"]),
+                "{mode:?}: {args:?}"
+            );
+            assert!(
+                args.windows(2).any(|pair| pair == ["-c", "agents.enabled=true"]),
+                "{mode:?}: {args:?}"
+            );
+            assert!(
+                args.iter().any(|a| a == "agents.max_concurrent_threads_per_session=3"),
+                "{mode:?}: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_with_one_task_asks_codex_for_one_concurrent_thread_and_not_zero() {
+        // N=1 is the case a batch of one ready task actually hits, and it must
+        // still turn multi-agent on rather than reading as "not configured" —
+        // `Some(1)` is a chosen cap, the same way `usage::REDUCED_MAX_TASKS`
+        // reads as a real cap and not an absence of one.
+        use crate::runs::model::RunMode;
+        let args = argv(&launch(run_with_cap(RunMode::Supervised, Some(1))));
+        assert!(
+            args.iter().any(|a| a == "agents.max_concurrent_threads_per_session=1"),
+            "{args:?}"
+        );
+    }
+
+    #[test]
+    fn the_multi_agent_cap_on_the_line_is_the_one_the_prompt_names() {
+        // Established by construction rather than by two readings that could
+        // drift: both `command` (above) and `prompt::build` (via
+        // `prompt_text`) read `settings.max_parallel_tasks` off the identical
+        // `Launch`, so a run's number reaching the CLI differently from the
+        // number reaching the prompt would mean one of the two stopped
+        // reading that field — which this test would catch on any cap, not
+        // only the default 3 every other test in this module uses.
+        use crate::runs::model::RunMode;
+        for (mode, cap) in [(RunMode::Auto, 4u8), (RunMode::Supervised, 6u8)] {
+            let built = launch(run_with_cap(mode, Some(cap)));
+            let args = argv(&built);
+            assert!(
+                args.iter()
+                    .any(|a| a == &format!("agents.max_concurrent_threads_per_session={cap}")),
+                "{mode:?}: {args:?}"
+            );
+            let prompt = Codex.prompt_text(&built).expect("a run always opens on a prompt");
+            assert!(
+                prompt.contains(&format!("at most {cap} task")),
+                "{mode:?}: the CLI's own cap and the prompt's own number must read off the \
+                 same field: {prompt}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_multi_agent_event_this_translator_has_never_heard_of_draws_nothing() {
+        // Native multi-agent adds events of its own to the same `codex exec
+        // --json` stream. This translator was never taught their shape, and
+        // the existing contract — an event type it does not recognise draws
+        // nothing rather than a raw line of JSON — already covers them
+        // without a rule written for them by name, the same as any other
+        // vocabulary word a CLI upgrade adds before this app has been taught
+        // it.
+        assert!(transcript_line(
+            r#"{"type":"agent.spawned","agent_id":"sub-1","task":"smetana-abcd"}"#
+        )
+        .is_empty());
+        assert!(transcript_line(r#"{"type":"agent.turn_completed","agent_id":"sub-1"}"#).is_empty());
+        assert!(transcript_line(
+            r#"{"type":"item.completed","item":{"id":"item_9","type":"agent_spawn","agent_id":"sub-1"}}"#
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn the_subcommand_leads_and_the_flag_still_precedes_the_positional_prompt() {
+        // The whole argv of an unattended batch, in order. It used to assert
+        // three arguments and pass, which was the thing certifying that
+        // `batch_args` never reached the line at all: the profile answered
+        // `exec --json` and `command` never applied it, so a run spawned the
+        // interactive TUI, sat at its prompt for ever and `watch_batch` never
+        // came round.
+        //
+        // The multi-agent overrides sit right after the stream flag and before
+        // the autonomy flag — extending `exec --json` rather than displacing
+        // anything that was already on this line, which is the property
+        // `every_non_auto_launch_explicitly_sandboxes_its_current_workspace` and
+        // the model/prompt tests below still check for on their own literals.
+        let args = argv(&launch(run(crate::runs::model::RunMode::Auto)));
+        assert_eq!(args[0], "codex");
+        assert_eq!(args[1], "exec", "the subcommand has one legal position and it is first");
+        assert_eq!(args[2], "--json");
+        assert_eq!(args[3], "--enable");
+        assert_eq!(args[4], "multi_agent");
+        assert_eq!(args[5], "-c");
+        assert_eq!(args[6], "agents.enabled=true");
+        assert_eq!(args[7], "-c");
+        assert_eq!(args[8], "agents.max_concurrent_threads_per_session=3");
+        assert_eq!(args[9], "--dangerously-bypass-approvals-and-sandbox");
+        assert_eq!(
+            args.len(),
+            11,
+            "binary, subcommand, stream flag, multi-agent (5), autonomy, prompt: {args:?}"
+        );
+    }
+
+    #[test]
+    fn nothing_a_person_watches_is_turned_into_a_batch() {
+        // The guard against the subcommand leaking into a session with somebody
+        // in front of it: `exec` is the non-interactive form, so a supervised
+        // run given it would lose the interface that makes it supervised.
+        use crate::runs::model::RunMode;
+        for mode in [RunMode::Supervised, RunMode::Solo] {
+            let args = argv(&launch(run(mode)));
+            assert!(!args.iter().any(|a| a == "exec"), "{mode:?}: {args:?}");
+        }
+        for intent in [Intent::Bare, Intent::Setup, new_task(Stage::Off)] {
+            let args = argv(&launch(intent));
+            assert!(!args.iter().any(|a| a == "exec"), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn every_non_auto_launch_explicitly_sandboxes_its_current_workspace() {
+        let launches = [
+            ("ordinary session", launch(Intent::Bare)),
+            ("task creation", launch(new_task(Stage::Off))),
+            ("project setup", launch(Intent::Setup)),
+            (
+                "resumed session",
+                launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", false)),
+            ),
+            (
+                "forked session",
+                launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", true)),
+            ),
+            ("supervised run", launch(run(crate::runs::model::RunMode::Supervised))),
+            ("solo run", launch(run(crate::runs::model::RunMode::Solo))),
+        ];
+
+        for (kind, launch) in launches {
+            let args = argv(&launch);
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair == ["--sandbox", "workspace-write"]),
+                "{kind}: {args:?}"
+            );
+            assert!(
+                !args
+                    .iter()
+                    .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox"),
+                "{kind}: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_model_flag_is_the_short_one_this_cli_documents() {
+        // `-m, --model <MODEL>`, and the short form is what that help
+        // documents first. Written out rather than composed from Claude Code's
+        // `--model`: two CLIs, two grammars.
+        use crate::agents::Profile;
+        assert_eq!(Codex.model_args("gpt-5.6-sol"), vec!["-m", "gpt-5.6-sol"]);
+    }
+
+    #[test]
+    fn every_offered_model_has_a_name_a_person_reads() {
+        use crate::agents::Profile;
+        assert!(!Codex.models().is_empty());
+        for (id, label) in Codex.models() {
+            assert!(!id.is_empty(), "a model id must not be empty");
+            assert!(!label.is_empty(), "model {id} has no label");
+        }
+    }
+
+    #[test]
+    fn a_chosen_model_reaches_the_command_line() {
+        let mut chosen = launch(Intent::Bare);
+        chosen.model = Some("gpt-5.6-sol".into());
+        let args = argv(&chosen);
+        assert!(
+            args.windows(2).any(|pair| pair[0] == "-m" && pair[1] == "gpt-5.6-sol"),
+            "the chosen model must be on the command line: {args:?}"
+        );
+    }
+
+    #[test]
+    fn no_chosen_model_means_no_flag_at_all() {
+        // The shipped state, and this app's behaviour to the letter before the
+        // setting existed: with nothing chosen the harness picks for itself.
+        let args = argv(&launch(Intent::Bare));
+        assert!(!args.iter().any(|arg| arg == "-m"), "{args:?}");
+    }
+
+    #[test]
+    fn a_resumed_session_is_never_told_which_model_to_use() {
+        // The second guard, standing where the flag would appear: a resumed
+        // conversation already has a model, and `settings::role_model` refuses
+        // this intent one before a `Launch` is ever built.
+        let mut chosen = launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", false));
+        chosen.model = Some("gpt-5.6-sol".into());
+        let args = argv(&chosen);
+        assert!(!args.iter().any(|arg| arg == "-m"), "{args:?}");
+    }
+
+    #[test]
+    fn a_resumed_session_has_its_subcommand_id_and_workspace_sandbox_without_a_prompt() {
+        // The half `resume_args` alone does not buy. Without it the spawn is a
+        // bare `codex` in the recorded worktree — and with no prompt either,
+        // since `prompt::build` refuses `ResumeSession` one — which is a fresh
+        // interactive session under a card promising the conversation somebody
+        // left, verbatim the outcome `TerminalError::NoResume` exists to
+        // prevent.
+        let args = argv(&launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", false)));
+        assert_eq!(
+            args,
+            vec![
+                "codex".to_owned(),
+                "resume".to_owned(),
+                "01a0765f-f205-74d0-8dc9-61006c68767f".to_owned(),
+                "--sandbox".to_owned(),
+                "workspace-write".to_owned(),
+            ],
+            "no prompt: a resumed conversation already has somebody's words in it"
+        );
+    }
+
+    #[test]
+    fn a_forked_session_takes_its_own_subcommand_and_not_the_resume() {
+        // Two capabilities, two subcommands: `fork` is a different word rather
+        // than `resume` with something appended, which is the shape difference
+        // from Claude Code's `--resume <id> --fork-session`.
+        let args = argv(&launch(resuming("01a0765f-f205-74d0-8dc9-61006c68767f", true)));
+        assert_eq!(
+            args,
+            vec![
+                "codex".to_owned(),
+                "fork".to_owned(),
+                "01a0765f-f205-74d0-8dc9-61006c68767f".to_owned(),
+                "--sandbox".to_owned(),
+                "workspace-write".to_owned(),
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg == "resume"), "{args:?}");
+    }
+
+    #[test]
+    fn nothing_but_a_resume_puts_either_subcommand_on_a_command_line() {
+        // The guard against the leak the other way: a `resume` on an ordinary
+        // session would reopen some other conversation under somebody who asked
+        // for a new agent.
+        for intent in [Intent::Bare, Intent::Setup, new_task(Stage::Off)] {
+            let args = argv(&launch(intent));
+            assert!(!args.iter().any(|a| a == "resume" || a == "fork"), "{args:?}");
+        }
+    }
+}

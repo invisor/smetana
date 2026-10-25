@@ -433,7 +433,7 @@ describe('agent rows', () => {
      connection is made from the two halves already on the front end — each run
      names the session working, the tracker names what is in progress and under
      whom. The **assignee** is the session's own bd actor (`run_actor` in
-     src-tauri/src/terminal/model.rs) — that is what `bd update --claim` writes —
+     crates/core/src/terminal/model.rs) — that is what `bd update --claim` writes —
      and it is what keeps two concurrent runs' rows apart.
 
      Every claimed fixture below carries a person in `owner` and the actor in

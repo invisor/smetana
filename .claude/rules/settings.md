@@ -1,6 +1,7 @@
 ---
 paths:
-  - "src-tauri/src/settings/**"
+  - "crates/core/src/settings/**"
+  - "src-tauri/src/commands/settings.rs"
   - "src-tauri/src/window.rs"
   - "src-tauri/src/autostart.rs"
   - "src/stores/settings.js"
@@ -15,10 +16,12 @@ paths:
 
 What the app remembers between runs lives in one JSON file in `app_config_dir()`
 (`~/Library/Application Support/com.invisor.smetana/settings.json` on macOS).
-`src-tauri/src/settings/` owns it: `model.rs` is the schema, the validation and the merge — pure,
+`crates/core/src/settings/` owns it: `model.rs` is the schema, the validation and the merge — pure,
 and where the tests are; `file.rs` is the disk (atomic write through a per-call temp file that is
-`sync_all`ed and renamed, a `.bak` copy of anything unparseable or too new); `commands.rs` is two
-thin commands.
+`sync_all`ed and renamed, a `.bak` copy of anything unparseable or too new); `commands.rs` is the two
+commands' bodies, and the `#[tauri::command]`s over them, with the three reads that hold an
+`AppHandle` (`updates_auto_check`, `dialog_size`, `remember_dialog_size`), are
+`src-tauri/src/commands/settings.rs`.
 
 At the root the file keeps appearance — theme, density and `uiFontSize` — panel layout (collapsed
 state and width for each side, `railOpen` for whether the project rail is drawn beside the left
@@ -117,7 +120,7 @@ somebody wants to meet their agent in is a habit of theirs rather than a propert
 and it is a boolean, shipped `true`. On is this app's behaviour to the letter since the panel
 existed, so nothing on anybody's screen moves on the day they update; off puts every session started
 after it back in a terminal tab with a PTY, which is where an agent opened before
-`src-tauri/src/session/` had a driver. The switch is the last row of **Agents and models** on the
+`crates/core/src/session/` had a driver. The switch is the last row of **Agents and models** on the
 Agents tab.
 
 Its validation is the absence of any, and that is a decision rather than a gap: a boolean has no set
@@ -526,7 +529,7 @@ field, on `autoFetch`'s argument exactly, and neither is a choice of channel: th
 and a control over a set of one says nothing.
 
 What it reaches is the **timer alone** (`src-tauri/src/updates.rs`, `schedule`), which asks
-`settings::updates_auto_check` at **every tick** rather than reading it once — that is the whole of
+`commands::settings::updates_auto_check` at **every tick** rather than reading it once — that is the whole of
 "off and on again without a restart", and the timer keeps ticking either way so there is nothing to
 start when it comes back on. It does not reach `updates_check`, the press on About, for the reason
 `autoFetch` does not reach the check in the Branches caption: a press is not the app acting on its

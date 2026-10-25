@@ -1,7 +1,8 @@
 ---
 paths:
-  - "src-tauri/src/terminal/**"
-  - "src-tauri/src/shell_env.rs"
+  - "crates/core/src/terminal/**"
+  - "crates/core/src/shell_env.rs"
+  - "src-tauri/src/commands/terminal.rs"
   - "src/components/terminal/**"
   - "src/components/agent/**"
   - "src/stores/terminals.js"
@@ -10,7 +11,8 @@ paths:
   # to prevent is confusing the two, and that mistake is made while reading
   # either half.
   - "src/stores/sessions.js"
-  - "src-tauri/src/sessions/**"
+  - "crates/core/src/sessions/**"
+  - "src-tauri/src/commands/sessions.rs"
   # Half of the tab row is derived from the sessions this file is about — the
   # Agent tab and one tab per shell — so the rule has to load for whoever is
   # editing that half, not only for whoever is editing the worker.
@@ -27,7 +29,8 @@ paths:
   # longer claims either one alone.
   - "src/stores/conversation.js"
   - "src/components/conversation/**"
-  - "src-tauri/src/session/**"
+  - "crates/core/src/session/**"
+  - "src-tauri/src/commands/session.rs"
   # Where the two kinds meet: `agentAim` and `showAgentTab` decide which of them
   # the Agent tab draws, and every road into a session is in this file.
   - "src/views/DesktopApp.vue"
@@ -68,7 +71,7 @@ when an agent is waiting on a human, including one in a tab nobody is looking at
 under Claude Code first, since smetana-5ijg, and picking a recorded conversation up again — the offline
 row, and the Sessions tab's Resume and Continue in a new session — did the same since smetana-477m: no
 PTY and no ring, because the worker parses that harness's protocol itself and the app draws typed
-events (`src-tauri/src/session/`, `src/stores/conversation.js`, `src/components/conversation/`). Since
+events (`crates/core/src/session/`, `src/stores/conversation.js`, `src/components/conversation/`). Since
 smetana-osut every intent a person talks to takes that same road under Claude Code — filing a task,
 editing one, answering a parked one's questions, fixing closed work, a conflict, a setup, a tracker
 repair, a branch review — and only `Intent::Run` stays here for a stated reason: nobody is in a run's
@@ -249,7 +252,7 @@ and the `terminal_shell` command, beside `terminal_create` and deliberately not 
 takes an agent id and turns it into a command line through a profile, and none of those words mean
 anything here.
 
-**A shell profile in `src-tauri/src/agents/` was the rejected design, and the reason is `agents::pick`.**
+**A shell profile in `crates/core/src/agents/` was the rejected design, and the reason is `agents::pick`.**
 That module is about intents, prompts and the quirks of named harnesses; a shell has none of them, and
 a profile for one would join the cascade `pick` walks, where the "take whatever is installed" fallback
 could pick it — or, worse, where it could stand in front of a real agent. So the shell is its own
@@ -665,7 +668,7 @@ The conversation panel draws the identical shape over itself, token for token, d
 | `detect.rs` | layer A: bell and silence, a pure function of the screen, the bell flag and the timings |
 | `pty.rs` | the only file that touches the OS: spawns, reads, writes, resizes, kills; also assembles the child's environment |
 | `service.rs` | the worker: one owner of mutable state, request queue, output and state events |
-| `commands.rs` | thin `#[tauri::command]`s, shaped exactly like the tracker's |
+| `commands.rs` | what the commands do, as plain functions, shaped exactly like the tracker's; the `#[tauri::command]` wrappers are `src-tauri/src/commands/terminal.rs` |
 
 `service.rs` is a single tokio task, the same shape as the tracker's worker and for the same reason:
 commands, PTY output arriving from per-session reader threads, and a 16 ms flush tick all meet in one
@@ -1505,6 +1508,10 @@ transcript under `~/.claude/projects` and the arbitrary folder a session ran in 
 every path on the machine — the same refusal `src-tauri/src/updates.rs` records for the updater
 plugin, since a permission is published to every window in the app. So the narrow thing to publish is
 a command that names its own rule, and each of the three names a different one:
+(the guard, and the sentence a refusal carries, live in `crates/core/src/sessions/act.rs`; the hand-over to the
+platform — the opener plugin's `open_path` and `reveal_item_in_dir` — is a closure the shell passes in from
+`src-tauri/src/commands/sessions.rs`, because the machine the transcripts are on need not be the one a person
+sits at):
 
 - a transcript is `sessions::model::is_transcript` — the extension, membership of the root by path
   *components* rather than by string prefix, and no `..` in it, since `Path::starts_with` is lexical

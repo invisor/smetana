@@ -1010,7 +1010,7 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
     // size must not have its height computed away by the first measurement, so
     // the flag travels on the URL and is right before the first paint rather
     // than one round trip after it.
-    let kept = settings::dialog_size(&app, &kind).map(|size| {
+    let kept = crate::commands::settings::dialog_size(&app, &kind).map(|size| {
         // The monitor the dialog is about to be *centred over*, which is the
         // main window's rather than the machine's first: on a laptop with an
         // external display the primary is often not the one the app is on, and
@@ -1141,7 +1141,7 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
                 let app = app_handle.clone();
                 let kind = resized_kind.clone();
                 tauri::async_runtime::spawn(async move {
-                    settings::remember_dialog_size(&app, &kind, size);
+                    crate::commands::settings::remember_dialog_size(&app, &kind, size);
                 });
             }
             WindowEvent::Resized(size) => {
@@ -1195,7 +1195,7 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
                     let Some(size) = logical_inner(&window) else {
                         return;
                     };
-                    settings::remember_dialog_size(&app, &kind, size);
+                    crate::commands::settings::remember_dialog_size(&app, &kind, size);
                 });
             }
             _ => {}

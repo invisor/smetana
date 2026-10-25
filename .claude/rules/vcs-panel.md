@@ -1,6 +1,7 @@
 ---
 paths:
-  - "src-tauri/src/vcs/**"
+  - "crates/core/src/vcs/**"
+  - "src-tauri/src/commands/vcs.rs"
   - "src-tauri/src/window.rs"
   - "src/components/git/**"
   - "src/stores/vcs.js"
@@ -24,7 +25,7 @@ paths:
 
 # The Git panel: what only the binary can answer
 
-`src-tauri/src/vcs/` is the one place in the tree that runs `git` as a process, and `git.rs`
+`crates/core/src/vcs/` is the one place in the tree that runs `git` as a process, and `git.rs`
 (`.claude/rules/git-head.md`) is untouched by it. **The split is by mechanism, not by subject**: `git.rs` is what can be read off the
 disk, `vcs/` is what only git itself can do — the state of a working tree, and later a diff, a
 checkout, a merge. Folding them together fails in one direction by dragging a process spawn into a
@@ -38,7 +39,7 @@ git lives in this app finds two answers.
 | `repos.rs` | what a project is made of — the pure rule, split from the directory read |
 | `merged.rs` | whether a task's branch has already reached the target branch: `git merge-base --is-ancestor`, narrowed by the task worktree's own dirtiness, and the rule about several repositories. Its one caller is the tracker's sweep, and the section in `.claude/rules/tracker.md` is where the behaviour is described |
 | `run.rs` | the only file that touches the OS |
-| `commands.rs` | thin `#[tauri::command]`s, shaped like `files/`'s |
+| `commands.rs` | what the commands do, as plain functions, shaped like `files/`'s; the `#[tauri::command]` wrappers are `src-tauri/src/commands/vcs.rs` |
 
 There is **no worker**, for the reason `files/` has none: `git status` costs tens of milliseconds
 against a bd call's two seconds, and the module owns no snapshot — the front end holds the list.
@@ -210,7 +211,7 @@ with nothing cancelled, which is what leaves Tab and Shift+Tab walking out of th
 shape this list earned.** The two are one feature — a roving stop is what the arrow keys move — and
 the arrows are a later task, so a single stop with nothing to move it would point at one row with no
 way to reach the next. What it costs is not bounded by anything: the list is `tree.changes` whole,
-nothing in `src-tauri/src/vcs/` truncates it, and a tree an agent has just swept is routinely dozens
+nothing in `crates/core/src/vcs/` truncates it, and a tree an agent has just swept is routinely dozens
 of rows, each a press of Tab to get past. Do not read this as "the section is short" — it is a long
 list whose keyboard is half built, and whoever adds the arrows adds the roving stop with them.
 
@@ -1170,7 +1171,7 @@ that already has them. So each of the four writes that **carry commits** — mer
 after `SAID_TOAST_MS`, the file tree menu's own three seconds. Success leaves on its own and a
 refusal is held: that is the app's rule already, not this feature's.
 
-**Rust measures and the front end words it.** `src-tauri/src/vcs/` is the only place in the tree that
+**Rust measures and the front end words it.** `crates/core/src/vcs/` is the only place in the tree that
 runs git as a process, and the only place that can read the repository at the two moments this needs
 — immediately before the operation and immediately after. Asked later the front end would be asking
 about a HEAD that has since moved, and an agent committing into the same tree is the ordinary case
@@ -2113,7 +2114,7 @@ operation that sets half a pair and an override is made by *copying* the rule ra
 an empty one. That is a property of the shape rather than a rule checked on submission, exactly as it
 was before — a rule can be forgotten and a shape cannot. What changed is where a person's answer is
 kept on the way to the exit, and the exit itself did not move: `reviewPairs` still answers
-`{ repo, base, head }` apiece, which is `src-tauri/src/agents/mod.rs`' `ReviewPair`.
+`{ repo, base, head }` apiece, which is `crates/core/src/agents/mod.rs`' `ReviewPair`.
 
 **`local` and `origin` are a flag on a side and not a control.** `remote: true` draws a muted
 `origin/` in front of the name and resolves to `origin/main` in `refOf`; there is no second dropdown

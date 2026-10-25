@@ -5,7 +5,7 @@
    no Vue and no DOM in it, out here because a `.vue` file is the one thing no
    test in this repository can reach.
 
-   The ladder is written out a second time in `src-tauri/src/settings/model.rs`
+   The ladder is written out a second time in `crates/core/src/settings/model.rs`
    as `SUBSCRIPTION_STEPS`, and the two copies move together. It is doubled
    rather than fetched because each end needs it for a different job: Rust
    refuses a hand-edited number that is not on it, and this end has to have
@@ -36,7 +36,7 @@ export function isThreshold(value) {
 }
 
 /* The front end's copy of the last rule in `SubscriptionSettings::validate`
-   (`src-tauri/src/settings/model.rs`): a `reducedAt` at or above an enabled
+   (`crates/core/src/settings/model.rs`): a `reducedAt` at or above an enabled
    `pauseAt` is turned off rather than moved, because there is no band left
    between the two for it to name.
 

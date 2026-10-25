@@ -9,7 +9,7 @@
    own argument: a habit of reading, not a fact about one repository. */
 
 /* The two closed lists, written out a second time in
-   `src-tauri/src/settings/model.rs`'s `ReportsSettings::validate`, under the
+   `crates/core/src/settings/model.rs`'s `ReportsSettings::validate`, under the
    same obligation `boardView.js`'s doubling carries: what this offers must be
    a subset of what Rust accepts, or a value Rust refuses reverts to the
    default on the next save with nothing on screen to say so. */
