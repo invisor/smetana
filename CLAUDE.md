@@ -49,7 +49,7 @@ cd crates/core && cargo test settings::model # by module path
 ```
 
 Two test runners: `npm test` covers the front end's pure logic — the plain modules and the stores —
-and `cargo test` covers the Rust side. That used to say "the nine plain modules" and had been wrong
+and `cargo test` (in `src-tauri` and in `crates/core`) covers the Rust side. That used to say "the nine plain modules" and had been wrong
 for some time before anybody noticed; `tests/` mirrors `src/`, so the directory is the count and it
 cannot drift the way a number written once does — name where a list lives, not how long it was on the
 day somebody looked. Neither runner covers components: there is no component test runner and no

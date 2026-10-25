@@ -31,7 +31,7 @@ const BLOCKED = 'blocked'
    selection in views/DesktopApp.vue — and nowhere else.
 
    The label is one string with copies in several places, and the copies are not
-   equal. In code it is here and `LOCK_LABEL` in src-tauri/src/runs/queue.rs,
+   equal. In code it is here and `LOCK_LABEL` in crates/core/src/runs/queue.rs,
    which keeps the lock out of a run's queue. The bundled skills under
    src-tauri/resources/smetana/skills/ carry the literal as well —
    merging/SKILL.md is the one that mints it (`bd create ... -l smetana-lock`),

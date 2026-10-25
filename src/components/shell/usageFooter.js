@@ -13,7 +13,7 @@
    than silently as one this build does know.
 
    **No threshold is written here.** Which band a reading falls in is decided in
-   `src-tauri/src/runs/usage.rs` and travels in the answer as a name. The two
+   `crates/core/src/runs/usage.rs` and travels in the answer as a name. The two
    numbers behind it are spelled nowhere in the front end: a second copy would
    be one that drifts from the first with nothing on screen to say it has.
 

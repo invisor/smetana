@@ -12,7 +12,7 @@
    what it chose — so there is no "under" to put it in.
 
    The ids are written out here and again as `SOUNDS` in
-   `src-tauri/src/settings/model.rs`. What crosses the IPC boundary is validated
+   `crates/core/src/settings/model.rs`. What crosses the IPC boundary is validated
    there; this copy is what the dropdown draws. A sound added to one and not the
    other is the familiar silent failure — offered here, and quietly becoming
    something else on the way to disk. */

@@ -14,7 +14,7 @@
    until they go and choose. */
 
 /* The closed lists. Written out here and again in
-   `src-tauri/src/settings/model.rs`, the same doubling `SIDE_TABS` and the
+   `crates/core/src/settings/model.rs`, the same doubling `SIDE_TABS` and the
    storage ladder carry, and with the same obligation: what this offers must be
    a subset of what Rust accepts, because a value Rust refuses loses itself on
    the next save with nothing on screen to say so. */

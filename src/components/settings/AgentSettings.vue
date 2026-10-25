@@ -214,7 +214,7 @@ const emit = defineEmits([
 
 /* The languages, still written out here, and the doubling is accepted for the
    reason the rows above no longer have to accept it: these are
-   `agents::LANGUAGES` in `src-tauri/src/agents/mod.rs`, which carries the
+   `agents::LANGUAGES` in `crates/core/src/agents/mod.rs`, which carries the
    English name beside each because that name is what goes into the prompt —
    these are labels for ids Rust already knows and validates, so drift costs a
    stale label rather than a lost setting. The order is the table's, and the
@@ -271,7 +271,7 @@ const priorityRowStyle = { display: 'flex', alignItems: 'center', justifyContent
 const priorityLabelStyle = { color: 'var(--text-primary)', font: 'var(--weight-regular) var(--text-ui-size)/var(--leading-normal) var(--font-sans)' }
 const priorityButtonsStyle = { display: 'flex', gap: 'var(--space-1)' }
 
-/* The same 4000 as `MAX_AGENT_PROMPT` in `src-tauri/src/settings/model.rs`, and
+/* The same 4000 as `MAX_AGENT_PROMPT` in `crates/core/src/settings/model.rs`, and
    the fifth copy of a number this feature keeps in two places — worth it here
    because without it the ceiling is only ever met by the file, silently. Rust
    forgets an overlong instruction **whole** rather than truncating it, and

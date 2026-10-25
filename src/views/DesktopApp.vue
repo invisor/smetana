@@ -634,7 +634,7 @@ const tree = computed(() => treeNodes(expandedSet.value))
    its git state, the agents working in it.
 
    This set is duplicated across the IPC boundary: the same three ids are the
-   closed list in `src-tauri/src/settings/model.rs` (SIDE_TABS). Change one and
+   closed list in `crates/core/src/settings/model.rs` (SIDE_TABS). Change one and
    you must change the other — a fourth tab added only here would work all
    session and come back as Files after a restart, with no error anywhere. */
 const SIDE_TABS = [
@@ -649,7 +649,7 @@ const SIDE_TABS = [
    somebody wants is a choice they make rather than a state to derive.
 
    The same doubling `SIDE_TABS` carries, and the same warning: these two ids
-   are the closed list in `src-tauri/src/settings/model.rs` (`RIGHT_TABS`) as
+   are the closed list in `crates/core/src/settings/model.rs` (`RIGHT_TABS`) as
    well. A third tab added only here would work all session and come back as
    Task after a restart, with no error anywhere. */
 const RIGHT_TABS = [
@@ -2172,7 +2172,7 @@ const toggleRemoteBranchFolders = (folders) => {
    reading, and it has to survive a restart for the reason a fold does.
 
    The ids are `branchTree.js`'s closed list and are duplicated across the IPC
-   boundary as `BRANCH_TABS` in `src-tauri/src/settings/model.rs`, exactly as
+   boundary as `BRANCH_TABS` in `crates/core/src/settings/model.rs`, exactly as
    `SIDE_TABS` and `RIGHT_TABS` are: a third tab added on one side alone would
    work all session and come back as Local after a restart, with no error
    anywhere. */

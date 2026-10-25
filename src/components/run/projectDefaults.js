@@ -17,7 +17,7 @@
    than sloppy: `ProjectConfig` crosses IPC in the spelling the TOML uses, so a
    draft in this shape is already the payload, and the file, the console and
    this module all say `max_parallel_tasks`. See the note over `ProjectConfig`
-   in `src-tauri/src/runs/config.rs`. */
+   in `crates/core/src/runs/config.rs`. */
 
 /* The same four values `Defaults::default()` produces on the Rust side. Written
    out here rather than read off a loaded config, because the case this exists

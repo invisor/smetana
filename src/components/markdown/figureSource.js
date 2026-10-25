@@ -63,7 +63,7 @@ const SCHEME = /^([a-z][a-z0-9+.-]+):/i
    without caring which of `/` and `\` supplied either one, so `/\host\p.png`
    and `\\host/p.png` — mixed on purpose by whoever is testing the gate, or by
    an accident of copy-paste — are refused by the same line as the two
-   canonical spellings. `src-tauri/src/attachments/figure.rs`'s `is_network_path`
+   canonical spellings. `crates/core/src/attachments/figure.rs`'s `is_network_path`
    is this same test again, in Rust, for `image_read` — one string check on
    each side of the boundary rather than trusting the other one to have run. */
 export function isNetworkPath(src) {

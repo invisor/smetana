@@ -97,7 +97,7 @@ const TASK = /^\[([ xX])\]\s+(.*)$/
    The address may carry a literal space, and that is not a hand-typed
    corner case: it is the shape the app itself hands an agent for every
    attachment it ever draws a figure for. `PICTURES` in
-   `src-tauri/src/agents/prompt.rs` asks an agent to write
+   `crates/core/src/agents/prompt.rs` asks an agent to write
    `![what it is](/absolute/path.png)`, a bare absolute path, and on macOS
    that path runs through `~/Library/Application Support/…` — a folder name
    with a space in it on every machine, so every screenshot an agent attaches

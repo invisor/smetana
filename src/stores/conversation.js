@@ -6,7 +6,7 @@
    registers the listeners once, and every `invoke` wrapped so a refusal lands
    in `lastError` rather than in an unhandled rejection. What it is not is a
    second copy of that store: a driven session has no PTY, no bytes and no
-   screen. The worker holds the journal (`src-tauri/src/session/`), and that is
+   screen. The worker holds the journal (`crates/core/src/session/`), and that is
    the whole reason `session_attach` can be asked as many times as a window
    likes — the second answer is the same conversation as the first.
 
@@ -98,7 +98,7 @@ const crewAddress = (id) => {
 }
 
 /* A Crew node's own `starting` is not `statusOf`'s — it is `CrewState::Starting`
-   (`src-tauri/src/session/crew.rs`), a background worker being spun up with
+   (`crates/core/src/session/crew.rs`), a background worker being spun up with
    work already handed to it (`pendingInit` in `agents/codex_crew.rs`, which
    counts `Starting` beside `Running` as active; `claude_crew`'s own fallback
    is the same shape). That is nothing like a driven session's `starting`,
@@ -891,7 +891,7 @@ export function forget(id) {
    not start, and the sentence saying why is in `lastError`.
 
    The intent is the same vocabulary `terminal_create` takes — which words reach
-   the agent is Rust's business (`src-tauri/src/agents/`), and this store's is
+   the agent is Rust's business (`crates/core/src/agents/`), and this store's is
    only to say what the session is for. The attach that follows is what makes
    the caller's next `conversationFor` draw anything: a session started and not
    attached to would sit in the worker filling a journal nothing reads. */
@@ -1002,7 +1002,7 @@ export async function answerQuestion(id, question, decision, answers = null) {
 /* Stop the turn in flight — the composer's Stop button, and never the row's
    cross. What that costs the harness is the driver's business: for Claude
    Code it is one `control_request` over stdin that ends the turn and leaves
-   the session open (smetana-y7mv, `src-tauri/src/agents/claude_driver.rs`'s
+   the session open (smetana-y7mv, `crates/core/src/agents/claude_driver.rs`'s
    own header carries the measurement); a harness with no such answer still
    loses the child. `closeConversation` below is the other one, for ending a
    session outright. */

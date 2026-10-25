@@ -5,7 +5,7 @@
    absent travels as `null` — the same shape as the floor and the pause, and
    what `RunSettings::instructions` reads as `None`. */
 
-/* The same bound as `INSTRUCTIONS_MAX` in src-tauri/src/runs/model.rs, which is
+/* The same bound as `INSTRUCTIONS_MAX` in crates/core/src/runs/model.rs, which is
    what refuses a longer text that arrives anyway. */
 export const NOTES_MAX = 2000
 

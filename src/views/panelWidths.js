@@ -49,7 +49,7 @@ export const RIGHT_MIN = 240
    it stands: this is what somebody who has never dragged the separator gets,
    and rewriting a stored preference to match a new default would be an edit
    nobody asked for. The same number is `LEFT_WIDTH_DEFAULT` in
-   `src-tauri/src/settings/model.rs`, so that a file with no width in it opens
+   `crates/core/src/settings/model.rs`, so that a file with no width in it opens
    the same width the front end would have chosen on its own. */
 export const LEFT_DEFAULT = 236
 export const RIGHT_DEFAULT = 340

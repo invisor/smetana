@@ -11,7 +11,7 @@
    given straight into `project.openTabs`, and `revealInTree`
    (`views/DesktopApp.vue`) walks `ancestors` of whatever it is given straight
    into `project.expanded` — both lists `sane_list`
-   (`src-tauri/src/settings/model.rs`) saves to `settings.json`. Neither door
+   (`crates/core/src/settings/model.rs`) saves to `settings.json`. Neither door
    checks the path it is handed; both trust the caller, which is why the
    checking belongs here, once, before either is called at all.
 
@@ -23,7 +23,7 @@
    with no project open to be inside — has nothing to translate it against,
    and `null` says so: a caller that pushed it into `openTabs` or `expanded`
    anyway would open a tab `files_read` can never fill (`reject_traversal`,
-   `src-tauri/src/files/model.rs:215`, refuses anything starting with `/`, `\`
+   `crates/core/src/files/model.rs:215`, refuses anything starting with `/`, `\`
    or a drive letter) and expand folders `files_list` refuses the same way,
    both surviving into `settings.json` with no way back but by hand.
 
