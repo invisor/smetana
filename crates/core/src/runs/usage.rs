@@ -557,6 +557,7 @@ fn app_server_session(
     deadline: Instant,
 ) -> Result<serde_json::Value, Unavailable> {
     write_rpc(stdin, 1, "initialize", serde_json::json!({
+        // The core crate's version; the app and the core are both 0.1.0, so it reads the same.
         "clientInfo": { "name": "smetana", "title": "Smetana", "version": env!("CARGO_PKG_VERSION") },
         "capabilities": {}
     }))?;

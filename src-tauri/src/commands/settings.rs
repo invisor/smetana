@@ -25,7 +25,7 @@ fn path(app: &AppHandle) -> Option<PathBuf> {
 
 /// Whether the update timer may ask the release feed by itself.
 ///
-/// Beside `role_pair` above and read the same way, from the disk on each call — and
+/// Beside `settings::role_pair` in the core and read the same way, from the disk on each call — and
 /// here that is not merely acceptable but the mechanism: `updates::schedule`
 /// asks at every tick, which is what lets the switch stop and restart the
 /// scheduled check without a restart of the app. The opposite of

@@ -461,7 +461,7 @@ const paletteStateFrameStyle = { ...paletteFrameStyle, height: '340px' }
    with a normal render. The two readings are named in the document itself, so
    whoever checks this next does not have to infer them. */
 
-/* Its stylesheet is a copy of the one `src-tauri/src/runs/report.rs` writes, and
+/* Its stylesheet is a copy of the one `crates/core/src/runs/report.rs` writes, and
    the copy has to keep that file's *shape*: the palette on a bare `:root`, again
    under `prefers-color-scheme`, and again under `[data-theme]`. That last block is
    the only reason this section changes palette at all: `reportTheme.js` names a
@@ -1324,7 +1324,7 @@ const onSessionAction = ({ kind, session }) => {
   return sessionCopyFeedback(session?.id ?? null, copyPayload(kind, session), copyVerbNoun(kind))
 }
 
-/* The Git panel's three states, in the shape `src-tauri/src/vcs/` answers with.
+/* The Git panel's three states, in the shape `crates/core/src/vcs/` answers with.
    Two repositories rather than one, since a project made of several is what the
    repository list exists for and the case a single-repository machine can never
    show; the second is on a detached HEAD, which the row has to say rather than

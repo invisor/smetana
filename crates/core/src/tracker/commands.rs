@@ -27,13 +27,11 @@ async fn ask<T>(
         .map_err(|_| TrackerError::Spawn("the tracker worker did not answer".into()))
 }
 
-
 /// The body of `tracker_health`, for the phone bridge: the allowlisted commands
 /// are plain functions that the Tauri wrapper and `remote::bridge` both call.
 pub async fn health(handle: &TrackerHandle) -> Result<Health, TrackerError> {
     ask(handle, Request::Health).await
 }
-
 
 /// The body of `tracker_snapshot`; see `health`.
 pub async fn snapshot(handle: &TrackerHandle) -> Result<Snapshot, TrackerError> {
@@ -69,7 +67,6 @@ pub async fn tracker_reopen(handle: &TrackerHandle, id: String) -> Result<Issue,
 pub async fn tracker_delete(handle: &TrackerHandle, id: String) -> Result<(), TrackerError> {
     ask(&handle, |tx| Request::Delete(id, tx)).await?
 }
-
 
 /// The body of `tracker_set_project`; see `health`.
 pub async fn set_project(

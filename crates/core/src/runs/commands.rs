@@ -301,13 +301,11 @@ async fn ask<T>(
     rx.await.map_err(|_| RunError::Terminal("the run worker did not answer".into()))
 }
 
-
 /// The body of `run_start`, for the phone bridge: the allowlisted commands are
 /// plain functions that the Tauri wrapper and `remote::bridge` both call.
 pub async fn start(handle: &RunHandle, project: String, settings: RunSettings) -> Result<Run, RunError> {
     ask(handle, |tx| Request::Start(project, Box::new(settings), tx)).await?
 }
-
 
 /// The body of `run_stop`; see `start`.
 pub async fn stop(handle: &RunHandle, token: u64) -> Result<Option<Run>, RunError> {
@@ -334,7 +332,6 @@ pub async fn stop(handle: &RunHandle, token: u64) -> Result<Option<Run>, RunErro
 pub async fn run_release(handle: &RunHandle) -> Result<(), RunError> {
     ask(&handle, Request::Release).await
 }
-
 
 /// The body of `run_state`; see `start`.
 pub async fn state(handle: &RunHandle, project: String) -> Result<Vec<Run>, RunError> {

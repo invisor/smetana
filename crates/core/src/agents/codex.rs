@@ -485,7 +485,7 @@ impl Profile for Codex {
         // on 0.155.1 answers `Error: Unknown feature flag`, but that is a claim about
         // a CLI that knows `--enable` and not about one older than it — this tree has
         // no captured `--help` at 0.146.0 to say whether that flag existed then, only
-        // the screen fixtures under `src-tauri/tests/fixtures/`, none of which answer
+        // the screen fixtures under `crates/core/tests/fixtures/`, none of which answer
         // this. So the honest floor is: an older Codex refuses these arguments and the
         // run dies at spawn either way, with `Error: Unknown feature flag` where it
         // knows `--enable` and refuses the feature name, and its own parser's

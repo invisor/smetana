@@ -170,7 +170,7 @@ is the only thing holding the two ends together.
 
 **Codex's layer B is genuinely a different reader, not Claude's with the glyphs swapped**, and the
 two deliberately share no code, because a glyph one harness happens to use today is exactly what
-drifts. Its rules are measured off fixtures in `src-tauri/tests/fixtures/`, captured under a PTY at
+drifts. Its rules are measured off fixtures in `crates/core/tests/fixtures/`, captured under a PTY at
 60 and 120 columns from CLI 0.146.0, and `codex.rs` carries each rule with the screen that forced it.
 Three properties of that interface are why it cannot be shared: the cursor `›` (U+203A) is also drawn
 in front of the person's own submitted prompt and the empty composer, so it counts only as the first

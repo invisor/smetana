@@ -25,11 +25,6 @@ async fn ask<T>(
     rx.await.map_err(|_| SessionError::Spawn("the session worker did not answer".into()))
 }
 
-
-
-
-
-
 /// End a Crew package from its row's close control. Kept separate from
 /// `crew_stop` at the IPC boundary so the UI never mistakes a node id for an
 /// ordinary terminal session id.
@@ -40,11 +35,6 @@ pub async fn crew_clear(handle: &SessionHandle, root: u64) -> Result<(), Session
         .await
         .map_err(|_| SessionError::Spawn("the session worker is not running".into()))
 }
-
-
-
-
-
 
 /// End the session outright — the cross on a driven agent row, never the
 /// composer's Stop (smetana-y7mv). Always kills the child, whatever a
@@ -57,8 +47,8 @@ pub async fn session_close(handle: &SessionHandle, id: SessionId) -> Result<(), 
 }
 
 /// The bodies of the commands the phone may call, as plain functions over the
-/// worker's handle: the `#[tauri::command]` wrappers above and `remote::bridge`
-/// both call these, so the phone reaches exactly the code the desktop front end
+/// worker's handle: the `#[tauri::command]` wrappers (`src-tauri/src/commands/session.rs`) and
+/// `remote::bridge` both call these, so the phone reaches exactly the code the desktop front end
 /// does. A command that takes `State` cannot be called without Tauri, and this
 /// is what the wrapper becomes for the allowlisted ones.
 pub mod plain {
