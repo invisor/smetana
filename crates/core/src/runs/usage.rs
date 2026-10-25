@@ -557,7 +557,8 @@ fn app_server_session(
     deadline: Instant,
 ) -> Result<serde_json::Value, Unavailable> {
     write_rpc(stdin, 1, "initialize", serde_json::json!({
-        // The core crate's version; the app and the core are both 0.1.0, so it reads the same.
+        // The core crate's Cargo version; src-tauri's Cargo version, which this read before the move, was
+        // 0.1.0 too, so the value sent is unchanged.
         "clientInfo": { "name": "smetana", "title": "Smetana", "version": env!("CARGO_PKG_VERSION") },
         "capabilities": {}
     }))?;
