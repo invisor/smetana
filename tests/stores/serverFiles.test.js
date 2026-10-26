@@ -24,7 +24,8 @@ async function load(view) {
 describe('paths for a server', () => {
   it('hands the paths back untouched when the server is on this machine, and reads nothing', async () => {
     const { ipc, stores } = await load(split({ local: true }))
-    const paths = await stores.serverFiles.pathsForServer(['/Users/me/a.png', '/Users/me/b.pdf'])
+    const { paths, failures } = await stores.serverFiles.pathsForServer(['/Users/me/a.png', '/Users/me/b.pdf'])
+    expect(failures).toEqual([])
     expect(paths).toEqual(['/Users/me/a.png', '/Users/me/b.pdf'])
     expect(ipc.calls('client_file_read')).toHaveLength(0)
     expect(ipc.calls('attachment_write')).toHaveLength(0)
@@ -32,7 +33,7 @@ describe('paths for a server', () => {
 
   it('treats a build with no server of its own, and a browser, as local', async () => {
     const { ipc, stores } = await load({ mode: 'in-process', state: 'connected', epoch: 0 })
-    expect(await stores.serverFiles.pathsForServer(['/x.png'])).toEqual(['/x.png'])
+    expect((await stores.serverFiles.pathsForServer(['/x.png'])).paths).toEqual(['/x.png'])
     ipc.fail('connection_state', new Error('no such command'))
     expect(await stores.serverFiles.serverIsRemote()).toBe(false)
   })
@@ -41,21 +42,25 @@ describe('paths for a server', () => {
     const { ipc, stores } = await load(split({ local: false }))
     ipc.on('client_file_read', (args) => ({ name: args.path.split('/').pop(), bytes: 3, data: 'cG5n' }))
     ipc.on('attachment_write', (args) => attachment(`/srv/attachments/p/${args.name}`))
-    const paths = await stores.serverFiles.pathsForServer(['/Users/me/a.png', '/Users/me/b.pdf'])
+    const { paths } = await stores.serverFiles.pathsForServer(['/Users/me/a.png', '/Users/me/b.pdf'])
     expect(paths).toEqual(['/srv/attachments/p/a.png', '/srv/attachments/p/b.pdf'])
     expect(ipc.calls('client_file_read').map((c) => c.path)).toEqual(['/Users/me/a.png', '/Users/me/b.pdf'])
     expect(ipc.calls('attachment_write')[0]).toEqual({ name: 'a.png', data: 'cG5n' })
   })
 
-  it('stops at the first file that cannot be uploaded and says why', async () => {
+  it('keeps the files that arrive and names each one that did not, instead of losing the batch', async () => {
     const { ipc, stores } = await load(split({ local: false }))
     ipc.on('client_file_read', (args) => {
       if (args.path.endsWith('huge.mov')) throw 'huge.mov is 99999999 bytes; the ceiling is 10485760 bytes'
-      return { name: 'a.png', bytes: 3, data: 'cG5n' }
+      return { name: args.path.split('/').pop(), bytes: 3, data: 'cG5n' }
     })
-    ipc.on('attachment_write', () => attachment('/srv/attachments/p/a.png'))
-    await expect(stores.serverFiles.pathsForServer(['/a.png', '/huge.mov', '/c.png'])).rejects.toThrow(/ceiling/)
-    expect(ipc.calls('attachment_write')).toHaveLength(1)
+    ipc.on('attachment_write', (args) => attachment(`/srv/attachments/p/${args.name}`))
+    const { paths, failures } = await stores.serverFiles.pathsForServer(['/a.png', '/huge.mov', '/c.png'])
+    expect(paths).toEqual(['/srv/attachments/p/a.png', '/srv/attachments/p/c.png'])
+    expect(failures).toEqual([{ path: '/huge.mov', message: expect.stringContaining('ceiling') }])
+    expect(stores.serverFiles.failureSentence(failures)).toMatch(/ceiling/)
+    expect(stores.serverFiles.failureSentence([...failures, ...failures])).toMatch(/and 1 more/)
+    expect(stores.serverFiles.failureSentence([])).toBe('')
   })
 
   it('asks the shell fresh in a window that never started the connection store', async () => {
@@ -100,7 +105,7 @@ describe('what is sent with a message and what is dropped on a terminal', () => 
     const { ipc, stores } = await load(split({ local: false }))
     ipc.on('client_file_read', () => ({ name: 'brief.pdf', bytes: 3, data: 'cG5n' }))
     ipc.on('attachment_write', () => attachment('/srv/attachments/p/brief.pdf'))
-    expect(await stores.app.pathsForServer(['/Users/me/brief.pdf'])).toEqual(['/srv/attachments/p/brief.pdf'])
+    expect((await stores.app.pathsForServer(['/Users/me/brief.pdf'])).paths).toEqual(['/srv/attachments/p/brief.pdf'])
   })
 
   it('sends a message\'s attachments as given: they were made server paths when they were chosen', async () => {

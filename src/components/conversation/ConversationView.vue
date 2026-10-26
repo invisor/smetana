@@ -126,7 +126,7 @@ import { basename } from '../../paths.js'
    themselves, so this file asks on their behalf and hands back which of
    their own attachments are worth drawing as a control at all. */
 import { agentLabel, signInVariants } from '../../stores/agents.js'
-import { openExternal, openImageWindow, pathsForServer, pickFiles } from '../../stores/app.js'
+import { failureSentence, openExternal, openImageWindow, pathsForServer, pickFiles } from '../../stores/app.js'
 import { filesState } from '../../stores/files.js'
 import { effectiveAgents, settings } from '../../stores/settings.js'
 import {
@@ -448,14 +448,17 @@ const dropCount = ref(0)
 const canAttach = computed(() => composerShown.value)
 
 /* Chosen or dropped files, put on the list as paths the agent can open. With the server on another
-   machine they are sent to it here, at the moment of the choice, so a chip names the server's copy
-   from the start (a click on a picture's chip asks the server for exactly that path); with it here
-   the paths are the same ones. A file that cannot be sent is said in the console and left off. */
+   machine each is sent to it here, at the moment of the choice, so a chip names the server's copy from
+   the start (a click on a picture's chip asks the server for exactly that path); with it here the
+   paths are the same ones. Files go one at a time and the ones that arrive are kept: a file that could
+   not be sent is said on the panel's own error line, with the reason, and the rest of the batch is not
+   lost with it. */
 async function addAttachments(paths) {
-  try {
-    attachments.value = [...attachments.value, ...(await pathsForServer(paths))]
-  } catch (err) {
-    console.error('[conversation] a file could not be attached:', err)
+  const { paths: sent, failures } = await pathsForServer(paths)
+  if (sent.length) attachments.value = [...attachments.value, ...sent]
+  if (failures.length) {
+    console.error('[conversation] files could not be attached:', failures)
+    conversationState.lastError = { session: props.sessionId, kind: 'attach', text: failureSentence(failures) }
   }
 }
 

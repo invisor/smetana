@@ -288,13 +288,56 @@ pub async fn project_clone(
         }
         Err(err) => return Err(io(&dest, err)),
     }
-    let result = run_clone(clone_args(&url, &dest), ssh_batch_mode().await, CLONE_TIMEOUT).await;
-    if let Err(err) = result {
-        // Only what this call made, and on every failure including the timeout.
-        let _ = std::fs::remove_dir_all(&dest);
-        return Err(err);
+    // Removed on every way out of this function - an error, the timeout, the caller dropping the
+    // future - and only ever the folder this call made.
+    let made = Made(Some(dest.clone()));
+    run_clone(clone_args(&url, &dest), ssh_batch_mode().await, CLONE_TIMEOUT).await?;
+    let path = text(&real(&dest)?);
+    made.keep();
+    Ok(Cloned { path })
+}
+
+/// A folder this call created, removed when the guard is dropped unless it was kept.
+struct Made(Option<PathBuf>);
+
+impl Made {
+    fn keep(mut self) {
+        self.0 = None;
     }
-    Ok(Cloned { path: text(&real(&dest)?) })
+}
+
+impl Drop for Made {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0.take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+/// Kills the whole process group git was started in when dropped while armed: `git clone` runs
+/// helpers (`git-remote-https`, `ssh`, `index-pack`) that outlive a kill of git alone and would go on
+/// writing into a folder that is being removed. Disarmed once git has been waited for, since a pid
+/// that has been reaped may be somebody else's by then.
+struct GroupKill(Option<u32>);
+
+impl GroupKill {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for GroupKill {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.0.take() {
+            // SAFETY: a negative pid is a process group; the group was made by this call's spawn.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = self.0.take();
+    }
 }
 
 /// Whether to make ssh refuse to ask anything (`BatchMode`): only when the operator has not chosen how
@@ -320,7 +363,16 @@ async fn run_clone(
     ssh_batch: bool,
     timeout: Duration,
 ) -> Result<(), PlacementError> {
-    let mut command = tokio::process::Command::new("git");
+    run_program("git", args, ssh_batch, timeout).await
+}
+
+async fn run_program(
+    program: impl AsRef<std::ffi::OsStr>,
+    args: Vec<std::ffi::OsString>,
+    ssh_batch: bool,
+    timeout: Duration,
+) -> Result<(), PlacementError> {
+    let mut command = tokio::process::Command::new(program);
     command
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -331,10 +383,19 @@ async fn run_clone(
     if ssh_batch {
         command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
     }
-    let output = tokio::time::timeout(timeout, command.output())
-        .await
-        .map_err(|_| PlacementError::Clone("The clone took longer than fifteen minutes and was stopped.".into()))?
-        .map_err(|err| PlacementError::Clone(format!("could not run git: {err}")))?;
+    // Its own process group, so the helpers it starts can be ended with it.
+    #[cfg(unix)]
+    command.process_group(0);
+    let child = command.spawn().map_err(|err| PlacementError::Clone(format!("could not run git: {err}")))?;
+    let mut group = GroupKill(child.id());
+    let output = tokio::time::timeout(timeout, child.wait_with_output()).await;
+    let output = match output {
+        // The guard ends the group as it drops, here and on any other way out.
+        Err(_) => return Err(PlacementError::Clone("The clone took longer than fifteen minutes and was stopped.".into())),
+        Ok(output) => output,
+    };
+    group.disarm();
+    let output = output.map_err(|err| PlacementError::Clone(format!("could not run git: {err}")))?;
     if output.status.success() {
         return Ok(());
     }
@@ -664,6 +725,48 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, PlacementError::Clone(ref why) if !why.is_empty()), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_timeout_ends_git_and_the_helpers_it_started() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = dir();
+        let pid_file = tmp.path().join("helper.pid");
+        // A stand-in for git that starts a helper which would outlive it, then waits.
+        let script = tmp.path().join("fake-git");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\nsleep 60 &\necho $! > {}\nwait\n", pid_file.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = run_program(&script, vec![], false, Duration::from_secs(3)).await.unwrap_err();
+        assert!(matches!(err, PlacementError::Clone(ref why) if why.contains("longer")), "{err}");
+        let helper: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        let mut gone = false;
+        for _ in 0..50 {
+            // SAFETY: signal 0 only asks whether the process exists.
+            if unsafe { libc::kill(helper, 0) } != 0 {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(gone, "the helper git started was left running");
+    }
+
+    #[test]
+    fn the_folder_a_clone_made_goes_with_the_guard_unless_it_was_kept() {
+        let tmp = dir();
+        let made = tmp.path().join("made");
+        let kept = tmp.path().join("kept");
+        std::fs::create_dir_all(&made).unwrap();
+        std::fs::create_dir_all(&kept).unwrap();
+        drop(Made(Some(made.clone())));
+        Made(Some(kept.clone())).keep();
+        assert!(!made.exists());
+        assert!(kept.exists());
     }
 
     #[tokio::test]

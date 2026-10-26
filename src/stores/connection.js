@@ -33,7 +33,7 @@
    load may have waited the shell's grace out and failed. */
 import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { emit, listen } from '@tauri-apps/api/event'
 
 /* `src-tauri/src/split/state.rs`'s `STATE_EVENT`, and the same string on both sides. */
 export const STATE_EVENT = 'connection:state'
@@ -47,6 +47,10 @@ export const connection = reactive({
   local: true,
   /* Which server: `local`, or a remote one's key. See `onServerChange`. */
   target: 'local',
+  /* True from the moment a connection to another server is noticed until the stores have taken that
+     server's own projects and settings in (`onServerChange`). Nothing may be written to a server in that
+     time: what the stores hold is still the previous server's. */
+  switching: false,
   server: null,
   /* A local server older than the bundled one, and what replacing it would end. */
   outdated: null,
@@ -140,8 +144,14 @@ function adopt(view, { first = false } = {}) {
     seenEpoch = epoch
     const changed = servedTarget !== null && servedTarget !== connection.target
     servedTarget = connection.target
-    if (changed) changeServer().then(resync)
-    else resync()
+    if (changed) {
+      connection.switching = true
+      changeServer()
+        .finally(() => {
+          connection.switching = false
+        })
+        .then(resync)
+    } else resync()
   }
 }
 
@@ -246,4 +256,80 @@ export function refusalOf(err) {
   if (typeof err === 'string') return err
   if (err && typeof err === 'object' && typeof err.message === 'string') return err.message
   return String(err)
+}
+
+/* ---- choosing a server goes through the app window ------------------------
+
+   The Server tab lives in the settings window, which has no tabs, no unsaved edits and no say over
+   the project the app window has open. Moving to another server changes what every one of those is
+   about, so the press is only a *request*: the app window, which owns them, asks the person about
+   unsaved edits, saves them to the server they belong to (the one still connected), and only then
+   calls the shell. A refusal or a cancel leaves the device exactly where it was. Three events carry
+   it: the request, an acknowledgement (so a settings window with no app window to answer says so at
+   once instead of waiting out a pairing), and the result. */
+export const SWITCH_REQUEST = 'server:switch-request'
+export const SWITCH_ACK = 'server:switch-ack'
+export const SWITCH_RESULT = 'server:switch-result'
+
+const ACK_WITHIN_MS = 3000
+const RESULT_WITHIN_MS = 6 * 60 * 1000
+
+/* The settings window's half. `request` is `{ kind: 'local' }` or `{ kind: 'remote', ticket,
+   stopLocal }`. Resolves `{ cancelled: true }` when the person kept their unsaved edits, the shell's
+   answer otherwise, and rejects with words for a line under the button. */
+export async function requestServerSwitch(request) {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const stops = []
+  let timer = null
+  const finish = () => {
+    clearTimeout(timer)
+    for (const stop of stops) stop()
+  }
+  return new Promise((resolve, reject) => {
+    const fail = (message) => {
+      finish()
+      reject(new Error(message))
+    }
+    ;(async () => {
+      try {
+        stops.push(
+          await listen(SWITCH_ACK, (event) => {
+            if (event.payload?.id !== id) return
+            clearTimeout(timer)
+            timer = setTimeout(() => fail('The app window did not finish. Nothing was changed.'), RESULT_WITHIN_MS)
+          })
+        )
+        stops.push(
+          await listen(SWITCH_RESULT, (event) => {
+            const result = event.payload
+            if (result?.id !== id) return
+            finish()
+            if (result.ok) resolve(result.cancelled ? { cancelled: true } : result.answer)
+            else reject(new Error(result.error || 'The switch was refused.'))
+          })
+        )
+        timer = setTimeout(() => fail('The app window did not answer. Nothing was changed.'), ACK_WITHIN_MS)
+        await emit(SWITCH_REQUEST, { id, ...request })
+      } catch (err) {
+        fail(refusalOf(err))
+      }
+    })()
+  })
+}
+
+/* The app window's half: `run(request)` does the work (`projects.js::switchServer`) and answers the
+   shell's reply, or `{ cancelled: true }`; whatever it throws goes back as the refusal. Answers the
+   way to stop. */
+export async function watchServerSwitch(run) {
+  return listen(SWITCH_REQUEST, async (event) => {
+    const { id, ...request } = event.payload ?? {}
+    if (!id) return
+    await emit(SWITCH_ACK, { id })
+    try {
+      const answer = await run(request)
+      await emit(SWITCH_RESULT, answer?.cancelled ? { id, ok: true, cancelled: true } : { id, ok: true, answer })
+    } catch (err) {
+      await emit(SWITCH_RESULT, { id, ok: false, error: refusalOf(err) })
+    }
+  })
 }

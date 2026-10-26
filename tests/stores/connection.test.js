@@ -222,3 +222,42 @@ describe('which server this device uses', () => {
     await expect(stores.connection.useLocalServer()).rejects.toThrow(/not been set up/)
   })
 })
+
+describe('a request to choose another server goes through the app window', () => {
+  it('carries the request to the app window, which answers with the shell\'s reply', async () => {
+    const { emit: _unused, stores } = await loadStores()
+    const seen = []
+    await stores.connection.watchServerSwitch(async (request) => {
+      seen.push(request)
+      return { target: { kind: 'remote' }, localStop: 'scheduled' }
+    })
+    const answer = await stores.connection.requestServerSwitch({ kind: 'remote', ticket: 'smetana2:abc', stopLocal: true })
+    expect(seen).toEqual([{ kind: 'remote', ticket: 'smetana2:abc', stopLocal: true }])
+    expect(answer.localStop).toBe('scheduled')
+  })
+
+  it('answers a cancel as a cancel and a refusal as a refusal', async () => {
+    const { stores } = await loadStores()
+    let next = { cancelled: true }
+    await stores.connection.watchServerSwitch(async () => {
+      if (next instanceof Error) throw next
+      return next
+    })
+    expect(await stores.connection.requestServerSwitch({ kind: 'local' })).toEqual({ cancelled: true })
+    next = new Error('the server refused the pairing: spent')
+    await expect(stores.connection.requestServerSwitch({ kind: 'local' })).rejects.toThrow(/spent/)
+  })
+
+  it('says at once when there is no app window to answer', async () => {
+    vi.useFakeTimers()
+    try {
+      const { stores } = await loadStores()
+      const pending = stores.connection.requestServerSwitch({ kind: 'local' })
+      const caught = pending.catch((err) => err)
+      await vi.advanceTimersByTimeAsync(3500)
+      expect((await caught).message).toMatch(/did not answer/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

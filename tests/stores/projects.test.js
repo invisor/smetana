@@ -785,3 +785,91 @@ describe('moving to another server', () => {
     expect(stores.settings.settings.activeProject).toBe('/Users/me/work')
   })
 })
+
+describe('choosing another server with unsaved edits open', () => {
+  const dirty = (tabs, settingsStore) => {
+    settingsStore.settings.project.openTabs = ['a.txt']
+    tabs.buffers.set('a.txt', buffer({ text: 'an unsaved edit' }))
+  }
+
+  it('asks first, saves to the server still connected, and only then asks the shell to move', async () => {
+    const loaded = await loadStores()
+    const { ipc: io, stores } = loaded
+    const order = []
+    io.on('connection_state', { mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local' })
+    io.on('settings_load', stores.settings.defaults())
+    io.on('device_settings_load', {})
+    io.on('device_settings_save', null)
+    io.on('settings_patch', null)
+    io.on('server_use_remote', () => {
+      order.push('moved')
+      return { target: { kind: 'remote' }, localStop: null }
+    })
+    await stores.settings.loadSettings()
+    dirty(stores.tabs, stores.settings)
+    stores.tabs.onUnsaved(async (paths) => {
+      order.push(`asked ${paths.join(',')}`)
+      // "Save" in the app window's dialog: written to the server this window is still connected to.
+      order.push('saved')
+      stores.tabs.discardTabs(paths)
+      return true
+    })
+
+    const answer = await stores.projects.switchServer({ kind: 'remote', ticket: 'smetana2:abc', stopLocal: false })
+
+    expect(order).toEqual(['asked a.txt', 'saved', 'moved'])
+    expect(answer.localStop).toBe(null)
+    expect(io.calls('server_use_remote')).toEqual([{ ticket: 'smetana2:abc', stopLocal: false }])
+  })
+
+  it('leaves the device where it was when the person keeps their edits', async () => {
+    const loaded = await loadStores()
+    const { ipc: io, stores } = loaded
+    io.on('connection_state', { mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local' })
+    io.on('settings_load', stores.settings.defaults())
+    io.on('device_settings_load', {})
+    io.on('device_settings_save', null)
+    io.on('server_use_remote', null)
+    io.on('server_use_local', null)
+    await stores.settings.loadSettings()
+    dirty(stores.tabs, stores.settings)
+    stores.tabs.onUnsaved(async () => false)
+
+    expect(await stores.projects.switchServer({ kind: 'remote', ticket: 'smetana2:abc' })).toEqual({ cancelled: true })
+    expect(await stores.projects.switchServer({ kind: 'local' })).toEqual({ cancelled: true })
+    expect(io.calls('server_use_remote')).toHaveLength(0)
+    expect(io.calls('server_use_local')).toHaveLength(0)
+    expect(stores.tabs.isDirty('a.txt')).toBe(true)
+  })
+
+  it('refuses while a project move is under way, and a refusal by the shell changes nothing', async () => {
+    const loaded = await loadStores()
+    const { ipc: io, stores } = loaded
+    io.on('connection_state', { mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local' })
+    io.on('settings_load', stores.settings.defaults())
+    io.on('device_settings_load', {})
+    io.on('device_settings_save', null)
+    io.fail('server_use_remote', 'the server refused the pairing: This code has expired.')
+    await stores.settings.loadSettings()
+    await expect(stores.projects.switchServer({ kind: 'remote', ticket: 'smetana2:abc' })).rejects.toThrow(/expired/)
+  })
+
+  it('says loudly that edits were dropped when the server changed without the guarded road', async () => {
+    const loaded = await loadStores()
+    const { ipc: io, emit, stores } = loaded
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    io.on('connection_state', { mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local' })
+    io.on('settings_load', { ...stores.settings.defaults(), openProjects: [], activeProject: null })
+    io.on('device_settings_load', {})
+    io.on('device_settings_save', null)
+    await stores.settings.loadSettings()
+    await stores.connection.initConnection()
+    dirty(stores.tabs, stores.settings)
+
+    await emit('connection:state', { mode: 'split', state: 'connected', epoch: 2, local: false, target: 'node-vps' })
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(error.mock.calls.some((call) => String(call[0]).includes('unsaved edits'))).toBe(true)
+    error.mockRestore()
+  })
+})

@@ -18,7 +18,7 @@ import { confirmUnsaved, dirtyPaths, resetTabs, restoreTabs } from './tabs.js'
 import { loadSessions } from './terminals.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
 import { basename, dirname } from '../paths.js'
-import { onServerChange, refusalOf } from './connection.js'
+import { onServerChange, refusalOf, useLocalServer, useRemoteServer } from './connection.js'
 
 /* Path → whether it holds a .beads. health says the same thing about the
    active project, but there is nowhere else to learn it about the other rows. */
@@ -370,13 +370,35 @@ export async function followRemoteProject(raw) {
   }
 }
 
+/* Choosing another server, from the Server tab (`connection.js::requestServerSwitch`). Everything
+   the app window owns that is about the server being left is settled **before** the shell is asked to
+   move: the unsaved-edits question is put (save, discard or keep them), saving goes to the server the
+   files belong to - still the connected one - and the pending settings are flushed to it. A cancel
+   leaves the device exactly where it was and answers `{ cancelled: true }`; a refusal by the shell
+   (a spent ticket, an unreachable relay) throws and also changes nothing. Only then can
+   `followServerChange` assume there is nothing dirty to lose. `request` is `{ kind: 'local' }` or
+   `{ kind: 'remote', ticket, stopLocal }`. */
+export async function switchServer(request) {
+  if (moving) throw new Error('The app is busy moving between projects. Try again in a moment.')
+  moving = true
+  try {
+    if (!(await askUnsaved())) return { cancelled: true }
+    await flushPending()
+    return request.kind === 'remote'
+      ? await useRemoteServer(request.ticket, request.stopLocal)
+      : await useLocalServer()
+  } finally {
+    release()
+  }
+}
+
 /* The connection is now to another server than the one this window's projects came from. Its
    projects are the ones to show, and none of this window's own may reach it: the list and the open
    project are taken from the server (`adoptServerProjects`), the tabs and the tree of the project
    left are dropped, and the window moves to the server's open project, or to the empty state when it
-   has none. Nothing is flushed first - what was unsent was addressed to the other server - and unsaved
-   edits in the old project's tabs go with it: they belong to a folder on a machine this window is no
-   longer talking to, so there is nowhere they could be saved. */
+   has none. Nothing is flushed here: `switchServer` flushed to the server being left before the move,
+   and what is unsent now was addressed to it. It also settled the unsaved edits - so a dirty buffer
+   found here means a switch that did not come through `switchServer`, and is said loudly. */
 export async function followServerChange() {
   if (moving) {
     pendingServerChange = true
@@ -384,6 +406,9 @@ export async function followServerChange() {
   }
   moving = true
   try {
+    if (dirtyPaths.value.length) {
+      console.error('[projects] the server changed with unsaved edits still open; they are dropped:', dirtyPaths.value)
+    }
     const path = await adoptServerProjects()
     await moveTo(path)
   } finally {

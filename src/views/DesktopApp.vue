@@ -248,6 +248,7 @@ import {
   basename,
   initActive,
   initProjectFollow,
+  switchServer,
   projectRows,
   refreshProbes,
   removeProject,
@@ -320,6 +321,7 @@ import {
   refusalOf,
   restartServer,
   retryConnection,
+  watchServerSwitch,
   stale as connectionStale
 } from '../stores/connection.js'
 import { connectionNotice } from '../components/shell/connectionNotice.js'
@@ -677,6 +679,8 @@ const RIGHT_TABS = [
 onMounted(initTracker)
 /* A project switched on the phone: the window follows it. */
 onMounted(initProjectFollow)
+/* The Server tab's press, settled here because this window owns the tabs (`switchServer`). */
+onMounted(() => watchServerSwitch(switchServer))
 onMounted(adoptInitialProject)
 onMounted(initTerminals)
 // Crew topology is emitted when a package starts. Subscribe with the desktop

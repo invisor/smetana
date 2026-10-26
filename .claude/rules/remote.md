@@ -246,7 +246,7 @@ asks for it only when the person chose "stop it when it is finished"; the settin
   and dropped if they leave the root, at most 2000 entries; a path outside is `outside`. Every path the client sends back was listed by
   the server; it never composes one.
 - `project_clone { url, parent, name }`: `git clone -- url dest` with `protocol.ext.allow=never` and `protocol.file.allow=never`, no terminal
-  prompt, 15 minutes; `valid_clone_url` (mirrored by `validCloneUrl` in `folderBrowser.js`, never more permissive) refuses `-…`, `ext::`,
+  prompt, 15 minutes, in its own process group that is killed whole on a timeout or a dropped future, into a folder this call created and a drop guard removes; `valid_clone_url` (mirrored by `validCloneUrl` in `folderBrowser.js`, never more permissive) refuses `-…`, `ext::`,
   `file:` and local paths; `parent` must be under the root and the destination must not exist.
 - `server_file_read { path }`: one file, base64, at most `MAX_ATTACHMENT_BYTES`, **only** inside the attachment store or a known project's
   `.smetana/reports` (the projects are read from the server's `settings.json` at each call; a `reports` or `.smetana` that is a symlink
@@ -259,7 +259,7 @@ asks for it only when the person chose "stop it when it is finished"; the settin
 the paths; remote: `client_file_read` then `attachment_write`, the stored paths come back), `openReportInBrowser` (local:
 `client_open_document`; remote: `server_file_read` then `client_open_fetched`). The two openers hand only an `.html` to the system
 (`commands/client_files.rs`), and the fetched copy is in a private folder under the app's cache directory (not a shared /tmp), swept after a day. In the release the three `client_*` commands are registered (the lists are held equal) but refuse, and the report button is drawn only when `connection.mode` is `split`. Consumers: `attachments.js::importPaths`
-(New task window), the composer (`stores/app.js::pathsForServer`, called by `ConversationView` when files are chosen or dropped, so a chip names the server's copy from the start; the phone's `app.js` answers with the same list), `terminals.js::sendDroppedPaths` (a file dropped on a terminal),
+(New task window), the composer (`stores/app.js::pathsForServer`, called by `ConversationView` when files are chosen or dropped, so a chip names the server's copy from the start; it answers `{ paths, failures }`, each file on its own, so one refusal does not cost the batch and is shown on the panel's error line; the phone's `app.js` answers with the same list and no failures), `terminals.js::sendDroppedPaths` (a file dropped on a terminal),
 `DesktopApp.vue` (report button on a run report's tab; `DocumentModeToggle` gets a second button and `toggleLane(2)`). The image window needs
 nothing: `image_read` is already a server command and its bytes cross the connection.
 Add project: `onAddProject` opens the `server-folder` dialog window (`FolderBrowserModal`, state in the app window, `projects.js::listServerFolders`
@@ -268,11 +268,16 @@ and `PointerMenu` and `MenuButton` draw `withoutClientActions(items)` (`overlays
 `open-cwd`, separators cleaned); a new menu row of that sort is added to that list. The Server tab (`ServerSettings.vue`, `serverChoice.js`) exists only
 when `connection.mode` is `split`.
 
-**Another server is another set of projects.** `View.target` (`local` or the remote key) tells the front end the connection is to a different
-server than the data on screen came from; `connection.js::onServerChange` hooks run before the ordinary resync, and `projects.js::followServerChange`
-takes the new server's list and open project (`settings.js::adoptServerProjects`, which also voids unsent patches and re-baselines), drops the old
-project's tabs and tree and moves to the server's open project, or the empty state if it has none. Nothing is flushed first, so no path of this
-machine reaches the new server's project list, and unsaved edits in the old project's tabs are dropped with it.
+**Another server is another set of projects, and the move is guarded.** The Server tab only *requests* a switch (`connection.js::requestServerSwitch`,
+events `server:switch-request` / `-ack` / `-result`); the app window, which owns the tabs, runs `projects.js::switchServer`: the unsaved-edits question
+(`askUnsaved`), saving to the server still connected, a flush of the pending settings to it, and only then the shell's `server_use_remote` /
+`server_use_local`. A cancel answers `{ cancelled: true }`; a refusal by the shell throws; either leaves the device where it was. After the move,
+`View.target` (`local` or the remote key) tells the front end the connection is to a different server; `connection.js::onServerChange` hooks run before
+the ordinary resync, and `projects.js::followServerChange` takes the new server's list and open project (`settings.js::adoptServerProjects`, which also
+voids unsent patches and re-baselines), drops the old project's tabs and tree and moves to the server's open project, or the empty state if it has none.
+It assumes nothing is dirty and says so with `console.error` if something is. **No client path reaches another server, structurally:** from the moment
+the target changes until `adoptServerProjects` has returned `connection.switching` is true and `settings.js::flushSplit` computes no server patch; a
+patch is recorded with the target it was made for and dropped at send time if that no longer matches.
 
 **Install.** `server/smetanad/README.md` and `smetanad.service` (also in every archive); the `smetanad` job in `.github/workflows/release.yml`
 builds `crates/smetanad` per platform, packs it with `bd`, `resources/`, the unit and the README, and uploads archive and `.sha256` to the

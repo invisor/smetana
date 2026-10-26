@@ -60,7 +60,7 @@ import { effectiveAgentTable } from '../components/settings/agentRoles.js'
 /* Pure: the settings split into the server's fields and the device's, and the patch between two
    states of the server's. Only used when the shell says it is a client (`split` below). */
 import { combine, diffViews, fold, mergePatch, serverView, transportFailure, viewFromHalf, writeView } from './settingsSplit.js'
-import { onReconnect } from './connection.js'
+import { connection, onReconnect } from './connection.js'
 
 /* The defaults mirror the ones in Rust. With no back end (a browser) or after
    a failed read, the app still has to open looking a known way. */
@@ -507,7 +507,12 @@ function believed() {
 /* The client build's save: the whole device half to this machine, and to the server only what
    changed in its half since what it is believed to hold. */
 function flushSplit(snapshot) {
-  const patch = baseline ? diffViews(believed(), serverView(snapshot)) : undefined
+  /* Nothing is addressed to a server while the stores still hold the previous one's state: from the
+     moment the connection is to another server until `adoptServerProjects` has replaced it, a diff
+     would be this machine's projects and settings against the new server's. And the server a patch
+     was made for is recorded, so one made before the move and sent after it is dropped, not sent. */
+  const target = connection.target
+  const patch = baseline && !connection.switching ? diffViews(believed(), serverView(snapshot)) : undefined
   if (patch) inflight.push(patch)
   chain = chain.then(async () => {
     try {
@@ -516,6 +521,11 @@ function flushSplit(snapshot) {
       console.error('[settings] saving this device\'s settings failed:', err)
     }
     if (!patch) return
+    if (connection.target !== target || connection.switching) {
+      inflight.splice(inflight.indexOf(patch), 1)
+      console.warn('[settings] a change made for another server was not sent to this one')
+      return
+    }
     let reply
     try {
       reply = await invoke('settings_patch', { patch })

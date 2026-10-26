@@ -44,20 +44,31 @@ export async function uploadClientFile(path) {
   return invoke('attachment_write', { name: file.name, data: file.data })
 }
 
-/* The paths an agent on the server can open for these files: the same paths when the server is
-   here, the stored copies' paths when it is not. In order, one at a time, and the first failure
-   rejects with the file named - nothing half-sent is hidden behind a partial list. */
+/* The paths an agent on the server can open for these files: the same paths when the server is here,
+   the stored copies' paths when it is not. Answers `{ paths, failures }` and never throws for a file:
+   each is sent on its own, in order, those that arrive are kept and each refusal is returned with the
+   file it was about (`{ path, message }`). One file over the ceiling must not cost the rest of a batch,
+   and a caller that threw away the files already stored would leave them orphaned on the server with
+   nothing on screen saying so. The caller shows the failures where the person is looking. */
 export async function pathsForServer(paths) {
-  if (paths.length === 0 || !(await serverIsRemote())) return paths
+  if (paths.length === 0 || !(await serverIsRemote())) return { paths, failures: [] }
   const stored = []
+  const failures = []
   for (const path of paths) {
     try {
       stored.push((await uploadClientFile(path)).path)
     } catch (err) {
-      throw new Error(`${refusalOf(err)}`)
+      failures.push({ path, message: refusalOf(err) })
     }
   }
-  return stored
+  return { paths: stored, failures }
+}
+
+/* One sentence for a toast or an error line about the files that could not be sent. */
+export function failureSentence(failures) {
+  if (!failures.length) return ''
+  const first = failures[0].message
+  return failures.length === 1 ? first : `${first} (and ${failures.length - 1} more could not be sent)`
 }
 
 /* One file from the server's attachment store or a project's report folder: `{ name, bytes, data }`

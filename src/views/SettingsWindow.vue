@@ -71,8 +71,7 @@ import {
   initConnection,
   localServerWork,
   readServerTarget,
-  useLocalServer,
-  useRemoteServer
+  requestServerSwitch
 } from '../stores/connection.js'
 
 /* The query string's two overrides, passed down rather than read here so that
@@ -627,8 +626,12 @@ const switchTo = async (stopLocal) => {
   server.error = null
   server.note = ''
   try {
-    const answer = await useRemoteServer(server.ticket.trim(), stopLocal)
+    const answer = await requestServerSwitch({ kind: 'remote', ticket: server.ticket.trim(), stopLocal })
     server.ask = null
+    if (answer?.cancelled) {
+      server.note = 'Cancelled. You still have unsaved changes in the app window, and nothing was changed.'
+      return
+    }
     server.ticket = ''
     server.note = ['Switched to the server on the other machine.', localStopLine(answer)].filter(Boolean).join(' ')
     await readTarget()
@@ -659,7 +662,11 @@ const backToLocal = async () => {
   server.error = null
   server.note = ''
   try {
-    await useLocalServer()
+    const answer = await requestServerSwitch({ kind: 'local' })
+    if (answer?.cancelled) {
+      server.note = 'Cancelled. You still have unsaved changes in the app window, and nothing was changed.'
+      return
+    }
     await readTarget()
   } catch (err) {
     server.error = err.message

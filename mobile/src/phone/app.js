@@ -30,5 +30,9 @@ export async function pickFiles() {
    `pickFiles`), so there is nothing to send anywhere and the list comes back as it was. The desktop's
    version uploads them when its server is on another machine. */
 export async function pathsForServer(paths) {
-  return paths
+  return { paths, failures: [] }
+}
+
+export function failureSentence() {
+  return ''
 }
