@@ -7,6 +7,7 @@ use tokio::sync::oneshot;
 
 use super::model::{Session, SessionId, SessionMark, TerminalError};
 use super::service::{Attached, Request, TerminalHandle};
+use super::stream::{ClientId, LOCAL};
 use crate::agents::Intent;
 
 async fn ask<T>(
@@ -103,7 +104,7 @@ pub async fn terminal_resize(
     cols: u16,
     rows: u16,
 ) -> Result<(), TerminalError> {
-    tell(&handle, Request::Resize(id, cols, rows)).await
+    tell(&handle, Request::Resize(LOCAL, id, cols, rows)).await
 }
 
 pub async fn terminal_write(
@@ -111,7 +112,7 @@ pub async fn terminal_write(
     id: SessionId,
     data: String,
 ) -> Result<(), TerminalError> {
-    ask(&handle, |tx| Request::Write(id, data, tx)).await?
+    ask(&handle, |tx| Request::Write(LOCAL, id, data, tx)).await?
 }
 
 /// Tell a live session's harness to forget the conversation so far, in that
@@ -161,10 +162,9 @@ pub async fn terminal_forget(project: String, session_id: String) -> Result<(), 
     Ok(())
 }
 
-/// The bodies of the two terminal commands the phone may call, over the worker's
-/// handle rather than Tauri's `State`; see `session::commands::plain`. There is
-/// no write or resize here and there will not be: a terminal is read-only on
-/// the phone.
+/// The bodies of the terminal commands the bridge calls, over the worker's handle rather than
+/// Tauri's `State`; see `session::commands::plain`. A phone reaches only `list` and `peek`: a
+/// terminal is read-only on a phone, and the bridge's allowlist is what keeps it so.
 pub mod plain {
     use super::*;
 
@@ -178,7 +178,37 @@ pub mod plain {
 
     /// `terminal_attach` for a reader that is not the window: the same reply, and
     /// no seat taken. See `Request::Peek`.
-    pub async fn peek(handle: &TerminalHandle, id: SessionId) -> Result<Attached, TerminalError> {
-        ask(handle, |tx| Request::Peek(id, tx)).await?
+    pub async fn peek(
+        handle: &TerminalHandle,
+        id: SessionId,
+        after: Option<u64>,
+    ) -> Result<Attached, TerminalError> {
+        ask(handle, |tx| Request::Peek(id, after, tx)).await?
+    }
+
+    /// `terminal_write` from a client over a connection, which has a size of its own.
+    pub async fn write_as(
+        handle: &TerminalHandle,
+        client: ClientId,
+        id: SessionId,
+        data: String,
+    ) -> Result<(), TerminalError> {
+        ask(handle, |tx| Request::Write(client, id, data, tx)).await?
+    }
+
+    /// `terminal_resize` from a client over a connection.
+    pub async fn resize_as(
+        handle: &TerminalHandle,
+        client: ClientId,
+        id: SessionId,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), TerminalError> {
+        tell(handle, Request::Resize(client, id, cols, rows)).await
+    }
+
+    /// A connection ended: no session keeps its size.
+    pub async fn forget_client(handle: &TerminalHandle, client: ClientId) -> Result<(), TerminalError> {
+        tell(handle, Request::ForgetClient(client)).await
     }
 }

@@ -1254,10 +1254,10 @@ fn drivable(intent: &Intent) -> bool {
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CrewTreeChange {
-    project: String,
-    root: u64,
-    nodes: Vec<CrewNode>,
+pub struct CrewTreeChange {
+    pub project: String,
+    pub root: u64,
+    pub nodes: Vec<CrewNode>,
 }
 
 #[derive(Clone, serde::Serialize)]

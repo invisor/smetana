@@ -31,6 +31,24 @@ pub trait Sink: Send + Sync {
 
     /// Hands a push message to every paired phone that registered a token, without waiting for it.
     fn push(&self, message: crate::remote::push::Message);
+
+    /// One committed chunk of a terminal session's output, for the clients that follow that
+    /// session over a connection. Called for every session, whether or not a window has it on
+    /// screen, and in order: `seq` is the session's own counter and rises by one per call. The
+    /// default is to drop it, which is what a sink with no connections wants.
+    fn terminal_chunk(&self, _session: u64, _seq: u64, _bytes: &[u8]) {}
+
+    /// New entries of a timeline session's structured log, on the same terms as
+    /// [`Sink::terminal_chunk`]. `entries` is the JSON of the list `terminal:log` carries.
+    fn terminal_log(&self, _session: u64, _entries: &serde_json::Value) {}
+}
+
+/// A sink that drops everything.
+struct Nowhere;
+
+impl Sink for Nowhere {
+    fn emit(&self, _name: &str, _payload: serde_json::Value) {}
+    fn push(&self, _message: crate::remote::push::Message) {}
 }
 
 /// The data directory, the event sink and the sidecar path, cheap to clone and share.
@@ -58,6 +76,13 @@ impl Context {
         sink: Arc<dyn Sink>,
     ) -> Self {
         Self { inner: Arc::new(Inner { data_dir, config_dir, resource_dir, sidecar, sink }) }
+    }
+
+    /// A context with no directories, no sidecar and a sink that drops everything: for a test
+    /// that needs the type, or a tool that only reads.
+    pub fn detached() -> Self {
+        let none = || Err("detached".to_owned());
+        Self::new(none(), none(), none(), None, Arc::new(Nowhere))
     }
 
     /// The folder this app owns for what it keeps: attachments, the device key, transcripts.
@@ -101,6 +126,16 @@ impl Context {
     /// output goes out at the rate the screen repaints, and a deep copy of every chunk is not free.
     pub fn emit_json(&self, name: &str, payload: serde_json::Value) {
         self.inner.sink.emit(name, payload);
+    }
+
+    /// See [`Sink::terminal_chunk`].
+    pub fn terminal_chunk(&self, session: u64, seq: u64, bytes: &[u8]) {
+        self.inner.sink.terminal_chunk(session, seq, bytes);
+    }
+
+    /// See [`Sink::terminal_log`].
+    pub fn terminal_log(&self, session: u64, entries: &serde_json::Value) {
+        self.inner.sink.terminal_log(session, entries);
     }
 
     pub fn push(&self, message: crate::remote::push::Message) {
