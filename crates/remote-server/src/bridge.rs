@@ -79,6 +79,12 @@ pub trait Dispatch: Send + Sync {
         args: Value,
     ) -> BoxFuture<'a, Result<Value, BridgeError>>;
 
+    /// Whether this host can honour `cmd`. A command it cannot is left out of the capabilities it
+    /// advertises, so a client does not draw a control that can only fail. Everything by default.
+    fn serves(&self, _cmd: &str) -> bool {
+        true
+    }
+
     /// The ring of a terminal session as of now: the number of the last chunk it holds, and the
     /// bytes in base64. What a device that fell behind is sent in place of the chunks it missed.
     /// `None` when the session is gone, or when this dispatcher has no terminals.
@@ -485,6 +491,16 @@ impl Hub {
     /// the first is the one connections already made are using.
     pub fn set_dispatch(&self, dispatch: Arc<dyn Dispatch>) {
         let _ = self.dispatch.set(dispatch);
+    }
+
+    /// What a device of `kind` is told it may do: its capabilities, less the commands this host's
+    /// dispatcher says it cannot serve (events have a colon and are never dropped).
+    pub fn capabilities_for(&self, kind: DeviceKind) -> Vec<String> {
+        let dispatch = self.dispatch.get();
+        remote_protocol::capabilities_for(kind)
+            .into_iter()
+            .filter(|name| name.contains(':') || dispatch.map_or(true, |dispatch| dispatch.serves(name)))
+            .collect()
     }
 
     /// Sets the ceiling on what one device may have buffered for one session, for connections

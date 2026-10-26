@@ -256,6 +256,32 @@ async fn remote_an_unpaired_key_is_closed_before_hello_is_read() {
     assert!(h.remote.devices.is_empty());
 }
 
+/// The local credential is the loopback endpoint's alone. The harness serves on the public door,
+/// which anybody who knows the node id can dial.
+#[tokio::test]
+async fn remote_the_public_endpoint_ignores_the_local_credential() {
+    let h = harness().await;
+    h.remote.pairing.set_local([9; 32]);
+    let phone = phone().await;
+    let conn = phone.connect(&h).await;
+    let (mut send, mut recv) = conn.open_bi().await.unwrap();
+    let _ = write_frame(&mut send, &request([9; 32])).await;
+    let closed = tokio::time::timeout(Duration::from_secs(5), conn.closed()).await.unwrap();
+    assert_eq!(code(closed), Some(CLOSE_UNKNOWN as u64), "closed before a byte was read");
+    assert!(read_frame::<PairReply>(&mut recv, MAX_FRAME).await.is_err(), "no answer was given");
+
+    // And with a ticket out, so a request is read: the local secret is still not a ticket.
+    h.remote.pairing.begin(h.remote.public_key(), "loopback");
+    let key = SecretKey::generate().public();
+    let reply = decide_pairing(&h.remote, &key, request([9; 32])).await;
+    assert!(matches!(reply, PairReply::Rejected { .. }), "{reply:?}");
+    assert!(h.remote.devices.is_empty());
+    // On the loopback door it is taken, as a desktop, marked local.
+    let reply = super::endpoint::decide_pairing_at(&h.remote, &key, request([9; 32]), super::endpoint::Door::Loopback).await;
+    assert_eq!(reply, PairReply::Accepted);
+    assert!(h.remote.devices.all()[0].local);
+}
+
 #[tokio::test]
 async fn remote_an_unknown_key_gets_one_bounded_frame_while_a_code_is_out_and_no_more() {
     let h = harness().await;

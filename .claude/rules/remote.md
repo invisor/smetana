@@ -42,6 +42,9 @@ commands and listens to allowlisted events on the same stream.
   loop, the event hub, `emit`), `dispatch.rs` (the server commands called without Tauri), `gateway.rs` (the restart
   gateway), `push.rs` (sealing and the POST), `contract.rs` (the contract test), `tests.rs` and `tests/` (two real iroh
   endpoints on loopback).
+- **Where the constants are.** `PROTOCOL_MAJOR`, `PROTOCOL_MINOR`, `MIN_MOBILE_VERSION` and `RECOMMENDED_MOBILE_VERSION` are in
+  `crates/remote-server/src/lib.rs` (they were in `src-tauri/src/remote/mod.rs`); `mobile/src-tauri/tests/versions.rs` reads that
+  file. `.smetana/project.toml` (untracked) still names `src-tauri/src/remote/mod.rs` for them in its hazards; read that as this file.
 - `src-tauri/src/remote/` — what is left of it: `mod.rs` makes a `Remote` out of an `AppHandle` (`start`, `shutdown`,
   `cancel_pairing`, the dispatcher's `Services` from managed state) and `commands.rs` holds the `#[tauri::command]`
   wrappers over `remote_server::commands::plain`.
@@ -161,16 +164,21 @@ here. Two exist:
   agents inherit. "Answers" is `--version` exiting successfully inside eight seconds; it cannot say an agent is logged in.
   It is separate from `tracker_health`, which moves with the open project. `smetanad status` prints the same report.
 - **`server_restart { mode, confirm }`**, the restart gateway (`gateway.rs`). `mode` is `now`, `when-idle` or `cancel`;
-  `confirm` is optional (absent is `false`). A restart ends every child the server owns, so the rule is **no live work of
-  any kind** (runs, agent sessions, driven sessions, shells) and nothing is ended silently:
-  `now` with nothing alive restarts; with work alive it answers `needs-confirmation` with the list and does nothing, and
-  only the same request with `confirm: true` — the person's answer to that list — ends the work and restarts.
+  `confirmed` is optional: `null`, or the list of work the person was shown. A restart ends every child the server owns, so
+  the rule is **no live work of any kind** (runs, agent sessions, driven sessions, shells) and nothing is ended silently:
+  `now` with nothing alive restarts; with work alive it answers `needs-confirmation` with the list and does nothing. The
+  person's answer is the same request with `confirmed` set to **that list**, and it covers only the work it names: if
+  anything else is alive the server answers `needs-confirmation` again with the fresh list. The list is also taken again
+  300 ms later, right before the restart runs; work that started in that window is never ended — the restart turns into a
+  `when-idle` one and waits for it. (A bare `confirm: true` was the first draft; it confirmed nothing in particular. The 1.9
+  digest in `versions.json` was recomputed for the change because 1.9 had not left the branch.)
   `when-idle` never ends anything: it arms a watch (polled every five seconds) and restarts when the list is empty, however
   long that takes, and answers `scheduled` with what it waits for. `cancel` disarms it (`cancelled` or `nothing-scheduled`).
   The reply is `{ outcome, scheduled, work: [{ kind, id, project, label }] }` with `outcome` one of `restarting`, `scheduled`,
   `needs-confirmation`, `cancelled`, `nothing-scheduled` and `kind` one of `run`, `agent`, `session`, `shell`. The restart
   itself runs 300 ms after the reply, so it leaves first. A run's own agent is listed beside the run. On the desktop, which has
-  no gateway, the command is a handler error.
+  no gateway, the command is a handler error and **is left out of the capabilities** in `HelloReply`
+  (`Dispatch::serves`, `Hub::capabilities_for`), so a client does not draw a control the host cannot honour.
 
 ## smetanad
 
@@ -192,16 +200,20 @@ stays so**. It is `smetana-core`, `remote-server` and `remote-protocol` behind a
 - **Local pairing.** `local-pairing.json` (mode 0600, written to a temporary file with that mode and renamed) holds
   `{ version, node, addrs, secret }` and is rewritten at every start and removed at a clean stop. The secret is
   `Pairing::set_local`: not a ticket, no term, not burned, **accepted as a desktop's pairing code with no confirmation**
-  (`Spent::Local`), and the only thing a request from an unknown key needs when no ticket is out (`accepts_requests`). It is
-  good for the life of the process. Whoever can read the file can already read the key and every repository, so it adds no
+  (`Spent::Local`), and the only thing a request from an unknown key needs when no ticket is out (`accepts_requests`). **It
+  counts on the loopback endpoint alone** (`endpoint::Door`): the public endpoint, which anybody who knows the node id can dial,
+  closes an unknown key before reading a byte unless a ticket is out, and never takes the local secret, so a leaked copy of the
+  data directory pairs nothing from off the machine. It is good for the life of the process. Whoever can read the file can already read the key and every repository, so it adds no
   exposure; a device revoked from the list can pair itself again through it, which is the point for a local client and is why
-  revoking one is cosmetic. A device paired this way has `local: true` in the list.
+  revoking one is cosmetic. `smetanad revoke` on one says so in plain words. A device paired this way has `local: true` in the
+  list (and in `DeviceView`, where it is omitted when false).
 - **The other subcommands are clients.** `client.rs` is a desktop-kind device: it pairs with the credential on first use (its
   own key `local-client-key` and `local-client-paired` marker beside the server's, named "smetanad (this machine)"), says
   `Hello` and calls the ordinary commands. `pair` calls `remote_pair_begin` and listens to `remote:pair-request`, asking the
   terminal; `devices` is `remote_devices`; `revoke` is `remote_device_revoke` (an id is a prefix of at least four characters of
   the key that names one device) and the server closes the live connection with `CLOSE_REVOKED` before it answers; `restart` is
-  `server_restart` (`--when-idle`, `--cancel`, `--yes`); `status` runs the report in the CLI's own process and needs no server.
+  `server_restart` (`--when-idle`, `--cancel`, `--yes`; `--yes` still prints the list it confirms and sends it back); `status` asks the running server (`server_health`, the report under the service's own environment) and says so, and falls back to
+  a probe in the CLI's own process, saying that instead, only when no server answers.
   There is no second control channel.
 - **Pairing in the terminal.** `smetanad pair --kind desktop|phone` prints the ticket as text and as a QR code
   (`qrcode`, half-block characters) and the confirmation is asked in that terminal; a closed stdin or anything but `y` is no.

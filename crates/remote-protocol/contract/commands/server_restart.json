@@ -1,5 +1,5 @@
 {
-  "args": [{"confirm":false,"mode":"now"},{"confirm":true,"mode":"now"},{"confirm":null,"mode":"when-idle"},{"confirm":false,"mode":"cancel"}],
+  "args": [{"confirmed":null,"mode":"now"},{"confirmed":[{"id":4,"kind":"agent","label":"claude","project":"/work/smetana"},{"id":null,"kind":"run","label":"run","project":"/work/smetana"}],"mode":"now"},{"confirmed":null,"mode":"when-idle"},{"confirmed":null,"mode":"cancel"}],
   "reply": [
     {"outcome":"needs-confirmation","scheduled":false,"work":[{"id":null,"kind":"run","label":"run","project":"/work/smetana"},{"id":4,"kind":"agent","label":"claude","project":"/work/smetana"},{"id":2,"kind":"session","label":"codex","project":"/work/smetana"},{"id":7,"kind":"shell","label":"shell","project":"/work/smetana"}]},
     {"outcome":"scheduled","scheduled":true,"work":[{"id":null,"kind":"run","label":"run","project":"/work/smetana"}]},

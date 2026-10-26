@@ -256,6 +256,11 @@ impl Client {
         close_code(&self.conn.closed().await)
     }
 
+    /// This client's own key, as the server's device list shows it.
+    pub fn id(&self) -> String {
+        self._endpoint.id().to_string()
+    }
+
     pub fn close(&self) {
         self.conn.close(0u32.into(), b"done");
     }

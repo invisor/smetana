@@ -213,7 +213,7 @@ async fn paired(h: &Harness) -> (Phone, Client) {
 
 /// Workers that answer from a script: the tracker's snapshot, and a session
 /// worker for which no session exists.
-fn services() -> (Services, Snapshot) {
+pub(super) fn services() -> (Services, Snapshot) {
     let snapshot = Snapshot {
         generation: 4,
         columns: vec![ColumnDef { name: "open".into(), category: "active".into() }],

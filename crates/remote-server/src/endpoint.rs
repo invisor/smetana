@@ -183,24 +183,32 @@ impl Connections {
     }
 }
 
-pub async fn accept_loop(remote: Arc<Remote>, endpoint: Endpoint) {
+/// Which endpoint a connection came in on. The local credential is good on the loopback one and
+/// nowhere else: a copy of the data directory leaked off the machine must not pair from the internet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Door {
+    Public,
+    Loopback,
+}
+
+pub async fn accept_loop(remote: Arc<Remote>, endpoint: Endpoint, door: Door) {
     while let Some(incoming) = endpoint.accept().await {
         let remote = remote.clone();
         tokio::spawn(async move {
             let Ok(conn) = incoming.await else { return };
-            handle(remote, conn).await;
+            handle(remote, conn, door).await;
         });
     }
 }
 
-async fn handle(remote: Arc<Remote>, conn: Connection) {
+async fn handle(remote: Arc<Remote>, conn: Connection, door: Door) {
     let key = conn.remote_id();
     if remote.devices.contains(&key) {
         serve_paired(&remote, conn, key).await;
-    } else if remote.pairing.accepts_requests() {
+    } else if remote.pairing.accepts_requests(door == Door::Loopback) {
         // Held for the whole of the exchange, the wait for the person included.
         match remote.pairing_slots.clone().try_acquire_owned() {
-            Ok(_permit) => serve_pairing(&remote, conn, key).await,
+            Ok(_permit) => serve_pairing(&remote, conn, key, door).await,
             Err(_) => conn.close(CLOSE_UNKNOWN.into(), b"busy"),
         }
     } else {
@@ -241,7 +249,7 @@ async fn handshake(
         protocol_major: PROTOCOL_MAJOR,
         protocol_minor: PROTOCOL_MINOR,
         app_version: remote.app_version.clone(),
-        capabilities: remote_protocol::capabilities_for(kind),
+        capabilities: remote.hub.capabilities_for(kind),
         min_mobile_version: MIN_MOBILE_VERSION.to_owned(),
         recommended_mobile_version: RECOMMENDED_MOBILE_VERSION.to_owned(),
     };
@@ -290,12 +298,12 @@ async fn first_frame<T: serde::de::DeserializeOwned>(
     tokio::time::timeout(FIRST_FRAME_TIMEOUT, read).await.ok().flatten()
 }
 
-async fn serve_pairing(remote: &Arc<Remote>, conn: Connection, key: PublicKey) {
+async fn serve_pairing(remote: &Arc<Remote>, conn: Connection, key: PublicKey, door: Door) {
     let Some((mut send, _recv, request)) = first_frame::<PairRequest>(&conn).await else {
         conn.close(CLOSE_PROTOCOL.into(), b"expected a pair request");
         return;
     };
-    let reply = decide_pairing(remote, &key, request).await;
+    let reply = decide_pairing_at(remote, &key, request, door).await;
     let delivered = conn.close_reason().is_none() && write_frame(&mut send, &reply).await.is_ok();
     if delivered {
         let _ = send.finish();
@@ -313,9 +321,19 @@ async fn serve_pairing(remote: &Arc<Remote>, conn: Connection, key: PublicKey) {
 }
 
 /// The whole of the pairing decision for one request that has been read.
+#[cfg(test)]
 pub(crate) async fn decide_pairing(remote: &Remote, key: &PublicKey, request: PairRequest) -> PairReply {
+    decide_pairing_at(remote, key, request, Door::Public).await
+}
+
+pub(crate) async fn decide_pairing_at(
+    remote: &Remote,
+    key: &PublicKey,
+    request: PairRequest,
+    door: Door,
+) -> PairReply {
     let rejected = |reason: &str| PairReply::Rejected { reason: reason.to_owned() };
-    let spent = match remote.pairing.spend_any(&request.secret) {
+    let spent = match remote.pairing.spend_any(&request.secret, door == Door::Loopback) {
         Ok(spent) => spent,
         Err(reason) => return rejected(reason),
     };

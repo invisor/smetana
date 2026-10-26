@@ -457,11 +457,19 @@ calls! {
 
     // --- the machine the server runs on
     ServerHealth = "server_health" {} => |s, c, a| plain(smetana_core::health::report(s.ctx()?).await);
-    ServerRestart = "server_restart" { mode: super::gateway::Mode, confirm: Option<bool> }
-        => |s, c, a| plain(s.gateway()?.request(a.mode, a.confirm.unwrap_or(false)).await);
+    ServerRestart = "server_restart" { mode: super::gateway::Mode, confirmed: Option<Vec<super::gateway::LiveWork>> }
+        => |s, c, a| plain(s.gateway()?.request(a.mode, a.confirmed).await);
 }
 
 impl Dispatch for Services {
+    fn serves(&self, cmd: &str) -> bool {
+        match cmd {
+            "server_restart" => self.gateway.is_some(),
+            "server_health" => self.ctx.is_some(),
+            _ => true,
+        }
+    }
+
     fn call<'a>(
         &'a self,
         caller: &'a Caller,

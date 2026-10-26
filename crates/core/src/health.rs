@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::context::Context;
 use crate::tracker::service::EXPECTED_BD_VERSION;
@@ -25,7 +25,7 @@ use crate::tracker::service::EXPECTED_BD_VERSION;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// One binary: where it was found and whether it answers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Tool {
     /// The name looked for.
@@ -40,7 +40,7 @@ pub struct Tool {
     pub problem: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCheck {
     pub id: String,
@@ -50,7 +50,7 @@ pub struct AgentCheck {
 
 /// The whole report. `ok` is `problems.is_empty()`, and `problems` is what `smetanad status` prints
 /// first.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Report {
     pub ok: bool,
@@ -76,13 +76,12 @@ pub fn which(binary: &str, path_var: Option<&str>) -> Option<PathBuf> {
 /// Runs `program --version` and returns the first line of what it printed, or why it did not answer.
 /// Blocking; the report runs it on a blocking thread.
 fn probe(program: &Path) -> Result<String, String> {
-    let mut child = Command::new(program)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|err| format!("could not be started: {err}"))?;
+    let mut command = Command::new(program);
+    command.arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    // Its own process group, so that a timeout can end what it started and not only it.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let mut child = command.spawn().map_err(|err| format!("could not be started: {err}"))?;
     let (tx, rx) = std::sync::mpsc::channel();
     let mut stdout = child.stdout.take();
     std::thread::spawn(move || {
@@ -102,6 +101,11 @@ fn probe(program: &Path) -> Result<String, String> {
             }
         }
         Err(_) => {
+            #[cfg(unix)]
+            // SAFETY: signalling the process group of a child this function started and still owns.
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGKILL);
+            }
             let _ = child.kill();
             let _ = child.wait();
             Err(format!("did not answer within {} seconds", PROBE_TIMEOUT.as_secs()))

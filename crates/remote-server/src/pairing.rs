@@ -121,8 +121,11 @@ impl Pairing {
 
     /// Whether a request from a key the list does not know is worth reading at all: a ticket is
     /// outstanding, or a local credential is set.
-    pub fn accepts_requests(&self) -> bool {
-        self.is_open() || self.lock().local.is_some()
+    /// `loopback` is whether the connection came in on the loopback endpoint: only there does the local
+    /// credential count. The public endpoint, which anybody who knows the node id can dial, reads from an
+    /// unknown key only while a ticket is out.
+    pub fn accepts_requests(&self, loopback: bool) -> bool {
+        self.is_open() || (loopback && self.lock().local.is_some())
     }
 
     /// Withdraws the ticket and refuses a request that is waiting on the person. The local
@@ -151,7 +154,7 @@ impl Pairing {
 
     /// [`Pairing::spend`], and the kind the ticket admitted.
     pub fn spend_for_kind(&self, presented: &[u8; SECRET_LEN]) -> Result<(u64, DeviceKind), &'static str> {
-        match self.spend_any(presented)? {
+        match self.spend_any(presented, false)? {
             Spent::Ticket { remaining, kind } => Ok((remaining, kind)),
             // Callers that cannot take a local credential do not get to see one as a ticket.
             Spent::Local => Err("this pairing code is not valid"),
@@ -160,8 +163,8 @@ impl Pairing {
 
     /// Checks a presented secret against the local credential, then against the ticket. A ticket is
     /// burned; the local credential is not.
-    pub fn spend_any(&self, presented: &[u8; SECRET_LEN]) -> Result<Spent, &'static str> {
-        if self.lock().local.as_ref().is_some_and(|local| same(local, presented)) {
+    pub fn spend_any(&self, presented: &[u8; SECRET_LEN], loopback: bool) -> Result<Spent, &'static str> {
+        if loopback && self.lock().local.as_ref().is_some_and(|local| same(local, presented)) {
             return Ok(Spent::Local);
         }
         let (remaining, kind) = self.spend_ticket(presented)?;
@@ -314,14 +317,16 @@ mod tests {
     fn the_local_credential_is_not_burned_and_admits_no_ticket_check() {
         let (pairing, _) = pairing();
         pairing.set_local([9; SECRET_LEN]);
-        assert!(pairing.accepts_requests());
+        assert!(pairing.accepts_requests(true));
+        assert!(!pairing.accepts_requests(false), "the public endpoint does not count it");
+        assert!(pairing.spend_any(&[9; SECRET_LEN], false).is_err(), "and does not take it");
         assert!(!pairing.is_open(), "it is not a ticket");
-        assert_eq!(pairing.spend_any(&[9; SECRET_LEN]), Ok(Spent::Local));
-        assert_eq!(pairing.spend_any(&[9; SECRET_LEN]), Ok(Spent::Local), "good for as long as the process runs");
-        assert!(pairing.spend_any(&[8; SECRET_LEN]).is_err());
+        assert_eq!(pairing.spend_any(&[9; SECRET_LEN], true), Ok(Spent::Local));
+        assert_eq!(pairing.spend_any(&[9; SECRET_LEN], true), Ok(Spent::Local), "good for as long as the process runs");
+        assert!(pairing.spend_any(&[8; SECRET_LEN], true).is_err());
         assert!(pairing.spend_for_kind(&[9; SECRET_LEN]).is_err(), "the ticket-only reader refuses it");
         pairing.cancel();
-        assert_eq!(pairing.spend_any(&[9; SECRET_LEN]), Ok(Spent::Local), "cancelling a ticket leaves it");
+        assert_eq!(pairing.spend_any(&[9; SECRET_LEN], true), Ok(Spent::Local), "cancelling a ticket leaves it");
     }
 
     #[tokio::test]

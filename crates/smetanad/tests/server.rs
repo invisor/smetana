@@ -273,3 +273,65 @@ fn the_health_surface_reports_bd_and_git_to_a_client() {
         server.shutdown().await;
     });
 }
+
+#[test]
+fn a_confirmation_that_does_not_cover_the_work_alive_is_refused_with_the_fresh_list() {
+    common::block_on(async {
+        let (_dir, server) = start().await;
+        let client = Client::connect(&server.data_dir).await.unwrap();
+        // The person confirmed an empty list; a shell has started since.
+        let id = a_shell(&client).await;
+        let reply = client.call("server_restart", json!({ "mode": "now", "confirmed": [] })).await.unwrap();
+        assert_eq!(reply["outcome"], "needs-confirmation");
+        assert_eq!(reply["work"][0]["id"], id, "the fresh list is returned");
+        assert!(tokio::time::timeout(Duration::from_millis(800), server.wait()).await.is_err(), "no restart");
+        // Confirming what the server just listed does restart.
+        let confirmed = reply["work"].clone();
+        let reply = client.call("server_restart", json!({ "mode": "now", "confirmed": confirmed })).await.unwrap();
+        assert_eq!(reply["outcome"], "restarting");
+        assert_eq!(tokio::time::timeout(Duration::from_secs(10), server.wait()).await.unwrap(), Exit::Restart);
+        server.shutdown().await;
+    });
+}
+
+#[test]
+fn yes_prints_the_work_it_confirms() {
+    common::block_on(async {
+        let (_dir, server) = start().await;
+        let client = Client::connect(&server.data_dir).await.unwrap();
+        a_shell(&client).await;
+        let mut out = Vec::new();
+        let outcome = ops::restart(&client, Mode::Now, true, |_| panic!("--yes does not ask"), &mut out).await.unwrap();
+        assert_eq!(outcome, Outcome::Restarting);
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.contains("Shell") && text.contains("--yes: confirming exactly the work listed"), "{text}");
+        server.shutdown().await;
+    });
+}
+
+#[test]
+fn revoking_a_same_machine_client_says_it_will_pair_again() {
+    common::block_on(async {
+        let (_dir, server) = start().await;
+        let cli = Client::connect(&server.data_dir).await.unwrap();
+        let mut out = Vec::new();
+        let key = server.remote.devices.all()[0].key.clone();
+        ops::revoke(&cli, &key[..12], &mut out).await.unwrap();
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.contains("pair itself again"), "{text}");
+        // And it does: the credential file is still good.
+        Client::connect(&server.data_dir).await.expect("re-pairs through the file");
+        server.shutdown().await;
+    });
+}
+
+#[test]
+fn status_asks_the_running_server_and_says_so() {
+    common::block_on(async {
+        let (_dir, server) = start().await;
+        let (report, source) = ops::status(&server.data_dir, None).await;
+        assert_eq!(source, ops::Source::Server);
+        assert!(report.bd.found, "the server's own bd, though no --bd was given here");
+        server.shutdown().await;
+    });
+}

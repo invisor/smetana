@@ -5,7 +5,7 @@ use std::io::Write;
 use std::time::Duration;
 
 use remote_protocol::{BridgeError, DeviceKind};
-use remote_server::gateway::{Mode, Outcome, Reply};
+use remote_server::gateway::{LiveWork, Mode, Outcome, Reply};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -31,6 +31,9 @@ pub struct DeviceRow {
     pub kind: DeviceKind,
     pub paired_at: u64,
     pub last_contact: Option<u64>,
+    /// Paired with the local credential rather than by a ticket.
+    #[serde(default)]
+    pub local: bool,
 }
 
 pub async fn devices(client: &Client) -> Result<Vec<DeviceRow>, String> {
@@ -62,8 +65,26 @@ pub async fn revoke(client: &Client, id: &str, out: &mut impl Write) -> Result<(
         [] => return Err(format!("no paired device has a key starting {id}")),
         many => return Err(format!("{} devices start {id}; give more of the key", many.len())),
     };
-    client.call("remote_device_revoke", json!({ "key": row.key })).await.map_err(|err| describe(&err))?;
-    writeln!(out, "Revoked {} ({}). Its connection is closed.", row.name, row.key).map_err(|err| err.to_string())
+    match client.call("remote_device_revoke", json!({ "key": row.key })).await {
+        Ok(_) => {}
+        // Revoking the device that is making the call: the server closes the connection before it
+        // can answer, which is the revocation having worked.
+        Err(BridgeError::Internal(_)) if row.key == client.id() => {}
+        Err(err) => return Err(describe(&err)),
+    }
+    writeln!(out, "Revoked {} ({}). Its connection is closed.", row.name, row.key).map_err(|err| err.to_string())?;
+    if row.local {
+        // Said plainly: this is a client on the server's own machine, and the file it paired through is
+        // still there. The boundary is the operating system's permission on the data directory.
+        writeln!(
+            out,
+            "Note: this device is a client on this machine. It pairs through the local credential file in the \
+             data directory, so any client run by this user will pair itself again the next time it connects. \
+             Revoking it ends this connection; it does not keep it out."
+        )
+        .map_err(|err| err.to_string())?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -173,18 +194,23 @@ fn shown(reply: &Reply) -> String {
         .join("\n")
 }
 
-async fn ask(client: &Client, mode: Mode, confirm: bool) -> Result<Reply, String> {
+async fn ask(client: &Client, mode: Mode, confirmed: Option<&[LiveWork]>) -> Result<Reply, String> {
     decode(
         client
-            .call("server_restart", json!({ "mode": mode, "confirm": confirm }))
+            .call("server_restart", json!({ "mode": mode, "confirmed": confirmed }))
             .await
             .map_err(|err| describe(&err))?,
     )
 }
 
+/// How many times a confirmation may be overtaken by new work before the command gives up.
+const CONFIRM_ROUNDS: usize = 3;
+
 /// The restart command. `now` asks the server; if work is alive the server answers with the list and
-/// does nothing, and `confirm` is asked of the person with that list in front of them. `yes` is the
-/// person having said so in advance.
+/// does nothing. The person's answer goes back **carrying that list**, and the server ends only the work
+/// it names: if more has started since, it answers with the fresh list and the person is asked again.
+/// `yes` is the person having said so in advance; the list is printed anyway, so what is being
+/// confirmed is on the screen.
 pub async fn restart(
     client: &Client,
     mode: Mode,
@@ -193,25 +219,75 @@ pub async fn restart(
     out: &mut impl Write,
 ) -> Result<Outcome, String> {
     let io = |err: std::io::Error| err.to_string();
-    let mut reply = ask(client, mode, yes).await?;
-    if reply.outcome == Outcome::NeedsConfirmation {
-        writeln!(out, "This work is alive and a restart would end it:\n{}", shown(&reply)).map_err(io)?;
-        if confirm("Restart anyway and end it?") {
-            reply = ask(client, Mode::Now, true).await?;
-        } else {
-            writeln!(out, "Nothing was restarted. `--when-idle` waits for the work to finish instead.").map_err(io)?;
-            return Ok(Outcome::NeedsConfirmation);
+    let mut confirmed: Option<Vec<LiveWork>> = None;
+    let mut mode = mode;
+    for _ in 0..CONFIRM_ROUNDS {
+        let reply = ask(client, mode, confirmed.as_deref()).await?;
+        if reply.outcome == Outcome::NeedsConfirmation {
+            writeln!(out, "This work is alive and a restart would end it:\n{}", shown(&reply)).map_err(io)?;
+            if yes {
+                writeln!(out, "--yes: confirming exactly the work listed above.").map_err(io)?;
+            } else if !confirm("Restart anyway and end it?") {
+                writeln!(out, "Nothing was restarted. `--when-idle` waits for the work to finish instead.")
+                    .map_err(io)?;
+                return Ok(Outcome::NeedsConfirmation);
+            }
+            confirmed = Some(reply.work);
+            mode = Mode::Now;
+            continue;
+        }
+        match reply.outcome {
+            Outcome::Restarting => writeln!(out, "Restarting."),
+            Outcome::Scheduled => writeln!(out, "Waiting for this work to finish, then restarting:\n{}", shown(&reply)),
+            Outcome::Cancelled => writeln!(out, "The scheduled restart is withdrawn."),
+            Outcome::NothingScheduled => writeln!(out, "No restart was scheduled."),
+            Outcome::NeedsConfirmation => Ok(()),
+        }
+        .map_err(io)?;
+        return Ok(reply.outcome);
+    }
+    Err("new work keeps starting; nothing was restarted. Try `--when-idle`.".to_owned())
+}
+
+/// Where a status report came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// The running server's own, taken under its environment: what its agents will actually see.
+    Server,
+    /// Probed here, in the shell that ran the command, because no server answered.
+    Local,
+}
+
+impl Source {
+    pub fn describe(self) -> &'static str {
+        match self {
+            Source::Server => "reported by the running server, under its own environment",
+            Source::Local => {
+                "no server is running for this data directory; probed from this shell, whose PATH and login may \
+                 differ from the service's"
+            }
         }
     }
-    match reply.outcome {
-        Outcome::Restarting => writeln!(out, "Restarting."),
-        Outcome::Scheduled => writeln!(out, "Waiting for this work to finish, then restarting:\n{}", shown(&reply)),
-        Outcome::Cancelled => writeln!(out, "The scheduled restart is withdrawn."),
-        Outcome::NothingScheduled => writeln!(out, "No restart was scheduled."),
-        Outcome::NeedsConfirmation => Ok(()),
+}
+
+/// The environment report: the running server's if one answers, else a probe in this process. `bd` is
+/// only for the probe; a running server uses the one it was started with.
+pub async fn status(
+    data_dir: &std::path::Path,
+    bd: Option<std::path::PathBuf>,
+) -> (smetana_core::health::Report, Source) {
+    let asked = async {
+        let client = tokio::time::timeout(Duration::from_secs(5), Client::connect(data_dir)).await.ok()?.ok()?;
+        let value = client.call("server_health", json!({})).await.ok()?;
+        serde_json::from_value::<smetana_core::health::Report>(value).ok()
+    };
+    if let Some(report) = asked.await {
+        return (report, Source::Server);
     }
-    .map_err(io)?;
-    Ok(reply.outcome)
+    let mut options = crate::server::Options::new(data_dir.to_path_buf());
+    options.bd = bd;
+    let ctx = crate::server::context(&options, std::sync::Arc::new(crate::server::NoSink));
+    (smetana_core::health::report(&ctx).await, Source::Local)
 }
 
 /// Renders a health report for a terminal.

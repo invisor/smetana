@@ -148,6 +148,14 @@ impl Sink for ServerSink {
     }
 }
 
+/// A sink with nowhere to send: for a context that only reads, as `status` builds.
+pub struct NoSink;
+
+impl Sink for NoSink {
+    fn emit(&self, _name: &str, _payload: serde_json::Value) {}
+    fn push(&self, _message: smetana_core::remote::push::Message) {}
+}
+
 /// How a server's life ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Exit {

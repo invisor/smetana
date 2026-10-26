@@ -147,7 +147,7 @@ impl Remote {
             old.endpoint.close().await;
         }
         let endpoint = endpoint::bind(&self.key, &wanted).await?;
-        *running = Some(self.serve(endpoint, wanted.clone()));
+        *running = Some(self.serve(endpoint, wanted.clone(), endpoint::Door::Public));
         Ok(wanted)
     }
 
@@ -161,7 +161,7 @@ impl Remote {
             old.task.abort();
             old.endpoint.close().await;
         }
-        *running = Some(self.serve(endpoint, relay));
+        *running = Some(self.serve(endpoint, relay, endpoint::Door::Public));
     }
 
     /// Binds the loopback endpoint and serves on it, and returns the address a client on this machine
@@ -175,12 +175,12 @@ impl Remote {
             old.task.abort();
             old.endpoint.close().await;
         }
-        *local = Some(self.serve(endpoint, "loopback".to_owned()));
+        *local = Some(self.serve(endpoint, "loopback".to_owned(), endpoint::Door::Loopback));
         Ok(addr)
     }
 
-    fn serve(self: &Arc<Self>, endpoint: iroh::Endpoint, relay: String) -> Running {
-        let task = tokio::spawn(endpoint::accept_loop(self.clone(), endpoint.clone()));
+    fn serve(self: &Arc<Self>, endpoint: iroh::Endpoint, relay: String, door: endpoint::Door) -> Running {
+        let task = tokio::spawn(endpoint::accept_loop(self.clone(), endpoint.clone(), door));
         Running { endpoint, relay, task }
     }
 
@@ -257,6 +257,10 @@ pub struct DeviceView {
     pub last_contact: Option<u64>,
     /// What the device may do; fixed at pairing. Added in protocol 1.8.
     pub kind: DeviceKind,
+    /// Paired with the local credential: a client on the server's own machine. Absent (false) for
+    /// every ticket-paired device, so what a phone reads is unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local: bool,
 }
 
 impl From<&Device> for DeviceView {
@@ -268,6 +272,7 @@ impl From<&Device> for DeviceView {
             paired_at: device.paired_at,
             last_contact: device.last_contact,
             kind: device.kind,
+            local: device.local,
         }
     }
 }

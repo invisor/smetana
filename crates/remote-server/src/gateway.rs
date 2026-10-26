@@ -6,8 +6,11 @@
 //! says "restart" and gets one. It says *when*:
 //!
 //! - **`now`** restarts at once if nothing is alive. If something is, it answers
-//!   [`Outcome::NeedsConfirmation`] with the list and does nothing; the same request with
-//!   `confirm: true` is the person's answer to that list, and only that ends the work.
+//!   [`Outcome::NeedsConfirmation`] with the list and does nothing. The person's answer is the same
+//!   request with `confirmed` set to **that list**, and a confirmation covers only the work it names:
+//!   work that started in between is not covered, so the server answers `needs-confirmation` again
+//!   with the fresh list. The list is also taken once more right before the restart runs, so work that
+//!   appears after the answer is never ended unseen either.
 //! - **`when-idle`** never ends anything: it arms a watch and restarts when the list is empty, however
 //!   long that takes. A busy server that never goes quiet never restarts, which is the promise.
 //! - **`cancel`** disarms a `when-idle` that has not fired.
@@ -118,15 +121,46 @@ impl Gateway {
         (self.list)().await
     }
 
-    fn fire(&self) {
-        let restart = self.restart.clone();
+    /// Arms the `when-idle` watch. `force` replaces one that is already armed, for the watch that has
+    /// just fired and found work again.
+    fn arm(self: &Arc<Self>, force: bool) {
+        if !force && self.scheduled() {
+            return;
+        }
+        let gateway = self.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(gateway.poll).await;
+                if gateway.live_work().await.is_empty() {
+                    gateway.fire(Vec::new());
+                    return;
+                }
+            }
+        });
+        if let Some(old) = self.watch().replace(task) {
+            old.abort();
+        }
+    }
+
+    /// Restarts after the reply has left, **if nothing is alive that `covered` does not name**. The
+    /// list is taken again here, right before anything is ended: work that started after the answer
+    /// the person saw was never shown to them. When it has, the restart does not happen; it becomes a
+    /// `when-idle` one and waits for that work too.
+    fn fire(self: &Arc<Self>, covered: Vec<LiveWork>) {
+        let gateway = self.clone();
         tokio::spawn(async move {
             tokio::time::sleep(REPLY_GRACE).await;
-            restart();
+            let now = gateway.live_work().await;
+            if now.iter().all(|work| covered.contains(work)) {
+                (gateway.restart)();
+            } else {
+                log::warn!("restart: work started after the answer was given; waiting for it instead");
+                gateway.arm(true);
+            }
         });
     }
 
-    pub async fn request(self: &Arc<Self>, mode: Mode, confirm: bool) -> Reply {
+    pub async fn request(self: &Arc<Self>, mode: Mode, confirmed: Option<Vec<LiveWork>>) -> Reply {
         match mode {
             Mode::Cancel => {
                 let task = self.watch().take();
@@ -139,8 +173,10 @@ impl Gateway {
             }
             Mode::Now => {
                 let work = self.live_work().await;
-                if work.is_empty() || confirm {
-                    self.fire();
+                // Covered: everything alive now is something the person has seen and said yes to.
+                let covered = confirmed.unwrap_or_default();
+                if work.iter().all(|item| covered.contains(item)) {
+                    self.fire(covered);
                     Reply { outcome: Outcome::Restarting, scheduled: self.scheduled(), work }
                 } else {
                     Reply { outcome: Outcome::NeedsConfirmation, scheduled: self.scheduled(), work }
@@ -149,22 +185,10 @@ impl Gateway {
             Mode::WhenIdle => {
                 let work = self.live_work().await;
                 if work.is_empty() {
-                    self.fire();
+                    self.fire(Vec::new());
                     return Reply { outcome: Outcome::Restarting, scheduled: false, work };
                 }
-                if !self.scheduled() {
-                    let gateway = self.clone();
-                    let task = tokio::spawn(async move {
-                        loop {
-                            tokio::time::sleep(gateway.poll).await;
-                            if gateway.live_work().await.is_empty() {
-                                gateway.fire();
-                                return;
-                            }
-                        }
-                    });
-                    *self.watch() = Some(task);
-                }
+                self.arm(false);
                 Reply { outcome: Outcome::Scheduled, scheduled: true, work }
             }
         }
@@ -206,7 +230,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn restart_now_with_live_work_lists_it_and_restarts_nothing() {
         let rig = rig(vec![work()]);
-        let reply = rig.gateway.request(Mode::Now, false).await;
+        let reply = rig.gateway.request(Mode::Now, None).await;
         assert_eq!(reply.outcome, Outcome::NeedsConfirmation);
         assert_eq!(reply.work, vec![work()]);
         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -216,7 +240,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_confirmed_restart_now_restarts_after_the_reply_has_left() {
         let rig = rig(vec![work()]);
-        let reply = rig.gateway.request(Mode::Now, true).await;
+        let reply = rig.gateway.request(Mode::Now, Some(vec![work()])).await;
         assert_eq!(reply.outcome, Outcome::Restarting);
         assert_eq!(rig.restarts.load(Ordering::SeqCst), 0, "the reply goes first");
         tokio::time::sleep(REPLY_GRACE * 2).await;
@@ -226,7 +250,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn with_nothing_alive_restart_now_needs_no_confirmation() {
         let rig = rig(Vec::new());
-        assert_eq!(rig.gateway.request(Mode::Now, false).await.outcome, Outcome::Restarting);
+        assert_eq!(rig.gateway.request(Mode::Now, None).await.outcome, Outcome::Restarting);
         tokio::time::sleep(REPLY_GRACE * 2).await;
         assert_eq!(rig.restarts.load(Ordering::SeqCst), 1);
     }
@@ -234,10 +258,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn when_idle_waits_for_the_work_and_never_ends_it() {
         let rig = rig(vec![work()]);
-        let reply = rig.gateway.request(Mode::WhenIdle, false).await;
+        let reply = rig.gateway.request(Mode::WhenIdle, None).await;
         assert_eq!((reply.outcome, reply.scheduled), (Outcome::Scheduled, true));
         // Asking again does not arm a second watch.
-        assert_eq!(rig.gateway.request(Mode::WhenIdle, false).await.outcome, Outcome::Scheduled);
+        assert_eq!(rig.gateway.request(Mode::WhenIdle, None).await.outcome, Outcome::Scheduled);
         tokio::time::sleep(Duration::from_secs(60)).await;
         assert_eq!(rig.restarts.load(Ordering::SeqCst), 0, "still busy");
         rig.alive.lock().unwrap().clear();
@@ -248,12 +272,69 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_scheduled_restart_can_be_withdrawn() {
         let rig = rig(vec![work()]);
-        rig.gateway.request(Mode::WhenIdle, false).await;
-        let reply = rig.gateway.request(Mode::Cancel, false).await;
+        rig.gateway.request(Mode::WhenIdle, None).await;
+        let reply = rig.gateway.request(Mode::Cancel, None).await;
         assert_eq!((reply.outcome, reply.scheduled), (Outcome::Cancelled, false));
         rig.alive.lock().unwrap().clear();
         tokio::time::sleep(Duration::from_secs(5)).await;
         assert_eq!(rig.restarts.load(Ordering::SeqCst), 0);
-        assert_eq!(rig.gateway.request(Mode::Cancel, false).await.outcome, Outcome::NothingScheduled);
+        assert_eq!(rig.gateway.request(Mode::Cancel, None).await.outcome, Outcome::NothingScheduled);
+    }
+
+    fn other() -> LiveWork {
+        LiveWork { kind: WorkKind::Agent, id: Some(9), project: "/p".into(), label: "claude".into() }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_confirmation_covers_only_the_work_it_names() {
+        let rig = rig(vec![work()]);
+        // The person saw `work()`; before they answered, another session started.
+        rig.alive.lock().unwrap().push(other());
+        let reply = rig.gateway.request(Mode::Now, Some(vec![work()])).await;
+        assert_eq!(reply.outcome, Outcome::NeedsConfirmation);
+        assert_eq!(reply.work, vec![work(), other()], "the fresh list is what they are shown");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 0);
+        // Confirming the fresh list is enough.
+        let reply = rig.gateway.request(Mode::Now, Some(reply.work)).await;
+        assert_eq!(reply.outcome, Outcome::Restarting);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn work_that_starts_after_an_empty_answer_is_not_ended_unseen() {
+        let rig = rig(Vec::new());
+        assert_eq!(rig.gateway.request(Mode::Now, None).await.outcome, Outcome::Restarting);
+        // Inside the grace period before the restart runs, a session starts.
+        rig.alive.lock().unwrap().push(other());
+        tokio::time::sleep(REPLY_GRACE * 2).await;
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 0, "it did not restart over the new session");
+        // It waits for it instead, and then goes.
+        rig.alive.lock().unwrap().clear();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_confirmed_restart_does_not_cover_work_that_appears_before_it_runs() {
+        let rig = rig(vec![work()]);
+        assert_eq!(rig.gateway.request(Mode::Now, Some(vec![work()])).await.outcome, Outcome::Restarting);
+        rig.alive.lock().unwrap().push(other());
+        tokio::time::sleep(REPLY_GRACE * 2).await;
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn when_idle_looks_again_before_it_fires() {
+        let rig = rig(vec![work()]);
+        rig.gateway.request(Mode::WhenIdle, None).await;
+        rig.alive.lock().unwrap().clear();
+        // The watch sees an empty list and fires; new work arrives during the grace period.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        rig.alive.lock().unwrap().push(other());
+        tokio::time::sleep(REPLY_GRACE * 2).await;
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 0);
+        rig.alive.lock().unwrap().clear();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 1);
     }
 }

@@ -153,6 +153,29 @@ async fn remote_desktop_a_device_paired_as_a_desktop_gets_every_server_command()
 }
 
 #[tokio::test]
+async fn remote_desktop_capabilities_leave_out_what_the_host_cannot_honour() {
+    use crate::gateway::Gateway;
+    // The desktop app's own `Remote`: no gateway, so no restart control is advertised.
+    let h = harness().await;
+    h.remote.hub.set_dispatch(Arc::new(super::phone_bridge::services().0));
+    let (_phone, client) = desktop(&h).await;
+    assert!(!client.hello.capabilities.iter().any(|c| c == "server_restart"), "{:?}", client.hello.capabilities);
+    assert!(client.hello.capabilities.iter().any(|c| c == "terminal_write"), "the rest is untouched");
+
+    // A server with one is advertised it.
+    let h = harness().await;
+    let mut services = super::phone_bridge::services().0;
+    services.gateway = Some(Gateway::new(
+        Box::new(|| Box::pin(async { Vec::new() })),
+        Arc::new(|| {}),
+        Duration::from_secs(1),
+    ));
+    h.remote.hub.set_dispatch(Arc::new(services));
+    let (_phone, client) = desktop(&h).await;
+    assert!(client.hello.capabilities.iter().any(|c| c == "server_restart"));
+}
+
+#[tokio::test]
 async fn remote_desktop_a_client_that_drops_resumes_with_no_gap_and_no_repeat() {
     let h = harness().await;
     let fake = FakeTerminal::new(1 << 20);

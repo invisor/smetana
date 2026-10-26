@@ -65,13 +65,16 @@ async fn main() -> ExitCode {
             with_client(&data_dir, |client| async move { ops::revoke(&client, &id, &mut std::io::stdout()).await }).await
         }
         Command::Status { data_dir, bd, json } => {
-            let mut options = Options::new(data_dir);
-            options.bd = bd;
-            let ctx = server::context(&options, std::sync::Arc::new(NoSink));
-            let report = smetana_core::health::report(&ctx).await;
+            let (report, source) = ops::status(&data_dir, bd).await;
             if json {
-                println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+                let mut value = serde_json::to_value(&report).unwrap_or_default();
+                value["source"] = serde_json::json!(match source {
+                    ops::Source::Server => "server",
+                    ops::Source::Local => "local",
+                });
+                println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default());
             } else {
+                println!("({})\n", source.describe());
                 let _ = ops::print_status(&report, &mut std::io::stdout());
             }
             if report.ok { ExitCode::SUCCESS } else { ExitCode::from(1) }
@@ -90,14 +93,6 @@ async fn main() -> ExitCode {
             .await
         }
     }
-}
-
-/// `status` reads the environment and starts nothing; the context it needs has nowhere to send events.
-struct NoSink;
-
-impl smetana_core::context::Sink for NoSink {
-    fn emit(&self, _name: &str, _payload: serde_json::Value) {}
-    fn push(&self, _message: smetana_core::remote::push::Message) {}
 }
 
 async fn with_client<F, Fut>(data_dir: &std::path::Path, body: F) -> ExitCode
