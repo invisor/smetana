@@ -969,7 +969,7 @@ const galleryConnection = [
     restartScheduled: true,
     outdated: { running: '0.0.9', bundled: '0.1.0', canRestart: true, work: [] }
   }
-].map((view) => connectionNotice({ mode: 'split', ...view }))
+].map((view) => connectionNotice({ mode: 'client', ...view }))
 
 const galleryUsage = [
   {
@@ -2654,13 +2654,10 @@ const galleryUpdateStates = [
   { kind: 'failed', message: 'Could not check for updates: the release feed could not be reached.' }
 ]
 
-/* The run gate, as `updates_install` refuses it — `UpdateError`'s `{kind,
-   detail}` exactly, since that is what a rejected `invoke` hands the window.
-   The refusal is the whole reason the Install control is never drawn dead: this
-   window cannot see a run in a project nobody is looking at, so the only honest
-   version of "you cannot install right now" is one that arrives from Rust with
-   the projects named. */
-const galleryUpdateRefusal = { kind: 'run_live', detail: { projects: 'smetana, holiday-curb' } }
+/* An install that would not go through, as `updates_install` refuses it —
+   `UpdateError`'s `{kind, detail}` exactly, since that is what a rejected
+   `invoke` hands the window, with the plugin's own words as the detail. */
+const galleryUpdateRefusal = { kind: 'install', detail: 'permission denied writing to /Applications/Smetana.app' }
 
 /* The conversation panel's fixtures — a driven session's journal as the worker
    hands it over, one piece per component.

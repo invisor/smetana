@@ -454,3 +454,24 @@ async fn remote_only_a_few_unknown_keys_are_served_while_a_code_is_out() {
 
 mod desktop_bridge;
 mod phone_bridge;
+
+/// A process serving under a key it will not have after a restart makes no ticket and binds no public
+/// endpoint: a device paired now would pin a node id that is gone at the next start.
+#[tokio::test]
+async fn remote_a_refused_public_side_makes_no_ticket_and_binds_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = Remote::new(
+        SecretKey::generate(),
+        Devices::load(dir.path().join(super::devices::FILE_NAME)),
+        Pairing::new(Arc::new(|| START)),
+        "9.9.9".into(),
+        Arc::new(|_| {}),
+        Box::new(|| "https://relay.example.org".into()),
+    );
+    remote.refuse_public("the key is not kept".into());
+    let refused = remote.pair_begin("https://relay.example.org", remote_protocol::DeviceKind::Phone).await;
+    assert_eq!(refused.err().as_deref(), Some("the key is not kept"));
+    assert_eq!(remote.ensure_running(None).await.err().as_deref(), Some("the key is not kept"));
+    assert!(remote.public_relay().await.is_none(), "nothing was bound");
+    assert!(!remote.pairing.is_open(), "and no secret is outstanding");
+}

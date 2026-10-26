@@ -32,7 +32,7 @@ async fn main() -> ExitCode {
     logger::init();
     let cli = Cli::parse();
     match cli.command {
-        Command::Run { data_dir, bd, resource_dir } => run(data_dir, bd, resource_dir).await,
+        Command::Run { data_dir, bd, resource_dir, inherit_from } => run(data_dir, bd, resource_dir, inherit_from).await,
         Command::Pair { data_dir, kind, relay } => {
             let mut client = match Client::connect(&data_dir).await {
                 Ok(client) => client,
@@ -106,7 +106,12 @@ where
     }
 }
 
-async fn run(data_dir: std::path::PathBuf, bd: Option<std::path::PathBuf>, resource_dir: Option<std::path::PathBuf>) -> ExitCode {
+async fn run(
+    data_dir: std::path::PathBuf,
+    bd: Option<std::path::PathBuf>,
+    resource_dir: Option<std::path::PathBuf>,
+    inherit_from: Option<std::path::PathBuf>,
+) -> ExitCode {
     if let Some(euid) = server::effective_uid() {
         if let Err(message) = server::refuse_root(euid) {
             return fail(message);
@@ -115,6 +120,7 @@ async fn run(data_dir: std::path::PathBuf, bd: Option<std::path::PathBuf>, resou
     let mut options = Options::new(data_dir);
     options.bd = bd;
     options.resource_dir = resource_dir;
+    options.inherit_from = inherit_from;
     let server = match Server::start(options).await {
         Ok(server) => server,
         Err(err) => return fail(err),

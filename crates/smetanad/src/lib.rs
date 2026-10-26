@@ -8,6 +8,7 @@
 
 pub mod cli;
 pub mod client;
+pub mod inherit;
 pub mod local;
 pub mod logger;
 pub mod ops;

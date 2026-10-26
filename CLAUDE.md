@@ -30,12 +30,12 @@ npm install          # postinstall fetches the bd sidecar; it warns and continue
 npm run dev          # http://localhost:5173 — front end alone, backed by the mock
 npm run build
 npm run preview      # serve the production build
-npm run tauri dev    # the actual desktop app: Rust worker, real bd, live board
+npm run tauri dev    # the desktop app with smetanad and real bd; its data is <identifier>.dev, never the release's
 npm run fetch-bd     # download the bd binary explicitly (fails hard, unlike postinstall)
 node scripts/fetch-icon-associations.mjs   # re-vendor the file-type icons; output is committed
 npm test             # front-end tests (vitest), single run
 npm run test:watch   # the same, in watch mode
-cd src-tauri && cargo test    # the shell: wrappers, windows, updates, the phone endpoint
+cd src-tauri && cargo test    # the shell: forwarding to the server, windows, updates, the login item
 cd crates/core && cargo test  # everything that does the work: tracker, runs, sessions, files, git
 cd crates/remote-server && cargo test  # the endpoint, pairing, devices, the bridge and the contract
 cd crates/smetanad && cargo test       # the headless server and its command line
@@ -95,10 +95,16 @@ travels is the path and never the bytes — see `.claude/rules/attachments.md`.
 ## Architecture
 
 A desktop app for supervising autonomous AI coding agents: a Tauri 2 shell (`src-tauri/`, Rust)
-around a Vue 3 front end (`src/`). Everything on the Rust side that does the work lives in
-`crates/core/`, a path dependency with no `tauri` in its manifest and no root workspace (the reason is
-in `.claude/rules/remote.md`); `src-tauri/` keeps the `#[tauri::command]` wrappers in
-`src/commands/`, the windows, the updater, the login item, the clipboard and the phone endpoint. The front end is ported from the **Smetana Design System**
+around a Vue 3 front end (`src/`), and a **client of a server**. Everything on the Rust side that does
+the work lives in `crates/core/`, a path dependency with no `tauri` in its manifest and no root
+workspace (the reason is in `.claude/rules/remote.md`), and runs in `smetanad` (`crates/smetanad/`),
+the headless server the bundle ships beside bd and the shell starts, detached, on this machine — or
+one on another machine. Phones pair with that server. `src-tauri/` holds no worker: `src/client/`
+forwards every command that is not the machine's own to the server and re-emits its events, and the
+rest is the windows, the updater, the login item, the clipboard and the device's own settings file.
+There is one build and one back end; the in-process back end and its `split` feature are gone.
+
+The front end is ported from the **Smetana Design System**
 (`claude.ai/design`, project `5da5ca35`). Tokens are copied from the design system verbatim;
 components are ports of its React sources, keeping prop names, computed styles and behaviour. React
 `value`/`onChange` became `v-model` (`modelValue`); React `children` props became named slots. When

@@ -10,12 +10,6 @@ rust-version = "1.77.2"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[features]
-# The desktop as a client of one `smetanad` instead of the owner of the workers: the Smetana Next
-# build (`tauri.next.conf.json` turns it on). Without it the app is what the release is. See
-# `src/split/mod.rs` and docs/superpowers/specs/2026-10-25-headless-server-design.md, "Transition".
-split = ["dep:smetanad"]
-
 [lib]
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -169,9 +163,10 @@ remote-protocol = { path = "../crates/remote-protocol" }
 
 # Everything that does the work: the tracker, runs, sessions, terminals, files, git. Path dependency
 # on purpose and for the reason `remote-protocol` above is one — no workspace at the root, the crate
-# is built and tested on its own (`cd crates/core && cargo test`). It carries no `tauri`; this shell
-# is what wraps it in commands, windows and a sidecar path. Most of this manifest's earlier entries
-# moved there with the code that uses them, and their notes with them.
+# is built and tested on its own (`cd crates/core && cargo test`). It carries no `tauri`. The shell
+# does not run those workers (the server does); it links the crate for the device's own settings file,
+# the types its commands name and the sidecar path. Most of this manifest's earlier entries moved
+# there with the code that uses them, and their notes with them.
 smetana-core = { path = "../crates/core" }
 
 # The server half of the protocol: the iroh endpoint, pairing, the device list, the bridge and the
@@ -180,12 +175,11 @@ smetana-core = { path = "../crates/core" }
 # sender's `reqwest` and `rustls` went with it.
 remote-server = { path = "../crates/remote-server" }
 
-# The headless server, linked only for its client half and its credential reader: the `split` build
-# pairs with the local server through `smetanad::client::Client` and starts the bundled binary, and
-# links nothing of its server side that the in-process build does not already link (`smetana-core`
-# and `remote-server` are above). The binary itself is not this dependency: it is the sidecar
-# `tauri.next.conf.json` adds to `bundle.externalBin`, built by `npm run build-smetanad`.
-smetanad = { path = "../crates/smetanad", optional = true }
+# The headless server, linked for its client half and its credential reader: the shell pairs with the
+# local server through `smetanad::client::Client` and starts the bundled binary. The binary itself is
+# not this dependency: it is the sidecar `tauri.conf.json` lists in `bundle.externalBin`, built by
+# `npm run build-smetanad`.
+smetanad = { path = "../crates/smetanad" }
 
 # The system clipboard for **files**, which is three formats and no crate that
 # covers them: `tauri-plugin-clipboard-manager` above stays exactly what it is,

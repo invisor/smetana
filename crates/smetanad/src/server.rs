@@ -45,12 +45,15 @@ pub struct Options {
     /// The skill library's directory (the bundle's resources). Absent, the library is not found and
     /// the agents work without it.
     pub resource_dir: Option<PathBuf>,
+    /// An older release's data directory to take the key, the paired devices and the attachments
+    /// from, once: `inherit.rs`. Never guessed; the desktop that has one names it.
+    pub inherit_from: Option<PathBuf>,
     pub restart_poll: Duration,
 }
 
 impl Options {
     pub fn new(data_dir: PathBuf) -> Self {
-        Self { data_dir, bd: None, resource_dir: None, restart_poll: RESTART_POLL }
+        Self { data_dir, bd: None, resource_dir: None, inherit_from: None, restart_poll: RESTART_POLL }
     }
 }
 
@@ -301,12 +304,51 @@ pub async fn live_work(
     work
 }
 
+/// The relay the public endpoint binds: the server's own setting when it has a settings file, else the
+/// one the old release paired its phones through (`inherit.rs`), else the default. A server that
+/// inherited phones binds before the shell has handed the settings over, and the phones are told to
+/// look for it on the old release's relay.
+fn relay_url(settings: Option<&Path>, inherited: Option<&str>) -> String {
+    match settings {
+        Some(path) if path.is_file() => settings::file::load(path).0.remote.relay_url,
+        _ => inherited.map(str::to_owned).unwrap_or_else(|| DEFAULT_RELAY_URL.to_owned()),
+    }
+}
+
 impl Server {
     pub async fn start(options: Options) -> Result<Server, String> {
         create_data_dir(&options.data_dir)?;
         let data_dir = options.data_dir.canonicalize().map_err(|err| format!("{}: {err}", options.data_dir.display()))?;
         let lock = lock_directory(&data_dir)?;
-        let key = endpoint::load_or_create_key(&data_dir.join(endpoint::KEY_FILE))?;
+        // Before the key is read: taking over an older release's data is what decides which key this
+        // is, and a key made first could not be replaced by the one the phones already trust. It never
+        // stops the start (`inherit.rs`): what failed is logged and tried again next time.
+        let inherited = options.inherit_from.as_ref().map(|from| {
+            let report = crate::inherit::inherit(from, &data_dir);
+            for problem in &report.problems {
+                log::warn!("inheriting from {}: {problem}", from.display());
+            }
+            log::info!("inherited from {}: {report:?}", from.display());
+            report
+        });
+        let key_file = data_dir.join(endpoint::KEY_FILE);
+        let unkept = inherited.as_ref().is_some_and(|report| report.key_pending) && !key_file.exists();
+        let key = if unkept {
+            // The old release's key is there and could not be taken this time. A key made and kept now
+            // would stand in its place for good and unpair every phone; one held only for this run
+            // leaves the next start free to take it. The inherited phones are not on the list yet, so
+            // nothing dials this run's key from outside, and the public side is refused below so that
+            // nothing pairs with it either.
+            log::warn!("serving this run under a key that is not kept, until the old release's key can be taken");
+            iroh::SecretKey::generate()
+        } else {
+            endpoint::load_or_create_key(&key_file)?
+        };
+        // Which relay the public endpoint uses before the server has settings of its own: the old
+        // release's, read by the inheritance (this start's report, or the marker of an earlier one).
+        let inherited_relay = inherited
+            .and_then(|report| report.relay)
+            .or_else(|| crate::inherit::relay_hint(&data_dir));
 
         // First: a descriptor limit raised after a child exists is no use to that child.
         smetana_core::rlimit::raise();
@@ -334,12 +376,7 @@ impl Server {
         let runs = runs::service::start(ctx.clone(), tracker.clone(), terminal.clone(), sessions.clone(), known);
 
         let settings_path = ctx.settings_path();
-        let relay = Box::new(move || {
-            settings_path
-                .as_ref()
-                .map(|path| settings::file::load(path).0.remote.relay_url)
-                .unwrap_or_else(|| DEFAULT_RELAY_URL.to_owned())
-        });
+        let relay = Box::new(move || relay_url(settings_path.as_deref(), inherited_relay.as_deref()));
         let remote = Remote::new(
             key,
             Devices::load(data_dir.join(devices::FILE_NAME)),
@@ -354,6 +391,12 @@ impl Server {
             }),
             relay,
         );
+        if unkept {
+            remote.refuse_public(
+                "Pairing is off until this server can read the key the old app kept; restart the server once that file is readable."
+                    .to_owned(),
+            );
+        }
         let _ = sink.remote.set(Arc::downgrade(&remote));
 
         let restart = Arc::new(Notify::new());
@@ -454,6 +497,19 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn before_the_server_has_settings_its_phones_are_served_on_the_relay_the_old_release_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        let theirs = "https://relay.example.org";
+        assert_eq!(relay_url(Some(&file), Some(theirs)), theirs, "no settings file yet: the inherited relay");
+        assert_eq!(relay_url(Some(&file), None), DEFAULT_RELAY_URL);
+        assert_eq!(relay_url(None, Some(theirs)), theirs);
+        // Once the settings are the server's, they decide, whatever was inherited.
+        std::fs::write(&file, r#"{"version":1,"remote":{"relayUrl":"https://relay.mine.org"}}"#).unwrap();
+        assert_eq!(relay_url(Some(&file), Some(theirs)), "https://relay.mine.org");
+    }
 
     #[test]
     fn root_is_refused_with_a_reason_and_anybody_else_is_not() {

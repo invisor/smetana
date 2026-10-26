@@ -25,16 +25,12 @@ itself) and 1 for process, counted rather than guessed.
 ## The state machine is in Rust, and that is against this tree's habit
 
 Everything else the app asks the desktop for is driven from a store, so this being a Rust module is a
-decision. Two reasons, and either alone would be enough.
+decision, and one reason is enough for it.
 
 **The About tab lives in the settings window, which is a second OS window a person closes as soon as
 they have read the version.** A download driven from that window's store dies with it — a hundred
 megabytes half fetched and nothing left to say so. Here the download is a task the app owns, and
 closing the window it was started from changes nothing about it.
-
-**And the run gate below cannot be answered in the front end at all.** `runsState.runs` is filtered
-to the active project, so the front end does not know whether a run is live in a neighbouring one.
-The authority is the run worker's map, and it is reachable only from Rust.
 
 What the module is inside is a `Mutex` rather than a worker, unlike `tracker/`, `terminal/` and
 `runs/`. Those serialize calls that take seconds; nothing here is slow *behind* the lock — the
@@ -98,10 +94,8 @@ Reaching `ready` is something the module does by itself. Leaving `ready` is only
 `updates_install`, because the app holds unsaved editor buffers and live terminals, and a relaunch
 nobody asked for loses them.
 
-**The install asks the feed again first**, after the dev-build, nothing-ready and run-gate checks
-and before it touches the bundle, with the run gate asked a second time after the recheck and
-immediately before the bytes are taken, since the recheck is a network round trip in which a run may
-have started. The same version, no answer, or an error installs what is staged —
+**The install asks the feed again first**, after the dev-build and nothing-ready checks and before
+it touches the bundle. The same version, no answer, or an error installs what is staged —
 a verified copy newer than the running one beats insisting on a network. A different version does not
 install: the machine goes `checking` and on into the download, and the command answers
 `UpdateError::NewerVersion { version }` (`newer_version` on the wire). That is an outcome, not a
@@ -112,28 +106,20 @@ version was ready. The state line is the message — "Smetana 0.1.2 is newer tha
 button is gone meanwhile, since `downloading` offers nothing to press. The comparison is inequality:
 the feed decides which release is latest, and there is no version-ordering dependency in the tree.
 
-## The run gate, and why a relaunch is destructive rather than rude
+## No run gate: the server is not the app
 
-**An install is refused while any run is live anywhere**, including in a project nobody is looking
-at. `live_runs` asks the run worker `Request::LiveProjects`; `live_projects` in `runs/service.rs`
-answers with every project its map holds an entry for, sorted and deduplicated, **whatever state the
-run is in** — filtering by `is_over` would let an install through in exactly the seconds a stop is
-being carried out, when a batch is still in flight. It is the same count `runs/awake.rs` holds a
-power assertion for.
+The release that held its workers in-process refused an install while any run was live anywhere,
+because the relaunch ended every PTY child and a run's agents are those children. That gate went with
+the in-process back end at switch-over (`.claude/rules/remote.md`, "The desktop is a client"): the
+runs, sessions and shells belong to `smetanad`, which runs detached and outlives the app's restart, so
+an install replaces the client and nothing a run depends on. `UpdateError` lost `RunLive` and `Runs`
+with it, and `installRefusal` lost the sentence that named the projects. Replacing the **server** has
+its own gate — no live work of any kind, nothing ended without a yes — and it is `smetanad`'s restart,
+reached through the version lock-step once the new bundle starts.
 
-The cost of getting it wrong is not that somebody is interrupted. `updates_install` ends with
-`app.request_restart()`, and `request_restart` rather than `restart` deliberately: it goes through
-the event loop whatever thread it is called from, so `RunEvent::Exit` fires in `lib.rs` and
-`terminal::service::shutdown` hangs up and then kills every PTY child exactly as an ordinary quit
-does. **A run is the app driving itself for hours with nobody watching, and its agents are those PTY
-children.** Restarting under one does not pause it; it kills it. The direct `restart` skips the exit
-event when it happens to be called on the main thread, which would orphan the same processes instead
-— worse, not better.
-
-The refusal names the projects (`UpdateError::RunLive { projects }`), because a button that will not
-act and will not say why sends somebody to guess. A run worker that cannot be reached is
-`UpdateError::Runs` and is **refused rather than allowed**: silence is not permission when the cost
-of being wrong is an agent killed mid-task.
+`updates_install` still ends with `app.request_restart()` rather than `restart`: it goes through the
+event loop whatever thread it is called from, so `RunEvent::Exit` fires in `lib.rs` as on an ordinary
+quit.
 
 ## One switch, over the timer alone
 
@@ -167,7 +153,7 @@ would `remove_dir_all` the whole build directory and move an unpacked `.app` int
 method, so no permission is required by anything today. Added back "for consistency" nothing fails to
 compile, no test goes red and `src-tauri/gen/` is git-ignored, while `plugin:updater|download_and_install`
 becomes reachable from the webview — **the one route by which a page could replace the bundle without
-passing the run gate.** The second half of that record lives in the `description` field of
+passing `updates_install`'s checks.** The second half of that record lives in the `description` field of
 `capabilities/default.json`, JSON having no other comment slot; tidying it back to "enables the
 default permissions" deletes half of it with no diff anywhere else.
 
@@ -277,20 +263,18 @@ this file's; do not re-sync it by putting the claim back into README.
 ## The front end, in one paragraph
 
 The wire vocabulary is a pair that has to move together: the six state tags and their fields, the
-six `UpdateError` kinds (`nothing_ready`, `newer_version`, `run_live`, `runs`,
-`development_build`, `install`) under `{kind, detail}`, the event name and the three command names, against
+four `UpdateError` kinds (`nothing_ready`, `newer_version`, `development_build`, `install`) under `{kind, detail}`, the event name and the three command names, against
 `KINDS` and `installRefusal` in `components/settings/update.js`, the command names in
 `stores/updates.js`, and `mockBackend.js`. A renamed state tag does not draw the wrong thing — it
 becomes `update.js`'s seventh kind, `unavailable`, which is also what a browser's `null` comes to, so
 About draws **nothing about updates at all**, indistinguishable on screen from running with no back
 end. A renamed `UpdateError` kind is quieter still: it falls through to the generic "The update could
-not be installed." and throws away the projects the run gate named, which is the one thing that
-refusal exists to say. `.claude/rules/settings.md` holds what About draws from it, and
+not be installed." and drops the sentence this app would have written for it. `.claude/rules/settings.md` holds what About draws from it, and
 `.claude/rules/notifications.md` the bell's half.
 
 ## What is tested
 
-`cargo test` covers the pure halves whole — `Machine`'s transitions and its guards, `gate`, the
+`cargo test` covers the pure halves whole — `Machine`'s transitions and its guards, the
 framing of somebody else's error, and two tests that pin the JSON both types travel as
 (`the_state_travels_tagged_and_whole`, `a_refusal_travels_as_a_kind_and_a_detail`) — plus
 `the_first_check_waits_and_the_next_one_is_a_day_later` over the two schedule constants. `npm test`

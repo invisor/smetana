@@ -185,7 +185,7 @@ it), and macOS lets that through while refusing the `read_dir`, so without that 
 would offer `bd init` over a `.beads` nobody may open — and again in
 `HealthReporter::failed`, which is why that method takes the folder the call was made in.
 
-The repair is `tccutil reset <service> <identifier>` and a restart, and it is offered **only where
+The repair is `tccutil reset <service> <identifier>` and a restart of the process that was refused, and it is offered **only where
 macOS will actually ask again**. TCC prompts per protected place — Desktop, Documents, Downloads, a
 mounted volume — and everything else on the disk is governed by Full Disk Access, which it never
 prompts for at all. So `tcc_service` answers `Option`, `None` for anywhere outside those four, and
@@ -215,17 +215,26 @@ again on every project switch. The three sentences are `views/folderAccess.js`, 
 the first has a button. The identifier is read from `app.config().identifier` rather than written a
 third time beside `tauri.conf.json` and `runs/awake.rs`.
 
-Two things the reset shares with `updates_install`, and it is the same reasoning in both places
-(`.claude/rules/updates.md`). It is **gated on live runs anywhere**, refusing while any project holds
-one and refusing again if the run worker cannot be reached — or does not answer inside five seconds,
-since a worker that is alive and wedged is a third silence and silence is not permission — because a
-restart kills every PTY child
-and under a run those are the agents — and the run this would end is always somebody else's, since
-the project on screen cannot be read at all. And it calls `request_restart`, never `restart`, so the
-exit event fires and those children are killed rather than orphaned. Rust restarts the app itself: a
-reset only takes effect for a process that has not already been refused in this launch, so the
-restart is the second half of the repair rather than a courtesy — and the button says so, since
-there is no confirmation dialog.
+**Since the switch-over the reset is the shell's and the restart is the server's**
+(`src-tauri/src/client/mod.rs`, `access_reset`; `tracker_access_reset` is a client command the shell
+registers). The folder is read by the local `smetanad`, but that process is a child of the app, and
+macOS attributes a child's file access to the bundle that spawned it, so the stored refusal is still
+the app's identifier's and `tccutil` is run for `app.config().identifier` exactly as before — the
+server does not know which bundle it belongs to. What has to be new afterwards is the refused
+process, which is the server: the shell asks it `server_restart` `stop-when-idle` (not `now`, which
+re-executes the same process) and the connection loop starts a fresh one from the app. The folder is
+the server's open project (`settings_load`'s `activeProject`), never the front end's.
+
+It is **refused while anything is alive on the server** (`server_work`: runs, agent sessions, driven
+sessions, shells), naming them, because stopping the server ends all of it and what it would end is
+always in another project, since the one on screen cannot be read. It is refused for a server on
+another machine, whose permissions are that machine's: the front end draws no button there
+(`accessResetOffered` in `DesktopApp.vue`) and the notice falls to the form that offers nothing. The
+promise settles now — the window stays and the connection comes back — so the button's flag is
+cleared in a `finally`; the notice says the server restarts, since there is no confirmation dialog.
+**Not checked on a real refused folder**: that macOS attributes the server's access to the app is the
+documented behaviour of a spawned child (responsibility is inherited unless disclaimed) and was not
+observed here.
 
 There is a second way into this state, and smetana-fkt is what stopped it happening again: a grant is
 bound to the code requirement, and under an ad-hoc signature that is a cdhash which changes with

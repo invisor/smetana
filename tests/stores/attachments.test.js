@@ -582,7 +582,7 @@ describe('images attached to a task that has not been filed', () => {
 })
 
 describe('attaching for a server on another machine', () => {
-  const remoteView = { mode: 'split', state: 'connected', epoch: 1, local: false }
+  const remoteView = { mode: 'client', state: 'connected', epoch: 1, local: false }
 
   it('sends the bytes of a dropped file and keeps the path the server stored, not the one on this machine', async () => {
     const { ipc, stores } = await loadStores()

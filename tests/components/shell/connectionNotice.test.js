@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { connectionNotice, isStale, workSentence } from '../../../src/components/shell/connectionNotice.js'
 
-const base = { mode: 'split', state: 'connected', reason: null, outdated: null }
+const base = { mode: 'client', state: 'connected', reason: null, outdated: null }
 
 describe('what the strip says about the connection', () => {
   it('says nothing without a server of its own, and nothing while connected and current', () => {
-    expect(connectionNotice({ mode: 'in-process', state: 'connected' })).toBe(null)
+    expect(connectionNotice({ mode: 'browser', state: 'connected' })).toBe(null)
     expect(connectionNotice(base)).toBe(null)
     expect(connectionNotice(null)).toBe(null)
   })
@@ -47,15 +47,15 @@ describe('what the strip says about the connection', () => {
     expect(workSentence(many)).toContain('and 2 more')
   })
 
-  it('calls the data stale in every state but connected, and only in the split build', () => {
+  it('calls the data stale in every state but connected, and only in the desktop app', () => {
     expect(isStale({ ...base, state: 'reconnecting' })).toBe(true)
     expect(isStale(base)).toBe(false)
-    expect(isStale({ mode: 'in-process', state: 'connecting' })).toBe(false)
+    expect(isStale({ mode: 'browser', state: 'connecting' })).toBe(false)
   })
 })
 
 describe('the notice for a server on another machine', () => {
-  const remote = (state, over = {}) => ({ mode: 'split', state, local: false, reason: null, ...over })
+  const remote = (state, over = {}) => ({ mode: 'client', state, local: false, reason: null, ...over })
 
   it('does not say the app starts a server it does not own', () => {
     expect(connectionNotice(remote('connecting')).detail).toBe('Reaching the server you chose in Settings.')

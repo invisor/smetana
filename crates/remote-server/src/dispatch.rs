@@ -61,8 +61,8 @@ pub struct Services {
     /// The device service, for the commands about devices. Weak: the service owns the hub that
     /// owns this.
     pub remote: Option<std::sync::Weak<super::Remote>>,
-    /// The restart gateway, on a server that can be restarted from a client. `None` on the desktop,
-    /// which has a window to close instead.
+    /// The restart gateway, on a server that can be restarted from a client. `None` in a test harness
+    /// or any host nobody restarts from a client; then no restart control is advertised.
     pub gateway: Option<std::sync::Arc<super::gateway::Gateway>>,
 }
 

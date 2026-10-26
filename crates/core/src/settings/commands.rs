@@ -146,8 +146,8 @@ pub async fn settings_adopt(ctx: &Context, patch: serde_json::Value) -> Result<b
     Ok(super::split::apply_patch(&path, &patch, &now, true, &announce)?.is_some())
 }
 
-/// `device_settings_save`, the client build's own half: the same whole save the single-file build
-/// makes, but of the device's fields only (see `split::merge_device`). Never reaches a server.
+/// `device_settings_save`, the desktop client's own half: the same whole save `settings_save` makes,
+/// but of the device's fields only (see `split::merge_device`). Never reaches a server.
 pub async fn device_settings_save(ctx: &Context, settings: ResolvedSettings) -> Result<(), SettingsError> {
     let path = settings_path(ctx)?;
     let (mut stored, problem) = file::load(&path);

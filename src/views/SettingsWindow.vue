@@ -437,11 +437,11 @@ const BASE_TABS = [
   { id: 'about', label: 'About', kind: 'pinned' }
 ]
 
-/* The Server tab exists only in a build that is a client of a server (`connection.mode` is `split`):
-   the release has its back end in-process and nothing to choose. Next to Devices, which is the other
+/* The Server tab exists only where there is a shell to choose a server with (`connection.mode` is
+   `client`): a browser has no server to choose. Next to Devices, which is the other
    tab about who talks to whom. */
 const TABS = computed(() => {
-  if (connection.mode !== 'split') return BASE_TABS
+  if (connection.mode !== 'client') return BASE_TABS
   const at = BASE_TABS.findIndex((entry) => entry.id === 'devices')
   return [...BASE_TABS.slice(0, at + 1), { id: 'server', label: 'Server', kind: 'pinned' }, ...BASE_TABS.slice(at + 1)]
 })

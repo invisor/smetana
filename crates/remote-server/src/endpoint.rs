@@ -76,7 +76,7 @@ pub fn load_or_create_key(path: &Path) -> Result<SecretKey, String> {
 }
 
 #[cfg(unix)]
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {
@@ -96,7 +96,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     write_atomic(path, bytes)
 }
 

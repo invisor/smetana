@@ -30,8 +30,8 @@ const props = defineProps({
      asks anybody anything, which is what keeps it drawable in the gallery with
      nothing behind it. */
   updateState: { type: Object, default: null },
-  /* Why the last press on Install was refused, in one line — the run gate above
-     all, which this window cannot see for itself and must not guess at. Held by
+  /* Why the last press on Install was refused, in one line, in Rust's words:
+     this window must not guess at it. Held by
      the window rather than by the state, because it is the answer to a press
      and not a state the machine is in: `updates.rs` deliberately leaves the
      machine at `ready` through a refusal, since what was downloaded is still

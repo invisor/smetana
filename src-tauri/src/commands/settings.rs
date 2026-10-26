@@ -4,23 +4,11 @@ use smetana_core::context::Context;
 use smetana_core::settings::commands as logic;
 use smetana_core::settings::commands::SettingsError;
 use smetana_core::settings::model::ResolvedSettings;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
-/// See `settings::commands::settings_load` in the core crate.
-#[tauri::command]
-pub async fn settings_load(ctx: State<'_, Context>, project: Option<String>) -> Result<ResolvedSettings, SettingsError> {
-    logic::settings_load(&ctx, project).await
-}
-
-/// See `settings::commands::settings_save` in the core crate.
-#[tauri::command]
-pub async fn settings_save(ctx: State<'_, Context>, settings: ResolvedSettings) -> Result<(), SettingsError> {
-    logic::settings_save(&ctx, settings).await
-}
-
-/// The client build's own half of the settings, read from the file on this machine: the same read
-/// `settings_load` makes, of a file whose server fields are not this device's to use. Registered in
-/// both builds; only the `split` front end calls it. See `settings::split` in the core crate.
+/// The device's own half of the settings, read from the file on this machine: the same read
+/// `settings_load` makes, of a file whose server fields are not this device's to use. See
+/// `settings::split` in the core crate. The server's half is the server's and goes over the connection.
 #[tauri::command]
 pub async fn device_settings_load(ctx: State<'_, Context>, project: Option<String>) -> Result<ResolvedSettings, SettingsError> {
     logic::settings_load(&ctx, project).await
@@ -35,7 +23,7 @@ pub async fn device_settings_save(ctx: State<'_, Context>, settings: ResolvedSet
 
 /// Where the file is, for the two readers that hold an `AppHandle` and not a context.
 fn path(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_config_dir().ok().map(|dir| dir.join("settings.json"))
+    crate::dirs::config_dir(app).ok().map(|dir| dir.join("settings.json"))
 }
 
 /// Whether the update timer may ask the release feed by itself.

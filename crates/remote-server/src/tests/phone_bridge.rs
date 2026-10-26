@@ -98,15 +98,18 @@ async fn remote_bridge_without_a_dispatcher_answers_internal_for_an_allowed_comm
     assert_eq!(invoke(None, &PHONE, "files_write", json!({})).await, Err(BridgeError::Forbidden));
 }
 
-/// `DESKTOP_COMMANDS` is what tells `Forbidden` from `UnknownCommand`, so it has
-/// to be what `lib.rs` registers.
+/// `DESKTOP_COMMANDS` is what tells `Forbidden` from `UnknownCommand`, so it has to cover what the
+/// desktop's webview can call: every command the shell registers in `lib.rs` (the machine's own), and
+/// every other one a server command the shell forwards, or one of the client's own that the shell
+/// declares unavailable.
 #[test]
-fn remote_bridge_desktop_commands_are_those_lib_rs_registers() {
+fn remote_bridge_desktop_commands_cover_what_lib_rs_registers() {
+    use crate::bridge::CLIENT_COMMANDS;
+    use remote_protocol::SERVER_COMMANDS;
     let lib = include_str!("../../../../src-tauri/src/lib.rs");
     let body = &lib[lib.find("generate_handler![").expect("lib.rs registers commands")..];
-    // The first list is the in-process build's (the `split` build registers its own after it, and it is
-    // held to another list in `src-tauri`): it ends at the first line that is only the closing bracket.
-    let mut registered: Vec<&str> = body
+    // The list ends at the first line that is only the closing bracket.
+    let registered: Vec<&str> = body
         .lines()
         .skip(1)
         .map(str::trim)
@@ -114,12 +117,18 @@ fn remote_bridge_desktop_commands_are_those_lib_rs_registers() {
         .filter(|line| !line.is_empty() && !line.starts_with("//"))
         .map(|line| line.trim_end_matches(',').rsplit("::").next().unwrap())
         .collect();
-    let mut listed: Vec<&str> = DESKTOP_COMMANDS.to_vec();
-    registered.sort_unstable();
-    listed.sort_unstable();
-    assert_eq!(listed, registered, "DESKTOP_COMMANDS and lib.rs's generate_handler! have drifted");
+    assert!(!registered.is_empty(), "no commands were read out of lib.rs");
+    for cmd in &registered {
+        assert!(DESKTOP_COMMANDS.contains(cmd), "{cmd} is registered by the shell and missing from DESKTOP_COMMANDS");
+    }
+    for cmd in DESKTOP_COMMANDS {
+        assert!(
+            registered.contains(cmd) || SERVER_COMMANDS.contains(cmd) || CLIENT_COMMANDS.contains(cmd),
+            "{cmd} is in DESKTOP_COMMANDS and is neither registered by the shell nor a server command"
+        );
+    }
     for cmd in ALLOWED_COMMANDS {
-        assert!(registered.contains(cmd), "{cmd} is allowlisted but the desktop has no such command");
+        assert!(DESKTOP_COMMANDS.contains(cmd), "{cmd} is allowlisted but the desktop has no such command");
     }
 }
 

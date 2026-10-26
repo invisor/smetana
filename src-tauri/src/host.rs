@@ -1,8 +1,8 @@
 //! The Tauri side of `context.rs`: the one place that makes a `Context` out of an `AppHandle`.
 //!
-//! Everything a worker used to ask the application for is answered here once, at start-up — the
-//! platform's directories, where the bd sidecar sits, and the sink that turns an event into
-//! `app.emit` plus the phones' bridge. The workers get the result and never see `tauri` again.
+//! Everything the core asks of the application is answered here once, at start-up — the platform's
+//! directories, where the bd sidecar sits, and the sink that turns an event into `app.emit`. The
+//! shell uses it for the device's own settings file and for the sidecar paths it hands the server.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,14 +10,11 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::context::{Context, Sink};
-use crate::remote::{push, Remote};
 
-/// Windows and remote devices, from one place: an event reaches the windows exactly as `app.emit`
-/// does and every device that has listened for it, so that a device and the window cannot be told
-/// different things. An event that is not on a device kind's list reaches the windows and no device
-/// of that kind — the hub refuses it — which is why one sink serves the events that used to be
-/// emitted to windows alone. Terminal output and log lines take the two extra roads below: they are
-/// delivered to the devices that follow a session, not to every listener.
+/// The windows of this app, and nobody else: an event a worker emits reaches the webview exactly as
+/// `app.emit` does. The shell starts no worker of its own, so this serves only what the settings
+/// helpers it still calls would announce; the server's events reach the windows by the connection
+/// (`client/link.rs`), not by here. There are no phones on this side to push to.
 struct TauriSink {
     app: AppHandle,
 }
@@ -25,28 +22,9 @@ struct TauriSink {
 impl Sink for TauriSink {
     fn emit(&self, name: &str, payload: serde_json::Value) {
         let _ = self.app.emit(name, &payload);
-        if let Some(remote) = self.app.try_state::<Arc<Remote>>() {
-            remote.hub.publish(name, &payload);
-        }
     }
 
-    fn terminal_chunk(&self, session: u64, seq: u64, bytes: &[u8]) {
-        if let Some(remote) = self.app.try_state::<Arc<Remote>>() {
-            remote.hub.publish_terminal_chunk(session, seq, bytes);
-        }
-    }
-
-    fn terminal_log(&self, session: u64, entries: &serde_json::Value) {
-        if let Some(remote) = self.app.try_state::<Arc<Remote>>() {
-            remote.hub.publish_terminal_log(session, entries);
-        }
-    }
-
-    fn push(&self, message: smetana_core::remote::push::Message) {
-        if let Some(remote) = self.app.try_state::<Arc<Remote>>() {
-            push::dispatch(&remote, message);
-        }
-    }
+    fn push(&self, _message: smetana_core::remote::push::Message) {}
 }
 
 /// The directory the bundled `bd` sits in — `None` only when the running executable has no
@@ -81,16 +59,10 @@ pub fn build(app: &AppHandle) -> Context {
     crate::context::install_runtime(handle);
     let paths = app.path();
     Context::new(
-        paths.app_data_dir().map_err(|err| err.to_string()),
-        paths.app_config_dir().map_err(|err| err.to_string()),
+        crate::dirs::data_dir(app),
+        crate::dirs::config_dir(app),
         paths.resource_dir().map_err(|err| err.to_string()),
         sidecar_path(),
         Arc::new(TauriSink { app: app.clone() }),
     )
-}
-
-/// The context `setup` put into the managed state, for a command wrapper that was handed an
-/// `AppHandle` rather than the context itself.
-pub fn context(app: &AppHandle) -> Context {
-    app.state::<Context>().inner().clone()
 }

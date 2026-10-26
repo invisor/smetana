@@ -31,12 +31,12 @@ describe('the notice for a refused folder', () => {
   })
 
   /* There is no confirmation dialog in front of the button, so the one thing
-     that cannot be taken back — the app going away and coming up again — has to
-     be said before it happens. In this app's own word for that act, which is
+     that cannot be taken back — the server going away and coming up again — has
+     to be said before it happens. In this app's own word for that act, which is
      "restart" (`components/settings/update.js`), not a second verb for one
      thing. */
-  it('warns that the app restarts, and only where the button is', () => {
-    expect(folderRefusedNotice('reset').description).toContain('restarts the app')
+  it('warns that the server restarts, and only where the button is', () => {
+    expect(folderRefusedNotice('reset').description).toContain('restarts the server')
     expect(folderRefusedNotice('full-disk-access').description).not.toContain('restart')
     expect(folderRefusedNotice('unavailable').description).not.toContain('restart')
     for (const form of FORMS) {

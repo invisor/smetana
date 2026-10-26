@@ -12,6 +12,19 @@ pub struct Cli {
     pub command: Command,
 }
 
+impl Cli {
+    /// Reads a command line the way `main` does, for a caller that builds one: the desktop shell starts
+    /// the server with arguments of its own making, and its test parses them here so that the two
+    /// cannot drift. The first item is the program name.
+    pub fn read<I, T>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        Self::try_parse_from(args).map_err(|err| err.to_string())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Kind {
     Desktop,
@@ -31,6 +44,11 @@ pub enum Command {
         /// The directory the skill library ships in.
         #[arg(long)]
         resource_dir: Option<PathBuf>,
+        /// A data directory an earlier release of the desktop kept its own device key, paired
+        /// devices and attachments in, to be taken over once (see `inherit.rs`). Nothing is removed
+        /// from it. The desktop passes its own; a server on a machine of its own has none.
+        #[arg(long)]
+        inherit_from: Option<PathBuf>,
     },
     /// Print a pairing ticket as text and as a QR code, and confirm the pairing here.
     Pair {

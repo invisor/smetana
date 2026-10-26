@@ -702,7 +702,7 @@ describe('adding a project on a server that is not on this machine', () => {
 })
 
 describe('moving to another server', () => {
-  const state = (over) => ({ mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local', ...over })
+  const state = (over) => ({ mode: 'client', state: 'connected', epoch: 1, local: true, target: 'local', ...over })
 
   async function onLocalServer() {
     const loaded = await loadStores()
@@ -796,7 +796,7 @@ describe('choosing another server with unsaved edits open', () => {
     const loaded = await loadStores()
     const { ipc: io, stores } = loaded
     const order = []
-    io.on('connection_state', { mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local' })
+    io.on('connection_state', { mode: 'client', state: 'connected', epoch: 1, local: true, target: 'local' })
     io.on('settings_load', stores.settings.defaults())
     io.on('device_settings_load', {})
     io.on('device_settings_save', null)
@@ -825,7 +825,7 @@ describe('choosing another server with unsaved edits open', () => {
   it('leaves the device where it was when the person keeps their edits', async () => {
     const loaded = await loadStores()
     const { ipc: io, stores } = loaded
-    io.on('connection_state', { mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local' })
+    io.on('connection_state', { mode: 'client', state: 'connected', epoch: 1, local: true, target: 'local' })
     io.on('settings_load', stores.settings.defaults())
     io.on('device_settings_load', {})
     io.on('device_settings_save', null)
@@ -845,7 +845,7 @@ describe('choosing another server with unsaved edits open', () => {
   it('refuses while a project move is under way, and a refusal by the shell changes nothing', async () => {
     const loaded = await loadStores()
     const { ipc: io, stores } = loaded
-    io.on('connection_state', { mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local' })
+    io.on('connection_state', { mode: 'client', state: 'connected', epoch: 1, local: true, target: 'local' })
     io.on('settings_load', stores.settings.defaults())
     io.on('device_settings_load', {})
     io.on('device_settings_save', null)
@@ -858,7 +858,7 @@ describe('choosing another server with unsaved edits open', () => {
     const loaded = await loadStores()
     const { ipc: io, emit, stores } = loaded
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    io.on('connection_state', { mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local' })
+    io.on('connection_state', { mode: 'client', state: 'connected', epoch: 1, local: true, target: 'local' })
     io.on('settings_load', { ...stores.settings.defaults(), openProjects: [], activeProject: null })
     io.on('device_settings_load', {})
     io.on('device_settings_save', null)
@@ -866,7 +866,7 @@ describe('choosing another server with unsaved edits open', () => {
     await stores.connection.initConnection()
     dirty(stores.tabs, stores.settings)
 
-    await emit('connection:state', { mode: 'split', state: 'connected', epoch: 2, local: false, target: 'node-vps' })
+    await emit('connection:state', { mode: 'client', state: 'connected', epoch: 2, local: false, target: 'node-vps' })
     for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 10))
 
     expect(error.mock.calls.some((call) => String(call[0]).includes('unsaved edits'))).toBe(true)

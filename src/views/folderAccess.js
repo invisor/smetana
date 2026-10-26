@@ -28,9 +28,11 @@
    allowed to open — so the second clause of all three forms is about what this
    is *not*, and it stays.
 
-   "Restarts the app", not "relaunches": the app already has a control that ends
+   "Restarts", not "relaunches": the app already has a control that ends
    itself and comes back, and it says "Install and restart" / "Installing
-   restarts the app" (`components/settings/update.js`). One act wants one verb. */
+   restarts the app" (`components/settings/update.js`). One act wants one verb.
+   What restarts here is the server on this machine rather than the app, since
+   the server is the process that reads the folder and was refused. */
 
 /* The name of the thing doing the refusing. macOS is named where the answer is
    macOS's, and not otherwise: on a platform this app is not sure of, "the
@@ -54,7 +56,7 @@
    while carrying `CFBundleName = Smetana`. Somebody reporting that the list
    says `smetana` is that copy before it is a bug in this string. */
 const DESCRIPTION = {
-  reset: 'macOS is refusing this app access to the folder — a permission, not the tracker or the data in it. Resetting it makes macOS ask again, and restarts the app.',
+  reset: 'macOS is refusing this app access to the folder — a permission, not the tracker or the data in it. Resetting it makes macOS ask again, and restarts the server on this machine.',
   'full-disk-access':
     'macOS is refusing this app access to the folder — a permission, not the tracker or the data in it. This one cannot be asked for again: grant Smetana Full Disk Access in System Settings → Privacy & Security, then open the project again.',
   unavailable:

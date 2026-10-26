@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { loadStores } from '../support/stores.js'
 
 const split = (over = {}) => ({
-  mode: 'split',
+  mode: 'client',
   state: 'connected',
   epoch: 1,
   attempt: 0,
@@ -16,9 +16,9 @@ const split = (over = {}) => ({
 describe('the connection state', () => {
   it('reads as connected and not stale in the build with no server of its own', async () => {
     const { ipc, stores } = await loadStores()
-    ipc.on('connection_state', { mode: 'in-process', state: 'connected', epoch: 0 })
+    ipc.on('connection_state', { mode: 'browser', state: 'connected', epoch: 0 })
     await stores.connection.initConnection()
-    expect(stores.connection.connection.mode).toBe('in-process')
+    expect(stores.connection.connection.mode).toBe('browser')
     expect(stores.connection.stale.value).toBe(false)
   })
 
@@ -106,9 +106,9 @@ describe('resynchronising after a connection', () => {
     const { ipc, emit, stores } = await loadStores()
     const hook = vi.fn(async () => {})
     stores.connection.onReconnect(hook)
-    ipc.on('connection_state', { mode: 'in-process', state: 'connected', epoch: 0 })
+    ipc.on('connection_state', { mode: 'browser', state: 'connected', epoch: 0 })
     await stores.connection.initConnection()
-    await emit('connection:state', { mode: 'in-process', state: 'connected', epoch: 1 })
+    await emit('connection:state', { mode: 'browser', state: 'connected', epoch: 1 })
     expect(hook).not.toHaveBeenCalled()
   })
 
@@ -183,19 +183,19 @@ describe('which server this device uses', () => {
     expect(stores.connection.isRemote.value).toBe(false)
   })
 
-  it('never reads the build with its back end in-process as remote', async () => {
+  it('never reads a browser as remote', async () => {
     const { ipc, stores } = await loadStores()
-    ipc.on('connection_state', { mode: 'in-process', state: 'connected', epoch: 0, local: false })
+    ipc.on('connection_state', { mode: 'browser', state: 'connected', epoch: 0, local: false })
     await stores.connection.initConnection()
     expect(stores.connection.isRemote.value).toBe(false)
   })
 
-  it('answers the shell\'s target, and in-process where there is nobody to ask', async () => {
+  it('answers the shell\'s target, and a browser where there is nobody to ask', async () => {
     const { ipc, stores } = await loadStores()
     ipc.on('server_target', { target: { kind: 'remote', node: 'abc', relay: 'https://r.example' } })
     expect(await stores.connection.readServerTarget()).toEqual({ kind: 'remote', node: 'abc', relay: 'https://r.example' })
     ipc.fail('server_target', new Error('no such command'))
-    expect(await stores.connection.readServerTarget()).toEqual({ kind: 'in-process' })
+    expect(await stores.connection.readServerTarget()).toEqual({ kind: 'browser' })
   })
 
   it('lists the local server\'s work, and an empty list when it cannot be asked', async () => {

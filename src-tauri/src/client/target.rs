@@ -53,7 +53,7 @@ pub fn load(identity_dir: &Path) -> Target {
     let file = path(identity_dir);
     match std::fs::read_to_string(&file) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_else(|err| {
-            log::warn!("split: {} is not readable, using the local server: {err}", file.display());
+            log::warn!("client: {} is not readable, using the local server: {err}", file.display());
             Target::Local
         }),
         Err(_) => Target::Local,

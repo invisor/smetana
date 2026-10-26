@@ -1,4 +1,5 @@
-//! The first launch of the client build on a device that has an older single-file `settings.json`.
+//! The first launch of the client on a device that has an older single-file `settings.json`: what every
+//! release before the switch-over wrote, since it held its workers in-process.
 //!
 //! That file holds both halves. The device half stays where it is. The server half is offered to the
 //! server once (`settings_adopt`, which a server that has settings of its own refuses), and when the
@@ -7,9 +8,9 @@
 //! small file when there is nothing to do; a failure leaves the file as it was, so the next
 //! connection tries again.
 //!
-//! A second source is the file an earlier build of the client left on the *server*: step 5 forwarded the
-//! whole document there, so a Smetana Next install has its theme, layout and per-project tabs in the
-//! server's `settings.json` and only `dialogs` on the device. That device half is fetched once
+//! A second source is the file an earlier build of the client left on the *server*: the separate
+//! "Smetana Next" build of step 5 forwarded the whole document there, so such an install has its
+//! theme, layout and per-project tabs in the server's `settings.json` and only `dialogs` on the device. That device half is fetched once
 //! (`settings_device_half`) and written into the device file together with the `deviceSeeded` mark.
 //!
 //! It runs before the link reports `connected`, so no read of the settings can be answered ahead of
@@ -22,8 +23,8 @@ use smetana_core::settings::{file, split};
 use smetanad::client::Client;
 
 pub async fn run(client: &Client, path: &Path) {
-    // Source one: the device's own old file holds the whole document (what a release install has, once
-    // the client build is the only one). Its server half goes to the server; its device half is already
+    // Source one: the device's own old file holds the whole document (what a release install has on its
+    // first start after the switch-over). Its server half goes to the server; its device half is already
     // where it belongs.
     let handed_over = match hand_over_server_half(client, path).await {
         Handover::Failed => return,
@@ -46,7 +47,7 @@ pub async fn run(client: &Client, path: &Path) {
             Ok(half) if half.is_null() => None,
             Ok(half) => Some(half),
             Err(err) => {
-                log::warn!("split: the server's copy of this device's settings was not fetched: {err}");
+                log::warn!("client: the server's copy of this device's settings was not fetched: {err}");
                 return;
             }
         }
@@ -54,8 +55,8 @@ pub async fn run(client: &Client, path: &Path) {
     let owned = path.to_owned();
     match tokio::task::spawn_blocking(move || split::seed_device(&owned, from_server.as_ref())).await {
         Ok(Ok(_)) => {}
-        Ok(Err(err)) => log::warn!("split: the device settings were not seeded: {err}"),
-        Err(err) => log::warn!("split: the settings seeding did not finish: {err}"),
+        Ok(Err(err)) => log::warn!("client: the device settings were not seeded: {err}"),
+        Err(err) => log::warn!("client: the settings seeding did not finish: {err}"),
     }
 }
 
@@ -78,18 +79,18 @@ async fn hand_over_server_half(client: &Client, path: &Path) -> Handover {
     let adopted = match client.call("settings_adopt", json!({ "patch": patch })).await {
         Ok(value) => value.as_bool().unwrap_or(false),
         Err(err) => {
-            log::warn!("split: the old settings file's server half was not handed over: {err}");
+            log::warn!("client: the old settings file's server half was not handed over: {err}");
             return Handover::Failed;
         }
     };
     if !adopted {
-        log::info!("split: the server already has settings; this device's old server half is kept only in settings.pre-split.json");
+        log::info!("client: the server already has settings; this device's old server half is kept only in settings.pre-split.json");
     }
     let owned = path.to_owned();
     match tokio::task::spawn_blocking(move || split::retire_server_half(&owned)).await {
         Ok(Ok(_)) => {}
-        Ok(Err(err)) => log::warn!("split: the device settings file was not relieved of the server's half: {err}"),
-        Err(err) => log::warn!("split: the settings migration did not finish: {err}"),
+        Ok(Err(err)) => log::warn!("client: the device settings file was not relieved of the server's half: {err}"),
+        Err(err) => log::warn!("client: the settings migration did not finish: {err}"),
     }
     Handover::Done
 }

@@ -2,9 +2,9 @@
 
    The whole of the rule, pure, so that a `.vue` file — which no test here can
    reach — only draws what this answers. The input is the connection store's
-   value in the shape the shell gives it (`src-tauri/src/split/state.rs`'s
-   `View`), and the answer is `null` when there is nothing to say: the build
-   without a server of its own, and a connection that is up and current.
+   value in the shape the shell gives it (`src-tauri/src/client/state.rs`'s
+   `View`), and the answer is `null` when there is nothing to say: a browser,
+   which has no server of its own, and a connection that is up and current.
 
    Two tones and no more. `wait` is a state that mends itself (connecting,
    reconnecting, a server older than this app that is waiting to be replaced);
@@ -40,7 +40,7 @@ function withReason(base, reason) {
 }
 
 export function connectionNotice(connection) {
-  if (!connection || connection.mode !== 'split') return null
+  if (!connection || connection.mode !== 'client') return null
   switch (connection.state) {
     case 'connecting':
       return {
@@ -129,5 +129,5 @@ export function connectionNotice(connection) {
 
 /* Whether what is on screen is older than the server's truth. */
 export function isStale(connection) {
-  return !!connection && connection.mode === 'split' && connection.state !== 'connected'
+  return !!connection && connection.mode === 'client' && connection.state !== 'connected'
 }

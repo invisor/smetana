@@ -155,7 +155,7 @@ async fn remote_desktop_a_device_paired_as_a_desktop_gets_every_server_command()
 #[tokio::test]
 async fn remote_desktop_capabilities_leave_out_what_the_host_cannot_honour() {
     use crate::gateway::Gateway;
-    // The desktop app's own `Remote`: no gateway, so no restart control is advertised.
+    // A `Remote` with no gateway (a host nobody restarts from a client): no restart control is advertised.
     let h = harness().await;
     h.remote.hub.set_dispatch(Arc::new(super::phone_bridge::services().0));
     let (_phone, client) = desktop(&h).await;

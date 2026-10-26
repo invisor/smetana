@@ -1,7 +1,8 @@
 //! What of `settings.json` is the server's and what is the device's.
 //!
-//! Step 6 of `docs/superpowers/specs/2026-10-25-headless-server-design.md`, and only for the client
-//! build (`split`): the release goes on writing one file whole, exactly as before.
+//! Step 6 of `docs/superpowers/specs/2026-10-25-headless-server-design.md`. The desktop is a client of
+//! `smetanad` and keeps the device's half; the server keeps the other. Only a browser, with no shell
+//! and no server, still reads and writes one document whole (the mock back end).
 //!
 //! **The rule is one question: does the server read it?** If a worker on the server reads the field —
 //! an agent's profile, a run's policy, the relay it pairs through, the project list it starts from —
@@ -23,7 +24,7 @@
 //! pins them to the letter, so a field added to the schema is a decision somebody had to make rather
 //! than a default nobody noticed.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde_json::{Map, Value};
@@ -302,8 +303,8 @@ pub fn device_half_of_file(path: &Path) -> Result<Option<Value>, SettingsError> 
 /// Otherwise the device half the server held (`from_server`, if it held any) becomes this file's,
 /// with the dialog sizes this machine remembered laid over it - they were never the server's - and
 /// the mark is set in the same write. With `None` the device's own half is the one that stands, and
-/// only the mark is set. A copy of the file as it was goes to `settings.pre-seed.json` first, never
-/// overwritten. Answers whether it wrote anything.
+/// only the mark is set. A copy of the file as it was is kept first (`keep_copy`, `settings.pre-seed`).
+/// Answers whether it wrote anything.
 pub fn seed_device(path: &Path, from_server: Option<&Value>) -> Result<bool, String> {
     let (local, problem) = file::load(path);
     if problem.is_some() {
@@ -315,10 +316,7 @@ pub fn seed_device(path: &Path, from_server: Option<&Value>) -> Result<bool, Str
     let seeded = match from_server {
         Some(half) => {
             if path.exists() {
-                let backup = path.with_file_name("settings.pre-seed.json");
-                if !backup.exists() {
-                    std::fs::copy(path, &backup).map_err(|err| format!("{}: {err}", backup.display()))?;
-                }
+                keep_copy(path, "settings.pre-seed")?;
             }
             // The server's device keys, then this device's own file over them where it has an
             // opinion the server could not: its dialog sizes, and anything the server lacks.
@@ -364,17 +362,19 @@ pub fn legacy_server_patch(settings: &Settings) -> Option<Value> {
 }
 
 /// Ends the migration on the device: the server's fields in the device file go back to the defaults,
-/// after a copy of the file as it was is put beside it (`settings.pre-split.json`, never overwritten,
-/// so the first one is the one that survives). Answers whether anything was changed.
+/// after a copy of the file as it was is kept beside it (`keep_copy`, `settings.pre-split`). Answers
+/// whether anything was changed.
+///
+/// It can run more than once on one device: an older release reinstalled and used for a while writes a
+/// server half into the file again, and a server that already has settings refuses to adopt it. That
+/// copy is then the only place the half survives, which is why a second retire never skips its copy
+/// because a first one left a file of the same name.
 pub fn retire_server_half(path: &Path) -> Result<bool, String> {
     let (mut settings, problem) = file::load(path);
     if problem.is_some() || legacy_server_patch(&settings).is_none() {
         return Ok(false);
     }
-    let backup = path.with_file_name("settings.pre-split.json");
-    if !backup.exists() {
-        std::fs::copy(path, &backup).map_err(|err| format!("{}: {err}", backup.display()))?;
-    }
+    keep_copy(path, "settings.pre-split")?;
     let fresh = Settings::default();
     settings.git.remove_worktrees = fresh.git.remove_worktrees;
     settings.remote = fresh.remote;
@@ -401,6 +401,28 @@ pub fn retire_server_half(path: &Path) -> Result<bool, String> {
     settings.device_seeded = true;
     file::save(path, &settings)?;
     Ok(true)
+}
+
+/// Keeps a copy of `path` as it is now beside it: `<stem>.json`, or, when a copy of that name already
+/// holds something else, the first free `<stem>.<n>.json` from 2 up. An existing copy is never
+/// overwritten, so the oldest state survives, and a later one is never dropped because an older one is
+/// there. A copy that already holds exactly these bytes is enough, and nothing is written.
+fn keep_copy(path: &Path, stem: &str) -> Result<PathBuf, String> {
+    let now = std::fs::read(path).map_err(|err| format!("{}: {err}", path.display()))?;
+    let mut n = 1u32;
+    loop {
+        let name = if n == 1 { format!("{stem}.json") } else { format!("{stem}.{n}.json") };
+        let backup = path.with_file_name(name);
+        match std::fs::read(&backup) {
+            Ok(held) if held == now => return Ok(backup),
+            Ok(_) => n += 1,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::write(&backup, &now).map_err(|err| format!("{}: {err}", backup.display()))?;
+                return Ok(backup);
+            }
+            Err(err) => return Err(format!("{}: {err}", backup.display())),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -743,6 +765,32 @@ mod tests {
         // And it is done once: the device has nothing left to offer.
         assert!(legacy_server_patch(&device_file).is_none());
         assert!(!retire_server_half(&device).unwrap());
+    }
+
+    #[test]
+    fn a_second_retire_keeps_a_copy_of_its_own_and_never_loses_what_was_set_in_between() {
+        let tmp = dir();
+        let device = tmp.path().join("settings.json");
+        std::fs::write(&device, old_file()).unwrap();
+        assert!(retire_server_half(&device).unwrap());
+        let first = std::fs::read(device.with_file_name("settings.pre-split.json")).unwrap();
+
+        // An older release, reinstalled, writes a server half into the file again — a different one.
+        let mut again = file::load(&device).0;
+        again.agent_prompt = "set in between".into();
+        again.open_projects = vec!["/work/later".into()];
+        file::save(&device, &again).unwrap();
+        let before = std::fs::read(&device).unwrap();
+        assert!(retire_server_half(&device).unwrap());
+
+        assert_eq!(std::fs::read(device.with_file_name("settings.pre-split.json")).unwrap(), first, "the first copy stands");
+        let second = device.with_file_name("settings.pre-split.2.json");
+        assert_eq!(std::fs::read(&second).unwrap(), before, "the second retire kept the file as it then was");
+        assert_eq!(file::load(&second).0.agent_prompt, "set in between");
+
+        // A copy that already holds the same bytes is enough: nothing piles up.
+        assert_eq!(keep_copy(&device, "settings.pre-split").unwrap(), keep_copy(&device, "settings.pre-split").unwrap());
+        assert!(!device.with_file_name("settings.pre-split.4.json").exists());
     }
 
     #[test]

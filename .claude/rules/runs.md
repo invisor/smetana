@@ -388,7 +388,7 @@ starts. Asked from `/` it walked the whole disk in the first three seconds of ev
 and the run gate's alike, and macOS put up an unexplained access prompt for every protected folder it
 crossed on the way. `usage::read` and `oneshot::ask_raw` now take the directory as a `&Path` rather
 than resolving it themselves, which is what keeps both modules free of Tauri; the caller resolves it
-through `agents::probe_dir` (`app.path().app_data_dir()/probe`, made on first use) and hands it in —
+through `agents::probe_dir` (`<server data dir>/probe`, `Context::data_dir`, made on first use) and hands it in —
 `runs::commands::agent_usage` and `runs::service`'s own gate and crash classification for the usage
 probe, `vcs::commands::vcs_suggest_message` and `tracker::commands::tracker_search_semantic` for the
 one-shot. The project root was considered and refused: the footer's probe has no project to be one of,

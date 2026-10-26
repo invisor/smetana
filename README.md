@@ -53,8 +53,21 @@ The app tries to keep a person out of the loop wherever that is honest. Filing a
 resolving a merge conflict, deciding a branch is fit to merge — that is the agent's own work, and you
 are asked only where the thing cannot be settled without you: a question written into the task's
 notes, or a run that stops and says which task it stopped on. Everything it knows sits in files you
-can open — tasks in `.beads/`, run state and reports in `.smetana/`. No server, no account, no
-database.
+can open — tasks in `.beads/`, run state and reports in `.smetana/`. No account, no database, and
+no server but the one on your own machine (below).
+
+### Where the work runs
+
+The window is a client. The agents, terminals, runs and git work live in `smetanad`, a small server
+the app ships with and starts on your machine by itself, in the background: close the window, or
+let the app update itself, and a run goes on. Your phone pairs with that same server. If you would
+rather the agents lived somewhere else — a VPS, a spare box — `smetanad` installs there on its own
+([server/smetanad/README.md](server/smetanad/README.md)), and the desktop and the phone pair with it
+instead.
+
+Updating from a version before the server existed needs nothing from you: on its first start the
+server takes over the app's projects, settings, attachments and paired phones, so a phone that was
+paired keeps working without pairing again.
 
 ## The Kanban board
 
@@ -156,7 +169,7 @@ saying what closed, what was parked, how long the whole thing took, and which mo
 ## Install
 
 Download the `.dmg` from [Releases](https://github.com/invisor/smetana/releases) and drag Smetana to
-Applications. It is signed with an Apple Developer ID and notarized, so it opens on a double-click:
+Applications. The server comes inside it. It is signed with an Apple Developer ID and notarized, so it opens on a double-click:
 nothing to dismiss, nothing to grant first.
 
 ## Getting started

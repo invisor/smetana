@@ -252,22 +252,6 @@ pub enum TrackerError {
     Empty,
     #[error("no tracker in this folder: {0}")]
     NoTracker(String),
-    /// The one repair that is not about bd at all: undoing the operating
-    /// system's stored refusal of the project's folder. Its own variant because
-    /// every message above it speaks about bd or about `.beads`, and this
-    /// failure happened before either was reached.
-    #[error("could not reset the folder permission: {0}")]
-    Access(String),
-    /// The gate in front of that repair, and the same one `UpdateError::RunLive`
-    /// keeps in front of an install: both restart the app, and a restart kills
-    /// every PTY child, which under a run means the agents it is driving.
-    ///
-    /// `projects` is the list, joined, and it is the whole point of the variant
-    /// — the notice this refusal answers is drawn for the folder on screen,
-    /// while the run being ended may be in a project nobody is looking at, so a
-    /// refusal that could not name it would send somebody hunting.
-    #[error("a run is going in {projects}; resetting the permission restarts the app and would end it")]
-    RunLive { projects: String },
 }
 
 // Tauri requires a command's error to be serializable.

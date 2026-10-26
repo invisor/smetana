@@ -8,8 +8,10 @@ close the laptop: the work goes on.
 The design is `docs/superpowers/specs/2026-10-25-headless-server-design.md`. Everything below is the
 "Remote placement" part of it.
 
-> This is for the **Smetana Next** desktop build. The released desktop app keeps its own server inside
-> it and does not connect to this one.
+> The desktop app already runs a `smetanad` of its own on your machine, and your phone pairs with that one.
+> This page is for putting the server somewhere else. When the desktop moves to a server on another
+> machine, **pair your phone with that server** too (`--kind phone`, below): the phone's pairing with the
+> server on your machine does not carry over.
 
 ## What you need
 
@@ -78,7 +80,7 @@ sudo -u smetana /opt/smetana/smetanad pair --data-dir /var/lib/smetana/data --ki
 ```
 
 It prints a code as text and as a QR code, and waits. **The code is the way in**: it is good once, for
-two minutes, and nobody can pair without it. In the desktop app (Smetana Next): Settings, then Server,
+two minutes, and nobody can pair without it. In the desktop app: Settings, then Server,
 paste the code under "Use a server on another machine" and press "Use this server". The terminal that
 ran `pair` asks you to confirm the device; answer `y`. A phone is paired the same way with
 `--kind phone` and its camera on the QR code.

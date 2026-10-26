@@ -179,6 +179,13 @@ jobs:
       - name: Fetch the bd sidecar
         run: npm run fetch-bd
 
+      # The other sidecar, and the one that is built here rather than fetched: the desktop is a client
+      # of a local `smetanad` and the bundle ships it beside bd (bundle.externalBin). `tauri build`
+      # runs the same script as its beforeBuildCommand; it is a step of its own so that a server that
+      # does not compile stops the release before the bundler and its signing, with its own log.
+      - name: Build the smetanad sidecar
+        run: npm run build-smetanad -- --release
+
       # The certificate lives in a keychain this step makes and nothing else
       # uses, rather than in the runner's login keychain: a runner is thrown
       # away after the job, but a default keychain with a private key in it is

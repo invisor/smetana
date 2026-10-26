@@ -490,7 +490,7 @@ pub fn settings_window_open(app: AppHandle, tab: Option<String>) -> Result<(), S
     let handle = app.clone();
     window.on_window_event(move |event| {
         if matches!(event, WindowEvent::Destroyed) {
-            crate::remote::cancel_pairing(&handle);
+            crate::client::cancel_pairing(&handle);
         }
     });
     Ok(())
@@ -1639,13 +1639,6 @@ pub fn window_chrome() -> &'static str {
 /// is the one that carries a name, its rule about an empty `HOME` is written
 /// down there, and this command is exactly the missing half `repoLabel.js`
 /// names — a way of handing that answer to the front end.
-// The split build forwards `home_dir`: the server's home is the one that means something.
-#[cfg_attr(feature = "split", allow(dead_code))]
-#[tauri::command]
-pub fn home_dir() -> Option<String> {
-    crate::tracker::access::home().map(|home| home.to_string_lossy().into_owned())
-}
-
 /// Which units and origin a drag-drop event's `position` arrives in, as one of
 /// the two names `src/dropPoint.js` holds.
 ///

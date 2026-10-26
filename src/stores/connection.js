@@ -5,12 +5,11 @@
    `@tauri-apps/api`, and this is the one thing in the app that is about the
    *absence* of the back end rather than its content.
 
-   **Two builds, one shape.** The desktop shell is either the release, with the
-   workers in its own process, or the Smetana Next build (`split`), which holds
-   a connection to a `smetanad`. The first answers `connection_state` with
-   `mode: 'in-process'` and a state that is always `connected`; so does
-   `mockBackend.js` in a browser. Everything below reads `mode`, and nothing in
-   the front end branches on which build it is.
+   **Two hosts, one shape.** The desktop shell holds a connection to a `smetanad`
+   and answers `connection_state` with `mode: 'client'`. A browser has no shell
+   and no server: `mockBackend.js` answers `mode: 'browser'` and a state that is
+   always `connected`. Everything below reads `mode`, and nothing else in the
+   front end branches on which host it is.
 
    **What a state means for the rest of the app** (the design is
    `docs/superpowers/specs/2026-10-25-headless-server-design.md`, "Connection
@@ -35,11 +34,11 @@ import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { emit, listen } from '@tauri-apps/api/event'
 
-/* `src-tauri/src/split/state.rs`'s `STATE_EVENT`, and the same string on both sides. */
+/* `src-tauri/src/client/state.rs`'s `STATE_EVENT`, and the same string on both sides. */
 export const STATE_EVENT = 'connection:state'
 
 export const connection = reactive({
-  mode: 'in-process',
+  mode: 'browser',
   state: 'connected',
   epoch: 0,
   attempt: 0,
@@ -63,12 +62,11 @@ export const connection = reactive({
 /* The server is on another machine. Paths are then the server's, not this machine's: the native
    folder dialog, the file manager and the system's "open this file" are the wrong tools for them
    (`serverFiles.js` is what the front end does instead). `local` defaults to true, and so does every
-   state that is not a connection to a server at all, so the build with its back end in-process and
-   a browser never read as remote. */
-export const isRemote = computed(() => connection.mode === 'split' && connection.local === false)
+   state that is not a connection to a server at all, so a browser never reads as remote. */
+export const isRemote = computed(() => connection.mode === 'client' && connection.local === false)
 
 /* The data on screen is older than the server's truth. */
-export const stale = computed(() => connection.mode === 'split' && connection.state !== 'connected')
+export const stale = computed(() => connection.mode === 'client' && connection.state !== 'connected')
 
 const hooks = new Set()
 
@@ -117,11 +115,11 @@ let servedTarget = null
 
 function adopt(view, { first = false } = {}) {
   if (!view || typeof view !== 'object' || typeof view.state !== 'string') return
-  const mode = view.mode === 'split' ? 'split' : 'in-process'
+  const mode = view.mode === 'client' ? 'client' : 'browser'
   const epoch = Number.isFinite(view.epoch) ? view.epoch : 0
   /* A read and an event can land in either order, and a view older than the one held would put
      the previous connection's picture back. */
-  if (connection.ready && mode === 'split' && epoch < connection.epoch) return
+  if (connection.ready && mode === 'client' && epoch < connection.epoch) return
   const newEpoch = epoch !== connection.epoch
   connection.mode = mode
   connection.state = view.state
@@ -136,11 +134,11 @@ function adopt(view, { first = false } = {}) {
   connection.ready = true
   if (first) {
     /* Mounted onto a connection that is already up: its loads were answered by it. */
-    seenEpoch = mode === 'split' && view.state === 'connected' ? epoch : 0
+    seenEpoch = mode === 'client' && view.state === 'connected' ? epoch : 0
     if (seenEpoch) servedTarget = connection.target
     return
   }
-  if (mode === 'split' && view.state === 'connected' && epoch !== seenEpoch) {
+  if (mode === 'client' && view.state === 'connected' && epoch !== seenEpoch) {
     seenEpoch = epoch
     const changed = servedTarget !== null && servedTarget !== connection.target
     servedTarget = connection.target
@@ -157,7 +155,7 @@ function adopt(view, { first = false } = {}) {
 
 /* Subscribe, then ask — the order `updates.js` documents: an event that arrives before the read's
    answer is the newer of the two. Answers the way to stop listening. Neither half throws: in a
-   browser there is no shell to ask, the state stays `in-process`, and nothing is drawn. */
+   browser there is no shell to ask, the state stays `browser`, and nothing is drawn. */
 export async function initConnection() {
   let stop = null
   try {
@@ -205,15 +203,15 @@ export async function restartServer(mode) {
 
 /* ---- which server this device uses ---------------------------------------- */
 
-/* `{ kind: 'local' }`, `{ kind: 'remote', node, relay }`, or `{ kind: 'in-process' }` in the
-   build that has no choice to make. A browser has nobody to ask and is in-process. */
+/* `{ kind: 'local' }`, `{ kind: 'remote', node, relay }`, or `{ kind: 'browser' }` in
+   a browser, which has nobody to ask and no choice to make. */
 export async function readServerTarget() {
   try {
     const answer = await invoke('server_target')
-    return answer?.target ?? { kind: 'in-process' }
+    return answer?.target ?? { kind: 'browser' }
   } catch (err) {
     console.debug('[connection] nobody to ask which server this is (a browser):', err)
-    return { kind: 'in-process' }
+    return { kind: 'browser' }
   }
 }
 

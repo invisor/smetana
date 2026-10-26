@@ -1180,14 +1180,14 @@ export function installMockBackend() {
        here: with the state unavailable the About tab draws no control at all,
        so neither can be reached in the ordinary course. */
     if (command === 'updates_state') return null
-    /* A browser has no server to be away from: the shape the build without a server of its own
-       answers, which `stores/connection.js` reads as nothing to draw. `connection_retry` is a write
+    /* A browser has no server to be away from: the shape that
+       `stores/connection.js` reads as nothing to draw. `connection_retry` is a write
        and falls through to the refusal below; nothing offers it while the state is connected. */
-    if (command === 'connection_state') return { mode: 'in-process', state: 'connected', epoch: 0 }
+    if (command === 'connection_state') return { mode: 'browser', state: 'connected', epoch: 0 }
     /* Which server this device uses: none to choose in a browser. The two reads answer so the Server
        section can be drawn under `?view=settings`; the choice itself (`server_use_local`,
        `server_use_remote`) is a write and falls through to the refusal below. */
-    if (command === 'server_target') return { target: { kind: 'in-process' } }
+    if (command === 'server_target') return { target: { kind: 'browser' } }
     if (command === 'server_local_work') return []
     /* The Devices tab's reads. A browser has no desktop to pair with, so these
        answer with two phones that look like what the real list holds, and a

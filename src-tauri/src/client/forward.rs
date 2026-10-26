@@ -1,4 +1,4 @@
-//! The invoke handler of the split build: what the webview's `invoke` reaches.
+//! The invoke handler of the shell: what the webview's `invoke` reaches.
 //!
 //! The webview keeps calling `invoke('tracker_snapshot', …)` under the names it always did. A name the
 //! shell answers itself (a window, a dialog, the clipboard, the opener, the client's updater and login
@@ -20,9 +20,8 @@ use tauri::{Manager, Runtime};
 
 use super::link::Link;
 
-/// The commands this shell registers for itself in the split build: the client's own
-/// (`CLIENT_COMMANDS`, the server's list of what is not its) less the one that cannot be served, plus
-/// the connection's. `lib.rs` registers exactly these, and a test holds the two lists equal.
+/// The commands this shell registers for itself: the client's own (`CLIENT_COMMANDS`, the server's
+/// list of what is not its). `lib.rs` registers exactly these, and a test holds the two lists equal.
 pub const LOCAL_COMMANDS: &[&str] = &[
     "sessions_open_log",
     "sessions_open_cwd",
@@ -52,22 +51,19 @@ pub const LOCAL_COMMANDS: &[&str] = &[
     "server_use_local",
     "server_use_remote",
     "server_local_work",
+    "tracker_access_reset",
     "client_file_read",
     "client_open_document",
     "client_open_fetched",
 ];
-
-/// Client commands the split build does not have, and says so: `tracker_access_reset` resets the
-/// system's stored refusal of a folder for the process that holds it and restarts the app, and the
-/// process that reads the folder is now the server's.
-const UNAVAILABLE: &[&str] = &["tracker_access_reset"];
 
 /// Where a command goes.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Route {
     /// The shell answers it.
     Local,
-    /// A client command this build cannot serve.
+    /// A client command this shell does not register: refused rather than sent to a server that
+    /// would only answer `Forbidden`. A test keeps the set empty.
     Unavailable,
     /// The server answers it.
     Forward,
@@ -76,7 +72,7 @@ pub enum Route {
 pub fn route(cmd: &str) -> Route {
     if LOCAL_COMMANDS.contains(&cmd) {
         Route::Local
-    } else if UNAVAILABLE.contains(&cmd) || CLIENT_COMMANDS.contains(&cmd) {
+    } else if CLIENT_COMMANDS.contains(&cmd) {
         Route::Unavailable
     } else {
         Route::Forward
@@ -150,7 +146,7 @@ pub fn handler<R: Runtime>(
         match route(&cmd) {
             Route::Local => local(invoke),
             Route::Unavailable => {
-                invoke.resolver.reject(format!("`{cmd}` is not available in this build: the server is a separate process."));
+                invoke.resolver.reject(format!("`{cmd}` is this app's own command, and this app does not answer it."));
                 true
             }
             Route::Forward => {
@@ -199,16 +195,16 @@ mod tests {
     }
 
     #[test]
-    fn a_client_command_the_split_build_lacks_is_refused_here_and_never_sent() {
-        assert_eq!(route("tracker_access_reset"), Route::Unavailable);
+    fn resetting_a_folder_permission_is_the_shells_own_and_never_sent() {
+        assert_eq!(route("tracker_access_reset"), Route::Local);
     }
 
-    /// Every command the server lists as the client's is either registered here or declared
-    /// unavailable, so none of them is sent to a server that would only answer `Forbidden`.
+    /// Every command the server lists as the client's is registered here, so none of them is sent to a
+    /// server that would only answer `Forbidden`, and none is refused for want of a handler.
     #[test]
-    fn every_client_command_is_local_or_declared_unavailable() {
+    fn every_client_command_is_answered_here() {
         for cmd in CLIENT_COMMANDS {
-            assert_ne!(route(cmd), Route::Forward, "`{cmd}` is the client's and would be forwarded");
+            assert_eq!(route(cmd), Route::Local, "`{cmd}` is the client's and this shell does not answer it");
         }
         for cmd in LOCAL_COMMANDS {
             assert!(
@@ -234,11 +230,11 @@ mod tests {
         }
     }
 
-    /// `lib.rs` registers exactly `LOCAL_COMMANDS` for the split build.
+    /// `lib.rs` registers exactly `LOCAL_COMMANDS` for the shell.
     #[test]
-    fn lib_rs_registers_the_local_commands_for_the_split_build() {
+    fn lib_rs_registers_exactly_the_local_commands() {
         let lib = include_str!("../lib.rs");
-        let from = lib.rfind("generate_handler![").expect("lib.rs registers the split commands");
+        let from = lib.rfind("generate_handler![").expect("lib.rs registers the local commands");
         let body = &lib[from..];
         let body = &body[..body.find("])").unwrap()];
         let mut registered: Vec<&str> = body
@@ -251,6 +247,6 @@ mod tests {
         let mut listed: Vec<&str> = LOCAL_COMMANDS.to_vec();
         registered.sort_unstable();
         listed.sort_unstable();
-        assert_eq!(listed, registered, "LOCAL_COMMANDS and the split generate_handler! in lib.rs have drifted");
+        assert_eq!(listed, registered, "LOCAL_COMMANDS and the generate_handler! in lib.rs have drifted");
     }
 }
