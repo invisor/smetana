@@ -202,8 +202,36 @@ workers and serves no phones; `src-tauri/src/split/` holds one iroh connection t
 - **The bundle.** `tauri.next.conf.json` changes the identifier, product name and window title, adds `binaries/smetanad` to
   `externalBin` and turns updater artifacts off. `npm run build-smetanad [-- --release]` builds it into
   `src-tauri/binaries/smetanad-<triple>` (ignored by git); the default config does not name it, so the default build never needs it.
-- **Not yet:** settings are entirely the server's (the split is step 6), no remote server (7), the in-process path stays (8).
+- **Settings are split** (step 6, below). **Not yet:** no remote server (7), the in-process path stays (8).
   The shell still links `smetana-core` as a library for `window.rs`'s settings types; no worker is started.
+
+## Settings in the client build (protocol 1.10)
+
+`crates/core/src/settings/split.rs` draws the line by one question: does a worker on the server read it? The server's:
+`agent`, `model`, `agentRoles`, the four languages, `agentPrompt`, `conversationPanel`, `subscription`, `runFailover`,
+`remote.relayUrl`, `git.removeWorktrees`, `openProjects`, `lastProject`, and per project `runSettings`, `agents` and `usedAt`.
+Everything else is the device's (appearance, layout, `editor`, `kanban`, `reports`, `git.autoFetch`, `window`, `updates`,
+`notifications`, `dialogs`, and a project's tabs, folds, selected task, orders, names and `storageWarnedMib`); a field in
+neither list is the device's, and a test pins the server list. `usedAt` is kept on both sides for each file's own project limit.
+
+- **Server half: a patch.** `settings_patch { patch }` (server-only command) is a JSON merge patch over the server's keys:
+  the server drops anything else, applies it to its `settings.json` under one process-wide lock, validates it as a read does,
+  writes, and **inside that lock** emits `settings:changed` (the server half whole) so clients hear states in the order they
+  were written. Two clients that changed different fields both keep them; a list (`openProjects`, `runFailover.priority`) is
+  replaced whole, so two simultaneous edits of the *same* list lose one.
+- **Device half: a file on the machine.** `device_settings_load` / `device_settings_save` are client commands (answered by the
+  shell, in `LOCAL_COMMANDS` and `CLIENT_COMMANDS`, registered in both builds) over the shell's own `settings.json`;
+  `merge_device` writes the device's keys and leaves the server's as that file has them. `window.rs`, the updater and the
+  dialog sizes keep reading that file unchanged.
+- **Front end** (`stores/settings.js`, pure parts in `stores/settingsSplit.js`): `connection_state` saying `split` turns it
+  on; the release and a browser take no new branch. The store keeps a `baseline` (the server's half as last agreed); a flush
+  saves the device half whole and sends `diff(baseline, now)` as the patch. `settings:changed` and a reconnect fold the
+  server's state in with this window's unsent edits laid over it. A refused patch is **not kept or replayed**: the server's
+  state is read back and wins. Which project is open stays this window's own (`lastProject` is sent, never adopted).
+- **Migration** (`src-tauri/src/split/migrate.rs`), on every connection before `connected`: if the device's `settings.json`
+  still holds a server half (`legacy_server_patch`), `settings_adopt` offers it (taken only by a server with no
+  `settings.json`), then `retire_server_half` copies the file to `settings.pre-split.json` (never overwritten) and resets the
+  server's keys in it. A server that already had settings keeps them; the second desktop's old half survives only in the copy.
 
 ## Protocol 1.9: the server's own commands
 

@@ -14,6 +14,7 @@
 
 mod forward;
 mod link;
+mod migrate;
 mod spawn;
 mod state;
 
@@ -40,6 +41,7 @@ fn config(app: &AppHandle) -> Result<Config, String> {
         bd: crate::host::sidecar_path(),
         resource_dir: app.path().resource_dir().ok(),
         log: data.join("smetanad.log"),
+        settings: app.path().app_config_dir().ok().map(|dir| dir.join("settings.json")),
     })
 }
 

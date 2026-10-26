@@ -43,7 +43,7 @@ pub use smetana_core::remote::DEFAULT_RELAY_URL;
 /// The protocol this desktop speaks. A phone on another major is answered with
 /// this and disconnected.
 pub const PROTOCOL_MAJOR: u16 = 1;
-pub const PROTOCOL_MINOR: u16 = 9;
+pub const PROTOCOL_MINOR: u16 = 10;
 
 /// Below this the phone shows one screen, "Update the app", and calls nothing.
 pub const MIN_MOBILE_VERSION: &str = "0.1.0";

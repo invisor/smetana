@@ -1815,7 +1815,7 @@ fn migrate(object: Map<String, Value>, from: u64) -> Map<String, Value> {
 /// open project plus closed ones until the total reaches the limit. The limit
 /// was put there against growth from one-off visits, not against what a person
 /// opened themselves.
-fn trim(projects: &mut BTreeMap<String, ProjectState>, current: Option<&str>, open: &[String]) {
+pub(super) fn trim(projects: &mut BTreeMap<String, ProjectState>, current: Option<&str>, open: &[String]) {
     if projects.len() <= MAX_PROJECTS {
         return;
     }

@@ -380,6 +380,8 @@ pub fn run() {
           commands::sessions::sessions_delete,
           commands::settings::settings_load,
           commands::settings::settings_save,
+          commands::settings::device_settings_load,
+          commands::settings::device_settings_save,
           window::settings_window_open,
           window::window_chrome,
           window::home_dir,
@@ -455,6 +457,8 @@ pub fn run() {
         updates::updates_install,
         connection::connection_state,
         connection::connection_retry,
+        commands::settings::device_settings_load,
+        commands::settings::device_settings_save,
       ])
       }
     })

@@ -908,6 +908,31 @@ fn server_replies(map: &mut BTreeMap<&'static str, Vec<Value>>) {
 
     map.insert("server_health", vec![json_of(&health_ok()), json_of(&health_with_problems())]);
     map.insert("server_restart", restart_replies());
+
+    map.insert("settings_patch", settings_halves());
+    map.insert("settings_adopt", vec![json!(true), json!(false)]);
+}
+
+/// The server half of the settings as `settings_patch` answers and `settings:changed` carries it:
+/// the shipped defaults, and one with a project whose server fields are set.
+fn settings_halves() -> Vec<Value> {
+    use crate::settings::model::{ProjectAgents, ProjectState, RunDefaults, Settings};
+    let mut settings = Settings::default();
+    settings.open_projects = vec!["/work/smetana".into()];
+    settings.last_project = Some("/work/smetana".into());
+    settings.projects.insert(
+        "/work/smetana".into(),
+        ProjectState {
+            run_settings: Some(RunDefaults { min_priority: Some(2), ..RunDefaults::default() }),
+            agents: Some(ProjectAgents { agent: "codex".into(), ..ProjectAgents::default() }),
+            used_at: Some("2026-10-26T10:00:00+00:00".into()),
+            ..ProjectState::default()
+        },
+    );
+    vec![
+        crate::settings::split::server_half(&Settings::default()),
+        crate::settings::split::server_half(&settings),
+    ]
 }
 
 fn tool(name: &str, version: Option<&str>) -> smetana_core::health::Tool {
@@ -983,6 +1008,7 @@ fn server_payloads(map: &mut BTreeMap<&'static str, Vec<Value>>) {
             output_payload(3, 12, 12, "aGk=", true),
         ],
     );
+    map.insert("settings:changed", settings_halves());
     map.insert("server:restart-deferred", vec![crate::gateway::deferred_payload(&restart_work())]);
     map.insert(
         "terminal:log",

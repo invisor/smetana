@@ -39,6 +39,9 @@ pub struct Config {
     pub resource_dir: Option<PathBuf>,
     /// Where the server's standard output and error go.
     pub log: PathBuf,
+    /// This device's own `settings.json`: the file an older single-file build left, whose server
+    /// half is handed to the server once (`migrate.rs`).
+    pub settings: Option<PathBuf>,
 }
 
 /// The name of a sidecar next to this executable. Tauri puts `externalBin` entries there under their
@@ -173,6 +176,7 @@ mod tests {
             bd: Some("/bundle/bd".into()),
             resource_dir: Some("/bundle/resources".into()),
             log: "/data/smetanad.log".into(),
+            settings: None,
         }
     }
 

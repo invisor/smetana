@@ -328,6 +328,11 @@ async fn attempt(link: &Arc<Link>, config: &Config, restarted_from: &mut Option<
             }
         }
     }
+    // Before the first call can be made: a read of the settings that was answered ahead of this
+    // would show the server's defaults while the old file's server half was still on its way.
+    if let Some(path) = &config.settings {
+        super::migrate::run(&client, path).await;
+    }
     link.connected(client.clone(), info, outdated);
     let mut watch_owner = tokio::time::interval(Duration::from_secs(1));
     let why = loop {
@@ -529,6 +534,7 @@ mod tests {
                 bd: None,
                 resource_dir: None,
                 log: dir.path().join("smetanad.log"),
+                settings: None,
             };
             let supervisor = tokio::spawn(supervise(link.clone(), config));
 
@@ -573,6 +579,62 @@ mod tests {
                 .map(|(_, payload)| payload["state"].as_str().unwrap().to_owned())
                 .collect();
             assert!(states.contains(&"connected".to_owned()) && states.contains(&"reconnecting".to_owned()), "{states:?}");
+
+            supervisor.abort();
+            server.shutdown().await;
+        });
+    }
+
+    #[test]
+    fn an_old_settings_file_is_migrated_before_the_first_call_and_a_patch_is_broadcast() {
+        use smetana_core::settings::{file, split};
+        block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let server = start_server(dir.path()).await;
+            let device = dir.path().join("device").join("settings.json");
+            std::fs::create_dir_all(device.parent().unwrap()).unwrap();
+            std::fs::write(
+                &device,
+                r#"{"version":1,"appearance":{"theme":"light"},"agent":"codex","agentPrompt":"be brief",
+                    "openProjects":["/work/a"],"lastProject":"/work/a"}"#,
+            )
+            .unwrap();
+
+            let seen: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+            let recorder = seen.clone();
+            let link = Link::new(Arc::new(move |name, payload| recorder.lock().unwrap().push((name.to_owned(), payload))), true);
+            let config = Config {
+                server_dir: dir.path().join("server"),
+                identity_dir: dir.path().to_owned(),
+                exe: None,
+                bd: None,
+                resource_dir: None,
+                log: dir.path().join("smetanad.log"),
+                settings: Some(device.clone()),
+            };
+            let supervisor = tokio::spawn(supervise(link.clone(), config));
+
+            // The first read already sees the migrated server half.
+            let loaded = link.call("settings_load", json!({ "project": null })).await.unwrap();
+            assert_eq!(loaded["agent"], "codex");
+            assert_eq!(loaded["agentPrompt"], "be brief");
+            assert_eq!(loaded["openProjects"], json!(["/work/a"]));
+            // The device keeps its own half and has given the other up.
+            let kept = file::load(&device).0;
+            assert_eq!(kept.appearance.theme, "light");
+            assert!(split::legacy_server_patch(&kept).is_none());
+            assert!(device.with_file_name("settings.pre-split.json").exists());
+
+            // A patch from this client is announced to every client, this one included.
+            link.call("settings_patch", json!({ "patch": { "model": "" , "agentLanguage": "ru" } })).await.unwrap();
+            until("the broadcast", || {
+                seen.lock().unwrap().iter().any(|(name, p)| name == "settings:changed" && p["agentLanguage"] == "ru" && p["agent"] == "codex")
+            })
+            .await;
+            // And the device half is refused on the server's road.
+            link.call("settings_patch", json!({ "patch": { "appearance": { "theme": "light" } } })).await.unwrap();
+            let after = link.call("settings_load", json!({ "project": null })).await.unwrap();
+            assert_eq!(after["appearance"]["theme"], "dark", "the server keeps no copy of the device's fields");
 
             supervisor.abort();
             server.shutdown().await;

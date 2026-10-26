@@ -46,6 +46,8 @@ pub const LOCAL_COMMANDS: &[&str] = &[
     "updates_install",
     "connection_state",
     "connection_retry",
+    "device_settings_load",
+    "device_settings_save",
 ];
 
 /// Client commands the split build does not have, and says so: `tracker_access_reset` resets the
