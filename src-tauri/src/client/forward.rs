@@ -1,4 +1,4 @@
-//! The invoke handler of the split build: what the webview's `invoke` reaches.
+//! The invoke handler of the shell: what the webview's `invoke` reaches.
 //!
 //! The webview keeps calling `invoke('tracker_snapshot', …)` under the names it always did. A name the
 //! shell answers itself (a window, a dialog, the clipboard, the opener, the client's updater and login
@@ -20,7 +20,7 @@ use tauri::{Manager, Runtime};
 
 use super::link::Link;
 
-/// The commands this shell registers for itself in the split build: the client's own
+/// The commands this shell registers for itself: the client's own
 /// (`CLIENT_COMMANDS`, the server's list of what is not its) less the one that cannot be served, plus
 /// the connection's. `lib.rs` registers exactly these, and a test holds the two lists equal.
 pub const LOCAL_COMMANDS: &[&str] = &[
@@ -57,7 +57,7 @@ pub const LOCAL_COMMANDS: &[&str] = &[
     "client_open_fetched",
 ];
 
-/// Client commands the split build does not have, and says so: `tracker_access_reset` resets the
+/// Client commands this shell does not have, and says so: `tracker_access_reset` resets the
 /// system's stored refusal of a folder for the process that holds it and restarts the app, and the
 /// process that reads the folder is now the server's.
 const UNAVAILABLE: &[&str] = &["tracker_access_reset"];
@@ -234,11 +234,11 @@ mod tests {
         }
     }
 
-    /// `lib.rs` registers exactly `LOCAL_COMMANDS` for the split build.
+    /// `lib.rs` registers exactly `LOCAL_COMMANDS` for the shell.
     #[test]
     fn lib_rs_registers_the_local_commands_for_the_split_build() {
         let lib = include_str!("../lib.rs");
-        let from = lib.rfind("generate_handler![").expect("lib.rs registers the split commands");
+        let from = lib.rfind("generate_handler![").expect("lib.rs registers the local commands");
         let body = &lib[from..];
         let body = &body[..body.find("])").unwrap()];
         let mut registered: Vec<&str> = body
@@ -251,6 +251,6 @@ mod tests {
         let mut listed: Vec<&str> = LOCAL_COMMANDS.to_vec();
         registered.sort_unstable();
         listed.sort_unstable();
-        assert_eq!(listed, registered, "LOCAL_COMMANDS and the split generate_handler! in lib.rs have drifted");
+        assert_eq!(listed, registered, "LOCAL_COMMANDS and the generate_handler! in lib.rs have drifted");
     }
 }

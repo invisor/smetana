@@ -31,7 +31,7 @@ export async function serverIsRemote() {
   if (connection.ready) return isRemote.value
   try {
     const view = await invoke('connection_state')
-    return view?.mode === 'split' && view.local === false
+    return view?.mode === 'client' && view.local === false
   } catch {
     return false
   }

@@ -58,7 +58,7 @@ import { isWaitMinutes, priorityOrder } from '../components/settings/runFailover
    way. */
 import { effectiveAgentTable } from '../components/settings/agentRoles.js'
 /* Pure: the settings split into the server's fields and the device's, and the patch between two
-   states of the server's. Only used when the shell says it is a client (`split` below). */
+   states of the server's. Only used when the shell says it is a client (`split` below, the settings halves). */
 import { combine, diffViews, fold, mergePatch, serverView, transportFailure, viewFromHalf, writeView } from './settingsSplit.js'
 import { connection, onReconnect } from './connection.js'
 
@@ -451,7 +451,7 @@ const CLOSE_FLUSH_LIMIT = 2000
 let timer = null
 let watching = false
 
-/* The settings are split in two in the client build (`connection_state` says `split`; see
+/* The settings are split in two (`connection_state` says `client`; see
    `docs/superpowers/specs/2026-10-25-headless-server-design.md`, "Settings"). The device's half
    - the look, the layout, the open task - is saved to this machine as it always was, whole, by the
    debounce below. The server's half is never saved whole: what changed is sent as a patch
@@ -660,7 +660,7 @@ function applySection(target, fallback, stored) {
    a test that does not mock it - is not. */
 async function isSplit() {
   try {
-    return (await invoke('connection_state'))?.mode === 'split'
+    return (await invoke('connection_state'))?.mode === 'client'
   } catch {
     return false
   }

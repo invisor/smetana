@@ -1,28 +1,16 @@
-// The `split` build leaves part of the in-process half unreferenced (the commands it forwards instead,
-// the phone endpoint's start, the run gate of an install). It is kept compiling rather than cut out so
-// the two builds cannot drift apart, and the allowance sits on exactly the modules that need it.
 mod autostart;
 mod clipboard;
-#[cfg_attr(feature = "split", allow(dead_code, unused_imports))]
+mod client;
 mod commands;
 mod connection;
 mod host;
-#[cfg_attr(feature = "split", allow(dead_code, unused_imports))]
-mod remote;
-#[cfg(feature = "split")]
-mod split;
-#[cfg_attr(feature = "split", allow(dead_code, unused_imports))]
 mod updates;
 mod window;
 
-// Everything that does the work lives in `crates/core`, which has no `tauri`. These bring its modules
-// in under the names the shell has always used, so `crate::tracker::...` still reads the same.
-// The `split` build starts none of the workers these name.
-#[cfg_attr(feature = "split", allow(unused_imports))]
-use smetana_core::{
-  attachments, context, project, rlimit, runs, session, settings, shell_env, terminal,
-  tracker,
-};
+// The desktop is a client: everything that does the work lives in `crates/smetana-core` and runs in
+// the `smetanad` server this shell connects to. The shell holds the core only for the device's own
+// settings file, the sidecar path and the types a command wrapper names.
+use smetana_core::{context, rlimit, settings};
 
 use tauri::Manager;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
@@ -177,21 +165,8 @@ pub fn run() {
       // Whatever `raise` above had to say, said now that there is something to
       // say it to. See `rlimit`: it runs before the builder, so it cannot log.
       rlimit::report();
-      // Before anything asks for an agent. A bundled app is handed launchd's
-      // environment rather than the person's, so the answer takes a login
-      // shell to get; starting it here means the first "+ New agent" does not
-      // wait for one. See `shell_env`.
-      #[cfg(not(feature = "split"))]
-      shell_env::warm();
-      // The settings file knows what to open with: the last run's active
-      // project lives there. We read it here rather than waiting for the front
-      // end — the board gets to load while the webview comes up. No file, or an
-      // empty list, means we take the directory the app was launched from if it
-      // is tracked; otherwise there is no project, and that is a normal state,
-      // not a failure.
-      // What the workers are given instead of this handle: the data directory, a sink for
-      // events and the path of the bd sidecar. Built once, here, and managed so that a command
-      // wrapper holding an `AppHandle` can hand the same one on (`host::context`).
+      // The data directory, a sink for events and the path of the bd sidecar, built once and managed
+      // so that a command wrapper can take it as `State<Context>`.
       let ctx = host::build(app.handle());
       app.manage(ctx.clone());
       let stored = ctx.settings_path().map(|path| settings::file::load(&path).0);
@@ -208,66 +183,6 @@ pub fn run() {
         app.handle(),
         stored.as_ref().map(|settings| settings.window.restore_geometry).unwrap_or(true),
       );
-      // The workers, the in-process half. The `split` build has none: it holds a connection to
-      // a server that has them (`split/`), and what this block starts is that server's.
-      #[cfg(not(feature = "split"))]
-      {
-        let initial = stored
-          .as_ref()
-          .and_then(|settings| settings.last_project.clone())
-          .map(std::path::PathBuf::from)
-          .or_else(project::default_project);
-        // Every project this launch knows about, for the run worker's start-up
-        // sweep: a `kill -9` leaves agent processes running and a record of them
-        // in each project's `.smetana/runs.json`, and this is the list of files
-        // to go and finish. The open list rather than the active project alone —
-        // a run in a project somebody has since switched away from left the same
-        // orphans — and one that was closed altogether waits until it is opened
-        // again, which is the price of the registry living in the project.
-        let known: Vec<std::path::PathBuf> = stored
-          .map(|settings| settings.open_projects)
-          .unwrap_or_default()
-          .into_iter()
-          .map(std::path::PathBuf::from)
-          .chain(initial.clone())
-          .collect();
-
-        let tracker = tracker::service::start(ctx.clone(), initial);
-        app.manage(tracker.clone());
-
-        // The terminal worker knows no project of its own: a session carries
-        // the directory it was created in, and the front end asks for the list
-        // by that directory. `known` is passed for its own start-up sweep too
-        // (smetana-kkz2, point 4 — macOS reads each project's own run registry
-        // for a dead instance's coalition id) — the identical list
-        // `runs::service::start` below sweeps its registries against, computed
-        // once above rather than read a second time here.
-        let terminal = terminal::service::start(ctx.clone(), known.clone());
-        app.manage(terminal.clone());
-
-        // The session worker: the driven half of the same idea, one tokio task
-        // beside the terminal's and sharing nothing with it. It knows no project
-        // of its own either — a session carries the directory it was started in.
-        // What it owns that the terminal does not is the in-app permission
-        // listener, which it binds once when it starts.
-              let session = session::service::start(ctx.clone());
-              app.manage(session.clone());
-
-        // The run worker drives the other two rather than owning anything of its
-        // own: it reads the board from the tracker and starts one session per
-        // batch through the terminal. Handed clones of both, so it queues behind
-        // them like every other caller.
-              let runs = runs::service::start(
-                  ctx.clone(),
-                  tracker.clone(),
-                  terminal,
-                  session,
-                  known,
-              );
-        app.manage(runs);
-
-      }
-
       // Whether there is a newer version, and the download of it, are the
       // app's own business rather than a window's: the About tab that shows
       // this lives in the settings window, which is closed as soon as it has
@@ -280,224 +195,56 @@ pub fn run() {
       // being written along the way too, so that a run cut short without a
       // clean exit does not open at the size from the run before last.
       window::persist_geometry(app.handle());
-      // The phone companion: the device key, the device list, and the endpoint
-      // if a phone is already paired. Last, because it needs nothing from the
-      // workers above and nothing waits for it.
-      #[cfg(not(feature = "split"))]
-      remote::start(app.handle().clone());
-      #[cfg(feature = "split")]
-      split::start(app.handle());
+      // The connection to the server: the one on this machine, started if it is not running, or the
+      // remote one this device was pointed at. Last, because nothing above waits for it.
+      client::start(app.handle());
       // Neither of the app's other windows owns anything — see
       // `close_children_with_main`.
       window::close_children_with_main(app.handle());
       Ok(())
     })
-    // Which commands the webview reaches in-process is the first list, and it is the one the
-    // phone bridge's test holds equal to `DESKTOP_COMMANDS`. The `split` build registers only what
-    // the machine itself answers, and `split::handler` sends every other name to the server; the
-    // second list is held equal to `split::forward::LOCAL_COMMANDS` by a test.
-    .invoke_handler({
-      #[cfg(not(feature = "split"))]
-      {
-    tauri::generate_handler![
-          commands::tracker::tracker_health,
-          commands::tracker::tracker_snapshot,
-          commands::tracker::tracker_resync,
-          commands::tracker::tracker_update,
-          commands::tracker::tracker_close,
-          commands::tracker::tracker_reopen,
-          commands::tracker::tracker_delete,
-          commands::tracker::tracker_set_project,
-          commands::tracker::tracker_init,
-          commands::tracker::tracker_repair,
-          commands::tracker::tracker_failure,
-          commands::tracker::tracker_access_repair,
-          commands::tracker::tracker_access_reset,
-          commands::tracker::tracker_probe,
-          commands::tracker::tracker_search_semantic,
-          commands::tracker::project_root,
-          commands::files::files_list,
-          commands::files::files_read,
-          commands::files::files_write,
-          commands::files::files_stat,
-          commands::files::files_create,
-          commands::files::files_mkdir,
-          commands::files::files_trash,
-          commands::files::files_copy,
-          commands::files::files_copy_external,
-          commands::files::files_move,
-          commands::files::files_rename,
-          commands::files::files_clipboard_write,
-          commands::files::files_clipboard_read,
-          commands::attachments::attachment_import,
-          commands::attachments::attachment_reopen,
-          commands::attachments::attachment_write,
-          commands::attachments::attachments_survey,
-          commands::attachments::attachments_clean,
-          commands::attachments::image_read,
-          commands::git::git_head,
-          commands::vcs::vcs_repos,
-          commands::vcs::vcs_status,
-          commands::vcs::vcs_in_progress,
-          commands::vcs::vcs_branches,
-          commands::vcs::vcs_remote_branches,
-          commands::vcs::vcs_last_fetch,
-          commands::vcs::vcs_tracking,
-          commands::vcs::vcs_fetch,
-          commands::vcs::vcs_pull,
-          commands::vcs::vcs_push,
-          commands::vcs::vcs_checkout,
-          commands::vcs::vcs_checkout_remote,
-          commands::vcs::vcs_create_branch,
-          commands::vcs::vcs_rename_branch,
-          commands::vcs::vcs_delete_branch,
-          commands::vcs::vcs_merge,
-          commands::vcs::vcs_rebase,
-          commands::vcs::vcs_abort,
-          commands::vcs::vcs_commit,
-          commands::vcs::vcs_discard,
-          commands::vcs::vcs_suggest_message,
-          commands::vcs::vcs_file_at_head,
-          commands::vcs::vcs_file_at_rev,
-          commands::vcs::vcs_compare,
-          commands::runs::project_config,
-          commands::runs::project_config_save_defaults,
-          commands::runs::browser_tools,
-          commands::runs::run_start,
-          commands::runs::run_stop,
-          commands::runs::run_release,
-          commands::runs::run_state,
-          commands::runs::run_reports,
-          commands::runs::target_branches,
-          commands::runs::agent_usage,
-          commands::agents::agents_catalog,
-          commands::agents::codex_models,
-          commands::agents::agents_installed,
-          commands::sessions::sessions_list,
-          commands::sessions::sessions_open_log,
-          commands::sessions::sessions_open_cwd,
-          commands::sessions::sessions_reveal,
-          commands::sessions::sessions_delete,
-          commands::settings::settings_load,
-          commands::settings::settings_save,
-          commands::settings::device_settings_load,
-          commands::settings::device_settings_save,
-          window::settings_window_open,
-          window::window_chrome,
-          window::home_dir,
-          window::drag_drop_space,
-          window::compare_window_open,
-          window::image_window_open,
-          window::dialog_window_open,
-          window::dialog_window_close,
-          window::dialog_window_size,
-          window::dialog_window_closable,
-          window::window_show_ready,
-          autostart::autostart_state,
-          autostart::autostart_set,
-          updates::updates_state,
-          updates::updates_check,
-          updates::updates_install,
-          commands::terminal::terminal_list,
-          commands::terminal::terminal_marks,
-          commands::terminal::terminal_create,
-          commands::terminal::terminal_shell,
-          commands::terminal::terminal_remove,
-          commands::terminal::terminal_attach,
-          commands::terminal::terminal_detach,
-          commands::terminal::terminal_resize,
-          commands::terminal::terminal_write,
-          commands::terminal::terminal_clear,
-          commands::terminal::terminal_run_capture,
-          commands::terminal::terminal_restorable,
-          commands::terminal::terminal_forget,
-          commands::session::session_start,
-                commands::session::crew_tree,
-                commands::session::crew_attach,
-                commands::session::crew_send,
-                commands::session::crew_stop,
-                commands::session::crew_clear,
-          commands::session::session_attach,
-          commands::session::session_since,
-          commands::session::session_send,
-          commands::session::session_answer,
-          commands::session::session_stop,
-          commands::session::session_close,
-          remote::commands::remote_pair_begin,
-          remote::commands::remote_pair_cancel,
-          remote::commands::remote_pair_decide,
-          remote::commands::remote_devices,
-          remote::commands::remote_device_revoke,
-          connection::connection_state,
-          connection::connection_retry,
-          connection::server_target,
-          connection::server_use_local,
-          connection::server_use_remote,
-          connection::server_local_work,
-          commands::client_files::client_file_read,
-          commands::client_files::client_open_document,
-          commands::client_files::client_open_fetched,
-        ]
-      }
-      #[cfg(feature = "split")]
-      {
-        split::handler(tauri::generate_handler![
-        commands::sessions::sessions_open_log,
-        commands::sessions::sessions_open_cwd,
-        commands::sessions::sessions_reveal,
-        commands::files::files_clipboard_write,
-        commands::files::files_clipboard_read,
-        window::settings_window_open,
-        window::window_chrome,
-        window::drag_drop_space,
-        window::compare_window_open,
-        window::image_window_open,
-        window::dialog_window_open,
-        window::dialog_window_close,
-        window::dialog_window_size,
-        window::dialog_window_closable,
-        window::window_show_ready,
-        autostart::autostart_state,
-        autostart::autostart_set,
-        updates::updates_state,
-        updates::updates_check,
-        updates::updates_install,
-        connection::connection_state,
-        connection::connection_retry,
-        commands::settings::device_settings_load,
-        commands::settings::device_settings_save,
-        connection::server_target,
-        connection::server_use_local,
-        connection::server_use_remote,
-        connection::server_local_work,
-        commands::client_files::client_file_read,
-        commands::client_files::client_open_document,
-        commands::client_files::client_open_fetched,
-      ])
-      }
-    })
+    // What the shell answers itself: the windows, the dialogs, the clipboard, the opener, this
+    // client's updater and login item, the device's settings and the connection's own state.
+    // `client::handler` sends every other name to the server; this list is held equal to
+    // `client::forward::LOCAL_COMMANDS` by a test.
+    .invoke_handler(client::handler(tauri::generate_handler![
+      commands::sessions::sessions_open_log,
+      commands::sessions::sessions_open_cwd,
+      commands::sessions::sessions_reveal,
+      commands::files::files_clipboard_write,
+      commands::files::files_clipboard_read,
+      window::settings_window_open,
+      window::window_chrome,
+      window::drag_drop_space,
+      window::compare_window_open,
+      window::image_window_open,
+      window::dialog_window_open,
+      window::dialog_window_close,
+      window::dialog_window_size,
+      window::dialog_window_closable,
+      window::window_show_ready,
+      autostart::autostart_state,
+      autostart::autostart_set,
+      updates::updates_state,
+      updates::updates_check,
+      updates::updates_install,
+      connection::connection_state,
+      connection::connection_retry,
+      commands::settings::device_settings_load,
+      commands::settings::device_settings_save,
+      connection::server_target,
+      connection::server_use_local,
+      connection::server_use_remote,
+      connection::server_local_work,
+      commands::client_files::client_file_read,
+      commands::client_files::client_open_document,
+      commands::client_files::client_open_fetched,
+    ]))
     // build + run instead of .run(context): we need the exit event. This is
     // exactly what Builder::run does — build, then run — plus our callback.
     .build(tauri::generate_context!())
     .expect("error while running tauri application")
-    .run(|app_handle, event| {
-      // Exit, not ExitRequested: the latter only reports an intention and can
-      // be prevented, while agents must be killed once leaving is settled.
-      // The callback runs before cleanup_before_exit, so the app is still whole.
-      if let tauri::RunEvent::Exit = event {
-        if let Some(terminal) = app_handle.try_state::<terminal::service::TerminalHandle>() {
-          terminal::service::shutdown(&terminal);
-        }
-        // The driven sessions' children are agents too, and an app that left
-        // them running would leave a `claude` in the process list every time it
-        // closed. Beside the terminal's rather than inside it: the two workers
-        // share no state, and each kills what it started.
-        if let Some(session) = app_handle.try_state::<session::service::SessionHandle>() {
-          session::service::shutdown(&session);
-        }
-        // And the phone endpoint, so connected phones are told rather than left
-        // to time out.
-        remote::shutdown(app_handle);
-      }
-    });
+    // Nothing to do on exit: the sessions and runs belong to the server, which is detached and goes
+    // on running after the app closes, and the connection ends with the process.
+    .run(|_app_handle, _event| {});
 }

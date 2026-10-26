@@ -1,7 +1,7 @@
-//! The desktop as a client of one `smetanad`: the `split` build (`src-tauri` feature `split`).
+//! The desktop as a client of one `smetanad`.
 //!
-//! Step 5 of `docs/superpowers/specs/2026-10-25-headless-server-design.md`. In this build the shell
-//! starts none of the workers and serves no phones: it holds one iroh connection to a server, and
+//! `docs/superpowers/specs/2026-10-25-headless-server-design.md`. The shell starts none of the workers
+//! and serves no phones: it holds one iroh connection to a server, and
 //!
 //! - `forward.rs` answers every `invoke` that is not the machine's own by sending it over that
 //!   connection and handing the server's reply back;
@@ -9,8 +9,8 @@
 //!   existing names, and tells the webview what state it is in (`state.rs`);
 //! - `spawn.rs` finds the local server and, when there is none, starts one of its own, detached.
 //!
-//! Everything in the app that is not this directory is the same code the release runs. The build
-//! without the feature never compiles it in.
+//! Everything in the app that is not this directory is the machine's own: windows, dialogs, the
+//! clipboard, the opener, the updater and the login item.
 
 mod forward;
 mod link;

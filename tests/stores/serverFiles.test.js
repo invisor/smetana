@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { loadStores } from '../support/stores.js'
 
 const split = (over = {}) => ({
-  mode: 'split',
+  mode: 'client',
   state: 'connected',
   epoch: 1,
   attempt: 0,
@@ -32,7 +32,7 @@ describe('paths for a server', () => {
   })
 
   it('treats a build with no server of its own, and a browser, as local', async () => {
-    const { ipc, stores } = await load({ mode: 'in-process', state: 'connected', epoch: 0 })
+    const { ipc, stores } = await load({ mode: 'browser', state: 'connected', epoch: 0 })
     expect((await stores.serverFiles.pathsForServer(['/x.png'])).paths).toEqual(['/x.png'])
     ipc.fail('connection_state', new Error('no such command'))
     expect(await stores.serverFiles.serverIsRemote()).toBe(false)

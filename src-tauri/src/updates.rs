@@ -12,11 +12,6 @@
 //! nothing to say so. Here the download is a task the app owns, and closing the
 //! window it was started from changes nothing about it.
 //!
-//! And the run gate below **cannot be answered in the front end at all**.
-//! `runsState.runs` is filtered to the active project, so it does not know
-//! whether a run is live in a neighbouring one; the authority is the run
-//! worker's map, and it is reachable only from here.
-//!
 //! # The state travels whole
 //!
 //! [`UpdateState`] is one tagged value — `idle`, `checking`, `available`,
@@ -45,19 +40,13 @@
 //! tick rather than once, which is what makes the switch take effect without a
 //! restart — see [`schedule`].
 //!
-//! # The run gate
+//! # No run gate, since the server is not the app
 //!
-//! Installing restarts the app, and a restart kills the PTY children a run's
-//! sessions started. A run is the app driving itself for hours with nobody
-//! watching, so the install is **refused while any run is live anywhere** —
-//! including in a project nobody is looking at. The refusal names the projects,
-//! because a button that will not act and will not say why sends somebody to
-//! guess.
-//!
-//! What counts as live is every entry in the run worker's map, which is the
-//! same count `runs/awake.rs` holds a power assertion for: a run that has
-//! stopped and is winding down still has a batch in flight, and that batch is
-//! still a process a restart would orphan.
+//! Installing restarts the app, and in the build that held the workers in-process a restart killed the
+//! PTY children a run's sessions started, so the install was refused while any run was live. The
+//! desktop is a client now: the runs and sessions belong to `smetanad`, which is detached and goes on
+//! running while the app is replaced. Replacing the *server* is its own gate (no live work of any kind,
+//! `smetanad`'s restart), not this one.
 //!
 //! # No ACL grant, deliberately
 //!
@@ -67,7 +56,7 @@
 //! or `plugin:process|*`. Those permissions would therefore be required by
 //! nothing, and what they would cost is real: `updater:default` publishes
 //! `plugin:updater|download_and_install` to the webview, which is the one route
-//! by which a page could replace the bundle without passing the run gate above,
+//! by which a page could replace the bundle without passing `updates_install`'s checks,
 //! and `process:allow-restart` is the same shape one step further on. The
 //! capability file's habit is a narrow grant for what is actually called
 //! (`clipboard-manager:allow-write-text`, not `:default`); here the honest
@@ -105,9 +94,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::UpdaterExt;
-use tokio::sync::oneshot;
 
-use crate::runs::service::{Request as RunRequest, RunHandle};
 
 /// How long after start the first check waits. The first seconds of a launch
 /// are the ones somebody is watching: the board's first `bd list` takes two to
@@ -193,16 +180,6 @@ pub enum UpdateError {
     /// it is ready. An outcome rather than a failure.
     #[error("a newer version, {version}, was found and is being downloaded")]
     NewerVersion { version: String },
-    /// The gate. `projects` is the list, joined, because a refusal that cannot
-    /// say where the run is leaves somebody hunting through their projects for
-    /// it.
-    #[error("a run is going in {projects}; installing restarts the app and would end it")]
-    RunLive { projects: String },
-    /// The run worker could not be reached, so nothing here knows whether a run
-    /// is live. Refused rather than allowed: silence is not permission when the
-    /// cost of being wrong is an agent killed mid-task.
-    #[error("{0}")]
-    Runs(String),
     #[error("a development build does not replace itself")]
     DevelopmentBuild,
     /// The install itself would not go through — no permission to write where
@@ -397,18 +374,6 @@ impl Machine {
     }
 }
 
-/// The gate, pure. `live` is every project the run worker holds an entry for.
-///
-/// It knows nothing about which project is active, and that is the point: a run
-/// in a project nobody is looking at refuses exactly as loudly as one on
-/// screen, because a restart ends both.
-fn gate(live: &[String]) -> Result<(), UpdateError> {
-    if live.is_empty() {
-        return Ok(());
-    }
-    Err(UpdateError::RunLive { projects: live.join(", ") })
-}
-
 /// Somebody else's error, framed so the first half of the sentence is ours and
 /// the second is whatever the machine said. The borrowed half is lowercased at
 /// its first letter, because these arrive capitalized ("Could not fetch a valid
@@ -463,12 +428,6 @@ impl Updates {
 /// Whether this build may replace itself at all. See the module header for what
 /// the answer costs when it is wrong.
 fn development() -> bool {
-    // The Smetana Next build shares the release's feed and its signing key, and installing the
-    // release over it would turn it into the other app. It updates when the switch-over makes it
-    // the release, and not before.
-    if cfg!(feature = "split") {
-        return true;
-    }
     cfg!(debug_assertions)
 }
 
@@ -600,16 +559,6 @@ fn fail(app: &AppHandle, updates: &Updates, message: String) {
     announce(app, &state);
 }
 
-/// Which projects hold a run right now, asked of the one thing that knows.
-async fn live_runs(runs: &RunHandle) -> Result<Vec<String>, UpdateError> {
-    let (tx, rx) = oneshot::channel();
-    runs.0
-        .send(RunRequest::LiveProjects(tx))
-        .await
-        .map_err(|_| UpdateError::Runs("the run worker is not running".into()))?;
-    rx.await.map_err(|_| UpdateError::Runs("the run worker did not answer".into()))
-}
-
 /// The first check after start, and one a day after that.
 ///
 /// A task rather than a call in `setup`: the delay is the whole point, and
@@ -664,39 +613,23 @@ pub fn updates_check(app: AppHandle, updates: State<'_, Updates>) -> UpdateState
 /// Replace the bundle and come back on the new one.
 ///
 /// Every way this can decline is a refusal with a reason rather than a press
-/// that did nothing — a development build, nothing downloaded, a run going
-/// somewhere, a run worker that will not answer, an install that would not go
-/// through. A button that will not act and will not say why sends somebody to
+/// that did nothing — a development build, nothing downloaded, an install that
+/// would not go through. A button that will not act and will not say why sends somebody to
 /// guess.
 ///
 /// On success this does not return in any useful sense: the app is on its way
 /// out. `request_restart` and not `restart` — it goes through the event loop
-/// whatever thread it is called from, so `RunEvent::Exit` in `lib.rs` fires and
-/// the PTY children are killed exactly as they are on an ordinary quit. The
+/// whatever thread it is called from, so the exit is the ordinary one. The
 /// direct `restart` skips both when it happens to be called on the main thread,
-/// which would leave every open terminal's process orphaned.
-/// The Next build never installs (see `development`), and the run gate below asks a worker that
-/// build does not have, so its answer is the one a development build gives, without the gate.
-#[cfg(feature = "split")]
+/// which would leave the app's own child processes orphaned.
 #[tauri::command]
-pub async fn updates_install() -> Result<(), UpdateError> {
-    Err(UpdateError::DevelopmentBuild)
-}
-
-#[cfg(not(feature = "split"))]
-#[tauri::command]
-pub async fn updates_install(
-    app: AppHandle,
-    updates: State<'_, Updates>,
-    runs: State<'_, RunHandle>,
-) -> Result<(), UpdateError> {
+pub async fn updates_install(app: AppHandle, updates: State<'_, Updates>) -> Result<(), UpdateError> {
     if development() {
         return Err(UpdateError::DevelopmentBuild);
     }
     if !updates.with(|held| held.machine.installable() && held.staged.is_some()) {
         return Err(UpdateError::NothingReady);
     }
-    gate(&live_runs(&runs).await?)?;
 
     // Ask the feed again before replacing the bundle: a release may have been
     // published since the one waiting here was downloaded, and installing the
@@ -724,13 +657,6 @@ pub async fn updates_install(
     if !updates.with(|held| held.machine.installable() && held.staged.is_some()) {
         return Err(UpdateError::NothingReady);
     }
-    // And the run gate again: the recheck is a network round trip, and a run
-    // started during it was not there when the first gate looked. The restart
-    // below would kill it, so the last look comes immediately before the bytes
-    // are taken. The first gate stays, so a live run is refused without paying
-    // for the round trip.
-    gate(&live_runs(&runs).await?)?;
-
     // Taken out for the blocking call and put back if it fails, and the state
     // is deliberately left at `ready` either way. An install that did not
     // happen has not stopped the update being downloaded and waiting — the
@@ -1105,37 +1031,13 @@ mod tests {
         assert!(!machine.installable());
     }
 
-    #[test]
-    fn no_run_anywhere_lets_the_install_through() {
-        assert_eq!(gate(&[]), Ok(()));
-    }
-
-    /// The case the gate exists for: the run is in a project the person is not
-    /// looking at, which is exactly what the front end cannot see.
-    #[test]
-    fn a_run_in_another_project_refuses_the_install_and_names_it() {
-        let refusal = gate(&["/Users/x/other".to_string()]);
-        assert_eq!(refusal, Err(UpdateError::RunLive { projects: "/Users/x/other".into() }));
-        let said = refusal.expect_err("the gate must refuse").to_string();
-        assert!(said.contains("/Users/x/other"), "the refusal names where the run is: {said}");
-        assert!(said.contains("restarts the app"), "and why it refuses: {said}");
-    }
-
-    #[test]
-    fn every_project_holding_a_run_is_named() {
-        assert_eq!(
-            gate(&["/one".to_string(), "/two".to_string()]),
-            Err(UpdateError::RunLive { projects: "/one, /two".into() })
-        );
-    }
-
     /// The refusals cross the IPC boundary, so their serialization is the
     /// contract rather than the enum.
     #[test]
     fn a_refusal_travels_as_a_kind_and_a_detail() {
-        let json = serde_json::to_string(&UpdateError::RunLive { projects: "/one".into() })
+        let json = serde_json::to_string(&UpdateError::NewerVersion { version: "0.3.0".into() })
             .expect("the refusal must serialize");
-        assert_eq!(json, r#"{"kind":"run_live","detail":{"projects":"/one"}}"#);
+        assert_eq!(json, r#"{"kind":"newer_version","detail":{"version":"0.3.0"}}"#);
         let json = serde_json::to_string(&UpdateError::NothingReady)
             .expect("the refusal must serialize");
         assert_eq!(json, r#"{"kind":"nothing_ready"}"#);

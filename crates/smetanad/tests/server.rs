@@ -397,3 +397,45 @@ fn a_server_asked_to_stop_when_idle_lists_its_work_waits_for_it_and_then_ends_in
         server.shutdown().await;
     });
 }
+
+#[test]
+fn a_server_started_over_an_old_releases_directory_is_the_node_its_phones_already_trust() {
+    use remote_server::{devices, endpoint};
+    common::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("release");
+        std::fs::create_dir_all(old.join("attachments/smetana-abc")).unwrap();
+        // What the in-process release had written: a key, a phone paired by it (no `kind`, as that
+        // release wrote none) and a picture an issue names by path.
+        let key = endpoint::load_or_create_key(&old.join(endpoint::KEY_FILE)).unwrap();
+        std::fs::write(
+            old.join(devices::FILE_NAME),
+            format!(
+                r#"{{"version":1,"devices":[{{"key":"{}","name":"SM-S918B","platform":"android","push_token":null,"push_key":"59","paired_at":1,"last_contact":2}}]}}"#,
+                "81".repeat(32)
+            ),
+        )
+        .unwrap();
+        std::fs::write(old.join("attachments/smetana-abc/shot.png"), b"png").unwrap();
+
+        let mut options = Options::new(old.join("server"));
+        options.bd = Some(bd());
+        options.inherit_from = Some(old.clone());
+        let server = Server::start(options).await.expect("the server starts over the old directory");
+        assert_eq!(server.remote.public_key(), key.public(), "the node id the phone has pinned");
+        let phone = server.remote.devices.all().into_iter().find(|d| d.name == "SM-S918B").expect("the phone is still paired");
+        assert_eq!(phone.kind, DeviceKind::Phone);
+        assert!(old.join("server/attachments/smetana-abc/shot.png").is_file());
+        assert!(old.join("server").join(smetanad::inherit::MARKER).is_file());
+        server.shutdown().await;
+
+        // A second start does not look at the old directory again.
+        std::fs::write(old.join(endpoint::KEY_FILE), "ff".repeat(32)).unwrap();
+        let mut options = Options::new(old.join("server"));
+        options.bd = Some(bd());
+        options.inherit_from = Some(old.clone());
+        let again = Server::start(options).await.expect("restarts");
+        assert_eq!(again.remote.public_key(), key.public());
+        again.shutdown().await;
+    });
+}

@@ -133,7 +133,7 @@ export function subtractPatch(pending, refused) {
 }
 
 /* The two phrases every rejection the shell makes for a call that did not reach the server contains:
-   `NOT_SENT` and `MAYBE_SENT` in `src-tauri/src/split/state.rs`, pinned there by tests. A server's own
+   `NOT_SENT` and `MAYBE_SENT` in `src-tauri/src/client/state.rs`, pinned there by tests. A server's own
    refusal contains neither. Change these and those together. */
 const TRANSPORT_WORDS = /Nothing was changed|may or may not have been made/
 

@@ -720,7 +720,7 @@ export async function searchSemantic(query) {
   }
 }
 
-/* A new connection to the server (the Smetana Next build) is a new reading of the board: what is on
+/* A new connection to the server is a new reading of the board: what is on
    screen is the last one the old connection sent, and no delta was delivered while it was down. The
    same read a project switch ends in, so the board is replaced and not merged. */
 onReconnect(resync)

@@ -45,12 +45,15 @@ pub struct Options {
     /// The skill library's directory (the bundle's resources). Absent, the library is not found and
     /// the agents work without it.
     pub resource_dir: Option<PathBuf>,
+    /// An older release's data directory to take the key, the paired devices and the attachments
+    /// from, once: `inherit.rs`. Never guessed; the desktop that has one names it.
+    pub inherit_from: Option<PathBuf>,
     pub restart_poll: Duration,
 }
 
 impl Options {
     pub fn new(data_dir: PathBuf) -> Self {
-        Self { data_dir, bd: None, resource_dir: None, restart_poll: RESTART_POLL }
+        Self { data_dir, bd: None, resource_dir: None, inherit_from: None, restart_poll: RESTART_POLL }
     }
 }
 
@@ -306,6 +309,12 @@ impl Server {
         create_data_dir(&options.data_dir)?;
         let data_dir = options.data_dir.canonicalize().map_err(|err| format!("{}: {err}", options.data_dir.display()))?;
         let lock = lock_directory(&data_dir)?;
+        // Before the key is read: taking over an older release's data is what decides which key this
+        // is, and a key made first could not be replaced by the one the phones already trust.
+        if let Some(from) = &options.inherit_from {
+            let report = crate::inherit::inherit(from, &data_dir)?;
+            log::info!("inherited from {}: {report:?}", from.display());
+        }
         let key = endpoint::load_or_create_key(&data_dir.join(endpoint::KEY_FILE))?;
 
         // First: a descriptor limit raised after a child exists is no use to that child.

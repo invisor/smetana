@@ -60,7 +60,17 @@ pub fn sidecar(name: &str) -> Option<PathBuf> {
 
 /// The arguments the server is started with, in the order the command line reads them.
 pub fn arguments(config: &Config) -> Vec<std::ffi::OsString> {
-    let mut args: Vec<std::ffi::OsString> = vec!["run".into(), "--data-dir".into(), config.server_dir.clone().into()];
+    // `--inherit-from` names the directory the release that held its workers in-process kept its
+    // device key, paired devices and attachments in, which is this app's own data directory. The
+    // server takes them over once and then ignores the flag (`smetanad::inherit`): passing it on every
+    // start is what lets an update that first starts the server do it with no step of its own.
+    let mut args: Vec<std::ffi::OsString> = vec![
+        "run".into(),
+        "--data-dir".into(),
+        config.server_dir.clone().into(),
+        "--inherit-from".into(),
+        config.identity_dir.clone().into(),
+    ];
     if let Some(bd) = &config.bd {
         args.push("--bd".into());
         args.push(bd.clone().into());
@@ -181,11 +191,21 @@ mod tests {
     }
 
     #[test]
-    fn the_server_is_started_with_its_own_data_directory_and_the_bundles_tools() {
+    fn the_server_is_started_with_its_own_data_directory_the_old_one_to_inherit_and_the_bundles_tools() {
         let args: Vec<String> = arguments(&config()).iter().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(
             args,
-            ["run", "--data-dir", "/data/server", "--bd", "/bundle/bd", "--resource-dir", "/bundle/resources"]
+            [
+                "run",
+                "--data-dir",
+                "/data/server",
+                "--inherit-from",
+                "/data",
+                "--bd",
+                "/bundle/bd",
+                "--resource-dir",
+                "/bundle/resources"
+            ]
         );
     }
 
@@ -194,7 +214,7 @@ mod tests {
         let mut config = config();
         config.bd = None;
         config.resource_dir = None;
-        assert_eq!(arguments(&config).len(), 3);
+        assert_eq!(arguments(&config).len(), 5);
     }
 
     #[test]

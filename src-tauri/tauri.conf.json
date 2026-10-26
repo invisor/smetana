@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "npm run build-smetanad && npm run dev",
+    "beforeBuildCommand": "npm run build-smetanad -- --release && npm run build"
   },
   "app": {
     "windows": [
@@ -39,7 +39,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/bd"],
+    "externalBin": ["binaries/bd", "binaries/smetanad"],
     "resources": [
       "binaries/LICENSE-bd",
       "resources/superpowers/**/*",

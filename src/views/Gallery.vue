@@ -969,7 +969,7 @@ const galleryConnection = [
     restartScheduled: true,
     outdated: { running: '0.0.9', bundled: '0.1.0', canRestart: true, work: [] }
   }
-].map((view) => connectionNotice({ mode: 'split', ...view }))
+].map((view) => connectionNotice({ mode: 'client', ...view }))
 
 const galleryUsage = [
   {

@@ -7,10 +7,9 @@ description = "The server half of the remote protocol: the iroh endpoint, pairin
 publish = false
 
 # No `tauri` and no `tauri-plugin-*`, directly or through a feature, and keep it that way: this crate is
-# what the headless `smetanad` (`crates/smetanad`) serves from, and the desktop shell links the very same
-# code in-process. It was `src-tauri/src/remote/` until the server needed it without a window
-# (docs/superpowers/specs/2026-10-25-headless-server-design.md, "Units" item 3); the shell keeps only the
-# Tauri wrappers of its commands and the code that makes a `Remote` out of an `AppHandle`.
+# what the headless `smetanad` (`crates/smetanad`) serves from, and the desktop shell links it only for
+# the types it shares. It was `src-tauri/src/remote/` until the server needed it without a window
+# (docs/superpowers/specs/2026-10-25-headless-server-design.md, "Units" item 3).
 #
 # A path dependency of both and **no root workspace**, for the reason `crates/remote-protocol` gives; the
 # crate is built and tested on its own (`cd crates/remote-server && cargo test`). Its lock file was seeded

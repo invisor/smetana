@@ -5488,10 +5488,10 @@ const documentTabActive = computed(
 /* A run's own report can be opened in the person's own browser, wherever the server is: the file
    itself when it is on this machine, its bytes over the connection when it is not
    (`stores/serverFiles.js`). Only a run's report, and not any html file: a server hands over nothing
-   but its attachments and its report folders. Offered only in the client build (`connection.mode`
-   is `split`): the release has no command behind it, and is unchanged. */
+   but its attachments and its report folders. Offered only in the desktop app (`connection.mode`
+   is `client`): a browser has no shell to open it with. */
 const reportOpenable = computed(
-  () => connection.mode === 'split' && htmlTabReadable.value && isRunReportPath(project.activeTab)
+  () => connection.mode === 'client' && htmlTabReadable.value && isRunReportPath(project.activeTab)
 )
 
 async function openReportInBrowser(tabPath) {

@@ -1194,7 +1194,7 @@ export async function removeSession(id) {
 /* One `terminal:output` payload, against the number this window has reached.
 
    In this process the worker sends `{ id, seq, data }` for one chunk, and the
-   next one is always `seq + 1`. Through a server (the Smetana Next build) a
+   next one is always `seq + 1`. Through a server a
    payload may be several chunks coalesced, `{ id, from, seq, data }` covering
    `from..=seq`, or a fresh ring, `reset: true`, sent in place of what a slow
    connection could not carry — `crates/remote-server`'s `Outbox`. A payload

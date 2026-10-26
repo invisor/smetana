@@ -2,10 +2,10 @@
 /* Builds the headless server and puts it into src-tauri/binaries under the name Tauri expects of an
    external binary: smetanad-<target-triple>[.exe], the way fetch-bd.mjs lays out bd.
 
-   Only the Smetana Next build needs it (`src-tauri/tauri.next.conf.json` adds it to
-   `bundle.externalBin`); the default build does not name it, so `npm run tauri build` without the
-   overlay never looks for this file and a contributor who only works on the release never has to
-   run this.
+   The desktop app needs it: `src-tauri/tauri.conf.json` lists it in `bundle.externalBin`, and
+   Tauri's build script refuses a missing one, so `cargo test` in `src-tauri` wants it laid out too.
+   `npm run tauri dev` and `npm run tauri build` run this first (`build.beforeDevCommand` and
+   `build.beforeBuildCommand`), and the release workflow runs it as a step of its own.
 
    `--release` builds the optimised binary, which is what a bundle wants; the default is a debug
    build, which is what `tauri dev` wants and is much faster to make. */

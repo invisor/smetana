@@ -20,6 +20,7 @@ pub const STATE_EVENT: &str = "connection:state";
 /// either in it (`transportFailure` in `src/stores/settingsSplit.js`, which holds the same two
 /// strings): change one here and that regex and its test move with it. `every_rejection_...` pins this.
 pub const NOT_SENT: &str = "Nothing was changed";
+#[cfg_attr(not(test), allow(dead_code))]
 pub const MAYBE_SENT: &str = "may or may not have been made";
 
 /// Where the connection is.
@@ -68,8 +69,8 @@ pub struct Outdated {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct View {
-    /// `split`: this build has a connection to draw. The other answer, `in-process`, is the one the
-    /// build without the feature gives and is never produced here.
+    /// Always `client`: the shell has a connection to draw. The other answer, `browser`, is the one
+    /// `mockBackend.js` gives where there is no shell, and is never produced here.
     pub mode: &'static str,
     pub state: Phase,
     /// How many connections have been made so far. A new number with `connected` is what makes the
@@ -92,7 +93,7 @@ pub struct View {
 impl View {
     pub fn new(local: bool) -> View {
         View {
-            mode: "split",
+            mode: "client",
             state: Phase::Connecting,
             epoch: 0,
             attempt: 0,
@@ -229,7 +230,7 @@ mod tests {
         view.epoch = 3;
         view.server = Some(ServerInfo { version: "0.1.0".into(), protocol_major: 1, protocol_minor: 9 });
         let json = serde_json::to_value(&view).unwrap();
-        assert_eq!(json["mode"], "split");
+        assert_eq!(json["mode"], "client");
         assert_eq!(json["state"], "reconnecting");
         assert_eq!(json["epoch"], 3);
         assert_eq!(json["server"]["protocolMajor"], 1);

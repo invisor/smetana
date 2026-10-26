@@ -98,10 +98,12 @@ pub trait Dispatch: Send + Sync {
     }
 }
 
-/// Every command the desktop registers with Tauri, allowlisted or not. It exists
-/// to tell `Forbidden` from `UnknownCommand`, and `lib.rs`'s `generate_handler!`
-/// is the truth it is held to: `desktop_commands_are_those_lib_rs_registers`
-/// fails when the two drift, in either direction. Each of them is either a server command
+/// Every command the desktop's webview can call, allowlisted or not: the shell answers the ones it
+/// registers itself (`src-tauri/src/lib.rs`'s `generate_handler!`) and forwards the rest to the
+/// server. It exists to tell `Forbidden` from `UnknownCommand`, and the shell's registrations are
+/// what it is held to: `remote_bridge_desktop_commands_cover_what_lib_rs_registers` fails when a
+/// registered command is missing here or a listed one is neither registered nor the server's. Each
+/// of them is either a server command
 /// (`remote_protocol::SERVER_COMMANDS`) or a [`CLIENT_COMMANDS`] one, and
 /// `every_desktop_command_is_a_server_command_or_a_client_one` fails for a new command that
 /// is neither, so that choosing is not skipped.

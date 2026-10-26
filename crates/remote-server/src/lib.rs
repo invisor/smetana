@@ -1,6 +1,6 @@
 //! The server half of the remote protocol: an iroh endpoint with a persistent key, pairing by ticket,
-//! and the list of devices allowed to connect. The desktop links it in-process and the headless
-//! `smetanad` serves from it; neither is in this crate, and it has no window.
+//! and the list of devices allowed to connect. The headless
+//! `smetanad` serves from it, and it has no window.
 //!
 //! A paired phone connects, says `Hello`, is answered with `HelloReply` and then
 //! speaks the command bridge (`bridge.rs`) on the same stream: it calls the

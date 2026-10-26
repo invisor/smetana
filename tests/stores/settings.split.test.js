@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadStores } from '../support/stores.js'
 
-/* The client build: the shell says `split`, the device's half is a local file and the server's half
+/* The desktop shell says `client`, the device's half is a local file and the server's half
    is written by patch. The only thing mocked is the IPC transport. */
 let ipc
 let emit
@@ -9,7 +9,7 @@ let nextTick
 let settings
 let connection
 
-const splitState = { mode: 'split', state: 'connected', epoch: 1 }
+const splitState = { mode: 'client', state: 'connected', epoch: 1 }
 
 beforeEach(async () => {
   const loaded = await loadStores()
@@ -220,7 +220,7 @@ describe('a change another client makes while the first read is out', () => {
 
 describe('the release build and a browser', () => {
   it('write one file whole, as before', async () => {
-    ipc.on('connection_state', { mode: 'in-process', state: 'connected', epoch: 0 })
+    ipc.on('connection_state', { mode: 'browser', state: 'connected', epoch: 0 })
     await settings.loadSettings()
     settings.settings.agentPrompt = 'x'
     await wait()
@@ -231,7 +231,7 @@ describe('the release build and a browser', () => {
 })
 
 describe('nothing made for one server is sent to another', () => {
-  const state = (over) => ({ mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local', ...over })
+  const state = (over) => ({ mode: 'client', state: 'connected', epoch: 1, local: true, target: 'local', ...over })
 
   it('drops a change made for the old server when the connection has moved to a new one before it is sent', async () => {
     ipc.on('connection_state', state())
