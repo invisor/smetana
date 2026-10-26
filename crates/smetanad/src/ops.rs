@@ -254,18 +254,35 @@ pub async fn restart(
 pub enum Source {
     /// The running server's own, taken under its environment: what its agents will actually see.
     Server,
-    /// Probed here, in the shell that ran the command, because no server answered.
-    Local,
+    /// Probed here, in the shell that ran the command, because there is no server for this directory:
+    /// it has never run, or it stopped cleanly and took its credential file with it.
+    NoServer,
+    /// Probed here, because a server may exist and did not answer: its credential file is there, but it
+    /// could not be reached, was too slow, or did not know the command (an older build).
+    Unanswered,
 }
 
 impl Source {
     pub fn describe(self) -> &'static str {
         match self {
             Source::Server => "reported by the running server, under its own environment",
-            Source::Local => {
+            Source::NoServer => {
                 "no server is running for this data directory; probed from this shell, whose PATH and login may \
                  differ from the service's"
             }
+            Source::Unanswered => {
+                "a server's credential file is here but the server did not answer (stopped uncleanly, stuck, or an \
+                 older build); probed from this shell, whose PATH and login may differ from the service's"
+            }
+        }
+    }
+
+    /// The word the JSON output carries.
+    pub fn word(self) -> &'static str {
+        match self {
+            Source::Server => "server",
+            Source::NoServer => "none",
+            Source::Unanswered => "unanswered",
         }
     }
 }
@@ -281,13 +298,17 @@ pub async fn status(
         let value = client.call("server_health", json!({})).await.ok()?;
         serde_json::from_value::<smetana_core::health::Report>(value).ok()
     };
-    if let Some(report) = asked.await {
+    let source = if let Some(report) = asked.await {
         return (report, Source::Server);
-    }
+    } else if crate::local::path(data_dir).exists() {
+        Source::Unanswered
+    } else {
+        Source::NoServer
+    };
     let mut options = crate::server::Options::new(data_dir.to_path_buf());
     options.bd = bd;
     let ctx = crate::server::context(&options, std::sync::Arc::new(crate::server::NoSink));
-    (smetana_core::health::report(&ctx).await, Source::Local)
+    (smetana_core::health::report(&ctx).await, source)
 }
 
 /// Renders a health report for a terminal.

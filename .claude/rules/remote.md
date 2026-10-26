@@ -163,18 +163,26 @@ here. Two exist:
   `agents` row per profile, each a `Tool` (`name`, `found`, `path`, `answers`, `version`, `problem`) plus the `PATH` the
   agents inherit. "Answers" is `--version` exiting successfully inside eight seconds; it cannot say an agent is logged in.
   It is separate from `tracker_health`, which moves with the open project. `smetanad status` prints the same report.
-- **`server_restart { mode, confirm }`**, the restart gateway (`gateway.rs`). `mode` is `now`, `when-idle` or `cancel`;
+- **`server_restart { mode, confirmed }`**, the restart gateway (`gateway.rs`). `mode` is `now`, `when-idle` or `cancel`;
   `confirmed` is optional: `null`, or the list of work the person was shown. A restart ends every child the server owns, so
   the rule is **no live work of any kind** (runs, agent sessions, driven sessions, shells) and nothing is ended silently:
   `now` with nothing alive restarts; with work alive it answers `needs-confirmation` with the list and does nothing. The
   person's answer is the same request with `confirmed` set to **that list**, and it covers only the work it names: if
-  anything else is alive the server answers `needs-confirmation` again with the fresh list. The list is also taken again
-  300 ms later, right before the restart runs; work that started in that window is never ended — the restart turns into a
-  `when-idle` one and waits for it. (A bare `confirm: true` was the first draft; it confirmed nothing in particular. The 1.9
-  digest in `versions.json` was recomputed for the change because 1.9 had not left the branch.)
+  anything else is alive the server answers `needs-confirmation` again with the fresh list. A run is named by its **token**
+  (`id`), so confirming one run does not cover another on the same project; a batch of a run (its recorded session, in
+  whichever worker its transport says) carries `owner: <token>` and is covered with that run, including a batch the run starts
+  after the confirmation.
+  A restart is a task of its own that `cancel` stops, wherever it has got to: after the 300 ms that let the reply leave it
+  takes the list, then **refuses the work-creating commands** (`WORK_COMMANDS`: `terminal_create`, `terminal_shell`,
+  `session_start`, `run_start`; a handler error saying the server is restarting) and takes the list once more, so the last
+  look is the one the workers are ended on. If work not covered has appeared, nothing is ended: the refusal is lifted, the
+  restart turns into a `when-idle` one (logged), and every desktop device hears **`server:restart-deferred`** with
+  `{ work }`, what it now waits for — the answer it already had said `restarting`, and this is how that is taken back. A
+  cancel that lands after that point does not undo it (the workers are already being ended). The 1.9 digest in `versions.json`
+  was recomputed for these changes because 1.9 had not left the branch.
   `when-idle` never ends anything: it arms a watch (polled every five seconds) and restarts when the list is empty, however
   long that takes, and answers `scheduled` with what it waits for. `cancel` disarms it (`cancelled` or `nothing-scheduled`).
-  The reply is `{ outcome, scheduled, work: [{ kind, id, project, label }] }` with `outcome` one of `restarting`, `scheduled`,
+  The reply is `{ outcome, scheduled, work: [{ kind, id, project, label, owner }] }` with `outcome` one of `restarting`, `scheduled`,
   `needs-confirmation`, `cancelled`, `nothing-scheduled` and `kind` one of `run`, `agent`, `session`, `shell`. The restart
   itself runs 300 ms after the reply, so it leaves first. A run's own agent is listed beside the run. On the desktop, which has
   no gateway, the command is a handler error and **is left out of the capabilities** in `HelloReply`
@@ -213,7 +221,8 @@ stays so**. It is `smetana-core`, `remote-server` and `remote-protocol` behind a
   terminal; `devices` is `remote_devices`; `revoke` is `remote_device_revoke` (an id is a prefix of at least four characters of
   the key that names one device) and the server closes the live connection with `CLOSE_REVOKED` before it answers; `restart` is
   `server_restart` (`--when-idle`, `--cancel`, `--yes`; `--yes` still prints the list it confirms and sends it back); `status` asks the running server (`server_health`, the report under the service's own environment) and says so, and falls back to
-  a probe in the CLI's own process, saying that instead, only when no server answers.
+  a probe in the CLI's own process, saying so, only when no server answers — and it says which of two: "no server is running"
+  (no credential file) or "the server did not answer" (a credential file is there: stopped uncleanly, stuck, older build).
   There is no second control channel.
 - **Pairing in the terminal.** `smetanad pair --kind desktop|phone` prints the ticket as text and as a QR code
   (`qrcode`, half-block characters) and the confirmation is asked in that terminal; a closed stdin or anything but `y` is no.

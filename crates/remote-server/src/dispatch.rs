@@ -476,7 +476,13 @@ impl Dispatch for Services {
         cmd: &'a str,
         args: Value,
     ) -> BoxFuture<'a, Result<Value, BridgeError>> {
-        Box::pin(async move { self.run(caller, Call::parse(cmd, args)?).await })
+        Box::pin(async move {
+            // A restart is committed: nothing new may start, or it would be ended unlisted.
+            if super::gateway::WORK_COMMANDS.contains(&cmd) && self.gateway.as_ref().is_some_and(|g| g.frozen()) {
+                return Err(BridgeError::Handler(json!("the server is restarting; try again once it is back")));
+            }
+            self.run(caller, Call::parse(cmd, args)?).await
+        })
     }
 
     fn terminal_ring<'a>(&'a self, session: u64) -> BoxFuture<'a, Option<(u64, String)>> {

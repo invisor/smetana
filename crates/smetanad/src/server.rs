@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use remote_server::devices::{self, Devices};
 use remote_server::dispatch::Services;
-use remote_server::gateway::{Gateway, LiveWork, WorkKind as LiveKind};
+use remote_server::gateway::{deferred_payload, Gateway, LiveWork, WorkKind as LiveKind, DEFERRED_EVENT};
 use remote_server::pairing::{self, Pairing};
 use remote_server::{endpoint, Event, Remote, DEFAULT_RELAY_URL};
 use smetana_core::context::{Context, Sink};
@@ -221,18 +221,38 @@ fn create_data_dir(dir: &Path) -> Result<(), String> {
 }
 
 /// The live work a restart would end: runs, agent sessions (PTY), driven sessions and shells.
-/// A run's own agent shows up beside the run as well — the run is the reason and the session is the
-/// process, and a person deciding about a restart wants both on the list.
+///
+/// A run is named by its token, and its current batch (the session the run records, in whichever
+/// worker its transport says) carries that token as its `owner`, so that confirming a run covers the
+/// batches it goes on to start and nothing else on the same project.
 pub async fn live_work(
     runs: &runs::service::RunHandle,
     terminal: &TerminalHandle,
     sessions: &SessionHandle,
 ) -> Vec<LiveWork> {
+    use smetana_core::runs::session::Transport;
     let mut work = Vec::new();
+    // (driven?, session id) -> the run's token
+    let mut owners: std::collections::HashMap<(bool, u64), u64> = std::collections::HashMap::new();
     let (tx, rx) = oneshot::channel();
     if runs.0.send(RunRequest::LiveProjects(tx)).await.is_ok() {
         for project in rx.await.unwrap_or_default() {
-            work.push(LiveWork { kind: LiveKind::Run, id: None, project, label: "run".to_owned() });
+            let (tx, rx) = oneshot::channel();
+            if runs.0.send(RunRequest::State(project, tx)).await.is_err() {
+                continue;
+            }
+            for run in rx.await.unwrap_or_default() {
+                if let Some(session) = run.session {
+                    owners.insert((run.transport != Transport::Pty, session), run.token);
+                }
+                work.push(LiveWork {
+                    kind: LiveKind::Run,
+                    id: Some(run.token),
+                    project: run.project,
+                    label: "run".to_owned(),
+                    owner: None,
+                });
+            }
         }
     }
     let (tx, rx) = oneshot::channel();
@@ -245,7 +265,13 @@ pub async fn live_work(
                 WorkKind::Shell => (LiveKind::Shell, "shell"),
                 _ => (LiveKind::Agent, "agent"),
             };
-            work.push(LiveWork { kind, id: Some(mark.id), project: mark.project, label: label.to_owned() });
+            work.push(LiveWork {
+                kind,
+                id: Some(mark.id),
+                project: mark.project,
+                label: label.to_owned(),
+                owner: owners.get(&(false, mark.id)).copied(),
+            });
         }
     }
     if let Ok(live) = session::commands::plain::live(sessions).await {
@@ -255,6 +281,7 @@ pub async fn live_work(
                 id: Some(found.id),
                 project: found.project,
                 label: found.agent,
+                owner: owners.get(&(true, found.id)).copied(),
             });
         }
     }
@@ -320,12 +347,18 @@ impl Server {
         let gateway = {
             let (runs, terminal, sessions) = (runs.clone(), terminal.clone(), sessions.clone());
             let wake = restart.clone();
+            let told = Arc::downgrade(&remote);
             Gateway::new(
                 Box::new(move || {
                     let (runs, terminal, sessions) = (runs.clone(), terminal.clone(), sessions.clone());
                     Box::pin(async move { live_work(&runs, &terminal, &sessions).await })
                 }),
                 Arc::new(move || wake.notify_one()),
+                Arc::new(move |work| {
+                    if let Some(remote) = told.upgrade() {
+                        remote.hub.publish(DEFERRED_EVENT, &deferred_payload(work));
+                    }
+                }),
                 options.restart_poll,
             )
         };

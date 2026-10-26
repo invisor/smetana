@@ -168,6 +168,7 @@ async fn remote_desktop_capabilities_leave_out_what_the_host_cannot_honour() {
     services.gateway = Some(Gateway::new(
         Box::new(|| Box::pin(async { Vec::new() })),
         Arc::new(|| {}),
+        Arc::new(|_| {}),
         Duration::from_secs(1),
     ));
     h.remote.hub.set_dispatch(Arc::new(services));

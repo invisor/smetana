@@ -1,9 +1,9 @@
 {
-  "args": [{"confirmed":null,"mode":"now"},{"confirmed":[{"id":4,"kind":"agent","label":"claude","project":"/work/smetana"},{"id":null,"kind":"run","label":"run","project":"/work/smetana"}],"mode":"now"},{"confirmed":null,"mode":"when-idle"},{"confirmed":null,"mode":"cancel"}],
+  "args": [{"confirmed":null,"mode":"now"},{"confirmed":[{"id":4,"kind":"agent","label":"claude","owner":null,"project":"/work/smetana"},{"id":1,"kind":"run","label":"run","owner":null,"project":"/work/smetana"}],"mode":"now"},{"confirmed":null,"mode":"when-idle"},{"confirmed":null,"mode":"cancel"}],
   "reply": [
-    {"outcome":"needs-confirmation","scheduled":false,"work":[{"id":null,"kind":"run","label":"run","project":"/work/smetana"},{"id":4,"kind":"agent","label":"claude","project":"/work/smetana"},{"id":2,"kind":"session","label":"codex","project":"/work/smetana"},{"id":7,"kind":"shell","label":"shell","project":"/work/smetana"}]},
-    {"outcome":"scheduled","scheduled":true,"work":[{"id":null,"kind":"run","label":"run","project":"/work/smetana"}]},
-    {"outcome":"restarting","scheduled":false,"work":[{"id":null,"kind":"run","label":"run","project":"/work/smetana"},{"id":4,"kind":"agent","label":"claude","project":"/work/smetana"},{"id":2,"kind":"session","label":"codex","project":"/work/smetana"},{"id":7,"kind":"shell","label":"shell","project":"/work/smetana"}]},
+    {"outcome":"needs-confirmation","scheduled":false,"work":[{"id":1,"kind":"run","label":"run","owner":null,"project":"/work/smetana"},{"id":4,"kind":"agent","label":"claude","owner":null,"project":"/work/smetana"},{"id":2,"kind":"session","label":"codex","owner":1,"project":"/work/smetana"},{"id":7,"kind":"shell","label":"shell","owner":null,"project":"/work/smetana"}]},
+    {"outcome":"scheduled","scheduled":true,"work":[{"id":1,"kind":"run","label":"run","owner":null,"project":"/work/smetana"}]},
+    {"outcome":"restarting","scheduled":false,"work":[{"id":1,"kind":"run","label":"run","owner":null,"project":"/work/smetana"},{"id":4,"kind":"agent","label":"claude","owner":null,"project":"/work/smetana"},{"id":2,"kind":"session","label":"codex","owner":1,"project":"/work/smetana"},{"id":7,"kind":"shell","label":"shell","owner":null,"project":"/work/smetana"}]},
     {"outcome":"cancelled","scheduled":false,"work":[]},
     {"outcome":"nothing-scheduled","scheduled":false,"work":[]}
   ]

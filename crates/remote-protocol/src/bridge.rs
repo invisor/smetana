@@ -295,6 +295,8 @@ pub const SERVER_EVENTS: &[&str] = &[
     "remote:pair-request",
     "remote:devices",
     "remote:pair-ended",
+    // Added in protocol 1.9: a restart that was announced is put off because work appeared.
+    "server:restart-deferred",
 ];
 
 /// Whether a phone may call `cmd`.

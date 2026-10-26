@@ -68,10 +68,7 @@ async fn main() -> ExitCode {
             let (report, source) = ops::status(&data_dir, bd).await;
             if json {
                 let mut value = serde_json::to_value(&report).unwrap_or_default();
-                value["source"] = serde_json::json!(match source {
-                    ops::Source::Server => "server",
-                    ops::Source::Local => "local",
-                });
+                value["source"] = serde_json::json!(source.word());
                 println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default());
             } else {
                 println!("({})\n", source.describe());

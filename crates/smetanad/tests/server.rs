@@ -335,3 +335,44 @@ fn status_asks_the_running_server_and_says_so() {
         server.shutdown().await;
     });
 }
+
+#[test]
+fn once_a_restart_is_committed_nothing_new_may_start() {
+    common::block_on(async {
+        let (_dir, server) = start().await;
+        let client = Client::connect(&server.data_dir).await.unwrap();
+        let reply = client.call("server_restart", json!({ "mode": "now", "confirmed": null })).await.unwrap();
+        assert_eq!(reply["outcome"], "restarting");
+        assert_eq!(tokio::time::timeout(Duration::from_secs(10), server.wait()).await.unwrap(), Exit::Restart);
+        let dir = std::env::temp_dir().to_string_lossy().into_owned();
+        let refused = client.call("terminal_shell", json!({ "project": dir, "cwd": null })).await;
+        assert!(
+            matches!(&refused, Err(BridgeError::Handler(text)) if text.as_str().unwrap_or("").contains("restarting")),
+            "{refused:?}"
+        );
+        server.shutdown().await;
+    });
+}
+
+#[test]
+fn a_stale_credential_is_reported_as_a_server_that_did_not_answer() {
+    common::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let (none, source) = ops::status(dir.path(), Some(dir.path().join("no-bd"))).await;
+        assert_eq!(source, ops::Source::NoServer);
+        assert!(!none.ok);
+        // A credential left by a server that died: the file is there and nothing listens.
+        smetanad::local::write(
+            dir.path(),
+            &smetanad::local::Credential {
+                node: iroh::SecretKey::generate().public(),
+                addrs: vec!["127.0.0.1:9".parse().unwrap()],
+                secret: [1; 32],
+            },
+        )
+        .unwrap();
+        let (_, source) = ops::status(dir.path(), Some(dir.path().join("no-bd"))).await;
+        assert_eq!(source, ops::Source::Unanswered);
+        assert!(!source.describe().contains("no server is running"));
+    });
+}

@@ -106,7 +106,7 @@ fn status_reports_bd_and_git_and_each_agent_and_exits_nonzero_when_something_is_
         .output()
         .expect("status runs");
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON on stdout");
-    assert_eq!(report["source"], "local", "no server is running for this directory, and the output says so");
+    assert_eq!(report["source"], "none", "no server is running for this directory, and the output says so");
     assert_eq!(report["bd"]["answers"], true, "{report}");
     assert_eq!(report["bd"]["version"].as_str().unwrap_or("").contains("1.1.2"), true, "{report}");
     assert_eq!(report["git"]["answers"], true, "{report}");

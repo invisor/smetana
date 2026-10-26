@@ -21,6 +21,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -45,12 +46,41 @@ pub enum WorkKind {
 #[serde(rename_all = "camelCase")]
 pub struct LiveWork {
     pub kind: WorkKind,
-    /// The session's id in its own worker; `None` for a run, which is named by its project.
+    /// A session's id in its own worker; a run's token. A confirmation of one run therefore does not
+    /// cover another started on the same project.
     pub id: Option<u64>,
     pub project: String,
     /// A short phrase for the person: the agent's name, or `shell`.
     pub label: String,
+    /// The token of the run this session belongs to, when it is a run's batch. A session its covered
+    /// run starts after the person confirmed is covered with it: it is the run's to end.
+    #[serde(default)]
+    pub owner: Option<u64>,
 }
+
+impl LiveWork {
+    /// Whether the person's confirmation `covered` includes this work: it is named there, or it is a
+    /// batch of a run that is.
+    pub fn is_covered_by(&self, covered: &[LiveWork]) -> bool {
+        covered.contains(self)
+            || self.owner.is_some_and(|token| {
+                covered.iter().any(|item| item.kind == WorkKind::Run && item.id == Some(token))
+            })
+    }
+}
+
+/// The event a client hears when a restart it was told was happening is put off because work appeared.
+/// Payload: `{ "work": [LiveWork] }`, what the restart now waits for.
+pub const DEFERRED_EVENT: &str = "server:restart-deferred";
+
+/// The payload of [`DEFERRED_EVENT`].
+pub fn deferred_payload(work: &[LiveWork]) -> serde_json::Value {
+    serde_json::json!({ "work": work })
+}
+
+/// The commands that start work. While a restart is committed the host refuses them, so that nothing
+/// can begin between the last look at the list and the end of the workers.
+pub const WORK_COMMANDS: &[&str] = &["terminal_create", "terminal_shell", "session_start", "run_start"];
 
 /// When the person wants the restart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,8 +122,17 @@ pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 pub struct Gateway {
     list: Box<dyn Fn() -> BoxFuture<Vec<LiveWork>> + Send + Sync>,
     restart: Arc<dyn Fn() + Send + Sync>,
+    deferred: Arc<dyn Fn(&[LiveWork]) + Send + Sync>,
     poll: Duration,
+    /// The pending restart: the `when-idle` watch, or a restart on its way out. One slot, so that
+    /// `cancel` withdraws whichever it is.
     watch: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Raised by every cancel. A task remembers the value it was started under and does nothing once
+    /// it has moved, which closes the gap between a cancel and a task that is already past its last
+    /// await.
+    epoch: AtomicU64,
+    /// Set from the last look at the list until the process is gone: work-creating commands are refused.
+    frozen: AtomicBool,
 }
 
 /// How long the reply gets to leave before the restart runs.
@@ -103,9 +142,23 @@ impl Gateway {
     pub fn new(
         list: Box<dyn Fn() -> BoxFuture<Vec<LiveWork>> + Send + Sync>,
         restart: Arc<dyn Fn() + Send + Sync>,
+        deferred: Arc<dyn Fn(&[LiveWork]) + Send + Sync>,
         poll: Duration,
     ) -> Arc<Self> {
-        Arc::new(Self { list, restart, poll, watch: Mutex::new(None) })
+        Arc::new(Self {
+            list,
+            restart,
+            deferred,
+            poll,
+            watch: Mutex::new(None),
+            epoch: AtomicU64::new(0),
+            frozen: AtomicBool::new(false),
+        })
+    }
+
+    /// Whether a restart is committed and work-creating commands are being refused.
+    pub fn frozen(&self) -> bool {
+        self.frozen.load(Ordering::SeqCst)
     }
 
     fn watch(&self) -> std::sync::MutexGuard<'_, Option<tokio::task::JoinHandle<()>>> {
@@ -121,16 +174,19 @@ impl Gateway {
         (self.list)().await
     }
 
-    /// Arms the `when-idle` watch. `force` replaces one that is already armed, for the watch that has
-    /// just fired and found work again.
+    /// Arms the `when-idle` watch. `force` replaces the pending restart, for the restart that has
+    /// just found work again.
     fn arm(self: &Arc<Self>, force: bool) {
         if !force && self.scheduled() {
             return;
         }
-        let gateway = self.clone();
+        let (gateway, epoch) = (self.clone(), self.epoch.load(Ordering::SeqCst));
         let task = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(gateway.poll).await;
+                if gateway.epoch.load(Ordering::SeqCst) != epoch {
+                    return;
+                }
                 if gateway.live_work().await.is_empty() {
                     gateway.fire(Vec::new());
                     return;
@@ -142,27 +198,45 @@ impl Gateway {
         }
     }
 
-    /// Restarts after the reply has left, **if nothing is alive that `covered` does not name**. The
-    /// list is taken again here, right before anything is ended: work that started after the answer
-    /// the person saw was never shown to them. When it has, the restart does not happen; it becomes a
-    /// `when-idle` one and waits for that work too.
+    /// Restarts after the reply has left, **if nothing is alive that `covered` does not name**.
+    ///
+    /// The list is taken again here, and the work-creating commands are then refused and the list taken
+    /// once more, so the last look is the one the workers are ended on: work that started after the
+    /// answer the person saw was never shown to them. When there is such work the restart does not
+    /// happen; it becomes a `when-idle` one, and the clients are told (`DEFERRED_EVENT`). The task is the
+    /// pending restart, so `cancel` stops it, and it does nothing if a cancel came after it began.
     fn fire(self: &Arc<Self>, covered: Vec<LiveWork>) {
-        let gateway = self.clone();
-        tokio::spawn(async move {
+        let (gateway, epoch) = (self.clone(), self.epoch.load(Ordering::SeqCst));
+        let task = tokio::spawn(async move {
             tokio::time::sleep(REPLY_GRACE).await;
-            let now = gateway.live_work().await;
-            if now.iter().all(|work| covered.contains(work)) {
-                (gateway.restart)();
-            } else {
+            let uncovered = |work: &[LiveWork]| work.iter().any(|item| !item.is_covered_by(&covered));
+            let mut now = gateway.live_work().await;
+            if !uncovered(&now) {
+                gateway.frozen.store(true, Ordering::SeqCst);
+                now = gateway.live_work().await;
+            }
+            if gateway.epoch.load(Ordering::SeqCst) != epoch {
+                return;
+            }
+            if uncovered(&now) {
+                gateway.frozen.store(false, Ordering::SeqCst);
                 log::warn!("restart: work started after the answer was given; waiting for it instead");
+                (gateway.deferred)(&now);
                 gateway.arm(true);
+            } else {
+                (gateway.restart)();
             }
         });
+        if let Some(old) = self.watch().replace(task) {
+            old.abort();
+        }
     }
 
     pub async fn request(self: &Arc<Self>, mode: Mode, confirmed: Option<Vec<LiveWork>>) -> Reply {
         match mode {
             Mode::Cancel => {
+                self.epoch.fetch_add(1, Ordering::SeqCst);
+                self.frozen.store(false, Ordering::SeqCst);
                 let task = self.watch().take();
                 let was = task.as_ref().is_some_and(|task| !task.is_finished());
                 if let Some(task) = task {
@@ -175,7 +249,7 @@ impl Gateway {
                 let work = self.live_work().await;
                 // Covered: everything alive now is something the person has seen and said yes to.
                 let covered = confirmed.unwrap_or_default();
-                if work.iter().all(|item| covered.contains(item)) {
+                if work.iter().all(|item| item.is_covered_by(&covered)) {
                     self.fire(covered);
                     Reply { outcome: Outcome::Restarting, scheduled: self.scheduled(), work }
                 } else {
@@ -201,19 +275,21 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn work() -> LiveWork {
-        LiveWork { kind: WorkKind::Shell, id: Some(3), project: "/p".into(), label: "shell".into() }
+        LiveWork { kind: WorkKind::Shell, id: Some(3), project: "/p".into(), label: "shell".into(), owner: None }
     }
 
     struct Rig {
         gateway: Arc<Gateway>,
         alive: Arc<Mutex<Vec<LiveWork>>>,
         restarts: Arc<AtomicUsize>,
+        deferred: Arc<AtomicUsize>,
     }
 
     fn rig(initial: Vec<LiveWork>) -> Rig {
         let alive = Arc::new(Mutex::new(initial));
         let restarts = Arc::new(AtomicUsize::new(0));
-        let (list, count) = (alive.clone(), restarts.clone());
+        let deferred = Arc::new(AtomicUsize::new(0));
+        let (list, count, told) = (alive.clone(), restarts.clone(), deferred.clone());
         let gateway = Gateway::new(
             Box::new(move || {
                 let list = list.clone();
@@ -222,9 +298,12 @@ mod tests {
             Arc::new(move || {
                 count.fetch_add(1, Ordering::SeqCst);
             }),
+            Arc::new(move |_| {
+                told.fetch_add(1, Ordering::SeqCst);
+            }),
             Duration::from_millis(50),
         );
-        Rig { gateway, alive, restarts }
+        Rig { gateway, alive, restarts, deferred }
     }
 
     #[tokio::test(start_paused = true)]
@@ -282,7 +361,7 @@ mod tests {
     }
 
     fn other() -> LiveWork {
-        LiveWork { kind: WorkKind::Agent, id: Some(9), project: "/p".into(), label: "claude".into() }
+        LiveWork { kind: WorkKind::Agent, id: Some(9), project: "/p".into(), label: "claude".into(), owner: None }
     }
 
     #[tokio::test(start_paused = true)]
@@ -336,5 +415,105 @@ mod tests {
         rig.alive.lock().unwrap().clear();
         tokio::time::sleep(Duration::from_secs(1)).await;
         assert_eq!(rig.restarts.load(Ordering::SeqCst), 1);
+    }
+
+    fn run(token: u64) -> LiveWork {
+        LiveWork { kind: WorkKind::Run, id: Some(token), project: "/p".into(), label: "run".into(), owner: None }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancel_reaches_a_restart_that_is_already_on_its_way() {
+        // (a) the watch saw an empty list and fired; the person cancels inside the grace period.
+        let rig = rig(vec![work()]);
+        rig.gateway.request(Mode::WhenIdle, None).await;
+        rig.alive.lock().unwrap().clear();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let reply = rig.gateway.request(Mode::Cancel, None).await;
+        assert_eq!(reply.outcome, Outcome::Cancelled, "an in-flight restart counts as scheduled");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 0);
+        // And a `now` that has been answered but not yet run is withdrawn the same way.
+        assert_eq!(rig.gateway.request(Mode::Now, None).await.outcome, Outcome::Restarting);
+        assert_eq!(rig.gateway.request(Mode::Cancel, None).await.outcome, Outcome::Cancelled);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cancelled_restart_is_not_re_armed_by_work_that_appears_afterwards() {
+        // (b) same window, and work appears too: the restart the person withdrew must not come back.
+        let rig = rig(vec![work()]);
+        rig.gateway.request(Mode::WhenIdle, None).await;
+        rig.alive.lock().unwrap().clear();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        rig.alive.lock().unwrap().push(other());
+        assert_eq!(rig.gateway.request(Mode::Cancel, None).await.outcome, Outcome::Cancelled);
+        tokio::time::sleep(REPLY_GRACE * 2).await;
+        rig.alive.lock().unwrap().clear();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 0);
+        assert_eq!(rig.gateway.request(Mode::Cancel, None).await.outcome, Outcome::NothingScheduled);
+        assert!(!rig.gateway.frozen());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn work_is_refused_from_the_last_look_and_a_late_arrival_lifts_it() {
+        let rig = rig(Vec::new());
+        rig.gateway.request(Mode::Now, None).await;
+        tokio::time::sleep(REPLY_GRACE + Duration::from_millis(10)).await;
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 1);
+        assert!(rig.gateway.frozen(), "once committed, work-creating commands are refused");
+
+        // Work that gets in between the first look and the freeze is caught by the second one.
+        let rig = rig_with_arrival();
+        rig.gateway.request(Mode::Now, None).await;
+        tokio::time::sleep(REPLY_GRACE * 2).await;
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 0, "the final look found it");
+        assert!(!rig.gateway.frozen(), "and the freeze is lifted");
+        assert_eq!(rig.deferred.load(Ordering::SeqCst), 1, "the clients are told it was put off");
+    }
+
+    /// A list that is empty the first time it is read and has a session in it from the second.
+    fn rig_with_arrival() -> Rig {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let rig = rig(Vec::new());
+        let (restarts, told) = (rig.restarts.clone(), rig.deferred.clone());
+        let (count, deferred) = (restarts.clone(), told.clone());
+        let gateway = Gateway::new(
+            Box::new(move || {
+                let first = reads.fetch_add(1, Ordering::SeqCst) == 0;
+                Box::pin(async move { if first { Vec::new() } else { vec![other()] } })
+            }),
+            Arc::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+            }),
+            Arc::new(move |_| {
+                deferred.fetch_add(1, Ordering::SeqCst);
+            }),
+            Duration::from_secs(3600),
+        );
+        Rig { gateway, alive: rig.alive, restarts, deferred: told }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_confirmation_of_one_run_does_not_cover_another_on_the_same_project() {
+        let rig = rig(vec![run(2)]);
+        let reply = rig.gateway.request(Mode::Now, Some(vec![run(1)])).await;
+        assert_eq!(reply.outcome, Outcome::NeedsConfirmation);
+        assert_eq!(rig.gateway.request(Mode::Now, Some(vec![run(2)])).await.outcome, Outcome::Restarting);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_session_of_a_covered_run_is_covered_with_it() {
+        let batch = LiveWork { owner: Some(7), ..other() };
+        let rig = rig(vec![run(7), batch.clone()]);
+        let reply = rig.gateway.request(Mode::Now, Some(vec![run(7)])).await;
+        assert_eq!(reply.outcome, Outcome::Restarting, "the batch is the run's to end");
+        let rig = rig_batches(run(8), batch);
+        assert_eq!(rig.gateway.request(Mode::Now, Some(vec![run(8)])).await.outcome, Outcome::NeedsConfirmation);
+    }
+
+    fn rig_batches(run: LiveWork, batch: LiveWork) -> Rig {
+        rig(vec![run, batch])
     }
 }

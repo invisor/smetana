@@ -946,14 +946,19 @@ fn health_with_problems() -> smetana_core::health::Report {
     report
 }
 
+fn restart_work() -> Vec<crate::gateway::LiveWork> {
+    use crate::gateway::{LiveWork, WorkKind};
+    vec![
+        LiveWork { kind: WorkKind::Run, id: Some(1), project: "/work/smetana".into(), label: "run".into(), owner: None },
+        LiveWork { kind: WorkKind::Agent, id: Some(4), project: "/work/smetana".into(), label: "claude".into(), owner: None },
+        LiveWork { kind: WorkKind::Session, id: Some(2), project: "/work/smetana".into(), label: "codex".into(), owner: Some(1) },
+        LiveWork { kind: WorkKind::Shell, id: Some(7), project: "/work/smetana".into(), label: "shell".into(), owner: None },
+    ]
+}
+
 fn restart_replies() -> Vec<Value> {
-    use crate::gateway::{LiveWork, Outcome, Reply, WorkKind};
-    let work = vec![
-        LiveWork { kind: WorkKind::Run, id: None, project: "/work/smetana".into(), label: "run".into() },
-        LiveWork { kind: WorkKind::Agent, id: Some(4), project: "/work/smetana".into(), label: "claude".into() },
-        LiveWork { kind: WorkKind::Session, id: Some(2), project: "/work/smetana".into(), label: "codex".into() },
-        LiveWork { kind: WorkKind::Shell, id: Some(7), project: "/work/smetana".into(), label: "shell".into() },
-    ];
+    use crate::gateway::{LiveWork, Outcome, Reply};
+    let work = restart_work();
     let reply = |outcome, scheduled, work: &[LiveWork]| json_of(&Reply { outcome, scheduled, work: work.to_vec() });
     vec![
         reply(Outcome::NeedsConfirmation, false, &work),
@@ -977,6 +982,7 @@ fn server_payloads(map: &mut BTreeMap<&'static str, Vec<Value>>) {
             output_payload(3, 12, 12, "aGk=", true),
         ],
     );
+    map.insert("server:restart-deferred", vec![crate::gateway::deferred_payload(&restart_work())]);
     map.insert(
         "terminal:log",
         vec![smetana_core::terminal::service::log_payload(3, &json_of(&log_entries()))],
