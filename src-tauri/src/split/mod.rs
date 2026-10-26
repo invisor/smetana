@@ -17,15 +17,17 @@ mod link;
 mod migrate;
 mod spawn;
 mod state;
+mod target;
 
 use std::sync::Arc;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
 pub use forward::handler;
 use link::Link;
 use spawn::Config;
+use target::Target;
 
 /// Where the local server keeps what it keeps, below the app's own data directory: a directory that
 /// belongs to the server alone, so the shell's files (the window's geometry, its device key) and the
@@ -49,11 +51,14 @@ fn config(app: &AppHandle) -> Result<Config, String> {
 /// can make a call.
 pub fn start(app: &AppHandle) {
     let sink_app = app.clone();
-    let link = Link::new(
+    // Which server this device uses is read before the first attempt: a person who chose a remote one
+    // must not see the local one started for a moment first.
+    let chosen = app.path().app_data_dir().map(|dir| target::load(&dir)).unwrap_or(Target::Local);
+    let link = Link::with_target(
         Arc::new(move |name, payload| {
             let _ = sink_app.emit(name, payload);
         }),
-        true,
+        chosen,
     );
     app.manage(link.clone());
     match config(app) {
@@ -95,4 +100,60 @@ pub fn cancel_pairing(app: &AppHandle) {
             let _ = link.call("remote_pair_cancel", serde_json::json!({})).await;
         });
     }
+}
+
+/// `server_target`: which server this device uses, and whether it is connected to it.
+pub fn target_view(app: &AppHandle) -> Value {
+    match link(app) {
+        Some(link) => json!({ "target": serde_json::to_value(link.target()).unwrap_or(Value::Null) }),
+        None => Value::Null,
+    }
+}
+
+fn identity_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path().app_data_dir().map_err(|err| err.to_string())
+}
+
+/// `server_use_local`: back to the server on this machine, which is started again if it is not
+/// running (the loop does that, not this call).
+pub fn use_local(app: &AppHandle) -> Result<Value, String> {
+    let link = link(app).ok_or("The connection has not been set up.")?;
+    target::save(&identity_dir(app)?, &Target::Local)?;
+    link.set_target(Target::Local);
+    Ok(target_view(app))
+}
+
+/// The live work of the server on this machine, for the question the switch asks: empty when this
+/// device is not using it or cannot reach it (a work list is no reason to refuse a switch).
+pub async fn local_work(app: &AppHandle) -> Value {
+    let Some(link) = link(app) else { return json!([]) };
+    if !link.target().is_local() {
+        return json!([]);
+    }
+    link.call("server_work", json!({})).await.unwrap_or_else(|_| json!([]))
+}
+
+/// `server_use_remote`: pairs with the server a desktop ticket names, and moves this device to it.
+///
+/// Pairing comes first and is the only step that can fail the whole switch: a bad or spent ticket
+/// leaves the device exactly where it was. Then, if the person asked for it, the local server is told
+/// to stop once its work is done (`stop-when-idle`, which ends nothing); that is best effort, and its
+/// outcome is reported rather than made a condition. The local server is otherwise left running.
+pub async fn use_remote(app: &AppHandle, ticket: String, stop_local: bool) -> Result<Value, String> {
+    let link = link(app).ok_or("The connection has not been set up.")?;
+    let dir = identity_dir(app)?;
+    let record = smetanad::client::Client::pair_remote(&dir, &ticket).await.map_err(|err| err.to_string())?;
+    let mut stop = Value::Null;
+    if stop_local && link.target().is_local() {
+        stop = match link.call("server_restart", json!({ "mode": "stop-when-idle", "confirmed": null })).await {
+            Ok(reply) => reply.get("outcome").cloned().unwrap_or(Value::Null),
+            Err(why) => json!({ "failed": why }),
+        };
+    }
+    let target = Target::remote(record);
+    target::save(&dir, &target)?;
+    link.set_target(target);
+    let mut answer = target_view(app);
+    answer["localStop"] = stop;
+    Ok(answer)
 }

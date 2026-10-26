@@ -430,6 +430,13 @@ pub fn run() {
           remote::commands::remote_device_revoke,
           connection::connection_state,
           connection::connection_retry,
+          connection::server_target,
+          connection::server_use_local,
+          connection::server_use_remote,
+          connection::server_local_work,
+          commands::client_files::client_file_read,
+          commands::client_files::client_open_document,
+          commands::client_files::client_open_fetched,
         ]
       }
       #[cfg(feature = "split")]
@@ -459,6 +466,13 @@ pub fn run() {
         connection::connection_retry,
         commands::settings::device_settings_load,
         commands::settings::device_settings_save,
+        connection::server_target,
+        connection::server_use_local,
+        connection::server_use_remote,
+        connection::server_local_work,
+        commands::client_files::client_file_read,
+        commands::client_files::client_open_document,
+        commands::client_files::client_open_fetched,
       ])
       }
     })

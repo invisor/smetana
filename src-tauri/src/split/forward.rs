@@ -48,6 +48,13 @@ pub const LOCAL_COMMANDS: &[&str] = &[
     "connection_retry",
     "device_settings_load",
     "device_settings_save",
+    "server_target",
+    "server_use_local",
+    "server_use_remote",
+    "server_local_work",
+    "client_file_read",
+    "client_open_document",
+    "client_open_fetched",
 ];
 
 /// Client commands the split build does not have, and says so: `tracker_access_reset` resets the
@@ -124,6 +131,9 @@ const READS: &[&str] = &[
     "image_read",
     "attachments_survey",
     "remote_devices",
+    "server_work",
+    "folders_list",
+    "server_file_read",
 ];
 
 /// Whether `cmd` may wait for the first connection.
