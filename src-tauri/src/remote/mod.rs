@@ -109,6 +109,9 @@ pub fn start(app: AppHandle) {
 /// the minutes it has left. Called from the window's own `Destroyed` event,
 /// since the page's unmount hooks do not run when the OS window is torn down.
 pub fn cancel_pairing(app: &AppHandle) {
+    // The split build keeps no pairing of its own: the code is the server's.
+    #[cfg(feature = "split")]
+    crate::split::cancel_pairing(app);
     if let Some(remote) = app.try_state::<Arc<Remote>>() {
         remote.pairing.cancel();
     }

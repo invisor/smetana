@@ -62,7 +62,7 @@ impl Sink for TauriSink {
 /// `tauri::utils::platform::current_exe` rather than `std::env::current_exe`, again because it is what
 /// the plugin calls: it answers with the path captured at start-up, before anything could have moved,
 /// and it resolves an AppImage's mount point back to the image.
-fn sidecar_path() -> Option<PathBuf> {
+pub(crate) fn sidecar_path() -> Option<PathBuf> {
     let exe = tauri::utils::platform::current_exe().ok()?;
     let dir = exe.parent()?;
     // A test binary lives one level below the sidecar, in `target/debug/deps`. The plugin steps up out

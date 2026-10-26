@@ -104,11 +104,13 @@ async fn remote_bridge_without_a_dispatcher_answers_internal_for_an_allowed_comm
 fn remote_bridge_desktop_commands_are_those_lib_rs_registers() {
     let lib = include_str!("../../../../src-tauri/src/lib.rs");
     let body = &lib[lib.find("generate_handler![").expect("lib.rs registers commands")..];
-    let body = &body[..body.find("])").unwrap()];
+    // The first list is the in-process build's (the `split` build registers its own after it, and it is
+    // held to another list in `src-tauri`): it ends at the first line that is only the closing bracket.
     let mut registered: Vec<&str> = body
         .lines()
         .skip(1)
         .map(str::trim)
+        .take_while(|line| !line.starts_with(']'))
         .filter(|line| !line.is_empty() && !line.starts_with("//"))
         .map(|line| line.trim_end_matches(',').rsplit("::").next().unwrap())
         .collect();

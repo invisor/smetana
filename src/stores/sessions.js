@@ -22,6 +22,7 @@
    same answer `files.js` and `git.js` give and for the same reason. */
 import { reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { onReconnect } from './connection.js'
 
 export const sessionsState = reactive({
   /* Newest first. `agentRows` in the terminal store is still oldest first, but
@@ -227,3 +228,6 @@ export async function deleteSessionTranscript(path) {
   if (at >= 0) sessionsState.sessions.splice(at, 1)
   return null
 }
+
+/* The history list, read again after a new connection. */
+onReconnect(() => loadSessionHistory(sessionsState.project))

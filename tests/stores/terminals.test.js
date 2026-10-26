@@ -837,6 +837,57 @@ describe('the output stream', () => {
   })
 })
 
+describe('the output stream through a server', () => {
+  it('draws a coalesced payload that starts where the window stopped', async () => {
+    const { stores, emit, nextTick } = await ready()
+    const seen = []
+    stores.terminals.subscribeOutput((bytes) => seen.push(new TextDecoder().decode(bytes)))
+    await stores.terminals.attach(1)
+    await emit('terminal:output', { id: 1, from: 1, seq: 3, data: b64('abc') })
+    await emit('terminal:output', { id: 1, from: 4, seq: 4, data: b64('d') })
+    await nextTick()
+    expect(seen.slice(1)).toEqual(['abc', 'd'])
+  })
+
+  it('replaces the terminal on a reset, whatever it held', async () => {
+    const { stores, emit, nextTick } = await ready()
+    const seen = []
+    stores.terminals.subscribeOutput((bytes, meta) => seen.push({ text: new TextDecoder().decode(bytes), meta }))
+    await stores.terminals.attach(1)
+    await emit('terminal:output', { id: 1, from: 40, seq: 40, reset: true, data: b64('fresh ring') })
+    await emit('terminal:output', { id: 1, from: 41, seq: 41, data: b64('!') })
+    await nextTick()
+    expect(seen[1]).toEqual({ text: 'fresh ring', meta: { reset: true } })
+    expect(seen[2].text).toBe('!')
+  })
+
+  it('drops a payload the attach answer already covers', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    const seen = []
+    stores.terminals.subscribeOutput((bytes) => seen.push(new TextDecoder().decode(bytes)))
+    ipc.on('terminal_attach', { data: b64('ring'), seq: 5, log: [], logTrimmed: 0 })
+    await stores.terminals.attach(1)
+    await emit('terminal:output', { id: 1, from: 3, seq: 5, data: b64('old') })
+    await nextTick()
+    expect(seen).toEqual(['ring'])
+  })
+
+  it('holds output that arrives while an attach is outstanding and judges it by the answer', async () => {
+    const { ipc, stores, emit } = await ready()
+    const seen = []
+    stores.terminals.subscribeOutput((bytes) => seen.push(new TextDecoder().decode(bytes)))
+    await stores.terminals.attach(1)
+    ipc.on('terminal_attach', async () => {
+      await emit('terminal:output', { id: 1, from: 8, seq: 8, data: b64('after') })
+      await emit('terminal:output', { id: 1, from: 6, seq: 7, data: b64('covered') })
+      return { data: b64('ring7'), seq: 7, log: [], logTrimmed: 0 }
+    })
+    await stores.terminals.attach(1)
+    await vi.waitFor(() => expect(seen.at(-1)).toBe('after'))
+    expect(seen.slice(1)).toEqual(['ring7', 'after'])
+  })
+})
+
 describe('detaching', () => {
   it('stops the stream but does not forget the selected agent', async () => {
     const { stores } = await ready()

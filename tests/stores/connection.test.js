@@ -1,0 +1,170 @@
+import { describe, expect, it, vi } from 'vitest'
+import { loadStores } from '../support/stores.js'
+
+const split = (over = {}) => ({
+  mode: 'split',
+  state: 'connected',
+  epoch: 1,
+  attempt: 0,
+  reason: null,
+  local: true,
+  server: { version: '0.1.0', protocolMajor: 1, protocolMinor: 9 },
+  outdated: null,
+  ...over
+})
+
+describe('the connection state', () => {
+  it('reads as connected and not stale in the build with no server of its own', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('connection_state', { mode: 'in-process', state: 'connected', epoch: 0 })
+    await stores.connection.initConnection()
+    expect(stores.connection.connection.mode).toBe('in-process')
+    expect(stores.connection.stale.value).toBe(false)
+  })
+
+  it('stays harmless when there is nobody to ask, as in a browser', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.fail('connection_state', new Error('no such command'))
+    await stores.connection.initConnection()
+    expect(stores.connection.connection.state).toBe('connected')
+    expect(stores.connection.stale.value).toBe(false)
+  })
+
+  it('follows the shell through a loss and back, marking the data stale while it is down', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    ipc.on('connection_state', split())
+    await stores.connection.initConnection()
+    expect(stores.connection.stale.value).toBe(false)
+
+    await emit('connection:state', split({ state: 'reconnecting', reason: 'the server stopped' }))
+    expect(stores.connection.connection.state).toBe('reconnecting')
+    expect(stores.connection.connection.reason).toBe('the server stopped')
+    expect(stores.connection.stale.value).toBe(true)
+
+    await emit('connection:state', split({ epoch: 2 }))
+    expect(stores.connection.stale.value).toBe(false)
+  })
+
+  it('knows every state the shell names as stale except connected', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    ipc.on('connection_state', split())
+    await stores.connection.initConnection()
+    for (const state of ['connecting', 'reconnecting', 'incompatible', 'unpaired']) {
+      await emit('connection:state', split({ state }))
+      expect(stores.connection.stale.value, state).toBe(true)
+    }
+  })
+
+  it('lets an event that arrived before the first read stand against it', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    ipc.on('connection_state', async () => {
+      await emit('connection:state', split({ epoch: 2 }))
+      return split({ state: 'connecting', epoch: 0 })
+    })
+    await stores.connection.initConnection()
+    expect(stores.connection.connection.epoch).toBe(2)
+    expect(stores.connection.connection.state).toBe('connected')
+  })
+
+  it('ignores a view older than the one it holds', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    ipc.on('connection_state', split({ epoch: 3 }))
+    await stores.connection.initConnection()
+    await emit('connection:state', split({ epoch: 2, state: 'reconnecting' }))
+    expect(stores.connection.connection.state).toBe('connected')
+  })
+})
+
+describe('resynchronising after a connection', () => {
+  it('runs every registered read after a new connection and not for the same one twice', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    const hook = vi.fn(async () => {})
+    stores.connection.onReconnect(hook)
+    ipc.on('connection_state', split())
+    await stores.connection.initConnection()
+    expect(hook, 'the app mounted onto a connection that was already up').not.toHaveBeenCalled()
+
+    await emit('connection:state', split({ state: 'reconnecting' }))
+    expect(hook).not.toHaveBeenCalled()
+    await emit('connection:state', split({ epoch: 2 }))
+    await vi.waitFor(() => expect(hook).toHaveBeenCalledTimes(1))
+    await emit('connection:state', split({ epoch: 2, outdated: null }))
+    expect(hook).toHaveBeenCalledTimes(1)
+  })
+
+  it('resyncs the first connection when the app mounted before it was made', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    const hook = vi.fn(async () => {})
+    stores.connection.onReconnect(hook)
+    ipc.on('connection_state', split({ state: 'connecting', epoch: 0 }))
+    await stores.connection.initConnection()
+    await emit('connection:state', split({ epoch: 1 }))
+    await vi.waitFor(() => expect(hook).toHaveBeenCalledTimes(1))
+  })
+
+  it('never resyncs in the build with no server of its own', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    const hook = vi.fn(async () => {})
+    stores.connection.onReconnect(hook)
+    ipc.on('connection_state', { mode: 'in-process', state: 'connected', epoch: 0 })
+    await stores.connection.initConnection()
+    await emit('connection:state', { mode: 'in-process', state: 'connected', epoch: 1 })
+    expect(hook).not.toHaveBeenCalled()
+  })
+
+  it('lets one failing read leave the others to run', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const good = vi.fn(async () => {})
+    stores.connection.onReconnect(async () => {
+      throw new Error('boom')
+    })
+    stores.connection.onReconnect(good)
+    ipc.on('connection_state', split({ state: 'connecting', epoch: 0 }))
+    await stores.connection.initConnection()
+    await emit('connection:state', split())
+    await vi.waitFor(() => expect(good).toHaveBeenCalled())
+    error.mockRestore()
+  })
+
+  it('reads the board again through the tracker store after a new connection', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    ipc.on('connection_state', split())
+    ipc.on('tracker_resync', { issues: [], generation: 4, health: null, project: null })
+    await stores.connection.initConnection()
+    await emit('connection:state', split({ epoch: 2 }))
+    await vi.waitFor(() => expect(ipc.calls('tracker_resync')).toHaveLength(1))
+  })
+})
+
+describe('the commands the strip presses', () => {
+  it('asks to connect now', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('connection_retry', null)
+    await stores.connection.retryConnection()
+    expect(ipc.calls('connection_retry')).toHaveLength(1)
+  })
+
+  it('confirms a restart with the list the person was shown, and only that', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    const work = [{ kind: 'run', id: 'r1', project: '/p', label: 'a run', owner: null }]
+    ipc.on('connection_state', split({ outdated: { running: '0.0.9', bundled: '0.1.0', work, canRestart: true } }))
+    ipc.on('server_restart', { outcome: 'restarting', scheduled: false, work })
+    await stores.connection.initConnection()
+    await stores.connection.restartServer('now')
+    expect(ipc.calls('server_restart')).toEqual([{ mode: 'now', confirmed: work }])
+    await emit('connection:state', split())
+  })
+
+  it('remembers that a restart is waiting for the work to finish, and that it was withdrawn', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('connection_state', split({ outdated: { running: '0.0.9', bundled: '0.1.0', work: [], canRestart: true } }))
+    ipc.on('server_restart', ({ mode }) => ({ outcome: mode === 'cancel' ? 'cancelled' : 'scheduled', scheduled: true, work: [] }))
+    await stores.connection.initConnection()
+    await stores.connection.restartServer('when-idle')
+    expect(stores.connection.connection.restartScheduled).toBe(true)
+    expect(ipc.calls('server_restart')[0].confirmed).toBe(null)
+    await stores.connection.restartServer('cancel')
+    expect(stores.connection.connection.restartScheduled).toBe(false)
+  })
+})

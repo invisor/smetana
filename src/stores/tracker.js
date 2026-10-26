@@ -9,6 +9,7 @@ import { orderCards } from '../components/kanban/cardOrder.js'
    project's own `agents` block a session it might start would be — see
    `searchSemantic` below. */
 import { settings } from './settings.js'
+import { onReconnect } from './connection.js'
 
 /* bd and the design system call the same thing by different names. RESERVED in
    status.js is ready/running/done, in bd it is open/in_progress/closed. The only
@@ -718,3 +719,8 @@ export async function searchSemantic(query) {
     searchState.pending = false
   }
 }
+
+/* A new connection to the server (the Smetana Next build) is a new reading of the board: what is on
+   screen is the last one the old connection sent, and no delta was delivered while it was down. The
+   same read a project switch ends in, so the board is replaced and not merged. */
+onReconnect(resync)

@@ -37,6 +37,7 @@ export {
 
 // shell
 export { default as AppShell } from './shell/AppShell.vue'
+export { default as ConnectionBanner } from './shell/ConnectionBanner.vue'
 export { default as CommandPalette } from './shell/CommandPalette.vue'
 export { default as Panel } from './shell/Panel.vue'
 export { default as ProjectRail } from './shell/ProjectRail.vue'

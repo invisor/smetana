@@ -1180,6 +1180,10 @@ export function installMockBackend() {
        here: with the state unavailable the About tab draws no control at all,
        so neither can be reached in the ordinary course. */
     if (command === 'updates_state') return null
+    /* A browser has no server to be away from: the shape the build without a server of its own
+       answers, which `stores/connection.js` reads as nothing to draw. `connection_retry` is a write
+       and falls through to the refusal below; nothing offers it while the state is connected. */
+    if (command === 'connection_state') return { mode: 'in-process', state: 'connected', epoch: 0 }
     /* The Devices tab's reads. A browser has no desktop to pair with, so these
        answer with two phones that look like what the real list holds, and a
        ticket of the right shape: it begins `smetana1:` and is lower-case base32 the
