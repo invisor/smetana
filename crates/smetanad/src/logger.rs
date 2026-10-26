@@ -24,8 +24,8 @@ impl Log for Stderr {
 
 /// Crates whose `info` is per-packet chatter. Names as they appear in a `log` target, so with
 /// underscores; each is matched as a whole path component, which is why `iroh` does not cover
-/// `iroh_relay` and both are listed. The shell's own logger in `src-tauri/src/lib.rs` keeps the same list.
-const NOISY: &[&str] = &[
+/// `iroh_relay` and both are listed. The shell's logger in `src-tauri/src/lib.rs` reads this list too.
+pub const NOISY: &[&str] = &[
     "iroh",
     "iroh_base",
     "iroh_dns",
@@ -47,7 +47,7 @@ const NOISY: &[&str] = &[
 /// `tracing` is built with its `log` feature, which turns every span into a record whose target is
 /// `tracing::span` or `tracing::span::active` and whose *module path* names the crate that opened
 /// it. So `poll_send` and `handle_message` arrive with a target that says nothing about iroh.
-const SPAN_TARGETS: &[&str] = &["tracing::span", "tracing::span::active"];
+pub const SPAN_TARGETS: &[&str] = &["tracing::span", "tracing::span::active"];
 
 fn within(path: &str, root: &str) -> bool {
     path.strip_prefix(root).is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
