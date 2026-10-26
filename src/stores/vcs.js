@@ -22,6 +22,7 @@ import { invoke } from '@tauri-apps/api/core'
    left, until they alt-tab away and back. */
 import { loadHead } from './git.js'
 import { settings } from './settings.js'
+import { onReconnect } from './connection.js'
 /* The one rule this store shares with the button that starts it — see `push`
    below. A pure module out of `components/`, which is what `runs.js`,
    `notifications.js` and `settings.js` already reach into that family for: the
@@ -1474,3 +1475,6 @@ function reset() {
      prevent. */
   fetchedAt.clear()
 }
+
+/* The working tree on the server moved while the connection was down. */
+onReconnect(() => refresh())

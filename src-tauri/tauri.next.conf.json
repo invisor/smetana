@@ -1,0 +1,28 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Smetana Next",
+  "identifier": "com.invisor.smetana.next",
+  "build": {
+    "features": ["split"]
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Smetana Next",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
+      }
+    ]
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "externalBin": ["binaries/bd", "binaries/smetanad"]
+  }
+}

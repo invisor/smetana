@@ -12,6 +12,9 @@
     "tauri": "tauri",
     "postinstall": "node scripts/fetch-bd.mjs --optional",
     "fetch-bd": "node scripts/fetch-bd.mjs",
+    "build-smetanad": "node scripts/build-smetanad.mjs",
+    "tauri:next:dev": "node scripts/build-smetanad.mjs && tauri dev --config src-tauri/tauri.next.conf.json",
+    "tauri:next:build": "node scripts/build-smetanad.mjs --release && tauri build --config src-tauri/tauri.next.conf.json",
     "release": "node scripts/release.mjs"
   },
   "dependencies": {

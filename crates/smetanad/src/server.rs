@@ -205,6 +205,17 @@ fn lock_directory(dir: &Path) -> Result<std::fs::File, String> {
     Ok(file)
 }
 
+/// Whether a server owns `dir` right now: the lock is held by a live process. A directory that has
+/// never held a server, or whose server is gone however it ended, is not owned. The lock is taken and
+/// let go again for the length of the question, which a server starting in that instant would see as
+/// "already owns" and retry or refuse; a caller that spawns servers asks once per spawn.
+pub fn is_owned(dir: &Path) -> bool {
+    let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(dir.join(LOCK_FILE)) else {
+        return false;
+    };
+    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+}
+
 fn create_data_dir(dir: &Path) -> Result<(), String> {
     if dir.is_dir() {
         return Ok(());
@@ -450,6 +461,16 @@ mod tests {
         assert!(err.contains("already owns"), "{err}");
         drop(first);
         assert!(lock_directory(dir.path()).is_ok(), "the lock goes with the process that held it");
+    }
+
+    #[test]
+    fn a_directory_is_owned_while_its_lock_is_held() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_owned(dir.path()), "no lock file at all");
+        let held = lock_directory(dir.path()).unwrap();
+        assert!(is_owned(dir.path()));
+        drop(held);
+        assert!(!is_owned(dir.path()), "the lock goes with the process that held it");
     }
 
     #[test]

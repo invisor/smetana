@@ -35,6 +35,7 @@ import { chime } from '../chime.js'
 import { runsState } from './runs.js'
 import { effectiveAgents, settings } from './settings.js'
 import { isLockIssue, trackerState } from './tracker.js'
+import { onReconnect } from './connection.js'
 
 /* The one word that tells a person's own shell from an agent, as `SessionWork`
    and `WorkKind` in `crates/core/src/terminal/model.rs` spell it on the wire.
@@ -757,6 +758,10 @@ let seq = 0
 /* The same anchor for the log: the `seq` of the last entry delivered. */
 let logSeq = 0
 let attaching = null
+/* An attach is out and its answer has not landed; the output that arrives in the meantime waits in
+   `heldOutput` to be judged against the answer's number. */
+let attachPending = false
+let heldOutput = []
 /* Which session the worker is streaming output to this window, which is the
    *other* thing `activeId` used to mean. Splitting it out is what lets a
    terminal tab draw a shell without moving the selection in the agents panel:
@@ -893,23 +898,22 @@ export async function initTerminals() {
     dropSession(id)
   })
   await listen('terminal:output', (event) => {
-    const { id, seq: next, data } = event.payload
+    const { id } = event.payload
     /* The session this window attached to, and not the selected agent: the two
        are the same on the Agent tab and deliberately different on a terminal
        tab. The worker sends output for one session at a time anyway; this
        guard is what keeps the last chunks of the one just left off the screen
        of the one just opened. */
     if (id !== streaming) return
-    if (next !== seq + 1) {
-      // Fired from an event listener, not awaited by anyone: attach() no
-      // longer throws (it reports instead), but the .catch() stays as a
-      // second line of defence — a lost event must never surface as an
-      // unhandled rejection, whatever else about this function changes.
-      attach(id).catch(() => {})
+    /* Until the answer to an attach is in, `seq` is the previous attach's and
+       means nothing: an event applied against it could repeat what the answer
+       carries or sit on the wrong side of it. They are held and judged against
+       the answer's own number the moment it lands (`attach`). */
+    if (attachPending) {
+      heldOutput.push(event.payload)
       return
     }
-    seq = next
-    push(decode(data))
+    applyOutput(event.payload)
   })
   await listen('terminal:log', (event) => {
     const { id, entries } = event.payload
@@ -1186,6 +1190,42 @@ export async function removeSession(id) {
 /* Attaching hands back the whole ring, and the subscriber must repaint from
    scratch: whatever it was showing before is either another session's past,
    or a piece of this same session already folded into the snapshot. */
+/* One `terminal:output` payload, against the number this window has reached.
+
+   In this process the worker sends `{ id, seq, data }` for one chunk, and the
+   next one is always `seq + 1`. Through a server (the Smetana Next build) a
+   payload may be several chunks coalesced, `{ id, from, seq, data }` covering
+   `from..=seq`, or a fresh ring, `reset: true`, sent in place of what a slow
+   connection could not carry — `crates/remote-server`'s `Outbox`. A payload
+   with no `from` is the one-chunk case, so the same line serves both.
+
+   - `reset` replaces the terminal whatever it holds, and `seq` becomes its own;
+   - a payload that starts where this window stopped is the next thing to draw;
+   - one wholly behind it was already covered by an answer and is dropped — but
+     only when it says where it started, which the one-chunk form never does
+     and which in this process means a gap, as it always did;
+   - anything else is a gap, and the whole is read again. */
+function applyOutput(payload) {
+  const { id, seq: next, data } = payload
+  const from = payload.from ?? next
+  if (payload.reset) {
+    seq = next
+    push(decode(data), { reset: true })
+    return
+  }
+  if (from !== seq + 1) {
+    if (payload.from !== undefined && next <= seq) return
+    // Fired from an event listener, not awaited by anyone: attach() no
+    // longer throws (it reports instead), but the .catch() stays as a
+    // second line of defence — a lost event must never surface as an
+    // unhandled rejection, whatever else about this function changes.
+    attach(id).catch(() => {})
+    return
+  }
+  seq = next
+  push(decode(data))
+}
+
 export async function attach(id) {
   /* Deliberately not `activeId = id`, which is what this used to do. Attaching
      is the transport's half; which agent is selected is the person's, and a
@@ -1198,6 +1238,10 @@ export async function attach(id) {
      moment nothing has failed. The view attaches again on its own when the
      selection becomes a real id, which is what the ticket exists to lead to. */
   if (isStarting(id)) return
+  /* Before the request leaves, so nothing that arrives once it is on its way
+     can be judged against the previous attach's number. */
+  attachPending = true
+  heldOutput = []
   const current = invoke('terminal_attach', { id })
   attaching = current
   try {
@@ -1208,10 +1252,23 @@ export async function attach(id) {
     push(decode(data), { reset: true })
     pushLog({ reset: true, entries: log, trimmed: logTrimmed })
     terminalState.lastError = null
+    /* What arrived while the answer was on its way, now that there is a number
+       to judge it by. */
+    const held = heldOutput
+    heldOutput = []
+    attachPending = false
+    for (const payload of held) {
+      /* A gap in what was held makes `applyOutput` attach again, and the rest
+         belongs to the answer to that one, not to this. */
+      if (attachPending) break
+      if (payload.id === streaming) applyOutput(payload)
+    }
   } catch (err) {
     // A newer attach already overtook this one; its outcome, not this
     // rejection, is what the store and the screen should reflect.
     if (attaching !== current) return
+    attachPending = false
+    heldOutput = []
     report('read', err)
   }
 }
@@ -1322,3 +1379,12 @@ export async function resize(id, cols, rows) {
    one window's drops are kept apart by never being mounted over the same
    point at once, not by an arbiter here. */
 export const watchSessionDrops = watchWindowDrops
+
+/* A new connection to the server is a new list of sessions and a new attach: the server forgets which
+   sessions a connection followed when the connection goes, so the one on screen has to ask again, and
+   the ring it gets back repaints the terminal from scratch — output the old connection never
+   delivered is in it. */
+onReconnect(async () => {
+  await loadSessions(terminalState.project)
+  if (streaming != null) await attach(streaming)
+})

@@ -7,6 +7,13 @@ paths:
   - "crates/core/src/remote/**"
   - "crates/core/src/health.rs"
   - "src/stores/remote.js"
+  - "src/stores/connection.js"
+  - "src/components/shell/ConnectionBanner.vue"
+  - "src/components/shell/connectionNotice.js"
+  - "src-tauri/src/split/**"
+  - "src-tauri/src/connection.rs"
+  - "src-tauri/tauri.next.conf.json"
+  - "scripts/build-smetanad.mjs"
   - "src/components/settings/DevicesSettings.vue"
   - "src/components/settings/devices.js"
 ---
@@ -149,6 +156,54 @@ The test `remote_contract_changes_only_with_a_protocol_version` fails when the f
 than the digest recorded for the current `PROTOCOL_MAJOR.PROTOCOL_MINOR`, and says which bump is needed:
 MINOR for additions, MAJOR for removals and renames. The way forward is a new entry under a higher version,
 added by hand together with the constants; an existing entry is a frozen contract and is not edited.
+
+## The desktop as a client: `split` and Smetana Next
+
+Step 5 of `docs/superpowers/specs/2026-10-25-headless-server-design.md`. Without the cargo feature `split` the shell is the
+release, byte for byte in behaviour (`cargo test` in `src-tauri` runs both ways). With it (`npm run tauri:next:dev`,
+`tauri:next:build`, through `src-tauri/tauri.next.conf.json`, whose `build.features` turns it on) the shell starts none of the
+workers and serves no phones; `src-tauri/src/split/` holds one iroh connection to one `smetanad`.
+
+- **Forwarding is generic.** `split::handler` wraps the `invoke_handler`: a name in `forward::LOCAL_COMMANDS` (the client's own:
+  windows, dialogs, clipboard, opener, updater, login item, `connection_*`) goes to the Tauri command registered for it; a client
+  command the build lacks (`tracker_access_reset`) is rejected; **every other name is sent to the server** as an `Invoke` and the
+  server's reply resolves the `invoke`. Arguments pass untouched (the dispatcher already reads the webview's camelCase). The
+  second `generate_handler!` in `lib.rs` is held equal to `LOCAL_COMMANDS` by a test, and `LOCAL_COMMANDS` to the server's
+  `CLIENT_COMMANDS`. `connection_state` and `connection_retry` are in `DESKTOP_COMMANDS` and `CLIENT_COMMANDS`, and the build
+  without the feature answers `connection_state` with `in-process`.
+- **Events** the server advertises (`HelloReply.capabilities`, names with a colon) are `Listen`ed to and re-emitted with
+  `app.emit` under the same names; `terminal:output` and `terminal:log` come with `terminal_attach`. `terminals.js` applies the
+  server's coalesced and `reset` payloads (`applyOutput`) and holds output that arrives while an attach is outstanding.
+- **State** (`split/state.rs`, `connection:state` event, `connection_state` command): `connecting`, `connected`,
+  `reconnecting`, `incompatible`, `unpaired` and `failed` (no data directory to keep a server in; nothing retries), with an `epoch` that counts connections. `Link` is the one holder; `supervise` is its
+  one writer, with backoff 0.5 s doubling to 10 s, and a slow poll (15 s) for the two states a person must fix.
+  **No call is ever retried.** A call with no connection is refused with a reason that says nothing was changed; one in flight
+  when the connection ends is answered "never sent" or "may or may not have been made". The one exception: a **read** (the allowlist `READS`
+  in `forward.rs`) made while the **first** connection of the run is still being made waits for it, up to 45 s, because the stores
+  read as the window mounts. A write is never held, so a double press while the server starts cannot start two of anything.
+- **Front end.** `stores/connection.js` holds the state; a store that must read its snapshot again registers with
+  `onReconnect` (tracker, terminals, runs, vcs, sessions history, conversations, and `DesktopApp.vue`'s `catchUp`, which re-lists the tree, reloads tabs left in `error` by a refused read, and re-reads head, config and storage). Each new epoch runs them; an app that mounted
+  onto an already-up connection does not run them for it. `DesktopApp.vue` dims the body while stale and draws
+  `ConnectionBanner` (words in `connectionNotice.js`). In the in-process build and in a browser the state is `in-process` and
+  nothing is drawn.
+- **Local placement.** The server's data directory is `<app data dir>/server` (its own `settings.json` and `remote-key` must not
+  meet the shell's files), the shell's own key and paired marker are in `<app data dir>`, and the server's output goes to
+  `<app data dir>/smetanad.log`. `spawn::ensure` asks the directory's lock (`smetanad::server::is_owned`), and if nothing owns it
+  starts the bundled `smetanad run --data-dir … --bd … --resource-dir …` in its own process group (Windows: detached), so closing
+  the app leaves it running. Pairing is `Client::connect_as`, which reads `local-pairing.json`, pairs once and re-pairs by itself
+  when the server no longer knows the key. A server killed without a goodbye is noticed at once by its lock being free.
+- **Version lock-step.** A different `protocol_major` is `incompatible` (the reason names `smetanad restart --data-dir …`, since
+  the old server cannot be asked). A server with a *newer* `app_version` is `incompatible` (update the app) and is never restarted. A different, older `app_version` with the same major makes the shell ask `server_restart now`
+  without `confirmed`: nothing alive restarts it (once per running version, so a binary that did not change cannot loop);
+  otherwise `connected` carries `outdated` with the list, and the banner offers *Restart now* (confirmed with exactly that
+  list) or *Restart when finished*.
+- **Updates are off in this build** (`updates::development()` is true under `split`): the release feed and key would replace
+  Next with the release.
+- **The bundle.** `tauri.next.conf.json` changes the identifier, product name and window title, adds `binaries/smetanad` to
+  `externalBin` and turns updater artifacts off. `npm run build-smetanad [-- --release]` builds it into
+  `src-tauri/binaries/smetanad-<triple>` (ignored by git); the default config does not name it, so the default build never needs it.
+- **Not yet:** settings are entirely the server's (the split is step 6), no remote server (7), the in-process path stays (8).
+  The shell still links `smetana-core` as a library for `window.rs`'s settings types; no worker is started.
 
 ## Protocol 1.9: the server's own commands
 

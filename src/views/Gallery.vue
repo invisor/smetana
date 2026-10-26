@@ -1,4 +1,5 @@
 <script setup>
+import { connectionNotice } from '../components/shell/connectionNotice.js'
 /* Dev harness: renders every component in the library once, so a broken port
    shows up here rather than in the product. Not part of the shipped app —
    reachable at ?view=gallery. */
@@ -44,6 +45,7 @@ import {
   CodeBlock,
   ColumnHeader,
   CommandPalette,
+  ConnectionBanner,
   Composer,
   ConflictModal,
   ConversationToolCall,
@@ -940,6 +942,33 @@ const galleryClipboard = { paths: ['src/agent.rs'], mode: 'cut' }
    The pair that matters most is the second and the fourth, and they are the two
    directions of one rule: a `null` half draws a dash while the other half draws
    its number, and a real `0` draws as `0%` and never as a dash. */
+/* The connection strip, one per thing it can say: the five states the shell names, an older server
+   whose restart would end work, and one waiting for the work to finish. Built through the same rule
+   the app uses, so what is drawn here is what the window would draw. */
+const galleryConnection = [
+  { state: 'connecting', reason: null },
+  { state: 'reconnecting', reason: 'the server stopped' },
+  { state: 'incompatible', reason: 'the server on this machine speaks protocol 2, this app 1' },
+  { state: 'unpaired', reason: 'the server does not know this device' },
+  {
+    state: 'connected',
+    outdated: {
+      running: '0.0.9',
+      bundled: '0.1.0',
+      canRestart: true,
+      work: [
+        { kind: 'run', label: 'smetana' },
+        { kind: 'agent', label: 'claude in smetana' }
+      ]
+    }
+  },
+  {
+    state: 'connected',
+    restartScheduled: true,
+    outdated: { running: '0.0.9', bundled: '0.1.0', canRestart: true, work: [] }
+  }
+].map((view) => connectionNotice({ mode: 'split', ...view }))
+
 const galleryUsage = [
   {
     state: 'read',
@@ -4511,6 +4540,14 @@ const menuTargetStyle = {
            do, and of why there is nothing to read. The right end is empty in
            all six, which is what a quiet project looks like and the state to
            compare the block below against. -->
+      <!-- The strip above the footer that says what the connection to the server is doing: connecting,
+           lost, another protocol version, an unpaired device, an older server that could be replaced, and
+           one whose replacement is waiting for the work to finish. Amber mends itself, red needs a
+           person; the first three buttons are the only ones each state offers. -->
+      <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }">
+        <ConnectionBanner v-for="(notice, index) in galleryConnection" :key="index" :notice="notice" />
+      </div>
+
       <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }">
         <StatusFooter :usage="galleryUsage[1]" />
         <StatusFooter :usage="galleryUsage[2]" />

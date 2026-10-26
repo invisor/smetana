@@ -26,6 +26,15 @@ use crate::local;
 pub const KEY_FILE: &str = "local-client-key";
 pub const PAIRED_FILE: &str = "local-client-paired";
 
+/// What a call's error says when the request could not be written to the connection, so it never
+/// reached the server. `Client::call` makes this message; a caller that has to tell it from the other
+/// loss (the connection closing with the request already sent) compares against these two.
+pub const SEND_FAILED: &str = "the connection is gone";
+
+/// What a call's error says when the connection ended after the request was sent and before the
+/// answer came: the server may have done what was asked.
+pub const CLOSED_BEFORE_REPLY: &str = "the connection closed before the reply";
+
 /// What the device is called in the server's list.
 const DEVICE_NAME: &str = "smetanad (this machine)";
 const STEP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -38,6 +47,10 @@ pub enum ClientError {
     Refused(String),
     #[error("the connection closed: {0}")]
     Closed(String),
+    /// The server ended the connection with one of the protocol's `CLOSE_*` codes, which says why
+    /// better than any message: an unknown key, a revoked one, a major version it does not speak.
+    #[error("the server closed the connection with code {0}")]
+    Code(u32),
 }
 
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, BridgeError>>>>>;
@@ -47,7 +60,8 @@ pub struct Client {
     send: tokio::sync::Mutex<SendStream>,
     pending: Pending,
     next: AtomicU64,
-    events: mpsc::UnboundedReceiver<(String, Value)>,
+    /// `None` once [`Client::take_events`] has handed the receiver to a task of its own.
+    events: Option<mpsc::UnboundedReceiver<(String, Value)>>,
     pub hello: HelloReply,
     _endpoint: Endpoint,
 }
@@ -184,11 +198,11 @@ impl Client {
             Err(Ok(code)) if was_paired && (code == CLOSE_UNKNOWN || code == CLOSE_PROTOCOL) => {
                 pair(&endpoint, &addr, credential.secret).await?;
                 say_hello(&endpoint, &addr).await.map_err(|err| match err {
-                    Ok(code) => ClientError::Closed(format!("closed with code {code}")),
+                    Ok(code) => ClientError::Code(code),
                     Err(err) => err,
                 })?
             }
-            Err(Ok(code)) => return Err(ClientError::Closed(format!("closed with code {code}"))),
+            Err(Ok(code)) => return Err(ClientError::Code(code)),
             Err(Err(err)) => return Err(err),
         };
         Ok(Self::from_open(opened, endpoint))
@@ -199,7 +213,7 @@ impl Client {
     pub async fn open(endpoint: &Endpoint, addr: &EndpointAddr) -> Result<Client, ClientError> {
         match say_hello(endpoint, addr).await {
             Ok(opened) => Ok(Self::from_open(opened, endpoint.clone())),
-            Err(Ok(code)) => Err(ClientError::Closed(format!("closed with code {code}"))),
+            Err(Ok(code)) => Err(ClientError::Code(code)),
             Err(Err(err)) => Err(err),
         }
     }
@@ -214,7 +228,7 @@ impl Client {
             send: tokio::sync::Mutex::new(send),
             pending,
             next: AtomicU64::new(1),
-            events,
+            events: Some(events),
             hello,
             _endpoint: endpoint,
         }
@@ -229,9 +243,9 @@ impl Client {
         let sent = write_frame(&mut *self.send.lock().await, &ClientMsg::Invoke { id, cmd: cmd.to_owned(), args }).await;
         if let Err(err) = sent {
             self.pending.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
-            return Err(BridgeError::Internal(format!("the connection is gone: {err}")));
+            return Err(BridgeError::Internal(format!("{SEND_FAILED}: {err}")));
         }
-        rx.await.unwrap_or_else(|_| Err(BridgeError::Internal("the connection closed before the reply".into())))
+        rx.await.unwrap_or_else(|_| Err(BridgeError::Internal(CLOSED_BEFORE_REPLY.into())))
     }
 
     /// Starts receiving an event.
@@ -243,12 +257,18 @@ impl Client {
 
     /// The next event, or `None` when the connection has ended.
     pub async fn next_event(&mut self) -> Option<(String, Value)> {
-        self.events.recv().await
+        self.events.as_mut()?.recv().await
+    }
+
+    /// Hands the event receiver to the caller, so one task can follow the events while others call
+    /// commands on the same shared client (`call` and `listen` take `&self`). `None` the second time.
+    pub fn take_events(&mut self) -> Option<mpsc::UnboundedReceiver<(String, Value)>> {
+        self.events.take()
     }
 
     /// The next event within `within`.
     pub async fn event_within(&mut self, within: Duration) -> Option<(String, Value)> {
-        tokio::time::timeout(within, self.events.recv()).await.ok().flatten()
+        tokio::time::timeout(within, self.events.as_mut()?.recv()).await.ok().flatten()
     }
 
     /// Resolves with the close code when the server ends this connection.

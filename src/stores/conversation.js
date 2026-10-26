@@ -29,6 +29,7 @@ import { crewRows } from '../components/agent/crewTree.js'
    own functions — and the cycle this closes (settings → tabs → conversation)
    is the one `settings.js` already records as harmless for that reason. */
 import { settings } from './settings.js'
+import { onReconnect } from './connection.js'
 /* The one sound `listenToState` below rings, the same call `terminal:state`
    makes in `terminals.js` — see that file and `.claude/rules/notifications.md`
    for the sound itself and for `onlyWhenUnfocused`, neither of which is this
@@ -1041,3 +1042,7 @@ export async function closeConversation(id) {
     report(id, 'closing a session', err)
   }
 }
+
+/* A conversation open in this window was last fed by the previous connection; its snapshot is read
+   again, replacing the journal whole as every attach does. */
+onReconnect(() => Promise.all([...conversations.keys()].map((id) => attach(id))))

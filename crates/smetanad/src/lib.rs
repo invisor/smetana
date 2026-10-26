@@ -12,3 +12,7 @@ pub mod local;
 pub mod logger;
 pub mod ops;
 pub mod server;
+
+/// The version of this build of the server. A desktop that ships one compares it with what a running
+/// server says in its `HelloReply` and replaces an older one through the restart gateway.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

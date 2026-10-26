@@ -31,6 +31,7 @@ import { syncRunCards } from './notifications.js'
    project's. */
 import { chime } from '../chime.js'
 import { settings } from './settings.js'
+import { onReconnect } from './connection.js'
 /* A Solo run with the panel on has its lead in the conversation store, not the
    terminal one; `adoptIfDriven` below is the one place that hands it over. */
 import { adoptRunSession } from './conversation.js'
@@ -372,3 +373,6 @@ export async function initRuns() {
     upsert(run)
   })
 }
+
+/* A run that ended, or began, while the connection was down. */
+onReconnect(() => loadRun(runsState.project))

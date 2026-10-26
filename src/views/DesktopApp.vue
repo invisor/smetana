@@ -89,7 +89,7 @@ import StatusFooter from '../components/shell/StatusFooter.vue'
 import Icon from '../components/core/Icon.vue'
 import Tooltip from '../components/core/Tooltip.vue'
 import IconButton from '../components/core/IconButton.vue'
-import { BatchTimeline, CommandPalette, ConversationView, TaskSearchButton, TerminalView } from '../components/index.js'
+import { BatchTimeline, CommandPalette, ConnectionBanner, ConversationView, TaskSearchButton, TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import { agentKey, conversationsOf, orderAgents } from '../components/agent/agentOrder.js'
 import { turnEnded } from '../components/agent/turnEnded.js'
@@ -308,6 +308,15 @@ import {
   stopRun
 } from '../stores/runs.js'
 import { initUpdates } from '../stores/updates.js'
+import {
+  connection,
+  initConnection,
+  onReconnect,
+  restartServer,
+  retryConnection,
+  stale as connectionStale
+} from '../stores/connection.js'
+import { connectionNotice } from '../components/shell/connectionNotice.js'
 import { liveCheckBlock } from '../components/run/browserTools.js'
 import { folderOf, parentOf, relativePath } from '../components/files/fileMenu.js'
 import {
@@ -682,6 +691,8 @@ onMounted(initRuns)
    goes looking for them. Rust's first check waits a minute after launch, so
    there is no race to lose here. */
 onMounted(initUpdates)
+/* The connection to the server, in the build that has one. Mounted beside the stores it resyncs. */
+onMounted(initConnection)
 
 /* The one road into a session, for every start a person talks to. Which of
    the two kinds of session it lands in depends on the harness and on the
@@ -3695,6 +3706,14 @@ const catchUp = async () => {
 
 onMounted(() => window.addEventListener('focus', catchUp))
 onUnmounted(() => window.removeEventListener('focus', catchUp))
+/* A new connection to the server is a reason to catch up as much as a return of focus is: the tree,
+   the open tabs (a read refused during the outage leaves a tab in `error`, whose only exit is this
+   sweep), the branch, the config and the storage were all asked of a server that was away. */
+let stopCatchUpOnReconnect = null
+onMounted(() => {
+  stopCatchUpOnReconnect = onReconnect(catchUp)
+})
+onUnmounted(() => stopCatchUpOnReconnect?.())
 
 /* The fourth moment this app catches up with the world: an agent of the active
    project ended its turn. An agent working inside this window never takes focus
@@ -7228,7 +7247,20 @@ const rootStyle = {
   fontSize: 'var(--text-md)',
   overflow: 'hidden'
 }
-const bodyStyle = { flex: 1, minHeight: 0, display: 'flex', alignItems: 'stretch' }
+const connectionBanner = computed(() => connectionNotice(connection))
+/* What is on screen while the connection is down is the last thing the server sent, and it is drawn
+   as the quiet rows are: dimmed, with the strip below saying why. */
+const bodyStyle = computed(() => ({
+  flex: 1,
+  minHeight: 0,
+  display: 'flex',
+  alignItems: 'stretch',
+  opacity: connectionStale.value ? 'var(--attn-quiet-opacity)' : undefined
+}))
+const refused = (err) => console.error('[connection] the server refused the restart:', err)
+const restartNow = () => restartServer('now').catch(refused)
+const restartWhenIdle = () => restartServer('when-idle').catch(refused)
+const restartCancel = () => restartServer('cancel').catch(refused)
 
 /* Either side folds away to a 32px rail so the board gets the width; the rail
    keeps the panel's name and the button that brings it back. Open, the width is
@@ -8159,6 +8191,13 @@ const toastStackStyle = {
          branch in the bar above is the project root's while this count is the
          selected repository's — the panel is where a person is looking at that
          list, and this is the number they can check against it. -->
+    <ConnectionBanner
+      :notice="connectionBanner"
+      @retry="retryConnection"
+      @restart-now="restartNow"
+      @restart-idle="restartWhenIdle"
+      @restart-cancel="restartCancel"
+    />
     <StatusFooter
       :usage="usageReading"
       :busy="usageBusy"

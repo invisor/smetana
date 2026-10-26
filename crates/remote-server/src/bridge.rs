@@ -232,6 +232,8 @@ pub const DESKTOP_COMMANDS: &[&str] = &[
     "remote_pair_decide",
     "remote_devices",
     "remote_device_revoke",
+    "connection_state",
+    "connection_retry",
 ];
 
 /// The commands that act on the machine the person sits at, and so are not the server's: the
@@ -261,6 +263,10 @@ pub const CLIENT_COMMANDS: &[&str] = &[
     "updates_state",
     "updates_check",
     "updates_install",
+    // The desktop's own connection to its server (`src-tauri/src/connection.rs`): there is nothing
+    // of the server's to ask, so a device that calls one is `Forbidden`.
+    "connection_state",
+    "connection_retry",
 ];
 
 /// What the output buffer of one device for one session may hold before the device is sent the

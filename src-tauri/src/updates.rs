@@ -463,6 +463,12 @@ impl Updates {
 /// Whether this build may replace itself at all. See the module header for what
 /// the answer costs when it is wrong.
 fn development() -> bool {
+    // The Smetana Next build shares the release's feed and its signing key, and installing the
+    // release over it would turn it into the other app. It updates when the switch-over makes it
+    // the release, and not before.
+    if cfg!(feature = "split") {
+        return true;
+    }
     cfg!(debug_assertions)
 }
 
@@ -669,6 +675,15 @@ pub fn updates_check(app: AppHandle, updates: State<'_, Updates>) -> UpdateState
 /// the PTY children are killed exactly as they are on an ordinary quit. The
 /// direct `restart` skips both when it happens to be called on the main thread,
 /// which would leave every open terminal's process orphaned.
+/// The Next build never installs (see `development`), and the run gate below asks a worker that
+/// build does not have, so its answer is the one a development build gives, without the gate.
+#[cfg(feature = "split")]
+#[tauri::command]
+pub async fn updates_install() -> Result<(), UpdateError> {
+    Err(UpdateError::DevelopmentBuild)
+}
+
+#[cfg(not(feature = "split"))]
 #[tauri::command]
 pub async fn updates_install(
     app: AppHandle,

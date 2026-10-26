@@ -10,6 +10,12 @@ rust-version = "1.77.2"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+# The desktop as a client of one `smetanad` instead of the owner of the workers: the Smetana Next
+# build (`tauri.next.conf.json` turns it on). Without it the app is what the release is. See
+# `src/split/mod.rs` and docs/superpowers/specs/2026-10-25-headless-server-design.md, "Transition".
+split = ["dep:smetanad"]
+
 [lib]
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -171,6 +177,13 @@ smetana-core = { path = "../crates/core" }
 # sender's `reqwest` and `rustls` went with it.
 remote-server = { path = "../crates/remote-server" }
 
+# The headless server, linked only for its client half and its credential reader: the `split` build
+# pairs with the local server through `smetanad::client::Client` and starts the bundled binary, and
+# links nothing of its server side that the in-process build does not already link (`smetana-core`
+# and `remote-server` are above). The binary itself is not this dependency: it is the sidecar
+# `tauri.next.conf.json` adds to `bundle.externalBin`, built by `npm run build-smetanad`.
+smetanad = { path = "../crates/smetanad", optional = true }
+
 # The system clipboard for **files**, which is three formats and no crate that
 # covers them: `tauri-plugin-clipboard-manager` above stays exactly what it is,
 # the thing that puts a path on the clipboard as text, and has no notion of a
@@ -238,3 +251,6 @@ windows = { version = "0.61", features = [
 # keep in step.
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+
+[dev-dependencies]
+tempfile = "3"
