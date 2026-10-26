@@ -113,7 +113,10 @@ pub fn run() {
       // account of what a run did was written by the one build that never runs
       // a run. `TargetKind::LogDir` is `~/Library/Logs/<bundle identifier>/` on
       // macOS, `$XDG_DATA_HOME/<identifier>/logs` on Linux; `file_name: None`
-      // takes the product name, so the file is `Smetana.log`. On a machine
+      // takes the product name, so the file is `Smetana.log`. That is the
+      // release build's directory: a development build writes to its `.dev`
+      // sibling instead, and `Target::new(dirs::log_target(...))` below is the
+      // line that chooses. On a machine
       // that installed an earlier build the directory entry still reads
       // `smetana.log`, and goes on doing so until the file first passes
       // `LOG_FILE_SIZE`: APFS is case-insensitive and case-preserving by
@@ -162,7 +165,7 @@ pub fn run() {
           .rotation_strategy(RotationStrategy::KeepSome(LOG_FILES_KEPT))
           .targets([
             Target::new(TargetKind::Stdout),
-            Target::new(TargetKind::LogDir { file_name: None }),
+            Target::new(dirs::log_target(app.handle())),
           ])
           .build(),
       ) {

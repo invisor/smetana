@@ -18,6 +18,7 @@
 use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Manager};
+use tauri_plugin_log::TargetKind;
 
 /// Whether this is a development build, which keeps its data apart from the release's.
 pub const DEVELOPMENT: bool = cfg!(debug_assertions);
@@ -52,6 +53,30 @@ pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_config_dir().map(for_this_build).map_err(|err| err.to_string())
 }
 
+/// The directory a development build writes its log into in place of the release's `dir`. macOS
+/// and Windows name the log directory after the identifier, so it is `development_dir` of it. Linux
+/// puts it at `<identifier>/logs`, and a sibling of *that* would sit inside the release's own
+/// directory, so there the identifier is the part that gets the suffix and `logs` stays under it.
+pub fn development_log_dir(dir: &Path) -> PathBuf {
+    match (dir.file_name(), dir.parent()) {
+        (Some(name), Some(parent)) if name == "logs" => development_dir(parent).join(name),
+        _ => development_dir(dir),
+    }
+}
+
+/// Where the shell's log goes. A release leaves the choice to the log plugin (its log directory);
+/// a development build names the `.dev` directory itself, since the plugin's own `LogDir` is the
+/// release's. Called from the setup hook, where the path resolver exists. The file name stays the
+/// plugin's default, so both builds write `Smetana.log`.
+pub fn log_target(app: &AppHandle) -> TargetKind {
+    if DEVELOPMENT {
+        if let Ok(dir) = app.path().app_log_dir() {
+            return TargetKind::Folder { path: development_log_dir(&dir), file_name: None };
+        }
+    }
+    TargetKind::LogDir { file_name: None }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,6 +88,17 @@ mod tests {
         assert_eq!(dev, Path::new("/Users/me/Library/Application Support/com.invisor.smetana.dev"));
         assert!(!dev.starts_with(release), "nothing of the development build is inside the release's directory");
         assert!(!release.starts_with(&dev));
+    }
+
+    #[test]
+    fn a_development_build_logs_beside_the_release_log_directory_and_never_inside_it() {
+        let release = Path::new("/Users/me/Library/Logs/com.invisor.smetana");
+        assert_eq!(development_log_dir(release), Path::new("/Users/me/Library/Logs/com.invisor.smetana.dev"));
+        // Linux keeps the log directory inside the identifier's, so the suffix goes on the identifier.
+        let linux = Path::new("/home/me/.local/share/com.invisor.smetana/logs");
+        let dev = development_log_dir(linux);
+        assert_eq!(dev, Path::new("/home/me/.local/share/com.invisor.smetana.dev/logs"));
+        assert!(!dev.starts_with(linux.parent().unwrap()), "nothing of the development build is inside the release's directory");
     }
 
     #[test]
