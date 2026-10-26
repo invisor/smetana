@@ -1,0 +1,7 @@
+{
+  "args": [{}],
+  "reply": [
+    null,
+    {"appearance":{"density":"comfortable","theme":"dark","uiFontSize":13},"deviceSeeded":false,"dialogs":{},"editor":{"confirmCloseTerminals":true,"fontSize":12,"wordWrap":false},"git":{"autoFetch":true},"kanban":{"alwaysShow":[],"columns":"all","interval":"all","unlimited":[]},"layout":{"branchSide":"local","gitSections":{"branchRows":null,"branchesOpen":true,"changesOpen":true,"commitRows":2,"reposOpen":true,"reposRows":null},"leftCollapsed":false,"leftWidth":236,"railOpen":true,"rightCollapsed":false,"rightWidth":340},"notifications":{"needsAttention":"sound-2","onlyWhenUnfocused":true,"runFinished":"sound-1","showReport":true},"projects":{"/work/smetana":{"activeTab":"kanban","agentNames":{},"agentOrder":[],"branchFolders":null,"branchTab":"local","columnOrder":[],"expanded":[],"favoriteBranches":[],"openTabs":[],"pinnedAgents":[],"previewTab":null,"recentTasks":[],"remoteBranchFolders":[],"rightTab":"task","selectedPath":null,"selectedRepo":null,"selectedTask":null,"sideTab":"files","storageWarnedMib":null,"tabOrder":[],"usedAt":null}},"reports":{"order":"newest","perPage":20},"updates":{"autoCheck":true},"version":1,"window":{"restoreGeometry":true}}
+  ]
+}

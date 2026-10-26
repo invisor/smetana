@@ -105,7 +105,38 @@ export function diffViews(prev, next) {
     if (inner !== undefined) projects[path] = inner
   }
   if (Object.keys(projects).length) patch.projects = projects
+  /* `writeView` keeps the project open here in the list whatever another client did to it. When that
+     re-append is the only difference, it is this window's own bookkeeping and not an edit: sending it
+     would put the project back in the list the other client took it out of, and be echoed back. */
+  const open = next.lastProject
+  if (patch.openProjects && open && !(prev.openProjects ?? []).includes(open)) {
+    const without = (list) => (list ?? []).filter((path) => path !== open)
+    if (JSON.stringify(without(prev.openProjects)) === JSON.stringify(without(next.openProjects))) {
+      delete patch.openProjects
+    }
+  }
   return Object.keys(patch).length ? patch : undefined
+}
+
+/* `pending` without the keys of `refused`: the fields of a patch the server turned down. */
+export function subtractPatch(pending, refused) {
+  if (!plain(pending) || !plain(refused)) return undefined
+  const out = {}
+  for (const [key, value] of Object.entries(pending)) {
+    if (!(key in refused)) out[key] = value
+    else if (plain(value) && plain(refused[key])) {
+      const inner = subtractPatch(value, refused[key])
+      if (inner !== undefined) out[key] = inner
+    }
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+/* Whether a failed call never reached the server's handler (the shell's own words for a connection
+   that was down or lost), as against the server answering with a refusal. The first leaves a change
+   waiting for the reconnect; the second drops it. */
+export function transportFailure(error) {
+  return typeof error === 'string' && /connection to the server|Not connected to the server/i.test(error)
 }
 
 /* RFC 7386, returning a new value. */
@@ -128,17 +159,20 @@ export function writeView(target, view) {
     if (value === undefined) return
     if (JSON.stringify(object[key]) !== JSON.stringify(value)) object[key] = clone(value)
   }
+  /* Every field of ROOT, however deep, from the one list: a field added there is applied from a
+     broadcast and from the load without a second place to remember it. */
+  const into = (object, source) => {
+    for (const [key, value] of Object.entries(source ?? {})) {
+      if (plain(value) && plain(object[key])) into(object[key], value)
+      else set(object, key, value)
+    }
+  }
+  for (const key of ROOT) {
+    if (view[key] === undefined) continue
+    if (plain(view[key]) && plain(target[key])) into(target[key], view[key])
+    else set(target, key, view[key])
+  }
   if (view.git) set(target.git, 'removeWorktrees', view.git.removeWorktrees)
-  for (const key of ['remote', 'subscription', 'runFailover']) {
-    for (const [field, value] of Object.entries(view[key] ?? {})) set(target[key], field, value)
-  }
-  for (const key of ['agent', 'agentLanguage', 'taskLanguage', 'commitLanguage', 'reportLanguage', 'agentPrompt', 'model', 'conversationPanel']) {
-    set(target, key, view[key])
-  }
-  for (const [role, pair] of Object.entries(view.agentRoles ?? {})) {
-    if (!target.agentRoles[role]) continue
-    for (const [field, value] of Object.entries(pair ?? {})) set(target.agentRoles[role], field, value)
-  }
   if (Array.isArray(view.openProjects)) {
     /* The project open here stays in the list, whatever another client did to it. */
     const list = [...view.openProjects]
@@ -151,20 +185,21 @@ export function writeView(target, view) {
   }
 }
 
-/* Folds what the server now holds into what this window holds. `pending` is what this window has
-   changed and not yet sent (`baseline` is the server's state as this window last agreed it); it is
-   laid over the incoming state, so another client's change to one field never undoes this window's
-   change to another. With `dropPending` the server's state wins outright: a change it refused is
-   not kept.
+/* Folds what the server now holds into what this window holds. `base` is the server's state as
+   this window believes it to be, with its own patches still on the way laid over it; `pending` is
+   what this window has changed beyond that. It is laid over the incoming state, so another client's
+   change to one field never undoes this window's change to another. `drop` is a patch the server
+   refused: its fields alone are taken from the server and the rest of what is pending is kept.
 
    Answers `{ next, baseline, pending }`: `next` to write into the store, `baseline` to hold from now
    on, and `pending` (a patch or `undefined`) so the caller knows a send is still owed. */
-export function fold(baseline, current, incoming, { dropPending = false } = {}) {
-  const pending = dropPending || !baseline ? undefined : diffViews(baseline, current)
+export function fold(base, current, incoming, { drop } = {}) {
+  let pending = base ? diffViews(base, current) : undefined
+  if (pending && drop) pending = subtractPatch(pending, drop)
   const next = pending ? mergePatch(incoming, pending) : clone(incoming)
   const kept = clone(incoming)
   /* Which project is open is this window's own; its baseline moves only when this window sends. */
-  if (!dropPending && baseline) kept.lastProject = baseline.lastProject
+  if (base) kept.lastProject = base.lastProject
   return { next, baseline: kept, pending }
 }
 
@@ -175,10 +210,11 @@ export function combine(device, server) {
   const defined = (object) => Object.fromEntries(Object.entries(object ?? {}).filter(([, value]) => value !== undefined))
   const out = { ...device }
   out.git = { ...device.git, ...defined({ removeWorktrees: server.git?.removeWorktrees }) }
-  for (const key of ['remote', 'subscription', 'runFailover']) {
-    if (server[key]) out[key] = { ...device[key], ...server[key] }
+  for (const key of ROOT) {
+    if (server[key] === undefined) continue
+    out[key] = plain(server[key]) && plain(device[key]) ? { ...device[key], ...server[key] } : server[key]
   }
-  for (const key of ['agent', 'agentLanguage', 'taskLanguage', 'commitLanguage', 'reportLanguage', 'agentPrompt', 'model', 'conversationPanel', 'agentRoles', 'openProjects', 'activeProject']) {
+  for (const key of ['openProjects', 'activeProject']) {
     if (server[key] !== undefined) out[key] = server[key]
   }
   out.project = {

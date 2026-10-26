@@ -94,6 +94,9 @@ pub fn load_from(path: &std::path::Path, project: Option<String>) -> Result<Reso
 /// saves, and other projects' entries in it must not be lost.
 pub async fn settings_save(ctx: &Context, settings: ResolvedSettings) -> Result<(), SettingsError> {
     let path = settings_path(&ctx)?;
+    // The same lock a patch takes (`split::apply_patch`): a whole-document write that landed between a
+    // patch's read and its rename would be undone by it, or undo it. Nothing below awaits.
+    let guard = super::split::WRITE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let (mut stored, problem) = file::load(&path);
 
     /* The asymmetry is deliberate. A broken or too-new file has already gone
@@ -111,8 +114,16 @@ pub async fn settings_save(ctx: &Context, settings: ResolvedSettings) -> Result<
 
     merge(&mut stored, settings, chrono::Utc::now().to_rfc3339());
     file::save(&path, &stored).map_err(SettingsError::Write)?;
+    drop(guard);
     saved_settings();
     Ok(())
+}
+
+/// `settings_device_half`, for a client whose earlier build kept the whole document here: the device's
+/// half of the server's file, or `null` when the server has none. Read once by the migration.
+pub async fn settings_device_half(ctx: &Context) -> Result<serde_json::Value, SettingsError> {
+    let path = settings_path(ctx)?;
+    Ok(super::split::device_half_of_file(&path)?.unwrap_or(serde_json::Value::Null))
 }
 
 /// `settings_patch`, the server's only road for a client to change its half of the settings: the

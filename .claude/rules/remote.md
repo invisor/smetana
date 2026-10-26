@@ -228,10 +228,33 @@ neither list is the device's, and a test pins the server list. `usedAt` is kept 
   saves the device half whole and sends `diff(baseline, now)` as the patch. `settings:changed` and a reconnect fold the
   server's state in with this window's unsent edits laid over it. A refused patch is **not kept or replayed**: the server's
   state is read back and wins. Which project is open stays this window's own (`lastProject` is sent, never adopted).
-- **Migration** (`src-tauri/src/split/migrate.rs`), on every connection before `connected`: if the device's `settings.json`
-  still holds a server half (`legacy_server_patch`), `settings_adopt` offers it (taken only by a server with no
-  `settings.json`), then `retire_server_half` copies the file to `settings.pre-split.json` (never overwritten) and resets the
-  server's keys in it. A server that already had settings keeps them; the second desktop's old half survives only in the copy.
+- **Numbered states.** The answer to a patch and every `settings:changed` carry `rev`, counted under the write lock and
+  restarting at 1 with the server. The store ignores a state whose `rev` is not newer than the last it took in (and resets the
+  count on each new connection), and ignores `settings:changed` while a patch of its own is unanswered: that state is older
+  than something it sent, and the answer to the last patch carries every state before it. The baseline the store compares
+  against is the confirmed state **plus the patches still on the way**, so an echo can never undo a later edit.
+- **A failed patch.** A refusal by the server (a handler error) takes back that patch's fields alone: the store reads the
+  server's state and keeps whatever else was typed since. A connection that was down (the shell's "Nothing was changed" /
+  "may or may not" / "Not connected" words) keeps the change pending; the reconnect reads the server's state and sends what is
+  still different. Neither is a replay of a command: it is the state being brought into agreement.
+- **`openProjects`.** The store keeps the project open in this window in the list whatever another client did to it; that
+  re-append is this window's bookkeeping and is not sent back (`diffViews`), so a client that closed a project does not see it
+  return. Two clients editing the list at the same moment still lose one edit (the list is replaced whole).
+- **Migration** (`src-tauri/src/split/migrate.rs`), on every connection before `connected`, two sources:
+  1. The device's `settings.json` still holds a server half (what a release install will have once the client build is the
+     only one): `settings_adopt` offers it (taken only by a server with no `settings.json`), then `retire_server_half` copies
+     the file to `settings.pre-split.json` (never overwritten) and resets the server's keys in it. The device half already
+     there stands.
+  2. The device file is not marked (`deviceSeeded`) and source one did not fire: an earlier build of the client (step 5)
+     forwarded `settings_save`, so a Smetana Next install has the whole document in the **server's** file and only `dialogs`
+     on the device. `settings_device_half` answers the device half of the server's file (or `null`); `seed_device` writes it
+     into the device file with this machine's dialog sizes laid over it and sets `deviceSeeded` in the same write, after a copy
+     to `settings.pre-seed.json`. The server's file is left whole (the device keys there are dead data), so nothing is lost and a
+     rerun does nothing. A marked file is never seeded again.
+  A server that already had settings keeps them; a second desktop's old server half survives only in its `.pre-split` copy.
+  Known edge for the future switch-over task: source two seeds from the server's file whenever the device file is unmarked
+  and source one did not fire, so a release device file with a customised device half but no server half, meeting a server
+  file that already holds device keys, takes the server's.
 
 ## Protocol 1.9: the server's own commands
 

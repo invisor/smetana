@@ -640,4 +640,53 @@ mod tests {
             server.shutdown().await;
         });
     }
+
+    #[test]
+    fn a_step_5_install_has_its_device_half_seeded_from_the_servers_file_before_the_first_call() {
+        use smetana_core::settings::file;
+        block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            // What step 5 left: the whole document on the server, only dialogs on the device.
+            let server_dir = dir.path().join("server");
+            std::fs::create_dir_all(&server_dir).unwrap();
+            std::fs::write(
+                server_dir.join("settings.json"),
+                r#"{"version":1,"appearance":{"theme":"light","density":"compact","uiFontSize":15},"agent":"codex",
+                    "layout":{"leftWidth":300},"openProjects":["/work/a"],"lastProject":"/work/a",
+                    "projects":{"/work/a":{"selectedTask":"a-1","sideTab":"git"}}}"#,
+            )
+            .unwrap();
+            let device = dir.path().join("device").join("settings.json");
+            std::fs::create_dir_all(device.parent().unwrap()).unwrap();
+            std::fs::write(&device, r#"{"version":1,"dialogs":{"run":{"width":600,"height":500}}}"#).unwrap();
+            let server = start_server(dir.path()).await;
+
+            let link = Link::new(Arc::new(|_, _| {}), true);
+            let config = Config {
+                server_dir: server_dir.clone(),
+                identity_dir: dir.path().to_owned(),
+                exe: None,
+                bd: None,
+                resource_dir: None,
+                log: dir.path().join("smetanad.log"),
+                settings: Some(device.clone()),
+            };
+            let supervisor = tokio::spawn(supervise(link.clone(), config));
+            let loaded = link.call("settings_load", json!({ "project": "/work/a" })).await.unwrap();
+            assert_eq!(loaded["agent"], "codex", "the server keeps its half");
+
+            let seeded = file::load(&device).0;
+            assert!(seeded.device_seeded);
+            assert_eq!(seeded.appearance.theme, "light");
+            assert_eq!(seeded.appearance.ui_font_size, 15);
+            assert_eq!(seeded.layout.left_width, 300);
+            assert_eq!(seeded.projects["/work/a"].selected_task.as_deref(), Some("a-1"));
+            assert_eq!(seeded.projects["/work/a"].side_tab, "git");
+            assert!(seeded.dialogs.contains_key("run"), "this machine's own dialog sizes are kept");
+            assert_eq!(seeded.agent, "claude", "the server's half is not copied to the device");
+
+            supervisor.abort();
+            server.shutdown().await;
+        });
+    }
 }

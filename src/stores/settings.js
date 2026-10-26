@@ -59,7 +59,7 @@ import { isWaitMinutes, priorityOrder } from '../components/settings/runFailover
 import { effectiveAgentTable } from '../components/settings/agentRoles.js'
 /* Pure: the settings split into the server's fields and the device's, and the patch between two
    states of the server's. Only used when the shell says it is a client (`split` below). */
-import { combine, diffViews, fold, mergePatch, serverView, viewFromHalf, writeView } from './settingsSplit.js'
+import { combine, diffViews, fold, mergePatch, serverView, transportFailure, viewFromHalf, writeView } from './settingsSplit.js'
 import { onReconnect } from './connection.js'
 
 /* The defaults mirror the ones in Rust. With no back end (a browser) or after
@@ -459,12 +459,16 @@ let watching = false
    (`settings:changed`), and a change another client made arrives here the same way. The release build
    and a browser take none of these branches, and write one file as before. */
 let split = false
-/* The server's half as this window last agreed it with the server, in `serverView` shape. A patch
-   is the difference between this and what the store holds now. */
+/* The server's half as the server last confirmed it to this window, in `serverView` shape. */
 let baseline = null
-/* A patch the server did not take: the next fold lets the server's state win instead of keeping
-   what was typed, because a write that was refused is not kept and not replayed. */
-let refused = false
+/* Patches sent and not yet answered. The state to compare the store against is the baseline with
+   these laid over it (`believed`): comparing against the baseline alone would send a change twice,
+   and moving the baseline at send time would let the echo of an earlier patch undo a later edit. */
+let inflight = []
+/* The newest numbered state taken in, so a state that arrives late is not mistaken for a new one. */
+let lastRev = 0
+/* A change another client announced before the first load finished. */
+let early = null
 let syncing = false
 let closing = false
 
@@ -494,13 +498,17 @@ function flush() {
   return chain
 }
 
+/* What the server holds as far as this window knows: the confirmed state with the patches still on
+   their way laid over it. */
+function believed() {
+  return inflight.reduce((state, patch) => mergePatch(state, patch), baseline)
+}
+
 /* The client build's save: the whole device half to this machine, and to the server only what
-   changed in its half since the server last agreed. The baseline moves forward by the patch at
-   once, so two flushes in a row never send the same change twice; a patch that fails is not kept
-   (see `refused`). */
+   changed in its half since what it is believed to hold. */
 function flushSplit(snapshot) {
-  const patch = baseline ? diffViews(baseline, serverView(snapshot)) : undefined
-  if (patch) baseline = mergePatch(baseline, patch)
+  const patch = baseline ? diffViews(believed(), serverView(snapshot)) : undefined
+  if (patch) inflight.push(patch)
   chain = chain.then(async () => {
     try {
       await invoke('device_settings_save', { settings: snapshot })
@@ -508,13 +516,23 @@ function flushSplit(snapshot) {
       console.error('[settings] saving this device\'s settings failed:', err)
     }
     if (!patch) return
+    let reply
     try {
-      await invoke('settings_patch', { patch })
+      reply = await invoke('settings_patch', { patch })
     } catch (err) {
-      console.error('[settings] the server did not take the change, taking its state back:', err)
-      refused = true
-      await resyncServer()
+      inflight.splice(inflight.indexOf(patch), 1)
+      console.error('[settings] the server did not take the change:', err)
+      /* A connection that was down leaves the change pending, to go out once it is back - the
+         reconnect reads the server's state and sends what is still different. A refusal is the
+         server's answer: its state is read back and this change alone is taken out of the store, so
+         whatever else was typed since is kept. */
+      if (!transportFailure(err)) await resyncServer({ drop: patch })
+      return
     }
+    inflight.splice(inflight.indexOf(patch), 1)
+    baseline = mergePatch(baseline, patch)
+    /* Only once the last patch is answered: until then the answer is older than something sent. */
+    if (!inflight.length) takeIn(reply)
   })
   return chain
 }
@@ -649,22 +667,29 @@ async function readStored(project, asSplit = split) {
 }
 
 /* Takes in what the server holds of its half. Another client's change to one field never undoes a
-   change here to another, and (unless the server refused something) a change not yet sent is kept
-   and sent. */
-function adopt(incoming) {
-  const dropPending = refused
-  refused = false
-  const folded = fold(baseline, serverView(settings), incoming, { dropPending })
+   change here to another, and what has not been sent yet is kept and sent. */
+function adopt(incoming, { drop } = {}) {
+  const folded = fold(baseline ? believed() : null, serverView(settings), incoming, { drop })
   writeView(settings, folded.next)
   baseline = folded.baseline
-  if (folded.pending || dropPending) scheduleSave()
+  if (folded.pending) scheduleSave()
   announce()
 }
 
-async function resyncServer() {
+/* A numbered state from the server: the answer to a patch, or the event that announces one. */
+function takeIn(half) {
+  if (!half || typeof half !== 'object') return
+  if (typeof half.rev === 'number') {
+    if (half.rev <= lastRev) return
+    lastRev = half.rev
+  }
+  adopt(viewFromHalf(half, settings.activeProject, baseline ?? serverView(settings)))
+}
+
+async function resyncServer({ drop } = {}) {
   try {
     const server = await invoke('settings_load', { project: settings.activeProject })
-    adopt(serverView({ ...server, activeProject: settings.activeProject }))
+    adopt(serverView({ ...server, activeProject: settings.activeProject }), { drop })
   } catch (err) {
     console.error('[settings] reading the server\'s settings again failed:', err)
   }
@@ -675,14 +700,24 @@ async function startSplitSync() {
   syncing = true
   try {
     await listen('settings:changed', (event) => {
-      /* A section the payload lacks keeps what the server last held, never what is typed here. */
-      adopt(viewFromHalf(event.payload, settings.activeProject, baseline ?? serverView(settings)))
+      if (!baseline) {
+        early = event.payload
+        return
+      }
+      /* While a patch is out, what arrives is older than something this window sent - or is that
+         patch's own echo - and the answer to the last of them will carry every state before it. */
+      if (inflight.length) return
+      takeIn(event.payload)
     })
   } catch (err) {
     console.warn('[settings] not listening to the server\'s settings:', err)
   }
-  /* A connection that was lost may have missed changes. */
-  onReconnect(resyncServer)
+  /* A connection that was lost may have missed changes, and a server that came back numbers its
+     states from the start again. */
+  onReconnect(() => {
+    lastRev = 0
+    return resyncServer()
+  })
 }
 
 /* The read at startup: it applies everything — appearance, layout, the project
@@ -691,6 +726,9 @@ async function startSplitSync() {
    contents, not the disk. */
 export async function loadSettings() {
   split = await isSplit()
+  /* Listening comes first: a change another client makes while the first read is out is held in
+     `early` and folded in after it. */
+  if (split) await startSplitSync()
   try {
     const stored = await readStored(null)
     const base = defaults()
@@ -729,7 +767,11 @@ export async function loadSettings() {
   } catch (err) {
     console.error('[settings] the read failed, taking the defaults:', err)
   }
-  if (split) await startSplitSync()
+  if (split && baseline && early) {
+    const held = early
+    early = null
+    takeIn(held)
+  }
 
   /* Watching starts only after the load: otherwise the layout of the values
      just read would go back to disk on its own as a "change". */

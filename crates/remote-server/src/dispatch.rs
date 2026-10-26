@@ -262,6 +262,8 @@ calls! {
         => |s, c, a| answer(crate::settings::commands::settings_patch(s.ctx()?, a.patch).await);
     SettingsAdopt = "settings_adopt" { patch: Value }
         => |s, c, a| answer(crate::settings::commands::settings_adopt(s.ctx()?, a.patch).await);
+    SettingsDeviceHalf = "settings_device_half" {}
+        => |s, c, a| answer(crate::settings::commands::settings_device_half(s.ctx()?).await);
     AgentsCatalog = "agents_catalog" {} => |s, c, a| plain(blocking(crate::agents::catalogue).await?);
     AgentsInstalled = "agents_installed" {}
         => |s, c, a| plain(blocking(crate::agents::commands::agents_installed).await?);

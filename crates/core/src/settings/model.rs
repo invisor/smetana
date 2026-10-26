@@ -1436,6 +1436,11 @@ pub struct Settings {
     /// How big each dialog window was dragged to. At the root for the reason
     /// `DialogSize` records.
     pub dialogs: BTreeMap<String, DialogSize>,
+    /// Set once, by the client build, when this file's device half has been settled: seeded from the
+    /// server's file if an earlier build kept it there, or found already in place. It is the marker
+    /// the seeding runs by (`split::seed_device`) and means nothing to the release build, which
+    /// leaves it as it finds it.
+    pub device_seeded: bool,
 }
 
 impl Default for Settings {
@@ -1467,6 +1472,7 @@ impl Default for Settings {
             open_projects: Vec::new(),
             projects: BTreeMap::new(),
             dialogs: BTreeMap::new(),
+            device_seeded: false,
         }
     }
 }
@@ -1630,6 +1636,7 @@ pub fn parse(text: &str) -> Outcome {
         open_projects: section(&object, "openProjects"),
         projects: projects(&object),
         dialogs: dialogs(&object),
+        device_seeded: object.get("deviceSeeded").and_then(Value::as_bool).unwrap_or(false),
     };
     adopt_last_project(&mut settings);
     settings.validate();

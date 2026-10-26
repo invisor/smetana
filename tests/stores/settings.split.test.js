@@ -7,6 +7,7 @@ let ipc
 let emit
 let nextTick
 let settings
+let connection
 
 const splitState = { mode: 'split', state: 'connected', epoch: 1 }
 
@@ -16,6 +17,7 @@ beforeEach(async () => {
   emit = loaded.emit
   nextTick = loaded.nextTick
   settings = loaded.stores.settings
+  connection = loaded.stores.connection
   ipc.on('connection_state', splitState)
   /* The server's answer carries the device fields at their shipped values, which is what a server
      really holds of them. */
@@ -107,18 +109,70 @@ describe('saving in the client build', () => {
     expect(ipc.calls('settings_patch')).toHaveLength(1)
   })
 
-  it('takes the server state back when it refuses the change, and does not replay it', async () => {
+  it('takes back the refused field alone: what else was typed since is kept and sent', async () => {
     await settings.loadSettings()
-    ipc.fail('settings_patch', 'The connection to the server was lost. Nothing was changed.')
+    const rejects = []
+    ipc.on('settings_patch', () => new Promise((_, reject) => rejects.push(reject)))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    settings.settings.agentPrompt = 'be brief'
+    const first = settings.flushPending()
+    await vi.waitFor(() => expect(rejects).toHaveLength(1))
+    settings.settings.model = 'typed-since'
+    rejects[0]('the settings patch was refused: no')
+    await first
+    expect(settings.settings.agentPrompt, 'the refused field is the server\'s again').toBe('')
+    expect(settings.settings.model, 'the other edit is not discarded').toBe('typed-since')
+    ipc.on('settings_patch', null)
+    await wait()
+    expect(ipc.calls('settings_patch').at(-1)).toEqual({ patch: { model: 'typed-since' } })
+    expect(ipc.calls('settings_patch').filter((call) => 'agentPrompt' in call.patch), 'not replayed').toHaveLength(1)
+    errors.mockRestore()
+  })
+
+  it('keeps a change when the connection was down, and sends it once the server is back', async () => {
+    await settings.loadSettings()
+    await connection.initConnection()
+    ipc.fail('settings_patch', 'The connection to the server was lost before the request was sent. Nothing was changed.')
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     settings.settings.agentPrompt = 'be brief'
     await wait()
-    await vi.waitFor(() => expect(settings.settings.agentPrompt).toBe(''))
-    expect(ipc.calls('settings_patch')).toHaveLength(1)
+    expect(settings.settings.agentPrompt, 'still what was typed').toBe('be brief')
     errors.mockRestore()
+
+    ipc.on('settings_patch', null)
+    await emit('connection:state', { ...splitState, epoch: 2 })
+    await vi.waitFor(() => expect(ipc.calls('settings_patch')).toHaveLength(2))
+    expect(ipc.calls('settings_patch')[1]).toEqual({ patch: { agentPrompt: 'be brief' } })
+  })
+
+  it('is not undone by the echo of an earlier patch while a later one is on its way', async () => {
+    await settings.loadSettings()
+    const answers = []
+    ipc.on('settings_patch', () => new Promise((resolve) => answers.push(resolve)))
+    const half = (agentPrompt, rev) => ({ agentPrompt, rev, lastProject: '/work/a', openProjects: ['/work/a'] })
+
+    settings.settings.agentPrompt = 'ab'
+    const first = settings.flushPending()
+    await vi.waitFor(() => expect(answers).toHaveLength(1))
+    settings.settings.agentPrompt = 'abc'
+    const second = settings.flushPending()
+
+    await emit('settings:changed', half('ab', 1))
+    expect(settings.settings.agentPrompt, 'the first echo does not revert the second edit').toBe('abc')
+    answers[0](half('ab', 1))
+    await first
+    await vi.waitFor(() => expect(answers).toHaveLength(2))
+    settings.settings.agentPrompt = 'abcd'
+    await emit('settings:changed', half('abc', 2))
+    answers[1](half('abc', 2))
+    await second
+    expect(settings.settings.agentPrompt, 'nor does the last answer lose the character typed since').toBe('abcd')
+    await emit('settings:changed', half('ab', 1))
+    expect(settings.settings.agentPrompt, 'and a state that arrives late is ignored').toBe('abcd')
+
     ipc.on('settings_patch', null)
     await wait()
-    expect(ipc.calls('settings_patch'), 'the refused change is not sent again').toHaveLength(1)
+    expect(ipc.calls('settings_patch').at(-1)).toEqual({ patch: { agentPrompt: 'abcd' } })
   })
 })
 
@@ -148,6 +202,19 @@ describe('following the other clients', () => {
     expect(settings.settings.appearance.theme).toBe('light')
     await wait()
     expect(ipc.calls('settings_patch')).toEqual([{ patch: { agentPrompt: 'mine' } }])
+  })
+})
+
+describe('a change another client makes while the first read is out', () => {
+  it('is not missed', async () => {
+    let release
+    ipc.on('device_settings_load', () => new Promise((resolve) => (release = resolve)))
+    const loading = settings.loadSettings()
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    await emit('settings:changed', { agentPrompt: 'from elsewhere', rev: 1, lastProject: '/work/a', openProjects: ['/work/a'] })
+    release({ project: {} })
+    await loading
+    expect(settings.settings.agentPrompt).toBe('from elsewhere')
   })
 })
 

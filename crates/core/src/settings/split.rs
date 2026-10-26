@@ -195,7 +195,13 @@ pub fn merge_patch(target: &mut Value, patch: &Value) {
 /// patches that overlapped would each start from the file as it was and the second rename would
 /// undo the first: this lock is what makes "both are kept" true. It is held across the broadcast
 /// too, so that the order clients hear the states in is the order they were written in.
-static WRITE: Mutex<()> = Mutex::new(());
+pub(super) static WRITE: Mutex<()> = Mutex::new(());
+
+/// How many states of the server half this process has written, counted under [`WRITE`]. It rides
+/// the answer to a patch and the event that announces it as `rev`, so a client can tell an older state
+/// arriving late from a newer one. It starts again at 1 when the server does, which a client meets as
+/// a new connection.
+static REV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Applies a patch of the server's fields to the file at `path`, validates the result the way a read
 /// does, writes it, and hands the server half now in force to `announce` before the next patch can
@@ -254,7 +260,8 @@ pub fn apply_patch(
     next.version = CURRENT_VERSION;
     file::save(path, &next).map_err(SettingsError::Write)?;
     super::notify_run_settings_changed();
-    let half = server_half(&next);
+    let mut half = server_half(&next);
+    half["rev"] = Value::from(REV.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1);
     announce(&half);
     Ok(Some(half))
 }
@@ -274,6 +281,68 @@ pub fn merge_device(file: &mut Settings, resolved: ResolvedSettings, now: String
     if let Outcome::Ok(next) = parse(&doc.to_string()) {
         *file = next;
     }
+}
+
+/// The device's half of the server's own file, for a client whose earlier build kept the whole
+/// document there (step 5 forwarded `settings_save`): `None` when the server has no file. Read
+/// under the write lock, so it is a state and never half of a patch.
+pub fn device_half_of_file(path: &Path) -> Result<Option<Value>, SettingsError> {
+    let _guard = WRITE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !path.exists() {
+        return Ok(None);
+    }
+    let (stored, problem) = file::load(path);
+    if matches!(problem, Some(file::Problem::Unreadable)) {
+        return Err(SettingsError::Write(format!("{}: the file could not be read", path.display())));
+    }
+    Ok(Some(device_half(&stored)))
+}
+
+/// Settles the device file's device half, once. A file already marked (`deviceSeeded`) is left alone.
+/// Otherwise the device half the server held (`from_server`, if it held any) becomes this file's,
+/// with the dialog sizes this machine remembered laid over it - they were never the server's - and
+/// the mark is set in the same write. With `None` the device's own half is the one that stands, and
+/// only the mark is set. A copy of the file as it was goes to `settings.pre-seed.json` first, never
+/// overwritten. Answers whether it wrote anything.
+pub fn seed_device(path: &Path, from_server: Option<&Value>) -> Result<bool, String> {
+    let (local, problem) = file::load(path);
+    if problem.is_some() {
+        return Err(format!("{}: the device settings could not be read", path.display()));
+    }
+    if local.device_seeded {
+        return Ok(false);
+    }
+    let seeded = match from_server {
+        Some(half) => {
+            if path.exists() {
+                let backup = path.with_file_name("settings.pre-seed.json");
+                if !backup.exists() {
+                    std::fs::copy(path, &backup).map_err(|err| format!("{}: {err}", backup.display()))?;
+                }
+            }
+            // The server's device keys, then this device's own file over them where it has an
+            // opinion the server could not: its dialog sizes, and anything the server lacks.
+            let mut doc = keep_device(half);
+            let own = keep_device(&document(&local));
+            if let Some(dialogs) = own.get("dialogs") {
+                let mut merged = doc.get("dialogs").cloned().unwrap_or(Value::Null);
+                merge_patch(&mut merged, dialogs);
+                doc["dialogs"] = merged;
+            }
+            doc["deviceSeeded"] = Value::Bool(true);
+            // The server-owned keys this file may still hold go back to the defaults: the migration
+            // has offered them already and the device keeps none.
+            let fresh = server_half(&Settings::default());
+            merge_patch(&mut doc, &fresh);
+            match parse(&doc.to_string()) {
+                Outcome::Ok(next) => next,
+                _ => return Err("the seeded settings did not read back".to_owned()),
+            }
+        }
+        None => Settings { device_seeded: true, ..local },
+    };
+    file::save(path, &seeded)?;
+    Ok(true)
 }
 
 /// The server half of a document with the entries that say nothing taken out: a project with no
@@ -440,7 +509,7 @@ mod tests {
         device_sorted.sort();
         assert_eq!(
             device_sorted,
-            ["appearance", "dialogs", "editor", "git", "kanban", "layout", "notifications", "projects", "reports", "updates", "version", "window"]
+            ["appearance", "deviceSeeded", "dialogs", "editor", "git", "kanban", "layout", "notifications", "projects", "reports", "updates", "version", "window"]
         );
         let server: Vec<String> = keep_server(&whole).as_object().unwrap().keys().cloned().collect();
         for key in whole.as_object().unwrap().keys() {
@@ -481,6 +550,8 @@ mod tests {
         assert_eq!(after.subscription.reduced_at, 70, "a field the patch did not name is untouched");
         assert_eq!(after.agent_prompt, "be brief");
         assert_eq!(after.run_failover, old_settings().run_failover);
+        let mut half = half;
+        half.as_object_mut().unwrap().remove("rev");
         assert_eq!(half, server_half(&after), "the answer is the half now in force");
     }
 
@@ -523,7 +594,11 @@ mod tests {
         assert_eq!(after.remote.relay_url, "https://relay.example.org");
         let heard = heard.lock().unwrap();
         assert_eq!(heard.len(), 8, "every applied patch is announced once");
-        assert_eq!(heard.last().unwrap(), &server_half(&after), "the last state announced is the state on disk");
+        let mut last = heard.last().unwrap().clone();
+        let revs: Vec<u64> = heard.iter().map(|half| half["rev"].as_u64().unwrap()).collect();
+        assert!(revs.windows(2).all(|pair| pair[0] < pair[1]), "the states are numbered in the order they were written: {revs:?}");
+        last.as_object_mut().unwrap().remove("rev");
+        assert_eq!(last, server_half(&after), "the last state announced is the state on disk");
         // Each announcement holds everything before it: the states are heard in the order written.
         let held = |half: &Value| ["agent", "agentLanguage", "agentPrompt", "conversationPanel"].iter().filter(|key| half[**key] != server_half(&Settings::default())[**key]).count()
             + usize::from(half["subscription"]["pauseAt"] != 90)
@@ -683,5 +758,68 @@ mod tests {
         let mut device = Settings::default();
         device.projects.insert("/work/a".into(), model::ProjectState { selected_task: Some("a-1".into()), ..Default::default() });
         assert!(legacy_server_patch(&device).is_none());
+    }
+
+    /// What step 5 left: the server's `settings.json` holds the whole document, and the device's file
+    /// holds only what this machine remembered itself.
+    #[test]
+    fn a_step_5_server_file_seeds_every_device_field_onto_the_device_and_loses_nothing() {
+        let tmp = dir();
+        let server = tmp.path().join("server").join("settings.json");
+        let device = tmp.path().join("settings.json");
+        std::fs::create_dir_all(server.parent().unwrap()).unwrap();
+        std::fs::write(&server, old_file()).unwrap();
+        std::fs::write(&device, r#"{"version":1,"dialogs":{"commit":{"width":500,"height":400}}}"#).unwrap();
+        let original = old_settings();
+
+        let half = device_half_of_file(&server).unwrap().expect("the server has a file");
+        assert!(seed_device(&device, Some(&half)).unwrap());
+        let seeded = file::load(&device).0;
+
+        assert!(seeded.device_seeded);
+        let mut expected = device_half(&original);
+        merge_patch(&mut expected, &json!({"dialogs": {"commit": {"width": 500, "height": 400}}, "deviceSeeded": true}));
+        assert_eq!(device_half(&seeded), expected, "every device field is on the device");
+        assert_eq!(seeded.appearance, original.appearance);
+        assert_eq!(seeded.layout, original.layout);
+        assert_eq!(seeded.kanban, original.kanban);
+        assert_eq!(seeded.notifications, original.notifications);
+        assert_eq!(seeded.projects["/work/a"].selected_task.as_deref(), Some("a-1"));
+        assert_eq!(seeded.projects["/work/a"].agent_names, original.projects["/work/a"].agent_names);
+        assert_eq!(seeded.dialogs.len(), 2, "the dialog sizes of both files are kept");
+        assert_eq!(seeded.agent, Settings::default().agent, "the server's half is not copied to the device");
+        // Nothing is lost: the server still holds the whole document, and the device's old file is kept.
+        assert_eq!(file::load(&server).0, original);
+        assert!(device.with_file_name("settings.pre-seed.json").exists());
+    }
+
+    #[test]
+    fn seeding_happens_once_and_a_marked_file_is_left_alone() {
+        let tmp = dir();
+        let device = tmp.path().join("settings.json");
+        let half = device_half(&old_settings());
+        assert!(seed_device(&device, Some(&half)).unwrap());
+        // Edited on the device since; a second launch must not bring the server's copy back.
+        let mut mine = file::load(&device).0;
+        mine.appearance.theme = "dark".into();
+        file::save(&device, &mine).unwrap();
+        assert!(!seed_device(&device, Some(&half)).unwrap());
+        assert!(!seed_device(&device, None).unwrap());
+        assert_eq!(file::load(&device).0.appearance.theme, "dark");
+    }
+
+    #[test]
+    fn a_server_with_no_file_leaves_the_devices_own_half_and_only_marks_it() {
+        let tmp = dir();
+        assert_eq!(device_half_of_file(&tmp.path().join("none.json")).unwrap(), None);
+        let device = tmp.path().join("settings.json");
+        let mut mine = Settings::default();
+        mine.appearance.theme = "light".into();
+        file::save(&device, &mine).unwrap();
+        assert!(seed_device(&device, None).unwrap());
+        let after = file::load(&device).0;
+        assert!(after.device_seeded);
+        assert_eq!(after.appearance.theme, "light");
+        assert!(!device.with_file_name("settings.pre-seed.json").exists());
     }
 }

@@ -5,6 +5,8 @@ import {
   fold,
   mergePatch,
   serverView,
+  subtractPatch,
+  transportFailure,
   viewFromHalf,
   writeView
 } from '../../src/stores/settingsSplit.js'
@@ -67,6 +69,34 @@ describe('a patch between two views', () => {
   })
 })
 
+describe('the project open here in the list', () => {
+  it('is not an edit when it was only put back after another client took it out', () => {
+    const before = serverView(store({ openProjects: ['/b'] }))
+    const after = serverView(store({ openProjects: ['/b', '/a'] }))
+    expect(diffViews(before, after)).toBeUndefined()
+  })
+
+  it('is still an edit when something else about the list changed', () => {
+    const before = serverView(store({ openProjects: ['/b'] }))
+    const after = serverView(store({ openProjects: ['/b', '/c', '/a'] }))
+    expect(diffViews(before, after)).toEqual({ openProjects: ['/b', '/c', '/a'] })
+  })
+})
+
+describe('a refused patch', () => {
+  it('is taken out of what is pending, key by key', () => {
+    expect(subtractPatch({ a: 1, b: { c: 2, d: 3 } }, { a: 9, b: { c: 0 } })).toEqual({ b: { d: 3 } })
+    expect(subtractPatch({ a: 1 }, { a: 9 })).toBeUndefined()
+  })
+
+  it('is told from a connection that was down by the words the shell uses', () => {
+    expect(transportFailure('The connection to the server was lost before the request was sent. Nothing was changed.')).toBe(true)
+    expect(transportFailure('Not connected to the server yet.')).toBe(true)
+    expect(transportFailure('the settings patch was refused: no')).toBe(false)
+    expect(transportFailure({ kind: 'x' })).toBe(false)
+  })
+})
+
 describe('merge patch', () => {
   it('merges objects, removes on null and replaces anything else', () => {
     expect(mergePatch({ a: { b: 1, c: 2 }, l: [1, 2], gone: 1 }, { a: { b: 5 }, l: [3], gone: null })).toEqual({
@@ -102,11 +132,13 @@ describe('folding in what the server holds', () => {
     expect(pending).toBeUndefined()
   })
 
-  it('takes the server outright when it refused what was typed', () => {
+  it('takes back only the fields of the patch the server refused', () => {
     const baseline = serverView(store())
-    const { next, pending } = fold(baseline, serverView(store({ agentPrompt: 'typed' })), serverView(store()), { dropPending: true })
+    const current = serverView(store({ agentPrompt: 'typed', model: 'kept' }))
+    const { next, pending } = fold(baseline, current, serverView(store()), { drop: { agentPrompt: 'typed' } })
     expect(next.agentPrompt).toBe('')
-    expect(pending).toBeUndefined()
+    expect(next.model).toBe('kept')
+    expect(pending).toEqual({ model: 'kept' })
   })
 
   it('leaves which project is open to this window', () => {

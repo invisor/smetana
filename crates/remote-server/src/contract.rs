@@ -911,6 +911,17 @@ fn server_replies(map: &mut BTreeMap<&'static str, Vec<Value>>) {
 
     map.insert("settings_patch", settings_halves());
     map.insert("settings_adopt", vec![json!(true), json!(false)]);
+    map.insert(
+        "settings_device_half",
+        vec![
+            json!(null),
+            crate::settings::split::device_half(&{
+                let mut settings = crate::settings::model::Settings::default();
+                settings.projects.insert("/work/smetana".into(), crate::settings::model::ProjectState::default());
+                settings
+            }),
+        ],
+    );
 }
 
 /// The server half of the settings as `settings_patch` answers and `settings:changed` carries it:
@@ -929,9 +940,14 @@ fn settings_halves() -> Vec<Value> {
             ..ProjectState::default()
         },
     );
+    // Both carry the `rev` the server numbers its states by.
+    let with_rev = |mut half: Value, rev: u64| {
+        half["rev"] = json!(rev);
+        half
+    };
     vec![
-        crate::settings::split::server_half(&Settings::default()),
-        crate::settings::split::server_half(&settings),
+        with_rev(crate::settings::split::server_half(&Settings::default()), 1),
+        with_rev(crate::settings::split::server_half(&settings), 2),
     ]
 }
 
