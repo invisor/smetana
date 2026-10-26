@@ -353,6 +353,7 @@ pub(crate) async fn decide_pairing(remote: &Remote, key: &PublicKey, request: Pa
         last_contact: None,
         // The ticket's, not the request's: `platform` above is what the device says it is.
         kind,
+        local: matches!(spent, Spent::Local),
     };
     if let Err(err) = remote.devices.add(device) {
         log::warn!("remote: could not save a paired device: {err}");

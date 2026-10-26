@@ -37,6 +37,8 @@ npm test             # front-end tests (vitest), single run
 npm run test:watch   # the same, in watch mode
 cd src-tauri && cargo test    # the shell: wrappers, windows, updates, the phone endpoint
 cd crates/core && cargo test  # everything that does the work: tracker, runs, sessions, files, git
+cd crates/remote-server && cargo test  # the endpoint, pairing, devices, the bridge and the contract
+cd crates/smetanad && cargo test       # the headless server and its command line
 ```
 
 One file, or one test, rather than the lot:
@@ -49,7 +51,7 @@ cd crates/core && cargo test settings::model # by module path
 ```
 
 Two test runners: `npm test` covers the front end's pure logic — the plain modules and the stores —
-and `cargo test` (in `src-tauri` and in `crates/core`) covers the Rust side. That used to say "the nine plain modules" and had been wrong
+and `cargo test` (in `src-tauri` and in each of `crates/core`, `crates/remote-server`, `crates/smetanad`) covers the Rust side. That used to say "the nine plain modules" and had been wrong
 for some time before anybody noticed; `tests/` mirrors `src/`, so the directory is the count and it
 cannot drift the way a number written once does — name where a list lives, not how long it was on the
 day somebody looked. Neither runner covers components: there is no component test runner and no
@@ -230,7 +232,7 @@ cannot make it.
 | the column order, and what of the board is drawn | `.claude/rules/kanban-board.md` |
 | `settings.json`, and the settings window | `.claude/rules/settings.md` |
 | in-app updates, and the release that feeds them | `.claude/rules/updates.md` |
-| the phone companion: protocol crate, pairing, devices | `.claude/rules/remote.md` |
+| the phone companion and the server: protocol crate, pairing, devices, `smetanad` | `.claude/rules/remote.md` |
 | the phone companion's own app, `mobile/` | `.claude/rules/mobile.md` |
 
 ### The bd sidecar

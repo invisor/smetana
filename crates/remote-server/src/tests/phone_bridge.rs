@@ -60,6 +60,9 @@ async fn remote_bridge_refuses_every_command_off_the_allowlist_and_runs_no_handl
         "terminal_write",
         "terminal_shell",
         "remote_device_revoke",
+        // The server's own: not the desktop app's commands, and still forbidden rather than unknown.
+        "server_health",
+        "server_restart",
     ];
     for cmd in named {
         let answer = invoke(Some(&dispatch), &PHONE, cmd, json!({})).await;

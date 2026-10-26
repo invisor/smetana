@@ -666,6 +666,7 @@ fn devices() -> Vec<Device> {
         paired_at: 1_760_000_000,
         last_contact: push.then_some(1_760_000_100),
         kind,
+        local: false,
     };
     vec![
         device("ab", Platform::Ios, DeviceKind::Phone, true),

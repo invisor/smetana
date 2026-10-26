@@ -352,6 +352,7 @@ async fn remote_a_device_listed_on_disk_is_served_after_a_restart() {
             paired_at: 1,
             last_contact: None,
             kind: DeviceKind::Phone,
+            local: false,
         })
         .unwrap();
     let conn = phone.connect(&h).await;
