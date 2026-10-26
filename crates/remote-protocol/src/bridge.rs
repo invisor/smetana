@@ -14,7 +14,7 @@
 //!
 //! **The shape of every allowlisted command and event is a public contract.**
 //! `contract/` holds an example of each argument object, each reply and each
-//! event payload, and `src-tauri/src/remote/contract.rs` compares the desktop's
+//! event payload, and `crates/remote-server/src/contract.rs` compares the desktop's
 //! real values with them. See the repository's `.claude/rules/remote.md`.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -260,7 +260,20 @@ pub const SERVER_COMMANDS: &[&str] = &[
     "remote_pair_decide",
     "remote_devices",
     "remote_device_revoke",
+    // The server's own: commands the desktop app does not have, because they are about the machine
+    // the server runs on. Added in protocol 1.9; see `SERVER_ONLY_COMMANDS`.
+    "server_health",
+    "server_restart",
 ];
+
+/// The server commands that exist only on the server: the desktop app registers no Tauri command of
+/// that name, so they are the one part of [`SERVER_COMMANDS`] that is not also the desktop's. A phone
+/// calling one is `Forbidden` all the same, not `UnknownCommand`.
+///
+/// - `server_health` — the report on the server's environment (bd, git, each agent's binary).
+/// - `server_restart` — the restart gateway: `{ mode: "now" | "when-idle" | "cancel", confirm }`.
+///   Nothing is restarted while work is alive unless the same request carries `confirm: true`.
+pub const SERVER_ONLY_COMMANDS: &[&str] = &["server_health", "server_restart"];
 
 /// Every event a desktop device may listen to: the phone's list (first), then the rest of what
 /// the desktop's front end listens to that a server emits. `terminal:output` is the one that is

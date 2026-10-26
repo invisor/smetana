@@ -17,6 +17,7 @@ pub mod attachments;
 pub mod context;
 pub mod files;
 pub mod git;
+pub mod health;
 pub mod project;
 pub mod remote;
 pub mod rlimit;

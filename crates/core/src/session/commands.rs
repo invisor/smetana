@@ -54,6 +54,12 @@ pub async fn session_close(handle: &SessionHandle, id: SessionId) -> Result<(), 
 pub mod plain {
     use super::*;
 
+    /// The driven sessions whose child is running. Not a front-end command: the server's restart
+    /// gateway asks, to list what a restart would end.
+    pub async fn live(handle: &SessionHandle) -> Result<Vec<super::super::service::LiveSession>, SessionError> {
+        ask(handle, Request::Live).await
+    }
+
     pub async fn start(
         handle: &SessionHandle,
         project: String,

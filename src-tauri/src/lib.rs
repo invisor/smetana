@@ -9,7 +9,7 @@ mod window;
 // Everything that does the work lives in `crates/core`, which has no `tauri`. These bring its modules
 // in under the names the shell has always used, so `crate::tracker::...` still reads the same.
 use smetana_core::{
-  agents, attachments, context, project, rlimit, runs, session, settings, shell_env, terminal,
+  attachments, context, project, rlimit, runs, session, settings, shell_env, terminal,
   tracker,
 };
 

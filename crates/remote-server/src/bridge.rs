@@ -614,7 +614,7 @@ impl Hub {
 
 /// What a call to `cmd` answers when the device's kind may not call it.
 pub fn refusal(cmd: &str) -> BridgeError {
-    if DESKTOP_COMMANDS.contains(&cmd) {
+    if DESKTOP_COMMANDS.contains(&cmd) || remote_protocol::SERVER_ONLY_COMMANDS.contains(&cmd) {
         BridgeError::Forbidden
     } else {
         BridgeError::UnknownCommand

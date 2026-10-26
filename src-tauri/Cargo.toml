@@ -142,7 +142,7 @@ tauri-plugin-updater = "2.10.1"
 # next thing to want. If that never arrives, this is the line to delete.
 tauri-plugin-process = "2.3.1"
 
-# The companion (`src-tauri/src/remote/`, `crates/remote-protocol/`): the wire types the
+# The companion (`crates/remote-server/`, `crates/remote-protocol/`): the wire types the
 # desktop shares with the mobile app and the servers, and the iroh endpoint that
 # carries them. Path dependency on purpose, with no workspace at the root: the
 # crate is built and tested on its own (`cd crates/remote-protocol && cargo
@@ -165,20 +165,11 @@ remote-protocol = { path = "../crates/remote-protocol" }
 # moved there with the code that uses them, and their notes with them.
 smetana-core = { path = "../crates/core" }
 
-# The push sender (`remote/push.rs`) posts one JSON body to the gateway. `reqwest` was already in
-# the tree through the updater and iroh's relay client, so this names it rather than adding a
-# second HTTP client; the features are the updater's (`rustls-no-provider`, no default TLS
-# backend), so the one build is shared and no second crypto provider is compiled.
-reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
-# `rustls-no-provider` builds a client only if a process-wide crypto provider exists, and the updater
-# installs ring lazily on its first check. A push can come first, so the sender installs the same
-# provider itself (already in the lock through the updater: no new package).
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
-iroh = "1.3"
-# The pairing secret. 0.10 because that is the major iroh itself is on, so this
-# adds no second copy.
-rand = "0.10"
-data-encoding = "2"
+# The server half of the protocol: the iroh endpoint, pairing, the device list, the bridge and the
+# push sender. It was `src/remote/` here; the headless `smetanad` serves from the same crate, and it has
+# no `tauri` (`cd crates/remote-server && cargo test`). `iroh`, `rand`, `data-encoding` and the push
+# sender's `reqwest` and `rustls` went with it.
+remote-server = { path = "../crates/remote-server" }
 
 # The system clipboard for **files**, which is three formats and no crate that
 # covers them: `tauri-plugin-clipboard-manager` above stays exactly what it is,
@@ -247,8 +238,3 @@ windows = { version = "0.61", features = [
 # keep in step.
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
-
-[dev-dependencies]
-# The stand-in push gateway in `remote/push.rs`'s tests. The permission listener in `crates/core`
-# is its other user, so the crate is already compiled; this names the same features.
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }

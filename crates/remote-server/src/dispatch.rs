@@ -25,7 +25,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use smetana_core::tracker::model::IssuePatch;
 use smetana_core::vcs::model::OpKind;
-use tauri::{AppHandle, Manager};
 
 use super::bridge::{BoxFuture, Caller, Dispatch};
 use crate::agents::Intent;
@@ -62,6 +61,9 @@ pub struct Services {
     /// The device service, for the commands about devices. Weak: the service owns the hub that
     /// owns this.
     pub remote: Option<std::sync::Weak<super::Remote>>,
+    /// The restart gateway, on a server that can be restarted from a client. `None` on the desktop,
+    /// which has a window to close instead.
+    pub gateway: Option<std::sync::Arc<super::gateway::Gateway>>,
 }
 
 pub type ProjectSwitched = std::sync::Arc<dyn Fn(Option<String>) + Send + Sync>;
@@ -75,27 +77,9 @@ pub fn project_switched_payload(path: Option<String>) -> Value {
 }
 
 impl Services {
-    /// The managed state of a running app. `None` while any of it is missing,
-    /// which at the end of `setup` it never is.
-    pub fn from_app(app: &AppHandle, remote: Option<std::sync::Weak<super::Remote>>) -> Option<Self> {
-        let ctx = crate::host::context(app);
-        let kept = ctx.clone();
-        Some(Self {
-            ctx: Some(kept),
-            remote,
-            tracker: app.try_state::<TrackerHandle>()?.inner().clone(),
-            runs: app.try_state::<RunHandle>()?.inner().clone(),
-            sessions: app.try_state::<SessionHandle>()?.inner().clone(),
-            terminal: app.try_state::<TerminalHandle>()?.inner().clone(),
-            settings_path: crate::settings::commands::settings_path(&ctx)
-                .map_err(|err| err.to_string()),
-            attachments_root: crate::attachments::store_root(&ctx).map_err(|err| err.to_string()),
-            project_switched: Some({
-                std::sync::Arc::new(move |path: Option<String>| {
-                    ctx.emit_json(PROJECT_SWITCHED_EVENT, project_switched_payload(path));
-                })
-            }),
-        })
+    /// The [`ProjectSwitched`] a host wants: the window event, emitted through the context's sink.
+    pub fn announce_project_switch(ctx: Context) -> ProjectSwitched {
+        std::sync::Arc::new(move |path| ctx.emit_json(PROJECT_SWITCHED_EVENT, project_switched_payload(path)))
     }
 }
 
@@ -214,6 +198,12 @@ macro_rules! calls {
 impl Services {
     fn ctx(&self) -> Result<&Context, BridgeError> {
         self.ctx.as_ref().ok_or_else(|| BridgeError::Internal("the server has no context".into()))
+    }
+
+    fn gateway(&self) -> Result<std::sync::Arc<super::gateway::Gateway>, BridgeError> {
+        self.gateway
+            .clone()
+            .ok_or_else(|| BridgeError::Handler(json!("this server cannot be restarted from a client")))
     }
 
     fn remote(&self) -> Result<std::sync::Arc<super::Remote>, BridgeError> {
@@ -464,6 +454,11 @@ calls! {
     RemoteDevices = "remote_devices" {} => |s, c, a| answer(super::commands::plain::devices(&s.remote()?));
     RemoteDeviceRevoke = "remote_device_revoke" { key: String }
         => |s, c, a| answer(super::commands::plain::revoke(&s.remote()?, &a.key));
+
+    // --- the machine the server runs on
+    ServerHealth = "server_health" {} => |s, c, a| plain(smetana_core::health::report(s.ctx()?).await);
+    ServerRestart = "server_restart" { mode: super::gateway::Mode, confirm: Option<bool> }
+        => |s, c, a| plain(s.gateway()?.request(a.mode, a.confirm.unwrap_or(false)).await);
 }
 
 impl Dispatch for Services {

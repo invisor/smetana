@@ -355,6 +355,17 @@ pub enum Request {
     /// ceiling on a blocking receive. The same shape the terminal's has, for
     /// the same reason.
     ShutDown(std::sync::mpsc::Sender<()>),
+    /// Every driven session whose child is still running, for the server's restart gateway: a
+    /// restart ends every child it owns, so what is alive is what a person has to be shown first.
+    Live(oneshot::Sender<Vec<LiveSession>>),
+}
+
+/// A driven session with a running child: what the restart gateway lists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveSession {
+    pub id: SessionId,
+    pub project: String,
+    pub agent: String,
 }
 
 #[derive(Clone)]
@@ -2403,6 +2414,15 @@ fn handle(
                 }
                 None => Err(SessionError::NoSuchSession(id)),
             });
+        }
+        Request::Live(tx) => {
+            let mut list: Vec<LiveSession> = sessions
+                .iter()
+                .filter(|(_, live)| live.child_alive)
+                .map(|(id, live)| LiveSession { id: *id, project: live.project.clone(), agent: live.agent.clone() })
+                .collect();
+            list.sort_by_key(|session| session.id);
+            let _ = tx.send(list);
         }
         Request::Since(id, seq, tx) => {
             let _ = tx.send(match sessions.get(&id) {

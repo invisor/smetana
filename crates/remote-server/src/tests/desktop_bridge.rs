@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use super::phone_bridge::{Client, Recorder};
 use super::{harness, pair_accepted, pair_accepted_as, phone, wait_until, Harness, Phone};
-use crate::remote::bridge::{BoxFuture, Caller, Dispatch};
+use crate::bridge::{BoxFuture, Caller, Dispatch};
 use crate::terminal::stream::History;
 
 const RING: usize = 256 * 1024;

@@ -29,6 +29,7 @@ use remote_protocol::{
 #[cfg(not(unix))]
 use super::devices::write_atomic;
 use super::devices::Device;
+use super::pairing::Spent;
 use super::{Event, Remote, MIN_MOBILE_VERSION, PROTOCOL_MAJOR, PROTOCOL_MINOR, RECOMMENDED_MOBILE_VERSION};
 
 pub const KEY_FILE: &str = "remote-key";
@@ -113,6 +114,34 @@ pub async fn bind(key: &SecretKey, relay: &str) -> Result<Endpoint, String> {
         .map_err(|err| format!("could not start the endpoint: {err}"))
 }
 
+/// Binds the endpoint a client on this machine dials: loopback only, no relay, an address the
+/// system picks. The same key as the public endpoint and the same protocol; what differs is who can
+/// reach it, which is why the pairing a client does here may be the local credential's.
+pub async fn bind_loopback(key: &SecretKey) -> Result<Endpoint, String> {
+    Endpoint::builder(presets::Minimal)
+        .secret_key(key.clone())
+        .alpns(vec![ALPN.to_vec()])
+        .relay_mode(RelayMode::Disabled)
+        .clear_ip_transports()
+        .bind_addr("127.0.0.1:0")
+        .map_err(|err| format!("could not bind the loopback address: {err}"))?
+        .bind()
+        .await
+        .map_err(|err| format!("could not start the loopback endpoint: {err}"))
+}
+
+/// The address of a loopback endpoint once it has one, which is a moment after it is bound.
+pub async fn loopback_addr(endpoint: &Endpoint) -> Result<iroh::EndpointAddr, String> {
+    for _ in 0..200 {
+        let addr = endpoint.addr();
+        if addr.ip_addrs().next().is_some() {
+            return Ok(addr);
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    Err("the loopback endpoint has no address".to_owned())
+}
+
 /// Open connections by phone, so revoking one can close them.
 #[derive(Default)]
 pub struct Connections {
@@ -168,7 +197,7 @@ async fn handle(remote: Arc<Remote>, conn: Connection) {
     let key = conn.remote_id();
     if remote.devices.contains(&key) {
         serve_paired(&remote, conn, key).await;
-    } else if remote.pairing.is_open() {
+    } else if remote.pairing.accepts_requests() {
         // Held for the whole of the exchange, the wait for the person included.
         match remote.pairing_slots.clone().try_acquire_owned() {
             Ok(_permit) => serve_pairing(&remote, conn, key).await,
@@ -286,7 +315,7 @@ async fn serve_pairing(remote: &Arc<Remote>, conn: Connection, key: PublicKey) {
 /// The whole of the pairing decision for one request that has been read.
 pub(crate) async fn decide_pairing(remote: &Remote, key: &PublicKey, request: PairRequest) -> PairReply {
     let rejected = |reason: &str| PairReply::Rejected { reason: reason.to_owned() };
-    let (remaining, kind) = match remote.pairing.spend_for_kind(&request.secret) {
+    let spent = match remote.pairing.spend_any(&request.secret) {
         Ok(spent) => spent,
         Err(reason) => return rejected(reason),
     };
@@ -294,19 +323,26 @@ pub(crate) async fn decide_pairing(remote: &Remote, key: &PublicKey, request: Pa
         return rejected("the push token is too long");
     }
     let name = clean_name(&request.device_name);
-    let waiting = match remote.pairing.wait_for_decision() {
-        Ok(waiting) => waiting,
-        Err(reason) => return rejected(reason),
+    let kind = match spent {
+        Spent::Ticket { remaining, kind } => {
+            let waiting = match remote.pairing.wait_for_decision() {
+                Ok(waiting) => waiting,
+                Err(reason) => return rejected(reason),
+            };
+            let id = waiting.id;
+            remote.emit(Event::PairRequest { device_name: name.clone(), platform: request.platform });
+            let accepted = waiting.answer(remaining).await;
+            remote.pairing.finish_waiting(id);
+            // However it ended, the prompt on the screen is stale now.
+            remote.emit(Event::PairEnded);
+            if !accepted {
+                return rejected("the desktop did not confirm the pairing");
+            }
+            kind
+        }
+        // The credential is in a file only this server's user reads: there is no one to ask.
+        Spent::Local => DeviceKind::Desktop,
     };
-    let id = waiting.id;
-    remote.emit(Event::PairRequest { device_name: name.clone(), platform: request.platform });
-    let accepted = waiting.answer(remaining).await;
-    remote.pairing.finish_waiting(id);
-    // However it ended, the prompt on the screen is stale now.
-    remote.emit(Event::PairEnded);
-    if !accepted {
-        return rejected("the desktop did not confirm the pairing");
-    }
     let device = Device {
         key: key.to_string(),
         name,

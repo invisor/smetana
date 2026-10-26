@@ -41,6 +41,9 @@ struct Issued {
 #[derive(Default)]
 struct State {
     issued: Option<Issued>,
+    /// The local credential: a secret a client on this machine reads from a file in the data
+    /// directory, so that it is paired without a person. See [`Pairing::set_local`].
+    local: Option<[u8; SECRET_LEN]>,
     /// The person's answer to the request that is on screen, if one is.
     waiting: Option<(u64, oneshot::Sender<bool>)>,
     /// The id the next wait gets.
@@ -50,6 +53,15 @@ struct State {
 pub struct Pairing {
     state: Mutex<State>,
     clock: Clock,
+}
+
+/// What a presented secret turned out to be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Spent {
+    /// A ticket, now burned: the seconds left of its term and the kind it admits.
+    Ticket { remaining: u64, kind: DeviceKind },
+    /// The local credential: a desktop, with no confirmation.
+    Local,
 }
 
 /// A request that has been entered and is waiting for the person.
@@ -97,7 +109,24 @@ impl Pairing {
         PairingTicket { desktop, relay: relay.to_owned(), secret, expires_at }
     }
 
-    /// Withdraws the ticket and refuses a request that is waiting on the person.
+    /// Makes `secret` the local credential, replacing any earlier one. Unlike a ticket it has no term
+    /// and is not burned: it is good for as long as this process runs, and the host writes it to a
+    /// file only the server's own user can read, which is the whole of the check — whoever can read
+    /// that file can already read the device key and every repository. It admits a desktop and
+    /// nothing else, and a request that carries it needs no confirmation, since nobody is at the
+    /// terminal to give one.
+    pub fn set_local(&self, secret: [u8; SECRET_LEN]) {
+        self.lock().local = Some(secret);
+    }
+
+    /// Whether a request from a key the list does not know is worth reading at all: a ticket is
+    /// outstanding, or a local credential is set.
+    pub fn accepts_requests(&self) -> bool {
+        self.is_open() || self.lock().local.is_some()
+    }
+
+    /// Withdraws the ticket and refuses a request that is waiting on the person. The local
+    /// credential is not a ticket and stays.
     pub fn cancel(&self) {
         let mut state = self.lock();
         state.issued = None;
@@ -122,6 +151,24 @@ impl Pairing {
 
     /// [`Pairing::spend`], and the kind the ticket admitted.
     pub fn spend_for_kind(&self, presented: &[u8; SECRET_LEN]) -> Result<(u64, DeviceKind), &'static str> {
+        match self.spend_any(presented)? {
+            Spent::Ticket { remaining, kind } => Ok((remaining, kind)),
+            // Callers that cannot take a local credential do not get to see one as a ticket.
+            Spent::Local => Err("this pairing code is not valid"),
+        }
+    }
+
+    /// Checks a presented secret against the local credential, then against the ticket. A ticket is
+    /// burned; the local credential is not.
+    pub fn spend_any(&self, presented: &[u8; SECRET_LEN]) -> Result<Spent, &'static str> {
+        if self.lock().local.as_ref().is_some_and(|local| same(local, presented)) {
+            return Ok(Spent::Local);
+        }
+        let (remaining, kind) = self.spend_ticket(presented)?;
+        Ok(Spent::Ticket { remaining, kind })
+    }
+
+    fn spend_ticket(&self, presented: &[u8; SECRET_LEN]) -> Result<(u64, DeviceKind), &'static str> {
         let now = self.now();
         let mut state = self.lock();
         let Some(issued) = state.issued.as_ref() else {
@@ -261,6 +308,20 @@ mod tests {
         pairing.cancel();
         assert!(!pairing.is_open());
         assert!(pairing.spend(&ticket.secret).is_err());
+    }
+
+    #[test]
+    fn the_local_credential_is_not_burned_and_admits_no_ticket_check() {
+        let (pairing, _) = pairing();
+        pairing.set_local([9; SECRET_LEN]);
+        assert!(pairing.accepts_requests());
+        assert!(!pairing.is_open(), "it is not a ticket");
+        assert_eq!(pairing.spend_any(&[9; SECRET_LEN]), Ok(Spent::Local));
+        assert_eq!(pairing.spend_any(&[9; SECRET_LEN]), Ok(Spent::Local), "good for as long as the process runs");
+        assert!(pairing.spend_any(&[8; SECRET_LEN]).is_err());
+        assert!(pairing.spend_for_kind(&[9; SECRET_LEN]).is_err(), "the ticket-only reader refuses it");
+        pairing.cancel();
+        assert_eq!(pairing.spend_any(&[9; SECRET_LEN]), Ok(Spent::Local), "cancelling a ticket leaves it");
     }
 
     #[tokio::test]
