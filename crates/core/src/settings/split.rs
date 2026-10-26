@@ -395,6 +395,10 @@ pub fn retire_server_half(path: &Path) -> Result<bool, String> {
         state.run_settings = None;
         state.agents = None;
     }
+    // The same write marks the device half settled. Were the mark a second write, a quit between the two
+    // would leave a retired but unmarked file, and the next launch would seed the device half from the
+    // server over the device's own.
+    settings.device_seeded = true;
     file::save(path, &settings)?;
     Ok(true)
 }
@@ -708,7 +712,9 @@ mod tests {
         let device_file = file::load(&device).0;
         // Every field is in its half, with its value.
         assert_eq!(server_half(&server_file), server_half(&original));
-        assert_eq!(device_half(&device_file), device_half(&original));
+        let mut marked = device_half(&original);
+        marked["deviceSeeded"] = json!(true);
+        assert_eq!(device_half(&device_file), marked);
         assert_eq!(server_file.agent, "codex");
         assert_eq!(server_file.agent_roles, original.agent_roles);
         assert_eq!(server_file.projects["/work/a"].run_settings, original.projects["/work/a"].run_settings);
@@ -725,7 +731,10 @@ mod tests {
         // Nothing is lost: the two halves put together are the old file.
         let mut together = device_half(&device_file);
         merge_patch(&mut together, &server_half(&server_file));
-        assert_eq!(parse(&together.to_string()), Outcome::Ok(original.clone()));
+        // The only difference from the old file is the mark the retiring write set.
+        let mut expected = original.clone();
+        expected.device_seeded = true;
+        assert_eq!(parse(&together.to_string()), Outcome::Ok(expected));
         // The device no longer carries the server's fields, and the old file is kept beside it.
         assert_eq!(device_file.agent, Settings::default().agent);
         assert!(device_file.open_projects.is_empty());
@@ -821,5 +830,23 @@ mod tests {
         assert!(after.device_seeded);
         assert_eq!(after.appearance.theme, "light");
         assert!(!device.with_file_name("settings.pre-seed.json").exists());
+    }
+
+    /// Source one succeeded and the process ended (or the seeding call failed) before anything else was
+    /// written: the next run must find the device half settled and leave it alone.
+    #[test]
+    fn a_retired_file_is_marked_in_the_same_write_so_a_later_seeding_never_overwrites_it() {
+        let tmp = dir();
+        let device = tmp.path().join("settings.json");
+        std::fs::write(&device, old_file()).unwrap();
+        assert!(retire_server_half(&device).unwrap());
+        let retired = file::load(&device).0;
+        assert!(retired.device_seeded, "the retiring write carries the mark");
+        // The next connection: the server's copy of the device half (here a stale, different one).
+        let mut stale = device_half(&Settings::default());
+        stale["appearance"] = json!({"theme": "dark", "density": "comfortable", "uiFontSize": 13});
+        assert!(!seed_device(&device, Some(&stale)).unwrap());
+        assert_eq!(file::load(&device).0, retired);
+        assert_eq!(file::load(&device).0.appearance.theme, "light");
     }
 }

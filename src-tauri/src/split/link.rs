@@ -400,6 +400,17 @@ mod tests {
     }
 
     #[test]
+    fn every_rejection_of_a_call_that_did_not_reach_the_server_carries_the_words_the_front_end_looks_for() {
+        use super::super::state::{MAYBE_SENT, NOT_SENT};
+        let never = rejection("x", BridgeError::Internal(format!("{SEND_FAILED}: broken pipe")));
+        let maybe = rejection("x", BridgeError::Internal(CLOSED_BEFORE_REPLY.to_owned()));
+        assert!(never.as_str().unwrap().contains(NOT_SENT));
+        assert!(maybe.as_str().unwrap().contains(MAYBE_SENT));
+        // A refusal by the server itself is none of these.
+        assert!(!rejection("x", BridgeError::Forbidden).as_str().unwrap().contains(NOT_SENT));
+    }
+
+    #[test]
     fn a_request_that_never_left_says_so_and_one_that_may_have_says_that() {
         let never = rejection("run_start", BridgeError::Internal(format!("{SEND_FAILED}: broken pipe")));
         assert!(never.as_str().unwrap().contains("Nothing was changed"), "{never}");

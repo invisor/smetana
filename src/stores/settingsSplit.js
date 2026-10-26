@@ -132,11 +132,16 @@ export function subtractPatch(pending, refused) {
   return Object.keys(out).length ? out : undefined
 }
 
+/* The two phrases every rejection the shell makes for a call that did not reach the server contains:
+   `NOT_SENT` and `MAYBE_SENT` in `src-tauri/src/split/state.rs`, pinned there by tests. A server's own
+   refusal contains neither. Change these and those together. */
+const TRANSPORT_WORDS = /Nothing was changed|may or may not have been made/
+
 /* Whether a failed call never reached the server's handler (the shell's own words for a connection
    that was down or lost), as against the server answering with a refusal. The first leaves a change
    waiting for the reconnect; the second drops it. */
 export function transportFailure(error) {
-  return typeof error === 'string' && /connection to the server|Not connected to the server/i.test(error)
+  return typeof error === 'string' && TRANSPORT_WORDS.test(error)
 }
 
 /* RFC 7386, returning a new value. */

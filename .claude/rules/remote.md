@@ -234,15 +234,17 @@ neither list is the device's, and a test pins the server list. `usedAt` is kept 
   than something it sent, and the answer to the last patch carries every state before it. The baseline the store compares
   against is the confirmed state **plus the patches still on the way**, so an echo can never undo a later edit.
 - **A failed patch.** A refusal by the server (a handler error) takes back that patch's fields alone: the store reads the
-  server's state and keeps whatever else was typed since. A connection that was down (the shell's "Nothing was changed" /
-  "may or may not" / "Not connected" words) keeps the change pending; the reconnect reads the server's state and sends what is
+  server's state and keeps whatever else was typed since. A call that did not reach the server's handler is told by words
+  every such shell rejection carries - `NOT_SENT` ("Nothing was changed") and `MAYBE_SENT` ("may or may not have been made") in
+  `src-tauri/src/split/state.rs`, matched by `TRANSPORT_WORDS` in `src/stores/settingsSplit.js`, each side pinned by a test and
+  naming the other; keep both when rewording a rejection. Such a failure keeps the change pending; the reconnect reads the server's state and sends what is
   still different. Neither is a replay of a command: it is the state being brought into agreement.
 - **`openProjects`.** The store keeps the project open in this window in the list whatever another client did to it; that
   re-append is this window's bookkeeping and is not sent back (`diffViews`), so a client that closed a project does not see it
   return. Two clients editing the list at the same moment still lose one edit (the list is replaced whole).
 - **Migration** (`src-tauri/src/split/migrate.rs`), on every connection before `connected`, two sources:
   1. The device's `settings.json` still holds a server half (what a release install will have once the client build is the
-     only one): `settings_adopt` offers it (taken only by a server with no `settings.json`), then `retire_server_half` copies
+     only one): `settings_adopt` offers it (taken only by a server with no `settings.json`), then `retire_server_half` (which sets `deviceSeeded` in the same write as it resets the server's keys, so no crash between two writes can lead to a seeding over the device's own half) copies
      the file to `settings.pre-split.json` (never overwritten) and resets the server's keys in it. The device half already
      there stands.
   2. The device file is not marked (`deviceSeeded`) and source one did not fire: an earlier build of the client (step 5)

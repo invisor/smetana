@@ -91,8 +91,10 @@ describe('a refused patch', () => {
 
   it('is told from a connection that was down by the words the shell uses', () => {
     expect(transportFailure('The connection to the server was lost before the request was sent. Nothing was changed.')).toBe(true)
-    expect(transportFailure('Not connected to the server yet.')).toBe(true)
+    expect(transportFailure('This app is not paired with the server. Nothing was changed.')).toBe(true)
+    expect(transportFailure('The connection to the server was lost before it answered, so the change may or may not have been made.')).toBe(true)
     expect(transportFailure('the settings patch was refused: no')).toBe(false)
+    expect(transportFailure('The server does not allow this device to call `settings_patch`.')).toBe(false)
     expect(transportFailure({ kind: 'x' })).toBe(false)
   })
 })
