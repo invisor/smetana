@@ -160,6 +160,7 @@ async fn remote_desktop_capabilities_leave_out_what_the_host_cannot_honour() {
     h.remote.hub.set_dispatch(Arc::new(super::phone_bridge::services().0));
     let (_phone, client) = desktop(&h).await;
     assert!(!client.hello.capabilities.iter().any(|c| c == "server_restart"), "{:?}", client.hello.capabilities);
+    assert!(!client.hello.capabilities.iter().any(|c| c == "server:restart-deferred"), "nor the event it announces");
     assert!(client.hello.capabilities.iter().any(|c| c == "terminal_write"), "the rest is untouched");
 
     // A server with one is advertised it.
@@ -174,6 +175,7 @@ async fn remote_desktop_capabilities_leave_out_what_the_host_cannot_honour() {
     h.remote.hub.set_dispatch(Arc::new(services));
     let (_phone, client) = desktop(&h).await;
     assert!(client.hello.capabilities.iter().any(|c| c == "server_restart"));
+    assert!(client.hello.capabilities.iter().any(|c| c == "server:restart-deferred"));
 }
 
 #[tokio::test]

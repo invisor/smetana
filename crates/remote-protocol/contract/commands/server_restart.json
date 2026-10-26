@@ -5,6 +5,7 @@
     {"outcome":"scheduled","scheduled":true,"work":[{"id":1,"kind":"run","label":"run","owner":null,"project":"/work/smetana"}]},
     {"outcome":"restarting","scheduled":false,"work":[{"id":1,"kind":"run","label":"run","owner":null,"project":"/work/smetana"},{"id":4,"kind":"agent","label":"claude","owner":null,"project":"/work/smetana"},{"id":2,"kind":"session","label":"codex","owner":1,"project":"/work/smetana"},{"id":7,"kind":"shell","label":"shell","owner":null,"project":"/work/smetana"}]},
     {"outcome":"cancelled","scheduled":false,"work":[]},
-    {"outcome":"nothing-scheduled","scheduled":false,"work":[]}
+    {"outcome":"nothing-scheduled","scheduled":false,"work":[]},
+    {"outcome":"already-restarting","scheduled":false,"work":[]}
   ]
 }

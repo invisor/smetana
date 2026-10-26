@@ -966,6 +966,7 @@ fn restart_replies() -> Vec<Value> {
         reply(Outcome::Restarting, false, &work),
         reply(Outcome::Cancelled, false, &[]),
         reply(Outcome::NothingScheduled, false, &[]),
+        reply(Outcome::AlreadyRestarting, false, &[]),
     ]
 }
 

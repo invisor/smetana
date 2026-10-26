@@ -178,12 +178,19 @@ here. Two exist:
   look is the one the workers are ended on. If work not covered has appeared, nothing is ended: the refusal is lifted, the
   restart turns into a `when-idle` one (logged), and every desktop device hears **`server:restart-deferred`** with
   `{ work }`, what it now waits for — the answer it already had said `restarting`, and this is how that is taken back. A
-  cancel that lands after that point does not undo it (the workers are already being ended). The 1.9 digest in `versions.json`
+  restart is **one piece of state under one lock** (`Phase`: `Idle`, `Frozen(epoch)`, `Committed`, with the cancel epoch beside
+  it): a task may freeze, commit, re-arm or announce only while its epoch is the current one, a cancel clears the freeze and
+  moves the epoch in the same step, and a task's freeze is lowered by a drop guard however it ends (an aborted task included).
+  Once `restart()` has been called the state is `Committed`: a cancel then answers **`already-restarting`** (not
+  `nothing-scheduled`), the freeze stays until the process is gone, and another `now` just answers `restarting`. The set of
+  refused commands is `WORK_COMMANDS` in `gateway.rs`, **which pairs with the `calls!` table in `dispatch.rs`: a new command that
+  starts a long-lived child (a shell, a session, a run, a PTY) must be added to it**, or the freeze lets it through to be ended
+  unlisted. A host with no gateway advertises neither `server_restart` nor `server:restart-deferred`. The 1.9 digest in `versions.json`
   was recomputed for these changes because 1.9 had not left the branch.
   `when-idle` never ends anything: it arms a watch (polled every five seconds) and restarts when the list is empty, however
   long that takes, and answers `scheduled` with what it waits for. `cancel` disarms it (`cancelled` or `nothing-scheduled`).
   The reply is `{ outcome, scheduled, work: [{ kind, id, project, label, owner }] }` with `outcome` one of `restarting`, `scheduled`,
-  `needs-confirmation`, `cancelled`, `nothing-scheduled` and `kind` one of `run`, `agent`, `session`, `shell`. The restart
+  `needs-confirmation`, `cancelled`, `nothing-scheduled`, `already-restarting` and `kind` one of `run`, `agent`, `session`, `shell`. The restart
   itself runs 300 ms after the reply, so it leaves first. A run's own agent is listed beside the run. On the desktop, which has
   no gateway, the command is a handler error and **is left out of the capabilities** in `HelloReply`
   (`Dispatch::serves`, `Hub::capabilities_for`), so a client does not draw a control the host cannot honour.

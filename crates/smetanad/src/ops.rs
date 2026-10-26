@@ -241,6 +241,7 @@ pub async fn restart(
             Outcome::Scheduled => writeln!(out, "Waiting for this work to finish, then restarting:\n{}", shown(&reply)),
             Outcome::Cancelled => writeln!(out, "The scheduled restart is withdrawn."),
             Outcome::NothingScheduled => writeln!(out, "No restart was scheduled."),
+            Outcome::AlreadyRestarting => writeln!(out, "The server is already restarting; it is too late to cancel."),
             Outcome::NeedsConfirmation => Ok(()),
         }
         .map_err(io)?;

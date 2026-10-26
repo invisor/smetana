@@ -464,7 +464,7 @@ calls! {
 impl Dispatch for Services {
     fn serves(&self, cmd: &str) -> bool {
         match cmd {
-            "server_restart" => self.gateway.is_some(),
+            "server_restart" | "server:restart-deferred" => self.gateway.is_some(),
             "server_health" => self.ctx.is_some(),
             _ => true,
         }

@@ -21,7 +21,6 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -78,7 +77,9 @@ pub fn deferred_payload(work: &[LiveWork]) -> serde_json::Value {
     serde_json::json!({ "work": work })
 }
 
-/// The commands that start work. While a restart is committed the host refuses them, so that nothing
+/// The commands that start work. **Any new command that starts a long-lived child must be added here**:
+/// it pairs with the `calls!` table in `dispatch.rs`, and a command that starts work and is not listed
+/// is one the freeze lets through, to be ended unlisted. While a restart is committed the host refuses them, so that nothing
 /// can begin between the last look at the list and the end of the workers.
 pub const WORK_COMMANDS: &[&str] = &["terminal_create", "terminal_shell", "session_start", "run_start"];
 
@@ -105,6 +106,8 @@ pub enum Outcome {
     Cancelled,
     /// `cancel` with nothing scheduled.
     NothingScheduled,
+    /// `cancel` after the restart was committed: the workers are being ended and it cannot be withdrawn.
+    AlreadyRestarting,
 }
 
 /// The reply of `server_restart`.
@@ -124,15 +127,46 @@ pub struct Gateway {
     restart: Arc<dyn Fn() + Send + Sync>,
     deferred: Arc<dyn Fn(&[LiveWork]) + Send + Sync>,
     poll: Duration,
+    control: Mutex<Control>,
+}
+
+/// Where a restart has got to. **One piece of state under one lock**, because the freeze, the cancel
+/// counter and the commit have to change together: a freeze raised by a task whose cancel has already
+/// happened, or lifted after the restart is committed, are each a way to refuse work for ever or to
+/// accept it just before it is ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    /// Nothing is committed; work-creating commands are accepted.
+    Idle,
+    /// A restart task has taken its last look and is about to commit; the commands are refused. Carries
+    /// the epoch of the task that raised it, and only that task (or a cancel) lowers it.
+    Frozen(u64),
+    /// `restart` has been called. There is no way back: the workers are being ended, the commands stay
+    /// refused and a cancel is told it is too late.
+    Committed,
+}
+
+struct Control {
+    /// Raised by every cancel. A task carries the value it started under and may not freeze, commit,
+    /// re-arm or announce anything once it has moved.
+    epoch: u64,
+    phase: Phase,
     /// The pending restart: the `when-idle` watch, or a restart on its way out. One slot, so that
     /// `cancel` withdraws whichever it is.
-    watch: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    /// Raised by every cancel. A task remembers the value it was started under and does nothing once
-    /// it has moved, which closes the gap between a cancel and a task that is already past its last
-    /// await.
-    epoch: AtomicU64,
-    /// Set from the last look at the list until the process is gone: work-creating commands are refused.
-    frozen: AtomicBool,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+/// Lowers the freeze a task raised, however the task ends — finished, returned early or aborted by a
+/// cancel — unless it was committed. It does nothing to a freeze that is not this task's.
+struct FreezeGuard {
+    gateway: Arc<Gateway>,
+    epoch: u64,
+}
+
+impl Drop for FreezeGuard {
+    fn drop(&mut self) {
+        self.gateway.unfreeze(self.epoch);
+    }
 }
 
 /// How long the reply gets to leave before the restart runs.
@@ -150,23 +184,56 @@ impl Gateway {
             restart,
             deferred,
             poll,
-            watch: Mutex::new(None),
-            epoch: AtomicU64::new(0),
-            frozen: AtomicBool::new(false),
+            control: Mutex::new(Control { epoch: 0, phase: Phase::Idle, task: None }),
         })
     }
 
-    /// Whether a restart is committed and work-creating commands are being refused.
-    pub fn frozen(&self) -> bool {
-        self.frozen.load(Ordering::SeqCst)
+    fn lock(&self) -> std::sync::MutexGuard<'_, Control> {
+        self.control.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn watch(&self) -> std::sync::MutexGuard<'_, Option<tokio::task::JoinHandle<()>>> {
-        self.watch.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    fn epoch(&self) -> u64 {
+        self.lock().epoch
+    }
+
+    /// Whether work-creating commands are being refused: a restart is about to commit, or has.
+    pub fn frozen(&self) -> bool {
+        self.lock().phase != Phase::Idle
     }
 
     fn scheduled(&self) -> bool {
-        self.watch().as_ref().is_some_and(|task| !task.is_finished())
+        self.lock().task.as_ref().is_some_and(|task| !task.is_finished())
+    }
+
+    /// Raises the freeze for the task of `epoch`. Refused if a cancel has moved the epoch, or if
+    /// something is already frozen or committed.
+    fn freeze(&self, epoch: u64) -> bool {
+        let mut control = self.lock();
+        if control.epoch == epoch && control.phase == Phase::Idle {
+            control.phase = Phase::Frozen(epoch);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Lowers the freeze `epoch` raised. A committed restart's is not lowered.
+    fn unfreeze(&self, epoch: u64) {
+        let mut control = self.lock();
+        if control.phase == Phase::Frozen(epoch) {
+            control.phase = Phase::Idle;
+        }
+    }
+
+    /// Commits the restart of `epoch`: only from its own freeze, and only if no cancel came.
+    fn commit(&self, epoch: u64) -> bool {
+        let mut control = self.lock();
+        if control.epoch == epoch && control.phase == Phase::Frozen(epoch) {
+            control.phase = Phase::Committed;
+            true
+        } else {
+            false
+        }
     }
 
     /// The work alive right now.
@@ -174,26 +241,31 @@ impl Gateway {
         (self.list)().await
     }
 
-    /// Arms the `when-idle` watch. `force` replaces the pending restart, for the restart that has
-    /// just found work again.
-    fn arm(self: &Arc<Self>, force: bool) {
-        if !force && self.scheduled() {
+    /// Arms the `when-idle` watch for `epoch`. `force` replaces the pending restart, for the restart
+    /// that has just found work again. Nothing is armed if a cancel has moved the epoch since, or the
+    /// restart is committed.
+    fn arm(self: &Arc<Self>, force: bool, epoch: u64) {
+        let mut control = self.lock();
+        if control.epoch != epoch || control.phase == Phase::Committed {
             return;
         }
-        let (gateway, epoch) = (self.clone(), self.epoch.load(Ordering::SeqCst));
+        if !force && control.task.as_ref().is_some_and(|task| !task.is_finished()) {
+            return;
+        }
+        let gateway = self.clone();
         let task = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(gateway.poll).await;
-                if gateway.epoch.load(Ordering::SeqCst) != epoch {
+                if gateway.epoch() != epoch {
                     return;
                 }
                 if gateway.live_work().await.is_empty() {
-                    gateway.fire(Vec::new());
+                    gateway.fire(Vec::new(), epoch);
                     return;
                 }
             }
         });
-        if let Some(old) = self.watch().replace(task) {
+        if let Some(old) = control.task.replace(task) {
             old.abort();
         }
     }
@@ -204,67 +276,86 @@ impl Gateway {
     /// once more, so the last look is the one the workers are ended on: work that started after the
     /// answer the person saw was never shown to them. When there is such work the restart does not
     /// happen; it becomes a `when-idle` one, and the clients are told (`DEFERRED_EVENT`). The task is the
-    /// pending restart, so `cancel` stops it, and it does nothing if a cancel came after it began.
-    fn fire(self: &Arc<Self>, covered: Vec<LiveWork>) {
-        let (gateway, epoch) = (self.clone(), self.epoch.load(Ordering::SeqCst));
+    /// pending restart, so `cancel` stops it, and every step that changes anything checks the epoch it
+    /// began under, under the lock the cancel takes.
+    fn fire(self: &Arc<Self>, covered: Vec<LiveWork>, epoch: u64) {
+        let mut control = self.lock();
+        if control.epoch != epoch || control.phase == Phase::Committed {
+            return;
+        }
+        let gateway = self.clone();
         let task = tokio::spawn(async move {
             tokio::time::sleep(REPLY_GRACE).await;
             let uncovered = |work: &[LiveWork]| work.iter().any(|item| !item.is_covered_by(&covered));
             let mut now = gateway.live_work().await;
+            let mut _guard = None;
             if !uncovered(&now) {
-                gateway.frozen.store(true, Ordering::SeqCst);
+                if !gateway.freeze(epoch) {
+                    return;
+                }
+                _guard = Some(FreezeGuard { gateway: gateway.clone(), epoch });
                 now = gateway.live_work().await;
             }
-            if gateway.epoch.load(Ordering::SeqCst) != epoch {
-                return;
-            }
             if uncovered(&now) {
-                gateway.frozen.store(false, Ordering::SeqCst);
+                gateway.unfreeze(epoch);
+                if gateway.epoch() != epoch {
+                    return;
+                }
                 log::warn!("restart: work started after the answer was given; waiting for it instead");
                 (gateway.deferred)(&now);
-                gateway.arm(true);
-            } else {
+                gateway.arm(true, epoch);
+            } else if gateway.commit(epoch) {
                 (gateway.restart)();
             }
         });
-        if let Some(old) = self.watch().replace(task) {
+        if let Some(old) = control.task.replace(task) {
             old.abort();
         }
     }
 
     pub async fn request(self: &Arc<Self>, mode: Mode, confirmed: Option<Vec<LiveWork>>) -> Reply {
-        match mode {
-            Mode::Cancel => {
-                self.epoch.fetch_add(1, Ordering::SeqCst);
-                self.frozen.store(false, Ordering::SeqCst);
-                let task = self.watch().take();
-                let was = task.as_ref().is_some_and(|task| !task.is_finished());
-                if let Some(task) = task {
-                    task.abort();
-                }
-                let outcome = if was { Outcome::Cancelled } else { Outcome::NothingScheduled };
-                Reply { outcome, scheduled: false, work: Vec::new() }
+        if mode == Mode::Cancel {
+            let mut control = self.lock();
+            if control.phase == Phase::Committed {
+                // Too late, and said so: the workers are being ended.
+                return Reply { outcome: Outcome::AlreadyRestarting, scheduled: false, work: Vec::new() };
             }
+            control.epoch += 1;
+            control.phase = Phase::Idle;
+            let task = control.task.take();
+            drop(control);
+            let was = task.as_ref().is_some_and(|task| !task.is_finished());
+            if let Some(task) = task {
+                task.abort();
+            }
+            let outcome = if was { Outcome::Cancelled } else { Outcome::NothingScheduled };
+            return Reply { outcome, scheduled: false, work: Vec::new() };
+        }
+        let epoch = self.epoch();
+        let work = self.live_work().await;
+        if self.lock().phase == Phase::Committed {
+            return Reply { outcome: Outcome::Restarting, scheduled: false, work };
+        }
+        match mode {
             Mode::Now => {
-                let work = self.live_work().await;
                 // Covered: everything alive now is something the person has seen and said yes to.
                 let covered = confirmed.unwrap_or_default();
                 if work.iter().all(|item| item.is_covered_by(&covered)) {
-                    self.fire(covered);
+                    self.fire(covered, epoch);
                     Reply { outcome: Outcome::Restarting, scheduled: self.scheduled(), work }
                 } else {
                     Reply { outcome: Outcome::NeedsConfirmation, scheduled: self.scheduled(), work }
                 }
             }
             Mode::WhenIdle => {
-                let work = self.live_work().await;
                 if work.is_empty() {
-                    self.fire(Vec::new());
+                    self.fire(Vec::new(), epoch);
                     return Reply { outcome: Outcome::Restarting, scheduled: false, work };
                 }
-                self.arm(false);
+                self.arm(false, epoch);
                 Reply { outcome: Outcome::Scheduled, scheduled: true, work }
             }
+            Mode::Cancel => unreachable!("handled above"),
         }
     }
 }
@@ -515,5 +606,89 @@ mod tests {
 
     fn rig_batches(run: LiveWork, batch: LiveWork) -> Rig {
         rig(vec![run, batch])
+    }
+
+    /// A gateway whose list is always empty, except that on its `call`th read (counting the request's
+    /// own) the person's cancel lands, in the middle of the task that is reading it. That is the
+    /// interleaving a second thread would produce, placed exactly instead of waited for.
+    fn rig_cancelling_on(call: usize) -> (Arc<Gateway>, Arc<AtomicUsize>) {
+        let restarts = Arc::new(AtomicUsize::new(0));
+        let cell: Arc<std::sync::OnceLock<Arc<Gateway>>> = Arc::default();
+        let (reads, count, handle) = (Arc::new(AtomicUsize::new(0)), restarts.clone(), cell.clone());
+        let gateway = Gateway::new(
+            Box::new(move || {
+                let n = reads.fetch_add(1, Ordering::SeqCst) + 1;
+                let handle = handle.clone();
+                Box::pin(async move {
+                    if n == call {
+                        let reply = handle.get().unwrap().request(Mode::Cancel, None).await;
+                        assert_eq!(reply.outcome, Outcome::Cancelled);
+                    }
+                    Vec::new()
+                })
+            }),
+            Arc::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+            }),
+            Arc::new(|_| {}),
+            Duration::from_secs(3600),
+        );
+        let _ = cell.set(gateway.clone());
+        (gateway, restarts)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cancel_between_the_first_look_and_the_freeze_leaves_nothing_frozen() {
+        let (gateway, restarts) = rig_cancelling_on(2);
+        assert_eq!(gateway.request(Mode::Now, None).await.outcome, Outcome::Restarting);
+        tokio::time::sleep(REPLY_GRACE * 3).await;
+        assert!(!gateway.frozen(), "the task's freeze was refused: its epoch had moved");
+        assert_eq!(restarts.load(Ordering::SeqCst), 0);
+        assert_eq!(gateway.request(Mode::Cancel, None).await.outcome, Outcome::NothingScheduled);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cancel_between_the_freeze_and_the_commit_lifts_it_and_commits_nothing() {
+        let (gateway, restarts) = rig_cancelling_on(3);
+        assert_eq!(gateway.request(Mode::Now, None).await.outcome, Outcome::Restarting);
+        tokio::time::sleep(REPLY_GRACE * 3).await;
+        assert!(!gateway.frozen());
+        assert_eq!(restarts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_freeze_belongs_to_the_epoch_that_raised_it() {
+        let rig = rig(Vec::new());
+        let gateway = &rig.gateway;
+        let epoch = gateway.epoch();
+        // A cancel moves the epoch; the task that began before it may not freeze afterwards.
+        gateway.lock().epoch += 1;
+        assert!(!gateway.freeze(epoch));
+        assert!(!gateway.frozen());
+        // Its own freeze is lowered by its guard, however it ends.
+        let epoch = gateway.epoch();
+        assert!(gateway.freeze(epoch));
+        assert!(!gateway.freeze(epoch), "not twice");
+        drop(FreezeGuard { gateway: gateway.clone(), epoch });
+        assert!(!gateway.frozen(), "an aborted task lifts its own freeze");
+        // Another task's freeze is not its to lower.
+        assert!(gateway.freeze(epoch));
+        gateway.unfreeze(epoch + 1);
+        assert!(gateway.frozen());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn once_committed_a_cancel_is_too_late_and_the_freeze_stays() {
+        let rig = rig(Vec::new());
+        rig.gateway.request(Mode::Now, None).await;
+        tokio::time::sleep(REPLY_GRACE * 2).await;
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 1);
+        let reply = rig.gateway.request(Mode::Cancel, None).await;
+        assert_eq!(reply.outcome, Outcome::AlreadyRestarting, "not NothingScheduled");
+        assert!(rig.gateway.frozen(), "work is still refused while the workers are ended");
+        // And asking again does not restart twice.
+        assert_eq!(rig.gateway.request(Mode::Now, None).await.outcome, Outcome::Restarting);
+        tokio::time::sleep(REPLY_GRACE * 2).await;
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 1);
     }
 }

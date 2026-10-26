@@ -494,12 +494,12 @@ impl Hub {
     }
 
     /// What a device of `kind` is told it may do: its capabilities, less the commands this host's
-    /// dispatcher says it cannot serve (events have a colon and are never dropped).
+    /// dispatcher says it cannot serve (a command it cannot run, an event it can never emit).
     pub fn capabilities_for(&self, kind: DeviceKind) -> Vec<String> {
         let dispatch = self.dispatch.get();
         remote_protocol::capabilities_for(kind)
             .into_iter()
-            .filter(|name| name.contains(':') || dispatch.map_or(true, |dispatch| dispatch.serves(name)))
+            .filter(|name| dispatch.map_or(true, |dispatch| dispatch.serves(name)))
             .collect()
     }
 
