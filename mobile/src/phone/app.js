@@ -25,3 +25,10 @@ export function openImageWindow() {}
 export async function pickFiles() {
   return []
 }
+
+/* Files named by the panel are on the machine the panel runs on; the phone attaches none (see
+   `pickFiles`), so there is nothing to send anywhere and the list comes back as it was. The desktop's
+   version uploads them when its server is on another machine. */
+export async function pathsForServer(paths) {
+  return paths
+}

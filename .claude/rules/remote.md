@@ -258,8 +258,8 @@ asks for it only when the person chose "stop it when it is finished"; the settin
 **Front end.** `isRemote` (connection store) is `mode === 'split' && local === false`. `stores/serverFiles.js`: `pathsForServer` (local:
 the paths; remote: `client_file_read` then `attachment_write`, the stored paths come back), `openReportInBrowser` (local:
 `client_open_document`; remote: `server_file_read` then `client_open_fetched`). The two openers hand only an `.html` to the system
-(`commands/client_files.rs`), and the fetched copy is in a private temporary folder swept after a day. Consumers: `attachments.js::importPaths`
-(New task window), `conversation.js::sendMessage` (composer attachments), `terminals.js::sendDroppedPaths` (a file dropped on a terminal),
+(`commands/client_files.rs`), and the fetched copy is in a private folder under the app's cache directory (not a shared /tmp), swept after a day. In the release the three `client_*` commands are registered (the lists are held equal) but refuse, and the report button is drawn only when `connection.mode` is `split`. Consumers: `attachments.js::importPaths`
+(New task window), the composer (`stores/app.js::pathsForServer`, called by `ConversationView` when files are chosen or dropped, so a chip names the server's copy from the start; the phone's `app.js` answers with the same list), `terminals.js::sendDroppedPaths` (a file dropped on a terminal),
 `DesktopApp.vue` (report button on a run report's tab; `DocumentModeToggle` gets a second button and `toggleLane(2)`). The image window needs
 nothing: `image_read` is already a server command and its bytes cross the connection.
 Add project: `onAddProject` opens the `server-folder` dialog window (`FolderBrowserModal`, state in the app window, `projects.js::listServerFolders`
@@ -267,6 +267,12 @@ Add project: `onAddProject` opens the `server-folder` dialog window (`FolderBrow
 and `PointerMenu` and `MenuButton` draw `withoutClientActions(items)` (`overlays/clientActions.js`: `reveal`, `reveal-log`, `open-log`,
 `open-cwd`, separators cleaned); a new menu row of that sort is added to that list. The Server tab (`ServerSettings.vue`, `serverChoice.js`) exists only
 when `connection.mode` is `split`.
+
+**Another server is another set of projects.** `View.target` (`local` or the remote key) tells the front end the connection is to a different
+server than the data on screen came from; `connection.js::onServerChange` hooks run before the ordinary resync, and `projects.js::followServerChange`
+takes the new server's list and open project (`settings.js::adoptServerProjects`, which also voids unsent patches and re-baselines), drops the old
+project's tabs and tree and moves to the server's open project, or the empty state if it has none. Nothing is flushed first, so no path of this
+machine reaches the new server's project list, and unsaved edits in the old project's tabs are dropped with it.
 
 **Install.** `server/smetanad/README.md` and `smetanad.service` (also in every archive); the `smetanad` job in `.github/workflows/release.yml`
 builds `crates/smetanad` per platform, packs it with `bd`, `resources/`, the unit and the README, and uploads archive and `.sha256` to the

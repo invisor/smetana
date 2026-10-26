@@ -13,6 +13,7 @@
 
 /* A name that is one plain path segment: no separator, no `..`, no leading dot or dash, no control
    character. `valid_folder_name` in `placement.rs`. */
+/* Mirrored by `valid_folder_name` in `crates/core/src/placement.rs`; change one, change both. */
 export function validFolderName(name) {
   return (
     typeof name === 'string' &&
@@ -28,6 +29,7 @@ export function validFolderName(name) {
 /* Whether an address is one `git clone` is told to try: `https://`, `http://`, `ssh://`, `git://` or
    the `user@host:path` form. Not an option (`-…`), not a remote-helper transport (`ext::…`), not a
    path on the server's own disk. `valid_clone_url` in `placement.rs`. */
+/* Mirrored by `valid_clone_url` in `crates/core/src/placement.rs`; change one, change both. */
 export function validCloneUrl(url) {
   if (typeof url !== 'string') return false
   const text = url.trim()

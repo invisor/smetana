@@ -13,12 +13,12 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { listDir, setRoot } from './files.js'
 import { measureStorage } from './notifications.js'
 import { loadRepos } from './vcs.js'
-import { flushPending, loadProjectLayout, settings } from './settings.js'
+import { adoptServerProjects, flushPending, loadProjectLayout, settings } from './settings.js'
 import { confirmUnsaved, dirtyPaths, resetTabs, restoreTabs } from './tabs.js'
 import { loadSessions } from './terminals.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
 import { basename, dirname } from '../paths.js'
-import { refusalOf } from './connection.js'
+import { onServerChange, refusalOf } from './connection.js'
 
 /* Path → whether it holds a .beads. health says the same thing about the
    active project, but there is nowhere else to learn it about the other rows. */
@@ -88,6 +88,11 @@ async function askUnsaved() {
    asks the worker for things, and the caller is on its way out. */
 function release() {
   moving = false
+  if (pendingServerChange) {
+    pendingServerChange = false
+    followServerChange().catch((err) => console.error('[projects] could not follow the new server:', err))
+    return
+  }
   if (!pendingRemote) return
   const { path } = pendingRemote
   pendingRemote = null
@@ -365,6 +370,29 @@ export async function followRemoteProject(raw) {
   }
 }
 
+/* The connection is now to another server than the one this window's projects came from. Its
+   projects are the ones to show, and none of this window's own may reach it: the list and the open
+   project are taken from the server (`adoptServerProjects`), the tabs and the tree of the project
+   left are dropped, and the window moves to the server's open project, or to the empty state when it
+   has none. Nothing is flushed first - what was unsent was addressed to the other server - and unsaved
+   edits in the old project's tabs go with it: they belong to a folder on a machine this window is no
+   longer talking to, so there is nowhere they could be saved. */
+export async function followServerChange() {
+  if (moving) {
+    pendingServerChange = true
+    return
+  }
+  moving = true
+  try {
+    const path = await adoptServerProjects()
+    await moveTo(path)
+  } finally {
+    release()
+  }
+}
+
+let pendingServerChange = false
+
 /* Listens for the announcement above. Answers with the way to stop. */
 export function initProjectFollow() {
   return listen('remote:project-switched', (event) => followRemoteProject(event.payload?.path ?? null))
@@ -424,3 +452,7 @@ export function adoptInitialProject() {
   if (active && !settings.openProjects.includes(active)) settings.openProjects.push(active)
   refreshProbes()
 }
+
+/* Registered with the connection store at load, so the move happens before the stores read their
+   snapshots from the server they have just been moved to. */
+onServerChange(followServerChange)

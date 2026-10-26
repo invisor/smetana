@@ -2784,6 +2784,8 @@ async function chooseServerFolder(path) {
 }
 
 async function cloneServerFolder({ url, parent, name }) {
+  // One clone at a time: a double click or a second Enter must not emit two for one name.
+  if (folderBrowser.cloning) return
   folderBrowser.cloning = true
   folderBrowser.cloneError = null
   try {
@@ -5482,8 +5484,11 @@ const documentTabActive = computed(
 /* A run's own report can be opened in the person's own browser, wherever the server is: the file
    itself when it is on this machine, its bytes over the connection when it is not
    (`stores/serverFiles.js`). Only a run's report, and not any html file: a server hands over nothing
-   but its attachments and its report folders. */
-const reportOpenable = computed(() => htmlTabReadable.value && isRunReportPath(project.activeTab))
+   but its attachments and its report folders. Offered only in the client build (`connection.mode`
+   is `split`): the release has no command behind it, and is unchanged. */
+const reportOpenable = computed(
+  () => connection.mode === 'split' && htmlTabReadable.value && isRunReportPath(project.activeTab)
+)
 
 async function openReportInBrowser(tabPath) {
   try {

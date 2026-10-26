@@ -45,6 +45,8 @@ export const connection = reactive({
   attempt: 0,
   reason: null,
   local: true,
+  /* Which server: `local`, or a remote one's key. See `onServerChange`. */
+  target: 'local',
   server: null,
   /* A local server older than the bundled one, and what replacing it would end. */
   outdated: null,
@@ -73,6 +75,30 @@ export function onReconnect(hook) {
   return () => hooks.delete(hook)
 }
 
+const serverHooks = new Set()
+
+/* Registers what must happen when the connection is to a *different server* than the one the data on
+   screen came from (the person chose another in Settings), before the stores read their snapshots
+   again. The project list, the open project and the settings a window holds belong to the server they
+   were read from: carried over, a path on this machine would be written into the new server's project
+   list, and a board of the new server would be drawn under the old one's project. A hook takes the
+   new server's own. Hooks run one after another and before the ordinary resync; a failing one is
+   logged and the rest still run. Answers the way to stop. */
+export function onServerChange(hook) {
+  serverHooks.add(hook)
+  return () => serverHooks.delete(hook)
+}
+
+async function changeServer() {
+  for (const hook of [...serverHooks]) {
+    try {
+      await hook()
+    } catch (err) {
+      console.error('[connection] a store could not take the new server in:', err)
+    }
+  }
+}
+
 async function resync() {
   const results = await Promise.allSettled([...hooks].map((hook) => hook()))
   for (const result of results) {
@@ -82,6 +108,8 @@ async function resync() {
 
 let seenEpoch = 0
 let heard = false
+/* The server the last connection that was acted on was to; null until there is one. */
+let servedTarget = null
 
 function adopt(view, { first = false } = {}) {
   if (!view || typeof view !== 'object' || typeof view.state !== 'string') return
@@ -97,6 +125,7 @@ function adopt(view, { first = false } = {}) {
   connection.attempt = Number.isFinite(view.attempt) ? view.attempt : 0
   connection.reason = typeof view.reason === 'string' ? view.reason : null
   connection.local = view.local !== false
+  connection.target = typeof view.target === 'string' ? view.target : 'local'
   connection.server = view.server && typeof view.server === 'object' ? view.server : null
   connection.outdated = view.outdated && typeof view.outdated === 'object' ? view.outdated : null
   if (newEpoch) connection.restartScheduled = false
@@ -104,11 +133,15 @@ function adopt(view, { first = false } = {}) {
   if (first) {
     /* Mounted onto a connection that is already up: its loads were answered by it. */
     seenEpoch = mode === 'split' && view.state === 'connected' ? epoch : 0
+    if (seenEpoch) servedTarget = connection.target
     return
   }
   if (mode === 'split' && view.state === 'connected' && epoch !== seenEpoch) {
     seenEpoch = epoch
-    resync()
+    const changed = servedTarget !== null && servedTarget !== connection.target
+    servedTarget = connection.target
+    if (changed) changeServer().then(resync)
+    else resync()
   }
 }
 

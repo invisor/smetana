@@ -686,6 +686,25 @@ function takeIn(half) {
   adopt(viewFromHalf(half, settings.activeProject, baseline ?? serverView(settings)))
 }
 
+/* A different server: its project list, its open project and its settings in place of the ones held,
+   which are the previous server's. What was unsent is void - it was addressed to the other server,
+   and the first thing a diff against the new one's state would send is the old one's settings and a
+   path on another machine. This device's own half stays. Answers the project the new server has open,
+   or null (the empty state). Does not touch the tabs or the tracker: `projects.js::followServerChange`
+   does, with the project this answers. */
+export async function adoptServerProjects() {
+  if (!split) return settings.activeProject
+  inflight = []
+  lastRev = 0
+  const server = await invoke('settings_load', { project: null })
+  settings.openProjects = []
+  settings.activeProject = server.activeProject ?? null
+  const view = serverView({ ...server, activeProject: settings.activeProject })
+  writeView(settings, view)
+  baseline = view
+  return settings.activeProject
+}
+
 async function resyncServer({ drop } = {}) {
   try {
     const server = await invoke('settings_load', { project: settings.activeProject })

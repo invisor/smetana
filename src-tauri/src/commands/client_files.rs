@@ -14,6 +14,10 @@
 //! The two openers take an HTML document and nothing else: they hand a path to whatever the system
 //! has registered for it, so a command that opened any path would open an executable as readily.
 
+// The release registers the three commands (the lists that pair them with the server's are held equal
+// by tests) but they refuse there, which leaves the helpers behind them unused in that build.
+#![cfg_attr(not(feature = "split"), allow(dead_code))]
+
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
@@ -43,8 +47,21 @@ pub fn read_file(path: &Path) -> Result<ClientFile, String> {
     Ok(ClientFile { name, bytes: bytes.len() as u64, data: base64::engine::general_purpose::STANDARD.encode(bytes) })
 }
 
+/// What the build without `split` says to the three commands below: they exist only for a client of a
+/// server on another machine, and the release has its back end in this process. The commands are
+/// registered in both builds (the lists that pair them with the server's are held equal by tests), so
+/// the release's copy refuses rather than reading or opening anything.
+#[cfg(not(feature = "split"))]
+const NOT_A_CLIENT: &str = "This build has no server on another machine, so there is nothing to send or fetch.";
+
 #[tauri::command]
 pub async fn client_file_read(path: String) -> Result<ClientFile, String> {
+    #[cfg(not(feature = "split"))]
+    {
+        let _ = path;
+        Err(NOT_A_CLIENT.to_owned())
+    }
+    #[cfg(feature = "split")]
     tokio_blocking(move || read_file(Path::new(&path))).await
 }
 
@@ -128,6 +145,16 @@ fn open(path: &Path) -> Result<(), String> {
 /// Opens an HTML document that is a file on this machine.
 #[tauri::command]
 pub async fn client_open_document(path: String) -> Result<(), String> {
+    #[cfg(not(feature = "split"))]
+    {
+        let _ = path;
+        return Err(NOT_A_CLIENT.to_owned());
+    }
+    #[cfg(feature = "split")]
+    open_document(&path)
+}
+
+fn open_document(path: &str) -> Result<(), String> {
     let path = PathBuf::from(path);
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     if !is_html_name(&name) {
@@ -139,12 +166,23 @@ pub async fn client_open_document(path: String) -> Result<(), String> {
     open(&path)
 }
 
-/// Opens a document the server sent: written to a temporary file first.
+/// Opens a document the server sent: written to a file under the app's cache folder first.
 #[tauri::command]
-pub async fn client_open_fetched(name: String, data: String) -> Result<(), String> {
-    let parent = std::env::temp_dir().join(TEMP_PARENT);
-    let file = tokio_blocking(move || write_fetched(&parent, &name, &data)).await?;
-    open(&file)
+pub async fn client_open_fetched(app: tauri::AppHandle, name: String, data: String) -> Result<(), String> {
+    #[cfg(not(feature = "split"))]
+    {
+        let _ = (app, name, data);
+        Err(NOT_A_CLIENT.to_owned())
+    }
+    #[cfg(feature = "split")]
+    {
+        use tauri::Manager;
+        // The app's own cache folder, which belongs to this user: a shared /tmp would let another
+        // account on the machine read, or plant, a report.
+        let parent = app.path().app_cache_dir().map_err(|err| err.to_string())?.join(TEMP_PARENT);
+        let file = tokio_blocking(move || write_fetched(&parent, &name, &data)).await?;
+        open(&file)
+    }
 }
 
 #[cfg(test)]
@@ -210,5 +248,20 @@ mod tests {
         std::fs::write(&big, vec![0u8; MAX_ATTACHMENT_BYTES as usize + 1]).unwrap();
         assert!(read_file(&big).unwrap_err().contains("ceiling"));
         assert!(read_file(&tmp.path().join("missing")).is_err());
+    }
+
+    /// The release's copies read and open nothing: a webview of the release must not gain a way to
+    /// read a file of this machine that it did not have.
+    #[cfg(not(feature = "split"))]
+    #[test]
+    fn the_release_refuses_all_three() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("secret.html");
+        std::fs::write(&file, "x").unwrap();
+        let path = file.to_string_lossy().into_owned();
+        tauri::async_runtime::block_on(async {
+            assert!(client_file_read(path.clone()).await.is_err());
+            assert!(client_open_document(path).await.is_err());
+        });
     }
 }

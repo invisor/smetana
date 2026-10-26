@@ -126,7 +126,7 @@ import { basename } from '../../paths.js'
    themselves, so this file asks on their behalf and hands back which of
    their own attachments are worth drawing as a control at all. */
 import { agentLabel, signInVariants } from '../../stores/agents.js'
-import { openExternal, openImageWindow, pickFiles } from '../../stores/app.js'
+import { openExternal, openImageWindow, pathsForServer, pickFiles } from '../../stores/app.js'
 import { filesState } from '../../stores/files.js'
 import { effectiveAgents, settings } from '../../stores/settings.js'
 import {
@@ -447,6 +447,18 @@ const dropCount = ref(0)
    response is drawn to promise otherwise. */
 const canAttach = computed(() => composerShown.value)
 
+/* Chosen or dropped files, put on the list as paths the agent can open. With the server on another
+   machine they are sent to it here, at the moment of the choice, so a chip names the server's copy
+   from the start (a click on a picture's chip asks the server for exactly that path); with it here
+   the paths are the same ones. A file that cannot be sent is said in the console and left off. */
+async function addAttachments(paths) {
+  try {
+    attachments.value = [...attachments.value, ...(await pathsForServer(paths))]
+  } catch (err) {
+    console.error('[conversation] a file could not be attached:', err)
+  }
+}
+
 let stopDrops = null
 onMounted(() => {
   stopDrops = watchWindowDrops({
@@ -457,10 +469,10 @@ onMounted(() => {
     leave: () => {
       dropping.value = false
     },
-    drop: ({ x, y, paths }) => {
+    drop: async ({ x, y, paths }) => {
       dropping.value = false
       if (!canAttach.value || !paths || !insidePanel(x, y)) return
-      attachments.value = [...attachments.value, ...paths]
+      await addAttachments(paths)
     }
   })
 })
@@ -481,7 +493,7 @@ const dropCaption = computed(() =>
 async function pickAttachments() {
   try {
     const paths = await pickFiles()
-    if (paths.length) attachments.value = [...attachments.value, ...paths]
+    if (paths.length) await addAttachments(paths)
   } catch (err) {
     console.error('[conversation] the file picker did not open:', err)
   }

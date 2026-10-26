@@ -83,6 +83,12 @@ paste the code under "Use a server on another machine" and press "Use this serve
 ran `pair` asks you to confirm the device; answer `y`. A phone is paired the same way with
 `--kind phone` and its camera on the QR code.
 
+Cloning over ssh runs with `BatchMode`, so nothing can ask a question on a server with nobody at it:
+**the server's host key for the git host must already be known** to the service user, and the key
+must not need a passphrase. Once, as the service user: `ssh -T git@github.com` (answer `yes`), or
+`ssh-keyscan github.com >> ~/.ssh/known_hosts`. If you have set `GIT_SSH_COMMAND`, `GIT_SSH` or
+`core.sshCommand` for that user, the server leaves your setting alone and `BatchMode` is yours to add.
+
 Then add a project: the folder dialog is replaced by the server's own folders (under the service
 user's home), or "Clone a repository…" with an address the server can reach. The desktop shows what is
 in those folders and nothing above them.

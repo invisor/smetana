@@ -700,3 +700,88 @@ describe('adding a project on a server that is not on this machine', () => {
     ).rejects.toThrow('fatal: repository not found')
   })
 })
+
+describe('moving to another server', () => {
+  const state = (over) => ({ mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local', ...over })
+
+  async function onLocalServer() {
+    const loaded = await loadStores()
+    const { ipc, emit, stores } = loaded
+    ipc.on('connection_state', state())
+    ipc.on('settings_load', ({ project }) => ({
+      ...stores.settings.defaults(),
+      openProjects: ['/Users/me/work'],
+      activeProject: '/Users/me/work',
+      lastProject: '/Users/me/work',
+      project: { runSettings: null }
+    }))
+    ipc.on('device_settings_load', {})
+    ipc.on('device_settings_save', null)
+    ipc.on('settings_patch', null)
+    ipc.on('project_root', (args) => args.path)
+    ipc.on('files_list', (args) => listing({ dir: args.dir }))
+    ipc.on('tracker_set_project', snapshot())
+    ipc.on('tracker_snapshot', snapshot())
+    ipc.on('tracker_probe', (args) => args.paths.map((path) => ({ path, tracked: true })))
+    ipc.on('terminal_list', [])
+    ipc.on('terminal_restorable', [])
+    await stores.settings.loadSettings()
+    await stores.connection.initConnection()
+    return { ...loaded }
+  }
+
+  const settled = async (loaded) => {
+    for (let i = 0; i < 20; i++) await loaded.nextTick()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await loaded.stores.settings.flushPending()
+  }
+
+  it('takes the new server\'s project list and open project, and sends it nothing of this machine\'s', async () => {
+    const loaded = await onLocalServer()
+    const { ipc, emit, stores } = loaded
+    expect(stores.settings.settings.activeProject).toBe('/Users/me/work')
+
+    // The person chooses a server on another machine; it has its own projects.
+    ipc.on('settings_load', () => ({
+      ...stores.settings.defaults(),
+      agent: 'codex',
+      openProjects: ['/home/dev/app'],
+      activeProject: '/home/dev/app',
+      lastProject: '/home/dev/app',
+      project: { runSettings: null }
+    }))
+    await emit('connection:state', state({ epoch: 2, local: false, target: 'node-vps' }))
+    await settled(loaded)
+
+    expect(stores.settings.settings.openProjects).toEqual(['/home/dev/app'])
+    expect(stores.settings.settings.activeProject).toBe('/home/dev/app')
+    expect(stores.settings.settings.agent).toBe('codex')
+    expect(ipc.calls('tracker_set_project')).toEqual([{ path: '/home/dev/app' }])
+    // Nothing of this machine's - a project path, a setting - was sent to the server, before or after.
+    expect(ipc.calls('settings_patch')).toEqual([])
+    expect(JSON.stringify(ipc.calls('settings_patch'))).not.toContain('/Users/me')
+  })
+
+  it('shows the empty state when the new server has no project open', async () => {
+    const loaded = await onLocalServer()
+    const { ipc, emit, stores } = loaded
+    ipc.on('settings_load', () => ({ ...stores.settings.defaults(), openProjects: [], activeProject: null }))
+    await emit('connection:state', state({ epoch: 2, local: false, target: 'node-vps' }))
+    await settled(loaded)
+
+    expect(stores.settings.settings.activeProject).toBeNull()
+    expect(stores.settings.settings.openProjects).toEqual([])
+    expect(ipc.calls('settings_patch')).toEqual([])
+  })
+
+  it('does nothing of the kind when the same server reconnects', async () => {
+    const loaded = await onLocalServer()
+    const { ipc, emit, stores } = loaded
+    ipc.on('settings_load', () => ({ ...stores.settings.defaults(), openProjects: ['/elsewhere'], activeProject: '/elsewhere' }))
+    await emit('connection:state', state({ epoch: 2 }))
+    await settled(loaded)
+
+    expect(ipc.calls('tracker_set_project')).toEqual([])
+    expect(stores.settings.settings.activeProject).toBe('/Users/me/work')
+  })
+})

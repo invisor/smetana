@@ -20,6 +20,13 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { usingMockBackend } from './mockBackend.js'
 import { CHROME_NONE, chromeFromPlatform } from '../components/shell/windowChrome.js'
 import { dirname } from '../paths.js'
+import { pathsForServer as serverPaths } from './serverFiles.js'
+
+/* Files chosen or dropped on this machine, as paths an agent on the server can open: the same paths
+   when the server is here, the server's own copies when it is not (`serverFiles.js`). Here because the
+   conversation panel reaches the desktop only through this file, and the phone answers it with a
+   function that changes nothing. */
+export const pathsForServer = serverPaths
 
 /* Which section the settings window should be showing. Not a setting and not
    part of the three-event contract in `settings.js` — nothing about it reaches

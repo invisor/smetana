@@ -196,6 +196,7 @@ pub fn clone_name(url: &str) -> Option<String> {
 }
 
 /// A name that is one plain path segment: no separator, no `..`, no leading dot or dash.
+// Mirrored by `validFolderName` in `src/components/projects/folderBrowser.js`; change one, change both.
 pub fn valid_folder_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 255
@@ -208,6 +209,7 @@ pub fn valid_folder_name(name: &str) -> bool {
 /// as an option, and the `ext::` transport runs a command, so neither is let through; `file:` and a
 /// bare path would copy something off the server's own disk, which is not what "clone a repository"
 /// asks for.
+// Mirrored by `validCloneUrl` in `src/components/projects/folderBrowser.js`; change one, change both.
 pub fn valid_clone_url(url: &str) -> bool {
     let url = url.trim();
     if url.is_empty() || url.starts_with('-') || url.chars().any(char::is_control) || url.contains(char::is_whitespace) {
@@ -276,30 +278,69 @@ pub async fn project_clone(
         return Err(PlacementError::NotAFolder(text(&parent_real)));
     }
     let dest = parent_real.join(&name);
-    if dest.symlink_metadata().is_ok() {
-        return Err(PlacementError::BadRequest(format!("{} already exists.", dest.display())));
+    // Created here, exclusively: git clones into an empty folder, and the folder being ours is what
+    // makes it safe to remove on failure. Two clones to one name cannot both get past this line, so
+    // neither can delete what the other is writing.
+    match std::fs::create_dir(&dest) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(PlacementError::BadRequest(format!("{} already exists.", dest.display())));
+        }
+        Err(err) => return Err(io(&dest, err)),
     }
+    let result = run_clone(clone_args(&url, &dest), ssh_batch_mode().await, CLONE_TIMEOUT).await;
+    if let Err(err) = result {
+        // Only what this call made, and on every failure including the timeout.
+        let _ = std::fs::remove_dir_all(&dest);
+        return Err(err);
+    }
+    Ok(Cloned { path: text(&real(&dest)?) })
+}
+
+/// Whether to make ssh refuse to ask anything (`BatchMode`): only when the operator has not chosen how
+/// git runs ssh, by `GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand`. An operator's own setting wins,
+/// and a host key must then be known to the service user (see `server/smetanad/README.md`).
+async fn ssh_batch_mode() -> bool {
+    if std::env::var_os("GIT_SSH_COMMAND").is_some() || std::env::var_os("GIT_SSH").is_some() {
+        return false;
+    }
+    let configured = tokio::process::Command::new("git")
+        .args(["config", "--get", "core.sshCommand"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await
+        .map(|out| out.status.success() && !out.stdout.iter().all(u8::is_ascii_whitespace))
+        .unwrap_or(false);
+    !configured
+}
+
+/// Runs `git` with `args` (already validated) and says why it failed. No terminal, no prompt.
+async fn run_clone(
+    args: Vec<std::ffi::OsString>,
+    ssh_batch: bool,
+    timeout: Duration,
+) -> Result<(), PlacementError> {
     let mut command = tokio::process::Command::new("git");
     command
-        .args(clone_args(&url, &dest))
+        .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let output = tokio::time::timeout(CLONE_TIMEOUT, command.output())
+    if ssh_batch {
+        command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+    }
+    let output = tokio::time::timeout(timeout, command.output())
         .await
         .map_err(|_| PlacementError::Clone("The clone took longer than fifteen minutes and was stopped.".into()))?
         .map_err(|err| PlacementError::Clone(format!("could not run git: {err}")))?;
-    if !output.status.success() {
-        // A half-made folder is not left behind to block the next try.
-        let _ = std::fs::remove_dir_all(&dest);
-        let why = String::from_utf8_lossy(&output.stderr);
-        let why = why.trim();
-        return Err(PlacementError::Clone(if why.is_empty() { "git clone failed.".into() } else { why.into() }));
+    if output.status.success() {
+        return Ok(());
     }
-    Ok(Cloned { path: text(&real(&dest)?) })
+    let why = String::from_utf8_lossy(&output.stderr);
+    let why = why.trim();
+    Err(PlacementError::Clone(if why.is_empty() { "git clone failed.".into() } else { why.into() }))
 }
 
 // ---- reading a file back --------------------------------------------------------------------
@@ -582,40 +623,68 @@ mod tests {
         assert!(matches!(err, PlacementError::BadRequest(_)), "{err}");
     }
 
+    fn git_in(dir: &Path, args: &[&str]) {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .status()
+            .unwrap()
+            .success());
+    }
+
+    fn have_git() -> bool {
+        std::process::Command::new("git").arg("--version").output().is_ok()
+    }
+
     #[tokio::test]
-    async fn a_local_repository_is_cloned_into_a_new_folder_under_the_root() {
-        // `file:` is refused for a client, so the happy path is exercised through the same
-        // arguments with a plain path as the "address" by calling git directly.
-        if std::process::Command::new("git").arg("--version").output().is_err() {
+    async fn the_clone_runner_clones_a_repository_and_reports_a_failure_in_gits_words() {
+        // `run_clone` is the real spawn, environment and failure path; `project_clone` hands it
+        // `clone_args`, which refuse `file:` and so cannot be pointed at a repository on this disk.
+        if !have_git() {
             return;
         }
         let tmp = dir();
         let src = tmp.path().join("src");
         std::fs::create_dir_all(&src).unwrap();
-        let git = |dir: &Path, args: &[&str]| {
-            assert!(std::process::Command::new("git")
-                .args(args)
-                .current_dir(dir)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@t")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@t")
-                .status()
-                .unwrap()
-                .success());
-        };
-        git(&src, &["init", "-q"]);
+        git_in(&src, &["init", "-q"]);
         touch(&src.join("a.txt"), b"hi");
-        git(&src, &["add", "."]);
-        git(&src, &["commit", "-q", "-m", "x"]);
-        let out = tmp.path().join("out");
-        std::fs::create_dir_all(&out).unwrap();
-        let dest = out.join("copy");
-        // The refusal of `file:` is the validator's; the clone itself is git's.
-        let status = std::process::Command::new("git").args(["clone", "-q"]).arg(&src).arg(&dest).status().unwrap();
-        assert!(status.success());
-        assert!(!valid_clone_url(&src.to_string_lossy()), "a path on the server's disk is not an address");
-        assert!(dest.join(".git").exists());
+        git_in(&src, &["add", "."]);
+        git_in(&src, &["commit", "-q", "-m", "x"]);
+        let dest = tmp.path().join("copy");
+        let args = |from: &Path, to: &Path| -> Vec<std::ffi::OsString> {
+            vec!["clone".into(), "-q".into(), "--".into(), from.into(), to.into()]
+        };
+        run_clone(args(&src, &dest), true, Duration::from_secs(60)).await.unwrap();
+        assert!(dest.join(".git").exists() && dest.join("a.txt").exists());
+        let err = run_clone(args(&tmp.path().join("nothing"), &tmp.path().join("x")), true, Duration::from_secs(60))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, PlacementError::Clone(ref why) if !why.is_empty()), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_failed_clone_removes_the_folder_it_made_and_a_second_clone_of_the_name_is_refused_meanwhile() {
+        if !have_git() {
+            return;
+        }
+        let tmp = dir();
+        let root = tmp.path().join("home");
+        std::fs::create_dir_all(&root).unwrap();
+        // An address git accepts and cannot reach: the connection is refused at once.
+        let url = "git://127.0.0.1:1/none.git".to_owned();
+        let err = project_clone(&root, url.clone(), text(&root), Some("app".into())).await.unwrap_err();
+        assert!(matches!(err, PlacementError::Clone(_)), "{err}");
+        assert!(!root.join("app").exists(), "what the call made is removed on failure");
+        // A folder that was not made by this call is never touched, failure or not.
+        std::fs::create_dir_all(root.join("mine")).unwrap();
+        std::fs::write(root.join("mine/keep.txt"), "x").unwrap();
+        let err = project_clone(&root, url, text(&root), Some("mine".into())).await.unwrap_err();
+        assert!(matches!(err, PlacementError::BadRequest(_)), "{err}");
+        assert!(root.join("mine/keep.txt").exists());
     }
 
     // ---- reading a file back

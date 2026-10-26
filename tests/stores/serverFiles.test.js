@@ -96,28 +96,18 @@ describe('a report in the person\'s browser', () => {
 })
 
 describe('what is sent with a message and what is dropped on a terminal', () => {
-  it('sends a message\'s attachments to a remote server first and gives the agent the stored paths', async () => {
+  it('hands the composer the stored paths as soon as files are chosen, so a chip names the server\'s copy', async () => {
     const { ipc, stores } = await load(split({ local: false }))
     ipc.on('client_file_read', () => ({ name: 'brief.pdf', bytes: 3, data: 'cG5n' }))
     ipc.on('attachment_write', () => attachment('/srv/attachments/p/brief.pdf'))
-    ipc.on('session_send', null)
-
-    await stores.conversation.sendMessage(7, 'see this', ['/Users/me/brief.pdf'])
-
-    expect(ipc.calls('session_send')).toEqual([
-      { id: 7, text: 'see this', attachments: ['/srv/attachments/p/brief.pdf'] }
-    ])
+    expect(await stores.app.pathsForServer(['/Users/me/brief.pdf'])).toEqual(['/srv/attachments/p/brief.pdf'])
   })
 
-  it('sends them untouched when the server is here, and asks nothing when there are none', async () => {
-    const { ipc, stores } = await load(split({ local: true }))
+  it('sends a message\'s attachments as given: they were made server paths when they were chosen', async () => {
+    const { ipc, stores } = await load(split({ local: false }))
     ipc.on('session_send', null)
-    await stores.conversation.sendMessage(7, 'see this', ['/Users/me/brief.pdf'])
-    await stores.conversation.sendMessage(7, 'no files', [])
-    expect(ipc.calls('session_send')).toEqual([
-      { id: 7, text: 'see this', attachments: ['/Users/me/brief.pdf'] },
-      { id: 7, text: 'no files', attachments: [] }
-    ])
+    await stores.conversation.sendMessage(7, 'see this', ['/srv/attachments/p/brief.pdf'])
+    expect(ipc.calls('session_send')).toEqual([{ id: 7, text: 'see this', attachments: ['/srv/attachments/p/brief.pdf'] }])
     expect(ipc.calls('client_file_read')).toHaveLength(0)
   })
 

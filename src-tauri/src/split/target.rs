@@ -31,6 +31,14 @@ impl Target {
         matches!(self, Target::Local)
     }
 
+    /// What tells one server from another: `local`, or the remote server's key.
+    pub fn id(&self) -> String {
+        match self {
+            Target::Local => "local".to_owned(),
+            Target::Remote { node, .. } => node.clone(),
+        }
+    }
+
     pub fn remote(record: RemoteRecord) -> Target {
         Target::Remote { node: record.node, relay: record.relay }
     }

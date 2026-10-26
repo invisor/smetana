@@ -58,7 +58,10 @@ impl Link {
     pub fn with_target(sink: Sink, target: Target) -> Arc<Link> {
         Arc::new(Link {
             sink,
-            inner: Mutex::new(Inner { view: View::new(target.is_local()), client: None }),
+            inner: Mutex::new(Inner {
+                view: View { target: target.id(), ..View::new(target.is_local()) },
+                client: None,
+            }),
             target: Mutex::new(target),
             generation: std::sync::atomic::AtomicU64::new(0),
             retarget: Notify::new(),
@@ -100,6 +103,7 @@ impl Link {
             inner.client = None;
             let view = &mut inner.view;
             view.local = target.is_local();
+            view.target = target.id();
             view.state = Phase::Connecting;
             view.attempt = 0;
             view.reason = Some("switching server".to_owned());
@@ -774,6 +778,7 @@ mod tests {
             // the view says it is another server, and nothing about the local one changed.
             link.set_target(Target::Remote { node: "garbage".into(), relay: "https://relay.example.com".into() });
             assert!(!link.view().local);
+            assert_eq!(link.view().target, "garbage", "the view says which server, so the front end can tell it changed");
             until("the connection to the old server to be dropped", || link.view().state != Phase::Connected).await;
             assert!(smetanad::server::is_owned(&server_dir), "the local server was not touched");
             let refused = link.call("tracker_update", json!({ "id": "x", "patch": {} })).await.unwrap_err();
