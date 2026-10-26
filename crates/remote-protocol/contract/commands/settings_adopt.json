@@ -1,0 +1,7 @@
+{
+  "args": [{"patch":{"agent":"codex","git":{"removeWorktrees":false},"lastProject":"/work/smetana","openProjects":["/work/smetana"],"projects":{"/work/smetana":{"agents":{"agent":"codex","agentRoles":{"code":{"agent":"","model":""},"reviewBranch":{"agent":"","model":""},"runLead":{"agent":"","model":""},"tasks":{"agent":"","model":""}},"model":""},"runSettings":null}},"subscription":{"pauseAt":80}}},{"patch":{"agentPrompt":""}}],
+  "reply": [
+    true,
+    false
+  ]
+}

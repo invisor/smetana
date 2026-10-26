@@ -234,6 +234,8 @@ pub const DESKTOP_COMMANDS: &[&str] = &[
     "remote_device_revoke",
     "connection_state",
     "connection_retry",
+    "device_settings_load",
+    "device_settings_save",
 ];
 
 /// The commands that act on the machine the person sits at, and so are not the server's: the
@@ -267,6 +269,9 @@ pub const CLIENT_COMMANDS: &[&str] = &[
     // of the server's to ask, so a device that calls one is `Forbidden`.
     "connection_state",
     "connection_retry",
+    // The client build's own half of the settings (`settings/split.rs`): the file on this machine.
+    "device_settings_load",
+    "device_settings_save",
 ];
 
 /// What the output buffer of one device for one session may hold before the device is sent the

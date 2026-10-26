@@ -202,8 +202,61 @@ workers and serves no phones; `src-tauri/src/split/` holds one iroh connection t
 - **The bundle.** `tauri.next.conf.json` changes the identifier, product name and window title, adds `binaries/smetanad` to
   `externalBin` and turns updater artifacts off. `npm run build-smetanad [-- --release]` builds it into
   `src-tauri/binaries/smetanad-<triple>` (ignored by git); the default config does not name it, so the default build never needs it.
-- **Not yet:** settings are entirely the server's (the split is step 6), no remote server (7), the in-process path stays (8).
+- **Settings are split** (step 6, below). **Not yet:** no remote server (7), the in-process path stays (8).
   The shell still links `smetana-core` as a library for `window.rs`'s settings types; no worker is started.
+
+## Settings in the client build (protocol 1.10)
+
+`crates/core/src/settings/split.rs` draws the line by one question: does a worker on the server read it? The server's:
+`agent`, `model`, `agentRoles`, the four languages, `agentPrompt`, `conversationPanel`, `subscription`, `runFailover`,
+`remote.relayUrl`, `git.removeWorktrees`, `openProjects`, `lastProject`, and per project `runSettings`, `agents` and `usedAt`.
+Everything else is the device's (appearance, layout, `editor`, `kanban`, `reports`, `git.autoFetch`, `window`, `updates`,
+`notifications`, `dialogs`, and a project's tabs, folds, selected task, orders, names and `storageWarnedMib`); a field in
+neither list is the device's, and a test pins the server list. `usedAt` is kept on both sides for each file's own project limit.
+
+- **Server half: a patch.** `settings_patch { patch }` (server-only command) is a JSON merge patch over the server's keys:
+  the server drops anything else, applies it to its `settings.json` under one process-wide lock, validates it as a read does,
+  writes, and **inside that lock** emits `settings:changed` (the server half whole) so clients hear states in the order they
+  were written. Two clients that changed different fields both keep them; a list (`openProjects`, `runFailover.priority`) is
+  replaced whole, so two simultaneous edits of the *same* list lose one.
+- **Device half: a file on the machine.** `device_settings_load` / `device_settings_save` are client commands (answered by the
+  shell, in `LOCAL_COMMANDS` and `CLIENT_COMMANDS`, registered in both builds) over the shell's own `settings.json`;
+  `merge_device` writes the device's keys and leaves the server's as that file has them. `window.rs`, the updater and the
+  dialog sizes keep reading that file unchanged.
+- **Front end** (`stores/settings.js`, pure parts in `stores/settingsSplit.js`): `connection_state` saying `split` turns it
+  on; the release and a browser take no new branch. The store keeps a `baseline` (the server's half as last agreed); a flush
+  saves the device half whole and sends `diff(baseline, now)` as the patch. `settings:changed` and a reconnect fold the
+  server's state in with this window's unsent edits laid over it. A refused patch is **not kept or replayed**: the server's
+  state is read back and wins. Which project is open stays this window's own (`lastProject` is sent, never adopted).
+- **Numbered states.** The answer to a patch and every `settings:changed` carry `rev`, counted under the write lock and
+  restarting at 1 with the server. The store ignores a state whose `rev` is not newer than the last it took in (and resets the
+  count on each new connection), and ignores `settings:changed` while a patch of its own is unanswered: that state is older
+  than something it sent, and the answer to the last patch carries every state before it. The baseline the store compares
+  against is the confirmed state **plus the patches still on the way**, so an echo can never undo a later edit.
+- **A failed patch.** A refusal by the server (a handler error) takes back that patch's fields alone: the store reads the
+  server's state and keeps whatever else was typed since. A call that did not reach the server's handler is told by words
+  every such shell rejection carries - `NOT_SENT` ("Nothing was changed") and `MAYBE_SENT` ("may or may not have been made") in
+  `src-tauri/src/split/state.rs`, matched by `TRANSPORT_WORDS` in `src/stores/settingsSplit.js`, each side pinned by a test and
+  naming the other; keep both when rewording a rejection. Such a failure keeps the change pending; the reconnect reads the server's state and sends what is
+  still different. Neither is a replay of a command: it is the state being brought into agreement.
+- **`openProjects`.** The store keeps the project open in this window in the list whatever another client did to it; that
+  re-append is this window's bookkeeping and is not sent back (`diffViews`), so a client that closed a project does not see it
+  return. Two clients editing the list at the same moment still lose one edit (the list is replaced whole).
+- **Migration** (`src-tauri/src/split/migrate.rs`), on every connection before `connected`, two sources:
+  1. The device's `settings.json` still holds a server half (what a release install will have once the client build is the
+     only one): `settings_adopt` offers it (taken only by a server with no `settings.json`), then `retire_server_half` (which sets `deviceSeeded` in the same write as it resets the server's keys, so no crash between two writes can lead to a seeding over the device's own half) copies
+     the file to `settings.pre-split.json` (never overwritten) and resets the server's keys in it. The device half already
+     there stands.
+  2. The device file is not marked (`deviceSeeded`) and source one did not fire: an earlier build of the client (step 5)
+     forwarded `settings_save`, so a Smetana Next install has the whole document in the **server's** file and only `dialogs`
+     on the device. `settings_device_half` answers the device half of the server's file (or `null`); `seed_device` writes it
+     into the device file with this machine's dialog sizes laid over it and sets `deviceSeeded` in the same write, after a copy
+     to `settings.pre-seed.json`. The server's file is left whole (the device keys there are dead data), so nothing is lost and a
+     rerun does nothing. A marked file is never seeded again.
+  A server that already had settings keeps them; a second desktop's old server half survives only in its `.pre-split` copy.
+  Known edge for the future switch-over task: source two seeds from the server's file whenever the device file is unmarked
+  and source one did not fire, so a release device file with a customised device half but no server half, meeting a server
+  file that already holds device keys, takes the server's.
 
 ## Protocol 1.9: the server's own commands
 

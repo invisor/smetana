@@ -328,6 +328,11 @@ async fn attempt(link: &Arc<Link>, config: &Config, restarted_from: &mut Option<
             }
         }
     }
+    // Before the first call can be made: a read of the settings that was answered ahead of this
+    // would show the server's defaults while the old file's server half was still on its way.
+    if let Some(path) = &config.settings {
+        super::migrate::run(&client, path).await;
+    }
     link.connected(client.clone(), info, outdated);
     let mut watch_owner = tokio::time::interval(Duration::from_secs(1));
     let why = loop {
@@ -392,6 +397,17 @@ mod tests {
     fn a_handlers_own_error_reaches_the_webview_untouched() {
         let value = json!({ "kind": "bd", "message": "no such issue" });
         assert_eq!(rejection("tracker_update", BridgeError::Handler(value.clone())), value);
+    }
+
+    #[test]
+    fn every_rejection_of_a_call_that_did_not_reach_the_server_carries_the_words_the_front_end_looks_for() {
+        use super::super::state::{MAYBE_SENT, NOT_SENT};
+        let never = rejection("x", BridgeError::Internal(format!("{SEND_FAILED}: broken pipe")));
+        let maybe = rejection("x", BridgeError::Internal(CLOSED_BEFORE_REPLY.to_owned()));
+        assert!(never.as_str().unwrap().contains(NOT_SENT));
+        assert!(maybe.as_str().unwrap().contains(MAYBE_SENT));
+        // A refusal by the server itself is none of these.
+        assert!(!rejection("x", BridgeError::Forbidden).as_str().unwrap().contains(NOT_SENT));
     }
 
     #[test]
@@ -529,6 +545,7 @@ mod tests {
                 bd: None,
                 resource_dir: None,
                 log: dir.path().join("smetanad.log"),
+                settings: None,
             };
             let supervisor = tokio::spawn(supervise(link.clone(), config));
 
@@ -573,6 +590,111 @@ mod tests {
                 .map(|(_, payload)| payload["state"].as_str().unwrap().to_owned())
                 .collect();
             assert!(states.contains(&"connected".to_owned()) && states.contains(&"reconnecting".to_owned()), "{states:?}");
+
+            supervisor.abort();
+            server.shutdown().await;
+        });
+    }
+
+    #[test]
+    fn an_old_settings_file_is_migrated_before_the_first_call_and_a_patch_is_broadcast() {
+        use smetana_core::settings::{file, split};
+        block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let server = start_server(dir.path()).await;
+            let device = dir.path().join("device").join("settings.json");
+            std::fs::create_dir_all(device.parent().unwrap()).unwrap();
+            std::fs::write(
+                &device,
+                r#"{"version":1,"appearance":{"theme":"light"},"agent":"codex","agentPrompt":"be brief",
+                    "openProjects":["/work/a"],"lastProject":"/work/a"}"#,
+            )
+            .unwrap();
+
+            let seen: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+            let recorder = seen.clone();
+            let link = Link::new(Arc::new(move |name, payload| recorder.lock().unwrap().push((name.to_owned(), payload))), true);
+            let config = Config {
+                server_dir: dir.path().join("server"),
+                identity_dir: dir.path().to_owned(),
+                exe: None,
+                bd: None,
+                resource_dir: None,
+                log: dir.path().join("smetanad.log"),
+                settings: Some(device.clone()),
+            };
+            let supervisor = tokio::spawn(supervise(link.clone(), config));
+
+            // The first read already sees the migrated server half.
+            let loaded = link.call("settings_load", json!({ "project": null })).await.unwrap();
+            assert_eq!(loaded["agent"], "codex");
+            assert_eq!(loaded["agentPrompt"], "be brief");
+            assert_eq!(loaded["openProjects"], json!(["/work/a"]));
+            // The device keeps its own half and has given the other up.
+            let kept = file::load(&device).0;
+            assert_eq!(kept.appearance.theme, "light");
+            assert!(split::legacy_server_patch(&kept).is_none());
+            assert!(device.with_file_name("settings.pre-split.json").exists());
+
+            // A patch from this client is announced to every client, this one included.
+            link.call("settings_patch", json!({ "patch": { "model": "" , "agentLanguage": "ru" } })).await.unwrap();
+            until("the broadcast", || {
+                seen.lock().unwrap().iter().any(|(name, p)| name == "settings:changed" && p["agentLanguage"] == "ru" && p["agent"] == "codex")
+            })
+            .await;
+            // And the device half is refused on the server's road.
+            link.call("settings_patch", json!({ "patch": { "appearance": { "theme": "light" } } })).await.unwrap();
+            let after = link.call("settings_load", json!({ "project": null })).await.unwrap();
+            assert_eq!(after["appearance"]["theme"], "dark", "the server keeps no copy of the device's fields");
+
+            supervisor.abort();
+            server.shutdown().await;
+        });
+    }
+
+    #[test]
+    fn a_step_5_install_has_its_device_half_seeded_from_the_servers_file_before_the_first_call() {
+        use smetana_core::settings::file;
+        block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            // What step 5 left: the whole document on the server, only dialogs on the device.
+            let server_dir = dir.path().join("server");
+            std::fs::create_dir_all(&server_dir).unwrap();
+            std::fs::write(
+                server_dir.join("settings.json"),
+                r#"{"version":1,"appearance":{"theme":"light","density":"compact","uiFontSize":15},"agent":"codex",
+                    "layout":{"leftWidth":300},"openProjects":["/work/a"],"lastProject":"/work/a",
+                    "projects":{"/work/a":{"selectedTask":"a-1","sideTab":"git"}}}"#,
+            )
+            .unwrap();
+            let device = dir.path().join("device").join("settings.json");
+            std::fs::create_dir_all(device.parent().unwrap()).unwrap();
+            std::fs::write(&device, r#"{"version":1,"dialogs":{"run":{"width":600,"height":500}}}"#).unwrap();
+            let server = start_server(dir.path()).await;
+
+            let link = Link::new(Arc::new(|_, _| {}), true);
+            let config = Config {
+                server_dir: server_dir.clone(),
+                identity_dir: dir.path().to_owned(),
+                exe: None,
+                bd: None,
+                resource_dir: None,
+                log: dir.path().join("smetanad.log"),
+                settings: Some(device.clone()),
+            };
+            let supervisor = tokio::spawn(supervise(link.clone(), config));
+            let loaded = link.call("settings_load", json!({ "project": "/work/a" })).await.unwrap();
+            assert_eq!(loaded["agent"], "codex", "the server keeps its half");
+
+            let seeded = file::load(&device).0;
+            assert!(seeded.device_seeded);
+            assert_eq!(seeded.appearance.theme, "light");
+            assert_eq!(seeded.appearance.ui_font_size, 15);
+            assert_eq!(seeded.layout.left_width, 300);
+            assert_eq!(seeded.projects["/work/a"].selected_task.as_deref(), Some("a-1"));
+            assert_eq!(seeded.projects["/work/a"].side_tab, "git");
+            assert!(seeded.dialogs.contains_key("run"), "this machine's own dialog sizes are kept");
+            assert_eq!(seeded.agent, "claude", "the server's half is not copied to the device");
 
             supervisor.abort();
             server.shutdown().await;

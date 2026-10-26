@@ -264,6 +264,10 @@ pub const SERVER_COMMANDS: &[&str] = &[
     // the server runs on. Added in protocol 1.9; see `SERVER_ONLY_COMMANDS`.
     "server_health",
     "server_restart",
+    // Added in protocol 1.10: the server half of the settings is written by patch.
+    "settings_patch",
+    "settings_adopt",
+    "settings_device_half",
 ];
 
 /// The server commands that exist only on the server: the desktop app registers no Tauri command of
@@ -271,9 +275,15 @@ pub const SERVER_COMMANDS: &[&str] = &[
 /// calling one is `Forbidden` all the same, not `UnknownCommand`.
 ///
 /// - `server_health` — the report on the server's environment (bd, git, each agent's binary).
+/// - `settings_patch` — `{ patch }`: the fields of the server's half of the settings that changed,
+///   applied under one lock and announced to every client as `settings:changed`. See
+///   `smetana_core::settings::split`.
+/// - `settings_adopt` — `{ patch }`: the migration's way in, taken only by a server with no settings yet.
+/// - `settings_device_half` — `{}`: the device's half of the server's own `settings.json` (or `null`), for
+///   the one-time seeding of a client whose earlier build kept the whole document on the server.
 /// - `server_restart` — the restart gateway: `{ mode: "now" | "when-idle" | "cancel", confirm }`.
 ///   Nothing is restarted while work is alive unless the same request carries `confirm: true`.
-pub const SERVER_ONLY_COMMANDS: &[&str] = &["server_health", "server_restart"];
+pub const SERVER_ONLY_COMMANDS: &[&str] = &["server_health", "server_restart", "settings_patch", "settings_adopt", "settings_device_half"];
 
 /// Every event a desktop device may listen to: the phone's list (first), then the rest of what
 /// the desktop's front end listens to that a server emits. `terminal:output` is the one that is
@@ -297,6 +307,8 @@ pub const SERVER_EVENTS: &[&str] = &[
     "remote:pair-ended",
     // Added in protocol 1.9: a restart that was announced is put off because work appeared.
     "server:restart-deferred",
+    // Added in protocol 1.10: the server half of the settings after a patch, whole.
+    "settings:changed",
 ];
 
 /// Whether a phone may call `cmd`.

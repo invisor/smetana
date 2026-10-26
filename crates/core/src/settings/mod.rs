@@ -11,6 +11,7 @@
 pub mod commands;
 pub mod file;
 pub mod model;
+pub mod split;
 
 use std::path::PathBuf;
 use std::sync::OnceLock;

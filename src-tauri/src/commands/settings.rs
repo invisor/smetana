@@ -18,6 +18,21 @@ pub async fn settings_save(ctx: State<'_, Context>, settings: ResolvedSettings) 
     logic::settings_save(&ctx, settings).await
 }
 
+/// The client build's own half of the settings, read from the file on this machine: the same read
+/// `settings_load` makes, of a file whose server fields are not this device's to use. Registered in
+/// both builds; only the `split` front end calls it. See `settings::split` in the core crate.
+#[tauri::command]
+pub async fn device_settings_load(ctx: State<'_, Context>, project: Option<String>) -> Result<ResolvedSettings, SettingsError> {
+    logic::settings_load(&ctx, project).await
+}
+
+/// Saves the device's fields of the settings into the file on this machine and leaves the server's
+/// as that file has them.
+#[tauri::command]
+pub async fn device_settings_save(ctx: State<'_, Context>, settings: ResolvedSettings) -> Result<(), SettingsError> {
+    logic::device_settings_save(&ctx, settings).await
+}
+
 /// Where the file is, for the two readers that hold an `AppHandle` and not a context.
 fn path(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|dir| dir.join("settings.json"))

@@ -905,3 +905,10 @@ subscribes to `Resized`/`Moved` and saves 500 ms after the last one — a deboun
 about disk traffic, since it also settles handler order: the plugin's own listener has long since
 updated the cache by then. Both directions go through the one `FLAGS` constant, `StateFlags::all()`,
 so saving less than is restored cannot happen.
+
+## The client build keeps two files
+
+In the `split` build the file above is the **device's half** and the server holds the other half in its own `settings.json`,
+written by patch and announced as `settings:changed`. Which field is whose, the patch rules and the migration are in
+`.claude/rules/remote.md`, "Settings in the client build". A new field is the device's until `SERVER_ROOT` / `SERVER_PROJECT` in
+`crates/core/src/settings/split.rs` (and `ROOT` / `PROJECT_FIELDS` in `src/stores/settingsSplit.js`) say otherwise.

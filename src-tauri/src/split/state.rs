@@ -14,6 +14,14 @@ use serde_json::Value;
 /// The event the state travels in. The same string as `STATE_EVENT` in `src/stores/connection.js`.
 pub const STATE_EVENT: &str = "connection:state";
 
+/// The words every rejection the shell makes for a call that did not reach the server's handler
+/// contains, in one of two forms: the call never left (`NOT_SENT`), or it left and the answer was lost
+/// (`MAYBE_SENT`). The front end tells such a rejection from the server's own refusal by finding
+/// either in it (`transportFailure` in `src/stores/settingsSplit.js`, which holds the same two
+/// strings): change one here and that regex and its test move with it. `every_rejection_...` pins this.
+pub const NOT_SENT: &str = "Nothing was changed";
+pub const MAYBE_SENT: &str = "may or may not have been made";
+
 /// Where the connection is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -155,6 +163,17 @@ pub const FIRST_CONNECTION_WAIT: Duration = Duration::from_secs(45);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The front end's `transportFailure` looks for `NOT_SENT` / `MAYBE_SENT` in a rejection; every state's
+    /// refusal must carry one.
+    #[test]
+    fn every_refusal_carries_the_words_the_front_end_tells_a_lost_connection_by() {
+        let mut view = View::new(true);
+        for state in [Phase::Connecting, Phase::Reconnecting, Phase::Incompatible, Phase::Unpaired, Phase::Failed] {
+            view.state = state;
+            assert!(view.refusal().contains(NOT_SENT), "{state:?}: {}", view.refusal());
+        }
+    }
 
     #[test]
     fn backoff_doubles_and_stops_at_its_ceiling() {

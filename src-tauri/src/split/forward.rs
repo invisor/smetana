@@ -46,6 +46,8 @@ pub const LOCAL_COMMANDS: &[&str] = &[
     "updates_install",
     "connection_state",
     "connection_retry",
+    "device_settings_load",
+    "device_settings_save",
 ];
 
 /// Client commands the split build does not have, and says so: `tracker_access_reset` resets the
@@ -151,7 +153,7 @@ pub fn handler<R: Runtime>(
                 };
                 let app = invoke.message.webview().app_handle().clone();
                 let Some(link) = app.try_state::<Arc<Link>>() else {
-                    invoke.resolver.reject("The connection to the server has not been set up.".to_owned());
+                    invoke.resolver.reject(format!("The connection to the server has not been set up. {}.", super::state::NOT_SENT));
                     return true;
                 };
                 let link = link.inner().clone();
