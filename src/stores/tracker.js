@@ -414,9 +414,11 @@ export async function trackerFailure() {
 
    Nothing here is about bd, which is the whole reason the state that offers it
    is not `error`: `.beads` is not opened, no migration runs, and there is no
-   snapshot to roll out afterwards. On success the app restarts — Rust does that
-   itself, as the second half of the repair — so this promise never settles: the
-   window is on its way out and the caller's "Resetting…" goes with it.
+   snapshot to roll out afterwards. On success the server on this machine stops
+   and the shell starts a fresh one, which is the second half of the repair (the
+   server is the process that was refused); the promise settles, the connection
+   drops and comes back, and the stores read their state again as after any
+   reconnect.
 
    A refusal is reported and rethrown, the way `repairTracker` does it and for
    the same reason: the caller is a button somebody pressed, and it has to stop
@@ -427,8 +429,9 @@ export async function resetFolderAccess() {
   } catch (err) {
     /* Built rather than picked, the same way `repairTracker` builds its own and
        for a sharper reason: every refusal this call can make is one Rust wrote
-       for a person to read — a run going somewhere else, a folder no promptable
-       permission governs, a `tccutil` that would not run — and the constant
+       for a person to read — work still alive on the server, a server on another
+       machine, a folder no promptable permission governs, a `tccutil` that would
+       not run — and the constant
        alone would throw away the only half that says which. The console line is
        `report`'s job everywhere else, so it is kept by hand. */
     console.error('[tracker] resetting the folder permission failed:', err)

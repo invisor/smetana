@@ -3,6 +3,7 @@ mod clipboard;
 mod client;
 mod commands;
 mod connection;
+mod dirs;
 mod host;
 mod updates;
 mod window;
@@ -237,6 +238,7 @@ pub fn run() {
       connection::server_use_local,
       connection::server_use_remote,
       connection::server_local_work,
+      connection::tracker_access_reset,
       commands::client_files::client_file_read,
       commands::client_files::client_open_document,
       commands::client_files::client_open_fetched,

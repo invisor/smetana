@@ -174,8 +174,8 @@ src-tauri/Cargo.toml` is empty, and `smetanad` is an ordinary dependency (for it
 
 - **Forwarding is generic.** `client::handler` wraps the `invoke_handler`: a name in `forward::LOCAL_COMMANDS` (the client's own:
   windows, dialogs, clipboard, opener, updater, login item, `connection_*`, the device settings, the server choice, the
-  `client_*` files) goes to the Tauri command registered for it; a client command the shell cannot serve (`UNAVAILABLE`:
-  `tracker_access_reset`, since the process that reads a project folder is the server's) is rejected; **every other name is
+  `client_*` files, `tracker_access_reset` — see `tracker.md`) goes to the Tauri command registered for it; a client command
+  the shell does not register would be rejected rather than sent (a test keeps that set empty); **every other name is
   sent to the server** as an `Invoke` and the server's reply resolves the `invoke`. Arguments pass untouched (the dispatcher
   already reads the webview's camelCase). The `generate_handler!` in `lib.rs` is held equal to `LOCAL_COMMANDS` by a test, and
   `LOCAL_COMMANDS` to the server's `CLIENT_COMMANDS`.
@@ -222,14 +222,26 @@ Support/com.invisor.smetana` on macOS). On the first start of the new local serv
 move**, so an older release reinstalled still finds its data:
 
 - **`smetanad::inherit`** (`--inherit-from`, run by `Server::start` after the lock is held and **before the key is read**):
-  `remote-key` is copied (validated first; a damaged one stops the start instead of making a fresh key that would unpair every
-  phone), so the server's node id is the one paired phones already trust and **no phone has to pair again**;
-  `remote-devices.json` is copied only together with that key (a list bound to another key is left alone); `attachments/` is
-  mirrored (hard links where possible), since issues name the old paths and agents go on reading them there. A server that
-  already has its own key keeps it. `inherited.json` is written last and makes every later start skip the step; an
-  interrupted run is finished by the next one. The shell passes the flag on every start, which is what lets the update itself
-  need no step of its own. Tests: `inherit.rs` and `tests/server.rs` (a real `Server::start` over an old directory keeps the
-  node id and the phone).
+  `remote-key` is copied (validated first), so the server's node id is the one paired phones already trust and **no phone has
+  to pair again**; the devices of `remote-devices.json` are merged into the server's list only together with that key (a list
+  bound to another key is left alone); `attachments/` is mirrored (hard links where possible), since issues name the old
+  paths and agents go on reading them there. A server that already has its own key keeps it. The old `settings.json`'s
+  `remote.relayUrl` is read too (`Report::relay`, kept in the marker): the server binds its public endpoint at start when an
+  inherited phone is on the list, before the shell has handed the settings over, and `server::relay_url` takes that relay
+  until the server has a `settings.json` of its own, so a phone paired through a person's own relay finds the server there.
+  The shell passes the flag on every start, which is what lets the update itself need no step of its own.
+- **It never stops the server.** Each failed step is a line in `Report::problems`, logged, and the start goes on: a key that
+  does not parse (useless to the old release too) leaves the server to make its own, and the list bound to it stays where it
+  is; a key that cannot be read or written *this time* sets `key_pending`, and the server serves that run under a key it does
+  not keep, so the next start can still take the real one; an attachment that cannot be mirrored is skipped. `inherited.json`
+  is written last and **only when nothing failed**, so a failed step is tried again next start, and every step skips what is
+  already done. Tests: `inherit.rs`, and `tests/server.rs` (a real `Server::start` over an old directory keeps the node id,
+  the phone and the relay; a damaged old key still starts).
+- **A development build inherits nothing.** `npm run tauri dev` runs under the release's identifier, so Tauri's data
+  directory *is* the release's. `src-tauri/src/dirs.rs` moves every directory the shell reads to a sibling,
+  `<identifier>.dev`, under `debug_assertions`, and `client::placement` passes no `--inherit-from` and no settings file to
+  migrate in that build. The migration is checked on a copy of a real directory, never on the live one (the design's rule;
+  until the switch-over the "Smetana Next" identifier kept them apart).
 - **Settings**: `client/migrate.rs`, below ("Migration", source one): the server half of the old `settings.json` (projects,
   per-project run settings and agents, profiles, languages, relay) goes to the server by `settings_adopt`; the device half
   stays.
@@ -346,8 +358,9 @@ neither list is the device's, and a test pins the server list. `usedAt` is kept 
   return. Two clients editing the list at the same moment still lose one edit (the list is replaced whole).
 - **Migration** (`src-tauri/src/client/migrate.rs`), on every connection before `connected`, two sources:
   1. The device's `settings.json` still holds a server half (what every install of a release from before the switch-over
-     has on its first start after it): `settings_adopt` offers it (taken only by a server with no `settings.json`), then `retire_server_half` (which sets `deviceSeeded` in the same write as it resets the server's keys, so no crash between two writes can lead to a seeding over the device's own half) copies
-     the file to `settings.pre-split.json` (never overwritten) and resets the server's keys in it. The device half already
+     has on its first start after it): `settings_adopt` offers it (taken only by a server with no `settings.json`), then `retire_server_half` (which sets `deviceSeeded` in the same write as it resets the server's keys, so no crash between two writes can lead to a seeding over the device's own half) keeps a copy of
+     the file (`settings.pre-split.json`, never overwritten; a later retire whose file differs writes
+     `settings.pre-split.2.json` and on, so a second server half is never lost) and resets the server's keys in it. The device half already
      there stands.
   2. The device file is not marked (`deviceSeeded`) and source one did not fire: an earlier build of the client (step 5)
      forwarded `settings_save`, so a "Smetana Next" install has the whole document in the **server's** file and only `dialogs`
@@ -355,7 +368,7 @@ neither list is the device's, and a test pins the server list. `usedAt` is kept 
      into the device file with this machine's dialog sizes laid over it and sets `deviceSeeded` in the same write, after a copy
      to `settings.pre-seed.json`. The server's file is left whole (the device keys there are dead data), so nothing is lost and a
      rerun does nothing. A marked file is never seeded again.
-  A server that already had settings keeps them; a second desktop's old server half survives only in its `.pre-split` copy.
+  A server that already had settings keeps them; a second desktop's old server half, or a second one on the same desktop, survives only in its `.pre-split` copy.
   Known edge: source two seeds from the server's file whenever the device file is unmarked and source one did not fire, so a
   device file with a customised device half but no server half, meeting a server file that already holds device keys, takes
   the server's. At switch-over it does not arise: a release file always carries a server half (source one fires and marks the
@@ -463,7 +476,7 @@ ignores. `Platform::Desktop` was added at the end. `capabilities_for(kind)`, `is
 `SERVER_EVENTS` (the phone's lists first, then the rest). The list is checked per call against the kind the device list holds.
 
 **The server surface** is every command in `DESKTOP_COMMANDS` that is not in `CLIENT_COMMANDS` (windows, dialogs,
-clipboard, opener, updater, login item, `tracker_access_reset`, which ends in an app restart). The contract tests fail for a
+clipboard, opener, updater, login item, `tracker_access_reset`, which restarts the local server). The contract tests fail for a
 command or event with neither a pinned example nor a client declaration, and scan the stores and the workers for event names.
 `dispatch.rs` declares each command once in the `calls!` table. Where the kind changes behaviour: a phone's `session_send`
 may carry no attachments and its `session_start` is confined to the attachment store; a desktop's is not.

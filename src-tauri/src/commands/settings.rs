@@ -4,7 +4,7 @@ use smetana_core::context::Context;
 use smetana_core::settings::commands as logic;
 use smetana_core::settings::commands::SettingsError;
 use smetana_core::settings::model::ResolvedSettings;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 /// The device's own half of the settings, read from the file on this machine: the same read
 /// `settings_load` makes, of a file whose server fields are not this device's to use. See
@@ -23,7 +23,7 @@ pub async fn device_settings_save(ctx: State<'_, Context>, settings: ResolvedSet
 
 /// Where the file is, for the two readers that hold an `AppHandle` and not a context.
 fn path(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_config_dir().ok().map(|dir| dir.join("settings.json"))
+    crate::dirs::config_dir(app).ok().map(|dir| dir.join("settings.json"))
 }
 
 /// Whether the update timer may ask the release feed by itself.

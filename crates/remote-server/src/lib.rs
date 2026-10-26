@@ -202,6 +202,11 @@ impl Remote {
         Ok(PairBegin { ticket: ticket.encode_for(kind), expires_at: ticket.expires_at })
     }
 
+    /// The relay the public endpoint is bound with, or `None` while it is not running.
+    pub async fn public_relay(&self) -> Option<String> {
+        self.running.lock().await.as_ref().map(|running| running.relay.clone())
+    }
+
     /// Stops the endpoint, closing every connection with it.
     pub async fn stop(&self) {
         if let Some(old) = self.running.lock().await.take() {

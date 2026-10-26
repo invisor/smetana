@@ -30,6 +30,10 @@ pub struct Config {
     pub server_dir: PathBuf,
     /// This client's own key and paired marker (`local-client-key`, `local-client-paired`).
     pub identity_dir: PathBuf,
+    /// The data directory of the release before the switch-over, whose device key, paired devices
+    /// and attachments the server takes over once (`--inherit-from`). `None` in a development build,
+    /// which never touches a release's data.
+    pub inherit_from: Option<PathBuf>,
     /// The `smetanad` to start. `None` when the bundle has none, which is a build mistake and is
     /// reported as the reason the connection cannot be made.
     pub exe: Option<PathBuf>,
@@ -60,17 +64,15 @@ pub fn sidecar(name: &str) -> Option<PathBuf> {
 
 /// The arguments the server is started with, in the order the command line reads them.
 pub fn arguments(config: &Config) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = vec!["run".into(), "--data-dir".into(), config.server_dir.clone().into()];
     // `--inherit-from` names the directory the release that held its workers in-process kept its
     // device key, paired devices and attachments in, which is this app's own data directory. The
     // server takes them over once and then ignores the flag (`smetanad::inherit`): passing it on every
     // start is what lets an update that first starts the server do it with no step of its own.
-    let mut args: Vec<std::ffi::OsString> = vec![
-        "run".into(),
-        "--data-dir".into(),
-        config.server_dir.clone().into(),
-        "--inherit-from".into(),
-        config.identity_dir.clone().into(),
-    ];
+    if let Some(from) = &config.inherit_from {
+        args.push("--inherit-from".into());
+        args.push(from.clone().into());
+    }
     if let Some(bd) = &config.bd {
         args.push("--bd".into());
         args.push(bd.clone().into());
@@ -182,6 +184,7 @@ mod tests {
         Config {
             server_dir: "/data/server".into(),
             identity_dir: "/data".into(),
+            inherit_from: Some("/data".into()),
             exe: Some("/bundle/smetanad".into()),
             bd: Some("/bundle/bd".into()),
             resource_dir: Some("/bundle/resources".into()),
@@ -209,12 +212,36 @@ mod tests {
         );
     }
 
+    /// The arguments are read by `smetanad`'s own command line, so a flag renamed on either side fails
+    /// here rather than as a server that will not start on somebody's machine.
+    #[test]
+    fn the_servers_command_line_reads_what_the_shell_passes() {
+        use smetanad::cli::{Cli, Command};
+        let read = |config: &Config| {
+            let mut args = vec![std::ffi::OsString::from("smetanad")];
+            args.extend(arguments(config));
+            match Cli::read(args).expect("smetanad accepts the shell's arguments").command {
+                Command::Run { data_dir, bd, resource_dir, inherit_from } => (data_dir, bd, resource_dir, inherit_from),
+                other => panic!("the shell starts `run`, and this is {other:?}"),
+            }
+        };
+        let full = config();
+        assert_eq!(read(&full), (full.server_dir.clone(), full.bd.clone(), full.resource_dir.clone(), full.inherit_from.clone()));
+        let mut bare = config();
+        bare.bd = None;
+        bare.resource_dir = None;
+        bare.inherit_from = None;
+        assert_eq!(read(&bare), (bare.server_dir.clone(), None, None, None));
+    }
+
     #[test]
     fn what_the_bundle_does_not_ship_is_left_off() {
         let mut config = config();
         config.bd = None;
         config.resource_dir = None;
         assert_eq!(arguments(&config).len(), 5);
+        config.inherit_from = None;
+        assert_eq!(arguments(&config).len(), 3, "a development build names nothing to inherit");
     }
 
     #[test]

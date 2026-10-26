@@ -59,8 +59,8 @@ pub fn build(app: &AppHandle) -> Context {
     crate::context::install_runtime(handle);
     let paths = app.path();
     Context::new(
-        paths.app_data_dir().map_err(|err| err.to_string()),
-        paths.app_config_dir().map_err(|err| err.to_string()),
+        crate::dirs::data_dir(app),
+        crate::dirs::config_dir(app),
         paths.resource_dir().map_err(|err| err.to_string()),
         sidecar_path(),
         Arc::new(TauriSink { app: app.clone() }),

@@ -1111,27 +1111,27 @@ describe('a folder the system is refusing', () => {
   })
 
   /* The likeliest refusal, and the one a constant caption would have thrown
-     away: a restart kills every PTY child, so Rust refuses while a run is going
-     — and that run is always in another project, since this one's folder cannot
-     be read. The window cannot see it, so the sentence naming it is the only
-     way a person learns which. */
-  it('a reset refused over a live run says which project holds it', async () => {
+     away: stopping the server ends everything it holds, so Rust refuses while
+     anything is alive on it — and that work is always in another project, since
+     this one's folder cannot be read. The window cannot see it, so the sentence
+     naming it is the only way a person learns which. */
+  it('a reset refused over live work says what is still running', async () => {
     await start()
     ipc.fail(
       'tracker_access_reset',
-      'a run is going in /Users/you/Projects/notes; resetting the permission restarts the app and would end it'
+      'Still running on the server: notes run. Resetting the permission restarts the server, which would end it.'
     )
 
     await expect(tracker.resetFolderAccess()).rejects.toBeTruthy()
 
-    expect(tracker.trackerState.lastError.description).toContain('/Users/you/Projects/notes')
+    expect(tracker.trackerState.lastError.description).toContain('notes run')
     // And still the half that is always true, whatever refused it.
     expect(tracker.trackerState.lastError.description).toContain('still being refused')
   })
 
-  /* Nothing is passed in. The folder is the worker's own — the one bd was
-     failing in — because the front end's idea of the active project and the
-     worker's can differ for the length of a switch, and resetting a grant for
+  /* Nothing is passed in. The folder is the server's own — its open project,
+     read by the shell from the server — because the front end's idea of the
+     active project and the server's can differ for the length of a switch, and resetting a grant for
      the wrong folder is not something anybody can undo from here. */
   it('asks for the reset without naming a folder of its own', async () => {
     await start()

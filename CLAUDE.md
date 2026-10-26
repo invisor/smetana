@@ -30,7 +30,7 @@ npm install          # postinstall fetches the bd sidecar; it warns and continue
 npm run dev          # http://localhost:5173 — front end alone, backed by the mock
 npm run build
 npm run preview      # serve the production build
-npm run tauri dev    # the actual desktop app: builds and starts smetanad, real bd, live board
+npm run tauri dev    # the desktop app with smetanad and real bd; its data is <identifier>.dev, never the release's
 npm run fetch-bd     # download the bd binary explicitly (fails hard, unlike postinstall)
 node scripts/fetch-icon-associations.mjs   # re-vendor the file-type icons; output is committed
 npm test             # front-end tests (vitest), single run

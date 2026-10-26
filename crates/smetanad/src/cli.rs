@@ -12,6 +12,19 @@ pub struct Cli {
     pub command: Command,
 }
 
+impl Cli {
+    /// Reads a command line the way `main` does, for a caller that builds one: the desktop shell starts
+    /// the server with arguments of its own making, and its test parses them here so that the two
+    /// cannot drift. The first item is the program name.
+    pub fn read<I, T>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        Self::try_parse_from(args).map_err(|err| err.to_string())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Kind {
     Desktop,

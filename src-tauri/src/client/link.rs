@@ -697,6 +697,7 @@ mod tests {
             let config = Config {
                 server_dir: dir.path().join("server"),
                 identity_dir: dir.path().to_owned(),
+                inherit_from: None,
                 exe: None,
                 bd: None,
                 resource_dir: None,
@@ -762,6 +763,7 @@ mod tests {
             let config = Config {
                 server_dir: server_dir.clone(),
                 identity_dir: dir.path().to_owned(),
+                inherit_from: None,
                 // No executable: a start of the local server would fail with "not in this build",
                 // which is how this test sees that none was attempted.
                 exe: None,
@@ -829,6 +831,7 @@ mod tests {
             let config = Config {
                 server_dir: dir.path().join("server"),
                 identity_dir: dir.path().to_owned(),
+                inherit_from: None,
                 exe: None,
                 bd: None,
                 resource_dir: None,
@@ -888,6 +891,7 @@ mod tests {
             let config = Config {
                 server_dir: server_dir.clone(),
                 identity_dir: dir.path().to_owned(),
+                inherit_from: None,
                 exe: None,
                 bd: None,
                 resource_dir: None,

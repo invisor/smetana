@@ -417,6 +417,10 @@ fn a_server_started_over_an_old_releases_directory_is_the_node_its_phones_alread
         )
         .unwrap();
         std::fs::write(old.join("attachments/smetana-abc/shot.png"), b"png").unwrap();
+        // The release paired that phone through a relay of the person's own. The phone looks for the
+        // server there, so the server must be there from its first start, before any settings are
+        // handed over.
+        std::fs::write(old.join("settings.json"), r#"{"version":1,"remote":{"relayUrl":"https://relay.example.org"}}"#).unwrap();
 
         let mut options = Options::new(old.join("server"));
         options.bd = Some(bd());
@@ -427,6 +431,7 @@ fn a_server_started_over_an_old_releases_directory_is_the_node_its_phones_alread
         assert_eq!(phone.kind, DeviceKind::Phone);
         assert!(old.join("server/attachments/smetana-abc/shot.png").is_file());
         assert!(old.join("server").join(smetanad::inherit::MARKER).is_file());
+        assert_eq!(server.remote.public_relay().await.as_deref(), Some("https://relay.example.org"));
         server.shutdown().await;
 
         // A second start does not look at the old directory again.
@@ -436,6 +441,32 @@ fn a_server_started_over_an_old_releases_directory_is_the_node_its_phones_alread
         options.inherit_from = Some(old.clone());
         let again = Server::start(options).await.expect("restarts");
         assert_eq!(again.remote.public_key(), key.public());
+        assert_eq!(
+            again.remote.public_relay().await.as_deref(),
+            Some("https://relay.example.org"),
+            "a later start, still with no settings of its own, reads the relay from the marker"
+        );
         again.shutdown().await;
+    });
+}
+
+#[test]
+fn an_old_release_whose_key_is_damaged_does_not_keep_the_server_from_starting() {
+    use remote_server::endpoint;
+    common::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("release");
+        std::fs::create_dir_all(old.join("attachments")).unwrap();
+        std::fs::write(old.join(endpoint::KEY_FILE), "not a key").unwrap();
+        std::fs::write(old.join("attachments/shot.png"), b"png").unwrap();
+
+        let mut options = Options::new(old.join("server"));
+        options.bd = Some(bd());
+        options.inherit_from = Some(old.clone());
+        let server = Server::start(options).await.expect("a damaged old key is a logged problem, not a refusal to start");
+        assert!(old.join("server/attachments/shot.png").is_file(), "what could be taken was taken");
+        assert!(!old.join("server").join(smetanad::inherit::MARKER).exists(), "and the next start looks again");
+        assert_eq!(server.remote.public_relay().await, None, "no inherited phone, so no public endpoint");
+        server.shutdown().await;
     });
 }

@@ -4037,32 +4037,30 @@ const askAgentAboutTracker = async () => {
 /* The third door under the board, and the one that is not about bd at all: the
    operating system has a stored refusal for this folder and nothing else will
    get past it. `tccutil reset` makes macOS forget the decision; only a process
-   that has not already been refused in this launch is asked again, so Rust
-   restarts the app itself once the reset lands.
+   that has not already been refused is asked again, and the refused process is
+   the server on this machine, so the shell stops it and starts a fresh one
+   (`client::access_reset` in Rust). The window stays, the connection comes back,
+   and the flag is cleared however the press ended.
 
-   Which means success never comes back here — the window is on its way out
-   before the promise could settle — and the flag is therefore cleared in the
-   catch rather than in a `finally`. A `finally` would be the tidier shape and
-   the wrong one: it would put the button back to "Reset and restart" in the
-   last moments of a window that is closing, which reads as nothing having
-   happened.
-
-   The likeliest refusal is not a failure at all but the run gate: a restart
-   kills every PTY child, so Rust refuses while any run is going anywhere, and
-   that run is by definition in another project — this one's folder cannot be
-   read, so nothing here is running. The store puts Rust's sentence, which names
-   the projects, in front of the caption.
+   The likeliest refusal is not a failure at all but the work gate: stopping the
+   server ends every run, session and shell it holds, so Rust refuses while any
+   is alive, and names them. The store puts that sentence in front of the
+   caption. The button is not drawn for a server on another machine: its
+   permissions are that machine's, and this desktop cannot reset them.
 
    No confirmation dialog, like the repair beside it. What stands in for one is
-   the notice above the button, which says the app restarts. */
+   the notice above the button, which says the server restarts. */
 const resettingAccess = ref(false)
+const accessResetOffered = computed(
+  () => folderRefusedHasReset(trackerState.folderAccessRepair) && !isRemote.value
+)
 const resetAccessHere = async () => {
   resettingAccess.value = true
   try {
     await resetFolderAccess()
   } catch {
-    /* The caption is already in trackerState.lastError and draws as a toast.
-       The app is still standing, so the button has to come back. */
+    /* The caption is already in trackerState.lastError and draws as a toast. */
+  } finally {
     resettingAccess.value = false
   }
 }
@@ -5437,7 +5435,8 @@ const healthNotice = computed(() => {
      rule is `folderAccess.js`'s rather than a ternary here, because it is copy
      and copy is the whole of this state — see the note there. */
   if (trackerState.health.state === 'folder-refused') {
-    return folderRefusedNotice(trackerState.folderAccessRepair)
+    // A server on another machine: its permissions are that machine's, and nothing here resets them.
+    return folderRefusedNotice(isRemote.value ? 'unavailable' : trackerState.folderAccessRepair)
   }
   return HEALTH_NOTICE[trackerState.health.state] ?? HEALTH_NOTICE.error
 })
@@ -8070,8 +8069,7 @@ const toastStackStyle = {
                  carries the whole of what to do. -->
             <template
               v-else-if="
-                trackerState.health.state === 'folder-refused' &&
-                folderRefusedHasReset(trackerState.folderAccessRepair)
+                trackerState.health.state === 'folder-refused' && accessResetOffered
               "
               #action
             >

@@ -19,6 +19,7 @@ mod spawn;
 mod state;
 mod target;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -35,16 +36,34 @@ use target::Target;
 const SERVER_DIR: &str = "server";
 
 fn config(app: &AppHandle) -> Result<Config, String> {
-    let data = app.path().app_data_dir().map_err(|err| err.to_string())?;
-    Ok(Config {
+    let data = crate::dirs::data_dir(app)?;
+    let settings = crate::dirs::config_dir(app).ok().map(|dir| dir.join("settings.json"));
+    let mut config = placement(data, settings, crate::dirs::DEVELOPMENT);
+    config.exe = spawn::sidecar("smetanad");
+    config.bd = crate::host::sidecar_path();
+    config.resource_dir = app.path().resource_dir().ok();
+    Ok(config)
+}
+
+/// Where everything of the local placement is, for a data directory and a device settings file.
+///
+/// A release build's local server inherits what the release before the switch-over kept in this
+/// same data directory (`--inherit-from`), and the device file's server half is handed to it
+/// (`migrate.rs`). A **development build does neither**: its data directory is its own
+/// (`dirs::development_dir`), so there is nothing of a release in it to take, and the migration is
+/// switched off outright, so that no slip in where a directory points can ever send a development
+/// build's migration at the release's live files.
+fn placement(data: PathBuf, settings: Option<PathBuf>, development: bool) -> Config {
+    Config {
         server_dir: data.join(SERVER_DIR),
         identity_dir: data.clone(),
-        exe: spawn::sidecar("smetanad"),
-        bd: crate::host::sidecar_path(),
-        resource_dir: app.path().resource_dir().ok(),
+        inherit_from: (!development).then(|| data.clone()),
+        exe: None,
+        bd: None,
+        resource_dir: None,
         log: data.join("smetanad.log"),
-        settings: app.path().app_config_dir().ok().map(|dir| dir.join("settings.json")),
-    })
+        settings: if development { None } else { settings },
+    }
 }
 
 /// Sets the connection up and starts keeping it. Called once, from `setup`, before the first window
@@ -53,7 +72,7 @@ pub fn start(app: &AppHandle) {
     let sink_app = app.clone();
     // Which server this device uses is read before the first attempt: a person who chose a remote one
     // must not see the local one started for a moment first.
-    let chosen = app.path().app_data_dir().map(|dir| target::load(&dir)).unwrap_or(Target::Local);
+    let chosen = crate::dirs::data_dir(app).map(|dir| target::load(&dir)).unwrap_or(Target::Local);
     let link = Link::with_target(
         Arc::new(move |name, payload| {
             let _ = sink_app.emit(name, payload);
@@ -111,7 +130,7 @@ pub fn target_view(app: &AppHandle) -> Value {
 }
 
 fn identity_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    app.path().app_data_dir().map_err(|err| err.to_string())
+    crate::dirs::data_dir(app)
 }
 
 /// `server_use_local`: back to the server on this machine, which is started again if it is not
@@ -131,6 +150,71 @@ pub async fn local_work(app: &AppHandle) -> Value {
         return json!([]);
     }
     link.call("server_work", json!({})).await.unwrap_or_else(|_| json!([]))
+}
+
+/// `tracker_access_reset`: make macOS forget its stored refusal of the open project's folder, then
+/// stop the server on this machine so that a fresh one is started and asked again.
+///
+/// **Who holds the grant.** The folder is read by `smetanad`, not by this process. A server this app
+/// started is a child of the app, and macOS attributes a child's file access to the app bundle that
+/// spawned it (the responsible process; nothing here disclaims it), so the stored refusal is the
+/// app's identifier's — the same one the release that read folders in-process held. The reset is
+/// therefore `tccutil reset <service> <this app's identifier>`, as it always was, and it is the
+/// shell's to make: the server does not know which bundle it belongs to.
+///
+/// **Why the server stops rather than this app.** A reset takes effect only for a process that has
+/// not been refused yet. The process that was refused is the server, so it is the server that has to
+/// be new: it is asked to stop (`server_restart` `stop-when-idle`, which ends nothing and stops at
+/// once when nothing is alive), and the connection loop finds the directory free and starts a fresh
+/// one from this app, which makes it the app's child again. Not `now`, which re-executes the same
+/// process.
+///
+/// **Refused** for a server on another machine (its permissions are that machine's), when the server
+/// says this folder has no promptable permission, and while anything is alive on the server: stopping
+/// it ends every run, session and shell it holds, and that list is what the refusal names.
+pub async fn access_reset(app: &AppHandle) -> Result<(), String> {
+    let link = link(app).ok_or("The connection has not been set up.")?;
+    let local = link.target().is_local();
+    let repair = if local { link.call("tracker_access_repair", json!({})).await.map_err(said)? } else { Value::Null };
+    let settings = if local { link.call("settings_load", json!({ "project": null })).await.map_err(said)? } else { Value::Null };
+    let work = if local { link.call("server_work", json!({})).await.map_err(said)? } else { Value::Null };
+    let dir = reset_plan(local, &repair, &settings["activeProject"], &work)?;
+    let identifier = app.config().identifier.clone();
+    tauri::async_runtime::spawn_blocking(move || smetana_core::tracker::access::reset(&dir, &identifier))
+        .await
+        .map_err(|err| format!("the reset did not finish: {err}"))??;
+    link.call("server_restart", json!({ "mode": "stop-when-idle", "confirmed": null })).await.map_err(said)?;
+    Ok(())
+}
+
+/// A rejection from the server, as the words the front end puts in front of its caption.
+fn said(value: Value) -> String {
+    match value {
+        Value::String(text) => text,
+        other => other.get("message").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| other.to_string()),
+    }
+}
+
+/// The checks `access_reset` makes before anything is changed, pure: the folder to reset, or why not.
+fn reset_plan(local: bool, repair: &Value, active: &Value, work: &Value) -> Result<PathBuf, String> {
+    if !local {
+        return Err("The server is on another machine, so its folder permissions are that machine's to reset.".to_owned());
+    }
+    if repair.as_str() != Some("reset") {
+        return Err("No permission macOS will ask about again governs this folder, so there is nothing here to reset.".to_owned());
+    }
+    let dir = active.as_str().filter(|dir| !dir.is_empty()).ok_or("No project is open.")?;
+    let live: Vec<String> = work
+        .as_array()
+        .map(|list| list.iter().map(|item| item["label"].as_str().or(item["project"].as_str()).unwrap_or("work").to_owned()).collect())
+        .unwrap_or_default();
+    if !live.is_empty() {
+        return Err(format!(
+            "Still running on the server: {}. Resetting the permission restarts the server, which would end it.",
+            live.join(", ")
+        ));
+    }
+    Ok(PathBuf::from(dir))
 }
 
 /// `server_use_remote`: pairs with the server a desktop ticket names, and moves this device to it.
@@ -156,4 +240,48 @@ pub async fn use_remote(app: &AppHandle, ticket: String, stop_local: bool) -> Re
     let mut answer = target_view(app);
     answer["localStop"] = stop;
     Ok(answer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_folder_permission_is_reset_only_for_the_local_server_with_nothing_alive_on_it() {
+        let reset = json!("reset");
+        let dir = json!("/Users/me/Desktop/p");
+        let idle = json!([]);
+        assert_eq!(reset_plan(true, &reset, &dir, &idle), Ok(PathBuf::from("/Users/me/Desktop/p")));
+        assert!(reset_plan(false, &reset, &dir, &idle).unwrap_err().contains("another machine"));
+        assert!(reset_plan(true, &json!("full-disk-access"), &dir, &idle).unwrap_err().contains("nothing here to reset"));
+        assert!(reset_plan(true, &reset, &Value::Null, &idle).unwrap_err().contains("No project"));
+        let busy = json!([{ "kind": "run", "id": "r1", "project": "/Users/me/notes", "label": "notes run", "owner": null }]);
+        let refused = reset_plan(true, &reset, &dir, &busy).unwrap_err();
+        assert!(refused.contains("notes run") && refused.contains("restarts the server"), "{refused}");
+    }
+
+    #[test]
+    fn a_release_build_inherits_its_own_data_directory_and_hands_its_settings_over() {
+        let data = PathBuf::from("/support/com.invisor.smetana");
+        let config = placement(data.clone(), Some(data.join("settings.json")), false);
+        assert_eq!(config.server_dir, data.join("server"));
+        assert_eq!(config.inherit_from.as_deref(), Some(data.as_path()));
+        assert_eq!(config.settings, Some(data.join("settings.json")));
+        let args: Vec<String> = spawn::arguments(&config).iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(args.windows(2).any(|pair| pair == ["--inherit-from", "/support/com.invisor.smetana"]));
+    }
+
+    #[test]
+    fn a_development_build_inherits_nothing_and_migrates_nothing_and_keeps_out_of_the_release_directory() {
+        let release = PathBuf::from("/support/com.invisor.smetana");
+        let data = crate::dirs::development_dir(&release);
+        let config = placement(data.clone(), Some(data.join("settings.json")), true);
+        assert_eq!(config.inherit_from, None, "no key or paired phone of the release is taken");
+        assert_eq!(config.settings, None, "no settings file is relieved of its server half");
+        for path in [&config.server_dir, &config.identity_dir, &config.log] {
+            assert!(!path.starts_with(&release), "{} is inside the release's directory", path.display());
+        }
+        let args: Vec<String> = spawn::arguments(&config).iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(!args.iter().any(|arg| arg == "--inherit-from"));
+    }
 }

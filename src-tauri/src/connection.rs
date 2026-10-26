@@ -39,3 +39,10 @@ pub async fn server_use_remote(app: AppHandle, ticket: String, stop_local: bool)
 pub async fn server_local_work(app: AppHandle) -> Value {
     crate::client::local_work(&app).await
 }
+
+/// Make macOS forget its refusal of the open project's folder and start the local server afresh. See
+/// `client::access_reset`, which holds who the grant belongs to and why the server is what restarts.
+#[tauri::command]
+pub async fn tracker_access_reset(app: AppHandle) -> Result<(), String> {
+    crate::client::access_reset(&app).await
+}
