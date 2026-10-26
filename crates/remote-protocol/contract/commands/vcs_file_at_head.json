@@ -1,0 +1,7 @@
+{
+  "args": [{"path":"src/main.js","repo":"/work/smetana"}],
+  "reply": [
+    "export {}\n",
+    null
+  ]
+}

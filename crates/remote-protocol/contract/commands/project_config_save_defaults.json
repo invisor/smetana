@@ -1,0 +1,6 @@
+{
+  "args": [{"defaults":{"max_parallel_tasks":3,"min_priority":2,"review_passes":5,"target_branch":"main"},"project":"/work/smetana"}],
+  "reply": [
+    null
+  ]
+}

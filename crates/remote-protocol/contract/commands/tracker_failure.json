@@ -1,0 +1,6 @@
+{
+  "args": [{}],
+  "reply": [
+    {"bdVersion":"1.0.3","command":"bd list --json","dir":"/work/smetana","stderr":"boom"}
+  ]
+}

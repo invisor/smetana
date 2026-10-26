@@ -1,0 +1,7 @@
+{
+  "args": [{"paths":["/work/smetana","/work/other"]}],
+  "reply": [
+    [{"path":"/work/smetana","tracked":true},{"path":"/work/other","tracked":false}],
+    []
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "args": [{"expectedMtime":1760000000000,"path":"src/main.js","root":"/work/smetana","text":"export {}\n"}],
+  "reply": [
+    1760000000001
+  ]
+}

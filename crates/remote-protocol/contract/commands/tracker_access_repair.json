@@ -1,0 +1,8 @@
+{
+  "args": [{}],
+  "reply": [
+    "reset",
+    "full-disk-access",
+    "unavailable"
+  ]
+}

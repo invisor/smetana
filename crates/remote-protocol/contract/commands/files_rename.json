@@ -1,0 +1,6 @@
+{
+  "args": [{"name":"index.js","path":"src/main.js","root":"/work/smetana"}],
+  "reply": [
+    "src/new.js"
+  ]
+}

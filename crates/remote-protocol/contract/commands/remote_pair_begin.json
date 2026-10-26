@@ -1,0 +1,6 @@
+{
+  "args": [{"kind":"desktop","relayUrl":"https://relay.smetana.io"},{"kind":null,"relayUrl":"https://relay.smetana.io"}],
+  "reply": [
+    {"expires_at":1760000120,"ticket":"smetana2:abcd"}
+  ]
+}

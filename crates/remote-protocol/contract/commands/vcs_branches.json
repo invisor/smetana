@@ -1,0 +1,6 @@
+{
+  "args": [{"repo":"/work/smetana"}],
+  "reply": [
+    [{"current":true,"name":"main"},{"current":false,"name":"topic"}]
+  ]
+}

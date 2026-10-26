@@ -1,0 +1,6 @@
+{
+  "args": [{"dir":"src","root":"/work/smetana"}],
+  "reply": [
+    {"dir":"src","entries":[{"ignored":false,"kind":"dir","name":"views","path":"src/views"},{"ignored":false,"kind":"file","name":"main.js","path":"src/main.js"},{"ignored":true,"kind":"file","name":"out.log","path":"src/out.log"}],"truncated":0}
+  ]
+}

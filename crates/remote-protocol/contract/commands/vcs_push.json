@@ -1,0 +1,7 @@
+{
+  "args": [{"repo":"/work/smetana","setUpstream":true}],
+  "reply": [
+    {"commits":2,"deletions":5,"files":3,"insertions":40},
+    {"commits":null,"deletions":null,"files":null,"insertions":null}
+  ]
+}

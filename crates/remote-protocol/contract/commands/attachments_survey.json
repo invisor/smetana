@@ -1,0 +1,6 @@
+{
+  "args": [{}],
+  "reply": [
+    {"board":"ok","kept":{"bytes":3000,"files":3},"project":"/work/smetana","removable":{"bytes":1000,"files":1},"store":{"bytes":4000,"files":4}}
+  ]
+}

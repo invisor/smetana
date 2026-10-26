@@ -20,6 +20,8 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
+use crate::DeviceKind;
+
 /// A phone's request. Frames are read from the phone with a size limit of the
 /// desktop's choosing, and every field is checked before it is acted on.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -137,18 +139,190 @@ pub const ALLOWED_EVENTS: &[&str] = &[
     "terminal:removed",
 ];
 
+/// Every command a desktop device may call: everything the desktop's own front end calls that
+/// belongs to the server, which is the phone's list (first, in the same order) and then the rest.
+///
+/// What is not here is the client's own: windows and their chrome, dialogs, the system
+/// clipboard, the opener, the client's updater and login item, and the restart that follows
+/// resetting the tracker's folder access. Those act on the machine the person sits at, and a
+/// server has no such machine.
+pub const SERVER_COMMANDS: &[&str] = &[
+    // The phone's list, unchanged.
+    "tracker_health",
+    "tracker_snapshot",
+    "tracker_set_project",
+    "settings_load",
+    "agents_catalog",
+    "agents_installed",
+    "project_config",
+    "target_branches",
+    "run_state",
+    "run_reports",
+    "run_start",
+    "run_stop",
+    "session_start",
+    "session_attach",
+    "session_since",
+    "session_send",
+    "session_answer",
+    "session_stop",
+    "crew_tree",
+    "crew_attach",
+    "crew_send",
+    "crew_stop",
+    "terminal_list",
+    "terminal_attach",
+    "attachment_write",
+    // The tracker.
+    "tracker_resync",
+    "tracker_update",
+    "tracker_close",
+    "tracker_reopen",
+    "tracker_delete",
+    "tracker_init",
+    "tracker_repair",
+    "tracker_failure",
+    "tracker_access_repair",
+    "tracker_probe",
+    "tracker_search_semantic",
+    "project_root",
+    "home_dir",
+    // Files.
+    "files_list",
+    "files_read",
+    "files_write",
+    "files_stat",
+    "files_create",
+    "files_mkdir",
+    "files_trash",
+    "files_copy",
+    "files_copy_external",
+    "files_move",
+    "files_rename",
+    // Attachments.
+    "attachment_import",
+    "attachment_reopen",
+    "attachments_survey",
+    "attachments_clean",
+    "image_read",
+    // Git.
+    "git_head",
+    "vcs_repos",
+    "vcs_status",
+    "vcs_in_progress",
+    "vcs_branches",
+    "vcs_remote_branches",
+    "vcs_last_fetch",
+    "vcs_tracking",
+    "vcs_fetch",
+    "vcs_pull",
+    "vcs_push",
+    "vcs_checkout",
+    "vcs_checkout_remote",
+    "vcs_create_branch",
+    "vcs_rename_branch",
+    "vcs_delete_branch",
+    "vcs_merge",
+    "vcs_rebase",
+    "vcs_abort",
+    "vcs_commit",
+    "vcs_discard",
+    "vcs_suggest_message",
+    "vcs_file_at_head",
+    "vcs_file_at_rev",
+    "vcs_compare",
+    // Runs, agents, settings.
+    "project_config_save_defaults",
+    "browser_tools",
+    "run_release",
+    "agent_usage",
+    "codex_models",
+    "sessions_list",
+    "sessions_delete",
+    "settings_save",
+    // Terminals and sessions.
+    "terminal_marks",
+    "terminal_create",
+    "terminal_shell",
+    "terminal_remove",
+    "terminal_detach",
+    "terminal_resize",
+    "terminal_write",
+    "terminal_clear",
+    "terminal_run_capture",
+    "terminal_restorable",
+    "terminal_forget",
+    "crew_clear",
+    "session_close",
+    // The server's own devices.
+    "remote_pair_begin",
+    "remote_pair_cancel",
+    "remote_pair_decide",
+    "remote_devices",
+    "remote_device_revoke",
+];
+
+/// Every event a desktop device may listen to: the phone's list (first), then the rest of what
+/// the desktop's front end listens to that a server emits. `terminal:output` is the one that is
+/// not delivered like the others — see `Hub` in the desktop's `remote::bridge`: a client asks for
+/// a session's output by attaching to it, and it is coalesced per session and per client.
+pub const SERVER_EVENTS: &[&str] = &[
+    "tracker:delta",
+    "tracker:health",
+    "run:state",
+    "session:events",
+    "crew:events",
+    "terminal:state",
+    "terminal:removed",
+    "session:state",
+    "crew:tree",
+    "terminal:output",
+    "terminal:log",
+    "remote:project-switched",
+    "remote:pair-request",
+    "remote:devices",
+    "remote:pair-ended",
+];
+
+/// Whether a phone may call `cmd`.
 pub fn is_allowed_command(cmd: &str) -> bool {
     ALLOWED_COMMANDS.contains(&cmd)
 }
 
+/// Whether a phone may listen to `event`.
 pub fn is_allowed_event(event: &str) -> bool {
     ALLOWED_EVENTS.contains(&event)
 }
 
-/// What a `HelloReply` advertises: every allowed command, then every allowed
+/// Whether a device of `kind` may call `cmd`.
+pub fn is_command_allowed_for(kind: DeviceKind, cmd: &str) -> bool {
+    match kind {
+        DeviceKind::Phone => is_allowed_command(cmd),
+        DeviceKind::Desktop => SERVER_COMMANDS.contains(&cmd),
+    }
+}
+
+/// Whether a device of `kind` may listen to `event`.
+pub fn is_event_allowed_for(kind: DeviceKind, event: &str) -> bool {
+    match kind {
+        DeviceKind::Phone => is_allowed_event(event),
+        DeviceKind::Desktop => SERVER_EVENTS.contains(&event),
+    }
+}
+
+/// What a `HelloReply` advertises to a phone: every allowed command, then every allowed
 /// event. The phone hides whatever it does not find here.
 pub fn capabilities() -> Vec<String> {
-    ALLOWED_COMMANDS.iter().chain(ALLOWED_EVENTS).map(|name| (*name).to_owned()).collect()
+    capabilities_for(DeviceKind::Phone)
+}
+
+/// What a `HelloReply` advertises to a device of `kind`: its commands, then its events.
+pub fn capabilities_for(kind: DeviceKind) -> Vec<String> {
+    let (commands, events) = match kind {
+        DeviceKind::Phone => (ALLOWED_COMMANDS, ALLOWED_EVENTS),
+        DeviceKind::Desktop => (SERVER_COMMANDS, SERVER_EVENTS),
+    };
+    commands.iter().chain(events).map(|name| (*name).to_owned()).collect()
 }
 
 /// Where a command's contract example lives, relative to `contract/`.
@@ -298,14 +472,44 @@ mod tests {
         assert_eq!(caps.last().map(String::as_str), Some("terminal:removed"));
     }
 
-    /// Every allowlisted name has its contract file, and every file there is
-    /// for an allowlisted name: adding to the list without pinning a shape, or
+    #[test]
+    fn the_phones_lists_are_the_front_of_the_servers() {
+        assert_eq!(&SERVER_COMMANDS[..ALLOWED_COMMANDS.len()], ALLOWED_COMMANDS);
+        assert_eq!(&SERVER_EVENTS[..ALLOWED_EVENTS.len()], ALLOWED_EVENTS);
+        for list in [SERVER_COMMANDS, SERVER_EVENTS] {
+            let mut seen = std::collections::HashSet::new();
+            for name in list {
+                assert!(seen.insert(*name), "{name} is listed twice");
+            }
+        }
+        assert!(SERVER_COMMANDS.iter().all(|name| !name.contains(':')));
+        assert!(SERVER_EVENTS.iter().all(|name| name.contains(':')));
+    }
+
+    #[test]
+    fn a_phone_gets_the_phone_list_and_a_desktop_gets_everything() {
+        assert_eq!(capabilities_for(DeviceKind::Phone), capabilities());
+        assert!(!is_command_allowed_for(DeviceKind::Phone, "terminal_write"));
+        assert!(is_command_allowed_for(DeviceKind::Desktop, "terminal_write"));
+        assert!(!is_event_allowed_for(DeviceKind::Phone, "terminal:output"));
+        assert!(is_event_allowed_for(DeviceKind::Desktop, "terminal:output"));
+        for cmd in ALLOWED_COMMANDS {
+            assert!(is_command_allowed_for(DeviceKind::Desktop, cmd), "{cmd}");
+        }
+        assert_eq!(
+            capabilities_for(DeviceKind::Desktop).len(),
+            SERVER_COMMANDS.len() + SERVER_EVENTS.len()
+        );
+    }
+
+    /// Every server name has its contract file, and every file there is
+    /// for a server name: adding to a list without pinning a shape, or
     /// leaving a shape behind a removed command, fails here.
     #[test]
-    fn the_contract_directory_matches_the_allowlist_exactly() {
+    fn the_contract_directory_matches_the_server_lists_exactly() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("contract");
-        let mut expected: Vec<String> = ALLOWED_COMMANDS.iter().map(|c| command_contract_path(c)).collect();
-        expected.extend(ALLOWED_EVENTS.iter().map(|e| event_contract_path(e)));
+        let mut expected: Vec<String> = SERVER_COMMANDS.iter().map(|c| command_contract_path(c)).collect();
+        expected.extend(SERVER_EVENTS.iter().map(|e| event_contract_path(e)));
         let mut found = Vec::new();
         for dir in ["commands", "events"] {
             for entry in std::fs::read_dir(root.join(dir)).unwrap() {

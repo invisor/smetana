@@ -1,0 +1,7 @@
+{
+  "args": [{"project":"/work/smetana"}],
+  "reply": [
+    {"busy_project":"/work/other","extension":false,"playwright_browsers":true,"playwright_mcp":true},
+    {"busy_project":null,"extension":false,"playwright_browsers":false,"playwright_mcp":false}
+  ]
+}

@@ -17,12 +17,15 @@ pub mod push;
 mod ticket;
 
 pub use bridge::{
-    capabilities, command_contract_path, event_contract_path, is_allowed_command, is_allowed_event,
-    BridgeError, ClientMsg, ServerMsg, ALLOWED_COMMANDS, ALLOWED_EVENTS,
+    capabilities, capabilities_for, command_contract_path, event_contract_path, is_allowed_command,
+    is_allowed_event, is_command_allowed_for, is_event_allowed_for, BridgeError, ClientMsg, ServerMsg,
+    ALLOWED_COMMANDS, ALLOWED_EVENTS, SERVER_COMMANDS, SERVER_EVENTS,
 };
-pub use frame::{decode_frame, encode_frame, read_frame, write_frame, FrameError, MAX_FRAME};
+pub use frame::{
+    decode_frame, encode_frame, read_frame, read_frame_bytes, write_frame, FrameError, MAX_FRAME,
+};
 pub use iroh::PublicKey;
-pub use ticket::{PairingTicket, TicketError, TICKET_PREFIX};
+pub use ticket::{PairingTicket, TicketError, DESKTOP_TICKET_PREFIX, TICKET_PREFIX};
 
 use serde::{Deserialize, Serialize};
 
@@ -54,12 +57,32 @@ pub const CLOSE_SLOW: u32 = 5;
 /// Length of the one-time pairing secret and of the push key, in bytes.
 pub const SECRET_LEN: usize = 32;
 
-/// What the phone is, as far as the desktop's device list is concerned.
+/// What the device is, as far as the server's device list is concerned. Informational:
+/// what a device may do is decided by its [`DeviceKind`], never by this.
+///
+/// `Desktop` is the last variant, so postcard's numbering of the first two is unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Platform {
     Ios,
     Android,
+    Desktop,
+}
+
+/// What a device is allowed to do. **Fixed when the device is paired** — the pairing ticket
+/// names the kind it admits and the server stores it — and never taken from anything the
+/// device says afterwards: a stolen phone key must not be able to call itself a desktop and
+/// get a writable shell.
+///
+/// A device list written before kinds existed has none, and every entry in it is a phone.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeviceKind {
+    /// Today's allowlist, unchanged; a terminal is read-only.
+    #[default]
+    Phone,
+    /// Every server command and event.
+    Desktop,
 }
 
 /// The first thing a phone says on a pairing connection.
@@ -103,9 +126,67 @@ pub struct HelloReply {
     pub recommended_mobile_version: String,
 }
 
+/// What a client says about itself after its `Hello`, in the same frame. Informational:
+/// the server records nothing from it that it acts on.
+///
+/// It is not a field of [`Hello`] so that a `Hello` written by a phone built before it
+/// existed stays valid: postcard writes a struct's fields one after another, so the bytes of
+/// a `Hello` followed by a `Platform` are exactly a frame the old reader reads the `Hello`
+/// out of and ignores the rest of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelloInfo {
+    pub platform: Platform,
+}
+
+/// A `Hello` as one frame, followed by the client's [`HelloInfo`].
+pub fn encode_hello(hello: &Hello, info: &HelloInfo) -> Result<Vec<u8>, FrameError> {
+    let mut body = postcard::to_stdvec(hello).map_err(|e| FrameError::Encode(e.to_string()))?;
+    body.extend(postcard::to_stdvec(info).map_err(|e| FrameError::Encode(e.to_string()))?);
+    if body.len() > MAX_FRAME {
+        return Err(FrameError::TooLarge(body.len()));
+    }
+    let mut out = (body.len() as u32).to_be_bytes().to_vec();
+    out.extend(body);
+    Ok(out)
+}
+
+/// A `Hello` and, if the client sent one, its [`HelloInfo`]. A trailer that is not a
+/// `HelloInfo` is ignored rather than an error: it is informational, and a future client's
+/// longer one must not lock it out.
+pub fn decode_hello(body: &[u8]) -> Result<(Hello, Option<HelloInfo>), FrameError> {
+    let (hello, rest) =
+        postcard::take_from_bytes::<Hello>(body).map_err(|e| FrameError::Decode(e.to_string()))?;
+    let info = postcard::take_from_bytes::<HelloInfo>(rest).ok().map(|(info, _)| info);
+    Ok((hello, info))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hello_with_and_without_a_platform_both_read() {
+        let hello = Hello {
+            protocol_major: 1,
+            protocol_minor: 7,
+            app_version: "1.0.0".into(),
+            capabilities: vec!["a".into()],
+        };
+        let plain = postcard::to_stdvec(&hello).unwrap();
+        assert_eq!(decode_hello(&plain).unwrap(), (hello.clone(), None));
+        let frame = encode_hello(&hello, &HelloInfo { platform: Platform::Desktop }).unwrap();
+        let (decoded, info) = decode_hello(&frame[4..]).unwrap();
+        assert_eq!(decoded, hello);
+        assert_eq!(info, Some(HelloInfo { platform: Platform::Desktop }));
+        // The reader a phone's build has is the plain one: it reads the same Hello.
+        assert_eq!(postcard::from_bytes::<Hello>(&frame[4..]).unwrap(), hello);
+    }
+
+    #[test]
+    fn a_device_without_a_kind_is_a_phone() {
+        assert_eq!(DeviceKind::default(), DeviceKind::Phone);
+        assert_eq!(serde_json::to_string(&DeviceKind::Desktop).unwrap(), "\"desktop\"");
+    }
 
     #[test]
     fn platform_is_lowercase_in_json_and_survives_postcard() {

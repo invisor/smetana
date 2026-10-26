@@ -1,0 +1,6 @@
+{
+  "args": [{"paths":["src/main.js"],"root":"/work/smetana"}],
+  "reply": [
+    [{"mtime":1760000000000,"path":"src/main.js"},{"mtime":null,"path":"src/gone.js"}]
+  ]
+}

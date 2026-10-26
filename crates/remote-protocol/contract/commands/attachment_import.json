@@ -1,0 +1,7 @@
+{
+  "args": [{"path":"/tmp/dropped.png"}],
+  "reply": [
+    {"bytes":2,"data":"aGk=","mime":"image/png","name":"20261017-x.png","path":"/data/attachments/proj-abc/20261017-x.png"},
+    {"bytes":2,"data":null,"mime":"application/octet-stream","name":"20261017-x.png","path":"/data/attachments/proj-abc/20261017-x.png"}
+  ]
+}

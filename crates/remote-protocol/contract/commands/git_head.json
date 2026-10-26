@@ -1,0 +1,7 @@
+{
+  "args": [{"project":"/work/smetana"}],
+  "reply": [
+    {"branch":"main","detached":null},
+    {"branch":null,"detached":"abc1234"}
+  ]
+}
