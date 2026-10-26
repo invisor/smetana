@@ -152,9 +152,15 @@ pub fn run() {
       // directory owned by somebody else are the others. Only registration
       // needs the guard — a write that fails afterwards falls back to stderr
       // inside fern and takes nothing down with it.
+      let mut log = tauri_plugin_log::Builder::default().level(log::LevelFilter::Info);
+      // The iroh stack and the spans bridged into `log` are capped at warn from the one list the
+      // server's logger uses. Spans are capped by target outright: this plugin filters on the
+      // target only, and a span's target is `tracing::span` whatever crate opened it.
+      for target in smetanad::logger::NOISY.iter().chain(smetanad::logger::SPAN_TARGETS) {
+        log = log.level_for(*target, log::LevelFilter::Warn);
+      }
       if let Err(err) = app.handle().plugin(
-        tauri_plugin_log::Builder::default()
-          .level(log::LevelFilter::Info)
+        log
           .max_file_size(LOG_FILE_SIZE)
           .rotation_strategy(RotationStrategy::KeepSome(LOG_FILES_KEPT))
           .targets([
