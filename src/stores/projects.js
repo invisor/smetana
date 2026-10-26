@@ -13,11 +13,12 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { listDir, setRoot } from './files.js'
 import { measureStorage } from './notifications.js'
 import { loadRepos } from './vcs.js'
-import { flushPending, loadProjectLayout, settings } from './settings.js'
+import { adoptServerProjects, flushPending, loadProjectLayout, settings } from './settings.js'
 import { confirmUnsaved, dirtyPaths, resetTabs, restoreTabs } from './tabs.js'
 import { loadSessions } from './terminals.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
 import { basename, dirname } from '../paths.js'
+import { onServerChange, refusalOf, useLocalServer, useRemoteServer } from './connection.js'
 
 /* Path → whether it holds a .beads. health says the same thing about the
    active project, but there is nowhere else to learn it about the other rows. */
@@ -87,6 +88,11 @@ async function askUnsaved() {
    asks the worker for things, and the caller is on its way out. */
 function release() {
   moving = false
+  if (pendingServerChange) {
+    pendingServerChange = false
+    followServerChange().catch((err) => console.error('[projects] could not follow the new server:', err))
+    return
+  }
   if (!pendingRemote) return
   const { path } = pendingRemote
   pendingRemote = null
@@ -244,6 +250,15 @@ export async function addProject() {
      a different question. Only on a choice — a cancelled panel returns above
      with the memory untouched. */
   lastPickedDir = dirname(picked) ?? lastPickedDir
+  return addProjectAt(picked)
+}
+
+/* The second half of adding a project, from a folder that has already been chosen: by the
+   operating system's panel on this machine (`addProject` above), or in the server-side folder
+   browser when the server is on another one (`listServerFolders`, below). Same contract: the added
+   path on success, null on any cancellation. */
+export async function addProjectAt(picked) {
+  if (moving) return null
   const path = await projectRoot(picked)
   /* The dialog itself takes as long as it takes — a move may have started and
      finished while the person was picking a folder, so the flag is checked
@@ -269,6 +284,31 @@ export async function addProject() {
     return path
   } finally {
     release()
+  }
+}
+
+/* ---- a server on another machine ---------------------------------------- */
+
+/* The folders under `path` on the server (its home folder when `path` is null): `{ root, path,
+   parent, entries: [{ name, path, repo, tracker }], truncated, repo, tracker }`. The server
+   refuses anything that is not under its root; the browser never composes a path of its own, it
+   only passes back ones the server listed. Rejects with the server's words. */
+export async function listServerFolders(path = null) {
+  try {
+    return await invoke('folders_list', { path })
+  } catch (err) {
+    throw new Error(refusalOf(err))
+  }
+}
+
+/* `git clone` on the server into `parent/name` (the address's last segment when `name` is empty).
+   Answers the new folder's path. The server runs git with no terminal, so a repository that wants
+   credentials the server does not have fails in git's own words, which come back here. */
+export async function cloneOnServer({ url, parent, name = null }) {
+  try {
+    return (await invoke('project_clone', { url, parent, name: name || null })).path
+  } catch (err) {
+    throw new Error(refusalOf(err))
   }
 }
 
@@ -330,6 +370,54 @@ export async function followRemoteProject(raw) {
   }
 }
 
+/* Choosing another server, from the Server tab (`connection.js::requestServerSwitch`). Everything
+   the app window owns that is about the server being left is settled **before** the shell is asked to
+   move: the unsaved-edits question is put (save, discard or keep them), saving goes to the server the
+   files belong to - still the connected one - and the pending settings are flushed to it. A cancel
+   leaves the device exactly where it was and answers `{ cancelled: true }`; a refusal by the shell
+   (a spent ticket, an unreachable relay) throws and also changes nothing. Only then can
+   `followServerChange` assume there is nothing dirty to lose. `request` is `{ kind: 'local' }` or
+   `{ kind: 'remote', ticket, stopLocal }`. */
+export async function switchServer(request) {
+  if (moving) throw new Error('The app is busy moving between projects. Try again in a moment.')
+  moving = true
+  try {
+    if (!(await askUnsaved())) return { cancelled: true }
+    await flushPending()
+    return request.kind === 'remote'
+      ? await useRemoteServer(request.ticket, request.stopLocal)
+      : await useLocalServer()
+  } finally {
+    release()
+  }
+}
+
+/* The connection is now to another server than the one this window's projects came from. Its
+   projects are the ones to show, and none of this window's own may reach it: the list and the open
+   project are taken from the server (`adoptServerProjects`), the tabs and the tree of the project
+   left are dropped, and the window moves to the server's open project, or to the empty state when it
+   has none. Nothing is flushed here: `switchServer` flushed to the server being left before the move,
+   and what is unsent now was addressed to it. It also settled the unsaved edits - so a dirty buffer
+   found here means a switch that did not come through `switchServer`, and is said loudly. */
+export async function followServerChange() {
+  if (moving) {
+    pendingServerChange = true
+    return
+  }
+  moving = true
+  try {
+    if (dirtyPaths.value.length) {
+      console.error('[projects] the server changed with unsaved edits still open; they are dropped:', dirtyPaths.value)
+    }
+    const path = await adoptServerProjects()
+    await moveTo(path)
+  } finally {
+    release()
+  }
+}
+
+let pendingServerChange = false
+
 /* Listens for the announcement above. Answers with the way to stop. */
 export function initProjectFollow() {
   return listen('remote:project-switched', (event) => followRemoteProject(event.payload?.path ?? null))
@@ -389,3 +477,7 @@ export function adoptInitialProject() {
   if (active && !settings.openProjects.includes(active)) settings.openProjects.push(active)
   refreshProbes()
 }
+
+/* Registered with the connection store at load, so the move happens before the stores read their
+   snapshots from the server they have just been moved to. */
+onServerChange(followServerChange)

@@ -580,3 +580,49 @@ describe('images attached to a task that has not been filed', () => {
     expect(stores.attachments.attachmentsState.lastError).toBe('gone.png: no such file')
   })
 })
+
+describe('attaching for a server on another machine', () => {
+  const remoteView = { mode: 'split', state: 'connected', epoch: 1, local: false }
+
+  it('sends the bytes of a dropped file and keeps the path the server stored, not the one on this machine', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('connection_state', remoteView)
+    ipc.on('client_file_read', () => ({ name: 'mock.png', bytes: 2, data: 'AQI=' }))
+    ipc.on('attachment_write', ({ name }) => ({ ...stored(name), path: `/srv/smetana/attachments/p/${name}` }))
+
+    await stores.attachments.importPaths(['/Users/you/Downloads/mock.png'])
+
+    expect(ipc.calls('attachment_import')).toHaveLength(0)
+    expect(ipc.calls('client_file_read')).toEqual([{ path: '/Users/you/Downloads/mock.png' }])
+    expect(ipc.calls('attachment_write')).toEqual([{ name: 'mock.png', data: 'AQI=' }])
+    expect(stores.attachments.attachmentsState.items).toEqual([
+      { path: '/srv/smetana/attachments/p/mock.png', name: 'mock.png', bytes: 2, url: 'data:image/png;base64,AQI=' }
+    ])
+  })
+
+  it('shows a file the shell refused to read as the same line a refusal always is, and goes on with the rest', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('connection_state', remoteView)
+    ipc.on('client_file_read', ({ path }) => {
+      if (path.endsWith('huge.png')) throw 'huge.png is 99999999 bytes; the ceiling is 10485760 bytes'
+      return { name: 'two.png', bytes: 2, data: 'AQI=' }
+    })
+    ipc.on('attachment_write', () => stored('two.png'))
+
+    await stores.attachments.importPaths(['/a/huge.png', '/a/two.png'])
+
+    expect(stores.attachments.attachmentsState.lastError).toMatch(/ceiling/)
+    expect(stores.attachments.attachmentsState.items).toHaveLength(1)
+  })
+
+  it('still copies by path when the server is on this machine', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('connection_state', { ...remoteView, local: true })
+    ipc.on('attachment_import', ({ path }) => stored(path.split('/').pop()))
+
+    await stores.attachments.importPaths(['/Users/you/Downloads/mock.png'])
+
+    expect(ipc.calls('client_file_read')).toHaveLength(0)
+    expect(ipc.calls('attachment_import')).toHaveLength(1)
+  })
+})

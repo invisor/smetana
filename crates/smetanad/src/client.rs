@@ -112,6 +112,17 @@ async fn timed<T>(what: &str, work: impl std::future::Future<Output = T>) -> Res
 
 /// Pairs with the local credential. `Ok` when the server said `Accepted`.
 async fn pair(endpoint: &Endpoint, addr: &EndpointAddr, secret: [u8; 32]) -> Result<(), ClientError> {
+    pair_within(endpoint, addr, secret, STEP_TIMEOUT).await
+}
+
+/// [`pair`] with a longer wait for the answer: a ticket is confirmed by a person in the terminal that
+/// ran `smetanad pair`, and that takes as long as it takes (the ticket itself lasts two minutes).
+async fn pair_within(
+    endpoint: &Endpoint,
+    addr: &EndpointAddr,
+    secret: [u8; 32],
+    answer_within: Duration,
+) -> Result<(), ClientError> {
     let conn = timed("connecting to pair", endpoint.connect(addr.clone(), ALPN))
         .await?
         .map_err(|err| ClientError::Closed(err.to_string()))?;
@@ -125,8 +136,9 @@ async fn pair(endpoint: &Endpoint, addr: &EndpointAddr, secret: [u8; 32]) -> Res
         app_version: env!("CARGO_PKG_VERSION").to_owned(),
     };
     write_frame(&mut send, &request).await.map_err(setup)?;
-    let reply = timed("waiting for the pairing answer", read_frame::<PairReply>(&mut recv, MAX_FRAME))
-        .await?
+    let reply = tokio::time::timeout(answer_within, read_frame::<PairReply>(&mut recv, MAX_FRAME))
+        .await
+        .map_err(|_| ClientError::Closed("timed out waiting for the pairing answer".to_owned()))?
         .map_err(setup)?;
     conn.close(0u32.into(), b"done");
     match reply {
@@ -170,7 +182,81 @@ async fn say_hello(
     }
 }
 
+/// A server this machine is paired with that is not on it: where to find it, and nothing else. The
+/// secret of the ticket is spent at pairing and kept nowhere.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RemoteRecord {
+    /// The server's public key.
+    pub node: String,
+    /// The relay the ticket named, which is how a client finds a server it has no address for.
+    pub relay: String,
+}
+
+/// How long a person has to confirm a pairing in the terminal that ran `smetanad pair`.
+pub const CONFIRM_WITHIN: Duration = Duration::from_secs(150);
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// Binds the endpoint a client dials a remote server from: the relay the ticket named, every
+/// interface, so a direct path can be found when there is one.
+async fn bind_remote(key: &iroh::SecretKey, relay: &iroh::RelayUrl) -> Result<Endpoint, ClientError> {
+    Endpoint::builder(presets::Minimal)
+        .secret_key(key.clone())
+        .relay_mode(RelayMode::custom([relay.clone()]))
+        .bind()
+        .await
+        .map_err(setup)
+}
+
+fn remote_address(record: &RemoteRecord) -> Result<(EndpointAddr, iroh::RelayUrl), ClientError> {
+    let relay: iroh::RelayUrl =
+        record.relay.parse().map_err(|_| ClientError::Setup(format!("the relay {:?} is not usable", record.relay)))?;
+    let node: iroh::PublicKey =
+        record.node.parse().map_err(|_| ClientError::Setup("the server's key is not readable".to_owned()))?;
+    Ok((EndpointAddr::new(node).with_relay_url(relay.clone()), relay))
+}
+
+/// What is wrong with a ticket before anything is dialled, in words for the person who pasted it.
+pub fn check_ticket(text: &str) -> Result<(remote_protocol::PairingTicket, RemoteRecord), String> {
+    let (ticket, kind) = remote_protocol::PairingTicket::decode_any(text).map_err(|err| err.to_string())?;
+    if kind != remote_protocol::DeviceKind::Desktop {
+        return Err("This is a code for a phone. Run `smetanad pair --kind desktop` on the server for this app.".to_owned());
+    }
+    if ticket.expires_at <= now_secs() {
+        return Err("This code has expired. Run `smetanad pair --kind desktop` again for a new one.".to_owned());
+    }
+    ticket.relay.parse::<iroh::RelayUrl>().map_err(|_| "The code names a relay that is not usable.".to_owned())?;
+    let record = RemoteRecord { node: ticket.desktop.to_string(), relay: ticket.relay.clone() };
+    Ok((ticket, record))
+}
+
 impl Client {
+    /// Pairs this machine with the server a desktop ticket names, and answers where it is. The
+    /// confirmation is the person's, at the terminal that issued the ticket, so this waits for it.
+    pub async fn pair_remote(identity: &Path, ticket_text: &str) -> Result<RemoteRecord, ClientError> {
+        let (ticket, record) = check_ticket(ticket_text).map_err(ClientError::Setup)?;
+        let key = remote_server::endpoint::load_or_create_key(&identity.join(KEY_FILE)).map_err(ClientError::Setup)?;
+        let (addr, relay) = remote_address(&record)?;
+        let endpoint = bind_remote(&key, &relay).await?;
+        let outcome = pair_within(&endpoint, &addr, ticket.secret, CONFIRM_WITHIN).await;
+        endpoint.close().await;
+        outcome.map(|()| record)
+    }
+
+    /// Connects to a server this machine has been paired with by [`Client::pair_remote`].
+    pub async fn connect_remote(identity: &Path, record: &RemoteRecord) -> Result<Client, ClientError> {
+        let key = remote_server::endpoint::load_or_create_key(&identity.join(KEY_FILE)).map_err(ClientError::Setup)?;
+        let (addr, relay) = remote_address(record)?;
+        let endpoint = bind_remote(&key, &relay).await?;
+        match say_hello(&endpoint, &addr).await {
+            Ok(opened) => Ok(Self::from_open(opened, endpoint)),
+            Err(Ok(code)) => Err(ClientError::Code(code)),
+            Err(Err(err)) => Err(err),
+        }
+    }
+
     /// Connects to the server whose data directory is `dir`, pairing first if this machine's client
     /// has not been paired with it.
     pub async fn connect(dir: &Path) -> Result<Client, ClientError> {
@@ -306,4 +392,51 @@ async fn read_loop(
     }
     // Whoever is still waiting is told by its sender being dropped.
     pending.lock().unwrap_or_else(|p| p.into_inner()).clear();
+}
+
+#[cfg(test)]
+mod remote_tests {
+    use super::*;
+    use remote_protocol::{DeviceKind, PairingTicket};
+
+    fn ticket(expires_at: u64) -> PairingTicket {
+        PairingTicket {
+            desktop: iroh::SecretKey::generate().public(),
+            relay: "https://relay.example.com".to_owned(),
+            secret: [7; 32],
+            expires_at,
+        }
+    }
+
+    #[test]
+    fn a_desktop_ticket_that_has_not_expired_names_the_server_to_dial() {
+        let ticket = ticket(now_secs() + 60);
+        let (read, record) = check_ticket(&ticket.encode_for(DeviceKind::Desktop)).unwrap();
+        assert_eq!(read, ticket);
+        assert_eq!(record.node, ticket.desktop.to_string());
+        assert_eq!(record.relay, "https://relay.example.com");
+        assert!(remote_address(&record).is_ok());
+    }
+
+    #[test]
+    fn a_phones_ticket_is_refused_with_the_command_that_makes_the_right_one() {
+        let err = check_ticket(&ticket(now_secs() + 60).encode_for(DeviceKind::Phone)).unwrap_err();
+        assert!(err.contains("--kind desktop"), "{err}");
+    }
+
+    #[test]
+    fn an_expired_ticket_and_a_garbled_one_are_told_apart() {
+        let expired = check_ticket(&ticket(now_secs().saturating_sub(5)).encode_for(DeviceKind::Desktop)).unwrap_err();
+        assert!(expired.contains("expired"), "{expired}");
+        let garbled = check_ticket("smetana2:not-base32!").unwrap_err();
+        assert!(!garbled.contains("expired"), "{garbled}");
+        assert!(check_ticket("hello").is_err());
+    }
+
+    #[test]
+    fn a_ticket_naming_an_unusable_relay_is_refused_before_anything_is_dialled() {
+        let mut bad = ticket(now_secs() + 60);
+        bad.relay = "not a url".to_owned();
+        assert!(check_ticket(&bad.encode_for(DeviceKind::Desktop)).unwrap_err().contains("relay"));
+    }
 }

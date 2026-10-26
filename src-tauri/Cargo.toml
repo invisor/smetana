@@ -58,6 +58,9 @@ tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-shell = "2"
 tauri-plugin-window-state = "2"
 thiserror = "2"
+# The bytes of a file this machine hands to a remote server (`commands/client_files.rs`). The same
+# version `smetana-core` already builds, so the lock gains no package.
+base64 = "0.23.0"
 tokio = { version = "1", features = ["sync", "time", "rt", "macros", "net"] }
 # The login item: whether the app opens itself when the person signs in. A
 # plugin rather than the platform calls, because there are three of them and no

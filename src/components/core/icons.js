@@ -60,6 +60,7 @@ import {
   Inbox,
   Info,
   Layers,
+  Laptop,
   LoaderCircle,
   Lock,
   LockOpen,
@@ -88,6 +89,7 @@ import {
   Settings,
   Settings2,
   SlidersHorizontal,
+  Server,
   Smartphone,
   Sparkles,
   Square,
@@ -326,6 +328,9 @@ export const iconNodes = {
   hash: Hash,
   /* The storage source's glyph: the attachment store's own weight. */
   'hard-drive': HardDrive,
+  /* The Server tab: a machine somewhere else, and the one in front of the person. */
+  server: Server,
+  laptop: Laptop,
   settings: Settings,
   'settings-2': Settings2,
   /* The project tile's menu, for editing `[defaults]` in the project's own

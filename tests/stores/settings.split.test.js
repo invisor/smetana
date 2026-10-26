@@ -229,3 +229,44 @@ describe('the release build and a browser', () => {
     expect(ipc.calls('device_settings_save')).toEqual([])
   })
 })
+
+describe('nothing made for one server is sent to another', () => {
+  const state = (over) => ({ mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local', ...over })
+
+  it('drops a change made for the old server when the connection has moved to a new one before it is sent', async () => {
+    ipc.on('connection_state', state())
+    await connection.initConnection()
+    await settings.loadSettings()
+    // The device's save is slow, so the server patch is still waiting behind it.
+    let release
+    ipc.on('device_settings_save', () => new Promise((resolve) => (release = resolve)))
+    settings.settings.agentRoles.tasks.agent = 'codex'
+    const sent = settings.flushPending()
+    await nextTick()
+    await emit('connection:state', state({ epoch: 2, local: false, target: 'node-vps' }))
+    release(null)
+    await sent
+    await nextTick()
+    expect(ipc.calls('settings_patch')).toEqual([])
+  })
+
+  it('sends nothing at all to the server from the moment it changes until its own state is taken in', async () => {
+    ipc.on('connection_state', state())
+    await connection.initConnection()
+    await settings.loadSettings()
+    // The hook that takes the new server's state in is held open: this is the window in which the
+    // store still holds the old server's state.
+    let finish
+    connection.onServerChange(() => new Promise((resolve) => (finish = resolve)))
+    await emit('connection:state', state({ epoch: 2, local: false, target: 'node-vps' }))
+    expect(connection.connection.switching).toBe(true)
+    settings.settings.agentRoles.tasks.agent = 'codex'
+    await wait()
+    expect(ipc.calls('settings_patch')).toEqual([])
+    for (let i = 0; i < 100 && !finish; i++) await new Promise((resolve) => setTimeout(resolve, 10))
+    finish()
+    await nextTick()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(connection.connection.switching).toBe(false)
+  })
+})

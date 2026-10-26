@@ -64,6 +64,15 @@ import {
   watchPairEnded,
   watchPairRequests
 } from '../stores/remote.js'
+import ServerSettings from '../components/settings/ServerSettings.vue'
+import { localStopLine, nextStep } from '../components/settings/serverChoice.js'
+import {
+  connection,
+  initConnection,
+  localServerWork,
+  readServerTarget,
+  requestServerSwitch
+} from '../stores/connection.js'
 
 /* The query string's two overrides, passed down rather than read here so that
    `App.vue` stays the one place that knows about them. They win over what the
@@ -284,6 +293,7 @@ let stopUpdates = null
 let stopRequests = null
 let stopEnded = null
 let stopDevices = null
+let stopConnection = null
 const version = ref(null)
 
 /* The update machine, and the fourth part of this window that is not a setting:
@@ -347,6 +357,14 @@ onMounted(async () => {
   } catch (err) {
     console.warn('[settings-window] the phone companion cannot be heard from:', err)
   }
+  try {
+    /* Which build this is, and live: the Server tab appears only in a client, and its state phrase
+       follows the connection while the window is open. */
+    stopConnection = await initConnection()
+    await readTarget()
+  } catch (err) {
+    console.warn('[settings-window] the connection state cannot be read:', err)
+  }
   /* And only now: this window is listening, and the section its URL named is
      the one `tab` was seeded with at setup. A gear pressed on a section while
      this window was still loading is handed over on this call and lands as an
@@ -380,6 +398,7 @@ onUnmounted(() => {
   stopRequests?.()
   stopEnded?.()
   stopDevices?.()
+  stopConnection?.()
   clearInterval(ticker)
   /* The code is withdrawn by Rust when the OS window is destroyed
      (`window::settings_window_open`), which is the path that runs when the
@@ -404,7 +423,7 @@ watchEffect(() => {
 
 /* `pinned` is the tab kind with no close button and a sans label — which is
    exactly what a settings tab is. The centre's file tabs are the other kinds. */
-const TABS = [
+const BASE_TABS = [
   { id: 'general', label: 'General', kind: 'pinned' },
   { id: 'editor', label: 'Editor', kind: 'pinned' },
   { id: 'agents', label: 'Agents', kind: 'pinned' },
@@ -418,12 +437,21 @@ const TABS = [
   { id: 'about', label: 'About', kind: 'pinned' }
 ]
 
+/* The Server tab exists only in a build that is a client of a server (`connection.mode` is `split`):
+   the release has its back end in-process and nothing to choose. Next to Devices, which is the other
+   tab about who talks to whom. */
+const TABS = computed(() => {
+  if (connection.mode !== 'split') return BASE_TABS
+  const at = BASE_TABS.findIndex((entry) => entry.id === 'devices')
+  return [...BASE_TABS.slice(0, at + 1), { id: 'server', label: 'Server', kind: 'pinned' }, ...BASE_TABS.slice(at + 1)]
+})
+
 /* The list of sections is this file's, and this is the only place a name is
    checked against it — Rust builds the URL and guards its shape, never its
    vocabulary, so a section this build has never heard of opens on General
    rather than on an empty body. Whoever asked for it pressed a button, so the
    worst outcome is landing one tab away from what they meant. */
-const known = (name) => (TABS.some((entry) => entry.id === name) ? name : null)
+const known = (name) => (TABS.value.some((entry) => entry.id === name) ? name : null)
 
 /* Which section a caller asked for, in the two forms that can reach this
    window. `?tab=` is how a window being built hears about it — passed in as a
@@ -580,6 +608,73 @@ const revoke = async (key) => {
   }
 }
 
+/* The Server tab, and a part of this window that is not a setting either: which `smetanad` this
+   device uses is the shell's own file (`server-target.json`), read before any connection exists. The
+   window asks, shows, and calls the shell; the rules of what to ask first are `serverChoice.js`'s.
+
+   A switch is two steps only when the server being left has work in it: `ask` holds that work while
+   the person chooses, and nothing has been changed until they do. Pairing waits for a person at the
+   other end, so `busy` can last a minute or two; a refusal leaves the device where it was and says so. */
+const server = reactive({ target: { kind: 'local' }, ticket: '', ask: null, busy: false, error: null, note: '' })
+
+const readTarget = async () => {
+  server.target = await readServerTarget()
+}
+
+const switchTo = async (stopLocal) => {
+  server.busy = true
+  server.error = null
+  server.note = ''
+  try {
+    const answer = await requestServerSwitch({ kind: 'remote', ticket: server.ticket.trim(), stopLocal })
+    server.ask = null
+    if (answer?.cancelled) {
+      server.note = 'Cancelled. You still have unsaved changes in the app window, and nothing was changed.'
+      return
+    }
+    server.ticket = ''
+    server.note = ['Switched to the server on the other machine.', localStopLine(answer)].filter(Boolean).join(' ')
+    await readTarget()
+  } catch (err) {
+    server.ask = null
+    server.error = err.message
+  } finally {
+    server.busy = false
+  }
+}
+
+const useServer = async () => {
+  server.error = null
+  server.note = ''
+  const usingLocal = server.target.kind !== 'remote'
+  const step = nextStep({
+    ticket: server.ticket,
+    usingLocal,
+    work: usingLocal ? await localServerWork() : null
+  })
+  if (step.kind === 'problem') server.error = step.problem
+  else if (step.kind === 'ask') server.ask = step.work
+  else await switchTo(step.stopLocal)
+}
+
+const backToLocal = async () => {
+  server.busy = true
+  server.error = null
+  server.note = ''
+  try {
+    const answer = await requestServerSwitch({ kind: 'local' })
+    if (answer?.cancelled) {
+      server.note = 'Cancelled. You still have unsaved changes in the app window, and nothing was changed.'
+      return
+    }
+    await readTarget()
+  } catch (err) {
+    server.error = err.message
+  } finally {
+    server.busy = false
+  }
+}
+
 /* What is left of the agent's subscription, and the third part of this window
    that is not a setting: nothing about it reaches `settings.json` either. It is
    a question put to the harness itself, through Rust, and the answer belongs to
@@ -704,6 +799,7 @@ watch(
   (which) => {
     if (which === 'storage' && !storage.busy) readStorage()
     if (which === 'devices') readDevices()
+    if (which === 'server') readTarget()
     if (which === 'general') readAutostart()
     /* Guarded by `busy` the way Storage is, and for a longer reason: walking
        off this tab and back while a minute-long probe is out must not start a
@@ -877,6 +973,20 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @decide="decide"
           @revoke="revoke"
           @update:relay-url="change({ remoteRelayUrl: $event })"
+        />
+        <ServerSettings
+          v-else-if="tab === 'server'"
+          v-model:ticket="server.ticket"
+          :target="server.target"
+          :connection="connection"
+          :ask="server.ask"
+          :busy="server.busy"
+          :error="server.error"
+          :note="server.note"
+          @use-remote="useServer"
+          @choose="switchTo"
+          @cancel-ask="server.ask = null"
+          @use-local="backToLocal"
         />
         <StorageSettings
           v-else-if="tab === 'storage'"

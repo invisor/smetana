@@ -81,6 +81,10 @@ pub struct View {
     pub reason: Option<String>,
     /// The server is on this machine and this app started it.
     pub local: bool,
+    /// Which server this is: `local`, or the remote server's key. A different value on a new
+    /// connection means the projects and settings on screen belong to another server, and the
+    /// front end takes the new one's instead of carrying its own over.
+    pub target: String,
     pub server: Option<ServerInfo>,
     pub outdated: Option<Outdated>,
 }
@@ -94,6 +98,7 @@ impl View {
             attempt: 0,
             reason: None,
             local,
+            target: if local { "local".to_owned() } else { "remote".to_owned() },
             server: None,
             outdated: None,
         }

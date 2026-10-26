@@ -238,6 +238,7 @@ pub async fn restart(
         }
         match reply.outcome {
             Outcome::Restarting => writeln!(out, "Restarting."),
+            Outcome::Stopping => writeln!(out, "Stopping."),
             Outcome::Scheduled => writeln!(out, "Waiting for this work to finish, then restarting:\n{}", shown(&reply)),
             Outcome::Cancelled => writeln!(out, "The scheduled restart is withdrawn."),
             Outcome::NothingScheduled => writeln!(out, "No restart was scheduled."),

@@ -62,8 +62,8 @@ export function packagesFromHere() {
    for it.
 
    - `stores/app.js` opens windows, reads the build and picks files with the system
-     dialog. The conversation panel imports three names from it; the phone's version
-     (./src/phone/app.js) gives it those three and nothing else, so the panel's links open
+     dialog. The conversation panel imports five names from it; the phone's version
+     (./src/phone/app.js) gives it those five and nothing else, so the panel's links open
      in the system browser, a picture has no window of its own to open in, and the
      paperclip finds no file to pick (it is not drawn at all, see `attachable`).
    - `stores/windowDrops.js` follows a file dragged over a desktop window, and asks the

@@ -376,3 +376,24 @@ fn a_stale_credential_is_reported_as_a_server_that_did_not_answer() {
         assert!(!source.describe().contains("no server is running"));
     });
 }
+
+#[test]
+fn a_server_asked_to_stop_when_idle_lists_its_work_waits_for_it_and_then_ends_instead_of_restarting() {
+    common::block_on(async {
+        let (_dir, server) = start().await;
+        let client = Client::connect(&server.data_dir).await.unwrap();
+        let id = a_shell(&client).await;
+
+        // The read-only list a client shows before it moves away.
+        let work = client.call("server_work", json!({})).await.unwrap();
+        assert_eq!(work.as_array().unwrap().len(), 1, "{work}");
+        assert_eq!(work[0]["kind"], "shell");
+
+        let reply = client.call("server_restart", json!({ "mode": "stop-when-idle", "confirmed": null })).await.unwrap();
+        assert_eq!(reply["outcome"], "scheduled");
+        assert!(tokio::time::timeout(Duration::from_millis(600), server.wait()).await.is_err(), "busy: nothing ends");
+        client.call("terminal_remove", json!({ "id": id })).await.unwrap();
+        assert_eq!(tokio::time::timeout(Duration::from_secs(10), server.wait()).await.unwrap(), Exit::Stop);
+        server.shutdown().await;
+    });
+}

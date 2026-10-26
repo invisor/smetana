@@ -74,7 +74,8 @@ import Checkbox from '../components/core/Checkbox.vue'
 import RunBar from '../components/run/RunBar.vue'
 import ReportView from '../components/run/ReportView.vue'
 import ReportList from '../components/run/ReportList.vue'
-import { isDocumentPath, reportTabPath, reviewReportTabs } from '../components/run/reportTab.js'
+import { isDocumentPath, isRunReportPath, reportTabPath, reviewReportTabs } from '../components/run/reportTab.js'
+import { openReportInBrowser as openReportInBrowserFile } from '../stores/serverFiles.js'
 import { deliveryFor } from '../components/run/reportDelivery.js'
 import TaskInspector from '../components/kanban/TaskInspector.vue'
 import DraftInspector from '../components/kanban/DraftInspector.vue'
@@ -240,10 +241,14 @@ import { paintRoot } from './useAppearance.js'
 import {
   activePath,
   addProject,
+  addProjectAt,
+  cloneOnServer,
+  listServerFolders,
   adoptInitialProject,
   basename,
   initActive,
   initProjectFollow,
+  switchServer,
   projectRows,
   refreshProbes,
   removeProject,
@@ -311,9 +316,12 @@ import { initUpdates } from '../stores/updates.js'
 import {
   connection,
   initConnection,
+  isRemote,
   onReconnect,
+  refusalOf,
   restartServer,
   retryConnection,
+  watchServerSwitch,
   stale as connectionStale
 } from '../stores/connection.js'
 import { connectionNotice } from '../components/shell/connectionNotice.js'
@@ -435,7 +443,7 @@ import {
 } from '../stores/tabs.js'
 import FileEditor from '../components/files/FileEditor.vue'
 import DocumentModeToggle from '../components/files/DocumentModeToggle.vue'
-import { TOGGLE_LANE } from '../components/files/documentToggle.js'
+import { toggleLane } from '../components/files/documentToggle.js'
 import DiffView from '../components/files/editor/DiffView.vue'
 import { keepOnly } from '../components/files/editor/states.js'
 
@@ -463,6 +471,9 @@ const props = defineProps({
    `ConversationView`, `UserMessage`, `AgentMessage` and `Reasoning` for a
    value none of them otherwise has a reason to know about. */
 provide('smCopyText', copyText)
+/* The rows that act on the machine in front of the person are not drawn while the server is on
+   another one (`components/overlays/clientActions.js`). */
+provide('smHideClientActions', isRemote)
 /* `smReadImage`, the same shape and for the same reason: a figure in a
    task's prose is read off disk through `image_read`, and `Markdown.vue`
    may not import `stores/attachments.js` any more than it may import Tauri
@@ -668,6 +679,8 @@ const RIGHT_TABS = [
 onMounted(initTracker)
 /* A project switched on the phone: the window follows it. */
 onMounted(initProjectFollow)
+/* The Server tab's press, settled here because this window owns the tabs (`switchServer`). */
+onMounted(() => watchServerSwitch(switchServer))
 onMounted(adoptInitialProject)
 onMounted(initTerminals)
 // Crew topology is emitted when a package starts. Subscribe with the desktop
@@ -2730,11 +2743,88 @@ const saveProjectSettings = async (payload) => {
    an empty folder gets the founding dialog and nothing else is offered
    beside it. */
 const onAddProject = async () => {
-  const added = await addProject()
+  /* A server on another machine cannot open a folder this machine's dialog chose, so it is asked
+     for its own: the folder browser below. */
+  if (isRemote.value) return openServerFolders()
+  afterProjectAdded(await addProject())
+}
+
+const afterProjectAdded = async (added) => {
   if (!added) return
   await loadConfig(added)
   if (needsStart.value) openStart(added)
   else if (needsSetup.value) openSetup(added, false)
+}
+
+/* The server's folders, in a window of its own, for a server that is not on this machine
+   (`components/projects/FolderBrowserModal.vue`). The window holds no connection: it says which
+   folder was stepped into, and this is the half that asks the server and announces the listing.
+
+   The same shape every dialog here has - state in this window, announced as props, answers back as
+   results. A listing that arrives after a newer request is dropped (`asked` counts the requests),
+   because two clicks in a row can be answered in either order and the last click has to win. The
+   window is closed *before* the project is added, so the move that follows is not read as its
+   ground going. A refusal stays on the dialog, where the person is looking. */
+const folderBrowser = reactive({ listing: null, loading: false, error: null, cloning: false, cloneError: null })
+let folderAsked = 0
+
+async function browseServerFolders(path) {
+  const asked = ++folderAsked
+  folderBrowser.loading = true
+  folderBrowser.error = null
+  try {
+    const listing = await listServerFolders(path)
+    if (asked === folderAsked) folderBrowser.listing = listing
+  } catch (err) {
+    if (asked === folderAsked) folderBrowser.error = refusalOf(err)
+  } finally {
+    if (asked === folderAsked) folderBrowser.loading = false
+  }
+}
+
+async function chooseServerFolder(path) {
+  closeDialog('server-folder')
+  afterProjectAdded(await addProjectAt(path))
+}
+
+async function cloneServerFolder({ url, parent, name }) {
+  // One clone at a time: a double click or a second Enter must not emit two for one name.
+  if (folderBrowser.cloning) return
+  folderBrowser.cloning = true
+  folderBrowser.cloneError = null
+  try {
+    const path = await cloneOnServer({ url, parent, name })
+    folderBrowser.cloning = false
+    await chooseServerFolder(path)
+  } catch (err) {
+    folderBrowser.cloning = false
+    folderBrowser.cloneError = refusalOf(err)
+  }
+}
+
+function openServerFolders() {
+  folderBrowser.listing = null
+  folderBrowser.error = null
+  folderBrowser.cloneError = null
+  folderBrowser.cloning = false
+  serveDialog('server-folder', {
+    ground: { project: activePath.value },
+    props: () => ({
+      title: 'Add project from the server',
+      listing: folderBrowser.listing,
+      loading: folderBrowser.loading,
+      error: folderBrowser.error,
+      cloning: folderBrowser.cloning,
+      cloneError: folderBrowser.cloneError
+    }),
+    onResult: (name, payload) => {
+      if (name === 'close') closeDialog('server-folder')
+      else if (name === 'open') browseServerFolders(payload)
+      else if (name === 'choose') chooseServerFolder(payload)
+      else if (name === 'clone') cloneServerFolder(payload)
+    }
+  })
+  browseServerFolders(null)
 }
 
 /* The setup agent runs inside this window itself and never in one of its own —
@@ -5395,6 +5485,23 @@ const documentTabActive = computed(
   () => htmlTabReadable.value && !showsSource(project.activeTab)
 )
 
+/* A run's own report can be opened in the person's own browser, wherever the server is: the file
+   itself when it is on this machine, its bytes over the connection when it is not
+   (`stores/serverFiles.js`). Only a run's report, and not any html file: a server hands over nothing
+   but its attachments and its report folders. Offered only in the client build (`connection.mode`
+   is `split`): the release has no command behind it, and is unchanged. */
+const reportOpenable = computed(
+  () => connection.mode === 'split' && htmlTabReadable.value && isRunReportPath(project.activeTab)
+)
+
+async function openReportInBrowser(tabPath) {
+  try {
+    await openReportInBrowserFile(absolutePath(filesState.root, tabPath))
+  } catch (err) {
+    sayFileMenu({ tone: 'error', title: 'Could not open the report', description: refusalOf(err) })
+  }
+}
+
 /* A changed file open as a diff. The record is the store's — the two texts and
    whatever refused to be read — and `null` is both "not a diff tab" and "a diff
    tab that is no longer there", which is why the branch below hangs off it
@@ -7338,7 +7445,7 @@ const centerContentStyle = computed(() => ({
   display: 'flex',
   flexDirection: 'column',
   position: 'relative',
-  paddingRight: htmlTabReadable.value ? TOGGLE_LANE : undefined
+  paddingRight: htmlTabReadable.value ? toggleLane(reportOpenable.value ? 2 : 1) : undefined
 }))
 
 /* Collapsed, the column is the same rail AppShell reserves for one. */
@@ -8007,7 +8114,9 @@ const toastStackStyle = {
           <DocumentModeToggle
             v-if="htmlTabReadable"
             :mode="documentTabActive ? 'document' : 'source'"
+            :can-open-in-browser="reportOpenable"
             @toggle="toggleSource(project.activeTab)"
+            @open-browser="openReportInBrowser(project.activeTab)"
           />
         </div>
       </div>

@@ -63,6 +63,8 @@ import {
   DependencySpine,
   DraftInspector,
   DevicesSettings,
+  FolderBrowserModal,
+  ServerSettings,
   EditorSettings,
   EmptyState,
   FileEditor,
@@ -2399,6 +2401,30 @@ const galleryDevices = [
 const galleryTicket =
   'smetana1:aebagbafaydqqcikbmgq4eb5haytcmzzgm2tqnzvgu3tgnbzgyzdmmrqgq4wmnjvgi3dgnbxgmaebagbafaydqqcikbmgq4eb5haytcmzzgm2tqnzvgu3tgnbzgyzdm'
 const galleryRelay = ref('https://relay.example.org')
+
+/* The Server tab and the server-side folder browser: a server on this machine, one elsewhere that
+   is connected, the question when the server being left is busy, and a switch that is waiting for
+   a person at the other end. The folder browser is drawn with a listing, with a read in flight, and
+   with a refusal. Nothing is behind any of them: pressing emits and the harness does nothing. */
+const galleryServerTicket = ref('')
+const galleryRemoteTarget = { kind: 'remote', node: 'c4e1a0b7f39d52861ad0e3b7c1f85a2d94e6b0713c58fa2e9d41b6a7c3e05f18', relay: 'https://relay.example.org' }
+const galleryFolders = {
+  root: '/home/dev',
+  path: '/home/dev/work',
+  parent: '/home/dev',
+  truncated: false,
+  repo: false,
+  tracker: false,
+  entries: [
+    { name: 'app', path: '/home/dev/work/app', repo: true, tracker: true },
+    { name: 'notes', path: '/home/dev/work/notes', repo: false, tracker: false },
+    { name: 'website', path: '/home/dev/work/website', repo: true, tracker: false }
+  ]
+}
+const galleryBusyWork = [
+  { kind: 'run', id: 1, label: 'run', project: '/work/smetana', owner: null },
+  { kind: 'agent', id: 4, label: 'claude', project: '/work/smetana', owner: null }
+]
 const galleryRemoveWorktrees = ref(false)
 /* The two notification sounds, local for the same reason. Deliberately not
    both on a sound: this page is where the pair of rows is looked at, and one of
@@ -3477,6 +3503,32 @@ const menuTargetStyle = {
           busy
           @close="() => {}"
           @confirm="() => {}"
+        />
+      </div>
+      <!-- Adding a project from the server's own disk: a listing, a read in flight over the last
+           listing, and a refusal. -->
+      <div :style="{ position: 'relative', height: '460px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <FolderBrowserModal :open="true" :listing="galleryFolders" @close="() => {}" @open="() => {}" @choose="() => {}" />
+      </div>
+      <div :style="{ position: 'relative', height: '460px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <FolderBrowserModal :open="true" :listing="galleryFolders" loading @close="() => {}" />
+      </div>
+      <div :style="{ position: 'relative', height: '460px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <FolderBrowserModal
+          :open="true"
+          :listing="{ ...galleryFolders, entries: [] }"
+          error="/etc is outside the folders this server lets a client reach"
+          @close="() => {}"
+        />
+      </div>
+      <div :style="{ position: 'relative', height: '460px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <FolderBrowserModal
+          :open="true"
+          :listing="galleryFolders"
+          start-in="clone"
+          cloning
+          clone-error="fatal: repository 'https://github.com/team/app.git/' not found"
+          @close="() => {}"
         />
       </div>
       <!-- A parked task on its way back to Ready. Both wordings are here, and
@@ -7380,6 +7432,34 @@ const menuTargetStyle = {
             :now="1_760_700_240_000"
             error="The desktop could not start the endpoint."
             relay-url="https://relay.example.org"
+          />
+        </div>
+        <div :style="{ width: '380px' }">
+          <ServerSettings
+            v-model:ticket="galleryServerTicket"
+            :connection="{ state: 'connected', server: { version: '0.1.0' } }"
+          />
+        </div>
+        <div :style="{ width: '380px' }">
+          <ServerSettings
+            ticket="smetana2:abcdefghijklmnopqrstuvwxyz"
+            :target="galleryRemoteTarget"
+            :connection="{ state: 'unpaired' }"
+            error="The server refused the pairing: that code has expired."
+          />
+        </div>
+        <div :style="{ width: '380px' }">
+          <ServerSettings
+            ticket="smetana2:abcdefghijklmnopqrstuvwxyz"
+            :connection="{ state: 'connected', server: { version: '0.1.0' } }"
+            :ask="galleryBusyWork"
+          />
+        </div>
+        <div :style="{ width: '380px' }">
+          <ServerSettings
+            ticket="smetana2:abcdefghijklmnopqrstuvwxyz"
+            :connection="{ state: 'connected', server: { version: '0.1.0' } }"
+            busy
           />
         </div>
         <!-- The Storage tab in the three states worth looking at: something to

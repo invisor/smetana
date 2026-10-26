@@ -8,6 +8,7 @@
 
 pub mod agents;
 pub mod attachments;
+pub mod client_files;
 pub mod files;
 pub mod git;
 pub mod runs;

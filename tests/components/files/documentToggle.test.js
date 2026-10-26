@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   TOGGLE_BOX,
   TOGGLE_INSET,
-  TOGGLE_LANE
+  TOGGLE_LANE,
+  toggleBox,
+  toggleLane
 } from '../../../src/components/files/documentToggle.js'
 
 /* The lane an html tab keeps clear for its eye/code toggle.
@@ -38,5 +40,17 @@ describe('the toggle lane', () => {
     for (const value of [TOGGLE_INSET, TOGGLE_BOX, TOGGLE_LANE]) {
       expect(value).not.toMatch(/\d+(px|rem|em)/)
     }
+  })
+})
+
+describe('a toggle with a second button', () => {
+  it('is the one-button lane when there is one, and wider by exactly a button when there are two', () => {
+    expect(toggleBox(1)).toBe(TOGGLE_BOX)
+    expect(toggleLane(1)).toBe(TOGGLE_LANE)
+    expect(toggleLane()).toBe(TOGGLE_LANE)
+    expect(toggleBox(2)).toContain('var(--control-h-sm) * 2')
+    expect(toggleLane(2)).toContain(toggleBox(2))
+    expect(toggleLane(2)).toContain(TOGGLE_INSET)
+    for (const value of [toggleBox(2), toggleLane(2)]) expect(value).not.toMatch(/\d+px|#[0-9a-f]{3,6}/i)
   })
 })

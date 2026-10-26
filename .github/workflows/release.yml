@@ -388,3 +388,98 @@ jobs:
               echo "::warning::Gatekeeper does not accept the disk image itself — the app inside is stapled and opens once dragged out, but the .dmg warns on the way. $(cat "$RUNNER_TEMP/dmg.txt" | tr '\n' ' ')"
             fi
           fi
+
+  # The headless server, one archive per platform, attached to the release the job above published.
+  # It is a plain `cargo build` of crates/smetanad (no Tauri, no webview, no signing identity: a
+  # tarball a person unpacks on a server), so it needs none of the secrets the bundle does and none
+  # of the matrix above - its own matrix is the platforms a server runs on, and each row builds for
+  # the runner's own architecture for the reason fetch-bd gives (it fetches `bd` for the host triple,
+  # and the archive carries that `bd` beside the server, where `smetanad run` looks for it first).
+  #
+  # `needs: release` is the ordering that matters: the release does not exist until tauri-action has
+  # made it, and `gh release upload` onto a tag with no release is an error. A failed row here leaves
+  # the app's release in place and the missing archive visible as missing, which is the right way
+  # round - the server is not the thing a desktop update depends on.
+  #
+  # Install instructions: server/smetanad/README.md, which is in every archive.
+  smetanad:
+    name: Server archive (${{ matrix.target }})
+    needs: release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - platform: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.platform }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the server
+        run: cargo build --release --manifest-path crates/smetanad/Cargo.toml --bin smetanad
+
+      # Only the script, not `npm ci`: it needs rustc and node and nothing from node_modules, and a
+      # server archive should not wait for the front end's dependencies. The failing form, for the
+      # reason the app's job gives: an archive without `bd` is a server that cannot do anything.
+      - name: Fetch the bd it drives
+        run: node scripts/fetch-bd.mjs
+
+      - name: Lay out and pack the archive
+        env:
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          name="smetanad-${version}-${TARGET}"
+          dir="dist-server/${name}"
+          exe=""
+          case "$TARGET" in *windows*) exe=".exe" ;; esac
+          mkdir -p "$dir"
+          cp "crates/smetanad/target/release/smetanad${exe}" "$dir/smetanad${exe}"
+          # fetch-bd lays bd out as src-tauri/binaries/bd-<host triple>[.exe]; the server looks for
+          # `bd` beside itself.
+          bd="$(ls src-tauri/binaries/bd-* | head -n 1)"
+          cp "$bd" "$dir/bd${exe}"
+          cp -R src-tauri/resources "$dir/resources"
+          cp LICENSE "$dir/LICENSE"
+          cp server/smetanad/README.md "$dir/README.md"
+          case "$TARGET" in *linux*) cp server/smetanad/smetanad.service "$dir/smetanad.service" ;; esac
+          cd dist-server
+          case "$TARGET" in
+            *windows*)
+              7z a -tzip "${name}.zip" "${name}" > /dev/null
+              archive="${name}.zip" ;;
+            *)
+              tar -czf "${name}.tar.gz" "${name}"
+              archive="${name}.tar.gz" ;;
+          esac
+          if command -v sha256sum > /dev/null; then sha256sum "$archive" > "${archive}.sha256"; else shasum -a 256 "$archive" > "${archive}.sha256"; fi
+          echo "ARCHIVE=dist-server/${archive}" >> "$GITHUB_ENV"
+          ls -l
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" "$ARCHIVE" "${ARCHIVE}.sha256" --clobber

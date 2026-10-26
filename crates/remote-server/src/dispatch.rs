@@ -206,6 +206,23 @@ impl Services {
             .ok_or_else(|| BridgeError::Handler(json!("this server cannot be restarted from a client")))
     }
 
+    /// Where `server_file_read` may read: the attachment store and the report folder of every
+    /// project the server's settings know. Read afresh at each call, so a project added a moment ago
+    /// counts and one removed does not.
+    fn artifact_roots(&self) -> crate::placement::ArtifactRoots {
+        let mut projects: Vec<PathBuf> = Vec::new();
+        if let Ok(path) = &self.settings_path {
+            let (settings, _) = crate::settings::file::load(path);
+            for project in settings.open_projects.iter().chain(settings.projects.keys()) {
+                let project = PathBuf::from(project);
+                if !projects.contains(&project) {
+                    projects.push(project);
+                }
+            }
+        }
+        crate::placement::ArtifactRoots { attachments: self.attachments_root.clone().ok(), projects }
+    }
+
     fn remote(&self) -> Result<std::sync::Arc<super::Remote>, BridgeError> {
         self.remote
             .as_ref()
@@ -465,12 +482,29 @@ calls! {
     ServerHealth = "server_health" {} => |s, c, a| plain(smetana_core::health::report(s.ctx()?).await);
     ServerRestart = "server_restart" { mode: super::gateway::Mode, confirmed: Option<Vec<super::gateway::LiveWork>> }
         => |s, c, a| plain(s.gateway()?.request(a.mode, a.confirmed).await);
+    ServerWork = "server_work" {} => |s, c, a| plain(s.gateway()?.live_work().await);
+
+    // --- a client that is not on this machine (protocol 1.11, `smetana_core::placement`)
+    FoldersList = "folders_list" { path: Option<String> } => |s, c, a| {
+        let root = crate::placement::browse_root()
+            .ok_or_else(|| BridgeError::Handler(json!("the server user has no home folder to browse from")))?;
+        answer(blocking(move || crate::placement::folders_list(&root, a.path.as_deref())).await?)
+    };
+    ProjectClone = "project_clone" { url: String, parent: String, name: Option<String> } => |s, c, a| {
+        let root = crate::placement::browse_root()
+            .ok_or_else(|| BridgeError::Handler(json!("the server user has no home folder to clone into")))?;
+        answer(crate::placement::project_clone(&root, a.url, a.parent, a.name).await)
+    };
+    ServerFileRead = "server_file_read" { path: String } => |s, c, a| {
+        let roots = s.artifact_roots();
+        answer(blocking(move || crate::placement::file_fetch(&roots, &a.path)).await?)
+    };
 }
 
 impl Dispatch for Services {
     fn serves(&self, cmd: &str) -> bool {
         match cmd {
-            "server_restart" | "server:restart-deferred" => self.gateway.is_some(),
+            "server_restart" | "server_work" | "server:restart-deferred" => self.gateway.is_some(),
             "server_health" => self.ctx.is_some(),
             _ => true,
         }

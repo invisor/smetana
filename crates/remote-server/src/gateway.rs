@@ -89,7 +89,17 @@ pub const WORK_COMMANDS: &[&str] = &["terminal_create", "terminal_shell", "sessi
 pub enum Mode {
     Now,
     WhenIdle,
+    /// Like `WhenIdle`, but the server ends instead of restarting: a client that has moved to another
+    /// server asks the one it leaves to go once its work is done (protocol 1.11).
+    StopWhenIdle,
     Cancel,
+}
+
+/// What the gateway does when its conditions are met.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Action {
+    Restart,
+    Stop,
 }
 
 /// What happened to the request.
@@ -98,6 +108,8 @@ pub enum Mode {
 pub enum Outcome {
     /// The server is restarting; the connection is about to close.
     Restarting,
+    /// `stop-when-idle` with nothing alive: the server is ending and will not come back.
+    Stopping,
     /// Armed: it restarts when no work is alive. `work` is what it is waiting for.
     Scheduled,
     /// Work is alive and the request was not confirmed. Nothing was done; `work` is the list to show.
@@ -125,6 +137,7 @@ pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 pub struct Gateway {
     list: Box<dyn Fn() -> BoxFuture<Vec<LiveWork>> + Send + Sync>,
     restart: Arc<dyn Fn() + Send + Sync>,
+    stop: Arc<dyn Fn() + Send + Sync>,
     deferred: Arc<dyn Fn(&[LiveWork]) + Send + Sync>,
     poll: Duration,
     control: Mutex<Control>,
@@ -176,12 +189,14 @@ impl Gateway {
     pub fn new(
         list: Box<dyn Fn() -> BoxFuture<Vec<LiveWork>> + Send + Sync>,
         restart: Arc<dyn Fn() + Send + Sync>,
+        stop: Arc<dyn Fn() + Send + Sync>,
         deferred: Arc<dyn Fn(&[LiveWork]) + Send + Sync>,
         poll: Duration,
     ) -> Arc<Self> {
         Arc::new(Self {
             list,
             restart,
+            stop,
             deferred,
             poll,
             control: Mutex::new(Control { epoch: 0, phase: Phase::Idle, task: None }),
@@ -244,7 +259,7 @@ impl Gateway {
     /// Arms the `when-idle` watch for `epoch`. `force` replaces the pending restart, for the restart
     /// that has just found work again. Nothing is armed if a cancel has moved the epoch since, or the
     /// restart is committed.
-    fn arm(self: &Arc<Self>, force: bool, epoch: u64) {
+    fn arm(self: &Arc<Self>, force: bool, epoch: u64, action: Action) {
         let mut control = self.lock();
         if control.epoch != epoch || control.phase == Phase::Committed {
             return;
@@ -260,7 +275,7 @@ impl Gateway {
                     return;
                 }
                 if gateway.live_work().await.is_empty() {
-                    gateway.fire(Vec::new(), epoch);
+                    gateway.fire(Vec::new(), epoch, action);
                     return;
                 }
             }
@@ -278,7 +293,7 @@ impl Gateway {
     /// happen; it becomes a `when-idle` one, and the clients are told (`DEFERRED_EVENT`). The task is the
     /// pending restart, so `cancel` stops it, and every step that changes anything checks the epoch it
     /// began under, under the lock the cancel takes.
-    fn fire(self: &Arc<Self>, covered: Vec<LiveWork>, epoch: u64) {
+    fn fire(self: &Arc<Self>, covered: Vec<LiveWork>, epoch: u64, action: Action) {
         let mut control = self.lock();
         if control.epoch != epoch || control.phase == Phase::Committed {
             return;
@@ -303,9 +318,12 @@ impl Gateway {
                 }
                 log::warn!("restart: work started after the answer was given; waiting for it instead");
                 (gateway.deferred)(&now);
-                gateway.arm(true, epoch);
+                gateway.arm(true, epoch, action);
             } else if gateway.commit(epoch) {
-                (gateway.restart)();
+                match action {
+                    Action::Restart => (gateway.restart)(),
+                    Action::Stop => (gateway.stop)(),
+                }
             }
         });
         if let Some(old) = control.task.replace(task) {
@@ -341,7 +359,7 @@ impl Gateway {
                 // Covered: everything alive now is something the person has seen and said yes to.
                 let covered = confirmed.unwrap_or_default();
                 if work.iter().all(|item| item.is_covered_by(&covered)) {
-                    self.fire(covered, epoch);
+                    self.fire(covered, epoch, Action::Restart);
                     Reply { outcome: Outcome::Restarting, scheduled: self.scheduled(), work }
                 } else {
                     Reply { outcome: Outcome::NeedsConfirmation, scheduled: self.scheduled(), work }
@@ -349,10 +367,19 @@ impl Gateway {
             }
             Mode::WhenIdle => {
                 if work.is_empty() {
-                    self.fire(Vec::new(), epoch);
+                    self.fire(Vec::new(), epoch, Action::Restart);
                     return Reply { outcome: Outcome::Restarting, scheduled: false, work };
                 }
-                self.arm(false, epoch);
+                self.arm(false, epoch, Action::Restart);
+                Reply { outcome: Outcome::Scheduled, scheduled: true, work }
+            }
+            Mode::StopWhenIdle => {
+                if work.is_empty() {
+                    self.fire(Vec::new(), epoch, Action::Stop);
+                    return Reply { outcome: Outcome::Stopping, scheduled: false, work };
+                }
+                // A stop replaces a restart that was waiting: the person's last word wins.
+                self.arm(true, epoch, Action::Stop);
                 Reply { outcome: Outcome::Scheduled, scheduled: true, work }
             }
             Mode::Cancel => unreachable!("handled above"),
@@ -373,6 +400,7 @@ mod tests {
         gateway: Arc<Gateway>,
         alive: Arc<Mutex<Vec<LiveWork>>>,
         restarts: Arc<AtomicUsize>,
+        stops: Arc<AtomicUsize>,
         deferred: Arc<AtomicUsize>,
     }
 
@@ -380,7 +408,8 @@ mod tests {
         let alive = Arc::new(Mutex::new(initial));
         let restarts = Arc::new(AtomicUsize::new(0));
         let deferred = Arc::new(AtomicUsize::new(0));
-        let (list, count, told) = (alive.clone(), restarts.clone(), deferred.clone());
+        let stop_count = Arc::new(AtomicUsize::new(0));
+        let (list, count, told, stops) = (alive.clone(), restarts.clone(), deferred.clone(), stop_count.clone());
         let gateway = Gateway::new(
             Box::new(move || {
                 let list = list.clone();
@@ -389,12 +418,15 @@ mod tests {
             Arc::new(move || {
                 count.fetch_add(1, Ordering::SeqCst);
             }),
+            Arc::new(move || {
+                stops.fetch_add(1, Ordering::SeqCst);
+            }),
             Arc::new(move |_| {
                 told.fetch_add(1, Ordering::SeqCst);
             }),
             Duration::from_millis(50),
         );
-        Rig { gateway, alive, restarts, deferred }
+        Rig { gateway, alive, restarts, stops: stop_count, deferred }
     }
 
     #[tokio::test(start_paused = true)]
@@ -578,12 +610,13 @@ mod tests {
             Arc::new(move || {
                 count.fetch_add(1, Ordering::SeqCst);
             }),
+            Arc::new(|| {}),
             Arc::new(move |_| {
                 deferred.fetch_add(1, Ordering::SeqCst);
             }),
             Duration::from_secs(3600),
         );
-        Rig { gateway, alive: rig.alive, restarts, deferred: told }
+        Rig { gateway, alive: rig.alive, restarts, stops: rig.stops.clone(), deferred: told }
     }
 
     #[tokio::test(start_paused = true)]
@@ -630,6 +663,7 @@ mod tests {
             Arc::new(move || {
                 count.fetch_add(1, Ordering::SeqCst);
             }),
+            Arc::new(|| {}),
             Arc::new(|_| {}),
             Duration::from_secs(3600),
         );
@@ -691,4 +725,47 @@ mod tests {
         tokio::time::sleep(REPLY_GRACE * 2).await;
         assert_eq!(rig.restarts.load(Ordering::SeqCst), 1);
     }
+    #[tokio::test(start_paused = true)]
+    async fn stop_when_idle_waits_for_the_work_and_then_stops_without_restarting() {
+        let rig = rig(vec![work()]);
+        let reply = rig.gateway.request(Mode::StopWhenIdle, None).await;
+        assert_eq!((reply.outcome, reply.scheduled), (Outcome::Scheduled, true));
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        assert_eq!(rig.stops.load(Ordering::SeqCst), 0, "still busy: nothing is ended");
+        rig.alive.lock().unwrap().clear();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(rig.stops.load(Ordering::SeqCst), 1);
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 0, "a stop is not a restart");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stop_when_idle_with_nothing_alive_stops_after_the_reply_has_left() {
+        let rig = rig(Vec::new());
+        let reply = rig.gateway.request(Mode::StopWhenIdle, None).await;
+        assert_eq!(reply.outcome, Outcome::Stopping);
+        assert_eq!(rig.stops.load(Ordering::SeqCst), 0, "the reply goes first");
+        tokio::time::sleep(REPLY_GRACE * 2).await;
+        assert_eq!(rig.stops.load(Ordering::SeqCst), 1);
+        assert_eq!(rig.restarts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_replaces_a_waiting_restart_and_can_be_withdrawn() {
+        let rig = rig(vec![work()]);
+        rig.gateway.request(Mode::WhenIdle, None).await;
+        rig.gateway.request(Mode::StopWhenIdle, None).await;
+        let reply = rig.gateway.request(Mode::Cancel, None).await;
+        assert_eq!(reply.outcome, Outcome::Cancelled);
+        rig.alive.lock().unwrap().clear();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!((rig.stops.load(Ordering::SeqCst), rig.restarts.load(Ordering::SeqCst)), (0, 0));
+        // And without the withdrawal the stop is what runs, not the restart it replaced.
+        let rig = self::rig(vec![work()]);
+        rig.gateway.request(Mode::WhenIdle, None).await;
+        rig.gateway.request(Mode::StopWhenIdle, None).await;
+        rig.alive.lock().unwrap().clear();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!((rig.stops.load(Ordering::SeqCst), rig.restarts.load(Ordering::SeqCst)), (1, 0));
+    }
+
 }

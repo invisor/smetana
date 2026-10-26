@@ -174,6 +174,8 @@ pub struct Server {
     terminal: TerminalHandle,
     sessions: SessionHandle,
     restart: Arc<Notify>,
+    /// The gateway asked for the server to end (`server_restart` with `stop-when-idle`).
+    stop: Arc<Notify>,
     _lock: std::fs::File,
 }
 
@@ -355,9 +357,11 @@ impl Server {
         let _ = sink.remote.set(Arc::downgrade(&remote));
 
         let restart = Arc::new(Notify::new());
+        let stop = Arc::new(Notify::new());
         let gateway = {
             let (runs, terminal, sessions) = (runs.clone(), terminal.clone(), sessions.clone());
             let wake = restart.clone();
+            let ending = stop.clone();
             let told = Arc::downgrade(&remote);
             Gateway::new(
                 Box::new(move || {
@@ -365,6 +369,7 @@ impl Server {
                     Box::pin(async move { live_work(&runs, &terminal, &sessions).await })
                 }),
                 Arc::new(move || wake.notify_one()),
+                Arc::new(move || ending.notify_one()),
                 Arc::new(move |work| {
                     if let Some(remote) = told.upgrade() {
                         remote.hub.publish(DEFERRED_EVENT, &deferred_payload(work));
@@ -402,7 +407,7 @@ impl Server {
             }
         }
         log::info!("serving {} as {}", data_dir.display(), remote.public_key());
-        Ok(Server { remote, gateway, data_dir, addr, terminal, sessions, restart, _lock: lock })
+        Ok(Server { remote, gateway, data_dir, addr, terminal, sessions, restart, stop, _lock: lock })
     }
 
     /// Resolves when the operator stops the server or the gateway restarts it.
@@ -411,12 +416,15 @@ impl Server {
         {
             use tokio::signal::unix::{signal, SignalKind};
             let (Ok(mut term), Ok(mut int)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) else {
-                self.restart.notified().await;
-                return Exit::Restart;
+                tokio::select! {
+                    _ = self.restart.notified() => return Exit::Restart,
+                    _ = self.stop.notified() => return Exit::Stop,
+                }
             };
             tokio::select! {
                 _ = term.recv() => Exit::Stop,
                 _ = int.recv() => Exit::Stop,
+                _ = self.stop.notified() => Exit::Stop,
                 _ = self.restart.notified() => Exit::Restart,
             }
         }
@@ -424,6 +432,7 @@ impl Server {
         {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => Exit::Stop,
+                _ = self.stop.notified() => Exit::Stop,
                 _ = self.restart.notified() => Exit::Restart,
             }
         }

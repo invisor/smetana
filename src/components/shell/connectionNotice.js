@@ -47,7 +47,12 @@ export function connectionNotice(connection) {
         tone: 'wait',
         icon: 'loader-circle',
         title: 'Connecting to the server',
-        detail: withReason('Starting it if it is not running.', connection.reason),
+        // A server on another machine is not started by this app, so the sentence about starting it
+        // would be false there.
+        detail: withReason(
+          connection.local === false ? 'Reaching the server you chose in Settings.' : 'Starting it if it is not running.',
+          connection.reason
+        ),
         canRetry: true,
         restart: null
       }
@@ -74,7 +79,12 @@ export function connectionNotice(connection) {
         tone: 'blocked',
         icon: 'triangle-alert',
         title: 'This app is not paired with the server',
-        detail: withReason(STALE_NOTE, connection.reason),
+        detail: withReason(
+          connection.local === false
+            ? `${STALE_NOTE} Pair again with a new code: Settings, Server.`
+            : STALE_NOTE,
+          connection.reason
+        ),
         canRetry: true,
         restart: null
       }

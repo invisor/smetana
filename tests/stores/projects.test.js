@@ -651,3 +651,225 @@ describe('a project switched on the phone', () => {
   })
 })
 
+
+describe('adding a project on a server that is not on this machine', () => {
+  it('adds a folder the server browser chose without opening the operating system panel', async () => {
+    const added = await projects.addProjectAt('/home/dev/app')
+
+    expect(added).toBe('/home/dev/app')
+    expect(settings.settings.openProjects).toEqual(['/home/dev/app'])
+    expect(settings.settings.activeProject).toBe('/home/dev/app')
+    expect(ipc.calls('plugin:dialog|open')).toHaveLength(0)
+    expect(ipc.calls('project_root')).toEqual([{ path: '/home/dev/app' }])
+  })
+
+  it('lists folders by the path the server gave and passes the root as null', async () => {
+    const listing = { root: '/home/dev', path: '/home/dev', parent: null, entries: [], truncated: false }
+    ipc.on('folders_list', listing)
+
+    expect(await projects.listServerFolders()).toBe(listing)
+    await projects.listServerFolders('/home/dev/app')
+
+    expect(ipc.calls('folders_list')).toEqual([{ path: null }, { path: '/home/dev/app' }])
+  })
+
+  it('says what the server refused a folder with', async () => {
+    ipc.on('folders_list', () => {
+      throw { kind: 'outside', message: '/etc is outside the folders this server lets a client reach' }
+    })
+
+    await expect(projects.listServerFolders('/etc')).rejects.toThrow(/outside the folders/)
+  })
+
+  it('clones into the folder it was given and answers the new path', async () => {
+    ipc.on('project_clone', { path: '/home/dev/app' })
+
+    const path = await projects.cloneOnServer({ url: 'https://host/team/app.git', parent: '/home/dev' })
+
+    expect(path).toBe('/home/dev/app')
+    expect(ipc.calls('project_clone')).toEqual([{ url: 'https://host/team/app.git', parent: '/home/dev', name: null }])
+  })
+
+  it('shows a failed clone in git\'s own words', async () => {
+    ipc.on('project_clone', () => {
+      throw { kind: 'clone', message: 'fatal: repository not found' }
+    })
+
+    await expect(
+      projects.cloneOnServer({ url: 'https://host/x.git', parent: '/home/dev', name: 'x' })
+    ).rejects.toThrow('fatal: repository not found')
+  })
+})
+
+describe('moving to another server', () => {
+  const state = (over) => ({ mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local', ...over })
+
+  async function onLocalServer() {
+    const loaded = await loadStores()
+    const { ipc, emit, stores } = loaded
+    ipc.on('connection_state', state())
+    ipc.on('settings_load', ({ project }) => ({
+      ...stores.settings.defaults(),
+      openProjects: ['/Users/me/work'],
+      activeProject: '/Users/me/work',
+      lastProject: '/Users/me/work',
+      project: { runSettings: null }
+    }))
+    ipc.on('device_settings_load', {})
+    ipc.on('device_settings_save', null)
+    ipc.on('settings_patch', null)
+    ipc.on('project_root', (args) => args.path)
+    ipc.on('files_list', (args) => listing({ dir: args.dir }))
+    ipc.on('tracker_set_project', snapshot())
+    ipc.on('tracker_snapshot', snapshot())
+    ipc.on('tracker_probe', (args) => args.paths.map((path) => ({ path, tracked: true })))
+    ipc.on('terminal_list', [])
+    ipc.on('terminal_restorable', [])
+    await stores.settings.loadSettings()
+    await stores.connection.initConnection()
+    return { ...loaded }
+  }
+
+  const settled = async (loaded) => {
+    for (let i = 0; i < 20; i++) await loaded.nextTick()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await loaded.stores.settings.flushPending()
+  }
+
+  it('takes the new server\'s project list and open project, and sends it nothing of this machine\'s', async () => {
+    const loaded = await onLocalServer()
+    const { ipc, emit, stores } = loaded
+    expect(stores.settings.settings.activeProject).toBe('/Users/me/work')
+
+    // The person chooses a server on another machine; it has its own projects.
+    ipc.on('settings_load', () => ({
+      ...stores.settings.defaults(),
+      agent: 'codex',
+      openProjects: ['/home/dev/app'],
+      activeProject: '/home/dev/app',
+      lastProject: '/home/dev/app',
+      project: { runSettings: null }
+    }))
+    await emit('connection:state', state({ epoch: 2, local: false, target: 'node-vps' }))
+    await settled(loaded)
+
+    expect(stores.settings.settings.openProjects).toEqual(['/home/dev/app'])
+    expect(stores.settings.settings.activeProject).toBe('/home/dev/app')
+    expect(stores.settings.settings.agent).toBe('codex')
+    expect(ipc.calls('tracker_set_project')).toEqual([{ path: '/home/dev/app' }])
+    // Nothing of this machine's - a project path, a setting - was sent to the server, before or after.
+    expect(ipc.calls('settings_patch')).toEqual([])
+    expect(JSON.stringify(ipc.calls('settings_patch'))).not.toContain('/Users/me')
+  })
+
+  it('shows the empty state when the new server has no project open', async () => {
+    const loaded = await onLocalServer()
+    const { ipc, emit, stores } = loaded
+    ipc.on('settings_load', () => ({ ...stores.settings.defaults(), openProjects: [], activeProject: null }))
+    await emit('connection:state', state({ epoch: 2, local: false, target: 'node-vps' }))
+    await settled(loaded)
+
+    expect(stores.settings.settings.activeProject).toBeNull()
+    expect(stores.settings.settings.openProjects).toEqual([])
+    expect(ipc.calls('settings_patch')).toEqual([])
+  })
+
+  it('does nothing of the kind when the same server reconnects', async () => {
+    const loaded = await onLocalServer()
+    const { ipc, emit, stores } = loaded
+    ipc.on('settings_load', () => ({ ...stores.settings.defaults(), openProjects: ['/elsewhere'], activeProject: '/elsewhere' }))
+    await emit('connection:state', state({ epoch: 2 }))
+    await settled(loaded)
+
+    expect(ipc.calls('tracker_set_project')).toEqual([])
+    expect(stores.settings.settings.activeProject).toBe('/Users/me/work')
+  })
+})
+
+describe('choosing another server with unsaved edits open', () => {
+  const dirty = (tabs, settingsStore) => {
+    settingsStore.settings.project.openTabs = ['a.txt']
+    tabs.buffers.set('a.txt', buffer({ text: 'an unsaved edit' }))
+  }
+
+  it('asks first, saves to the server still connected, and only then asks the shell to move', async () => {
+    const loaded = await loadStores()
+    const { ipc: io, stores } = loaded
+    const order = []
+    io.on('connection_state', { mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local' })
+    io.on('settings_load', stores.settings.defaults())
+    io.on('device_settings_load', {})
+    io.on('device_settings_save', null)
+    io.on('settings_patch', null)
+    io.on('server_use_remote', () => {
+      order.push('moved')
+      return { target: { kind: 'remote' }, localStop: null }
+    })
+    await stores.settings.loadSettings()
+    dirty(stores.tabs, stores.settings)
+    stores.tabs.onUnsaved(async (paths) => {
+      order.push(`asked ${paths.join(',')}`)
+      // "Save" in the app window's dialog: written to the server this window is still connected to.
+      order.push('saved')
+      stores.tabs.discardTabs(paths)
+      return true
+    })
+
+    const answer = await stores.projects.switchServer({ kind: 'remote', ticket: 'smetana2:abc', stopLocal: false })
+
+    expect(order).toEqual(['asked a.txt', 'saved', 'moved'])
+    expect(answer.localStop).toBe(null)
+    expect(io.calls('server_use_remote')).toEqual([{ ticket: 'smetana2:abc', stopLocal: false }])
+  })
+
+  it('leaves the device where it was when the person keeps their edits', async () => {
+    const loaded = await loadStores()
+    const { ipc: io, stores } = loaded
+    io.on('connection_state', { mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local' })
+    io.on('settings_load', stores.settings.defaults())
+    io.on('device_settings_load', {})
+    io.on('device_settings_save', null)
+    io.on('server_use_remote', null)
+    io.on('server_use_local', null)
+    await stores.settings.loadSettings()
+    dirty(stores.tabs, stores.settings)
+    stores.tabs.onUnsaved(async () => false)
+
+    expect(await stores.projects.switchServer({ kind: 'remote', ticket: 'smetana2:abc' })).toEqual({ cancelled: true })
+    expect(await stores.projects.switchServer({ kind: 'local' })).toEqual({ cancelled: true })
+    expect(io.calls('server_use_remote')).toHaveLength(0)
+    expect(io.calls('server_use_local')).toHaveLength(0)
+    expect(stores.tabs.isDirty('a.txt')).toBe(true)
+  })
+
+  it('refuses while a project move is under way, and a refusal by the shell changes nothing', async () => {
+    const loaded = await loadStores()
+    const { ipc: io, stores } = loaded
+    io.on('connection_state', { mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local' })
+    io.on('settings_load', stores.settings.defaults())
+    io.on('device_settings_load', {})
+    io.on('device_settings_save', null)
+    io.fail('server_use_remote', 'the server refused the pairing: This code has expired.')
+    await stores.settings.loadSettings()
+    await expect(stores.projects.switchServer({ kind: 'remote', ticket: 'smetana2:abc' })).rejects.toThrow(/expired/)
+  })
+
+  it('says loudly that edits were dropped when the server changed without the guarded road', async () => {
+    const loaded = await loadStores()
+    const { ipc: io, emit, stores } = loaded
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    io.on('connection_state', { mode: 'split', state: 'connected', epoch: 1, local: true, target: 'local' })
+    io.on('settings_load', { ...stores.settings.defaults(), openProjects: [], activeProject: null })
+    io.on('device_settings_load', {})
+    io.on('device_settings_save', null)
+    await stores.settings.loadSettings()
+    await stores.connection.initConnection()
+    dirty(stores.tabs, stores.settings)
+
+    await emit('connection:state', { mode: 'split', state: 'connected', epoch: 2, local: false, target: 'node-vps' })
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(error.mock.calls.some((call) => String(call[0]).includes('unsaved edits'))).toBe(true)
+    error.mockRestore()
+  })
+})

@@ -16,11 +16,12 @@ use std::time::Duration;
 
 use remote_protocol::{BridgeError, CLOSE_PROTOCOL, CLOSE_UNKNOWN, CLOSE_VERSION};
 use serde_json::{json, Value};
-use smetanad::client::{Client, ClientError, CLOSED_BEFORE_REPLY, SEND_FAILED};
+use smetanad::client::{Client, ClientError, RemoteRecord, CLOSED_BEFORE_REPLY, SEND_FAILED};
 use smetanad::server;
 use tokio::sync::{watch, Notify};
 
 use super::spawn::{self, Config};
+use super::target::Target;
 use super::state::{
     Backoff, Outdated, Phase, ServerInfo, View, FIRST_CONNECTION_WAIT, SLOW_POLL, STATE_EVENT,
 };
@@ -36,6 +37,12 @@ struct Inner {
 pub struct Link {
     sink: Sink,
     inner: Mutex<Inner>,
+    /// Which server this device uses. Changed only by [`Link::set_target`], which also moves
+    /// `generation`: the connection loop compares it to know that the one it holds is the old choice.
+    target: Mutex<Target>,
+    generation: std::sync::atomic::AtomicU64,
+    /// Told when the target changes, so a connected loop does not sit on the server that was left.
+    retarget: Notify,
     /// Bumped on every change of the view, so a call waiting for the first connection wakes.
     changed: watch::Sender<u64>,
     /// A person pressed retry: the supervisor stops waiting and tries now.
@@ -43,10 +50,21 @@ pub struct Link {
 }
 
 impl Link {
+    #[cfg(test)]
     pub fn new(sink: Sink, local: bool) -> Arc<Link> {
+        Self::with_target(sink, if local { Target::Local } else { Target::Remote { node: String::new(), relay: String::new() } })
+    }
+
+    pub fn with_target(sink: Sink, target: Target) -> Arc<Link> {
         Arc::new(Link {
             sink,
-            inner: Mutex::new(Inner { view: View::new(local), client: None }),
+            inner: Mutex::new(Inner {
+                view: View { target: target.id(), ..View::new(target.is_local()) },
+                client: None,
+            }),
+            target: Mutex::new(target),
+            generation: std::sync::atomic::AtomicU64::new(0),
+            retarget: Notify::new(),
             changed: watch::channel(0).0,
             wake: Notify::new(),
         })
@@ -58,6 +76,42 @@ impl Link {
 
     pub fn view(&self) -> View {
         self.lock().view.clone()
+    }
+
+    pub fn target(&self) -> Target {
+        self.target.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Moves this device to another server. The connection to the one it leaves is dropped by the
+    /// loop that holds it (the server itself is not touched: a local one keeps running), and the
+    /// view goes back to "connecting" for the new one with its connection count kept, so the stores
+    /// read their snapshots again when it is up.
+    pub fn set_target(&self, target: Target) {
+        {
+            let mut held = self.target.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if *held == target {
+                return;
+            }
+            *held = target.clone();
+        }
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.update(|inner| {
+            inner.client = None;
+            let view = &mut inner.view;
+            view.local = target.is_local();
+            view.target = target.id();
+            view.state = Phase::Connecting;
+            view.attempt = 0;
+            view.reason = Some("switching server".to_owned());
+            view.server = None;
+            view.outdated = None;
+        });
+        self.retarget.notify_one();
+        self.wake.notify_one();
     }
 
     /// Changes the view and tells the webview. The event carries the whole view, never a diff.
@@ -269,6 +323,125 @@ enum Attempt {
 }
 
 async fn attempt(link: &Arc<Link>, config: &Config, restarted_from: &mut Option<String>) -> Attempt {
+    let generation = link.generation();
+    match link.target() {
+        Target::Local => attempt_local(link, config, restarted_from, generation).await,
+        Target::Remote { node, relay } => attempt_remote(link, config, RemoteRecord { node, relay }, generation).await,
+    }
+}
+
+/// Subscribes to the events a server advertises. Attaching to a terminal is its own subscription
+/// (`terminal_attach`), and `terminal:log` follows it, so neither is asked for here.
+async fn listen_to_all(client: &Client) -> Result<(), Failure> {
+    for name in client.hello.capabilities.iter().filter(|name| name.contains(':')) {
+        if matches!(name.as_str(), "terminal:output" | "terminal:log") {
+            continue;
+        }
+        if let Err(err) = client.listen(name).await {
+            client.close();
+            return Err(Failure::Transient(err.to_string()));
+        }
+    }
+    Ok(())
+}
+
+/// Holds a connection: re-emits the server's events until it ends, the target changes, or (for the
+/// server this app started) the server's lock is released. Answers why it ended, and whether it
+/// ended because the person chose another server.
+async fn hold(
+    link: &Arc<Link>,
+    client: &Arc<Client>,
+    mut events: tokio::sync::mpsc::UnboundedReceiver<(String, Value)>,
+    generation: u64,
+    owned_dir: Option<&std::path::Path>,
+) -> (&'static str, bool) {
+    let mut watch_owner = tokio::time::interval(Duration::from_secs(1));
+    loop {
+        tokio::select! {
+            event = events.recv() => match event {
+                Some((name, payload)) => (link.sink)(&name, payload),
+                None => return ("the connection to the server ended", false),
+            },
+            // A server killed without a goodbye is noticed by the transport only after its idle
+            // timeout; its lock is released at once.
+            _ = watch_owner.tick() => {
+                if link.generation() != generation {
+                    client.close();
+                    return ("switching server", true);
+                }
+                if let Some(dir) = owned_dir {
+                    if !server::is_owned(dir) {
+                        return ("the server stopped", false);
+                    }
+                }
+            }
+            _ = link.retarget.notified() => {
+                if link.generation() != generation {
+                    client.close();
+                    return ("switching server", true);
+                }
+            }
+        }
+    }
+}
+
+/// A server somewhere else. Its updates are its operator's, so none of the lock-step the local
+/// server gets applies: a different major is the only mismatch that stops anything, and the reason
+/// says which side to update.
+async fn attempt_remote(link: &Arc<Link>, config: &Config, record: RemoteRecord, generation: u64) -> Attempt {
+    let mut client = match Client::connect_remote(&config.identity_dir, &record).await {
+        Ok(client) => client,
+        Err(err) => return Attempt::Failed(classify(err)),
+    };
+    let hello = client.hello.clone();
+    let info = ServerInfo {
+        version: hello.app_version.clone(),
+        protocol_major: hello.protocol_major,
+        protocol_minor: hello.protocol_minor,
+    };
+    if hello.protocol_major != remote_server::PROTOCOL_MAJOR {
+        client.close();
+        return Attempt::Failed(Failure::Incompatible(remote_incompatible_reason(&info), Some(info)));
+    }
+    let Some(events) = client.take_events() else {
+        return Attempt::Failed(Failure::Transient("the connection has no event stream".to_owned()));
+    };
+    let client = Arc::new(client);
+    if let Err(failure) = listen_to_all(&client).await {
+        return Attempt::Failed(failure);
+    }
+    // The person may have chosen another server while this one was being reached.
+    if link.generation() != generation {
+        client.close();
+        return Attempt::Ended;
+    }
+    link.connected(client.clone(), info, None);
+    let (why, switched) = hold(link, &client, events, generation, None).await;
+    if !switched {
+        link.lost(why);
+    }
+    client.close();
+    Attempt::Ended
+}
+
+/// What a remote server of another major is told: which side is older cannot be known from a number
+/// alone, but the numbers are, so they are named.
+fn remote_incompatible_reason(server: &ServerInfo) -> String {
+    let ours = remote_server::PROTOCOL_MAJOR;
+    let which = if server.protocol_major < ours {
+        "update smetanad on the server"
+    } else {
+        "update this app"
+    };
+    format!("the server speaks protocol {}, this app {ours}; {which}", server.protocol_major)
+}
+
+async fn attempt_local(
+    link: &Arc<Link>,
+    config: &Config,
+    restarted_from: &mut Option<String>,
+    generation: u64,
+) -> Attempt {
     {
         let config = config.clone();
         match tokio::task::spawn_blocking(move || spawn::ensure(&config)).await {
@@ -292,20 +465,12 @@ async fn attempt(link: &Arc<Link>, config: &Config, restarted_from: &mut Option<
         let reason = incompatible_reason(&info, config);
         return Attempt::Failed(Failure::Incompatible(reason, Some(info)));
     }
-    let Some(mut events) = client.take_events() else {
+    let Some(events) = client.take_events() else {
         return Attempt::Failed(Failure::Transient("the connection has no event stream".to_owned()));
     };
     let client = Arc::new(client);
-    // Attaching to a terminal is its own subscription (`terminal_attach`), and `terminal:log` follows
-    // it, so neither is asked for here.
-    for name in hello.capabilities.iter().filter(|name| name.contains(':')) {
-        if matches!(name.as_str(), "terminal:output" | "terminal:log") {
-            continue;
-        }
-        if let Err(err) = client.listen(name).await {
-            client.close();
-            return Attempt::Failed(Failure::Transient(err.to_string()));
-        }
+    if let Err(failure) = listen_to_all(&client).await {
+        return Attempt::Failed(failure);
     }
     let mut outdated = None;
     if newer(&hello.app_version, smetanad::VERSION) {
@@ -333,24 +498,15 @@ async fn attempt(link: &Arc<Link>, config: &Config, restarted_from: &mut Option<
     if let Some(path) = &config.settings {
         super::migrate::run(&client, path).await;
     }
+    if link.generation() != generation {
+        client.close();
+        return Attempt::Ended;
+    }
     link.connected(client.clone(), info, outdated);
-    let mut watch_owner = tokio::time::interval(Duration::from_secs(1));
-    let why = loop {
-        tokio::select! {
-            event = events.recv() => match event {
-                Some((name, payload)) => (link.sink)(&name, payload),
-                None => break "the connection to the server ended",
-            },
-            // A server killed without a goodbye is noticed by the transport only after its idle
-            // timeout; its lock is released at once.
-            _ = watch_owner.tick() => {
-                if !server::is_owned(&config.server_dir) {
-                    break "the server stopped";
-                }
-            }
-        }
-    };
-    link.lost(why);
+    let (why, switched) = hold(link, &client, events, generation, Some(&config.server_dir)).await;
+    if !switched {
+        link.lost(why);
+    }
     client.close();
     Attempt::Ended
 }
@@ -590,6 +746,62 @@ mod tests {
                 .map(|(_, payload)| payload["state"].as_str().unwrap().to_owned())
                 .collect();
             assert!(states.contains(&"connected".to_owned()) && states.contains(&"reconnecting".to_owned()), "{states:?}");
+
+            supervisor.abort();
+            server.shutdown().await;
+        });
+    }
+
+    #[test]
+    fn choosing_a_remote_server_leaves_the_local_one_running_and_unrestarted_and_going_back_reconnects() {
+        block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let server = start_server(dir.path()).await;
+            let server_dir = dir.path().join("server");
+            let link = Link::new(Arc::new(|_, _| {}), true);
+            let config = Config {
+                server_dir: server_dir.clone(),
+                identity_dir: dir.path().to_owned(),
+                // No executable: a start of the local server would fail with "not in this build",
+                // which is how this test sees that none was attempted.
+                exe: None,
+                bd: None,
+                resource_dir: None,
+                log: dir.path().join("smetanad.log"),
+                settings: None,
+            };
+            let supervisor = tokio::spawn(supervise(link.clone(), config));
+            link.call("terminal_list", json!({ "project": "/tmp/none" })).await.unwrap();
+            assert!(link.view().local);
+
+            // To a server that cannot be dialled (a damaged record): the old connection is let go of,
+            // the view says it is another server, and nothing about the local one changed.
+            link.set_target(Target::Remote { node: "garbage".into(), relay: "https://relay.example.com".into() });
+            assert!(!link.view().local);
+            assert_eq!(link.view().target, "garbage", "the view says which server, so the front end can tell it changed");
+            until("the connection to the old server to be dropped", || link.view().state != Phase::Connected).await;
+            assert!(smetanad::server::is_owned(&server_dir), "the local server was not touched");
+            let refused = link.call("tracker_update", json!({ "id": "x", "patch": {} })).await.unwrap_err();
+            assert!(refused.as_str().unwrap().contains("Nothing was changed"), "{refused}");
+
+            // While the choice is remote the local server is not started again, even when it is gone.
+            server.shutdown().await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let reason = link.view().reason.unwrap_or_default();
+            assert!(!reason.contains("not in this build"), "a start of the local server was attempted: {reason}");
+            assert!(reason.contains("key"), "the failure is about the remote record: {reason}");
+
+            // Back to the local one: it is found again (here, started by the test) and the epoch moves.
+            let server = start_server(dir.path()).await;
+            link.set_target(Target::Local);
+            assert!(link.view().local);
+            until("the link to reconnect to the local server", || link.view().state == Phase::Connected).await;
+            assert_eq!(link.view().epoch, 2, "a new connection is a new epoch, which is what resyncs the stores");
+
+            // Setting the target it already has changes nothing.
+            let epoch = link.view().epoch;
+            link.set_target(Target::Local);
+            assert_eq!((link.view().state, link.view().epoch), (Phase::Connected, epoch));
 
             supervisor.abort();
             server.shutdown().await;

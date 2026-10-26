@@ -33,7 +33,7 @@
    load may have waited the shell's grace out and failed. */
 import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { emit, listen } from '@tauri-apps/api/event'
 
 /* `src-tauri/src/split/state.rs`'s `STATE_EVENT`, and the same string on both sides. */
 export const STATE_EVENT = 'connection:state'
@@ -45,6 +45,12 @@ export const connection = reactive({
   attempt: 0,
   reason: null,
   local: true,
+  /* Which server: `local`, or a remote one's key. See `onServerChange`. */
+  target: 'local',
+  /* True from the moment a connection to another server is noticed until the stores have taken that
+     server's own projects and settings in (`onServerChange`). Nothing may be written to a server in that
+     time: what the stores hold is still the previous server's. */
+  switching: false,
   server: null,
   /* A local server older than the bundled one, and what replacing it would end. */
   outdated: null,
@@ -53,6 +59,13 @@ export const connection = reactive({
   /* Whether the first answer has been heard: until then nothing is known. */
   ready: false
 })
+
+/* The server is on another machine. Paths are then the server's, not this machine's: the native
+   folder dialog, the file manager and the system's "open this file" are the wrong tools for them
+   (`serverFiles.js` is what the front end does instead). `local` defaults to true, and so does every
+   state that is not a connection to a server at all, so the build with its back end in-process and
+   a browser never read as remote. */
+export const isRemote = computed(() => connection.mode === 'split' && connection.local === false)
 
 /* The data on screen is older than the server's truth. */
 export const stale = computed(() => connection.mode === 'split' && connection.state !== 'connected')
@@ -66,6 +79,30 @@ export function onReconnect(hook) {
   return () => hooks.delete(hook)
 }
 
+const serverHooks = new Set()
+
+/* Registers what must happen when the connection is to a *different server* than the one the data on
+   screen came from (the person chose another in Settings), before the stores read their snapshots
+   again. The project list, the open project and the settings a window holds belong to the server they
+   were read from: carried over, a path on this machine would be written into the new server's project
+   list, and a board of the new server would be drawn under the old one's project. A hook takes the
+   new server's own. Hooks run one after another and before the ordinary resync; a failing one is
+   logged and the rest still run. Answers the way to stop. */
+export function onServerChange(hook) {
+  serverHooks.add(hook)
+  return () => serverHooks.delete(hook)
+}
+
+async function changeServer() {
+  for (const hook of [...serverHooks]) {
+    try {
+      await hook()
+    } catch (err) {
+      console.error('[connection] a store could not take the new server in:', err)
+    }
+  }
+}
+
 async function resync() {
   const results = await Promise.allSettled([...hooks].map((hook) => hook()))
   for (const result of results) {
@@ -75,6 +112,8 @@ async function resync() {
 
 let seenEpoch = 0
 let heard = false
+/* The server the last connection that was acted on was to; null until there is one. */
+let servedTarget = null
 
 function adopt(view, { first = false } = {}) {
   if (!view || typeof view !== 'object' || typeof view.state !== 'string') return
@@ -90,6 +129,7 @@ function adopt(view, { first = false } = {}) {
   connection.attempt = Number.isFinite(view.attempt) ? view.attempt : 0
   connection.reason = typeof view.reason === 'string' ? view.reason : null
   connection.local = view.local !== false
+  connection.target = typeof view.target === 'string' ? view.target : 'local'
   connection.server = view.server && typeof view.server === 'object' ? view.server : null
   connection.outdated = view.outdated && typeof view.outdated === 'object' ? view.outdated : null
   if (newEpoch) connection.restartScheduled = false
@@ -97,11 +137,21 @@ function adopt(view, { first = false } = {}) {
   if (first) {
     /* Mounted onto a connection that is already up: its loads were answered by it. */
     seenEpoch = mode === 'split' && view.state === 'connected' ? epoch : 0
+    if (seenEpoch) servedTarget = connection.target
     return
   }
   if (mode === 'split' && view.state === 'connected' && epoch !== seenEpoch) {
     seenEpoch = epoch
-    resync()
+    const changed = servedTarget !== null && servedTarget !== connection.target
+    servedTarget = connection.target
+    if (changed) {
+      connection.switching = true
+      changeServer()
+        .finally(() => {
+          connection.switching = false
+        })
+        .then(resync)
+    } else resync()
   }
 }
 
@@ -151,4 +201,135 @@ export async function restartServer(mode) {
     connection.outdated = { ...connection.outdated, work: reply.work ?? [] }
   }
   return reply
+}
+
+/* ---- which server this device uses ---------------------------------------- */
+
+/* `{ kind: 'local' }`, `{ kind: 'remote', node, relay }`, or `{ kind: 'in-process' }` in the
+   build that has no choice to make. A browser has nobody to ask and is in-process. */
+export async function readServerTarget() {
+  try {
+    const answer = await invoke('server_target')
+    return answer?.target ?? { kind: 'in-process' }
+  } catch (err) {
+    console.debug('[connection] nobody to ask which server this is (a browser):', err)
+    return { kind: 'in-process' }
+  }
+}
+
+/* What the server on this machine is doing that moving away from it would leave running: the list
+   of live work, empty when there is none or when this device is not using it. */
+export async function localServerWork() {
+  try {
+    const work = await invoke('server_local_work')
+    return Array.isArray(work) ? work : []
+  } catch (err) {
+    console.debug('[connection] the local server was not asked about its work:', err)
+    return []
+  }
+}
+
+/* Back to the server on this machine. Rejects with the shell's words. */
+export async function useLocalServer() {
+  try {
+    await invoke('server_use_local')
+  } catch (err) {
+    throw new Error(refusalOf(err))
+  }
+}
+
+/* Pairs with the server a desktop ticket names and moves this device to it. `stopLocal` asks the
+   local server to stop once its work is done (it ends nothing); without it the local server is left
+   running. Answers `{ target, localStop }`; rejects with the shell's words, and a rejection means the
+   device is where it was. The pairing waits for the person to confirm at the server, so this can
+   take a minute or two. */
+export async function useRemoteServer(ticket, stopLocal) {
+  try {
+    return await invoke('server_use_remote', { ticket, stopLocal: Boolean(stopLocal) })
+  } catch (err) {
+    throw new Error(refusalOf(err))
+  }
+}
+
+/* An error as text: Tauri rejects with the command's own string, and an `Error` has its message. */
+export function refusalOf(err) {
+  if (typeof err === 'string') return err
+  if (err && typeof err === 'object' && typeof err.message === 'string') return err.message
+  return String(err)
+}
+
+/* ---- choosing a server goes through the app window ------------------------
+
+   The Server tab lives in the settings window, which has no tabs, no unsaved edits and no say over
+   the project the app window has open. Moving to another server changes what every one of those is
+   about, so the press is only a *request*: the app window, which owns them, asks the person about
+   unsaved edits, saves them to the server they belong to (the one still connected), and only then
+   calls the shell. A refusal or a cancel leaves the device exactly where it was. Three events carry
+   it: the request, an acknowledgement (so a settings window with no app window to answer says so at
+   once instead of waiting out a pairing), and the result. */
+export const SWITCH_REQUEST = 'server:switch-request'
+export const SWITCH_ACK = 'server:switch-ack'
+export const SWITCH_RESULT = 'server:switch-result'
+
+const ACK_WITHIN_MS = 3000
+const RESULT_WITHIN_MS = 6 * 60 * 1000
+
+/* The settings window's half. `request` is `{ kind: 'local' }` or `{ kind: 'remote', ticket,
+   stopLocal }`. Resolves `{ cancelled: true }` when the person kept their unsaved edits, the shell's
+   answer otherwise, and rejects with words for a line under the button. */
+export async function requestServerSwitch(request) {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const stops = []
+  let timer = null
+  const finish = () => {
+    clearTimeout(timer)
+    for (const stop of stops) stop()
+  }
+  return new Promise((resolve, reject) => {
+    const fail = (message) => {
+      finish()
+      reject(new Error(message))
+    }
+    ;(async () => {
+      try {
+        stops.push(
+          await listen(SWITCH_ACK, (event) => {
+            if (event.payload?.id !== id) return
+            clearTimeout(timer)
+            timer = setTimeout(() => fail('The app window did not finish. Nothing was changed.'), RESULT_WITHIN_MS)
+          })
+        )
+        stops.push(
+          await listen(SWITCH_RESULT, (event) => {
+            const result = event.payload
+            if (result?.id !== id) return
+            finish()
+            if (result.ok) resolve(result.cancelled ? { cancelled: true } : result.answer)
+            else reject(new Error(result.error || 'The switch was refused.'))
+          })
+        )
+        timer = setTimeout(() => fail('The app window did not answer. Nothing was changed.'), ACK_WITHIN_MS)
+        await emit(SWITCH_REQUEST, { id, ...request })
+      } catch (err) {
+        fail(refusalOf(err))
+      }
+    })()
+  })
+}
+
+/* The app window's half: `run(request)` does the work (`projects.js::switchServer`) and answers the
+   shell's reply, or `{ cancelled: true }`; whatever it throws goes back as the refusal. Answers the
+   way to stop. */
+export async function watchServerSwitch(run) {
+  return listen(SWITCH_REQUEST, async (event) => {
+    const { id, ...request } = event.payload ?? {}
+    if (!id) return
+    await emit(SWITCH_ACK, { id })
+    try {
+      const answer = await run(request)
+      await emit(SWITCH_RESULT, answer?.cancelled ? { id, ok: true, cancelled: true } : { id, ok: true, answer })
+    } catch (err) {
+      await emit(SWITCH_RESULT, { id, ok: false, error: refusalOf(err) })
+    }
+  })
 }

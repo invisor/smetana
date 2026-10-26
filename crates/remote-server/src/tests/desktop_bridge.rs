@@ -169,6 +169,7 @@ async fn remote_desktop_capabilities_leave_out_what_the_host_cannot_honour() {
     services.gateway = Some(Gateway::new(
         Box::new(|| Box::pin(async { Vec::new() })),
         Arc::new(|| {}),
+        Arc::new(|| {}),
         Arc::new(|_| {}),
         Duration::from_secs(1),
     ));
@@ -357,4 +358,71 @@ async fn remote_desktop_output_in_flight_when_a_client_attaches_again_is_not_app
     let (more, _) = hear_after(&mut client, last, 4).await;
     screen.extend(more);
     assert_eq!(String::from_utf8(screen).unwrap(), "abcd");
+}
+
+#[tokio::test]
+async fn remote_desktop_reading_a_file_from_the_server_is_confined_and_a_phone_cannot_ask() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(tmp.path()).unwrap();
+    let project = base.join("work/app");
+    std::fs::create_dir_all(project.join(".smetana/reports")).unwrap();
+    std::fs::write(project.join(".smetana/reports/run-1.html"), "<html>ok</html>").unwrap();
+    std::fs::write(project.join("secret.txt"), "secret").unwrap();
+    let store = base.join("data/attachments");
+    std::fs::create_dir_all(store.join("p-1")).unwrap();
+    std::fs::write(store.join("p-1/pic.png"), "png").unwrap();
+    // The server's settings name the project, as `settings.json` does once it has been added.
+    let settings = base.join("settings.json");
+    std::fs::write(&settings, json!({ "openProjects": [project.to_string_lossy()] }).to_string()).unwrap();
+
+    let h = harness().await;
+    let mut services = super::phone_bridge::services().0;
+    services.attachments_root = Ok(store.clone());
+    services.settings_path = Ok(settings);
+    h.remote.hub.set_dispatch(Arc::new(services));
+    let (_desktop, mut client) = desktop(&h).await;
+
+    let read = |path: String| json!({ "path": path });
+    let report = client.call("server_file_read", read(project.join(".smetana/reports/run-1.html").to_string_lossy().into_owned())).await.unwrap();
+    assert_eq!(report["name"], "run-1.html");
+    assert_eq!(decode(&report["data"]), b"<html>ok</html>");
+    let picture = client.call("server_file_read", read(store.join("p-1/pic.png").to_string_lossy().into_owned())).await.unwrap();
+    assert_eq!(decode(&picture["data"]), b"png");
+
+    // The rest of the project, a path that climbs out of the store, and a file nowhere near either.
+    let sneaky = format!("{}/p-1/../../../work/app/secret.txt", store.display());
+    for path in [project.join("secret.txt").to_string_lossy().into_owned(), sneaky, "/etc/passwd".to_owned()] {
+        match client.call("server_file_read", read(path.clone())).await {
+            Err(BridgeError::Handler(value)) => assert_eq!(value["kind"], "outside", "{path}: {value}"),
+            other => panic!("{path} was not refused: {other:?}"),
+        }
+    }
+
+    // A phone is not a desktop: none of the four exists for it. (Its own server, because a pairing
+    // request in the first one's event log would be taken for the second's.)
+    let h = harness().await;
+    h.remote.hub.set_dispatch(Arc::new(super::phone_bridge::services().0));
+    let phone_device = phone().await;
+    pair_accepted(&h, &phone_device).await;
+    let mut phone_client = Client::connect(&h, &phone_device).await;
+    for cmd in ["server_file_read", "folders_list", "project_clone", "server_work"] {
+        assert_eq!(phone_client.call(cmd, json!({ "path": "/etc/passwd" })).await, Err(BridgeError::Forbidden), "{cmd}");
+    }
+    assert!(!phone_client.hello.capabilities.iter().any(|c| c == "server_file_read" || c == "folders_list"));
+}
+
+#[tokio::test]
+async fn remote_desktop_the_folder_browser_refuses_a_path_above_the_servers_home() {
+    let h = harness().await;
+    h.remote.hub.set_dispatch(Arc::new(super::phone_bridge::services().0));
+    let (_desktop, mut client) = desktop(&h).await;
+    // Whatever the home folder is, the filesystem root is above it (or the same, on a machine whose
+    // home is the root, which nobody runs a server as).
+    match client.call("folders_list", json!({ "path": "/" })).await {
+        Err(BridgeError::Handler(value)) => assert_eq!(value["kind"], "outside", "{value}"),
+        Ok(listing) => assert_eq!(listing["parent"], Value::Null, "only the root itself may be listed: {listing}"),
+        other => panic!("{other:?}"),
+    }
+    let home = client.call("folders_list", json!({ "path": null })).await.unwrap();
+    assert_eq!(home["parent"], Value::Null);
 }

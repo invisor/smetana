@@ -39,8 +39,9 @@
    whether this pick was the answer. Every other caller sets the flag nowhere —
    `fileMenu.js` and `branchMenu.js` are the whole of the producing side, and a
    caller is only ever as armed as the items it is handed. */
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, ref, unref } from 'vue'
 import ContextMenu from './ContextMenu.vue'
+import { visibleItems } from './clientActions.js'
 
 const props = defineProps({
   /* The `ContextMenu` shape — `{kind, label, icon?, tone?, disabled?}`,
@@ -50,6 +51,13 @@ const props = defineProps({
      no `title`, so a label past it clips with an ellipsis. */
   width: { type: Number, default: 200 }
 })
+
+/* `DesktopApp.vue` provides this as true while the server is on another machine, and the rows that
+   act on the machine in front of the person are then not drawn (`clientActions.js`). Every read of
+   the items below goes through this, the keyboard's index included: a menu that drew fewer rows
+   than it walked would select the wrong one. Absent, as in the phone and the gallery, it is false. */
+const hideClientActions = inject('smHideClientActions', false)
+const shownItems = computed(() => visibleItems(props.items, Boolean(unref(hideClientActions))))
 
 const emit = defineEmits(['select', 'close'])
 
@@ -75,7 +83,7 @@ const EDGE = 8
 
 /* Separators, labels and greyed rows are drawn but never walked to. */
 const walkable = computed(() =>
-  props.items.map((it, i) => (it.type || it.disabled ? -1 : i)).filter((i) => i >= 0)
+  shownItems.value.map((it, i) => (it.type || it.disabled ? -1 : i)).filter((i) => i >= 0)
 )
 
 function place() {
@@ -191,7 +199,7 @@ const onKeydown = (event) => {
     cursor.value = step(walkable.value, cursor.value, event.key === 'ArrowDown' ? 1 : -1)
   } else if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault()
-    pick(props.items[cursor.value])
+    pick(shownItems.value[cursor.value])
   }
 }
 
@@ -217,7 +225,7 @@ defineExpose({ open, close })
          would have to fall through as an attribute to reach a node at all. -->
     <div v-if="shown" ref="box" :style="panelStyle" tabindex="-1" @keydown="onKeydown">
       <ContextMenu
-        :items="items"
+        :items="shownItems"
         :cursor="cursor"
         :width="width"
         @select="pick"

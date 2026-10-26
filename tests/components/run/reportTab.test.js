@@ -4,6 +4,7 @@ import {
   REVIEWS_DIR,
   isDocumentPath,
   isReportPath,
+  isRunReportPath,
   reportTabPath,
   reviewReportPath,
   reviewReportTabs
@@ -271,5 +272,15 @@ describe('reviewReportTabs', () => {
     expect(reviewReportTabs([], HERE)).toEqual([])
     expect(reviewReportTabs(null, HERE)).toEqual([])
     expect(reviewReportTabs(undefined, HERE)).toEqual([])
+  })
+})
+
+describe('isRunReportPath', () => {
+  it('is true for a run\'s own report and false for a branch review, which a server will not hand over', () => {
+    expect(isRunReportPath('.smetana/reports/2026-08-12-143155.html')).toBe(true)
+    expect(isRunReportPath('.smetana/reviews/main-2026-08-12.html')).toBe(false)
+    expect(isRunReportPath('docs/report.html')).toBe(false)
+    expect(isRunReportPath('.smetana/reports/nested/a.html')).toBe(false)
+    expect(isRunReportPath(undefined)).toBe(false)
   })
 })

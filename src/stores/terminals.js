@@ -27,6 +27,7 @@ import { captionOf } from '../components/agent/captions.js'
 import { workOf } from '../components/agent/sessionWork.js'
 import { can } from './agents.js'
 import { watchWindowDrops } from './windowDrops.js'
+import { failureSentence, pathsForServer } from './serverFiles.js'
 /* The audible half of what the app has to say. Here rather than in a watcher
    over the session list, because the list holds the active project only and the
    marks below hold every project — and somebody supervising two overnight is
@@ -1379,6 +1380,22 @@ export async function resize(id, cols, rows) {
    one window's drops are kept apart by never being mounted over the same
    point at once, not by an arbiter here. */
 export const watchSessionDrops = watchWindowDrops
+
+/* The paths of files dropped on a session's pane, typed into it. With the server on this machine
+   they are typed as they are; with one on another machine they name files it cannot open, so each
+   is sent there first and the paths the server stored are what the agent is given
+   (`stores/serverFiles.js`). `toText` is `dropPaths.js`'s `dropText`, handed in so this store keeps
+   knowing nothing about how a path is quoted for a shell. Files that arrive are typed and each one
+   that could not be sent is said on the same toast every other refusal of this store uses. */
+export async function sendDroppedPaths(id, paths, toText) {
+  const { paths: usable, failures } = await pathsForServer(paths)
+  if (failures.length) {
+    console.error('[terminal] dropped files could not be sent to the server:', failures)
+    terminalState.lastError = { title: 'Could not send the file', description: failureSentence(failures) }
+  }
+  const text = toText(usable)
+  if (text) await send(id, text)
+}
 
 /* A new connection to the server is a new list of sessions and a new attach: the server forgets which
    sessions a connection followed when the connection goes, so the one on screen has to ask again, and
