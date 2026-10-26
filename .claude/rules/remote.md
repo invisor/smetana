@@ -175,13 +175,14 @@ workers and serves no phones; `src-tauri/src/split/` holds one iroh connection t
   `app.emit` under the same names; `terminal:output` and `terminal:log` come with `terminal_attach`. `terminals.js` applies the
   server's coalesced and `reset` payloads (`applyOutput`) and holds output that arrives while an attach is outstanding.
 - **State** (`split/state.rs`, `connection:state` event, `connection_state` command): `connecting`, `connected`,
-  `reconnecting`, `incompatible`, `unpaired`, with an `epoch` that counts connections. `Link` is the one holder; `supervise` is its
+  `reconnecting`, `incompatible`, `unpaired` and `failed` (no data directory to keep a server in; nothing retries), with an `epoch` that counts connections. `Link` is the one holder; `supervise` is its
   one writer, with backoff 0.5 s doubling to 10 s, and a slow poll (15 s) for the two states a person must fix.
   **No call is ever retried.** A call with no connection is refused with a reason that says nothing was changed; one in flight
-  when the connection ends is answered "never sent" or "may or may not have been made". The one exception: a call made while the
-  **first** connection of the run is still being made waits for it, up to 45 s, because the stores read as the window mounts.
+  when the connection ends is answered "never sent" or "may or may not have been made". The one exception: a **read** (the allowlist `READS`
+  in `forward.rs`) made while the **first** connection of the run is still being made waits for it, up to 45 s, because the stores
+  read as the window mounts. A write is never held, so a double press while the server starts cannot start two of anything.
 - **Front end.** `stores/connection.js` holds the state; a store that must read its snapshot again registers with
-  `onReconnect` (tracker, terminals, runs, vcs, sessions history, conversations). Each new epoch runs them; an app that mounted
+  `onReconnect` (tracker, terminals, runs, vcs, sessions history, conversations, and `DesktopApp.vue`'s `catchUp`, which re-lists the tree, reloads tabs left in `error` by a refused read, and re-reads head, config and storage). Each new epoch runs them; an app that mounted
   onto an already-up connection does not run them for it. `DesktopApp.vue` dims the body while stale and draws
   `ConnectionBanner` (words in `connectionNotice.js`). In the in-process build and in a browser the state is `in-process` and
   nothing is drawn.
@@ -192,7 +193,7 @@ workers and serves no phones; `src-tauri/src/split/` holds one iroh connection t
   the app leaves it running. Pairing is `Client::connect_as`, which reads `local-pairing.json`, pairs once and re-pairs by itself
   when the server no longer knows the key. A server killed without a goodbye is noticed at once by its lock being free.
 - **Version lock-step.** A different `protocol_major` is `incompatible` (the reason names `smetanad restart --data-dir …`, since
-  the old server cannot be asked). A different `app_version` with the same major makes the shell ask `server_restart now`
+  the old server cannot be asked). A server with a *newer* `app_version` is `incompatible` (update the app) and is never restarted. A different, older `app_version` with the same major makes the shell ask `server_restart now`
   without `confirmed`: nothing alive restarts it (once per running version, so a binary that did not change cannot loop);
   otherwise `connected` carries `outdated` with the list, and the banner offers *Restart now* (confirmed with exactly that
   list) or *Restart when finished*.

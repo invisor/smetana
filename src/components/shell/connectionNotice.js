@@ -78,6 +78,15 @@ export function connectionNotice(connection) {
         canRetry: true,
         restart: null
       }
+    case 'failed':
+      return {
+        tone: 'blocked',
+        icon: 'triangle-alert',
+        title: 'This app cannot reach a server',
+        detail: withReason(STALE_NOTE, connection.reason),
+        canRetry: false,
+        restart: null
+      }
     case 'connected': {
       const outdated = connection.outdated
       if (!outdated) return null

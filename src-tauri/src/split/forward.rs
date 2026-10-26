@@ -74,6 +74,61 @@ pub fn route(cmd: &str) -> Route {
     }
 }
 
+/// The commands that only read, and so may wait for the first connection of the run. A call the
+/// server would act on (a start, a write, a switch of project) is never held: held, it would be sent
+/// after all, and a double press made while the server was starting would start two of whatever it
+/// starts. Anything not named here is refused at once while there is no connection.
+const READS: &[&str] = &[
+    "tracker_health",
+    "tracker_snapshot",
+    "tracker_resync",
+    "tracker_failure",
+    "tracker_probe",
+    "project_root",
+    "home_dir",
+    "settings_load",
+    "agents_catalog",
+    "agents_installed",
+    "codex_models",
+    "agent_usage",
+    "project_config",
+    "browser_tools",
+    "target_branches",
+    "run_state",
+    "run_reports",
+    "terminal_list",
+    "terminal_marks",
+    "terminal_restorable",
+    "terminal_attach",
+    "session_attach",
+    "session_since",
+    "crew_tree",
+    "crew_attach",
+    "sessions_list",
+    "files_list",
+    "files_read",
+    "files_stat",
+    "git_head",
+    "vcs_repos",
+    "vcs_status",
+    "vcs_in_progress",
+    "vcs_branches",
+    "vcs_remote_branches",
+    "vcs_last_fetch",
+    "vcs_tracking",
+    "vcs_file_at_head",
+    "vcs_file_at_rev",
+    "vcs_compare",
+    "image_read",
+    "attachments_survey",
+    "remote_devices",
+];
+
+/// Whether `cmd` may wait for the first connection.
+pub fn is_read(cmd: &str) -> bool {
+    READS.contains(&cmd)
+}
+
 /// Wraps the handler `generate_handler!` made for the local commands.
 pub fn handler<R: Runtime>(
     local: impl Fn(Invoke<R>) -> bool + Send + Sync + 'static,
@@ -148,6 +203,22 @@ mod tests {
                 CLIENT_COMMANDS.contains(cmd),
                 "`{cmd}` is registered locally but the server does not list it as the client's"
             );
+        }
+    }
+
+    #[test]
+    fn only_reads_wait_for_the_first_connection() {
+        for cmd in ["tracker_snapshot", "files_read", "terminal_list", "settings_load"] {
+            assert!(is_read(cmd), "{cmd}");
+        }
+        for cmd in [
+            "terminal_create", "terminal_shell", "terminal_write", "run_start", "session_start", "tracker_update",
+            "tracker_init", "tracker_set_project", "settings_save", "files_write", "vcs_commit", "server_restart",
+        ] {
+            assert!(!is_read(cmd), "{cmd} must be refused, not held");
+        }
+        for cmd in READS {
+            assert_eq!(route(cmd), Route::Forward, "{cmd}");
         }
     }
 

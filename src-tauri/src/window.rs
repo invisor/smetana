@@ -1639,6 +1639,8 @@ pub fn window_chrome() -> &'static str {
 /// is the one that carries a name, its rule about an empty `HOME` is written
 /// down there, and this command is exactly the missing half `repoLabel.js`
 /// names — a way of handing that answer to the front end.
+// The split build forwards `home_dir`: the server's home is the one that means something.
+#[cfg_attr(feature = "split", allow(dead_code))]
 #[tauri::command]
 pub fn home_dir() -> Option<String> {
     crate::tracker::access::home().map(|home| home.to_string_lossy().into_owned())

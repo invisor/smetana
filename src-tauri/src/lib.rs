@@ -1,21 +1,24 @@
-// The `split` build leaves some of the in-process half unreferenced (the run gate of an install, the
-// phone endpoint's start); it is kept compiling rather than cut out, so that the two builds cannot
-// drift apart.
-#![cfg_attr(feature = "split", allow(dead_code, unused_imports))]
-
+// The `split` build leaves part of the in-process half unreferenced (the commands it forwards instead,
+// the phone endpoint's start, the run gate of an install). It is kept compiling rather than cut out so
+// the two builds cannot drift apart, and the allowance sits on exactly the modules that need it.
 mod autostart;
 mod clipboard;
+#[cfg_attr(feature = "split", allow(dead_code, unused_imports))]
 mod commands;
 mod connection;
 mod host;
+#[cfg_attr(feature = "split", allow(dead_code, unused_imports))]
 mod remote;
 #[cfg(feature = "split")]
 mod split;
+#[cfg_attr(feature = "split", allow(dead_code, unused_imports))]
 mod updates;
 mod window;
 
 // Everything that does the work lives in `crates/core`, which has no `tauri`. These bring its modules
 // in under the names the shell has always used, so `crate::tracker::...` still reads the same.
+// The `split` build starts none of the workers these name.
+#[cfg_attr(feature = "split", allow(unused_imports))]
 use smetana_core::{
   attachments, context, project, rlimit, runs, session, settings, shell_env, terminal,
   tracker,

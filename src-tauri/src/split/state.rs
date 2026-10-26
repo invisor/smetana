@@ -28,6 +28,8 @@ pub enum Phase {
     Incompatible,
     /// The server does not know this device, and could not be asked to pair it.
     Unpaired,
+    /// This build cannot even look for a server (no data directory to keep one in). Nothing retries.
+    Failed,
 }
 
 /// What the server said about itself in its `HelloReply`.
@@ -117,6 +119,7 @@ impl View {
             Phase::Unpaired => format!(
                 "This app is not paired with the server{why}. Nothing was changed."
             ),
+            Phase::Failed => format!("This app cannot reach a server{why}. Nothing was changed."),
         }
     }
 }
@@ -186,7 +189,7 @@ mod tests {
     #[test]
     fn every_refusal_says_nothing_was_changed() {
         let mut view = View::new(true);
-        for state in [Phase::Connecting, Phase::Reconnecting, Phase::Incompatible, Phase::Unpaired] {
+        for state in [Phase::Connecting, Phase::Reconnecting, Phase::Incompatible, Phase::Unpaired, Phase::Failed] {
             view.state = state;
             assert!(view.refusal().contains("Nothing was changed"), "{state:?}: {}", view.refusal());
         }

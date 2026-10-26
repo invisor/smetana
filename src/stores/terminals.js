@@ -1257,7 +1257,12 @@ export async function attach(id) {
     const held = heldOutput
     heldOutput = []
     attachPending = false
-    for (const payload of held) if (payload.id === streaming) applyOutput(payload)
+    for (const payload of held) {
+      /* A gap in what was held makes `applyOutput` attach again, and the rest
+         belongs to the answer to that one, not to this. */
+      if (attachPending) break
+      if (payload.id === streaming) applyOutput(payload)
+    }
   } catch (err) {
     // A newer attach already overtook this one; its outcome, not this
     // rejection, is what the store and the screen should reflect.

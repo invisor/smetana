@@ -4,7 +4,9 @@
 //! process and cannot be away. It answers `connection_state` all the same, with `in-process`, so the
 //! store reads one shape in either build and nothing in the front end branches on which it is.
 
-use serde_json::{json, Value};
+#[cfg(not(feature = "split"))]
+use serde_json::json;
+use serde_json::Value;
 use tauri::AppHandle;
 
 /// What the connection is doing: see `split::state::View` for the `split` build's answer.

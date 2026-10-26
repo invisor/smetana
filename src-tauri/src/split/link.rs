@@ -78,12 +78,15 @@ impl Link {
 
     /// Forwards one command. `Err` is what the webview's `invoke` is rejected with.
     pub async fn call(&self, cmd: &str, args: Value) -> Result<Value, Value> {
-        let client = self.ready().await?;
+        let client = self.ready(super::forward::is_read(cmd)).await?;
         client.call(cmd, args).await.map_err(|err| rejection(cmd, err))
     }
 
     /// The connection, or the reason there is none.
-    async fn ready(&self) -> Result<Arc<Client>, Value> {
+    ///
+    /// Only a read (`hold`) waits for the first connection; anything else is refused at once, the same
+    /// as when the connection is down.
+    async fn ready(&self, hold: bool) -> Result<Arc<Client>, Value> {
         let mut changes = self.changed.subscribe();
         let deadline = tokio::time::Instant::now() + FIRST_CONNECTION_WAIT;
         loop {
@@ -94,7 +97,7 @@ impl Link {
             if let (Phase::Connected, Some(client)) = (view.state, client) {
                 return Ok(client);
             }
-            if !view.first_connection_pending() {
+            if !(hold && view.first_connection_pending()) {
                 return Err(Value::String(view.refusal()));
             }
             match tokio::time::timeout_at(deadline, changes.changed()).await {
@@ -122,6 +125,14 @@ impl Link {
             inner.client = None;
             inner.view.state = Phase::Reconnecting;
             inner.view.reason = Some(why.to_owned());
+        });
+    }
+
+    /// A state nothing here can mend: shown with its reason and left.
+    pub fn broken(&self, reason: String) {
+        self.update(|inner| {
+            inner.view.state = Phase::Failed;
+            inner.view.reason = Some(reason);
         });
     }
 
@@ -201,9 +212,19 @@ fn incompatible_reason(server: &ServerInfo, config: &Config) -> String {
     )
 }
 
+/// Whether `running` is a later version than `bundled`, comparing dotted numbers. A version that
+/// does not parse is not "newer": it is left to the ordinary mismatch path.
+fn newer(running: &str, bundled: &str) -> bool {
+    fn parts(text: &str) -> Option<Vec<u64>> {
+        text.split(['.', '-', '+']).take_while(|p| p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty()).map(|p| p.parse().ok()).collect()
+    }
+    match (parts(running), parts(bundled)) {
+        (Some(a), Some(b)) if !a.is_empty() && !b.is_empty() => a > b,
+        _ => false,
+    }
+}
+
 enum Gate {
-    /// The server is the bundled one, or close enough to be left alone.
-    Current,
     /// It is older, and could not be replaced now.
     Outdated(Outdated),
     /// It was asked to restart and has said it will.
@@ -287,10 +308,18 @@ async fn attempt(link: &Arc<Link>, config: &Config, restarted_from: &mut Option<
         }
     }
     let mut outdated = None;
+    if newer(&hello.app_version, smetanad::VERSION) {
+        client.close();
+        let reason = format!(
+            "the server on this machine is {}, newer than this app's {}; update the app",
+            hello.app_version,
+            smetanad::VERSION
+        );
+        return Attempt::Failed(Failure::Incompatible(reason, Some(info)));
+    }
     if hello.app_version != smetanad::VERSION {
         let may_restart = restarted_from.as_deref() != Some(hello.app_version.as_str());
         match gate(&client, &hello.app_version, may_restart).await {
-            Gate::Current => {}
             Gate::Outdated(found) => outdated = Some(found),
             Gate::Restarting => {
                 *restarted_from = Some(hello.app_version.clone());
@@ -380,6 +409,15 @@ mod tests {
     }
 
     #[test]
+    fn only_a_later_server_is_newer() {
+        assert!(newer("0.2.0", "0.1.9"));
+        assert!(newer("0.10.0", "0.9.0"));
+        assert!(!newer("0.1.0", "0.1.0"));
+        assert!(!newer("0.0.9", "0.1.0"));
+        assert!(!newer("garbage", "0.1.0"));
+    }
+
+    #[test]
     fn what_a_close_code_means_for_the_state() {
         assert!(matches!(classify(ClientError::Code(CLOSE_UNKNOWN)), Failure::Unpaired(_)));
         assert!(matches!(classify(ClientError::Code(CLOSE_VERSION)), Failure::Incompatible(..)));
@@ -408,6 +446,13 @@ mod tests {
         };
         tokio::time::sleep(FIRST_CONNECTION_WAIT + Duration::from_secs(1)).await;
         let err = call.await.unwrap().unwrap_err();
+        assert!(err.as_str().unwrap().contains("Not connected to the server yet"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_write_before_the_first_connection_is_refused_at_once_and_not_held() {
+        let link = Link::new(Arc::new(|_, _| {}), true);
+        let err = link.call("terminal_create", json!({})).await.unwrap_err();
         assert!(err.as_str().unwrap().contains("Not connected to the server yet"), "{err}");
     }
 

@@ -23,6 +23,7 @@ describe('what the strip says about the connection', () => {
     expect(connectionNotice({ ...base, state: 'connecting' }).tone).toBe('wait')
     expect(connectionNotice({ ...base, state: 'incompatible' }).tone).toBe('blocked')
     expect(connectionNotice({ ...base, state: 'unpaired' }).tone).toBe('blocked')
+    expect(connectionNotice({ ...base, state: 'failed', reason: 'no data directory' }).canRetry).toBe(false)
   })
 
   it('offers a restart of an older server only when it can be asked for', () => {

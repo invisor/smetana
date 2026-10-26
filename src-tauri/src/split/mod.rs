@@ -60,7 +60,7 @@ pub fn start(app: &AppHandle) {
         }
         Err(reason) => {
             log::error!("split: no data directory, no server to reach: {reason}");
-            link.retry_now();
+            link.broken(format!("there is no data directory to keep a server in: {reason}"));
         }
     }
 }

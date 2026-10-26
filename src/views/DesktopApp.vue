@@ -311,6 +311,7 @@ import { initUpdates } from '../stores/updates.js'
 import {
   connection,
   initConnection,
+  onReconnect,
   restartServer,
   retryConnection,
   stale as connectionStale
@@ -3705,6 +3706,14 @@ const catchUp = async () => {
 
 onMounted(() => window.addEventListener('focus', catchUp))
 onUnmounted(() => window.removeEventListener('focus', catchUp))
+/* A new connection to the server is a reason to catch up as much as a return of focus is: the tree,
+   the open tabs (a read refused during the outage leaves a tab in `error`, whose only exit is this
+   sweep), the branch, the config and the storage were all asked of a server that was away. */
+let stopCatchUpOnReconnect = null
+onMounted(() => {
+  stopCatchUpOnReconnect = onReconnect(catchUp)
+})
+onUnmounted(() => stopCatchUpOnReconnect?.())
 
 /* The fourth moment this app catches up with the world: an agent of the active
    project ended its turn. An agent working inside this window never takes focus
