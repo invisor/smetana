@@ -456,8 +456,8 @@ let watching = false
    - the look, the layout, the open task - is saved to this machine as it always was, whole, by the
    debounce below. The server's half is never saved whole: what changed is sent as a patch
    (`settings_patch`), the server applies it under a lock and tells every client what it now holds
-   (`settings:changed`), and a change another client made arrives here the same way. The release build
-   and a browser take none of these branches, and write one file as before. */
+   (`settings:changed`), and a change another client made arrives here the same way. A browser, with
+   no shell, takes none of these branches and writes one document to the mock. */
 let split = false
 /* The server's half as the server last confirmed it to this window, in `serverView` shape. */
 let baseline = null
@@ -504,7 +504,7 @@ function believed() {
   return inflight.reduce((state, patch) => mergePatch(state, patch), baseline)
 }
 
-/* The client build's save: the whole device half to this machine, and to the server only what
+/* A client's save: the whole device half to this machine, and to the server only what
    changed in its half since what it is believed to hold. */
 function flushSplit(snapshot) {
   /* Nothing is addressed to a server while the stores still hold the previous one's state: from the
@@ -656,8 +656,8 @@ function applySection(target, fallback, stored) {
   Object.assign(target, fallback, stored)
 }
 
-/* Whether the shell is a client of a server. A build that cannot answer - the release, a browser,
-   a test that does not mock it - is not. */
+/* Whether the shell is a client of a server, which the desktop always is. What cannot answer - a
+   browser, a test that does not mock it - is not. */
 async function isSplit() {
   try {
     return (await invoke('connection_state'))?.mode === 'client'
@@ -666,8 +666,8 @@ async function isSplit() {
   }
 }
 
-/* The settings as `settings_load` brings them: one file in the release, and in the client build
-   the server's answer and this device's file put together (`combine`). `project` is the project whose
+/* The settings as `settings_load` brings them: one document in a browser (the mock), and on the
+   desktop the server's answer and this device's file put together (`combine`). `project` is the project whose
    state is wanted; null is the active one, which is the server's to name. */
 async function readStored(project, asSplit = split) {
   if (!asSplit) return invoke('settings_load', { project })

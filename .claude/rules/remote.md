@@ -1,7 +1,6 @@
 ---
 paths:
   - "crates/remote-protocol/**"
-  - "src-tauri/src/remote/**"
   - "crates/remote-server/**"
   - "crates/smetanad/**"
   - "crates/core/src/remote/**"
@@ -10,15 +9,13 @@ paths:
   - "src/stores/connection.js"
   - "src/components/shell/ConnectionBanner.vue"
   - "src/components/shell/connectionNotice.js"
-  - "src-tauri/src/split/**"
+  - "src-tauri/src/client/**"
   - "src-tauri/src/connection.rs"
-  - "src-tauri/tauri.next.conf.json"
   - "scripts/build-smetanad.mjs"
   - "src/components/settings/DevicesSettings.vue"
   - "src/components/settings/devices.js"
   - "crates/core/src/placement.rs"
   - "src/stores/serverFiles.js"
-  - "src-tauri/src/split/target.rs"
   - "src-tauri/src/commands/client_files.rs"
   - "src/components/settings/ServerSettings.vue"
   - "src/components/settings/serverChoice.js"
@@ -61,17 +58,17 @@ commands and listens to allowlisted events on the same stream.
 - **Where the constants are.** `PROTOCOL_MAJOR`, `PROTOCOL_MINOR`, `MIN_MOBILE_VERSION` and `RECOMMENDED_MOBILE_VERSION` are in
   `crates/remote-server/src/lib.rs` (they were in `src-tauri/src/remote/mod.rs`); `mobile/src-tauri/tests/versions.rs` reads that
   file. `.smetana/project.toml` (untracked) still names `src-tauri/src/remote/mod.rs` for them in its hazards; read that as this file.
-- `src-tauri/src/remote/` — what is left of it: `mod.rs` makes a `Remote` out of an `AppHandle` (`start`, `shutdown`,
-  `cancel_pairing`, the dispatcher's `Services` from managed state) and `commands.rs` holds the `#[tauri::command]`
-  wrappers over `remote_server::commands::plain`.
-- `crates/smetanad/` — the headless server, see "smetanad" below.
+- `src-tauri/src/client/` — the desktop as a client of one `smetanad`, see "The desktop is a client" below. The shell
+  serves no phones and runs no endpoint of its own any more; `src-tauri/src/remote/` is gone.
+- `crates/smetanad/` — the headless server, see "smetanad" below. A phone pairs with it: the local one on the desktop's
+  machine, or one on another machine.
 - `src/stores/remote.js`, `components/settings/DevicesSettings.vue`, `components/settings/devices.js`.
 
 ## Decisions worth knowing before changing them
 
-**The endpoint starts late.** Binding one contacts a relay, and this app does not open a socket by itself
-for a feature nobody has used. It starts on `remote_pair_begin`, and at launch only when the device list
-is not empty. A changed relay URL takes effect at the next `remote_pair_begin` (the endpoint is rebound).
+**The endpoint starts late.** Binding one contacts a relay, and the server does not open a socket by itself
+for a feature nobody has used. It starts on `remote_pair_begin`, and at the server's start only when some
+device on the list was paired by a ticket (a phone inherited from the release is one). A changed relay URL takes effect at the next `remote_pair_begin` (the endpoint is rebound).
 
 **Three kinds of connection, decided by the key alone.** A key on the list gets `Hello`. An unknown key
 while a pairing code is outstanding may send exactly one `PairRequest` — the only time anything is read
@@ -103,7 +100,8 @@ nothing that could be tried again. A wrong secret does not burn the right one. T
 person is bounded by what is left of the secret's two minutes. Close codes (`CLOSE_*` in `endpoint.rs`)
 are part of the protocol a phone reads.
 
-**The device list is its own file**, `remote-devices.json` in `app_data_dir()`, written atomically and
+**The device list is its own file**, `remote-devices.json` in the server's data directory (for the local server,
+`<app data dir>/server`), written atomically and
 at once on revoke; the key is `remote-key` beside it (hex, mode 0600, created on first use, never
 rotated). `settings.json` holds only `remote.relayUrl`, validated by `valid_relay_url` in
 `settings/model.rs` (https, a host name, no IP) and mirrored by `validRelayUrl` in `devices.js` so the
@@ -166,24 +164,25 @@ than the digest recorded for the current `PROTOCOL_MAJOR.PROTOCOL_MINOR`, and sa
 MINOR for additions, MAJOR for removals and renames. The way forward is a new entry under a higher version,
 added by hand together with the constants; an existing entry is a frozen contract and is not edited.
 
-## The desktop as a client: `split` and Smetana Next
+## The desktop is a client
 
-Step 5 of `docs/superpowers/specs/2026-10-25-headless-server-design.md`. Without the cargo feature `split` the shell is the
-release, byte for byte in behaviour (`cargo test` in `src-tauri` runs both ways). With it (`npm run tauri:next:dev`,
-`tauri:next:build`, through `src-tauri/tauri.next.conf.json`, whose `build.features` turns it on) the shell starts none of the
-workers and serves no phones; `src-tauri/src/split/` holds one iroh connection to one `smetanad`.
+Steps 5 and 8 of `docs/superpowers/specs/2026-10-25-headless-server-design.md`. **There is one build and one back end.** The
+shell starts none of the workers and serves no phones; `src-tauri/src/client/` holds one iroh connection to one `smetanad`,
+local or remote. The cargo feature `split`, the `tauri.next.conf.json` overlay ("Smetana Next", its own identifier and data
+directory) and the in-process path were the transition and were deleted at switch-over (step 8): `grep -n split
+src-tauri/Cargo.toml` is empty, and `smetanad` is an ordinary dependency (for its client half) and a sidecar (the binary).
 
-- **Forwarding is generic.** `split::handler` wraps the `invoke_handler`: a name in `forward::LOCAL_COMMANDS` (the client's own:
-  windows, dialogs, clipboard, opener, updater, login item, `connection_*`) goes to the Tauri command registered for it; a client
-  command the build lacks (`tracker_access_reset`) is rejected; **every other name is sent to the server** as an `Invoke` and the
-  server's reply resolves the `invoke`. Arguments pass untouched (the dispatcher already reads the webview's camelCase). The
-  second `generate_handler!` in `lib.rs` is held equal to `LOCAL_COMMANDS` by a test, and `LOCAL_COMMANDS` to the server's
-  `CLIENT_COMMANDS`. `connection_state` and `connection_retry` are in `DESKTOP_COMMANDS` and `CLIENT_COMMANDS`, and the build
-  without the feature answers `connection_state` with `in-process`.
+- **Forwarding is generic.** `client::handler` wraps the `invoke_handler`: a name in `forward::LOCAL_COMMANDS` (the client's own:
+  windows, dialogs, clipboard, opener, updater, login item, `connection_*`, the device settings, the server choice, the
+  `client_*` files) goes to the Tauri command registered for it; a client command the shell cannot serve (`UNAVAILABLE`:
+  `tracker_access_reset`, since the process that reads a project folder is the server's) is rejected; **every other name is
+  sent to the server** as an `Invoke` and the server's reply resolves the `invoke`. Arguments pass untouched (the dispatcher
+  already reads the webview's camelCase). The `generate_handler!` in `lib.rs` is held equal to `LOCAL_COMMANDS` by a test, and
+  `LOCAL_COMMANDS` to the server's `CLIENT_COMMANDS`.
 - **Events** the server advertises (`HelloReply.capabilities`, names with a colon) are `Listen`ed to and re-emitted with
   `app.emit` under the same names; `terminal:output` and `terminal:log` come with `terminal_attach`. `terminals.js` applies the
   server's coalesced and `reset` payloads (`applyOutput`) and holds output that arrives while an attach is outstanding.
-- **State** (`split/state.rs`, `connection:state` event, `connection_state` command): `connecting`, `connected`,
+- **State** (`client/state.rs`, `connection:state` event, `connection_state` command, `mode: 'client'`): `connecting`, `connected`,
   `reconnecting`, `incompatible`, `unpaired` and `failed` (no data directory to keep a server in; nothing retries), with an `epoch` that counts connections. `Link` is the one holder; `supervise` is its
   one writer, with backoff 0.5 s doubling to 10 s, and a slow poll (15 s) for the two states a person must fix.
   **No call is ever retried.** A call with no connection is refused with a reason that says nothing was changed; one in flight
@@ -193,40 +192,65 @@ workers and serves no phones; `src-tauri/src/split/` holds one iroh connection t
 - **Front end.** `stores/connection.js` holds the state; a store that must read its snapshot again registers with
   `onReconnect` (tracker, terminals, runs, vcs, sessions history, conversations, and `DesktopApp.vue`'s `catchUp`, which re-lists the tree, reloads tabs left in `error` by a refused read, and re-reads head, config and storage). Each new epoch runs them; an app that mounted
   onto an already-up connection does not run them for it. `DesktopApp.vue` dims the body while stale and draws
-  `ConnectionBanner` (words in `connectionNotice.js`). In the in-process build and in a browser the state is `in-process` and
-  nothing is drawn.
+  `ConnectionBanner` (words in `connectionNotice.js`). In a browser `mockBackend.js` answers `mode: 'browser'`, always
+  `connected`, and nothing is drawn.
 - **Local placement.** The server's data directory is `<app data dir>/server` (its own `settings.json` and `remote-key` must not
   meet the shell's files), the shell's own key and paired marker are in `<app data dir>`, and the server's output goes to
   `<app data dir>/smetanad.log`. `spawn::ensure` asks the directory's lock (`smetanad::server::is_owned`), and if nothing owns it
-  starts the bundled `smetanad run --data-dir … --bd … --resource-dir …` in its own process group (Windows: detached), so closing
-  the app leaves it running. Pairing is `Client::connect_as`, which reads `local-pairing.json`, pairs once and re-pairs by itself
-  when the server no longer knows the key. A server killed without a goodbye is noticed at once by its lock being free.
+  starts the bundled `smetanad run --data-dir … --inherit-from <app data dir> --bd … --resource-dir …` in its own process group
+  (Windows: detached), so closing or updating the app leaves it running. Pairing is `Client::connect_as`, which reads
+  `local-pairing.json`, pairs once and re-pairs by itself when the server no longer knows the key. A server killed without a
+  goodbye is noticed at once by its lock being free.
 - **Version lock-step.** A different `protocol_major` is `incompatible` (the reason names `smetanad restart --data-dir …`, since
   the old server cannot be asked). A server with a *newer* `app_version` is `incompatible` (update the app) and is never restarted. A different, older `app_version` with the same major makes the shell ask `server_restart now`
   without `confirmed`: nothing alive restarts it (once per running version, so a binary that did not change cannot loop);
   otherwise `connected` carries `outdated` with the list, and the banner offers *Restart now* (confirmed with exactly that
   list) or *Restart when finished*.
-- **Updates are off in this build** (`updates::development()` is true under `split`): the release feed and key would replace
-  Next with the release.
-- **The bundle.** `tauri.next.conf.json` changes the identifier, product name and window title, adds `binaries/smetanad` to
-  `externalBin` and turns updater artifacts off. `npm run build-smetanad [-- --release]` builds it into
-  `src-tauri/binaries/smetanad-<triple>` (ignored by git); the default config does not name it, so the default build never needs it.
-- **Settings are split** (step 6, below). A remote server is step 7 (below); the in-process path stays until 8.
-  The shell still links `smetana-core` as a library for `window.rs`'s settings types; no worker is started.
+- **Updates replace the client only.** The release feed updates the app as before (`updates.md`); there is no run gate any
+  more, because the runs and sessions are the detached server's and outlive the app's restart. The new bundle's `smetanad`
+  takes over through the version lock-step above.
+- **The bundle.** `tauri.conf.json` lists `binaries/smetanad` beside `binaries/bd` in `externalBin`, and its
+  `beforeDevCommand` / `beforeBuildCommand` run `npm run build-smetanad [-- --release]`, which builds it into
+  `src-tauri/binaries/smetanad-<triple>` (ignored by git). The release workflow builds it per target before `tauri build`.
+- The shell still links `smetana-core` as a library for the device's settings file, the types its commands name and the
+  sidecar path; no worker is started.
+
+### Switch-over: the local server inherits the release's data
+
+The release before the switch kept everything in the app's own data directory (`<app data dir>` = `~/Library/Application
+Support/com.invisor.smetana` on macOS). On the first start of the new local server two things move, both **copy and never
+move**, so an older release reinstalled still finds its data:
+
+- **`smetanad::inherit`** (`--inherit-from`, run by `Server::start` after the lock is held and **before the key is read**):
+  `remote-key` is copied (validated first; a damaged one stops the start instead of making a fresh key that would unpair every
+  phone), so the server's node id is the one paired phones already trust and **no phone has to pair again**;
+  `remote-devices.json` is copied only together with that key (a list bound to another key is left alone); `attachments/` is
+  mirrored (hard links where possible), since issues name the old paths and agents go on reading them there. A server that
+  already has its own key keeps it. `inherited.json` is written last and makes every later start skip the step; an
+  interrupted run is finished by the next one. The shell passes the flag on every start, which is what lets the update itself
+  need no step of its own. Tests: `inherit.rs` and `tests/server.rs` (a real `Server::start` over an old directory keeps the
+  node id and the phone).
+- **Settings**: `client/migrate.rs`, below ("Migration", source one): the server half of the old `settings.json` (projects,
+  per-project run settings and agents, profiles, languages, relay) goes to the server by `settings_adopt`; the device half
+  stays.
+- **Not moved, because it was never in that directory**: the runs' registry is `.smetana/runs.json` in each project and the
+  transcripts are Claude Code's under `~/.claude/projects`; the server reads both where they are.
+
+A person who moves to a remote server pairs the phone with that server (`smetanad pair --kind phone`); the local server's
+pairing is untouched (`server/smetanad/README.md`).
 
 ## A server on another machine (step 7, protocol 1.11)
 
 `docs/superpowers/specs/2026-10-25-headless-server-design.md`, "Things that name a path on the client" and "Remote placement".
-Client build only; the release is untouched.
 
-**Which server.** `split/target.rs`: `server-target.json` in the app data directory, `{"kind":"local"}` or `{"kind":"remote","node","relay"}`
+**Which server.** `client/target.rs`: `server-target.json` in the app data directory, `{"kind":"local"}` or `{"kind":"remote","node","relay"}`
 (nothing secret: the ticket's secret is spent at pairing). A damaged file is the local server. `Link` holds the target and a
 generation (`set_target`); `attempt` branches on it. **Local** is as before (`ensure`, lock watch, version lock-step). **Remote**
 (`attempt_remote`, `Client::connect_remote` in `smetanad::client`): no start, no lock watch, no version gate and **no settings
 migration** (a fresh VPS must not adopt this machine's project paths); a different major is `incompatible` with a reason that names the
 side to update. Choosing another server drops the old connection (the loop notices the generation), leaves the local server running,
 and does not respawn it while the choice is remote; going back finds or starts it. `hold` is the shared connected loop. The client
-shell commands (all in `CLIENT_COMMANDS`, `LOCAL_COMMANDS` and both `generate_handler!` lists; stubs in the build without `split`):
+shell commands (all in `CLIENT_COMMANDS`, `LOCAL_COMMANDS` and the `generate_handler!` list):
 `server_target`, `server_use_local`, `server_use_remote { ticket, stopLocal }`, `server_local_work`.
 
 **Pairing by ticket.** `Client::pair_remote` reads a `smetana2:` ticket (`check_ticket`: a phone's, an expired or an unusable-relay one is
@@ -255,10 +279,10 @@ asks for it only when the person chose "stop it when it is finished"; the settin
   symlinks, absolute paths, a symlinked reports folder) and `desktop_bridge.rs` (end to end, and a phone is refused).
 - `server_work`, above. A refusal travels as `{ kind, message }` (`PlacementError`'s own `Serialize`).
 
-**Front end.** `isRemote` (connection store) is `mode === 'split' && local === false`. `stores/serverFiles.js`: `pathsForServer` (local:
+**Front end.** `isRemote` (connection store) is `mode === 'client' && local === false`. `stores/serverFiles.js`: `pathsForServer` (local:
 the paths; remote: `client_file_read` then `attachment_write`, the stored paths come back), `openReportInBrowser` (local:
 `client_open_document`; remote: `server_file_read` then `client_open_fetched`). The two openers hand only an `.html` to the system
-(`commands/client_files.rs`), and the fetched copy is in a private folder under the app's cache directory (not a shared /tmp), swept after a day. In the release the three `client_*` commands are registered (the lists are held equal) but refuse, and the report button is drawn only when `connection.mode` is `split`. Consumers: `attachments.js::importPaths`
+(`commands/client_files.rs`), and the fetched copy is in a private folder under the app's cache directory (not a shared /tmp), swept after a day. The report button is drawn only when `connection.mode` is `client`. Consumers: `attachments.js::importPaths`
 (New task window), the composer (`stores/app.js::pathsForServer`, called by `ConversationView` when files are chosen or dropped, so a chip names the server's copy from the start; it answers `{ paths, failures }`, each file on its own, so one refusal does not cost the batch and is shown on the panel's error line; the phone's `app.js` answers with the same list and no failures), `terminals.js::sendDroppedPaths` (a file dropped on a terminal),
 `DesktopApp.vue` (report button on a run report's tab; `DocumentModeToggle` gets a second button and `toggleLane(2)`). The image window needs
 nothing: `image_read` is already a server command and its bytes cross the connection.
@@ -266,7 +290,7 @@ Add project: `onAddProject` opens the `server-folder` dialog window (`FolderBrow
 / `cloneOnServer` / `addProjectAt`) when `isRemote`. **Hidden, not disabled:** `DesktopApp.vue` provides `smHideClientActions` (= `isRemote`),
 and `PointerMenu` and `MenuButton` draw `withoutClientActions(items)` (`overlays/clientActions.js`: `reveal`, `reveal-log`, `open-log`,
 `open-cwd`, separators cleaned); a new menu row of that sort is added to that list. The Server tab (`ServerSettings.vue`, `serverChoice.js`) exists only
-when `connection.mode` is `split`.
+when `connection.mode` is `client`.
 
 **Another server is another set of projects, and the move is guarded.** The Server tab only *requests* a switch (`connection.js::requestServerSwitch`,
 events `server:switch-request` / `-ack` / `-result`); the app window, which owns the tabs, runs `projects.js::switchServer`: the unsaved-edits question
@@ -283,7 +307,7 @@ patch is recorded with the target it was made for and dropped at send time if th
 builds `crates/smetanad` per platform, packs it with `bd`, `resources/`, the unit and the README, and uploads archive and `.sha256` to the
 release the app job published. `tests/docs/smetanadInstall.test.js` holds the unit's flags to the CLI and the three files to each other.
 
-## Settings in the client build (protocol 1.10)
+## Settings: the server's half and the device's (protocol 1.10)
 
 `crates/core/src/settings/split.rs` draws the line by one question: does a worker on the server read it? The server's:
 `agent`, `model`, `agentRoles`, the four languages, `agentPrompt`, `conversationPanel`, `subscription`, `runFailover`,
@@ -298,11 +322,11 @@ neither list is the device's, and a test pins the server list. `usedAt` is kept 
   were written. Two clients that changed different fields both keep them; a list (`openProjects`, `runFailover.priority`) is
   replaced whole, so two simultaneous edits of the *same* list lose one.
 - **Device half: a file on the machine.** `device_settings_load` / `device_settings_save` are client commands (answered by the
-  shell, in `LOCAL_COMMANDS` and `CLIENT_COMMANDS`, registered in both builds) over the shell's own `settings.json`;
+  shell, in `LOCAL_COMMANDS` and `CLIENT_COMMANDS`) over the shell's own `settings.json`;
   `merge_device` writes the device's keys and leaves the server's as that file has them. `window.rs`, the updater and the
   dialog sizes keep reading that file unchanged.
-- **Front end** (`stores/settings.js`, pure parts in `stores/settingsSplit.js`): `connection_state` saying `split` turns it
-  on; the release and a browser take no new branch. The store keeps a `baseline` (the server's half as last agreed); a flush
+- **Front end** (`stores/settings.js`, pure parts in `stores/settingsSplit.js`): `connection_state` saying `client` turns it
+  on; a browser (the mock) takes no branch and saves one document with `settings_save`. The store keeps a `baseline` (the server's half as last agreed); a flush
   saves the device half whole and sends `diff(baseline, now)` as the patch. `settings:changed` and a reconnect fold the
   server's state in with this window's unsent edits laid over it. A refused patch is **not kept or replayed**: the server's
   state is read back and wins. Which project is open stays this window's own (`lastProject` is sent, never adopted).
@@ -314,27 +338,28 @@ neither list is the device's, and a test pins the server list. `usedAt` is kept 
 - **A failed patch.** A refusal by the server (a handler error) takes back that patch's fields alone: the store reads the
   server's state and keeps whatever else was typed since. A call that did not reach the server's handler is told by words
   every such shell rejection carries - `NOT_SENT` ("Nothing was changed") and `MAYBE_SENT` ("may or may not have been made") in
-  `src-tauri/src/split/state.rs`, matched by `TRANSPORT_WORDS` in `src/stores/settingsSplit.js`, each side pinned by a test and
+  `src-tauri/src/client/state.rs`, matched by `TRANSPORT_WORDS` in `src/stores/settingsSplit.js`, each side pinned by a test and
   naming the other; keep both when rewording a rejection. Such a failure keeps the change pending; the reconnect reads the server's state and sends what is
   still different. Neither is a replay of a command: it is the state being brought into agreement.
 - **`openProjects`.** The store keeps the project open in this window in the list whatever another client did to it; that
   re-append is this window's bookkeeping and is not sent back (`diffViews`), so a client that closed a project does not see it
   return. Two clients editing the list at the same moment still lose one edit (the list is replaced whole).
-- **Migration** (`src-tauri/src/split/migrate.rs`), on every connection before `connected`, two sources:
-  1. The device's `settings.json` still holds a server half (what a release install will have once the client build is the
-     only one): `settings_adopt` offers it (taken only by a server with no `settings.json`), then `retire_server_half` (which sets `deviceSeeded` in the same write as it resets the server's keys, so no crash between two writes can lead to a seeding over the device's own half) copies
+- **Migration** (`src-tauri/src/client/migrate.rs`), on every connection before `connected`, two sources:
+  1. The device's `settings.json` still holds a server half (what every install of a release from before the switch-over
+     has on its first start after it): `settings_adopt` offers it (taken only by a server with no `settings.json`), then `retire_server_half` (which sets `deviceSeeded` in the same write as it resets the server's keys, so no crash between two writes can lead to a seeding over the device's own half) copies
      the file to `settings.pre-split.json` (never overwritten) and resets the server's keys in it. The device half already
      there stands.
   2. The device file is not marked (`deviceSeeded`) and source one did not fire: an earlier build of the client (step 5)
-     forwarded `settings_save`, so a Smetana Next install has the whole document in the **server's** file and only `dialogs`
+     forwarded `settings_save`, so a "Smetana Next" install has the whole document in the **server's** file and only `dialogs`
      on the device. `settings_device_half` answers the device half of the server's file (or `null`); `seed_device` writes it
      into the device file with this machine's dialog sizes laid over it and sets `deviceSeeded` in the same write, after a copy
      to `settings.pre-seed.json`. The server's file is left whole (the device keys there are dead data), so nothing is lost and a
      rerun does nothing. A marked file is never seeded again.
   A server that already had settings keeps them; a second desktop's old server half survives only in its `.pre-split` copy.
-  Known edge for the future switch-over task: source two seeds from the server's file whenever the device file is unmarked
-  and source one did not fire, so a release device file with a customised device half but no server half, meeting a server
-  file that already holds device keys, takes the server's.
+  Known edge: source two seeds from the server's file whenever the device file is unmarked and source one did not fire, so a
+  device file with a customised device half but no server half, meeting a server file that already holds device keys, takes
+  the server's. At switch-over it does not arise: a release file always carries a server half (source one fires and marks the
+  file), and the local server's directory is new, with no file of a Next build in it.
 
 ## Protocol 1.9: the server's own commands
 
@@ -449,7 +474,7 @@ reply gains `resumedAfter` only when `data` is the continuation after that numbe
 `seq`. A desktop device that attaches is registered for the session (`Outbox` in `bridge.rs`): output is coalesced per
 session and per device, a device that falls behind its ceiling (`OUTBOX_CAP`) is sent the ring again as `terminal:output`
 with `reset: true`, and the worker is never made to wait. The PTY has the size of the client that last wrote or resized it
-(`Viewers`); the in-process window is client 0.
+(`Viewers`).
 
 **How a client follows a session.** Attaching is the whole subscription: `terminal_attach` (a desktop device only) registers
 the follow before the worker is asked and arms it once the reply is on its way, so no `Listen` is needed and the reply

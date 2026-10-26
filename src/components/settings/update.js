@@ -151,11 +151,10 @@ export function updateLine(state) {
    button disabled rather than nothing at all, so the row does not lose a
    control for the length of a network round trip and then grow one back.
 
-   `ready` offers Install unconditionally, and that is deliberate: a run going
-   somewhere else is the one thing that refuses it, the refusal is Rust's to
-   make and it arrives carrying the projects it named. A control drawn dead here
-   on a guess would be inert with nothing said — and it would be wrong, since
-   this window cannot see a run in a project nobody is looking at. */
+   `ready` offers Install unconditionally. Installing replaces the client and
+   nothing else: the runs and sessions belong to `smetanad`, which is detached and
+   goes on running, so no run refuses it. A refusal that still comes back is
+   Rust's to make, and it arrives in words. */
 export function updateAction(state) {
   const kind = updateKind(state)
   if (kind === 'idle' || kind === 'failed') {
@@ -183,10 +182,10 @@ export function shownRefusal(err) {
    — the same shape `runFailure` in `DesktopApp.vue` reads and for the same
    reason: a refusal that cannot say what is in the way sends somebody to guess.
 
-   The two that carry somebody else's message (`runs`, `install`) are passed
-   through as they are, which is what `runFailure` does with a broken config: the
-   borrowed half is the only part that says what actually went wrong. The two
-   this app writes itself are rewritten in this app's voice rather than quoted,
+   The one that carries somebody else's message (`install`) is passed through as
+   it is, which is what `runFailure` does with a broken config: the borrowed half
+   is the only part that says what actually went wrong. The two this app writes
+   itself are rewritten in this app's voice rather than quoted,
    since the `thiserror` text is a fragment built for a log line and never
    travels on the wire anyway — `#[serde(tag, content)]` carries the tag and the
    fields, and nothing of `#[error]`. */
@@ -194,15 +193,9 @@ export function installRefusal(err) {
   if (!err) return null
   /* A channel that broke rather than a refusal that was made: `invoke` rejects
      with whatever it was given, and not every failure on the way to Rust is one
-     of the six below. */
+     of the four below. */
   if (typeof err === 'string') return err
   const detail = err.detail
-  if (err.kind === 'run_live') {
-    const projects = typeof detail?.projects === 'string' && detail.projects ? detail.projects : null
-    return projects
-      ? `A run is going in ${projects}. Installing restarts the app, which would end it.`
-      : 'A run is going. Installing restarts the app, which would end it.'
-  }
   if (err.kind === 'nothing_ready') return 'There is no downloaded update to install.'
   if (err.kind === 'development_build') return 'A development build does not replace itself.'
   if (typeof detail === 'string' && detail) return detail

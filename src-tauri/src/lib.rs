@@ -46,10 +46,11 @@ const LOG_FILES_KEPT: usize = 10;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   // First, and before the builder rather than inside the setup hook: launchd
-  // hands a bundled app a soft descriptor limit of 256, every agent
-  // `terminal::pty` starts inherits it, and a limit raised after a child exists
-  // is of no use to that child. `rlimit` records what claude prints when it
-  // gets the inherited number, and why the hard limit is not the answer.
+  // hands a bundled app a soft descriptor limit of 256, and the local
+  // `smetanad` this shell starts inherits it. The server raises its own before
+  // it starts an agent, so this is the shell's own share and a floor for the
+  // child; `rlimit` records what claude prints when it gets the inherited
+  // number, and why the hard limit is not the answer.
   rlimit::raise();
   tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())

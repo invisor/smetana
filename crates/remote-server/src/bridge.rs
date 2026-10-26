@@ -279,7 +279,7 @@ pub const CLIENT_COMMANDS: &[&str] = &[
     // of the server's to ask, so a device that calls one is `Forbidden`.
     "connection_state",
     "connection_retry",
-    // The client build's own half of the settings (`settings/split.rs`): the file on this machine.
+    // The desktop client's own half of the settings (`settings/split.rs`): the file on this machine.
     "device_settings_load",
     "device_settings_save",
     // Which server this device uses, and the files on this machine that a remote server cannot reach.

@@ -308,7 +308,7 @@ async fn gate(client: &Client, running: &str, may_restart: bool) -> Gate {
             }
         },
         Err(err) => {
-            log::warn!("split: the older local server would not restart: {err}");
+            log::warn!("client: the older local server would not restart: {err}");
             Gate::Outdated(outdated)
         }
     }
@@ -527,17 +527,17 @@ pub async fn supervise(link: Arc<Link>, config: Config) {
                 link.pause(Backoff::FIRST * 2).await;
             }
             Attempt::Failed(Failure::Transient(reason)) => {
-                log::info!("split: no connection: {reason}");
+                log::info!("client: no connection: {reason}");
                 link.failed(Phase::Connecting, reason, None);
                 link.pause(backoff.next()).await;
             }
             Attempt::Failed(Failure::Unpaired(reason)) => {
-                log::warn!("split: unpaired: {reason}");
+                log::warn!("client: unpaired: {reason}");
                 link.failed(Phase::Unpaired, reason, None);
                 link.pause(SLOW_POLL).await;
             }
             Attempt::Failed(Failure::Incompatible(reason, info)) => {
-                log::warn!("split: incompatible: {reason}");
+                log::warn!("client: incompatible: {reason}");
                 link.failed(Phase::Incompatible, reason, info);
                 link.pause(SLOW_POLL).await;
             }

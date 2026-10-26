@@ -66,7 +66,7 @@ pub fn start(app: &AppHandle) {
             tauri::async_runtime::spawn(link::supervise(link, config));
         }
         Err(reason) => {
-            log::error!("split: no data directory, no server to reach: {reason}");
+            log::error!("client: no data directory, no server to reach: {reason}");
             link.broken(format!("there is no data directory to keep a server in: {reason}"));
         }
     }

@@ -42,7 +42,7 @@ const wait = async () => {
   await settings.flushPending()
 }
 
-describe('loading in the client build', () => {
+describe('loading on the desktop client', () => {
   it('takes the server half from the server and the device half from the device file', async () => {
     await settings.loadSettings()
     const s = settings.settings
@@ -63,7 +63,7 @@ describe('loading in the client build', () => {
   })
 })
 
-describe('saving in the client build', () => {
+describe('saving on the desktop client', () => {
   it('sends the server only the field that changed, and never the whole file', async () => {
     await settings.loadSettings()
     settings.settings.agentRoles.tasks.agent = 'codex'
@@ -218,8 +218,8 @@ describe('a change another client makes while the first read is out', () => {
   })
 })
 
-describe('the release build and a browser', () => {
-  it('write one file whole, as before', async () => {
+describe('a browser, with no shell', () => {
+  it('writes one document whole to the mock', async () => {
     ipc.on('connection_state', { mode: 'browser', state: 'connected', epoch: 0 })
     await settings.loadSettings()
     settings.settings.agentPrompt = 'x'

@@ -164,7 +164,7 @@ pub enum UpdateState {
     Failed { message: String },
 }
 
-/// What a run gate or an install refuses for. `kind`/`detail` is `RunError`'s
+/// What an install refuses for. `kind`/`detail` is `RunError`'s
 /// shape, so the front end reads both the same way.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, thiserror::Error)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]

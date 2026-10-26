@@ -1436,10 +1436,9 @@ pub struct Settings {
     /// How big each dialog window was dragged to. At the root for the reason
     /// `DialogSize` records.
     pub dialogs: BTreeMap<String, DialogSize>,
-    /// Set once, by the client build, when this file's device half has been settled: seeded from the
+    /// Set once, by the desktop client, when this file's device half has been settled: seeded from the
     /// server's file if an earlier build kept it there, or found already in place. It is the marker
-    /// the seeding runs by (`split::seed_device`) and means nothing to the release build, which
-    /// leaves it as it finds it.
+    /// the seeding runs by (`split::seed_device`); a server's own file leaves it as it finds it.
     pub device_seeded: bool,
 }
 

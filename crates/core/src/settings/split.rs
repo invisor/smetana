@@ -1,7 +1,8 @@
 //! What of `settings.json` is the server's and what is the device's.
 //!
-//! Step 6 of `docs/superpowers/specs/2026-10-25-headless-server-design.md`, and only for the client
-//! build (`split`): the release goes on writing one file whole, exactly as before.
+//! Step 6 of `docs/superpowers/specs/2026-10-25-headless-server-design.md`. The desktop is a client of
+//! `smetanad` and keeps the device's half; the server keeps the other. Only a browser, with no shell
+//! and no server, still reads and writes one document whole (the mock back end).
 //!
 //! **The rule is one question: does the server read it?** If a worker on the server reads the field —
 //! an agent's profile, a run's policy, the relay it pairs through, the project list it starts from —

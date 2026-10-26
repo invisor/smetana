@@ -98,8 +98,8 @@ export async function checkForUpdate() {
 }
 
 /* The press on Install. It rejects with `UpdateError`'s `{kind, detail}` and
-   this deliberately does not catch it: the refusal is the answer — the run
-   gate, a development build, an install that would not go through — and the
+   this deliberately does not catch it: the refusal is the answer — nothing
+   downloaded, a development build, an install that would not go through — and the
    window turns it into a sentence with `installRefusal`. The same division
    `startRun` keeps with `runFailure` one file over.
 

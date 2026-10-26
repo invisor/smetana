@@ -246,18 +246,6 @@ describe('the control the row offers', () => {
 })
 
 describe('why an install did not happen', () => {
-  it('names the projects the run gate refused for', () => {
-    expect(installRefusal({ kind: 'run_live', detail: { projects: 'smetana, notes' } })).toBe(
-      'A run is going in smetana, notes. Installing restarts the app, which would end it.'
-    )
-  })
-
-  it('still explains the gate when the refusal named no project', () => {
-    expect(installRefusal({ kind: 'run_live', detail: {} })).toBe(
-      'A run is going. Installing restarts the app, which would end it.'
-    )
-  })
-
   it('says there is nothing to install when the state moved under the press', () => {
     expect(installRefusal({ kind: 'nothing_ready' })).toBe(
       'There is no downloaded update to install.'
@@ -272,8 +260,8 @@ describe('why an install did not happen', () => {
   })
 
   it('keeps every other rejection as a refusal to show', () => {
-    const gate = { kind: 'run_live', detail: { projects: 'smetana' } }
-    expect(shownRefusal(gate)).toBe(gate)
+    const development = { kind: 'development_build', detail: null }
+    expect(shownRefusal(development)).toBe(development)
     expect(shownRefusal({ kind: 'install', detail: 'permission denied' })).toEqual({
       kind: 'install',
       detail: 'permission denied'
@@ -287,13 +275,9 @@ describe('why an install did not happen', () => {
     )
   })
 
-  it('passes through the two refusals that carry somebody else’s words', () => {
-    // The run worker could not be reached, and the install itself would not go
-    // through: both messages are the only part that says what actually
-    // happened, so they are shown rather than replaced.
-    expect(installRefusal({ kind: 'runs', detail: 'the run worker did not answer' })).toBe(
-      'the run worker did not answer'
-    )
+  it('passes through the refusal that carries somebody else’s words', () => {
+    // The install itself would not go through: the plugin's message is the only
+    // part that says what actually happened, so it is shown rather than replaced.
     expect(installRefusal({ kind: 'install', detail: 'permission denied' })).toBe(
       'permission denied'
     )

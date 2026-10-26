@@ -307,7 +307,7 @@ and belongs to an agent waiting for a person, while an update that has waited an
 for waiting another. Its button opens the settings window on About rather than installing from the
 panel — the same bargain the storage card makes with Clean up, and for a sharper reason: installing
 restarts the app over unsaved editor buffers and live terminals, so the press belongs beside the
-sentence naming the version and the refusal that may come back from the run gate.
+sentence naming the version and any refusal that comes back from it.
 
 The import direction is the **opposite of the runs source's, on purpose**. `runs.js` and
 `notifications.js` import each other, which is the cycle both files carry a warning about; nothing

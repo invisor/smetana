@@ -124,11 +124,17 @@ list still belongs to the New task window alone, and nothing in the image window
 drop or keep one — and reading through a second command changes nothing about that, since neither one
 is a subscription either.
 
-**Remote placement is the one exception, and it is the client build's** (`.claude/rules/remote.md`, "A server on another machine"). A path
+**Remote placement is the one exception** (`.claude/rules/remote.md`, "A server on another machine"). A path
 picked or dropped on this machine names a file a remote server cannot open, so there the bytes travel: `importPaths`, a message's
 attachments and a file dropped on a terminal read the file here (`client_file_read`, refused over `MAX_ATTACHMENT_BYTES` before it is read -
 the front end carries no copy of that number) and store it with `attachment_write`; what is kept in a task or given to an agent is the
 server's path. With the server on this machine nothing in this paragraph applies and the rule below stands.
+
+**The store is the server's.** It is `attachments/` in the server's data directory — for the local server
+`<app data dir>/server/attachments`. The release before the switch-over kept it in `<app data dir>/attachments`,
+and issues name those paths; the local server's first start mirrors that tree into its own (hard links where it can,
+`smetanad::inherit`) and removes nothing, so an old path in an issue goes on resolving and a new attachment lands in
+the server's store.
 
 **What travels to it is the path, and never the bytes.** A record's `url` is a `data:` URL of up to
 `MAX_ATTACHMENT_BYTES` of base64: it fits in no URL, and putting it on the event channel would be thirteen
@@ -171,7 +177,7 @@ Nothing is *collected* twice either, which is the smaller half: `attachment_impo
 `attachment_write` are commands rather than subscriptions, so the move added no second observer and
 no second copy of the list.
 
-**The bytes are copied, never pointed at.** They go into `app_data_dir()` and the path that reaches
+**The bytes are copied, never pointed at.** They go into the server's data directory and the path that reaches
 the agent is absolute, because the case this exists for is a screenshot in `~/Downloads` that a
 person throws away in a week and the link in the issue has to outlive that. Writing into the
 repository instead would work in every clone and worktree, but only for files somebody committed, and
@@ -182,7 +188,7 @@ A picture taken on a phone arrives by the same `attachment_write`, over the brid
 There is no `resolve_within` here, and its absence is the design rather than an oversight.
 `files/fs.rs` confines every path to the project root because everything it touches belongs to the
 project; nothing here does — the *source* is whatever a person picked in the OS's own dialog or
-dragged off their desktop. What is confined is the *destination*: always `app_data_dir()/attachments`,
+dragged off their desktop. What is confined is the *destination*: always `<server data dir>/attachments`,
 under a name that is not the one that arrived. `stored_name` builds it from a timestamp and a `slug`
 keeping ASCII letters and digits and nothing else, so no incoming name can climb a directory, hide
 behind a dot or need quoting — that string ends up in a prompt, in a shell argument and in an issue
