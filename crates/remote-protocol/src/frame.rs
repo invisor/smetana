@@ -84,14 +84,7 @@ pub async fn read_frame<T: DeserializeOwned>(
     recv: &mut RecvStream,
     limit: usize,
 ) -> Result<T, FrameError> {
-    let mut prefix = [0u8; 4];
-    recv.read_exact(&mut prefix).await.map_err(|e| FrameError::Io(e.to_string()))?;
-    let len = u32::from_be_bytes(prefix) as usize;
-    if len > limit.min(MAX_FRAME) {
-        return Err(FrameError::TooLarge(len));
-    }
-    let mut body = vec![0u8; len];
-    recv.read_exact(&mut body).await.map_err(|e| FrameError::Io(e.to_string()))?;
+    let body = read_frame_bytes(recv, limit).await?;
     postcard::from_bytes(&body).map_err(|e| FrameError::Decode(e.to_string()))
 }
 
