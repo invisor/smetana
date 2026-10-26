@@ -156,7 +156,7 @@ pub fn run() {
           .rotation_strategy(RotationStrategy::KeepSome(LOG_FILES_KEPT))
           .targets([
             Target::new(TargetKind::Stdout),
-            Target::new(TargetKind::LogDir { file_name: None }),
+            Target::new(dirs::log_target(app.handle())),
           ])
           .build(),
       ) {
