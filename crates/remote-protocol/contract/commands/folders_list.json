@@ -1,0 +1,7 @@
+{
+  "args": [{"path":null},{"path":"/home/dev/app"}],
+  "reply": [
+    {"entries":[{"name":"app","path":"/home/dev/app","repo":true,"tracker":true},{"name":"notes","path":"/home/dev/notes","repo":false,"tracker":false}],"parent":null,"path":"/home/dev","repo":false,"root":"/home/dev","tracker":false,"truncated":false},
+    {"entries":[],"parent":"/home/dev","path":"/home/dev/app","repo":true,"root":"/home/dev","tracker":true,"truncated":true}
+  ]
+}

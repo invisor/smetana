@@ -1,0 +1,50 @@
+# The Smetana server as a systemd service. See README.md beside this file.
+#
+# Installed by hand into /etc/systemd/system/smetanad.service after the two lines marked EDIT are
+# true for your machine. It runs as an ordinary user, never root: smetanad refuses to start as
+# root, and the agents it starts should not have a root shell either.
+#
+#   sudo useradd --system --create-home --home-dir /var/lib/smetana --shell /bin/bash smetana
+#   sudo install -d -o smetana -g smetana /var/lib/smetana/data
+#   sudo systemctl daemon-reload && sudo systemctl enable --now smetanad
+[Unit]
+Description=Smetana server
+Documentation=https://github.com/invisor/smetana/blob/main/server/smetanad/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# EDIT: the user the agents run as. Their CLIs (claude, codex, ...) and git credentials are installed
+# and logged in for this user, and the folders a project is added from are under its home.
+User=smetana
+Group=smetana
+# EDIT: where the archive was unpacked. `bd` is looked for beside the executable.
+ExecStart=/opt/smetana/smetanad run --data-dir /var/lib/smetana/data --resource-dir /opt/smetana/resources
+# Agents and builds need the user's own environment: `claude` and friends are usually installed under
+# ~/.local/bin or by a version manager, which a bare service PATH does not include.
+Environment=HOME=/var/lib/smetana
+Environment=PATH=/var/lib/smetana/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/var/lib/smetana
+
+# A restart asked for from a client (`server_restart`) ends the process and starts it again by itself;
+# where it cannot it exits 75, which means "start me again". A stop asked for from a client
+# (`stop-when-idle`) exits 0 and must not be started again.
+Restart=on-failure
+RestartSec=3
+RestartForceExitStatus=75
+SuccessExitStatus=75
+# Children first, then the process: a terminal's shell is not left behind by a stop.
+KillMode=control-group
+TimeoutStopSec=30
+
+# The agents run commands on this machine as this user, which is what the server is for, so the sandbox
+# options that would stop that are not set. These are the ones that cost nothing:
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

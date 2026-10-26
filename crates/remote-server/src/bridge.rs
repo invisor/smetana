@@ -236,6 +236,14 @@ pub const DESKTOP_COMMANDS: &[&str] = &[
     "connection_retry",
     "device_settings_load",
     "device_settings_save",
+    // Which server this device uses, and the files on this machine that a remote server cannot reach.
+    "server_target",
+    "server_use_local",
+    "server_use_remote",
+    "server_local_work",
+    "client_file_read",
+    "client_open_document",
+    "client_open_fetched",
 ];
 
 /// The commands that act on the machine the person sits at, and so are not the server's: the
@@ -272,6 +280,14 @@ pub const CLIENT_COMMANDS: &[&str] = &[
     // The client build's own half of the settings (`settings/split.rs`): the file on this machine.
     "device_settings_load",
     "device_settings_save",
+    // Which server this device uses, and the files on this machine that a remote server cannot reach.
+    "server_target",
+    "server_use_local",
+    "server_use_remote",
+    "server_local_work",
+    "client_file_read",
+    "client_open_document",
+    "client_open_fetched",
 ];
 
 /// What the output buffer of one device for one session may hold before the device is sent the

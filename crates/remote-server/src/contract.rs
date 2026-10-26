@@ -908,6 +908,16 @@ fn server_replies(map: &mut BTreeMap<&'static str, Vec<Value>>) {
 
     map.insert("server_health", vec![json_of(&health_ok()), json_of(&health_with_problems())]);
     map.insert("server_restart", restart_replies());
+    map.insert("server_work", vec![json_of(&restart_work()), json!([])]);
+    map.insert("folders_list", folder_listings());
+    map.insert(
+        "project_clone",
+        vec![json_of(&crate::placement::Cloned { path: "/home/dev/app".into() })],
+    );
+    map.insert(
+        "server_file_read",
+        vec![json_of(&crate::placement::Fetched { name: "run-1.html".into(), bytes: 2, data: "aGk=".into() })],
+    );
 
     map.insert("settings_patch", settings_halves());
     map.insert("settings_adopt", vec![json!(true), json!(false)]);
@@ -997,6 +1007,37 @@ fn restart_work() -> Vec<crate::gateway::LiveWork> {
     ]
 }
 
+/// The folder browser's two shapes: the root, and a folder below it that is a repository.
+fn folder_listings() -> Vec<Value> {
+    use crate::placement::{FolderEntry, FolderListing};
+    let entry = |name: &str, repo: bool, tracker: bool| FolderEntry {
+        name: name.into(),
+        path: format!("/home/dev/{name}"),
+        repo,
+        tracker,
+    };
+    vec![
+        json_of(&FolderListing {
+            root: "/home/dev".into(),
+            path: "/home/dev".into(),
+            parent: None,
+            entries: vec![entry("app", true, true), entry("notes", false, false)],
+            truncated: false,
+            repo: false,
+            tracker: false,
+        }),
+        json_of(&FolderListing {
+            root: "/home/dev".into(),
+            path: "/home/dev/app".into(),
+            parent: Some("/home/dev".into()),
+            entries: vec![],
+            truncated: true,
+            repo: true,
+            tracker: true,
+        }),
+    ]
+}
+
 fn restart_replies() -> Vec<Value> {
     use crate::gateway::{LiveWork, Outcome, Reply};
     let work = restart_work();
@@ -1005,6 +1046,7 @@ fn restart_replies() -> Vec<Value> {
         reply(Outcome::NeedsConfirmation, false, &work),
         reply(Outcome::Scheduled, true, &work[..1]),
         reply(Outcome::Restarting, false, &work),
+        reply(Outcome::Stopping, false, &[]),
         reply(Outcome::Cancelled, false, &[]),
         reply(Outcome::NothingScheduled, false, &[]),
         reply(Outcome::AlreadyRestarting, false, &[]),

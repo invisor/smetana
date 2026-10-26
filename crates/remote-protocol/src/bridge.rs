@@ -268,6 +268,11 @@ pub const SERVER_COMMANDS: &[&str] = &[
     "settings_patch",
     "settings_adopt",
     "settings_device_half",
+    // Added in protocol 1.11: what a client of a remote server cannot do on its own disk.
+    "folders_list",
+    "project_clone",
+    "server_file_read",
+    "server_work",
 ];
 
 /// The server commands that exist only on the server: the desktop app registers no Tauri command of
@@ -281,9 +286,26 @@ pub const SERVER_COMMANDS: &[&str] = &[
 /// - `settings_adopt` — `{ patch }`: the migration's way in, taken only by a server with no settings yet.
 /// - `settings_device_half` — `{}`: the device's half of the server's own `settings.json` (or `null`), for
 ///   the one-time seeding of a client whose earlier build kept the whole document on the server.
-/// - `server_restart` — the restart gateway: `{ mode: "now" | "when-idle" | "cancel", confirm }`.
-///   Nothing is restarted while work is alive unless the same request carries `confirm: true`.
-pub const SERVER_ONLY_COMMANDS: &[&str] = &["server_health", "server_restart", "settings_patch", "settings_adopt", "settings_device_half"];
+/// - `server_restart` — the restart gateway: `{ mode: "now" | "when-idle" | "stop-when-idle" | "cancel", confirmed }`.
+///   Nothing is restarted while work is alive unless the same request carries the list it was shown.
+///   `stop-when-idle` ends the server, instead of restarting it, when no work is alive (protocol 1.11).
+/// - `folders_list` — `{ path }` (or `null` for the root): the directories under the server user's home,
+///   for a client that cannot open a folder dialog on the server's disk. Confined to that root.
+/// - `project_clone` — `{ url, parent, name }`: `git clone` into a new folder under a folder in that root.
+/// - `server_file_read` — `{ path }`: one file's bytes, only from the attachment store or a project's
+///   `.smetana/reports` folder; anything else is refused. See `smetana_core::placement`.
+/// - `server_work` — `{}`: the live work a restart or a stop would end, read-only.
+pub const SERVER_ONLY_COMMANDS: &[&str] = &[
+    "server_health",
+    "server_restart",
+    "settings_patch",
+    "settings_adopt",
+    "settings_device_half",
+    "folders_list",
+    "project_clone",
+    "server_file_read",
+    "server_work",
+];
 
 /// Every event a desktop device may listen to: the phone's list (first), then the rest of what
 /// the desktop's front end listens to that a server emits. `terminal:output` is the one that is

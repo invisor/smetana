@@ -1,0 +1,6 @@
+{
+  "args": [{"name":null,"parent":"/home/dev","url":"https://github.com/team/app.git"},{"name":"app-2","parent":"/home/dev","url":"git@github.com:team/app.git"}],
+  "reply": [
+    {"path":"/home/dev/app"}
+  ]
+}

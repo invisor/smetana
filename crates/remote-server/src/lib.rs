@@ -33,7 +33,7 @@ use remote_protocol::{DeviceKind, Platform, PublicKey};
 use serde::Serialize;
 // The workers live in `smetana-core`; these bring its modules in under the names the desktop shell has
 // always used, so `crate::tracker::...` reads the same here as it does there.
-use smetana_core::{agents, attachments, context, runs, session, settings, terminal, tracker};
+use smetana_core::{agents, attachments, context, placement, runs, session, settings, terminal, tracker};
 
 use devices::{Device, Devices};
 use pairing::Pairing;
@@ -43,7 +43,7 @@ pub use smetana_core::remote::DEFAULT_RELAY_URL;
 /// The protocol this desktop speaks. A phone on another major is answered with
 /// this and disconnected.
 pub const PROTOCOL_MAJOR: u16 = 1;
-pub const PROTOCOL_MINOR: u16 = 10;
+pub const PROTOCOL_MINOR: u16 = 11;
 
 /// Below this the phone shows one screen, "Update the app", and calls nothing.
 pub const MIN_MOBILE_VERSION: &str = "0.1.0";
