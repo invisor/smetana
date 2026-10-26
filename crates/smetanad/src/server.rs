@@ -332,11 +332,13 @@ impl Server {
             report
         });
         let key_file = data_dir.join(endpoint::KEY_FILE);
-        let key = if inherited.as_ref().is_some_and(|report| report.key_pending) && !key_file.exists() {
+        let unkept = inherited.as_ref().is_some_and(|report| report.key_pending) && !key_file.exists();
+        let key = if unkept {
             // The old release's key is there and could not be taken this time. A key made and kept now
             // would stand in its place for good and unpair every phone; one held only for this run
             // leaves the next start free to take it. The inherited phones are not on the list yet, so
-            // nothing dials this run's key from outside.
+            // nothing dials this run's key from outside, and the public side is refused below so that
+            // nothing pairs with it either.
             log::warn!("serving this run under a key that is not kept, until the old release's key can be taken");
             iroh::SecretKey::generate()
         } else {
@@ -389,6 +391,12 @@ impl Server {
             }),
             relay,
         );
+        if unkept {
+            remote.refuse_public(
+                "Pairing is off until this server can read the key the old app kept; restart the server once that file is readable."
+                    .to_owned(),
+            );
+        }
         let _ = sink.remote.set(Arc::downgrade(&remote));
 
         let restart = Arc::new(Notify::new());

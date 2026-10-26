@@ -231,12 +231,17 @@ move**, so an older release reinstalled still finds its data:
   until the server has a `settings.json` of its own, so a phone paired through a person's own relay finds the server there.
   The shell passes the flag on every start, which is what lets the update itself need no step of its own.
 - **It never stops the server.** Each failed step is a line in `Report::problems`, logged, and the start goes on: a key that
-  does not parse (useless to the old release too) leaves the server to make its own, and the list bound to it stays where it
-  is; a key that cannot be read or written *this time* sets `key_pending`, and the server serves that run under a key it does
-  not keep, so the next start can still take the real one; an attachment that cannot be mirrored is skipped. `inherited.json`
-  is written last and **only when nothing failed**, so a failed step is tried again next start, and every step skips what is
-  already done. Tests: `inherit.rs`, and `tests/server.rs` (a real `Server::start` over an old directory keeps the node id,
-  the phone and the relay; a damaged old key still starts).
+  does not parse or is not text (useless to the old release too) leaves the server to make its own, and the list bound to it
+  stays where it is; a key that cannot be read or written *this time* sets `key_pending`, and the server serves that run
+  under a key it does not keep, **with its public side refused** (`Remote::refuse_public`: no public endpoint, no
+  `remote_pair_begin`), so the next start can still take the real one and nothing pairs with a node id that will vanish; an
+  attachment that cannot be mirrored is skipped and holds nothing back. `inherited.json` is written last unless the key is
+  pending or the device merge failed, and every step skips what is already done.
+- **The device merge happens once, ever** (`inherited-devices.json`, written as soon as it succeeds, and checked before it
+  runs): merging on a later start would bring back a phone the person revoked in the meantime. Tests: `inherit.rs`
+  (including a revoke followed by a restart with the completion marker missing), and `tests/server.rs` (a real
+  `Server::start` over an old directory keeps the node id, the phone and the relay; a damaged old key still starts; an
+  unreadable one starts under an unkept key and refuses to pair).
 - **A development build inherits nothing.** `npm run tauri dev` runs under the release's identifier, so Tauri's data
   directory *is* the release's. `src-tauri/src/dirs.rs` moves every directory the shell reads to a sibling,
   `<identifier>.dev`, under `debug_assertions`, and `client::placement` passes no `--inherit-from` and no settings file to

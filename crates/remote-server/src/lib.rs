@@ -84,6 +84,10 @@ pub struct Remote {
     /// The endpoint bound on loopback with no relay, for a client on this machine. A second endpoint
     /// with the same key, not a second transport: the protocol on it is the one on the first.
     local: tokio::sync::Mutex<Option<Running>>,
+    /// Set when the key this process serves under is not the one it will have after a restart
+    /// (`refuse_public`): no public endpoint is bound and no ticket is made, because a device paired
+    /// now would pin a node id that disappears with this process.
+    public_refused: std::sync::OnceLock<String>,
 }
 
 impl Remote {
@@ -107,6 +111,7 @@ impl Remote {
             relay,
             running: tokio::sync::Mutex::new(None),
             local: tokio::sync::Mutex::new(None),
+            public_refused: std::sync::OnceLock::new(),
         })
     }
 
@@ -127,11 +132,21 @@ impl Remote {
         self.key.public()
     }
 
+    /// Keeps the public endpoint down for the life of this process, with `reason` as the answer to
+    /// anything that would bind it: starting it and every pairing ticket. The loopback endpoint and
+    /// the local client's pairing are not affected; they are re-made at every start anyway.
+    pub fn refuse_public(&self, reason: String) {
+        let _ = self.public_refused.set(reason);
+    }
+
     /// Starts the endpoint if it is not running with the relay wanted, and
     /// returns that relay. `wanted` is the address the caller has on screen; with
     /// none, the one `settings.json` holds (start-up). A changed relay takes
     /// effect here and ends the connections held on the old one.
     pub async fn ensure_running(self: &Arc<Self>, wanted: Option<&str>) -> Result<String, String> {
+        if let Some(reason) = self.public_refused.get() {
+            return Err(reason.clone());
+        }
         let wanted = match wanted {
             Some(url) => url.trim().to_owned(),
             None => (self.relay)(),

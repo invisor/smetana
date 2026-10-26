@@ -465,8 +465,49 @@ fn an_old_release_whose_key_is_damaged_does_not_keep_the_server_from_starting() 
         options.inherit_from = Some(old.clone());
         let server = Server::start(options).await.expect("a damaged old key is a logged problem, not a refusal to start");
         assert!(old.join("server/attachments/shot.png").is_file(), "what could be taken was taken");
-        assert!(!old.join("server").join(smetanad::inherit::MARKER).exists(), "and the next start looks again");
+        assert!(old.join("server").join(smetanad::inherit::MARKER).exists(), "a key that is not one is not waited for");
         assert_eq!(server.remote.public_relay().await, None, "no inherited phone, so no public endpoint");
         server.shutdown().await;
+    });
+}
+
+/// An old key that cannot be read at this start (here: no permission) leaves the server up under a key
+/// it does not keep, and with that key nothing may pair from outside: a device paired now would pin a
+/// node id that is gone at the next start.
+#[cfg(unix)]
+#[test]
+fn a_server_serving_under_an_unkept_key_refuses_to_pair_anything_from_outside() {
+    use remote_server::endpoint;
+    use std::os::unix::fs::PermissionsExt;
+    common::block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("release");
+        std::fs::create_dir_all(&old).unwrap();
+        let key_file = old.join(endpoint::KEY_FILE);
+        let key = endpoint::load_or_create_key(&key_file).unwrap();
+        std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&key_file).is_ok() {
+            return;
+        }
+
+        let mut options = Options::new(old.join("server"));
+        options.bd = Some(bd());
+        options.inherit_from = Some(old.clone());
+        let server = Server::start(options).await.expect("an unreadable old key does not stop the start");
+        assert_ne!(server.remote.public_key(), key.public());
+        assert!(!old.join("server").join(endpoint::KEY_FILE).exists(), "the stand-in key is not kept");
+        let refused = server.remote.pair_begin("https://relay.example.org", DeviceKind::Phone).await;
+        assert!(refused.is_err(), "no ticket under a key that will not survive a restart");
+        assert_eq!(server.remote.public_relay().await, None);
+        server.shutdown().await;
+
+        // Readable again: the next start takes it, and is the node the phones know.
+        std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut options = Options::new(old.join("server"));
+        options.bd = Some(bd());
+        options.inherit_from = Some(old.clone());
+        let again = Server::start(options).await.expect("restarts");
+        assert_eq!(again.remote.public_key(), key.public());
+        again.shutdown().await;
     });
 }

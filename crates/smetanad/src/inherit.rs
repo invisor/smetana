@@ -37,15 +37,24 @@
 //! would try again for ever; a person with a working release and one damaged file would lose the whole
 //! app over it. So each step that fails is a line in [`Report::problems`] and the start goes on:
 //!
-//! - a key that does not parse was useless to the old release too (it ran without phones), so the
-//!   server makes a key of its own and the list bound to the broken one is left where it is;
+//! - a key that does not parse (or is not text at all) was useless to the old release too (it ran
+//!   without phones), so the server makes a key of its own and the list bound to the broken one is
+//!   left where it is;
 //! - a key that could not be *read* or *written* this time may be next time, so the report says so
 //!   ([`Report::key_pending`]) and the server serves this run under a key it does not keep
-//!   (`Server::start`): writing one would take the place of the key the phones trust for good;
-//! - an attachment that could not be mirrored is skipped and the rest are not.
+//!   (`Server::start`), with its public side refused: writing one would take the place of the key the
+//!   phones trust for good, and a device paired under it would pin a node id gone at the next start;
+//! - an attachment that could not be mirrored is skipped and the rest are not. The store is best
+//!   effort: a picture that cannot be read now is a problem in the log, not a reason to run again.
 //!
-//! The marker [`MARKER`] is written last, and **only when nothing failed**; until it is there each
-//! start does the work again, and each step skips what is already done.
+//! The marker [`MARKER`] is written last, and only when nothing that **can be retried and must be**
+//! failed: a key that may be readable next time, or a device list that could not be merged. Until it
+//! is there each start does the work again, and each step skips what is already done.
+//!
+//! **The device merge happens once, ever**, and has a marker of its own ([`DEVICES_MARKER`]), written
+//! as soon as the merge has succeeded. A merge that ran again would put back a phone the person has
+//! revoked since; the completion marker alone cannot promise it never runs again, because it waits
+//! on the key.
 //!
 //! It also reads which relay the old release paired its phones through (`remote.relayUrl` in the old
 //! `settings.json`), into [`Report::relay`] and the marker. The server binds the public endpoint at
@@ -63,6 +72,10 @@ use serde_json::Value;
 /// What says the inheritance is over. Its absence is the only thing that makes the next start try.
 pub const MARKER: &str = "inherited.json";
 
+/// What says the device list has been merged. Once it is there the old list is never read again, so a
+/// device revoked on the server stays revoked.
+pub const DEVICES_MARKER: &str = "inherited-devices.json";
+
 /// What a run of [`inherit`] did, for the log and for the marker.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 pub struct Report {
@@ -79,7 +92,8 @@ pub struct Report {
     pub attachments: u64,
     /// The relay the old release's settings named, when it had a settings file.
     pub relay: Option<String>,
-    /// Every step that failed, in words. Not empty means no marker, and the next start tries again.
+    /// Every step that failed, in words, for the log. Only a pending key or an unmerged list keeps the
+    /// marker from being written.
     pub problems: Vec<String>,
     /// The run had already been done, or there was nothing to do.
     pub skipped: Option<&'static str>,
@@ -134,10 +148,22 @@ pub fn inherit(from: &Path, into: &Path) -> Report {
 
     let source_devices = from.join(devices::FILE_NAME);
     let own_devices = into.join(devices::FILE_NAME);
-    if source_devices.is_file() && same_key(&source_key, &own_key) {
+    let mut devices_pending = false;
+    if source_devices.is_file() && !into.join(DEVICES_MARKER).exists() && same_key(&source_key, &own_key) {
         match merge_devices(&source_devices, &own_devices) {
-            Ok(added) => report.devices = added,
-            Err(err) => report.problems.push(err),
+            Ok(added) => {
+                report.devices = added;
+                let body = serde_json::json!({ "version": 1, "added": added });
+                if let Err(err) = devices::write_atomic(&into.join(DEVICES_MARKER), body.to_string().as_bytes()) {
+                    // The merge is done and the completion marker below records it too; both failing
+                    // to be written is a disk that is not taking writes at all.
+                    report.problems.push(err);
+                }
+            }
+            Err(err) => {
+                devices_pending = true;
+                report.problems.push(err);
+            }
         }
     }
 
@@ -146,7 +172,7 @@ pub fn inherit(from: &Path, into: &Path) -> Report {
         report.attachments = mirror(&source_store, &into.join("attachments"), &mut report.problems);
     }
 
-    if report.problems.is_empty() {
+    if !report.key_pending && !devices_pending {
         if let Err(err) = write_marker(into, &report) {
             report.problems.push(err);
         }
@@ -170,7 +196,16 @@ enum KeyProblem {
 }
 
 fn take_key(source: &Path, own: &Path) -> Result<(), KeyProblem> {
-    let text = fs::read_to_string(source).map_err(|err| KeyProblem::Unavailable(format!("{}: {err}", source.display())))?;
+    let text = fs::read_to_string(source).map_err(|err| {
+        let why = format!("{}: {err}", source.display());
+        // Bytes that are not text are a damaged key, not a key that may be readable next time: read
+        // again, they fail again, and the server would serve under a new unkept key at every start.
+        if err.kind() == std::io::ErrorKind::InvalidData {
+            KeyProblem::Damaged(why)
+        } else {
+            KeyProblem::Unavailable(why)
+        }
+    })?;
     // Parsed before anything is written: a damaged key is the one thing this must not paper over.
     validate_key(&text, source).map_err(KeyProblem::Damaged)?;
     let temp = own.with_file_name(format!("{}.inheriting", endpoint::KEY_FILE));
@@ -438,7 +473,18 @@ mod tests {
         assert!(!new.join(endpoint::KEY_FILE).exists(), "inheriting makes no key; the server makes its own");
         assert!(!new.join(devices::FILE_NAME).exists(), "a list bound to a broken key is not taken");
         assert_eq!(report.attachments, 2, "the pictures are taken all the same");
-        assert!(!new.join(MARKER).exists(), "a failed step leaves the next start to look again");
+        assert!(new.join(MARKER).exists(), "nothing to try again: the bytes will not become a key");
+    }
+
+    #[test]
+    fn a_key_that_is_not_text_is_damaged_and_not_waited_for() {
+        let (_root, old, new) = dirs();
+        old_release(&old);
+        fs::write(old.join(endpoint::KEY_FILE), [0xff, 0xfe, 0x00, 0x80]).unwrap();
+        let report = inherit(&old, &new);
+        assert!(!report.key_pending, "read again it fails again; waiting would mean a new unkept key at every start");
+        assert!(!report.key && report.problems.len() == 1, "{report:?}");
+        assert!(new.join(MARKER).exists());
     }
 
     #[cfg(unix)]
@@ -475,7 +521,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn an_attachment_that_cannot_be_mirrored_is_skipped_and_the_rest_are_taken() {
+    fn an_attachment_that_cannot_be_mirrored_is_skipped_and_does_not_hold_the_rest_back() {
         use std::os::unix::fs::PermissionsExt;
         let (_root, old, new) = dirs();
         old_release(&old);
@@ -491,11 +537,36 @@ mod tests {
         assert!(report.key && report.devices == 1, "the key and the phones do not wait on a picture");
         assert_eq!(report.attachments, 2, "loose.png and second.png");
         assert!(!report.problems.is_empty());
-        assert!(!new.join(MARKER).exists());
-        // Once the folder can be read, the next start takes what was missing and finishes.
-        let later = inherit(&old, &new);
-        assert_eq!(later.attachments, 1);
-        assert!(later.problems.is_empty() && new.join(MARKER).exists(), "{later:?}");
+        assert!(new.join(MARKER).exists(), "a picture is best effort and does not keep the inheritance open");
+    }
+
+    /// The security half of the rule above: a list merged on every start would bring back a phone the
+    /// person revoked. A folder of pictures that stays unreadable is the ordinary way the completion
+    /// marker could be held back, so this is that case, and then the marker is taken away as well.
+    #[cfg(unix)]
+    #[test]
+    fn a_revoked_phone_stays_revoked_whatever_else_the_inheritance_could_not_finish() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_root, old, new) = dirs();
+        old_release(&old);
+        let locked = old.join("attachments/smetana-abc");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let first = inherit(&old, &new);
+        assert_eq!(first.devices, 1);
+        assert!(new.join(DEVICES_MARKER).exists());
+
+        // The person revokes the lost phone in Devices.
+        let list = devices::Devices::load(new.join(devices::FILE_NAME));
+        let phone = list.all()[0].clone();
+        fs::write(new.join(devices::FILE_NAME), r#"{"version":1,"devices":[]}"#).unwrap();
+        assert!(devices::Devices::load(new.join(devices::FILE_NAME)).all().is_empty(), "{} revoked", phone.name);
+
+        // A restart, and one whose completion marker never got written.
+        let _ = fs::remove_file(new.join(MARKER));
+        let again = inherit(&old, &new);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(again.devices, 0, "{again:?}");
+        assert!(devices::Devices::load(new.join(devices::FILE_NAME)).all().is_empty(), "the revoked phone is not brought back");
     }
 
     #[test]
