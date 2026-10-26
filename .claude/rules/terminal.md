@@ -687,15 +687,23 @@ batch's chunk is translated before any of the three has seen it, inside `absorb`
 position is the whole of why it is safe: one translation ahead of the fork leaves all three reading
 one identical stream, where translating for the pane alone would set them arguing.
 
-`seq` plays the part `generation` plays for the tracker: every flushed output event carries a
-monotonic number, `terminal_attach` hands back the ring's snapshot plus the `seq` to continue from,
-and `terminals.js` re-attaches on an out-of-sequence event. Attaching clears whatever that session
-had queued to flush — it is already in the snapshot just handed over.
+`seq` plays the part `generation` plays for the tracker, and it counts **commits**. Every tick `flush()`
+commits what a session produced since the last one as one numbered chunk (`commit`): the session's `seq`
+rises by one, the chunk goes into a bounded per-session history (`stream::History`, half the ring), and
+the sink is offered it (`Sink::terminal_chunk`) for the clients that follow sessions over connections.
+This happens for **every** session, active or not. The window still sees only the active session: only
+that one's chunk becomes a `terminal:output` event (`{ id, seq, data }`, one chunk per event), and a
+background session's bytes are in the ring and the history and never reach the webview.
+`terminal_attach` hands back the ring's snapshot plus the `seq` to continue from, and `terminals.js`
+re-attaches on an out-of-sequence event. Attaching takes the seat and commits what was pending (so the
+connection clients get it) but withholds the window's event for it, because it is already in the snapshot
+just handed over. `Request::Peek` is the read that takes no seat: the ring *as of the last committed
+chunk* (the uncommitted tail is cut off, so the next chunk repeats nothing), or, given `after`, the bytes
+that followed that chunk when the history still holds them (`resumedAfter` in the reply).
 
-Output only flows to the front end for the **active** session — `flush()` drops a background
-session's pending bytes on the floor every tick, because nobody is rendering them. **State flows for
-every session, active or not** — `reassess()` walks all of them — and that asymmetry is the entire
-point: a background agent's row can turn `needs-you` while its bytes never leave the worker.
+Output flows to the **window** only for the active session. **State flows for every session, active or
+not** — `reassess()` walks all of them — and that asymmetry is the entire point: a background agent's row
+can turn `needs-you` while its bytes never leave the worker for the webview.
 
 Detection is two layers that degrade in one direction only. Layer A (`detect.rs`) is
 agent-independent — a bell, or three seconds of stillness — and has nothing in it to break. Layer B

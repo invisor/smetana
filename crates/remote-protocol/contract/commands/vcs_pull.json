@@ -1,0 +1,7 @@
+{
+  "args": [{"repo":"/work/smetana"}],
+  "reply": [
+    {"kind":"clean","landed":{"commits":2,"deletions":5,"files":3,"insertions":40}},
+    {"files":["src/a.js"],"kind":"conflict"}
+  ]
+}

@@ -38,6 +38,7 @@ fn platform_name(platform: Platform) -> &'static str {
     match platform {
         Platform::Ios => "ios",
         Platform::Android => "android",
+        Platform::Desktop => "desktop",
     }
 }
 
@@ -52,6 +53,11 @@ fn blob_for(device: &Device, plaintext: &[u8]) -> Option<String> {
 pub async fn deliver(client: &reqwest::Client, gateway: &str, devices: &[Device], message: &Message) {
     let Ok(plaintext) = serde_json::to_vec(message) else { return };
     for device in devices {
+        // The gateway knows two platforms and answers 400 to anything else; a desktop is woken by
+        // its own connection, not by a push.
+        if device.platform == Platform::Desktop {
+            continue;
+        }
         let Some(token) = device.push_token.as_deref().filter(|token| !token.is_empty()) else {
             continue;
         };
@@ -100,7 +106,9 @@ fn client() -> Option<reqwest::Client> {
 /// workers that want a push sent say so through `notify_*` below and never hold the `Remote`.
 pub fn dispatch(remote: &Arc<Remote>, message: Message) {
     let devices: Vec<Device> =
-        remote.devices.all().into_iter().filter(|device| device.push_token.is_some()).collect();
+        remote.devices.all().into_iter()
+        .filter(|device| device.push_token.is_some() && device.platform != Platform::Desktop)
+        .collect();
     if devices.is_empty() {
         return;
     }
@@ -163,6 +171,7 @@ mod tests {
             push_key: data_encoding::HEXLOWER.encode(&public),
             paired_at: 1,
             last_contact: None,
+            kind: remote_protocol::DeviceKind::Phone,
         }
     }
 
@@ -215,6 +224,19 @@ mod tests {
         assert_eq!(plain["body"], "smetana: 5 tasks closed, 1 waiting for you");
         assert_eq!(plain["target"], "run:/work/smetana");
         assert_eq!(decrypt(&b, &seen[1])["kind"], "run-finished");
+    }
+
+    #[tokio::test]
+    async fn a_desktop_with_a_token_is_not_sent_to_the_gateway() {
+        let gateway = gateway(StatusCode::OK).await;
+        let devices = vec![
+            device("desktop", Platform::Desktop, Some("zz"), &[3; 32]),
+            device("phone", Platform::Ios, Some("ab12"), &[1; 32]),
+        ];
+        deliver(&http(), &gateway.url, &devices, &run_finished("/p", None)).await;
+        let seen = gateway.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0]["platform"], "ios");
     }
 
     #[tokio::test]

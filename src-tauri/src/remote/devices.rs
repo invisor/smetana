@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use remote_protocol::{Platform, PublicKey};
+use remote_protocol::{DeviceKind, Platform, PublicKey};
 use serde::{Deserialize, Serialize};
 
 pub const FILE_NAME: &str = "remote-devices.json";
@@ -37,6 +37,10 @@ pub struct Device {
     pub paired_at: u64,
     /// The last time this phone completed a handshake, if it ever has.
     pub last_contact: Option<u64>,
+    /// What this device may do. Fixed at pairing by the ticket it spent. An entry written before
+    /// kinds existed has none, and is a phone: the safe direction.
+    #[serde(default)]
+    pub kind: DeviceKind,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -86,8 +90,13 @@ impl Devices {
     }
 
     pub fn contains(&self, key: &PublicKey) -> bool {
+        self.kind_of(key).is_some()
+    }
+
+    /// What the device with this key may do, or `None` when it is not on the list.
+    pub fn kind_of(&self, key: &PublicKey) -> Option<DeviceKind> {
         let key = key.to_string();
-        self.lock().iter().any(|device| device.key == key)
+        self.lock().iter().find(|device| device.key == key).map(|device| device.kind)
     }
 
     /// Adds a device, replacing an earlier entry for the same key (a phone that
@@ -207,7 +216,35 @@ mod tests {
             push_key: "00".repeat(32),
             paired_at: 5,
             last_contact: None,
+            kind: DeviceKind::Phone,
         }
+    }
+
+    #[test]
+    fn an_entry_written_before_kinds_existed_is_a_phone() {
+        let dir = dir();
+        let path = dir.join(FILE_NAME);
+        let old = format!(
+            r#"{{"version":1,"devices":[{{"key":"{}","name":"Old","platform":"ios","push_token":null,"push_key":"00","paired_at":1,"last_contact":null}}]}}"#,
+            key(1)
+        );
+        fs::write(&path, old).unwrap();
+        let devices = Devices::load(path);
+        assert_eq!(devices.kind_of(&key(1)), Some(DeviceKind::Phone));
+        assert_eq!(devices.kind_of(&key(2)), None);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_desktops_kind_survives_a_restart() {
+        let dir = dir();
+        let path = dir.join(FILE_NAME);
+        let devices = Devices::load(path.clone());
+        let mut desktop = device(3);
+        desktop.kind = DeviceKind::Desktop;
+        devices.add(desktop).unwrap();
+        assert_eq!(Devices::load(path).kind_of(&key(3)), Some(DeviceKind::Desktop));
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

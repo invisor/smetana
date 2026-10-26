@@ -17,12 +17,18 @@ use super::model::{Exit, LogEntry, Session, SessionId, SessionMark, SessionState
 use super::pty::{Chunk, Pty};
 use super::ring::Ring;
 use super::screen::Screen;
+use super::stream::{ClientId, OutState};
 use crate::agents::{self, Intent};
 use crate::runs::{procs, registry};
 
 /// How much raw output every session remembers — this is what xterm.js
 /// repaints itself from when it attaches.
 const RING_CAP: usize = 1024 * 1024;
+
+/// How many bytes of committed chunks a session keeps for a client that drops and comes back
+/// asking for what it missed. Half the ring: a reconnect is usually seconds, and one that is not
+/// is answered with the ring, which is the whole of what the ring is for.
+const HISTORY_CAP: usize = RING_CAP / 2;
 /// The geometry of a session that has never been shown yet.
 const DEFAULT_COLS: u16 = 120;
 const DEFAULT_ROWS: u16 = 30;
@@ -105,6 +111,13 @@ pub struct Attached {
     pub log: Vec<LogEntry>,
     /// The `seq` of the newest entry the budget dropped, or 0.
     pub log_trimmed: u64,
+    /// Present when the caller asked for the output after a number it holds and `data` is
+    /// exactly that: the bytes that followed chunk `resumed_after`, to be written onto the
+    /// terminal the caller already has. Absent when `data` is the ring, which replaces what the
+    /// caller has — either because it asked for no number, or because the history no longer
+    /// reaches back to it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resumed_after: Option<u64>,
 }
 
 /// How many structured entries a session keeps. Past it the oldest go, like
@@ -154,14 +167,22 @@ pub enum Request {
     Attach(SessionId, oneshot::Sender<Result<Attached, TerminalError>>),
     /// The same answer as `Attach`, from a reader that is not the window: it
     /// takes no seat. `active` and the pending output are left alone, because
-    /// `flush` throws away the output of every session that is not `active` —
-    /// an `Attach` from a phone would freeze the tab the desktop has on screen.
-    /// Used by the phone bridge's `terminal_attach`; nothing in the window sends it.
-    Peek(SessionId, oneshot::Sender<Result<Attached, TerminalError>>),
+    /// an `Attach` from a connection would move the tab the desktop has on screen. The second
+    /// field is the number of the last chunk the reader holds, when it holds one: the answer is
+    /// then what followed it if the history still reaches back that far (see
+    /// `Attached::resumed_after`), and the ring otherwise. Used by the bridge's
+    /// `terminal_attach`; nothing in the window sends it.
+    Peek(SessionId, Option<u64>, oneshot::Sender<Result<Attached, TerminalError>>),
     /// Carries the id it is leaving, and not for symmetry: see the handler.
     Detach(SessionId),
-    Resize(SessionId, u16, u16),
-    Write(SessionId, String, oneshot::Sender<Result<(), TerminalError>>),
+    /// The client that asked, the session, and the size that client's view has. The PTY takes
+    /// it (see `stream::Viewers`).
+    Resize(ClientId, SessionId, u16, u16),
+    /// The client that is writing, the session, and the bytes. A write by a client other than
+    /// the one that last wrote or resized puts the PTY at that client's size first.
+    Write(ClientId, SessionId, String, oneshot::Sender<Result<(), TerminalError>>),
+    /// A client's connection ended: every session forgets its size.
+    ForgetClient(ClientId),
     /// Tell this session's harness to forget the conversation so far, in that
     /// harness's own words (`Profile::clear_command`).
     ///
@@ -237,7 +258,10 @@ struct Live {
     /// Accumulated since the last flush — leaves as a single event on the
     /// tick.
     pending: Vec<u8>,
+    /// The number of the last chunk committed (see `commit`).
     seq: u64,
+    /// What clients over connections need: the committed chunks, and whose size the PTY has.
+    out: OutState,
     /// The structured log of a timeline session (`Session::timeline`): bounded
     /// by `LOG_BUDGET`, numbered from 1 by `log_seq`, with `log_trimmed` the
     /// `seq` of the newest entry the budget dropped. `pending_log` is what has
@@ -777,6 +801,18 @@ fn forget_session(live: &Live) {
     super::restore::drop_record(Path::new(&live.session.project), id);
 }
 
+/// The payload of `terminal:output`: the chunk `seq` of session `id`, in base64. A client over a
+/// connection that was sent the ring afresh (see `remote::bridge`) gets the same keys and one
+/// more, `reset: true`, which says the data replaces the terminal's contents.
+pub fn output_payload(id: SessionId, seq: u64, data: &str) -> serde_json::Value {
+    serde_json::json!({ "id": id, "seq": seq, "data": data })
+}
+
+/// The payload of `terminal:log`.
+pub fn log_payload(id: SessionId, entries: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "id": id, "entries": entries })
+}
+
 /// The payload of `terminal:removed`.
 pub fn removed_payload(id: SessionId) -> serde_json::Value {
     serde_json::json!({ "id": id })
@@ -965,38 +1001,47 @@ fn poll_mac_descendants(sessions: &mut HashMap<SessionId, Live>) {
 #[cfg(not(target_os = "macos"))]
 fn poll_mac_descendants(_sessions: &mut HashMap<SessionId, Live>) {}
 
-/// The active session's accumulated output — as one event. Background
-/// sessions do not leak to the front end: their screen is for the app, not
-/// for the human, and it is already here.
+/// Moves what has accumulated since the last commit into a chunk of its own: the session's number
+/// rises by one, the chunk goes into the history a reconnecting client resumes from, and the
+/// caller gets it back to hand on. `None` when nothing has accumulated.
+///
+/// Every session commits, whether or not a window has it on screen. A client over a connection
+/// follows sessions the window never opened, and a chunk the history did not keep is one nobody
+/// could resume from.
+fn commit(live: &mut Live) -> Option<(u64, Vec<u8>)> {
+    if live.pending.is_empty() {
+        return None;
+    }
+    live.seq += 1;
+    let bytes = std::mem::take(&mut live.pending);
+    live.out.history.push(live.seq, bytes.clone());
+    Some((live.seq, bytes))
+}
+
+/// Each tick: what a session produced since the last one leaves as one chunk. The window gets the
+/// active session's as a `terminal:output` event; the clients over connections get every
+/// session's through the sink, which decides who is following what.
 fn flush(ctx: &Context, sessions: &mut HashMap<SessionId, Live>, active: Option<SessionId>) {
     for (id, live) in sessions.iter_mut() {
-        // The log follows the bytes' rule: a background session's is for the
-        // app, which already holds it in the deque, not for a window nobody
-        // has open on it.
         if !live.pending_log.is_empty() {
+            let entries = std::mem::take(&mut live.pending_log);
+            let entries = serde_json::to_value(&entries).unwrap_or_default();
+            ctx.terminal_log(*id, &entries);
+            // The log follows the bytes' rule for the window: a background session's is
+            // already in the deque, which the window reads when it attaches.
             if Some(*id) == active {
-                let entries = std::mem::take(&mut live.pending_log);
-                ctx.emit_json("terminal:log", serde_json::json!({ "id": id, "entries": entries }));
-            } else {
-                live.pending_log.clear();
+                ctx.emit_json("terminal:log", log_payload(*id, &entries));
             }
         }
-        if live.pending.is_empty() {
-            continue;
-        }
+        let Some((seq, bytes)) = commit(live) else { continue };
+        ctx.terminal_chunk(*id, seq, &bytes);
         if Some(*id) != active {
-            live.pending.clear();
             continue;
         }
         // The resync anchor: the front end throws away what it has and
         // re-attaches the moment it sees a gap in this number.
-        live.seq += 1;
-        let data = base64::engine::general_purpose::STANDARD.encode(&live.pending);
-        live.pending.clear();
-        ctx.emit_json(
-            "terminal:output",
-            serde_json::json!({ "id": id, "seq": live.seq, "data": data }),
-        );
+        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        ctx.emit_json("terminal:output", output_payload(*id, seq, &data));
     }
 }
 
@@ -1195,6 +1240,7 @@ fn resume_cwd(root: &Path, cwd: &str) -> Result<PathBuf, TerminalError> {
 /// A window takes a session on screen: it becomes `active`, and the ring comes
 /// back with the `seq` that output arriving after it continues from.
 fn attach(
+    ctx: &Context,
     sessions: &mut HashMap<SessionId, Live>,
     active: &mut Option<SessionId>,
     id: SessionId,
@@ -1221,17 +1267,25 @@ fn attach(
             // survives the acknowledgement; only a bell whose reason
             // has already been read is lost.
             live.bell_pending = false;
-            // Everything accumulated before attaching is already in
-            // the ring — sending it as a second event would mean
-            // showing it twice.
-            live.pending.clear();
+            // Everything accumulated before attaching is already in the ring, so
+            // it must not reach the window a second time as an event. It is still
+            // a chunk, though, and the clients over connections follow chunks: it
+            // is committed and offered to the sink, and only the window's copy is
+            // withheld.
+            if let Some((seq, bytes)) = commit(live) {
+                ctx.terminal_chunk(id, seq, &bytes);
+            }
             // The same for the log: the snapshot below carries all of it.
-            live.pending_log.clear();
+            if !live.pending_log.is_empty() {
+                let entries = std::mem::take(&mut live.pending_log);
+                ctx.terminal_log(id, &serde_json::to_value(&entries).unwrap_or_default());
+            }
             Ok(Attached {
                 data: base64::engine::general_purpose::STANDARD.encode(live.ring.snapshot()),
                 seq: live.seq,
                 log: live.log.iter().cloned().collect(),
                 log_trimmed: live.log_trimmed,
+                resumed_after: None,
             })
         }
     }
@@ -1242,16 +1296,31 @@ fn attach(
 /// session's pending output or touch `seq`. The bell is left too: acknowledging
 /// one is what a person looking at the session on the desktop does, and a
 /// phone's read is not that.
-fn peek(sessions: &HashMap<SessionId, Live>, id: SessionId) -> Result<Attached, TerminalError> {
-    match sessions.get(&id) {
-        None => Err(TerminalError::NoSession(id)),
-        Some(live) => Ok(Attached {
-            data: base64::engine::general_purpose::STANDARD.encode(live.ring.snapshot()),
-            seq: live.seq,
-            log: live.log.iter().cloned().collect(),
-            log_trimmed: live.log_trimmed,
-        }),
-    }
+///
+/// The ring includes bytes that have not been committed as a chunk yet, and the number answered
+/// is the last chunk that was; the answer is the ring as of that number, so that the chunk after
+/// it is the next thing the reader hears, with nothing in it twice. With `after`, and a history
+/// that still holds everything past it, the answer is that run of bytes instead of the ring.
+fn peek(
+    sessions: &HashMap<SessionId, Live>,
+    id: SessionId,
+    after: Option<u64>,
+) -> Result<Attached, TerminalError> {
+    let Some(live) = sessions.get(&id) else {
+        return Err(TerminalError::NoSession(id));
+    };
+    let resumed = after.and_then(|after| live.out.history.after(after, live.seq).map(|bytes| (after, bytes)));
+    let (data, resumed_after) = match resumed {
+        Some((after, bytes)) => (bytes, Some(after)),
+        None => (live.ring.snapshot_without_tail(live.pending.len()), None),
+    };
+    Ok(Attached {
+        data: base64::engine::general_purpose::STANDARD.encode(data),
+        seq: live.seq,
+        log: live.log.iter().cloned().collect(),
+        log_trimmed: live.log_trimmed,
+        resumed_after,
+    })
 }
 
 /// Everything the worker does synchronously. `ShutDown` is handled by the
@@ -1516,6 +1585,7 @@ fn handle(
                         last_output: Instant::now(),
                         pending: Vec::new(),
                         seq: 0,
+                        out: OutState::new(HISTORY_CAP),
                         log: VecDeque::new(),
                         log_seq: 0,
                         log_trimmed: 0,
@@ -1683,6 +1753,7 @@ fn handle(
                         last_output: Instant::now(),
                         pending: Vec::new(),
                         seq: 0,
+                        out: OutState::new(HISTORY_CAP),
                         log: VecDeque::new(),
                         log_seq: 0,
                         log_trimmed: 0,
@@ -1737,10 +1808,10 @@ fn handle(
             let _ = tx.send(());
         }
         Request::Attach(id, tx) => {
-            let _ = tx.send(attach(sessions, active, id));
+            let _ = tx.send(attach(ctx, sessions, active, id));
         }
-        Request::Peek(id, tx) => {
-            let _ = tx.send(peek(sessions, id));
+        Request::Peek(id, after, tx) => {
+            let _ = tx.send(peek(sessions, id, after));
         }
         // Only when `active` still points at that session. Switching tabs is
         // two calls — detach the old, attach the new — with no ordering
@@ -1754,18 +1825,31 @@ fn handle(
                 *active = None;
             }
         }
-        Request::Resize(id, cols, rows) => {
+        Request::Resize(client, id, cols, rows) => {
             if let Some(live) = sessions.get_mut(&id) {
+                let (cols, rows) = live.out.viewers.resized(client, cols, rows);
                 live.pty.resize(cols, rows);
                 // The same size goes into the parsing: the app is obliged to
                 // read the screen the human sees.
                 live.screen.resize(cols, rows);
             }
         }
-        Request::Write(id, data, tx) => {
+        Request::ForgetClient(client) => {
+            for live in sessions.values_mut() {
+                live.out.viewers.forget(client);
+            }
+        }
+        Request::Write(client, id, data, tx) => {
             let _ = tx.send(match sessions.get_mut(&id) {
                 None => Err(TerminalError::NoSession(id)),
                 Some(live) => {
+                    // The PTY has one size and several clients may be looking at it: it is
+                    // the size of the one that wrote last, so a client that starts typing
+                    // gets the screen it is looking at.
+                    if let Some((cols, rows)) = live.out.viewers.wrote(client) {
+                        live.pty.resize(cols, rows);
+                        live.screen.resize(cols, rows);
+                    }
                     live.pty.write(data.as_bytes());
                     // The human has answered — there is nobody left to call.
                     live.bell_pending = false;
@@ -2004,6 +2088,9 @@ mod tests {
         let pty = Pty::spawn_shell(id, dir, None, DEFAULT_COLS, DEFAULT_ROWS, out).expect("a shell starts");
         let mut ring = Ring::new(RING_CAP);
         ring.push(ring_bytes);
+        // The pending bytes are in the ring too, as they are in a live session: that is what
+        // makes the ring end past the last committed chunk.
+        ring.push(b"not yet flushed");
         Live {
             session: Session::new(
                 id,
@@ -2024,6 +2111,7 @@ mod tests {
             last_output: Instant::now(),
             pending: b"not yet flushed".to_vec(),
             seq: 4,
+            out: OutState::new(HISTORY_CAP),
             log: VecDeque::new(),
             log_seq: 0,
             log_trimmed: 0,
@@ -2043,29 +2131,145 @@ mod tests {
         let mut active = None;
 
         // The desktop has session 1 on screen.
-        attach(&mut sessions, &mut active, 1).unwrap();
+        let ctx = Context::detached();
+        attach(&ctx, &mut sessions, &mut active, 1).unwrap();
         sessions.get_mut(&1).unwrap().pending = b"next tick".to_vec();
         assert_eq!(active, Some(1));
 
         // A phone reads session 2, then session 1.
-        let other = peek(&sessions, 2).unwrap();
-        let same = peek(&sessions, 1).unwrap();
+        let other = peek(&sessions, 2, None).unwrap();
+        let same = peek(&sessions, 1, None).unwrap();
+        // The ring as of chunk 4: the bytes not yet committed are still to come.
         assert_eq!(other.data, base64::engine::general_purpose::STANDARD.encode(b"read by a phone"));
-        assert_eq!((other.seq, same.seq), (4, 4));
+        assert_eq!((other.seq, same.seq), (4, 5), "the attach committed session 1's pending as chunk 5");
         assert_eq!(active, Some(1), "the seat did not move");
         assert_eq!(sessions[&1].pending, b"next tick", "the active session's output was not dropped");
         assert_eq!(sessions[&2].pending, b"not yet flushed", "nor was the peeked session's");
         assert!(sessions[&2].bell_pending, "a phone's read does not acknowledge a bell");
-        assert!(matches!(peek(&sessions, 9), Err(TerminalError::NoSession(9))));
+        assert!(matches!(peek(&sessions, 9, None), Err(TerminalError::NoSession(9))));
 
         // Contrast: an attach is what takes the seat and clears the rest.
-        attach(&mut sessions, &mut active, 2).unwrap();
+        attach(&ctx, &mut sessions, &mut active, 2).unwrap();
         assert_eq!(active, Some(2));
         assert!(sessions[&2].pending.is_empty());
+        assert_eq!(sessions[&2].seq, 5, "what was pending became the next chunk");
 
         for live in sessions.values_mut() {
             live.pty.kill();
         }
+    }
+
+    /// A sink that keeps what the worker offers the clients over connections.
+    #[derive(Default)]
+    struct Tap {
+        chunks: std::sync::Mutex<Vec<(u64, u64, Vec<u8>)>>,
+        windows: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+    }
+
+    impl crate::context::Sink for Tap {
+        fn emit(&self, name: &str, payload: serde_json::Value) {
+            self.windows.lock().unwrap().push((name.to_owned(), payload));
+        }
+        fn push(&self, _message: crate::remote::push::Message) {}
+        fn terminal_chunk(&self, session: u64, seq: u64, bytes: &[u8]) {
+            self.chunks.lock().unwrap().push((session, seq, bytes.to_vec()));
+        }
+    }
+
+    /// A live session with nothing in its ring, nothing pending, and no chunk committed.
+    fn empty_live(id: SessionId, dir: &Path) -> Live {
+        let mut live = shell_live(id, dir, b"");
+        live.ring = Ring::new(RING_CAP);
+        live.pending.clear();
+        live.seq = 0;
+        live
+    }
+
+    fn decoded(attached: &Attached) -> Vec<u8> {
+        base64::engine::general_purpose::STANDARD.decode(&attached.data).unwrap()
+    }
+
+    #[test]
+    fn a_flush_numbers_every_sessions_chunk_but_shows_the_window_only_its_own() {
+        let dir = scratch("flush");
+        let tap = std::sync::Arc::new(Tap::default());
+        let ctx = Context::new(Err("x".into()), Err("x".into()), Err("x".into()), None, tap.clone());
+        let mut sessions = HashMap::new();
+        for id in [1, 2] {
+            let mut live = shell_live(id, &dir, b"");
+            live.seq = 0;
+            live.pending = format!("out{id}").into_bytes();
+            sessions.insert(id, live);
+        }
+        flush(&ctx, &mut sessions, Some(1));
+        let mut chunks = tap.chunks.lock().unwrap().clone();
+        chunks.sort();
+        assert_eq!(chunks, [(1, 1, b"out1".to_vec()), (2, 1, b"out2".to_vec())]);
+        let windows = tap.windows.lock().unwrap().clone();
+        assert_eq!(windows.len(), 1, "only the session on screen is an event for the window");
+        assert_eq!(windows[0].1["id"], 1);
+        assert_eq!(windows[0].1["seq"], 1);
+        for live in sessions.values_mut() {
+            live.pty.kill();
+        }
+    }
+
+    #[test]
+    fn a_client_resumes_after_its_number_with_nothing_missing_and_nothing_twice() {
+        let dir = scratch("resume");
+        let ctx = Context::detached();
+        let mut sessions = HashMap::new();
+        sessions.insert(1, empty_live(1, &dir));
+        // Three chunks go out; the client hears the first and drops.
+        for text in ["one ", "two ", "three"] {
+            let live = sessions.get_mut(&1).unwrap();
+            live.ring.push(text.as_bytes());
+            live.pending = text.as_bytes().to_vec();
+            flush(&ctx, &mut sessions, None);
+        }
+        // Bytes that arrived since the last tick are in the ring and not yet a chunk.
+        let live = sessions.get_mut(&1).unwrap();
+        live.ring.push(b"!");
+        live.pending = b"!".to_vec();
+
+        let resumed = peek(&sessions, 1, Some(1)).unwrap();
+        assert_eq!(resumed.resumed_after, Some(1));
+        assert_eq!(resumed.seq, 3);
+        assert_eq!(decoded(&resumed), b"two three", "what followed chunk 1, up to chunk 3");
+
+        // Asking for nothing is the ring as of chunk 3: the uncommitted '!' is the next chunk's.
+        let ring = peek(&sessions, 1, None).unwrap();
+        assert_eq!(ring.resumed_after, None);
+        assert_eq!(decoded(&ring), b"one two three");
+
+        // A number the session never reached is some other life of it: the ring.
+        let ahead = peek(&sessions, 1, Some(40)).unwrap();
+        assert_eq!(ahead.resumed_after, None);
+        assert_eq!(decoded(&ahead), b"one two three");
+        sessions.get_mut(&1).unwrap().pty.kill();
+    }
+
+    #[test]
+    fn a_history_that_was_trimmed_answers_with_the_ring_again() {
+        let dir = scratch("trimmed");
+        let ctx = Context::detached();
+        let mut sessions = HashMap::new();
+        let mut live = empty_live(1, &dir);
+        live.out = OutState::new(8);
+        sessions.insert(1, live);
+        for _ in 0..5 {
+            let live = sessions.get_mut(&1).unwrap();
+            live.ring.push(b"abcd");
+            live.pending = b"abcd".to_vec();
+            flush(&ctx, &mut sessions, None);
+        }
+        // Budget 8 bytes holds chunks 4 and 5.
+        let near = peek(&sessions, 1, Some(3)).unwrap();
+        assert_eq!((near.resumed_after, decoded(&near)), (Some(3), b"abcdabcd".to_vec()));
+        let far = peek(&sessions, 1, Some(1)).unwrap();
+        assert_eq!(far.resumed_after, None, "chunk 2 is gone: the whole ring");
+        assert_eq!(decoded(&far), b"abcdabcdabcdabcdabcd");
+        sessions.get_mut(&1).unwrap().pty.kill();
     }
 
     /* ---- what a session leaves behind ------------------------------------ */

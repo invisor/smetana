@@ -1,0 +1,7 @@
+{
+  "args": [{}],
+  "reply": [
+    [{"key":"abababababababababababababababababababababababababababababababab","kind":"phone","last_contact":1760000100,"name":"A device","paired_at":1760000000,"platform":"ios"},{"key":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","kind":"phone","last_contact":null,"name":"A device","paired_at":1760000000,"platform":"android"},{"key":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","kind":"desktop","last_contact":null,"name":"A device","paired_at":1760000000,"platform":"desktop"}],
+    []
+  ]
+}

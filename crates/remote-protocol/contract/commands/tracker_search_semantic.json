@@ -1,0 +1,7 @@
+{
+  "args": [{"project":"/work/smetana","query":"the board"},{"project":null,"query":"the board"}],
+  "reply": [
+    ["smetana-1","smetana-2"],
+    []
+  ]
+}

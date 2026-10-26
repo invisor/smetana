@@ -9,14 +9,14 @@ use std::time::Duration;
 
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use remote_protocol::{
-    read_frame, write_frame, BridgeError, ClientMsg, HelloReply, ServerMsg, ALLOWED_COMMANDS,
-    MAX_FRAME,
+    read_frame, write_frame, BridgeError, ClientMsg, HelloReply, ServerMsg,
+    ALLOWED_COMMANDS, MAX_FRAME,
 };
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use super::{harness, hello, pair_accepted, phone, wait_until, Harness, Phone};
-use crate::remote::bridge::{invoke, BoxFuture, Dispatch, DESKTOP_COMMANDS};
+use crate::remote::bridge::{invoke, BoxFuture, Caller, Dispatch, DESKTOP_COMMANDS};
 use crate::remote::dispatch::Services;
 use crate::remote::PROTOCOL_MAJOR;
 use crate::runs::service::RunHandle;
@@ -26,16 +26,18 @@ use crate::terminal::service::TerminalHandle;
 use crate::tracker::model::{ColumnDef, Issue, Snapshot};
 use crate::tracker::service::{Request as TrackerRequest, TrackerHandle};
 
+const PHONE: Caller = Caller { id: 1, kind: remote_protocol::DeviceKind::Phone };
+
 /// A dispatcher that records what reached it and answers `null`, after an
 /// optional delay per command.
 #[derive(Default)]
-struct Recorder {
-    calls: Mutex<Vec<String>>,
+pub(super) struct Recorder {
+    pub(super) calls: Mutex<Vec<String>>,
     slow: Mutex<Vec<(&'static str, Duration)>>,
 }
 
 impl Dispatch for Recorder {
-    fn call<'a>(&'a self, cmd: &'a str, _args: Value) -> BoxFuture<'a, Result<Value, BridgeError>> {
+    fn call<'a>(&'a self, _caller: &'a Caller, cmd: &'a str, _args: Value) -> BoxFuture<'a, Result<Value, BridgeError>> {
         Box::pin(async move {
             self.calls.lock().unwrap().push(cmd.to_owned());
             let delay = self.slow.lock().unwrap().iter().find(|(c, _)| *c == cmd).map(|(_, d)| *d);
@@ -60,18 +62,18 @@ async fn remote_bridge_refuses_every_command_off_the_allowlist_and_runs_no_handl
         "remote_device_revoke",
     ];
     for cmd in named {
-        let answer = invoke(Some(&dispatch), cmd, json!({})).await;
+        let answer = invoke(Some(&dispatch), &PHONE, cmd, json!({})).await;
         assert_eq!(answer, Err(BridgeError::Forbidden), "{cmd}");
     }
     // Not only the named ones: every other command the desktop registers.
     for cmd in DESKTOP_COMMANDS.iter().filter(|c| !ALLOWED_COMMANDS.contains(c)) {
-        let answer = invoke(Some(&dispatch), cmd, json!({})).await;
+        let answer = invoke(Some(&dispatch), &PHONE, cmd, json!({})).await;
         assert_eq!(answer, Err(BridgeError::Forbidden), "{cmd}");
     }
     assert!(recorder.calls.lock().unwrap().is_empty(), "a handler was reached by a refused command");
 
     // And an allowed one does reach it, so the recorder is not simply deaf.
-    assert_eq!(invoke(Some(&dispatch), "tracker_health", json!({})).await, Ok(json!({ "ran": "tracker_health" })));
+    assert_eq!(invoke(Some(&dispatch), &PHONE, "tracker_health", json!({})).await, Ok(json!({ "ran": "tracker_health" })));
     assert_eq!(recorder.calls.lock().unwrap().as_slice(), ["tracker_health"]);
 }
 
@@ -80,7 +82,7 @@ async fn remote_bridge_answers_unknown_command_for_a_name_the_desktop_does_not_h
     let recorder = Arc::new(Recorder::default());
     let dispatch: Arc<dyn Dispatch> = recorder.clone();
     for cmd in ["no_such_command", "", "TRACKER_SNAPSHOT", "tracker_snapshot ", "terminal_write2"] {
-        let answer = invoke(Some(&dispatch), cmd, json!({})).await;
+        let answer = invoke(Some(&dispatch), &PHONE, cmd, json!({})).await;
         assert_eq!(answer, Err(BridgeError::UnknownCommand), "{cmd:?}");
     }
     assert!(recorder.calls.lock().unwrap().is_empty());
@@ -88,9 +90,9 @@ async fn remote_bridge_answers_unknown_command_for_a_name_the_desktop_does_not_h
 
 #[tokio::test]
 async fn remote_bridge_without_a_dispatcher_answers_internal_for_an_allowed_command() {
-    let answer = invoke(None, "tracker_snapshot", json!({})).await;
+    let answer = invoke(None, &PHONE, "tracker_snapshot", json!({})).await;
     assert!(matches!(answer, Err(BridgeError::Internal(_))));
-    assert_eq!(invoke(None, "files_write", json!({})).await, Err(BridgeError::Forbidden));
+    assert_eq!(invoke(None, &PHONE, "files_write", json!({})).await, Err(BridgeError::Forbidden));
 }
 
 /// `DESKTOP_COMMANDS` is what tells `Forbidden` from `UnknownCommand`, so it has
@@ -117,29 +119,42 @@ fn remote_bridge_desktop_commands_are_those_lib_rs_registers() {
 }
 
 /// The phone's end of the bridge.
-struct Client {
-    conn: Connection,
-    send: SendStream,
-    recv: RecvStream,
+pub(super) struct Client {
+    pub(super) conn: Connection,
+    pub(super) send: SendStream,
+    pub(super) recv: RecvStream,
     next: u64,
-    events: Vec<(String, Value)>,
-    hello: HelloReply,
+    pub(super) events: Vec<(String, Value)>,
+    pub(super) hello: HelloReply,
 }
 
 impl Client {
-    async fn connect(h: &Harness, phone: &Phone) -> Client {
+    pub(super) async fn connect(h: &Harness, phone: &Phone) -> Client {
+        Self::connect_saying(h, phone, None).await
+    }
+
+    /// Connects and says `Hello`; with a platform, in the longer frame a client that has one
+    /// sends. What the device says changes nothing about what it may do.
+    pub(super) async fn connect_saying(h: &Harness, phone: &Phone, platform: Option<remote_protocol::Platform>) -> Client {
         let conn = phone.connect(h).await;
         let (mut send, mut recv) = conn.open_bi().await.unwrap();
-        write_frame(&mut send, &hello(PROTOCOL_MAJOR)).await.unwrap();
+        match platform {
+            None => write_frame(&mut send, &hello(PROTOCOL_MAJOR)).await.unwrap(),
+            Some(platform) => {
+                let frame = remote_protocol::encode_hello(&hello(PROTOCOL_MAJOR), &remote_protocol::HelloInfo { platform })
+                    .unwrap();
+                send.write_all(&frame).await.unwrap();
+            }
+        }
         let reply = read_frame::<HelloReply>(&mut recv, MAX_FRAME).await.unwrap();
         Client { conn, send, recv, next: 1, events: Vec::new(), hello: reply }
     }
 
-    async fn send_msg(&mut self, msg: ClientMsg) {
+    pub(super) async fn send_msg(&mut self, msg: ClientMsg) {
         write_frame(&mut self.send, &msg).await.unwrap();
     }
 
-    async fn read(&mut self) -> ServerMsg {
+    pub(super) async fn read(&mut self) -> ServerMsg {
         tokio::time::timeout(Duration::from_secs(10), read_frame::<ServerMsg>(&mut self.recv, MAX_FRAME))
             .await
             .expect("the desktop answered in time")
@@ -165,13 +180,13 @@ impl Client {
         }
     }
 
-    async fn call(&mut self, cmd: &str, args: Value) -> Result<Value, BridgeError> {
+    pub(super) async fn call(&mut self, cmd: &str, args: Value) -> Result<Value, BridgeError> {
         let id = self.start(cmd, args).await;
         self.reply(id).await
     }
 
     /// The next event, from those already read or the stream.
-    async fn event(&mut self, within: Duration) -> Option<(String, Value)> {
+    pub(super) async fn event(&mut self, within: Duration) -> Option<(String, Value)> {
         if !self.events.is_empty() {
             return Some(self.events.remove(0));
         }
@@ -248,6 +263,8 @@ fn services() -> (Services, Snapshot) {
         settings_path: Err("no settings in tests".into()),
         attachments_root: Err("no attachments in tests".into()),
         project_switched: None,
+        ctx: None,
+        remote: None,
     };
     (services, snapshot)
 }

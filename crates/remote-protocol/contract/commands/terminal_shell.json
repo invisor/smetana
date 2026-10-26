@@ -1,0 +1,6 @@
+{
+  "args": [{"cwd":null,"project":"/work/smetana"},{"cwd":"src","project":"/work/smetana"}],
+  "reply": [
+    {"agent":"claude","conversation":null,"cwd":"/work/smetana","exitCode":null,"id":16,"project":"/work/smetana","question":null,"startedAt":"2026-10-15T10:00:00Z","state":"starting","timeline":false,"work":{"kind":"shell"}}
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "args": [{"project":"/work/smetana"}],
+  "reply": [
+    {"repos":[{"branch":"main","detached":null,"name":".","path":"/work/smetana"},{"branch":null,"detached":"abc1234","name":"web","path":"/work/smetana/web"}],"unlisted":["/work/smetana/extra"]}
+  ]
+}

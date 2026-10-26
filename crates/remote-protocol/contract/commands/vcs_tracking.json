@@ -1,0 +1,6 @@
+{
+  "args": [{"repo":"/work/smetana"}],
+  "reply": [
+    [{"ahead":1,"behind":2,"branch":"main","gone":false,"upstream":"origin/main"},{"ahead":0,"behind":0,"branch":"topic","gone":true,"upstream":null}]
+  ]
+}

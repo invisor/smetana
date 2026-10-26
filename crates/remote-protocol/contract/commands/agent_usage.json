@@ -1,0 +1,14 @@
+{
+  "args": [{"agent":"claude","project":"/work/smetana"},{"agent":null,"project":null}],
+  "reply": [
+    {"agent":"codex","state":"unsupported"},
+    {"agent":null,"state":"unsupported"},
+    {"agent":"claude","reason":"notSignedIn","state":"unreadable"},
+    {"agent":"claude","reason":"unsupportedAccount","state":"unreadable"},
+    {"agent":"claude","reason":"timedOut","state":"unreadable"},
+    {"agent":"claude","reason":"invalidResponse","state":"unreadable"},
+    {"agent":"claude","band":"normal","enumeratesWindows":true,"state":"read","usage":{"sessionLabel":"Current session","sessionPct":40,"sessionReset":"in 2h","weekLabel":"Current week","weekPct":10,"weekReset":"Mon"}},
+    {"agent":"claude","band":"reduced","enumeratesWindows":false,"state":"read","usage":{"sessionLabel":null,"sessionPct":null,"sessionReset":null,"weekLabel":null,"weekPct":null,"weekReset":null}},
+    {"agent":"claude","band":"pause","enumeratesWindows":false,"state":"read","usage":{"sessionLabel":null,"sessionPct":null,"sessionReset":null,"weekLabel":null,"weekPct":null,"weekReset":null}}
+  ]
+}

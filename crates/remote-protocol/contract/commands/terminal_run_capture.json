@@ -1,0 +1,7 @@
+{
+  "args": [{"id":7,"input":"ls\r","settleMs":300,"timeoutMs":5000}],
+  "reply": [
+    ["$ ls","a.txt"],
+    []
+  ]
+}

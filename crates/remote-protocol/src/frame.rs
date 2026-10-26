@@ -84,6 +84,13 @@ pub async fn read_frame<T: DeserializeOwned>(
     recv: &mut RecvStream,
     limit: usize,
 ) -> Result<T, FrameError> {
+    let body = read_frame_bytes(recv, limit).await?;
+    postcard::from_bytes(&body).map_err(|e| FrameError::Decode(e.to_string()))
+}
+
+/// Reads one frame from a stream and hands back its body, undecoded, with the same limit as
+/// [`read_frame`]. For a message whose reader needs more than one type's view of the bytes.
+pub async fn read_frame_bytes(recv: &mut RecvStream, limit: usize) -> Result<Vec<u8>, FrameError> {
     let mut prefix = [0u8; 4];
     recv.read_exact(&mut prefix).await.map_err(|e| FrameError::Io(e.to_string()))?;
     let len = u32::from_be_bytes(prefix) as usize;
@@ -92,7 +99,7 @@ pub async fn read_frame<T: DeserializeOwned>(
     }
     let mut body = vec![0u8; len];
     recv.read_exact(&mut body).await.map_err(|e| FrameError::Io(e.to_string()))?;
-    postcard::from_bytes(&body).map_err(|e| FrameError::Decode(e.to_string()))
+    Ok(body)
 }
 
 #[cfg(test)]

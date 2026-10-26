@@ -136,6 +136,48 @@ than the digest recorded for the current `PROTOCOL_MAJOR.PROTOCOL_MINOR`, and sa
 MINOR for additions, MAJOR for removals and renames. The way forward is a new entry under a higher version,
 added by hand together with the constants; an existing entry is a frozen contract and is not edited.
 
+## Protocol 1.8: the full command set, and device kinds
+
+Step 3 of `docs/superpowers/specs/2026-10-25-headless-server-design.md`. Additions only; the phone sees no difference.
+
+**Kinds.** `DeviceKind` (`phone` | `desktop`) is fixed at pairing: the ticket names the kind it admits (a phone's keeps the
+`smetana1:` layout byte for byte, a desktop's is `smetana2:`), `Pairing` remembers it, and `remote-devices.json` stores it
+(`kind`, absent means phone). `Hello`'s platform is informational and is not even a field of `Hello`: a client that has one
+sends `HelloInfo` in the same frame after the `Hello` (`encode_hello`/`decode_hello`), which a reader of the plain `Hello`
+ignores. `Platform::Desktop` was added at the end. `capabilities_for(kind)`, `is_command_allowed_for` and
+`is_event_allowed_for` decide everything: a phone gets `ALLOWED_*` unchanged, a desktop gets `SERVER_COMMANDS` and
+`SERVER_EVENTS` (the phone's lists first, then the rest). The list is checked per call against the kind the device list holds.
+
+**The server surface** is every command in `DESKTOP_COMMANDS` that is not in `CLIENT_COMMANDS` (windows, dialogs,
+clipboard, opener, updater, login item, `tracker_access_reset`, which ends in an app restart). The contract tests fail for a
+command or event with neither a pinned example nor a client declaration, and scan the stores and the workers for event names.
+`dispatch.rs` declares each command once in the `calls!` table. Where the kind changes behaviour: a phone's `session_send`
+may carry no attachments and its `session_start` is confined to the attachment store; a desktop's is not.
+
+**Terminal stream.** Chunks are committed by the worker for every session each tick, numbered, kept in a bounded history
+(`terminal/stream.rs`) and offered to the sink (`Sink::terminal_chunk`). `terminal_attach` takes an optional `after`; the
+reply gains `resumedAfter` only when `data` is the continuation after that number, and otherwise `data` is the ring as of
+`seq`. A desktop device that attaches is registered for the session (`Outbox` in `bridge.rs`): output is coalesced per
+session and per device, a device that falls behind its ceiling (`OUTBOX_CAP`) is sent the ring again as `terminal:output`
+with `reset: true`, and the worker is never made to wait. The PTY has the size of the client that last wrote or resized it
+(`Viewers`); the in-process window is client 0.
+
+**How a client follows a session.** Attaching is the whole subscription: `terminal_attach` (a desktop device only) registers
+the follow before the worker is asked and arms it once the reply is on its way, so no `Listen` is needed and the reply
+always precedes the stream; `Unlisten terminal:output` ends every follow of that connection, and `terminal_detach` ends one.
+Attaching again to a session on a live connection is supported and starts the follow afresh (pass `after` to resume).
+Every bridged `terminal:output` is `{ id, from, seq, data }` plus `reset: true` when it is a fresh ring: the data is chunks
+`from..=seq` joined. A client holding chunk `last` (the reply's `seq`, or the previous event's) applies an event only when
+`from == last + 1`; anything else is a gap and it attaches again. A `reset` has `from == seq`, replaces the terminal's
+contents instead of continuing them, and is sent in place of the chunks a device that fell behind its ceiling did not get;
+chunks after it continue from its `seq`. A reset is applied whatever `last` is, and sets `last = seq` (outside an outstanding
+attach, below). The window's own events have no `from`.
+
+**While an attach is outstanding.** From sending `terminal_attach` for a session until its reply arrives, the client discards
+that session's `terminal:output`; the reply alone sets `last`. Events already written when the attach was sent precede the
+reply on the stream and are covered by it (the server drops its buffer for the session when the attach arrives, and the
+follow is armed only after the reply), so applying them would repeat chunks the reply re-sends.
+
 ## Protocol 1.7: a tool result's denial
 
 `EventKind::ToolResult` gained `denial`: `null`, or the reason Claude Code's auto-mode classifier gave when it refused the

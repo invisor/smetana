@@ -1,6 +1,6 @@
-//! The contract test: the shape of everything a phone may call or hear is pinned
-//! in `crates/remote-protocol/contract/`, and this compares it with what the
-//! desktop really produces.
+//! The contract test: the shape of everything a device may call or hear is pinned
+//! in `crates/remote-protocol/contract/` — the phone's allowlist and, beyond it, every command
+//! and event of the server — and this compares it with what the desktop really produces.
 //!
 //! **Replies and event payloads** are real values. Each is built here from the
 //! types the handlers return (and, for events, the same payload functions the
@@ -29,7 +29,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use remote_protocol::{command_contract_path, event_contract_path, ALLOWED_COMMANDS, ALLOWED_EVENTS};
+use remote_protocol::{command_contract_path, event_contract_path, SERVER_COMMANDS, SERVER_EVENTS};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -54,7 +54,26 @@ use crate::terminal::model::{
     LogEntry, LogKind, Question, QuestionOption, Session, SessionState as TerminalState, SessionWork,
 };
 use crate::terminal::service::{removed_payload, Attached as TerminalAttached};
-use crate::tracker::model::{ColumnDef, Delta, Dependency, Health, HealthState, Issue, Snapshot};
+use crate::tracker::model::{ColumnDef, Delta, Dependency, Failure, Health, HealthState, Issue, Repair, Snapshot};
+use smetana_core::attachments::cleanup::Tally;
+use smetana_core::attachments::{Cleaned, Survey};
+use smetana_core::files::model::{Entry, EntryKind, FileText, Listing, Stat};
+use smetana_core::runs::browser::BrowserTools;
+use smetana_core::runs::usage::{AgentUsage, Band, Unavailable, Usage};
+use smetana_core::session::model::StateChange;
+use smetana_core::session::service::CrewTreeChange;
+use smetana_core::sessions::model::SessionSummary;
+use smetana_core::terminal::model::{SessionMark, WorkKind};
+use smetana_core::terminal::restore::Restorable;
+use smetana_core::tracker::access::AccessRepair;
+use smetana_core::tracker::commands::ProjectProbe;
+use smetana_core::vcs::model::{
+    Branch, Change, ChangeKind, CompareChange, Comparison, InProgress, Landed, MergeOutcome, OpKind,
+    ProjectRepos, Repo, Tracking, WorkingTree,
+};
+use remote_protocol::{DeviceKind, Platform};
+use super::devices::Device;
+use super::{device_views, PairBegin, PairRequestPayload};
 
 fn json_of<T: Serialize>(value: &T) -> Value {
     serde_json::to_value(value).expect("a contract value serializes")
@@ -503,6 +522,453 @@ fn log_entries() -> Vec<LogEntry> {
 }
 
 // ---------------------------------------------------------------------------
+// The rest of the server's surface (protocol 1.8): what only a desktop device calls.
+//
+// One example of each shape is pinned, and of every variant of an enum a reply carries; the
+// breadth of the phone's own commands above is not repeated for commands whose replies are a
+// single flat record.
+// ---------------------------------------------------------------------------
+
+fn attachment(picture: bool) -> Attachment {
+    Attachment {
+        path: "/data/attachments/proj-abc/20261017-x.png".into(),
+        name: "20261017-x.png".into(),
+        bytes: 2,
+        mime: if picture { "image/png" } else { "application/octet-stream" }.into(),
+        data: picture.then(|| "aGk=".to_string()),
+    }
+}
+
+fn survey() -> Survey {
+    Survey {
+        store: Tally { files: 4, bytes: 4000 },
+        project: Some("/work/smetana".into()),
+        board: HealthState::Ok,
+        kept: Tally { files: 3, bytes: 3000 },
+        removable: Tally { files: 1, bytes: 1000 },
+    }
+}
+
+fn changes() -> Vec<Change> {
+    let kinds = [
+        ChangeKind::Modified,
+        ChangeKind::Added,
+        ChangeKind::Deleted,
+        ChangeKind::Renamed,
+        ChangeKind::Copied,
+        ChangeKind::TypeChanged,
+        ChangeKind::Untracked,
+        ChangeKind::Conflicted,
+    ];
+    kinds
+        .into_iter()
+        .enumerate()
+        .map(|(i, kind)| Change {
+            path: format!("src/file{i}.js"),
+            orig_path: (kind == ChangeKind::Renamed).then(|| "src/old.js".to_string()),
+            kind,
+            staged: i % 2 == 0,
+            unstaged: i % 3 == 0,
+        })
+        .collect()
+}
+
+fn landed(full: bool) -> Landed {
+    if full {
+        Landed { commits: Some(2), files: Some(3), insertions: Some(40), deletions: Some(5) }
+    } else {
+        Landed::default()
+    }
+}
+
+fn session_marks() -> Vec<SessionMark> {
+    let kinds = [
+        WorkKind::Bare,
+        WorkKind::NewTask,
+        WorkKind::EditTask,
+        WorkKind::ResolveTask,
+        WorkKind::FixTask,
+        WorkKind::ResolveConflict,
+        WorkKind::RepairTracker,
+        WorkKind::ResumeSession,
+        WorkKind::Setup,
+        WorkKind::Bootstrap,
+        WorkKind::SignIn,
+        WorkKind::ReviewBranch,
+        WorkKind::Run,
+        WorkKind::Shell,
+    ];
+    let states = [
+        TerminalState::Starting,
+        TerminalState::Running,
+        TerminalState::Idle,
+        TerminalState::NeedsYou,
+        TerminalState::Exited,
+    ];
+    kinds
+        .into_iter()
+        .enumerate()
+        .map(|(i, kind)| SessionMark {
+            id: i as u64 + 1,
+            project: "/work/smetana".into(),
+            state: states[i % states.len()],
+            kind,
+        })
+        .collect()
+}
+
+fn restorable() -> Vec<Restorable> {
+    vec![Restorable {
+        session_id: "conv-1".into(),
+        agent: "claude".into(),
+        cwd: "/work/smetana".into(),
+        project: "/work/smetana".into(),
+        work: SessionWork::NewTask { text: "Add a thing".into(), issue_type: None, priority: None, parent: None },
+        started_at: "2026-10-15T10:00:00Z".into(),
+        title: Some("Add a thing".into()),
+    }]
+}
+
+fn agent_usages() -> Vec<AgentUsage> {
+    vec![
+        AgentUsage::Unsupported { agent: Some("codex".into()) },
+        AgentUsage::Unsupported { agent: None },
+        AgentUsage::Unreadable { agent: "claude".into(), reason: Unavailable::NotSignedIn },
+        AgentUsage::Unreadable { agent: "claude".into(), reason: Unavailable::UnsupportedAccount },
+        AgentUsage::Unreadable { agent: "claude".into(), reason: Unavailable::TimedOut },
+        AgentUsage::Unreadable { agent: "claude".into(), reason: Unavailable::InvalidResponse },
+        AgentUsage::Read {
+            agent: "claude".into(),
+            usage: Usage {
+                session_pct: Some(40),
+                session_reset: Some("in 2h".into()),
+                session_label: Some("Current session".into()),
+                week_pct: Some(10),
+                week_reset: Some("Mon".into()),
+                week_label: Some("Current week".into()),
+                ..Usage::default()
+            },
+            band: Band::Normal,
+            enumerates_windows: true,
+        },
+        AgentUsage::Read { agent: "claude".into(), usage: Usage::default(), band: Band::Reduced, enumerates_windows: false },
+        AgentUsage::Read { agent: "claude".into(), usage: Usage::default(), band: Band::Pause, enumerates_windows: false },
+    ]
+}
+
+fn devices() -> Vec<Device> {
+    let device = |key: &str, platform, kind, push: bool| Device {
+        key: key.repeat(32),
+        name: "A device".into(),
+        platform,
+        push_token: push.then(|| "token".to_string()),
+        push_key: "00".repeat(32),
+        paired_at: 1_760_000_000,
+        last_contact: push.then_some(1_760_000_100),
+        kind,
+    };
+    vec![
+        device("ab", Platform::Ios, DeviceKind::Phone, true),
+        device("cd", Platform::Android, DeviceKind::Phone, false),
+        device("ef", Platform::Desktop, DeviceKind::Desktop, false),
+    ]
+}
+
+/// Every command beyond the phone's, with the examples of what it answers.
+fn server_replies(map: &mut BTreeMap<&'static str, Vec<Value>>) {
+    let nothing = || vec![Value::Null];
+    let one_path = || vec![json!("src/new.js")];
+    let clean = MergeOutcome::Clean { landed: landed(true) };
+    let conflict = MergeOutcome::Conflict { files: vec!["src/a.js".into()] };
+
+    map.insert("tracker_resync", all(&snapshots()));
+    for name in ["tracker_update", "tracker_close", "tracker_reopen"] {
+        map.insert(name, vec![json_of(&issue(true)), json_of(&issue(false))]);
+    }
+    map.insert("tracker_delete", nothing());
+    map.insert("tracker_init", all(&snapshots()));
+    map.insert(
+        "tracker_repair",
+        vec![json_of(&Repair {
+            backup: "/work/smetana/.beads.bak".into(),
+            output: "repaired".into(),
+            snapshot: snapshots().remove(0),
+        })],
+    );
+    map.insert(
+        "tracker_failure",
+        vec![json_of(&Failure {
+            dir: "/work/smetana".into(),
+            bd_version: "1.0.3".into(),
+            command: "bd list --json".into(),
+            stderr: "boom".into(),
+        })],
+    );
+    map.insert(
+        "tracker_access_repair",
+        all(&[AccessRepair::Reset, AccessRepair::FullDiskAccess, AccessRepair::Unavailable]),
+    );
+    map.insert(
+        "tracker_probe",
+        vec![
+            json_of(&vec![
+                ProjectProbe { path: "/work/smetana".into(), tracked: true },
+                ProjectProbe { path: "/work/other".into(), tracked: false },
+            ]),
+            json!([]),
+        ],
+    );
+    map.insert("tracker_search_semantic", vec![json!(["smetana-1", "smetana-2"]), json!([])]);
+    map.insert("project_root", vec![json!("/work/smetana")]);
+    map.insert("home_dir", vec![json!("/Users/you"), Value::Null]);
+
+    map.insert(
+        "files_list",
+        vec![json_of(&Listing {
+            dir: "src".into(),
+            entries: vec![
+                Entry { name: "views".into(), path: "src/views".into(), kind: EntryKind::Dir, ignored: false },
+                Entry { name: "main.js".into(), path: "src/main.js".into(), kind: EntryKind::File, ignored: false },
+                Entry { name: "out.log".into(), path: "src/out.log".into(), kind: EntryKind::File, ignored: true },
+            ],
+            truncated: 0,
+        })],
+    );
+    map.insert(
+        "files_read",
+        vec![json_of(&FileText { path: "src/main.js".into(), text: "export {}\n".into(), mtime: 1_760_000_000_000 })],
+    );
+    map.insert("files_write", vec![json!(1_760_000_000_001i64)]);
+    map.insert(
+        "files_stat",
+        vec![json_of(&vec![
+            Stat { path: "src/main.js".into(), mtime: Some(1_760_000_000_000) },
+            Stat { path: "src/gone.js".into(), mtime: None },
+        ])],
+    );
+    for name in ["files_create", "files_mkdir", "files_copy", "files_copy_external", "files_move", "files_rename"] {
+        map.insert(name, one_path());
+    }
+    map.insert("files_trash", nothing());
+
+    map.insert("attachment_import", vec![json_of(&attachment(true)), json_of(&attachment(false))]);
+    map.insert("attachment_reopen", vec![json_of(&attachment(true))]);
+    map.insert("image_read", vec![json_of(&attachment(true))]);
+    map.insert("attachments_survey", vec![json_of(&survey())]);
+    map.insert(
+        "attachments_clean",
+        vec![json_of(&Cleaned { removed: Tally { files: 1, bytes: 1000 }, failed: 0, survey: survey() })],
+    );
+
+    map.insert(
+        "git_head",
+        vec![
+            json_of(&smetana_core::git::Head { branch: Some("main".into()), detached: None }),
+            json_of(&smetana_core::git::Head { branch: None, detached: Some("abc1234".into()) }),
+        ],
+    );
+    map.insert(
+        "vcs_repos",
+        vec![json_of(&ProjectRepos {
+            repos: vec![
+                Repo { name: ".".into(), path: "/work/smetana".into(), branch: Some("main".into()), detached: None },
+                Repo { name: "web".into(), path: "/work/smetana/web".into(), branch: None, detached: Some("abc1234".into()) },
+            ],
+            unlisted: vec!["/work/smetana/extra".into()],
+        })],
+    );
+    map.insert(
+        "vcs_status",
+        vec![
+            json_of(&WorkingTree { branch: Some("main".into()), detached: None, changes: changes() }),
+            json_of(&WorkingTree::default()),
+        ],
+    );
+    map.insert(
+        "vcs_in_progress",
+        vec![
+            json_of(&Some(InProgress { op: OpKind::Merge, ours: Some("main".into()), theirs: Some("topic".into()) })),
+            json_of(&Some(InProgress { op: OpKind::Rebase, ours: None, theirs: None })),
+            Value::Null,
+        ],
+    );
+    map.insert(
+        "vcs_branches",
+        vec![json_of(&vec![
+            Branch { name: "main".into(), current: true },
+            Branch { name: "topic".into(), current: false },
+        ])],
+    );
+    map.insert(
+        "vcs_remote_branches",
+        vec![json_of(&vec![
+            smetana_core::git::RemoteBranch { name: "origin/main".into(), touched_at: Some(1_760_000_000) },
+            smetana_core::git::RemoteBranch { name: "origin/old".into(), touched_at: None },
+        ])],
+    );
+    map.insert("vcs_last_fetch", vec![json!(1_760_000_000i64), Value::Null]);
+    map.insert(
+        "vcs_tracking",
+        vec![json_of(&vec![
+            Tracking { branch: "main".into(), upstream: Some("origin/main".into()), ahead: 1, behind: 2, gone: false },
+            Tracking { branch: "topic".into(), upstream: None, ahead: 0, behind: 0, gone: true },
+        ])],
+    );
+    for name in [
+        "vcs_fetch",
+        "vcs_checkout",
+        "vcs_checkout_remote",
+        "vcs_create_branch",
+        "vcs_rename_branch",
+        "vcs_delete_branch",
+        "vcs_abort",
+        "vcs_commit",
+        "vcs_discard",
+    ] {
+        map.insert(name, nothing());
+    }
+    for name in ["vcs_pull", "vcs_merge", "vcs_rebase"] {
+        map.insert(name, vec![json_of(&clean), json_of(&conflict)]);
+    }
+    map.insert("vcs_push", vec![json_of(&landed(true)), json_of(&landed(false))]);
+    map.insert("vcs_suggest_message", vec![json!("feat: a thing")]);
+    map.insert("vcs_file_at_head", vec![json!("export {}\n"), Value::Null]);
+    map.insert("vcs_file_at_rev", vec![json!("export {}\n"), Value::Null]);
+    map.insert(
+        "vcs_compare",
+        vec![json_of(&Comparison {
+            left: "main".into(),
+            right: "topic".into(),
+            files: vec![
+                CompareChange { path: "src/a.js".into(), orig_path: None, kind: ChangeKind::Modified },
+                CompareChange { path: "src/b.js".into(), orig_path: Some("src/c.js".into()), kind: ChangeKind::Renamed },
+            ],
+        })],
+    );
+
+    map.insert("project_config_save_defaults", nothing());
+    map.insert(
+        "browser_tools",
+        vec![
+            json_of(&BrowserTools {
+                playwright_mcp: true,
+                playwright_browsers: true,
+                extension: false,
+                busy_project: Some("/work/other".into()),
+            }),
+            json_of(&BrowserTools::default()),
+        ],
+    );
+    map.insert("run_release", nothing());
+    map.insert("agent_usage", all(&agent_usages()));
+    map.insert("codex_models", vec![json_of(&vec![AgentModel { id: "gpt-5".into(), label: "GPT-5".into() }])]);
+    map.insert(
+        "sessions_list",
+        vec![json_of(&vec![SessionSummary {
+            id: "abc".into(),
+            path: "/home/you/.claude/projects/-work-smetana/abc.jsonl".into(),
+            cwd: "/work/smetana".into(),
+            branch: Some("main".into()),
+            title: Some("Fix the board".into()),
+            first_prompt: Some("Fix it".into()),
+            last_role: Some("assistant".into()),
+            last_text: Some("Done".into()),
+            messages: 12,
+            subagents: 1,
+            model: Some("opus".into()),
+            modified_at: "2026-10-15T10:00:00Z".into(),
+            cwd_exists: true,
+            size: 2048,
+        }])],
+    );
+    map.insert("sessions_delete", nothing());
+    map.insert("settings_save", nothing());
+
+    map.insert("terminal_marks", vec![json_of(&session_marks()), json!([])]);
+    let sessions = terminal_sessions();
+    map.insert("terminal_create", vec![json_of(&sessions[1]), json_of(&sessions[0])]);
+    map.insert("terminal_shell", vec![json_of(&sessions[15])]);
+    for name in ["terminal_remove", "terminal_detach", "terminal_resize", "terminal_write", "terminal_clear", "terminal_forget"] {
+        map.insert(name, nothing());
+    }
+    map.insert("terminal_run_capture", vec![json!(["$ ls", "a.txt"]), json!([])]);
+    map.insert("terminal_restorable", vec![json_of(&restorable()), json!([])]);
+    map.insert("crew_clear", nothing());
+    map.insert("session_close", nothing());
+
+    map.insert(
+        "remote_pair_begin",
+        vec![json_of(&PairBegin { ticket: "smetana2:abcd".into(), expires_at: 1_760_000_120 })],
+    );
+    map.insert("remote_pair_cancel", nothing());
+    map.insert("remote_pair_decide", nothing());
+    map.insert("remote_devices", vec![json_of(&device_views(&devices())), json!([])]);
+    map.insert("remote_device_revoke", nothing());
+}
+
+/// Every event beyond the phone's.
+fn server_payloads(map: &mut BTreeMap<&'static str, Vec<Value>>) {
+    use crate::remote::bridge::output_payload;
+    map.insert(
+        "terminal:output",
+        vec![
+            // One chunk, and a run of three coalesced (`from..=seq`).
+            output_payload(3, 8, 8, "aGk=", false),
+            output_payload(3, 9, 11, "aGk=", false),
+            // The ring afresh, for a device that fell behind: the data replaces the terminal.
+            output_payload(3, 12, 12, "aGk=", true),
+        ],
+    );
+    map.insert(
+        "terminal:log",
+        vec![smetana_core::terminal::service::log_payload(3, &json_of(&log_entries()))],
+    );
+    let states = [
+        DrivenState::Starting,
+        DrivenState::Running,
+        DrivenState::Ready,
+        DrivenState::NeedsYou,
+        DrivenState::Exited,
+        DrivenState::Failed,
+    ];
+    map.insert(
+        "session:state",
+        states
+            .into_iter()
+            .enumerate()
+            .map(|(i, state)| {
+                json_of(&StateChange {
+                    id: i as u64 + 1,
+                    state,
+                    conversation: (i == 0).then(|| "conv-1".to_string()),
+                    title: (i == 0).then(|| "Fix the board".to_string()),
+                })
+            })
+            .collect(),
+    );
+    map.insert(
+        "crew:tree",
+        vec![
+            json_of(&CrewTreeChange { project: "/work/smetana".into(), root: 1, nodes: crew_nodes() }),
+            json_of(&CrewTreeChange { project: "/work/smetana".into(), root: 2, nodes: Vec::new() }),
+        ],
+    );
+    map.insert(
+        "remote:project-switched",
+        vec![
+            super::dispatch::project_switched_payload(Some("/work/smetana".into())),
+            super::dispatch::project_switched_payload(None),
+        ],
+    );
+    map.insert(
+        "remote:pair-request",
+        vec![json_of(&PairRequestPayload { device_name: "Pixel 8".into(), platform: Platform::Android })],
+    );
+    map.insert("remote:devices", vec![json_of(&device_views(&devices())), json!([])]);
+    map.insert("remote:pair-ended", vec![Value::Null]);
+}
+
+// ---------------------------------------------------------------------------
 // What the contract says each command answers and each event carries.
 // ---------------------------------------------------------------------------
 
@@ -552,7 +1018,12 @@ fn replies() -> BTreeMap<&'static str, Vec<Value>> {
     map.insert("crew_send", vec![Value::Null]);
     map.insert("crew_stop", vec![Value::Null]);
     map.insert("terminal_list", vec![json_of(&terminal_sessions()), json!([])]);
-    map.insert("terminal_attach", vec![json_of(&TerminalAttached { data: "aGk=".into(), seq: 12, log: log_entries(), log_trimmed: 3 })]);
+    server_replies(&mut map);
+    map.insert("terminal_attach", vec![json_of(&TerminalAttached { data: "aGk=".into(), seq: 12, log: log_entries(), log_trimmed: 3, resumed_after: None }),
+        // A reply to a call that named the number it holds: the bytes that followed it, which the
+        // caller writes onto the terminal it already has (protocol 1.8). Absent in the first
+        // example, so the shape a phone reads is the one it always was.
+        json_of(&TerminalAttached { data: "aGk=".into(), seq: 14, log: Vec::new(), log_trimmed: 0, resumed_after: Some(12) })]);
     map
 }
 
@@ -569,6 +1040,7 @@ fn payloads() -> BTreeMap<&'static str, Vec<Value>> {
     );
     map.insert("terminal:state", all(&terminal_sessions()));
     map.insert("terminal:removed", vec![removed_payload(3)]);
+    server_payloads(&mut map);
     map
 }
 
@@ -697,7 +1169,7 @@ fn fail_on(reports: Vec<String>) {
 fn remote_contract_replies_of_every_allowed_command_match_the_pinned_files() {
     let replies = replies();
     assert_eq!(replies.keys().copied().collect::<Vec<_>>(), {
-        let mut names = ALLOWED_COMMANDS.to_vec();
+        let mut names = SERVER_COMMANDS.to_vec();
         names.sort_unstable();
         names
     }, "a reply example is needed for exactly the allowlisted commands");
@@ -720,7 +1192,7 @@ fn remote_contract_replies_of_every_allowed_command_match_the_pinned_files() {
 fn remote_contract_payloads_of_every_allowed_event_match_the_pinned_files() {
     let payloads = payloads();
     assert_eq!(payloads.keys().copied().collect::<Vec<_>>(), {
-        let mut names = ALLOWED_EVENTS.to_vec();
+        let mut names = SERVER_EVENTS.to_vec();
         names.sort_unstable();
         names
     }, "a payload example is needed for exactly the allowlisted events");
@@ -749,8 +1221,8 @@ fn read_or_default(file: &str, key: &str) -> Value {
 /// (so line endings and layout do not matter). Not a security hash: it is a
 /// fingerprint, and a changed byte of any file changes it.
 fn contract_digest() -> String {
-    let mut paths: Vec<String> = ALLOWED_COMMANDS.iter().map(|c| command_contract_path(c)).collect();
-    paths.extend(ALLOWED_EVENTS.iter().map(|e| event_contract_path(e)));
+    let mut paths: Vec<String> = SERVER_COMMANDS.iter().map(|c| command_contract_path(c)).collect();
+    paths.extend(SERVER_EVENTS.iter().map(|e| event_contract_path(e)));
     paths.sort();
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     let mut feed = |bytes: &[u8]| {
@@ -826,7 +1298,7 @@ fn remote_contract_changes_only_with_a_protocol_version() {
 /// the bridge decodes a call, with no key left over.
 #[test]
 fn remote_contract_argument_examples_of_every_allowed_command_decode() {
-    for cmd in ALLOWED_COMMANDS {
+    for cmd in SERVER_COMMANDS {
         let file = command_contract_path(cmd);
         let pinned = read(&file);
         let examples = pinned["args"].as_array().unwrap_or_else(|| panic!("{file} has no `args` list"));
@@ -863,4 +1335,140 @@ fn remote_contract_diff_names_the_field_that_changed() {
     assert_eq!(problems.len(), 2);
     assert!(problems.iter().any(|p| p.contains("$.state.iteration") && p.contains("PROTOCOL_MAJOR")));
     assert!(problems.iter().any(|p| p.contains("$.state.round") && p.contains("PROTOCOL_MINOR")));
+}
+
+// ---------------------------------------------------------------------------
+// The server's surface is the front end's surface.
+// ---------------------------------------------------------------------------
+
+/// Every command the desktop front end can call is a server command with a pinned example, or is
+/// declared the client's own. A command added to `lib.rs` without either fails here, which is the
+/// point: whether a new command belongs to the server is a decision, and the contract is where it
+/// is written down.
+#[test]
+fn remote_contract_every_front_end_command_is_pinned_or_the_clients() {
+    use super::bridge::{CLIENT_COMMANDS, DESKTOP_COMMANDS};
+    for cmd in DESKTOP_COMMANDS {
+        let server = SERVER_COMMANDS.contains(cmd);
+        let client = CLIENT_COMMANDS.contains(cmd);
+        assert!(
+            server != client,
+            "`{cmd}` must be exactly one of a server command (SERVER_COMMANDS) and a client one (CLIENT_COMMANDS)"
+        );
+        if server {
+            let file = command_contract_path(cmd);
+            let pinned = read(&file);
+            for key in ["args", "reply"] {
+                let examples = pinned[key].as_array().unwrap_or_else(|| panic!("{file} has no `{key}` list"));
+                assert!(!examples.is_empty(), "server command `{cmd}` has no {key} example in contract/{file}");
+            }
+        }
+    }
+    for cmd in SERVER_COMMANDS {
+        assert!(DESKTOP_COMMANDS.contains(cmd), "`{cmd}` is a server command the desktop does not have");
+    }
+    for cmd in CLIENT_COMMANDS {
+        assert!(DESKTOP_COMMANDS.contains(cmd), "`{cmd}` is declared the client's and the desktop has no such command");
+    }
+}
+
+/// Every file under `dir` with the extension `ext`, as text, except the mock backend: it answers
+/// for a browser and names events of the windows' own.
+fn sources(dir: &std::path::Path, ext: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&path) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == ext)
+                && path.file_name().is_some_and(|name| name != "mockBackend.js")
+            {
+                out.push(std::fs::read_to_string(&path).unwrap_or_default());
+            }
+        }
+    }
+    out
+}
+
+/// An event name: lower-case words around one colon.
+fn is_event_name(text: &str) -> bool {
+    text.split_once(':').is_some_and(|(namespace, name)| {
+        !namespace.is_empty()
+            && !name.is_empty()
+            && namespace.bytes().all(|b| b.is_ascii_lowercase())
+            && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+    })
+}
+
+/// The literals quoted with `quote` that follow `call` (and any whitespace) in `text`, when they
+/// are event names.
+fn event_names_after(text: &str, call: &str, quote: char) -> Vec<String> {
+    let mut out = Vec::new();
+    for (at, _) in text.match_indices(call) {
+        let rest = text[at + call.len()..].trim_start();
+        let Some(rest) = rest.strip_prefix(quote) else { continue };
+        if let Some(end) = rest.find(quote) {
+            if is_event_name(&rest[..end]) {
+                out.push(rest[..end].to_owned());
+            }
+        }
+    }
+    out
+}
+
+/// Every event the front end listens to by name, and every event a worker emits, is pinned as a
+/// server event. The scans read source text, which is crude and is the point: a new
+/// `listen('x:y')` or `ctx.emit("x:y", ...)` that nobody added to the contract fails here.
+#[test]
+fn remote_contract_every_front_end_and_worker_event_is_pinned() {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let stores = sources(&manifest.join("../src/stores"), "js");
+    let workers = sources(&manifest.join("../crates/core/src"), "rs");
+    let listened: Vec<String> = stores.iter().flat_map(|text| event_names_after(text, "listen(", '\'')).collect();
+    // The companion's own events are named by constants in `stores/remote.js`.
+    let devices: Vec<String> = stores
+        .iter()
+        .flat_map(|text| event_names_after(text, "_EVENT =", '\''))
+        .filter(|name| name.starts_with("remote:"))
+        .collect();
+    let emitted: Vec<String> = workers
+        .iter()
+        .flat_map(|text| {
+            let mut names = event_names_after(text, "emit(", '"');
+            names.extend(event_names_after(text, "emit_json(", '"'));
+            names
+        })
+        .collect();
+    assert!(listened.len() >= 10, "the scan of the stores found only {listened:?}");
+    assert!(devices.len() >= 3, "the scan of remote.js found only {devices:?}");
+    assert!(emitted.len() >= 10, "the scan of the workers found only {emitted:?}");
+    for (what, names) in [("listens to", listened), ("remote.js names", devices), ("a worker emits", emitted)] {
+        for name in names {
+            assert!(
+                SERVER_EVENTS.contains(&name.as_str()),
+                "the front end {what} `{name}`, which is not in SERVER_EVENTS: add it with its contract/events file"
+            );
+            let file = event_contract_path(&name);
+            let pinned = read(&file);
+            assert!(
+                pinned["payload"].as_array().is_some_and(|examples| !examples.is_empty()),
+                "event `{name}` has no payload example in contract/{file}"
+            );
+        }
+    }
+    for name in SERVER_EVENTS {
+        assert!(is_event_name(name), "{name}");
+    }
+}
+
+#[test]
+fn remote_contract_event_name_scan_reads_what_it_should() {
+    let text = "await listen('run:state', (e) => 1)\nlisten(\n  'crew:tree', x)\nlisten(CONST, y)\nlisten(`dialog:hello:${k}`, z)";
+    assert_eq!(event_names_after(text, "listen(", '\''), ["run:state", "crew:tree"]);
+    let rust = "ctx.emit(\n    \"crew:events\", &x);\nctx.emit_json(\"terminal:log\", y);\nctx.emit(name, z);";
+    assert_eq!(event_names_after(rust, "emit(", '"'), ["crew:events"]);
+    assert_eq!(event_names_after(rust, "emit_json(", '"'), ["terminal:log"]);
 }

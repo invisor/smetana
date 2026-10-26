@@ -1,0 +1,7 @@
+{
+  "payload": [
+    {"data":"aGk=","from":8,"id":3,"seq":8},
+    {"data":"aGk=","from":9,"id":3,"seq":11},
+    {"data":"aGk=","from":12,"id":3,"reset":true,"seq":12}
+  ]
+}

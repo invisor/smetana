@@ -12,7 +12,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use remote_protocol::{PairingTicket, PublicKey, SECRET_LEN};
+use remote_protocol::{DeviceKind, PairingTicket, PublicKey, SECRET_LEN};
 use tokio::sync::oneshot;
 
 /// How long a freshly issued secret stays good, in seconds.
@@ -33,6 +33,9 @@ pub fn system_clock() -> Clock {
 struct Issued {
     secret: [u8; SECRET_LEN],
     expires_at: u64,
+    /// What the device that spends this secret will be allowed to do. Decided here, when the
+    /// ticket is issued, and never by anything the device says.
+    kind: DeviceKind,
 }
 
 #[derive(Default)]
@@ -81,10 +84,16 @@ impl Pairing {
 
     /// Issues a ticket, replacing any earlier one: there is one QR on screen at
     /// a time, and the older code stops working the moment a newer one appears.
+    #[cfg(test)]
     pub fn begin(&self, desktop: PublicKey, relay: &str) -> PairingTicket {
+        self.begin_for(desktop, relay, DeviceKind::Phone)
+    }
+
+    /// [`Pairing::begin`] for a ticket that admits a device of `kind`.
+    pub fn begin_for(&self, desktop: PublicKey, relay: &str, kind: DeviceKind) -> PairingTicket {
         let secret: [u8; SECRET_LEN] = rand::random();
         let expires_at = self.now() + SECRET_TTL_SECS;
-        self.lock().issued = Some(Issued { secret, expires_at });
+        self.lock().issued = Some(Issued { secret, expires_at, kind });
         PairingTicket { desktop, relay: relay.to_owned(), secret, expires_at }
     }
 
@@ -106,7 +115,13 @@ impl Pairing {
 
     /// Checks a presented secret and burns it, whatever the outcome of what
     /// follows. On success, the seconds left of its term.
+    #[cfg(test)]
     pub fn spend(&self, presented: &[u8; SECRET_LEN]) -> Result<u64, &'static str> {
+        self.spend_for_kind(presented).map(|(secs, _)| secs)
+    }
+
+    /// [`Pairing::spend`], and the kind the ticket admitted.
+    pub fn spend_for_kind(&self, presented: &[u8; SECRET_LEN]) -> Result<(u64, DeviceKind), &'static str> {
         let now = self.now();
         let mut state = self.lock();
         let Some(issued) = state.issued.as_ref() else {
@@ -117,12 +132,12 @@ impl Pairing {
             // the endpoint could otherwise cancel a pairing by guessing.
             return Err("this pairing code is not valid");
         }
-        let expires_at = issued.expires_at;
+        let (expires_at, kind) = (issued.expires_at, issued.kind);
         state.issued = None;
         if now >= expires_at {
             return Err("this pairing code has expired");
         }
-        Ok(expires_at - now)
+        Ok((expires_at - now, kind))
     }
 
     /// Puts a request in front of the person. One at a time.
@@ -194,6 +209,15 @@ mod tests {
         assert_eq!(pairing.spend(&ticket.secret), Ok(SECRET_TTL_SECS));
         assert!(pairing.spend(&ticket.secret).is_err(), "the second use is refused");
         assert!(!pairing.is_open());
+    }
+
+    #[test]
+    fn a_ticket_admits_the_kind_it_was_issued_for() {
+        let (pairing, _) = pairing();
+        let phone = pairing.begin(key(), "https://relay.example");
+        assert_eq!(pairing.spend_for_kind(&phone.secret).map(|(_, kind)| kind), Ok(DeviceKind::Phone));
+        let desktop = pairing.begin_for(key(), "https://relay.example", DeviceKind::Desktop);
+        assert_eq!(pairing.spend_for_kind(&desktop.secret).map(|(_, kind)| kind), Ok(DeviceKind::Desktop));
     }
 
     #[test]

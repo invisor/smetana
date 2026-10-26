@@ -1,0 +1,6 @@
+{
+  "args": [{"dir":"src","name":"views","root":"/work/smetana"}],
+  "reply": [
+    "src/new.js"
+  ]
+}

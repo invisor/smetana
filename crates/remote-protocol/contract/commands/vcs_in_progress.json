@@ -1,0 +1,8 @@
+{
+  "args": [{"repo":"/work/smetana"}],
+  "reply": [
+    {"op":"merge","ours":"main","theirs":"topic"},
+    {"op":"rebase","ours":null,"theirs":null},
+    null
+  ]
+}

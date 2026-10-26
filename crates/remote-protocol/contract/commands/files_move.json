@@ -1,0 +1,6 @@
+{
+  "args": [{"dstDir":"docs","root":"/work/smetana","src":"src/main.js"}],
+  "reply": [
+    "src/new.js"
+  ]
+}

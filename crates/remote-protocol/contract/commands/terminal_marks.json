@@ -1,0 +1,7 @@
+{
+  "args": [{}],
+  "reply": [
+    [{"id":1,"kind":"bare","project":"/work/smetana","state":"starting"},{"id":2,"kind":"newTask","project":"/work/smetana","state":"running"},{"id":3,"kind":"editTask","project":"/work/smetana","state":"idle"},{"id":4,"kind":"resolveTask","project":"/work/smetana","state":"needs-you"},{"id":5,"kind":"fixTask","project":"/work/smetana","state":"exited"},{"id":6,"kind":"resolveConflict","project":"/work/smetana","state":"starting"},{"id":7,"kind":"repairTracker","project":"/work/smetana","state":"running"},{"id":8,"kind":"resumeSession","project":"/work/smetana","state":"idle"},{"id":9,"kind":"setup","project":"/work/smetana","state":"needs-you"},{"id":10,"kind":"bootstrap","project":"/work/smetana","state":"exited"},{"id":11,"kind":"signIn","project":"/work/smetana","state":"starting"},{"id":12,"kind":"reviewBranch","project":"/work/smetana","state":"running"},{"id":13,"kind":"run","project":"/work/smetana","state":"idle"},{"id":14,"kind":"shell","project":"/work/smetana","state":"needs-you"}],
+    []
+  ]
+}

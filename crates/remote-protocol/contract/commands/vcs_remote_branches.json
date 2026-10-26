@@ -1,0 +1,6 @@
+{
+  "args": [{"repo":"/work/smetana"}],
+  "reply": [
+    [{"at":1760000000,"name":"origin/main"},{"at":null,"name":"origin/old"}]
+  ]
+}

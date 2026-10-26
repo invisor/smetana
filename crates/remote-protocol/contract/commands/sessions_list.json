@@ -1,0 +1,6 @@
+{
+  "args": [{"project":"/work/smetana"}],
+  "reply": [
+    [{"branch":"main","cwd":"/work/smetana","cwdExists":true,"firstPrompt":"Fix it","id":"abc","lastRole":"assistant","lastText":"Done","messages":12,"model":"opus","modifiedAt":"2026-10-15T10:00:00Z","path":"/home/you/.claude/projects/-work-smetana/abc.jsonl","size":2048,"subagents":1,"title":"Fix the board"}]
+  ]
+}

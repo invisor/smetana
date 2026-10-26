@@ -47,11 +47,20 @@ impl Ring {
     }
 
     pub fn snapshot(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.buf.len() + 4);
+        self.snapshot_without_tail(0)
+    }
+
+    /// The snapshot as it was `tail` bytes ago: what the ring held before the last `tail` bytes
+    /// were pushed. A reader that is told the number of the last chunk *committed* needs the
+    /// ring to end there, and the bytes since then (`pending` in the worker) are still on their
+    /// way to it as the next chunk. A tail longer than the ring leaves nothing.
+    pub fn snapshot_without_tail(&self, tail: usize) -> Vec<u8> {
+        let keep = self.buf.len().saturating_sub(tail);
+        let mut out = Vec::with_capacity(keep + 4);
         if self.dropped {
             out.extend_from_slice(b"\x1b[0m");
         }
-        out.extend(self.buf.iter().copied());
+        out.extend(self.buf.iter().take(keep).copied());
         out
     }
 }
@@ -65,6 +74,16 @@ mod tests {
         let mut ring = Ring::new(64);
         ring.push(b"hello\nworld\n");
         assert_eq!(ring.snapshot(), b"hello\nworld\n");
+    }
+
+    #[test]
+    fn a_snapshot_without_a_tail_ends_where_the_ring_ended_before_it() {
+        let mut ring = Ring::new(64);
+        ring.push(b"hello ");
+        ring.push(b"world");
+        assert_eq!(ring.snapshot_without_tail(5), b"hello ");
+        assert_eq!(ring.snapshot_without_tail(0), b"hello world");
+        assert!(ring.snapshot_without_tail(99).is_empty());
     }
 
     #[test]

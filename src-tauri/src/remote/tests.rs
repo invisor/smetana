@@ -12,7 +12,8 @@ use std::time::Duration;
 use iroh::endpoint::{presets, Connection, ConnectionError};
 use iroh::{Endpoint, EndpointAddr, RelayMode, SecretKey};
 use remote_protocol::{
-    read_frame, write_frame, Hello, HelloReply, PairReply, PairRequest, Platform, ALPN, MAX_FRAME,
+    read_frame, write_frame, DeviceKind, Hello, HelloReply, PairReply, PairRequest, Platform, ALPN,
+    MAX_FRAME,
 };
 
 use super::devices::{Device, Devices};
@@ -142,7 +143,12 @@ async fn pair(h: &Harness, phone: &Phone, secret: [u8; 32]) -> (Connection, Pair
 
 /// Pairs a phone by the real route and returns when it is on the list.
 async fn pair_accepted(h: &Harness, phone: &Phone) {
-    let ticket = h.remote.pairing.begin(h.remote.public_key(), "loopback");
+    pair_accepted_as(h, phone, DeviceKind::Phone).await;
+}
+
+/// [`pair_accepted`] with a ticket that admits a device of `kind`.
+async fn pair_accepted_as(h: &Harness, phone: &Phone, kind: DeviceKind) {
+    let ticket = h.remote.pairing.begin_for(h.remote.public_key(), "loopback", kind);
     let answer = async {
         wait_until("the pair request", || {
             h.events.lock().unwrap().iter().any(|e| matches!(e, Event::PairRequest { .. }))
@@ -345,6 +351,7 @@ async fn remote_a_device_listed_on_disk_is_served_after_a_restart() {
             push_key: "00".repeat(32),
             paired_at: 1,
             last_contact: None,
+            kind: DeviceKind::Phone,
         })
         .unwrap();
     let conn = phone.connect(&h).await;
@@ -355,7 +362,7 @@ async fn remote_a_device_listed_on_disk_is_served_after_a_restart() {
 async fn remote_a_ticket_carries_the_relay_it_is_asked_for_and_not_the_one_on_disk() {
     let h = harness().await;
     // The harness's disk-side relay is "loopback"; the field says otherwise.
-    let issued = h.remote.pair_begin("https://new-relay.example.org").await.unwrap();
+    let issued = h.remote.pair_begin("https://new-relay.example.org", DeviceKind::Phone).await.unwrap();
     let ticket = remote_protocol::PairingTicket::decode(&issued.ticket).unwrap();
     assert_eq!(ticket.relay, "https://new-relay.example.org");
     assert_eq!(ticket.desktop, h.remote.public_key());
@@ -367,7 +374,7 @@ async fn remote_a_ticket_carries_the_relay_it_is_asked_for_and_not_the_one_on_di
 async fn remote_a_relay_that_is_not_usable_issues_no_ticket() {
     let h = harness().await;
     for bad in ["", "http://relay.example.org", "https://203.0.113.7", "relay.example.org"] {
-        assert!(h.remote.pair_begin(bad).await.is_err(), "{bad:?}");
+        assert!(h.remote.pair_begin(bad, DeviceKind::Phone).await.is_err(), "{bad:?}");
     }
     assert!(!h.remote.pairing.is_open(), "nothing was issued");
 }
@@ -418,4 +425,5 @@ async fn remote_only_a_few_unknown_keys_are_served_while_a_code_is_out() {
     assert_eq!(code(closed), Some(CLOSE_UNKNOWN as u64));
 }
 
+mod desktop_bridge;
 mod phone_bridge;

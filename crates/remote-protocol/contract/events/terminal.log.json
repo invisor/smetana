@@ -1,0 +1,5 @@
+{
+  "payload": [
+    {"entries":[{"at":"2026-10-19T10:00:00+03:00","kind":"note","seq":4,"text":"session start (model opus)"},{"at":"2026-10-19T10:00:00+03:00","kind":"say","seq":5,"text":"Reading `merging`.\n\nThen the diff."},{"at":"2026-10-19T10:00:00+03:00","command":"git status","cwd":"/work/smetana","id":"t1","kind":"tool","seq":6,"tool":"Bash"},{"at":"2026-10-19T10:00:00+03:00","id":"t1","kind":"result","ok":true,"seq":7,"summary":"4 lines"},{"at":"2026-10-19T10:00:00+03:00","command":"/work/smetana/a.txt","cwd":null,"id":"t2","kind":"tool","seq":8,"tool":"Read"},{"at":"2026-10-19T10:00:00+03:00","id":"t2","kind":"result","ok":false,"seq":9,"summary":"1 line"}],"id":3}
+  ]
+}

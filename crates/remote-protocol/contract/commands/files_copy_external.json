@@ -1,0 +1,6 @@
+{
+  "args": [{"dstDir":"docs","root":"/work/smetana","src":"/tmp/dropped.png"}],
+  "reply": [
+    "src/new.js"
+  ]
+}

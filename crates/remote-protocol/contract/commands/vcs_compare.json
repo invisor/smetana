@@ -1,0 +1,6 @@
+{
+  "args": [{"branch":"main","mode":"diverged","repo":"/work/smetana"},{"branch":"main","mode":"direct","repo":"/work/smetana"}],
+  "reply": [
+    {"files":[{"kind":"modified","origPath":null,"path":"src/a.js"},{"kind":"renamed","origPath":"src/c.js","path":"src/b.js"}],"left":"main","right":"topic"}
+  ]
+}

@@ -12,10 +12,12 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::context::{Context, Sink};
 use crate::remote::{push, Remote};
 
-/// Windows and phones, from one place: an event reaches the windows exactly as `app.emit` does and
-/// every phone that has listened for it, so that a phone and the window cannot be told different
-/// things. An event that is not on the phones' allowlist reaches the windows and no phone — the hub
-/// refuses it — which is why one sink serves the events that used to be emitted to windows alone.
+/// Windows and remote devices, from one place: an event reaches the windows exactly as `app.emit`
+/// does and every device that has listened for it, so that a device and the window cannot be told
+/// different things. An event that is not on a device kind's list reaches the windows and no device
+/// of that kind — the hub refuses it — which is why one sink serves the events that used to be
+/// emitted to windows alone. Terminal output and log lines take the two extra roads below: they are
+/// delivered to the devices that follow a session, not to every listener.
 struct TauriSink {
     app: AppHandle,
 }
@@ -25,6 +27,18 @@ impl Sink for TauriSink {
         let _ = self.app.emit(name, &payload);
         if let Some(remote) = self.app.try_state::<Arc<Remote>>() {
             remote.hub.publish(name, &payload);
+        }
+    }
+
+    fn terminal_chunk(&self, session: u64, seq: u64, bytes: &[u8]) {
+        if let Some(remote) = self.app.try_state::<Arc<Remote>>() {
+            remote.hub.publish_terminal_chunk(session, seq, bytes);
+        }
+    }
+
+    fn terminal_log(&self, session: u64, entries: &serde_json::Value) {
+        if let Some(remote) = self.app.try_state::<Arc<Remote>>() {
+            remote.hub.publish_terminal_log(session, entries);
         }
     }
 

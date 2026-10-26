@@ -1,0 +1,7 @@
+{
+  "args": [{"repo":"/work/smetana"}],
+  "reply": [
+    {"branch":"main","changes":[{"kind":"modified","origPath":null,"path":"src/file0.js","staged":true,"unstaged":true},{"kind":"added","origPath":null,"path":"src/file1.js","staged":false,"unstaged":false},{"kind":"deleted","origPath":null,"path":"src/file2.js","staged":true,"unstaged":false},{"kind":"renamed","origPath":"src/old.js","path":"src/file3.js","staged":false,"unstaged":true},{"kind":"copied","origPath":null,"path":"src/file4.js","staged":true,"unstaged":false},{"kind":"typeChanged","origPath":null,"path":"src/file5.js","staged":false,"unstaged":false},{"kind":"untracked","origPath":null,"path":"src/file6.js","staged":true,"unstaged":true},{"kind":"conflicted","origPath":null,"path":"src/file7.js","staged":false,"unstaged":false}],"detached":null},
+    {"branch":null,"changes":[],"detached":null}
+  ]
+}
