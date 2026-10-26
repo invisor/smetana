@@ -161,20 +161,6 @@ pub fn nearest_tracked_ancestor(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// What to open with on the very first run, when the project list is still empty.
-///
-/// Plain `current_dir` is no good in any real launch: under `npm run tauri dev`
-/// the binary starts from `src-tauri/`, and a built macOS app opened from
-/// Finder starts from `/` altogether. Hence the walk up the ancestors.
-///
-/// Nothing found means there is no project, and that is no trouble: the list is
-/// empty and a person will pick a folder themselves. This used to return the
-/// working directory, and the app said "there is no .beads here" about a folder
-/// nobody had chosen.
-pub fn default_project() -> Option<PathBuf> {
-    nearest_tracked_ancestor(&std::env::current_dir().ok()?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -469,9 +469,10 @@ export async function initActive() {
   }
 }
 
-/* The first run: settings brought an active project that is not in the list
-   yet (it was found from the working directory). We put it in — and the list
-   stops being empty for good. */
+/* Settings brought an active project that is not in the list. Rust's
+   `adopt_last_project` already covers a file with `lastProject` and no list, so
+   this is a guard rather than a path the app takes; the list must never miss
+   the project on screen. */
 export function adoptInitialProject() {
   const active = settings.activeProject
   if (active && !settings.openProjects.includes(active)) settings.openProjects.push(active)

@@ -14,7 +14,6 @@ use std::path::PathBuf;
 use super::file;
 use crate::context::Context;
 use super::model::{merge, resolve, ResolvedSettings};
-use crate::project;
 
 /// Settings have almost no read errors: the file may be missing, it may be
 /// broken — that is ordinary life, not a failure. There are two real troubles:
@@ -79,15 +78,12 @@ pub fn load_from(path: &std::path::Path, project: Option<String>) -> Result<Reso
         None => {}
     }
 
-    let mut view = resolve(&settings, project.as_deref());
-    // The first run: there is no list yet. We open with the directory the app
-    // was launched from, if it is tracked; the front end puts it in the list —
-    // reading does not change the file.
-    if view.open_projects.is_empty() && view.active_project.is_none() {
-        view.active_project =
-            project::default_project().map(|dir| dir.to_string_lossy().into_owned());
-    }
-    Ok(view)
+    // The first run answers no project at all. The directory the process was
+    // started from is deliberately not offered in its place: the tracker worker
+    // starts from the stored `lastProject` alone (`smetanad::server`), so a
+    // project named here and nowhere else was drawn as open over a board that
+    // answered "no project", and adding the same folder was a no-op.
+    Ok(resolve(&settings, project.as_deref()))
 }
 
 /// The file is re-read on every write: a person may have edited it between two
@@ -210,5 +206,15 @@ mod tests {
         assert!(settings_adopt(&ctx, serde_json::json!({"agent": "codex"})).await.unwrap());
         assert!(!settings_adopt(&ctx, serde_json::json!({"agent": "claude"})).await.unwrap());
         assert_eq!(sink.0.lock().unwrap().len(), 1);
+    }
+
+    /// This test runs inside a tracked repository, which is exactly the
+    /// working directory the removed fallback would have answered with.
+    #[test]
+    fn a_first_run_answers_no_project_whatever_the_working_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let view = load_from(&dir.path().join("settings.json"), None).unwrap();
+        assert_eq!(view.active_project, None);
+        assert!(view.open_projects.is_empty());
     }
 }

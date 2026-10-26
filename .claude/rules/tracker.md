@@ -61,8 +61,10 @@ trigger, because two copies would have drifted the first time bd grew a status. 
 preview, deletes nothing and exits zero.
 
 Which directory that is comes from `crates/core/src/project.rs` — the vocabulary the tracker and the
-settings share: `has_tracker`, `nearest_tracked_ancestor` and `default_project` for the very first
-run. `has_tracker` answers whether `bd list` can actually read something here, not whether `bd where`
+settings share: `has_tracker` and `nearest_tracked_ancestor`. The very first run opens on no project
+at all: `default_project`, which offered the folder the process was started from, is gone, because
+since the switch-over only the front end took it and the server's tracker never did — a project
+drawn as open over a board answering `no-project`. `has_tracker` answers whether `bd list` can actually read something here, not whether `bd where`
 accepts the folder as a workspace — the two questions differ, and only the first one is what this app
 depends on. A `.beads` counts only if it also holds one of `embeddeddolt/`, `dolt/` (bd's own
 `.gitignore` names the database directory both ways across releases) or `redirect` (a worktree's own
