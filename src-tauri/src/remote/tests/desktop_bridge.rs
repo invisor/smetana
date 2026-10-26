@@ -284,3 +284,51 @@ async fn remote_desktop_attaching_again_on_a_live_connection_starts_the_follow_a
     let (heard, _) = hear_after(&mut client, 1, 2).await;
     assert_eq!(heard, b"two");
 }
+
+#[tokio::test]
+async fn remote_desktop_a_phone_that_attaches_to_a_terminal_gets_no_stream() {
+    let h = harness().await;
+    let fake = FakeTerminal::new(1 << 20);
+    h.remote.hub.set_dispatch(fake.clone());
+    let phone = phone().await;
+    pair_accepted(&h, &phone).await;
+    let mut client = Client::connect(&h, &phone).await;
+    // The phone's attach is a read of the ring, as ever.
+    let reply = client.call("terminal_attach", json!({ "id": 1 })).await.unwrap();
+    assert_eq!(decode(&reply["data"]), Vec::<u8>::new());
+
+    fake.commit(&h, b"raw pty bytes");
+    h.remote.hub.publish_terminal_log(1, &json!([]));
+    assert_eq!(h.remote.hub.buffered_bytes(), 0, "nothing is held for a phone");
+    assert!(client.event(Duration::from_millis(300)).await.is_none(), "and nothing is sent to it");
+}
+
+#[tokio::test]
+async fn remote_desktop_output_in_flight_when_a_client_attaches_again_is_not_applied_twice() {
+    let h = harness().await;
+    let fake = FakeTerminal::new(1 << 20);
+    h.remote.hub.set_dispatch(fake.clone());
+    let (_phone, mut client) = desktop(&h).await;
+    client.call("terminal_attach", json!({ "id": 1, "after": null })).await.unwrap();
+    fake.commit(&h, b"a");
+    let (mut screen, last) = hear_after(&mut client, 0, 1).await;
+
+    // Two more chunks are written to the connection before the client asks again.
+    fake.commit(&h, b"b");
+    fake.commit(&h, b"c");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let reply = client.call("terminal_attach", json!({ "id": 1, "after": last })).await.unwrap();
+    // The documented rule: output that arrived while the attach was outstanding is discarded, and
+    // the reply alone sets `last`.
+    let stale = client.events.len();
+    client.events.clear();
+    assert!(stale >= 1, "the chunks really were in flight, or this test proves nothing");
+    assert_eq!(reply["resumedAfter"], json!(last));
+    screen.extend(decode(&reply["data"]));
+    let last = reply["seq"].as_u64().unwrap();
+
+    fake.commit(&h, b"d");
+    let (more, _) = hear_after(&mut client, last, 4).await;
+    screen.extend(more);
+    assert_eq!(String::from_utf8(screen).unwrap(), "abcd");
+}
