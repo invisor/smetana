@@ -51,9 +51,19 @@ export const TOGGLE_INSET = 'var(--space-3)'
 /* The control's own box: the small icon button, plus the border around it. */
 export const TOGGLE_BOX = 'calc(var(--control-h-sm) + var(--border-w) * 2)'
 
+/* The same box holding `buttons` of them side by side - a report tab draws a second, "Open in
+   browser", beside the first. One button is exactly `TOGGLE_BOX`, so nothing that reserves a lane for
+   the one has to know there can be two. */
+export const toggleBox = (buttons = 1) =>
+  buttons <= 1 ? TOGGLE_BOX : `calc(var(--control-h-sm) * ${buttons} + var(--border-w) * 2)`
+
 /* What the tab keeps clear on its right: the control, with its inset on both
    sides. Read by whatever draws the toggle — the centre column in the app, the
    demo boxes in the gallery — as padding on the content box, since an absolutely
    positioned child is placed against the padding box and therefore lands in the
    strip rather than over the content. */
 export const TOGGLE_LANE = `calc(${TOGGLE_BOX} + ${TOGGLE_INSET} * 2)`
+
+/* The lane for a control of `buttons` buttons; one is `TOGGLE_LANE`. */
+export const toggleLane = (buttons = 1) =>
+  buttons <= 1 ? TOGGLE_LANE : `calc(${toggleBox(buttons)} + ${TOGGLE_INSET} * 2)`

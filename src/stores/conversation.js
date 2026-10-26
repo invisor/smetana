@@ -30,6 +30,7 @@ import { crewRows } from '../components/agent/crewTree.js'
    is the one `settings.js` already records as harmless for that reason. */
 import { settings } from './settings.js'
 import { onReconnect } from './connection.js'
+import { pathsForServer } from './serverFiles.js'
 /* The one sound `listenToState` below rings, the same call `terminal:state`
    makes in `terminals.js` — see that file and `.claude/rules/notifications.md`
    for the sound itself and for `onlyWhenUnfocused`, neither of which is this
@@ -959,7 +960,10 @@ export async function sendMessage(id, message, attachments = []) {
       if (attachments.length) throw new Error('Crew messages cannot include attachments')
       await invoke('crew_send', { ...address, text })
     } else {
-      await invoke('session_send', { id, text, attachments })
+      /* Files from this machine reach an agent on another one as the paths the server stored them at;
+         with the server here the paths go as they are (`stores/serverFiles.js`). */
+      const paths = attachments.length ? await pathsForServer(attachments) : attachments
+      await invoke('session_send', { id, text, attachments: paths })
     }
     conversationState.lastError = null
     /* Cleared only while it is still the words that went. A slow worker invites

@@ -24,6 +24,7 @@ paths:
   # shared with the terminal and the conversation panel; the "no drop is heard
   # twice" argument now leans on it directly.
   - "src/stores/windowDrops.js"
+  - "src/stores/serverFiles.js"
 ---
 
 # Attachments: files on a task nobody has filed yet
@@ -122,6 +123,12 @@ above all no `watchDrops`. The invariant is untouched because a command is not a
 list still belongs to the New task window alone, and nothing in the image window's webview can hear a
 drop or keep one — and reading through a second command changes nothing about that, since neither one
 is a subscription either.
+
+**Remote placement is the one exception, and it is the client build's** (`.claude/rules/remote.md`, "A server on another machine"). A path
+picked or dropped on this machine names a file a remote server cannot open, so there the bytes travel: `importPaths`, a message's
+attachments and a file dropped on a terminal read the file here (`client_file_read`, refused over `MAX_ATTACHMENT_BYTES` before it is read -
+the front end carries no copy of that number) and store it with `attachment_write`; what is kept in a task or given to an agent is the
+server's path. With the server on this machine nothing in this paragraph applies and the rule below stands.
 
 **What travels to it is the path, and never the bytes.** A record's `url` is a `data:` URL of up to
 `MAX_ATTACHMENT_BYTES` of base64: it fits in no URL, and putting it on the event channel would be thirteen

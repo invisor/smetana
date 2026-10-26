@@ -264,6 +264,9 @@ export { default as RunModal } from './run/RunModal.vue'
 export { default as SetupProjectModal } from './run/SetupProjectModal.vue'
 export { default as StartProjectModal } from './run/StartProjectModal.vue'
 
+// projects
+export { default as FolderBrowserModal } from './projects/FolderBrowserModal.vue'
+
 // settings
 export { default as AboutSettings } from './settings/AboutSettings.vue'
 export { default as AgentRoleRows } from './settings/AgentRoleRows.vue'
@@ -273,6 +276,7 @@ export { default as EditorSettings } from './settings/EditorSettings.vue'
 export { default as GeneralSettings } from './settings/GeneralSettings.vue'
 export { default as GitSettings } from './settings/GitSettings.vue'
 export { default as KanbanSettings } from './settings/KanbanSettings.vue'
+export { default as ServerSettings } from './settings/ServerSettings.vue'
 export { default as SettingsGroup } from './settings/SettingsGroup.vue'
 export { default as SettingsRow } from './settings/SettingsRow.vue'
 export { default as StorageSettings } from './settings/StorageSettings.vue'

@@ -10,7 +10,7 @@ import {
 } from '../../src/views/dialogRegistry.js'
 
 describe('the dialog registry', () => {
-  it('holds the fourteen kinds that became windows', () => {
+  it('holds the fifteen kinds that became windows', () => {
     expect([...DIALOG_KINDS].sort()).toEqual([
       'delete-branch',
       'delete-session',
@@ -24,9 +24,18 @@ describe('the dialog registry', () => {
       'rename-branch',
       'review-changes',
       'run',
+      'server-folder',
       'setup-project',
       'start-project'
     ])
+  })
+
+  /* The folder browser stands on the project like every kind, and is wide enough for a path. */
+  it('gives the server folder browser the project as its ground and a width of its own', () => {
+    expect(isDialogKind('server-folder')).toBe(true)
+    expect(dialogGround('server-folder')).toEqual(['project'])
+    expect(dialogWidth('server-folder')).toBe(520)
+    expect(stalenessMessage('server-folder', 'project')).toMatch(/add project dialog/)
   })
 
   /* The rename window stands on the same three as the two branch dialogs beside

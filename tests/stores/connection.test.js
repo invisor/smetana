@@ -168,3 +168,57 @@ describe('the commands the strip presses', () => {
     expect(stores.connection.connection.restartScheduled).toBe(false)
   })
 })
+
+describe('which server this device uses', () => {
+  it('reads a server on another machine as remote and everything else as local', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    ipc.on('connection_state', split({ local: true }))
+    await stores.connection.initConnection()
+    expect(stores.connection.isRemote.value).toBe(false)
+
+    await emit('connection:state', split({ local: false, epoch: 2 }))
+    expect(stores.connection.isRemote.value).toBe(true)
+
+    await emit('connection:state', split({ local: true, epoch: 3 }))
+    expect(stores.connection.isRemote.value).toBe(false)
+  })
+
+  it('never reads the build with its back end in-process as remote', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('connection_state', { mode: 'in-process', state: 'connected', epoch: 0, local: false })
+    await stores.connection.initConnection()
+    expect(stores.connection.isRemote.value).toBe(false)
+  })
+
+  it('answers the shell\'s target, and in-process where there is nobody to ask', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('server_target', { target: { kind: 'remote', node: 'abc', relay: 'https://r.example' } })
+    expect(await stores.connection.readServerTarget()).toEqual({ kind: 'remote', node: 'abc', relay: 'https://r.example' })
+    ipc.fail('server_target', new Error('no such command'))
+    expect(await stores.connection.readServerTarget()).toEqual({ kind: 'in-process' })
+  })
+
+  it('lists the local server\'s work, and an empty list when it cannot be asked', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('server_local_work', [{ kind: 'run', id: 1, label: 'run', project: '/p', owner: null }])
+    expect(await stores.connection.localServerWork()).toHaveLength(1)
+    ipc.fail('server_local_work', 'nope')
+    expect(await stores.connection.localServerWork()).toEqual([])
+  })
+
+  it('switches to a remote server with the ticket and the stop choice, and says what the shell answered', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('server_use_remote', { target: { kind: 'remote', node: 'abc', relay: 'r' }, localStop: 'scheduled' })
+    const answer = await stores.connection.useRemoteServer('smetana2:abc', true)
+    expect(ipc.calls('server_use_remote')).toEqual([{ ticket: 'smetana2:abc', stopLocal: true }])
+    expect(answer.localStop).toBe('scheduled')
+  })
+
+  it('rejects with the shell\'s words when pairing is refused, and the same for going back', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.fail('server_use_remote', 'the server refused the pairing: This code has expired.')
+    await expect(stores.connection.useRemoteServer('smetana2:abc', false)).rejects.toThrow(/expired/)
+    ipc.fail('server_use_local', new Error('The connection has not been set up.'))
+    await expect(stores.connection.useLocalServer()).rejects.toThrow(/not been set up/)
+  })
+})

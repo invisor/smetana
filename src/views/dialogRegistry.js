@@ -110,7 +110,14 @@ const REGISTRY = {
      the repository it is about. And the branch is not ground either, for the
      same reason — a row whose branch has gone is a pair git will refuse in its
      own words, which is a better answer than a half-filled table vanishing. */
-  'review-changes': { width: 720, ground: ['project'] }
+  'review-changes': { width: 720, ground: ['project'] },
+  /* Adding a project from the server's own disk, for a server that is on another machine. The
+     project, like every kind: a window left standing over a project somebody has clicked away from
+     is about a project that is no longer the one in front of them. The app window holds the store
+     that asks the server (this window has no connection of its own to speak of) and announces each
+     listing; this window only draws it and says which folder was stepped into. It closes itself
+     before the project is added, so the move this causes is never read as the ground going. */
+  'server-folder': { width: 520, ground: ['project'] }
 }
 
 export const DIALOG_KINDS = Object.keys(REGISTRY)
@@ -146,7 +153,8 @@ const DIALOG_NOUN = {
   'delete-task': 'delete',
   'ready-task': 'move to ready',
   'delete-session': 'delete session',
-  'review-changes': 'review changes'
+  'review-changes': 'review changes',
+  'server-folder': 'add project'
 }
 
 const REASON_CLAUSE = {

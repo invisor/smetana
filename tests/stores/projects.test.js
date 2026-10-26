@@ -651,3 +651,52 @@ describe('a project switched on the phone', () => {
   })
 })
 
+
+describe('adding a project on a server that is not on this machine', () => {
+  it('adds a folder the server browser chose without opening the operating system panel', async () => {
+    const added = await projects.addProjectAt('/home/dev/app')
+
+    expect(added).toBe('/home/dev/app')
+    expect(settings.settings.openProjects).toEqual(['/home/dev/app'])
+    expect(settings.settings.activeProject).toBe('/home/dev/app')
+    expect(ipc.calls('plugin:dialog|open')).toHaveLength(0)
+    expect(ipc.calls('project_root')).toEqual([{ path: '/home/dev/app' }])
+  })
+
+  it('lists folders by the path the server gave and passes the root as null', async () => {
+    const listing = { root: '/home/dev', path: '/home/dev', parent: null, entries: [], truncated: false }
+    ipc.on('folders_list', listing)
+
+    expect(await projects.listServerFolders()).toBe(listing)
+    await projects.listServerFolders('/home/dev/app')
+
+    expect(ipc.calls('folders_list')).toEqual([{ path: null }, { path: '/home/dev/app' }])
+  })
+
+  it('says what the server refused a folder with', async () => {
+    ipc.on('folders_list', () => {
+      throw { kind: 'outside', message: '/etc is outside the folders this server lets a client reach' }
+    })
+
+    await expect(projects.listServerFolders('/etc')).rejects.toThrow(/outside the folders/)
+  })
+
+  it('clones into the folder it was given and answers the new path', async () => {
+    ipc.on('project_clone', { path: '/home/dev/app' })
+
+    const path = await projects.cloneOnServer({ url: 'https://host/team/app.git', parent: '/home/dev' })
+
+    expect(path).toBe('/home/dev/app')
+    expect(ipc.calls('project_clone')).toEqual([{ url: 'https://host/team/app.git', parent: '/home/dev', name: null }])
+  })
+
+  it('shows a failed clone in git\'s own words', async () => {
+    ipc.on('project_clone', () => {
+      throw { kind: 'clone', message: 'fatal: repository not found' }
+    })
+
+    await expect(
+      projects.cloneOnServer({ url: 'https://host/x.git', parent: '/home/dev', name: 'x' })
+    ).rejects.toThrow('fatal: repository not found')
+  })
+})

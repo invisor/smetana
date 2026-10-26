@@ -18,6 +18,7 @@ import { confirmUnsaved, dirtyPaths, resetTabs, restoreTabs } from './tabs.js'
 import { loadSessions } from './terminals.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
 import { basename, dirname } from '../paths.js'
+import { refusalOf } from './connection.js'
 
 /* Path → whether it holds a .beads. health says the same thing about the
    active project, but there is nowhere else to learn it about the other rows. */
@@ -244,6 +245,15 @@ export async function addProject() {
      a different question. Only on a choice — a cancelled panel returns above
      with the memory untouched. */
   lastPickedDir = dirname(picked) ?? lastPickedDir
+  return addProjectAt(picked)
+}
+
+/* The second half of adding a project, from a folder that has already been chosen: by the
+   operating system's panel on this machine (`addProject` above), or in the server-side folder
+   browser when the server is on another one (`listServerFolders`, below). Same contract: the added
+   path on success, null on any cancellation. */
+export async function addProjectAt(picked) {
+  if (moving) return null
   const path = await projectRoot(picked)
   /* The dialog itself takes as long as it takes — a move may have started and
      finished while the person was picking a folder, so the flag is checked
@@ -269,6 +279,31 @@ export async function addProject() {
     return path
   } finally {
     release()
+  }
+}
+
+/* ---- a server on another machine ---------------------------------------- */
+
+/* The folders under `path` on the server (its home folder when `path` is null): `{ root, path,
+   parent, entries: [{ name, path, repo, tracker }], truncated, repo, tracker }`. The server
+   refuses anything that is not under its root; the browser never composes a path of its own, it
+   only passes back ones the server listed. Rejects with the server's words. */
+export async function listServerFolders(path = null) {
+  try {
+    return await invoke('folders_list', { path })
+  } catch (err) {
+    throw new Error(refusalOf(err))
+  }
+}
+
+/* `git clone` on the server into `parent/name` (the address's last segment when `name` is empty).
+   Answers the new folder's path. The server runs git with no terminal, so a repository that wants
+   credentials the server does not have fails in git's own words, which come back here. */
+export async function cloneOnServer({ url, parent, name = null }) {
+  try {
+    return (await invoke('project_clone', { url, parent, name: name || null })).path
+  } catch (err) {
+    throw new Error(refusalOf(err))
   }
 }
 

@@ -46,10 +46,14 @@ const props = defineProps({
      is. A string rather than a boolean because both states have names a reader
      of the call site can check against what is drawn, where `:source="false"`
      reads as a double negative at exactly the place the two branches meet. */
-  mode: { type: String, default: 'document' }
+  mode: { type: String, default: 'document' },
+  /* A second button, "Open in browser", beside the first: offered on a run's report, which is a
+     self-contained page meant to be read anywhere. The caller reserves a lane for two
+     (`toggleLane(2)`). */
+  canOpenInBrowser: { type: Boolean, default: false }
 })
 
-defineEmits(['toggle'])
+defineEmits(['toggle', 'open-browser'])
 
 const { hover, handlers } = useInteractive()
 
@@ -107,5 +111,12 @@ const style = computed(() => ({
     @focusout="focused = false"
   >
     <IconButton :icon="icon" :label="label" size="sm" @click="$emit('toggle')" />
+    <IconButton
+      v-if="canOpenInBrowser"
+      icon="external-link"
+      label="Open in browser"
+      size="sm"
+      @click="$emit('open-browser')"
+    />
   </div>
 </template>

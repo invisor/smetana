@@ -48,6 +48,7 @@ import { downloadDir } from '@tauri-apps/api/path'
 import { open } from '@tauri-apps/plugin-dialog'
 import { dirname } from '../paths.js'
 import { watchWindowDrops } from './windowDrops.js'
+import { serverIsRemote, uploadClientFile } from './serverFiles.js'
 
 /* Which paths are pictures: the same five spellings `PICTURE_EXTENSIONS` in
    `attachments.rs` refuses to store as anything else. The picker no longer
@@ -235,9 +236,15 @@ export async function readImagePath(path) {
    nothing the first does not. */
 export async function importPaths(paths) {
   begin()
+  /* One question for the whole batch. With a server on another machine the path names a file the
+     server cannot open, so the bytes go instead: the shell reads the file here and
+     `attachment_write` stores it there, answering with the same record. The picture, the chip, the
+     refusals and the order are all the same afterwards; the only thing that differs is which
+     command carried the file (`.claude/rules/attachments.md`, "Remote placement"). */
+  const remote = await serverIsRemote()
   for (const path of paths) {
     try {
-      add(await invoke('attachment_import', { path }))
+      add(remote ? await uploadClientFile(path) : await invoke('attachment_import', { path }))
     } catch (err) {
       fail(err)
     }

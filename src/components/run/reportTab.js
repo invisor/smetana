@@ -237,3 +237,10 @@ export function reviewReportTabs(sessions, project) {
   }
   return tabs
 }
+
+/* A run's own report - in `.smetana/reports/`, and not a branch review's. The ones a client of a server
+   on another machine can fetch (`server_file_read` reads that folder and the attachment store and
+   nothing else), so it is the one kind "Open in browser" is offered on. */
+export function isRunReportPath(path) {
+  return isReportPath(path) && typeof path === 'string' && path.startsWith(REPORTS_DIR)
+}

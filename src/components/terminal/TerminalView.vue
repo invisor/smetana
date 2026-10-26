@@ -22,6 +22,7 @@ import {
   isStarting,
   resize,
   send,
+  sendDroppedPaths,
   subscribeOutput,
   terminalState,
   watchSessionDrops
@@ -375,8 +376,7 @@ onMounted(() => {
     drop: ({ x, y, paths }) => {
       dropping.value = false
       if (!live.value || !insideHost(x, y)) return
-      const text = dropText(paths)
-      if (text) send(props.sessionId, text)
+      sendDroppedPaths(props.sessionId, paths, dropText)
     }
   })
 })

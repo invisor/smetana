@@ -16,6 +16,15 @@ paths:
   - "scripts/build-smetanad.mjs"
   - "src/components/settings/DevicesSettings.vue"
   - "src/components/settings/devices.js"
+  - "crates/core/src/placement.rs"
+  - "src/stores/serverFiles.js"
+  - "src-tauri/src/split/target.rs"
+  - "src-tauri/src/commands/client_files.rs"
+  - "src/components/settings/ServerSettings.vue"
+  - "src/components/settings/serverChoice.js"
+  - "src/components/projects/**"
+  - "src/components/overlays/clientActions.js"
+  - "server/smetanad/**"
 ---
 
 # The phone companion: protocol, pairing, devices
@@ -202,8 +211,66 @@ workers and serves no phones; `src-tauri/src/split/` holds one iroh connection t
 - **The bundle.** `tauri.next.conf.json` changes the identifier, product name and window title, adds `binaries/smetanad` to
   `externalBin` and turns updater artifacts off. `npm run build-smetanad [-- --release]` builds it into
   `src-tauri/binaries/smetanad-<triple>` (ignored by git); the default config does not name it, so the default build never needs it.
-- **Settings are split** (step 6, below). **Not yet:** no remote server (7), the in-process path stays (8).
+- **Settings are split** (step 6, below). A remote server is step 7 (below); the in-process path stays until 8.
   The shell still links `smetana-core` as a library for `window.rs`'s settings types; no worker is started.
+
+## A server on another machine (step 7, protocol 1.11)
+
+`docs/superpowers/specs/2026-10-25-headless-server-design.md`, "Things that name a path on the client" and "Remote placement".
+Client build only; the release is untouched.
+
+**Which server.** `split/target.rs`: `server-target.json` in the app data directory, `{"kind":"local"}` or `{"kind":"remote","node","relay"}`
+(nothing secret: the ticket's secret is spent at pairing). A damaged file is the local server. `Link` holds the target and a
+generation (`set_target`); `attempt` branches on it. **Local** is as before (`ensure`, lock watch, version lock-step). **Remote**
+(`attempt_remote`, `Client::connect_remote` in `smetanad::client`): no start, no lock watch, no version gate and **no settings
+migration** (a fresh VPS must not adopt this machine's project paths); a different major is `incompatible` with a reason that names the
+side to update. Choosing another server drops the old connection (the loop notices the generation), leaves the local server running,
+and does not respawn it while the choice is remote; going back finds or starts it. `hold` is the shared connected loop. The client
+shell commands (all in `CLIENT_COMMANDS`, `LOCAL_COMMANDS` and both `generate_handler!` lists; stubs in the build without `split`):
+`server_target`, `server_use_local`, `server_use_remote { ticket, stopLocal }`, `server_local_work`.
+
+**Pairing by ticket.** `Client::pair_remote` reads a `smetana2:` ticket (`check_ticket`: a phone's, an expired or an unusable-relay one is
+refused before anything is dialled), binds an endpoint on the ticket's relay with the same device key the local client uses
+(`local-client-key`), and waits up to 150 s for the person to confirm in the terminal that ran `smetanad pair`. Pairing is the only step
+that can fail a switch; a failure leaves the device where it was. **Not covered by a test:** the dial through a real relay (no relay in
+this crate's tests); `check_ticket` and the rest of the switch are.
+
+**Leaving a busy local server.** `server_work {}` (read-only: the gateway's live work) and `server_restart` mode `stop-when-idle`
+(like `when-idle`, but the host's `stop` callback runs: `Exit::Stop`, exit 0, which a service manager must not restart; reply outcome
+`stopping` when nothing is alive, `scheduled` otherwise; it replaces a waiting restart and `cancel` withdraws it). `server_use_remote`
+asks for it only when the person chose "stop it when it is finished"; the settings tab asks first when `server_local_work` is not empty
+(`serverChoice.js::nextStep`). Nothing is ended by the switch.
+
+**Four server commands** (`SERVER_ONLY_COMMANDS`, desktop devices only, a phone is `Forbidden`), the logic in `smetana_core::placement`:
+- `folders_list { path }`: directories under the server user's home (`HOME`, else `USERPROFILE`), hidden ones left out, symlinks resolved
+  and dropped if they leave the root, at most 2000 entries; a path outside is `outside`. Every path the client sends back was listed by
+  the server; it never composes one.
+- `project_clone { url, parent, name }`: `git clone -- url dest` with `protocol.ext.allow=never` and `protocol.file.allow=never`, no terminal
+  prompt, 15 minutes; `valid_clone_url` (mirrored by `validCloneUrl` in `folderBrowser.js`, never more permissive) refuses `-…`, `ext::`,
+  `file:` and local paths; `parent` must be under the root and the destination must not exist.
+- `server_file_read { path }`: one file, base64, at most `MAX_ATTACHMENT_BYTES`, **only** inside the attachment store or a known project's
+  `.smetana/reports` (the projects are read from the server's `settings.json` at each call; a `reports` or `.smetana` that is a symlink
+  leaving the project is not a root). The test is on real paths (`canonicalize`) of both sides, plus a refusal of any `..` before the
+  filesystem is asked; a missing file outside every root is the same `outside` as an existing one. Tests: `placement.rs` (traversal,
+  symlinks, absolute paths, a symlinked reports folder) and `desktop_bridge.rs` (end to end, and a phone is refused).
+- `server_work`, above. A refusal travels as `{ kind, message }` (`PlacementError`'s own `Serialize`).
+
+**Front end.** `isRemote` (connection store) is `mode === 'split' && local === false`. `stores/serverFiles.js`: `pathsForServer` (local:
+the paths; remote: `client_file_read` then `attachment_write`, the stored paths come back), `openReportInBrowser` (local:
+`client_open_document`; remote: `server_file_read` then `client_open_fetched`). The two openers hand only an `.html` to the system
+(`commands/client_files.rs`), and the fetched copy is in a private temporary folder swept after a day. Consumers: `attachments.js::importPaths`
+(New task window), `conversation.js::sendMessage` (composer attachments), `terminals.js::sendDroppedPaths` (a file dropped on a terminal),
+`DesktopApp.vue` (report button on a run report's tab; `DocumentModeToggle` gets a second button and `toggleLane(2)`). The image window needs
+nothing: `image_read` is already a server command and its bytes cross the connection.
+Add project: `onAddProject` opens the `server-folder` dialog window (`FolderBrowserModal`, state in the app window, `projects.js::listServerFolders`
+/ `cloneOnServer` / `addProjectAt`) when `isRemote`. **Hidden, not disabled:** `DesktopApp.vue` provides `smHideClientActions` (= `isRemote`),
+and `PointerMenu` and `MenuButton` draw `withoutClientActions(items)` (`overlays/clientActions.js`: `reveal`, `reveal-log`, `open-log`,
+`open-cwd`, separators cleaned); a new menu row of that sort is added to that list. The Server tab (`ServerSettings.vue`, `serverChoice.js`) exists only
+when `connection.mode` is `split`.
+
+**Install.** `server/smetanad/README.md` and `smetanad.service` (also in every archive); the `smetanad` job in `.github/workflows/release.yml`
+builds `crates/smetanad` per platform, packs it with `bd`, `resources/`, the unit and the README, and uploads archive and `.sha256` to the
+release the app job published. `tests/docs/smetanadInstall.test.js` holds the unit's flags to the CLI and the three files to each other.
 
 ## Settings in the client build (protocol 1.10)
 

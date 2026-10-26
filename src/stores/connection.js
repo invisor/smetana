@@ -54,6 +54,13 @@ export const connection = reactive({
   ready: false
 })
 
+/* The server is on another machine. Paths are then the server's, not this machine's: the native
+   folder dialog, the file manager and the system's "open this file" are the wrong tools for them
+   (`serverFiles.js` is what the front end does instead). `local` defaults to true, and so does every
+   state that is not a connection to a server at all, so the build with its back end in-process and
+   a browser never read as remote. */
+export const isRemote = computed(() => connection.mode === 'split' && connection.local === false)
+
 /* The data on screen is older than the server's truth. */
 export const stale = computed(() => connection.mode === 'split' && connection.state !== 'connected')
 
@@ -151,4 +158,59 @@ export async function restartServer(mode) {
     connection.outdated = { ...connection.outdated, work: reply.work ?? [] }
   }
   return reply
+}
+
+/* ---- which server this device uses ---------------------------------------- */
+
+/* `{ kind: 'local' }`, `{ kind: 'remote', node, relay }`, or `{ kind: 'in-process' }` in the
+   build that has no choice to make. A browser has nobody to ask and is in-process. */
+export async function readServerTarget() {
+  try {
+    const answer = await invoke('server_target')
+    return answer?.target ?? { kind: 'in-process' }
+  } catch (err) {
+    console.debug('[connection] nobody to ask which server this is (a browser):', err)
+    return { kind: 'in-process' }
+  }
+}
+
+/* What the server on this machine is doing that moving away from it would leave running: the list
+   of live work, empty when there is none or when this device is not using it. */
+export async function localServerWork() {
+  try {
+    const work = await invoke('server_local_work')
+    return Array.isArray(work) ? work : []
+  } catch (err) {
+    console.debug('[connection] the local server was not asked about its work:', err)
+    return []
+  }
+}
+
+/* Back to the server on this machine. Rejects with the shell's words. */
+export async function useLocalServer() {
+  try {
+    await invoke('server_use_local')
+  } catch (err) {
+    throw new Error(refusalOf(err))
+  }
+}
+
+/* Pairs with the server a desktop ticket names and moves this device to it. `stopLocal` asks the
+   local server to stop once its work is done (it ends nothing); without it the local server is left
+   running. Answers `{ target, localStop }`; rejects with the shell's words, and a rejection means the
+   device is where it was. The pairing waits for the person to confirm at the server, so this can
+   take a minute or two. */
+export async function useRemoteServer(ticket, stopLocal) {
+  try {
+    return await invoke('server_use_remote', { ticket, stopLocal: Boolean(stopLocal) })
+  } catch (err) {
+    throw new Error(refusalOf(err))
+  }
+}
+
+/* An error as text: Tauri rejects with the command's own string, and an `Error` has its message. */
+export function refusalOf(err) {
+  if (typeof err === 'string') return err
+  if (err && typeof err === 'object' && typeof err.message === 'string') return err.message
+  return String(err)
 }

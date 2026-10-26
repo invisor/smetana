@@ -53,3 +53,17 @@ describe('what the strip says about the connection', () => {
     expect(isStale({ mode: 'in-process', state: 'connecting' })).toBe(false)
   })
 })
+
+describe('the notice for a server on another machine', () => {
+  const remote = (state, over = {}) => ({ mode: 'split', state, local: false, reason: null, ...over })
+
+  it('does not say the app starts a server it does not own', () => {
+    expect(connectionNotice(remote('connecting')).detail).toBe('Reaching the server you chose in Settings.')
+    expect(connectionNotice({ ...remote('connecting'), local: true }).detail).toBe('Starting it if it is not running.')
+  })
+
+  it('sends a device the server forgot to the place a new code is typed', () => {
+    expect(connectionNotice(remote('unpaired')).detail).toMatch(/Settings, Server/)
+    expect(connectionNotice({ ...remote('unpaired'), local: true }).detail).not.toMatch(/Settings, Server/)
+  })
+})

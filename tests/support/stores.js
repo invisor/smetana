@@ -48,7 +48,8 @@ export async function loadStores() {
     agents,
     windowDrops,
     remote,
-    connection
+    connection,
+    serverFiles
   ] =
     await Promise.all([
       import('vue'),
@@ -73,7 +74,8 @@ export async function loadStores() {
       import('../../src/stores/agents.js'),
       import('../../src/stores/windowDrops.js'),
       import('../../src/stores/remote.js'),
-      import('../../src/stores/connection.js')
+      import('../../src/stores/connection.js'),
+      import('../../src/stores/serverFiles.js')
     ])
 
   built.push({ ipc, settings })
@@ -104,7 +106,8 @@ export async function loadStores() {
       agents,
       windowDrops,
       remote,
-      connection
+      connection,
+      serverFiles
     }
   }
 }

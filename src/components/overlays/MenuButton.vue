@@ -18,9 +18,10 @@
    in a field; this picks a verb and shows nothing afterwards, so there is no
    `modelValue`, no selected label, and a second level: an item with `children`
    opens a submenu beside itself. */
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, ref, unref } from 'vue'
 import IconButton from '../core/IconButton.vue'
 import ContextMenu from './ContextMenu.vue'
+import { visibleItems } from './clientActions.js'
 
 const props = defineProps({
   /* The `taskMenu.js` shape: {kind, label, icon?, tone?, disabled?, children?}
@@ -42,6 +43,13 @@ const props = defineProps({
   width: { type: Number, default: 200 },
   subWidth: { type: Number, default: 200 }
 })
+
+/* `DesktopApp.vue` provides this as true while the server is on another machine, and the rows that
+   act on the machine in front of the person are then not drawn (`clientActions.js`). Every read of
+   the items below goes through this, the keyboard's index included: a menu that drew fewer rows
+   than it walked would select the wrong one. Absent, as in the phone and the gallery, it is false. */
+const hideClientActions = inject('smHideClientActions', false)
+const shownItems = computed(() => visibleItems(props.items, Boolean(unref(hideClientActions))))
 
 const emit = defineEmits(['select'])
 
@@ -75,11 +83,11 @@ const EDGE = 8
 
 /* Separators, labels and greyed rows are drawn but never walked to. */
 const walkable = computed(() =>
-  props.items.map((it, i) => (it.type || it.disabled ? -1 : i)).filter((i) => i >= 0)
+  shownItems.value.map((it, i) => (it.type || it.disabled ? -1 : i)).filter((i) => i >= 0)
 )
 
 const subItems = computed(() =>
-  openSub.value >= 0 ? (props.items[openSub.value]?.children ?? []) : []
+  openSub.value >= 0 ? (shownItems.value[openSub.value]?.children ?? []) : []
 )
 
 const subWalkable = computed(() =>
@@ -219,7 +227,7 @@ const enterSub = async (i) => {
 const onHover = async (i) => {
   if (i < 0) return
   cursor.value = i
-  const item = props.items[i]
+  const item = shownItems.value[i]
   if (item?.children && !item.disabled) await enterSub(i)
   else closeSub()
 }
@@ -227,7 +235,7 @@ const onHover = async (i) => {
 const pick = (item) => {
   if (!item || item.disabled || item.type) return
   if (item.children) {
-    enterSub(props.items.indexOf(item))
+    enterSub(shownItems.value.indexOf(item))
     return
   }
   emit('select', item)
@@ -256,7 +264,7 @@ const onKeydown = async (event) => {
     else cursor.value = step(walkable.value, cursor.value, delta)
   } else if (event.key === 'ArrowRight') {
     event.preventDefault()
-    const item = props.items[cursor.value]
+    const item = shownItems.value[cursor.value]
     if (item?.children && !item.disabled) {
       await enterSub(cursor.value)
       subCursor.value = subWalkable.value[0] ?? -1
@@ -267,7 +275,7 @@ const onKeydown = async (event) => {
   } else if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault()
     const inSub = openSub.value >= 0 && subCursor.value >= 0
-    pick(inSub ? subItems.value[subCursor.value] : props.items[cursor.value])
+    pick(inSub ? subItems.value[subCursor.value] : shownItems.value[cursor.value])
   }
 }
 
@@ -309,7 +317,7 @@ const panelStyle = (position) => ({
       >
         <ContextMenu
           ref="menu"
-          :items="items"
+          :items="shownItems"
           :cursor="cursor"
           :width="width"
           @select="pick"

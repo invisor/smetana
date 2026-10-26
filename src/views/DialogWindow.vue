@@ -64,6 +64,7 @@
 import { computed, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch, watchEffect } from 'vue'
 import DeleteBranchModal from '../components/git/DeleteBranchModal.vue'
 import DeleteSessionModal from '../components/agent/DeleteSessionModal.vue'
+import FolderBrowserModal from '../components/projects/FolderBrowserModal.vue'
 import EmptyState from '../components/core/EmptyState.vue'
 import DeleteTaskModal from '../components/kanban/DeleteTaskModal.vue'
 import DiscardChangeModal from '../components/git/DiscardChangeModal.vue'
@@ -135,6 +136,7 @@ const COMPONENTS = {
   'delete-task': DeleteTaskModal,
   'ready-task': ReadyTaskModal,
   'delete-session': DeleteSessionModal,
+  'server-folder': FolderBrowserModal,
   'discard-change': DiscardChangeModal,
   'review-changes': ReviewChangesDialog
 }
@@ -413,7 +415,13 @@ const EMITS = [
      and knows nothing of Tauri, so this is what the button needs — the app
      window turns it into `fetchIn` calls and a re-read of the origin lists,
      the same act `openReviewChanges` already does on the way in. */
-  'fetch'
+  'fetch',
+  /* The server-side folder browser's three: a step into a folder, the choice of one, and a clone.
+     Each carries what the app window needs to ask the server, because this window holds no store
+     that could (`server-folder` in `dialogRegistry.js`). */
+  'open',
+  'choose',
+  'clone'
 ]
 
 /* And the four that deliberately do not travel: `new-task`'s images, answered
