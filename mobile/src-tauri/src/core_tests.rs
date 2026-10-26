@@ -6,7 +6,7 @@
 //! is part of the Tauri application's crate and cannot be linked here — and it
 //! speaks the desktop's side of the same frames: pairing by secret, `Hello`
 //! answered with a `HelloReply`, `Invoke` answered, `Listen` remembered.
-//! `src-tauri/src/remote/tests/phone_bridge.rs` tests the real endpoint from the
+//! `crates/remote-server/src/tests/phone_bridge.rs` tests the real endpoint from the
 //! other end with the same frames.
 
 use std::sync::atomic::{AtomicBool, Ordering};

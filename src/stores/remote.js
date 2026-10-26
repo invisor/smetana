@@ -2,7 +2,7 @@
    request that comes in, list the paired phones and revoke one.
 
    One of the only files in `src/` that knows Tauri exists, and there is no state
-   here at all — `src-tauri/src/remote/` owns the device list and the pairing
+   here at all — `crates/remote-server/` owns the device list and the pairing
    secret, and the settings window that draws them keeps what it was last told.
    What this file does is rename: Rust's fields are snake_case, as the spec for
    the commands fixes them, and a component should read camelCase like every
@@ -15,7 +15,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
-/* `remote/mod.rs`'s `PAIR_REQUEST_EVENT` and `DEVICES_EVENT`, spelled the same
+/* `crates/remote-server/src/lib.rs`'s `PAIR_REQUEST_EVENT` and `DEVICES_EVENT`, spelled the same
    on both sides. */
 export const PAIR_REQUEST_EVENT = 'remote:pair-request'
 export const PAIR_ENDED_EVENT = 'remote:pair-ended'

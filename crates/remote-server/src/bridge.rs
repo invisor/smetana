@@ -79,6 +79,12 @@ pub trait Dispatch: Send + Sync {
         args: Value,
     ) -> BoxFuture<'a, Result<Value, BridgeError>>;
 
+    /// Whether this host can honour `cmd`. A command it cannot is left out of the capabilities it
+    /// advertises, so a client does not draw a control that can only fail. Everything by default.
+    fn serves(&self, _cmd: &str) -> bool {
+        true
+    }
+
     /// The ring of a terminal session as of now: the number of the last chunk it holds, and the
     /// bytes in base64. What a device that fell behind is sent in place of the chunks it missed.
     /// `None` when the session is gone, or when this dispatcher has no terminals.
@@ -487,6 +493,16 @@ impl Hub {
         let _ = self.dispatch.set(dispatch);
     }
 
+    /// What a device of `kind` is told it may do: its capabilities, less the commands this host's
+    /// dispatcher says it cannot serve (a command it cannot run, an event it can never emit).
+    pub fn capabilities_for(&self, kind: DeviceKind) -> Vec<String> {
+        let dispatch = self.dispatch.get();
+        remote_protocol::capabilities_for(kind)
+            .into_iter()
+            .filter(|name| dispatch.map_or(true, |dispatch| dispatch.serves(name)))
+            .collect()
+    }
+
     /// Sets the ceiling on what one device may have buffered for one session, for connections
     /// made after the call. A test makes it small; nothing else changes it.
     #[cfg(test)]
@@ -614,7 +630,7 @@ impl Hub {
 
 /// What a call to `cmd` answers when the device's kind may not call it.
 pub fn refusal(cmd: &str) -> BridgeError {
-    if DESKTOP_COMMANDS.contains(&cmd) {
+    if DESKTOP_COMMANDS.contains(&cmd) || remote_protocol::SERVER_ONLY_COMMANDS.contains(&cmd) {
         BridgeError::Forbidden
     } else {
         BridgeError::UnknownCommand

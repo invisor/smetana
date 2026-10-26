@@ -29,6 +29,7 @@ use remote_protocol::{
 #[cfg(not(unix))]
 use super::devices::write_atomic;
 use super::devices::Device;
+use super::pairing::Spent;
 use super::{Event, Remote, MIN_MOBILE_VERSION, PROTOCOL_MAJOR, PROTOCOL_MINOR, RECOMMENDED_MOBILE_VERSION};
 
 pub const KEY_FILE: &str = "remote-key";
@@ -113,6 +114,34 @@ pub async fn bind(key: &SecretKey, relay: &str) -> Result<Endpoint, String> {
         .map_err(|err| format!("could not start the endpoint: {err}"))
 }
 
+/// Binds the endpoint a client on this machine dials: loopback only, no relay, an address the
+/// system picks. The same key as the public endpoint and the same protocol; what differs is who can
+/// reach it, which is why the pairing a client does here may be the local credential's.
+pub async fn bind_loopback(key: &SecretKey) -> Result<Endpoint, String> {
+    Endpoint::builder(presets::Minimal)
+        .secret_key(key.clone())
+        .alpns(vec![ALPN.to_vec()])
+        .relay_mode(RelayMode::Disabled)
+        .clear_ip_transports()
+        .bind_addr("127.0.0.1:0")
+        .map_err(|err| format!("could not bind the loopback address: {err}"))?
+        .bind()
+        .await
+        .map_err(|err| format!("could not start the loopback endpoint: {err}"))
+}
+
+/// The address of a loopback endpoint once it has one, which is a moment after it is bound.
+pub async fn loopback_addr(endpoint: &Endpoint) -> Result<iroh::EndpointAddr, String> {
+    for _ in 0..200 {
+        let addr = endpoint.addr();
+        if addr.ip_addrs().next().is_some() {
+            return Ok(addr);
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    Err("the loopback endpoint has no address".to_owned())
+}
+
 /// Open connections by phone, so revoking one can close them.
 #[derive(Default)]
 pub struct Connections {
@@ -154,24 +183,32 @@ impl Connections {
     }
 }
 
-pub async fn accept_loop(remote: Arc<Remote>, endpoint: Endpoint) {
+/// Which endpoint a connection came in on. The local credential is good on the loopback one and
+/// nowhere else: a copy of the data directory leaked off the machine must not pair from the internet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Door {
+    Public,
+    Loopback,
+}
+
+pub async fn accept_loop(remote: Arc<Remote>, endpoint: Endpoint, door: Door) {
     while let Some(incoming) = endpoint.accept().await {
         let remote = remote.clone();
         tokio::spawn(async move {
             let Ok(conn) = incoming.await else { return };
-            handle(remote, conn).await;
+            handle(remote, conn, door).await;
         });
     }
 }
 
-async fn handle(remote: Arc<Remote>, conn: Connection) {
+async fn handle(remote: Arc<Remote>, conn: Connection, door: Door) {
     let key = conn.remote_id();
     if remote.devices.contains(&key) {
         serve_paired(&remote, conn, key).await;
-    } else if remote.pairing.is_open() {
+    } else if remote.pairing.accepts_requests(door == Door::Loopback) {
         // Held for the whole of the exchange, the wait for the person included.
         match remote.pairing_slots.clone().try_acquire_owned() {
-            Ok(_permit) => serve_pairing(&remote, conn, key).await,
+            Ok(_permit) => serve_pairing(&remote, conn, key, door).await,
             Err(_) => conn.close(CLOSE_UNKNOWN.into(), b"busy"),
         }
     } else {
@@ -212,7 +249,7 @@ async fn handshake(
         protocol_major: PROTOCOL_MAJOR,
         protocol_minor: PROTOCOL_MINOR,
         app_version: remote.app_version.clone(),
-        capabilities: remote_protocol::capabilities_for(kind),
+        capabilities: remote.hub.capabilities_for(kind),
         min_mobile_version: MIN_MOBILE_VERSION.to_owned(),
         recommended_mobile_version: RECOMMENDED_MOBILE_VERSION.to_owned(),
     };
@@ -261,12 +298,12 @@ async fn first_frame<T: serde::de::DeserializeOwned>(
     tokio::time::timeout(FIRST_FRAME_TIMEOUT, read).await.ok().flatten()
 }
 
-async fn serve_pairing(remote: &Arc<Remote>, conn: Connection, key: PublicKey) {
+async fn serve_pairing(remote: &Arc<Remote>, conn: Connection, key: PublicKey, door: Door) {
     let Some((mut send, _recv, request)) = first_frame::<PairRequest>(&conn).await else {
         conn.close(CLOSE_PROTOCOL.into(), b"expected a pair request");
         return;
     };
-    let reply = decide_pairing(remote, &key, request).await;
+    let reply = decide_pairing_at(remote, &key, request, door).await;
     let delivered = conn.close_reason().is_none() && write_frame(&mut send, &reply).await.is_ok();
     if delivered {
         let _ = send.finish();
@@ -284,9 +321,19 @@ async fn serve_pairing(remote: &Arc<Remote>, conn: Connection, key: PublicKey) {
 }
 
 /// The whole of the pairing decision for one request that has been read.
+#[cfg(test)]
 pub(crate) async fn decide_pairing(remote: &Remote, key: &PublicKey, request: PairRequest) -> PairReply {
+    decide_pairing_at(remote, key, request, Door::Public).await
+}
+
+pub(crate) async fn decide_pairing_at(
+    remote: &Remote,
+    key: &PublicKey,
+    request: PairRequest,
+    door: Door,
+) -> PairReply {
     let rejected = |reason: &str| PairReply::Rejected { reason: reason.to_owned() };
-    let (remaining, kind) = match remote.pairing.spend_for_kind(&request.secret) {
+    let spent = match remote.pairing.spend_any(&request.secret, door == Door::Loopback) {
         Ok(spent) => spent,
         Err(reason) => return rejected(reason),
     };
@@ -294,19 +341,26 @@ pub(crate) async fn decide_pairing(remote: &Remote, key: &PublicKey, request: Pa
         return rejected("the push token is too long");
     }
     let name = clean_name(&request.device_name);
-    let waiting = match remote.pairing.wait_for_decision() {
-        Ok(waiting) => waiting,
-        Err(reason) => return rejected(reason),
+    let kind = match spent {
+        Spent::Ticket { remaining, kind } => {
+            let waiting = match remote.pairing.wait_for_decision() {
+                Ok(waiting) => waiting,
+                Err(reason) => return rejected(reason),
+            };
+            let id = waiting.id;
+            remote.emit(Event::PairRequest { device_name: name.clone(), platform: request.platform });
+            let accepted = waiting.answer(remaining).await;
+            remote.pairing.finish_waiting(id);
+            // However it ended, the prompt on the screen is stale now.
+            remote.emit(Event::PairEnded);
+            if !accepted {
+                return rejected("the desktop did not confirm the pairing");
+            }
+            kind
+        }
+        // The credential is in a file only this server's user reads: there is no one to ask.
+        Spent::Local => DeviceKind::Desktop,
     };
-    let id = waiting.id;
-    remote.emit(Event::PairRequest { device_name: name.clone(), platform: request.platform });
-    let accepted = waiting.answer(remaining).await;
-    remote.pairing.finish_waiting(id);
-    // However it ended, the prompt on the screen is stale now.
-    remote.emit(Event::PairEnded);
-    if !accepted {
-        return rejected("the desktop did not confirm the pairing");
-    }
     let device = Device {
         key: key.to_string(),
         name,
@@ -317,6 +371,7 @@ pub(crate) async fn decide_pairing(remote: &Remote, key: &PublicKey, request: Pa
         last_contact: None,
         // The ticket's, not the request's: `platform` above is what the device says it is.
         kind,
+        local: matches!(spent, Spent::Local),
     };
     if let Err(err) = remote.devices.add(device) {
         log::warn!("remote: could not save a paired device: {err}");

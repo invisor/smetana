@@ -1,0 +1,41 @@
+[package]
+name = "remote-server"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.2"
+description = "The server half of the remote protocol: the iroh endpoint, pairing, the device list and the command bridge, with no window"
+publish = false
+
+# No `tauri` and no `tauri-plugin-*`, directly or through a feature, and keep it that way: this crate is
+# what the headless `smetanad` (`crates/smetanad`) serves from, and the desktop shell links the very same
+# code in-process. It was `src-tauri/src/remote/` until the server needed it without a window
+# (docs/superpowers/specs/2026-10-25-headless-server-design.md, "Units" item 3); the shell keeps only the
+# Tauri wrappers of its commands and the code that makes a `Remote` out of an `AppHandle`.
+#
+# A path dependency of both and **no root workspace**, for the reason `crates/remote-protocol` gives; the
+# crate is built and tested on its own (`cd crates/remote-server && cargo test`). Its lock file was seeded
+# from the shell's, so the versions are the ones the desktop already builds.
+
+[dependencies]
+remote-protocol = { path = "../remote-protocol" }
+smetana-core = { path = "../core" }
+serde_json = "1"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "time", "rt", "macros", "net"] }
+iroh = "1.3"
+# The pairing secret. 0.10 because that is the major iroh itself is on, so this adds no second copy.
+rand = "0.10"
+data-encoding = "2"
+# The push sender posts one JSON body to the gateway. The features are the updater's
+# (`rustls-no-provider`, no default TLS backend), so the one build is shared with the shell's.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+# `rustls-no-provider` builds a client only if a process-wide crypto provider exists; the sender installs
+# ring itself in case nothing else has.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
+[dev-dependencies]
+# The stand-in push gateway in `push.rs`'s tests.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+tokio = { version = "1", features = ["test-util"] }

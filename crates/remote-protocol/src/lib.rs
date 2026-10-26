@@ -19,7 +19,7 @@ mod ticket;
 pub use bridge::{
     capabilities, capabilities_for, command_contract_path, event_contract_path, is_allowed_command,
     is_allowed_event, is_command_allowed_for, is_event_allowed_for, BridgeError, ClientMsg, ServerMsg,
-    ALLOWED_COMMANDS, ALLOWED_EVENTS, SERVER_COMMANDS, SERVER_EVENTS,
+    ALLOWED_COMMANDS, ALLOWED_EVENTS, SERVER_COMMANDS, SERVER_EVENTS, SERVER_ONLY_COMMANDS,
 };
 pub use frame::{
     decode_frame, encode_frame, read_frame, read_frame_bytes, write_frame, FrameError, MAX_FRAME,

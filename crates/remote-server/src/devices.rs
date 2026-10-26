@@ -41,6 +41,10 @@ pub struct Device {
     /// kinds existed has none, and is a phone: the safe direction.
     #[serde(default)]
     pub kind: DeviceKind,
+    /// Paired with the local credential rather than by a ticket: a client on the server's own
+    /// machine. The server uses it to tell whether anything can need the public endpoint at start-up.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -87,6 +91,12 @@ impl Devices {
 
     pub fn is_empty(&self) -> bool {
         self.lock().is_empty()
+    }
+
+    /// Whether any device was paired by ticket, which is to say could reach this server from
+    /// elsewhere and so needs the public endpoint to be up.
+    pub fn has_remote(&self) -> bool {
+        self.lock().iter().any(|device| !device.local)
     }
 
     pub fn contains(&self, key: &PublicKey) -> bool {
@@ -217,7 +227,22 @@ mod tests {
             paired_at: 5,
             last_contact: None,
             kind: DeviceKind::Phone,
+            local: false,
         }
+    }
+
+    #[test]
+    fn only_a_device_paired_by_ticket_counts_as_remote() {
+        let dir = dir();
+        let devices = Devices::load(dir.join(FILE_NAME));
+        assert!(!devices.has_remote());
+        devices.add(Device { local: true, ..device(1) }).unwrap();
+        assert!(!devices.has_remote(), "a client on this machine needs no public endpoint");
+        devices.add(device(2)).unwrap();
+        assert!(devices.has_remote());
+        // The marker survives a reload, and an entry without one reads as not local.
+        let again = Devices::load(dir.join(FILE_NAME));
+        assert_eq!(again.all().iter().filter(|d| d.local).count(), 1);
     }
 
     #[test]

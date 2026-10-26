@@ -172,6 +172,7 @@ mod tests {
             paired_at: 1,
             last_contact: None,
             kind: remote_protocol::DeviceKind::Phone,
+            local: false,
         }
     }
 

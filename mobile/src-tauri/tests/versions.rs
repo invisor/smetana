@@ -30,6 +30,8 @@ fn iroh_is_the_same_version_as_on_the_desktop_and_in_the_shared_crate() {
     let mobile = locked(&read("mobile/src-tauri/Cargo.lock"), "iroh");
     assert_eq!(mobile, locked(&read("src-tauri/Cargo.lock"), "iroh"), "desktop");
     assert_eq!(mobile, locked(&read("crates/remote-protocol/Cargo.lock"), "iroh"), "remote-protocol");
+    assert_eq!(mobile, locked(&read("crates/remote-server/Cargo.lock"), "iroh"), "remote-server");
+    assert_eq!(mobile, locked(&read("crates/smetanad/Cargo.lock"), "iroh"), "smetanad");
     assert!(
         read("server/Dockerfile").contains(&format!("IROH_RELAY_VERSION={mobile}")),
         "the relay image is on another iroh than {mobile}"
@@ -38,7 +40,7 @@ fn iroh_is_the_same_version_as_on_the_desktop_and_in_the_shared_crate() {
 
 #[test]
 fn the_protocol_major_is_the_desktops() {
-    let desktop = read("src-tauri/src/remote/mod.rs");
+    let desktop = read("crates/remote-server/src/lib.rs");
     let line = |name: &str| -> u16 {
         let marker = format!("pub const {name}: u16 = ");
         let rest = &desktop[desktop.find(&marker).expect("constant") + marker.len()..];
@@ -62,7 +64,7 @@ fn the_app_version_is_one_number_everywhere() {
 
 #[test]
 fn the_desktops_minimum_mobile_version_admits_this_build() {
-    let desktop = read("src-tauri/src/remote/mod.rs");
+    let desktop = read("crates/remote-server/src/lib.rs");
     let marker = "pub const MIN_MOBILE_VERSION: &str = \"";
     let rest = &desktop[desktop.find(marker).unwrap() + marker.len()..];
     let min = &rest[..rest.find('"').unwrap()];

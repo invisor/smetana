@@ -1,0 +1,49 @@
+[package]
+name = "smetanad"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "The headless Smetana server: the core and the iroh endpoint behind a command line"
+publish = false
+
+# The binary the desktop shell will ship beside `bd` and a person installs on a VPS
+# (docs/superpowers/specs/2026-10-25-headless-server-design.md, "Units" item 3).
+#
+# **No `tauri` anywhere in its tree**, directly or through a dependency, and `cargo tree | grep tauri` is
+# the check: a server has no webview to link. It is built from path dependencies only, with no root
+# workspace, for the reason `crates/remote-protocol` gives; the crate is built and tested on its own
+# (`cd crates/smetanad && cargo test`). The lock file was seeded from `remote-server`'s, so every
+# version is the one the desktop builds, and `mobile/src-tauri/tests/versions.rs` holds `iroh` equal
+# across all of them.
+#
+# `rust-version` is 1.89 because the data directory's lock is `File::try_lock`, which std has had since
+# then; the other crates keep their older floor.
+
+[dependencies]
+smetana-core = { path = "../core" }
+remote-server = { path = "../remote-server" }
+remote-protocol = { path = "../remote-protocol" }
+iroh = "1.3"
+serde_json = "1"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+thiserror = "2"
+data-encoding = "2"
+rand = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "net", "signal", "io-util"] }
+# The command line. `derive` for the declarations; no `color` or `suggestions` for a tool a service
+# manager runs more often than a person does.
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+# The pairing QR in the terminal. Renders from the module matrix; no image decoder comes with it.
+qrcode = { version = "0.14", default-features = false }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+# SIGTERM to the child the binary test started.
+libc = "0.2"

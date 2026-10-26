@@ -16,9 +16,9 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use super::{harness, hello, pair_accepted, phone, wait_until, Harness, Phone};
-use crate::remote::bridge::{invoke, BoxFuture, Caller, Dispatch, DESKTOP_COMMANDS};
-use crate::remote::dispatch::Services;
-use crate::remote::PROTOCOL_MAJOR;
+use crate::bridge::{invoke, BoxFuture, Caller, Dispatch, DESKTOP_COMMANDS};
+use crate::dispatch::Services;
+use crate::PROTOCOL_MAJOR;
 use crate::runs::service::RunHandle;
 use crate::session::model::SessionError;
 use crate::session::service::{Request as SessionRequest, SessionHandle};
@@ -60,6 +60,9 @@ async fn remote_bridge_refuses_every_command_off_the_allowlist_and_runs_no_handl
         "terminal_write",
         "terminal_shell",
         "remote_device_revoke",
+        // The server's own: not the desktop app's commands, and still forbidden rather than unknown.
+        "server_health",
+        "server_restart",
     ];
     for cmd in named {
         let answer = invoke(Some(&dispatch), &PHONE, cmd, json!({})).await;
@@ -99,7 +102,7 @@ async fn remote_bridge_without_a_dispatcher_answers_internal_for_an_allowed_comm
 /// to be what `lib.rs` registers.
 #[test]
 fn remote_bridge_desktop_commands_are_those_lib_rs_registers() {
-    let lib = include_str!("../../lib.rs");
+    let lib = include_str!("../../../../src-tauri/src/lib.rs");
     let body = &lib[lib.find("generate_handler![").expect("lib.rs registers commands")..];
     let body = &body[..body.find("])").unwrap()];
     let mut registered: Vec<&str> = body
@@ -210,7 +213,7 @@ async fn paired(h: &Harness) -> (Phone, Client) {
 
 /// Workers that answer from a script: the tracker's snapshot, and a session
 /// worker for which no session exists.
-fn services() -> (Services, Snapshot) {
+pub(super) fn services() -> (Services, Snapshot) {
     let snapshot = Snapshot {
         generation: 4,
         columns: vec![ColumnDef { name: "open".into(), category: "active".into() }],
@@ -265,6 +268,7 @@ fn services() -> (Services, Snapshot) {
         project_switched: None,
         ctx: None,
         remote: None,
+        gateway: None,
     };
     (services, snapshot)
 }

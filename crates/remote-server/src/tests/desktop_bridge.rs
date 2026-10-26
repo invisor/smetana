@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use super::phone_bridge::{Client, Recorder};
 use super::{harness, pair_accepted, pair_accepted_as, phone, wait_until, Harness, Phone};
-use crate::remote::bridge::{BoxFuture, Caller, Dispatch};
+use crate::bridge::{BoxFuture, Caller, Dispatch};
 use crate::terminal::stream::History;
 
 const RING: usize = 256 * 1024;
@@ -150,6 +150,32 @@ async fn remote_desktop_a_device_paired_as_a_desktop_gets_every_server_command()
     assert_eq!(client.call("window_show_ready", json!({})).await, Err(BridgeError::Forbidden));
     assert_eq!(client.call("no_such_command", json!({})).await, Err(BridgeError::UnknownCommand));
     assert_eq!(recorder.calls.lock().unwrap().as_slice(), ["terminal_write"]);
+}
+
+#[tokio::test]
+async fn remote_desktop_capabilities_leave_out_what_the_host_cannot_honour() {
+    use crate::gateway::Gateway;
+    // The desktop app's own `Remote`: no gateway, so no restart control is advertised.
+    let h = harness().await;
+    h.remote.hub.set_dispatch(Arc::new(super::phone_bridge::services().0));
+    let (_phone, client) = desktop(&h).await;
+    assert!(!client.hello.capabilities.iter().any(|c| c == "server_restart"), "{:?}", client.hello.capabilities);
+    assert!(!client.hello.capabilities.iter().any(|c| c == "server:restart-deferred"), "nor the event it announces");
+    assert!(client.hello.capabilities.iter().any(|c| c == "terminal_write"), "the rest is untouched");
+
+    // A server with one is advertised it.
+    let h = harness().await;
+    let mut services = super::phone_bridge::services().0;
+    services.gateway = Some(Gateway::new(
+        Box::new(|| Box::pin(async { Vec::new() })),
+        Arc::new(|| {}),
+        Arc::new(|_| {}),
+        Duration::from_secs(1),
+    ));
+    h.remote.hub.set_dispatch(Arc::new(services));
+    let (_phone, client) = desktop(&h).await;
+    assert!(client.hello.capabilities.iter().any(|c| c == "server_restart"));
+    assert!(client.hello.capabilities.iter().any(|c| c == "server:restart-deferred"));
 }
 
 #[tokio::test]

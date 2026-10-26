@@ -666,6 +666,7 @@ fn devices() -> Vec<Device> {
         paired_at: 1_760_000_000,
         last_contact: push.then_some(1_760_000_100),
         kind,
+        local: false,
     };
     vec![
         device("ab", Platform::Ios, DeviceKind::Phone, true),
@@ -904,11 +905,74 @@ fn server_replies(map: &mut BTreeMap<&'static str, Vec<Value>>) {
     map.insert("remote_pair_decide", nothing());
     map.insert("remote_devices", vec![json_of(&device_views(&devices())), json!([])]);
     map.insert("remote_device_revoke", nothing());
+
+    map.insert("server_health", vec![json_of(&health_ok()), json_of(&health_with_problems())]);
+    map.insert("server_restart", restart_replies());
+}
+
+fn tool(name: &str, version: Option<&str>) -> smetana_core::health::Tool {
+    smetana_core::health::Tool {
+        name: name.into(),
+        found: version.is_some(),
+        path: version.map(|_| format!("/usr/local/bin/{name}")),
+        answers: version.is_some(),
+        version: version.map(str::to_owned),
+        problem: if version.is_some() { None } else { Some(format!("`{name}` was not found")) },
+    }
+}
+
+fn health_ok() -> smetana_core::health::Report {
+    use smetana_core::health::{AgentCheck, Report};
+    Report {
+        ok: true,
+        problems: Vec::new(),
+        bd: tool("bd", Some("bd version 1.1.2")),
+        bd_expected: "1.1.2".into(),
+        git: tool("git", Some("git version 2.50.1")),
+        agents: vec![
+            AgentCheck { id: "claude".into(), label: "Claude Code".into(), binary: tool("claude", Some("2.1.0 (Claude Code)")) },
+            AgentCheck { id: "codex".into(), label: "Codex".into(), binary: tool("codex", Some("codex-cli 0.80.0")) },
+        ],
+        path: Some("/usr/local/bin:/usr/bin".into()),
+    }
+}
+
+fn health_with_problems() -> smetana_core::health::Report {
+    let mut report = health_ok();
+    report.ok = false;
+    report.problems = vec!["`codex` was not found".into()];
+    report.agents[1].binary = tool("codex", None);
+    report.path = None;
+    report
+}
+
+fn restart_work() -> Vec<crate::gateway::LiveWork> {
+    use crate::gateway::{LiveWork, WorkKind};
+    vec![
+        LiveWork { kind: WorkKind::Run, id: Some(1), project: "/work/smetana".into(), label: "run".into(), owner: None },
+        LiveWork { kind: WorkKind::Agent, id: Some(4), project: "/work/smetana".into(), label: "claude".into(), owner: None },
+        LiveWork { kind: WorkKind::Session, id: Some(2), project: "/work/smetana".into(), label: "codex".into(), owner: Some(1) },
+        LiveWork { kind: WorkKind::Shell, id: Some(7), project: "/work/smetana".into(), label: "shell".into(), owner: None },
+    ]
+}
+
+fn restart_replies() -> Vec<Value> {
+    use crate::gateway::{LiveWork, Outcome, Reply};
+    let work = restart_work();
+    let reply = |outcome, scheduled, work: &[LiveWork]| json_of(&Reply { outcome, scheduled, work: work.to_vec() });
+    vec![
+        reply(Outcome::NeedsConfirmation, false, &work),
+        reply(Outcome::Scheduled, true, &work[..1]),
+        reply(Outcome::Restarting, false, &work),
+        reply(Outcome::Cancelled, false, &[]),
+        reply(Outcome::NothingScheduled, false, &[]),
+        reply(Outcome::AlreadyRestarting, false, &[]),
+    ]
 }
 
 /// Every event beyond the phone's.
 fn server_payloads(map: &mut BTreeMap<&'static str, Vec<Value>>) {
-    use crate::remote::bridge::output_payload;
+    use crate::bridge::output_payload;
     map.insert(
         "terminal:output",
         vec![
@@ -919,6 +983,7 @@ fn server_payloads(map: &mut BTreeMap<&'static str, Vec<Value>>) {
             output_payload(3, 12, 12, "aGk=", true),
         ],
     );
+    map.insert("server:restart-deferred", vec![crate::gateway::deferred_payload(&restart_work())]);
     map.insert(
         "terminal:log",
         vec![smetana_core::terminal::service::log_payload(3, &json_of(&log_entries()))],
@@ -1049,7 +1114,7 @@ fn payloads() -> BTreeMap<&'static str, Vec<Value>> {
 // ---------------------------------------------------------------------------
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../crates/remote-protocol/contract")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../remote-protocol/contract")
 }
 
 fn updating() -> bool {
@@ -1276,7 +1341,7 @@ fn remote_contract_changes_only_with_a_protocol_version() {
         Some(pinned) => panic!(
             "the contract changed but the protocol version did not: version {current} is pinned to digest {pinned} \
              and the files now hash to {digest}.\n\
-             - if you only ADDED (a field, a command, an event): raise PROTOCOL_MINOR in remote/mod.rs to {}.{} \
+             - if you only ADDED (a field, a command, an event): raise PROTOCOL_MINOR in remote-server/src/lib.rs to {}.{} \
              and add \"{}.{}\": \"{digest}\" to contract/versions.json;\n\
              - if you REMOVED or RENAMED anything: raise PROTOCOL_MAJOR to {} and add \"{}.0\": \"{digest}\".\n\
              Do not edit the digest of an existing version: phones built against it hold that contract.",
@@ -1365,7 +1430,14 @@ fn remote_contract_every_front_end_command_is_pinned_or_the_clients() {
         }
     }
     for cmd in SERVER_COMMANDS {
-        assert!(DESKTOP_COMMANDS.contains(cmd), "`{cmd}` is a server command the desktop does not have");
+        assert!(
+            DESKTOP_COMMANDS.contains(cmd) || remote_protocol::SERVER_ONLY_COMMANDS.contains(cmd),
+            "`{cmd}` is a server command the desktop does not have and that is not declared server-only"
+        );
+    }
+    for cmd in remote_protocol::SERVER_ONLY_COMMANDS {
+        assert!(SERVER_COMMANDS.contains(cmd), "`{cmd}` is declared server-only and is not a server command");
+        assert!(!DESKTOP_COMMANDS.contains(cmd), "`{cmd}` is declared server-only and the desktop has it");
     }
     for cmd in CLIENT_COMMANDS {
         assert!(DESKTOP_COMMANDS.contains(cmd), "`{cmd}` is declared the client's and the desktop has no such command");
@@ -1425,8 +1497,8 @@ fn event_names_after(text: &str, call: &str, quote: char) -> Vec<String> {
 #[test]
 fn remote_contract_every_front_end_and_worker_event_is_pinned() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let stores = sources(&manifest.join("../src/stores"), "js");
-    let workers = sources(&manifest.join("../crates/core/src"), "rs");
+    let stores = sources(&manifest.join("../../src/stores"), "js");
+    let workers = sources(&manifest.join("../core/src"), "rs");
     let listened: Vec<String> = stores.iter().flat_map(|text| event_names_after(text, "listen(", '\'')).collect();
     // The companion's own events are named by constants in `stores/remote.js`.
     let devices: Vec<String> = stores

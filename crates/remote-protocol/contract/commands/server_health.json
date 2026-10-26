@@ -1,0 +1,7 @@
+{
+  "args": [{}],
+  "reply": [
+    {"agents":[{"binary":{"answers":true,"found":true,"name":"claude","path":"/usr/local/bin/claude","problem":null,"version":"2.1.0 (Claude Code)"},"id":"claude","label":"Claude Code"},{"binary":{"answers":true,"found":true,"name":"codex","path":"/usr/local/bin/codex","problem":null,"version":"codex-cli 0.80.0"},"id":"codex","label":"Codex"}],"bd":{"answers":true,"found":true,"name":"bd","path":"/usr/local/bin/bd","problem":null,"version":"bd version 1.1.2"},"bdExpected":"1.1.2","git":{"answers":true,"found":true,"name":"git","path":"/usr/local/bin/git","problem":null,"version":"git version 2.50.1"},"ok":true,"path":"/usr/local/bin:/usr/bin","problems":[]},
+    {"agents":[{"binary":{"answers":true,"found":true,"name":"claude","path":"/usr/local/bin/claude","problem":null,"version":"2.1.0 (Claude Code)"},"id":"claude","label":"Claude Code"},{"binary":{"answers":false,"found":false,"name":"codex","path":null,"problem":"`codex` was not found","version":null},"id":"codex","label":"Codex"}],"bd":{"answers":true,"found":true,"name":"bd","path":"/usr/local/bin/bd","problem":null,"version":"bd version 1.1.2"},"bdExpected":"1.1.2","git":{"answers":true,"found":true,"name":"git","path":"/usr/local/bin/git","problem":null,"version":"git version 2.50.1"},"ok":false,"path":null,"problems":["`codex` was not found"]}
+  ]
+}

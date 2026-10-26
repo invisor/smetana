@@ -37,7 +37,7 @@ use crate::secrets::{names, Identity, SecretStore};
 use crate::version::older_than;
 
 /// The protocol this build speaks. `PROTOCOL_MAJOR` must equal the desktop's
-/// (`src-tauri/src/remote/mod.rs`; `tests/versions.rs` reads the file). The minor
+/// (`crates/remote-server/src/lib.rs`; `tests/versions.rs` reads the file). The minor
 /// is the newest this build knows: 1 added `UpdatePushToken`, 3 `attachment_write`.
 pub const PROTOCOL_MAJOR: u16 = 1;
 pub const PROTOCOL_MINOR: u16 = 3;
