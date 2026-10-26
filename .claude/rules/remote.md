@@ -170,7 +170,13 @@ Every bridged `terminal:output` is `{ id, from, seq, data }` plus `reset: true` 
 `from..=seq` joined. A client holding chunk `last` (the reply's `seq`, or the previous event's) applies an event only when
 `from == last + 1`; anything else is a gap and it attaches again. A `reset` has `from == seq`, replaces the terminal's
 contents instead of continuing them, and is sent in place of the chunks a device that fell behind its ceiling did not get;
-chunks after it continue from its `seq`. The window's own events have no `from`.
+chunks after it continue from its `seq`. A reset is applied whatever `last` is, and sets `last = seq` (outside an outstanding
+attach, below). The window's own events have no `from`.
+
+**While an attach is outstanding.** From sending `terminal_attach` for a session until its reply arrives, the client discards
+that session's `terminal:output`; the reply alone sets `last`. Events already written when the attach was sent precede the
+reply on the stream and are covered by it (the server drops its buffer for the session when the attach arrives, and the
+follow is armed only after the reply), so applying them would repeat chunks the reply re-sends.
 
 ## Protocol 1.7: a tool result's denial
 
