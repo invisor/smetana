@@ -21,8 +21,9 @@ use std::time::Duration;
 use iroh::endpoint::{presets, Connection};
 use iroh::{Endpoint, RelayMode, RelayUrl, SecretKey};
 use remote_protocol::{
-    read_frame, write_frame, Hello, HelloReply, PairReply, PairRequest, PublicKey, ALPN,
-    CLOSE_DONE, CLOSE_PROTOCOL, CLOSE_REVOKED, CLOSE_UNKNOWN, CLOSE_VERSION,
+    decode_hello, read_frame, read_frame_bytes, write_frame, DeviceKind, HelloReply, PairReply,
+    PairRequest, PublicKey, ALPN, CLOSE_DONE, CLOSE_PROTOCOL, CLOSE_REVOKED, CLOSE_UNKNOWN,
+    CLOSE_VERSION,
 };
 
 #[cfg(not(unix))]
@@ -182,9 +183,9 @@ async fn serve_paired(remote: &Arc<Remote>, conn: Connection, key: PublicKey) {
     let id = remote.connections.register(&key, conn.clone());
     // The list is checked again once the connection is registered: a revoke that
     // landed between the first check and the registration found nothing to close.
-    if remote.devices.contains(&key) {
-        if let Some((send, recv)) = handshake(remote, &conn, &key).await {
-            super::bridge::serve(remote, &conn, &key, send, recv).await;
+    if let Some(kind) = remote.devices.kind_of(&key) {
+        if let Some((send, recv)) = handshake(remote, &conn, &key, kind).await {
+            super::bridge::serve(remote, &conn, &key, kind, send, recv).await;
         }
         conn.closed().await;
     } else {
@@ -198,16 +199,20 @@ async fn handshake(
     remote: &Remote,
     conn: &Connection,
     key: &PublicKey,
+    kind: DeviceKind,
 ) -> Option<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
-    let Some((mut send, recv, hello)) = first_frame::<Hello>(conn).await else {
+    let Some((mut send, recv, (hello, info))) = first_hello(conn).await else {
         conn.close(CLOSE_PROTOCOL.into(), b"expected a hello");
         return None;
     };
+    // What the device says about itself is a note for the log. What it may do is the kind the
+    // list holds for its key, set when it was paired.
+    log::debug!("remote: hello from a {kind:?} device, which calls itself {:?}", info.map(|info| info.platform));
     let reply = HelloReply {
         protocol_major: PROTOCOL_MAJOR,
         protocol_minor: PROTOCOL_MINOR,
         app_version: remote.app_version.clone(),
-        capabilities: remote_protocol::capabilities(),
+        capabilities: remote_protocol::capabilities_for(kind),
         min_mobile_version: MIN_MOBILE_VERSION.to_owned(),
         recommended_mobile_version: RECOMMENDED_MOBILE_VERSION.to_owned(),
     };
@@ -224,6 +229,22 @@ async fn handshake(
     }
     remote.devices.touch(key, remote.pairing.now());
     Some((send, recv))
+}
+
+/// [`first_frame`] for a `Hello`, which may carry a [`remote_protocol::HelloInfo`] behind it.
+async fn first_hello(
+    conn: &Connection,
+) -> Option<(
+    iroh::endpoint::SendStream,
+    iroh::endpoint::RecvStream,
+    (remote_protocol::Hello, Option<remote_protocol::HelloInfo>),
+)> {
+    let read = async {
+        let (send, mut recv) = conn.accept_bi().await.ok()?;
+        let body = read_frame_bytes(&mut recv, FIRST_FRAME_LIMIT).await.ok()?;
+        Some((send, recv, decode_hello(&body).ok()?))
+    };
+    tokio::time::timeout(FIRST_FRAME_TIMEOUT, read).await.ok().flatten()
 }
 
 /// Opens the phone's first stream and reads the one frame it must begin with.
@@ -265,8 +286,8 @@ async fn serve_pairing(remote: &Arc<Remote>, conn: Connection, key: PublicKey) {
 /// The whole of the pairing decision for one request that has been read.
 pub(crate) async fn decide_pairing(remote: &Remote, key: &PublicKey, request: PairRequest) -> PairReply {
     let rejected = |reason: &str| PairReply::Rejected { reason: reason.to_owned() };
-    let remaining = match remote.pairing.spend(&request.secret) {
-        Ok(secs) => secs,
+    let (remaining, kind) = match remote.pairing.spend_for_kind(&request.secret) {
+        Ok(spent) => spent,
         Err(reason) => return rejected(reason),
     };
     if request.push_token.as_ref().is_some_and(|token| token.len() > TOKEN_LIMIT) {
@@ -294,6 +315,8 @@ pub(crate) async fn decide_pairing(remote: &Remote, key: &PublicKey, request: Pa
         push_key: data_encoding::HEXLOWER.encode(&request.push_key),
         paired_at: remote.pairing.now(),
         last_contact: None,
+        // The ticket's, not the request's: `platform` above is what the device says it is.
+        kind,
     };
     if let Err(err) = remote.devices.add(device) {
         log::warn!("remote: could not save a paired device: {err}");

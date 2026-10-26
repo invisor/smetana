@@ -1,9 +1,11 @@
-//! The allowlisted commands, called without Tauri.
+//! Every server command, called without Tauri.
 //!
 //! Each arm calls the plain function the `#[tauri::command]` wrapper of the same
 //! name calls (`tracker::commands::snapshot`, `session::commands::plain::send`, …),
-//! so a phone reaches exactly the code the desktop front end does, with the same
-//! argument validation and the same errors. A handler's failure is serialized
+//! so a remote device reaches exactly the code the desktop front end does, with the same
+//! argument validation and the same errors. Which commands a device may call at all is
+//! decided before this layer, by its kind (`remote_protocol::is_command_allowed_for`); what
+//! this layer adds is the few places where the kind changes what a command does. A handler's failure is serialized
 //! with serde as Tauri serializes it for the webview, and travels as
 //! `BridgeError::Handler` in that form.
 //!
@@ -17,14 +19,18 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use remote_protocol::BridgeError;
+use remote_protocol::{BridgeError, DeviceKind};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use smetana_core::tracker::model::IssuePatch;
+use smetana_core::vcs::model::OpKind;
 use tauri::{AppHandle, Manager};
 
-use super::bridge::{BoxFuture, Dispatch};
+use super::bridge::{BoxFuture, Caller, Dispatch};
 use crate::agents::Intent;
+use crate::context::Context;
+use crate::runs::config;
 use crate::runs::model::RunSettings;
 use crate::runs::service::RunHandle;
 use crate::session::model::Decision;
@@ -50,19 +56,33 @@ pub struct Services {
     /// only that; this is how the window is told to follow (see
     /// `projects.js::followRemoteProject`). Production emits the window event.
     pub project_switched: Option<ProjectSwitched>,
+    /// What the commands that need more than a worker take: the data directory, the settings
+    /// file, the agents' one-shot runs. `None` in a test that calls none of them.
+    pub ctx: Option<Context>,
+    /// The device service, for the commands about devices. Weak: the service owns the hub that
+    /// owns this.
+    pub remote: Option<std::sync::Weak<super::Remote>>,
 }
 
 pub type ProjectSwitched = std::sync::Arc<dyn Fn(Option<String>) + Send + Sync>;
 
-/// The window event a phone's project switch is announced with.
+/// The window event a remote device's project switch is announced with.
 pub const PROJECT_SWITCHED_EVENT: &str = "remote:project-switched";
+
+/// The payload of [`PROJECT_SWITCHED_EVENT`].
+pub fn project_switched_payload(path: Option<String>) -> Value {
+    json!({ "path": path })
+}
 
 impl Services {
     /// The managed state of a running app. `None` while any of it is missing,
     /// which at the end of `setup` it never is.
-    pub fn from_app(app: &AppHandle) -> Option<Self> {
+    pub fn from_app(app: &AppHandle, remote: Option<std::sync::Weak<super::Remote>>) -> Option<Self> {
         let ctx = crate::host::context(app);
+        let kept = ctx.clone();
         Some(Self {
+            ctx: Some(kept),
+            remote,
             tracker: app.try_state::<TrackerHandle>()?.inner().clone(),
             runs: app.try_state::<RunHandle>()?.inner().clone(),
             sessions: app.try_state::<SessionHandle>()?.inner().clone(),
@@ -72,137 +92,11 @@ impl Services {
             attachments_root: crate::attachments::store_root(&ctx).map_err(|err| err.to_string()),
             project_switched: Some({
                 std::sync::Arc::new(move |path: Option<String>| {
-                    ctx.emit_json(PROJECT_SWITCHED_EVENT, json!({ "path": path }));
+                    ctx.emit_json(PROJECT_SWITCHED_EVENT, project_switched_payload(path));
                 })
             }),
         })
     }
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, serde(deny_unknown_fields))]
-pub(crate) struct Project {
-    project: String,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, serde(deny_unknown_fields))]
-pub(crate) struct SetProject {
-    path: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, serde(deny_unknown_fields))]
-pub(crate) struct SettingsLoad {
-    project: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, serde(deny_unknown_fields))]
-pub(crate) struct RunStart {
-    project: String,
-    settings: RunSettings,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, serde(deny_unknown_fields))]
-pub(crate) struct RunStop {
-    token: u64,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, serde(deny_unknown_fields))]
-pub(crate) struct SessionStart {
-    project: String,
-    intent: Intent,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, serde(deny_unknown_fields))]
-pub(crate) struct AttachmentWrite {
-    name: Option<String>,
-    data: String,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, serde(deny_unknown_fields))]
-pub(crate) struct SessionId {
-    id: u64,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, serde(deny_unknown_fields))]
-pub(crate) struct SessionSince {
-    id: u64,
-    seq: u64,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, serde(deny_unknown_fields))]
-pub(crate) struct SessionSend {
-    id: u64,
-    text: String,
-    attachments: Vec<String>,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, serde(deny_unknown_fields))]
-pub(crate) struct SessionAnswer {
-    id: u64,
-    question: String,
-    decision: Decision,
-    answers: Option<BTreeMap<String, String>>,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, serde(deny_unknown_fields))]
-pub(crate) struct CrewRoot {
-    root: u64,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, serde(deny_unknown_fields))]
-pub(crate) struct CrewAt {
-    root: u64,
-    node: u64,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(test, serde(deny_unknown_fields))]
-pub(crate) struct CrewSend {
-    root: u64,
-    node: u64,
-    text: String,
-}
-
-/// A command and its decoded arguments. Decoding is a step of its own so that a
-/// test can hold the contract's example arguments to it without running anything.
-pub(crate) enum Call {
-    TrackerHealth,
-    TrackerSnapshot,
-    TrackerSetProject(SetProject),
-    SettingsLoad(SettingsLoad),
-    AgentsCatalog,
-    AgentsInstalled,
-    ProjectConfig(Project),
-    TargetBranches(Project),
-    RunState(Project),
-    RunReports(Project),
-    RunStart(RunStart),
-    RunStop(RunStop),
-    SessionStart(SessionStart),
-    AttachmentWrite(AttachmentWrite),
-    SessionAttach(SessionId),
-    SessionSince(SessionSince),
-    SessionSend(SessionSend),
-    SessionAnswer(SessionAnswer),
-    SessionStop(SessionId),
-    CrewTree(CrewRoot),
-    CrewAttach(CrewAt),
-    CrewSend(CrewSend),
-    CrewStop(CrewRoot),
-    TerminalList(Project),
-    TerminalAttach(SessionId),
 }
 
 /// The rejection Tauri gives a command whose arguments do not decode.
@@ -215,49 +109,6 @@ fn decode<T: DeserializeOwned>(cmd: &str, args: Value) -> Result<T, BridgeError>
     // optional parameters from the front end is.
     let args = if args.is_null() { json!({}) } else { args };
     serde_json::from_value(args).map_err(|err| invalid(cmd, err))
-}
-
-impl Call {
-    /// `cmd` must be allowlisted; the bridge checks that first. A name that is
-    /// not answers `Forbidden` here too, so this cannot be the place a gap opens.
-    pub(crate) fn parse(cmd: &str, args: Value) -> Result<Call, BridgeError> {
-        Ok(match cmd {
-            "tracker_health" => Call::TrackerHealth,
-            "tracker_snapshot" => Call::TrackerSnapshot,
-            "tracker_set_project" => Call::TrackerSetProject(decode(cmd, args)?),
-            "settings_load" => Call::SettingsLoad(decode(cmd, args)?),
-            "agents_catalog" => Call::AgentsCatalog,
-            "agents_installed" => Call::AgentsInstalled,
-            "project_config" => Call::ProjectConfig(decode(cmd, args)?),
-            "target_branches" => Call::TargetBranches(decode(cmd, args)?),
-            "run_state" => Call::RunState(decode(cmd, args)?),
-            "run_reports" => Call::RunReports(decode(cmd, args)?),
-            "run_start" => Call::RunStart(decode(cmd, args)?),
-            "run_stop" => Call::RunStop(decode(cmd, args)?),
-            "session_start" => Call::SessionStart(decode(cmd, args)?),
-            "session_attach" => Call::SessionAttach(decode(cmd, args)?),
-            "session_since" => Call::SessionSince(decode(cmd, args)?),
-            "session_send" => {
-                let send: SessionSend = decode(cmd, args)?;
-                // The spec keeps "attachments from disk" off the phone: these are
-                // paths on the desktop, and a phone has no business naming them.
-                if !send.attachments.is_empty() {
-                    return Err(BridgeError::Forbidden);
-                }
-                Call::SessionSend(send)
-            }
-            "session_answer" => Call::SessionAnswer(decode(cmd, args)?),
-            "session_stop" => Call::SessionStop(decode(cmd, args)?),
-            "crew_tree" => Call::CrewTree(decode(cmd, args)?),
-            "crew_attach" => Call::CrewAttach(decode(cmd, args)?),
-            "crew_send" => Call::CrewSend(decode(cmd, args)?),
-            "crew_stop" => Call::CrewStop(decode(cmd, args)?),
-            "terminal_list" => Call::TerminalList(decode(cmd, args)?),
-            "terminal_attach" => Call::TerminalAttach(decode(cmd, args)?),
-            "attachment_write" => Call::AttachmentWrite(decode(cmd, args)?),
-            _ => return Err(BridgeError::Forbidden),
-        })
-    }
 }
 
 /// What a phone may name as a new task's pictures and files: paths in the
@@ -310,79 +161,332 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) 
         .map_err(|err| BridgeError::Internal(format!("the command did not finish: {err}")))
 }
 
-impl Services {
-    pub(crate) async fn run(&self, call: Call) -> Result<Value, BridgeError> {
-        use crate::{runs, session, terminal, tracker};
-        match call {
-            Call::TrackerHealth => answer(tracker::commands::health(&self.tracker).await),
-            Call::TrackerSnapshot => answer(tracker::commands::snapshot(&self.tracker).await),
-            Call::TrackerSetProject(a) => {
-                let path = a.path.clone();
-                let result = tracker::commands::set_project(&self.tracker, a.path).await;
-                if result.is_ok() {
-                    if let Some(announce) = &self.project_switched {
-                        announce(path);
-                    }
-                }
-                answer(result)
+/// Declares every command in one place: its argument struct (named the way the front end names
+/// the parameters, camelCase — Tauri does that renaming for a command and this layer has to do
+/// it by hand), the variant of [`Call`] that carries it, and the arm that runs it. A command's
+/// name appears once, so the list a test holds against `SERVER_COMMANDS` cannot drift from the
+/// arms.
+macro_rules! calls {
+    ($(
+        $variant:ident = $cmd:literal { $($field:ident : $ty:ty),* $(,)? }
+            => |$svc:ident, $caller:ident, $a:ident| $body:expr;
+    )*) => {
+        $(
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            #[cfg_attr(test, serde(deny_unknown_fields))]
+            #[allow(dead_code)]
+            pub(crate) struct $variant { $(pub(crate) $field: $ty),* }
+        )*
+
+        /// A command and its decoded arguments. Decoding is a step of its own so that a
+        /// test can hold the contract's example arguments to it without running anything.
+        pub(crate) enum Call { $($variant($variant)),* }
+
+        /// Every command this layer runs, in declaration order.
+        impl Call {
+            /// `cmd` must be a server command the device's kind may call; the bridge checks
+            /// that first. A name that is not one answers `Forbidden` here too, so this cannot
+            /// be the place a gap opens.
+            pub(crate) fn parse(cmd: &str, args: Value) -> Result<Call, BridgeError> {
+                Ok(match cmd {
+                    $($cmd => Call::$variant(decode(cmd, args)?),)*
+                    _ => return Err(BridgeError::Forbidden),
+                })
             }
-            Call::SettingsLoad(a) => match &self.settings_path {
-                Ok(path) => answer(crate::settings::commands::load_from(path, a.project)),
-                Err(message) => answer(Err::<(), _>(crate::settings::commands::SettingsError::Dir(
-                    message.clone(),
-                ))),
-            },
-            Call::AgentsCatalog => plain(blocking(crate::agents::catalogue).await?),
-            Call::AgentsInstalled => plain(blocking(crate::agents::commands::agents_installed).await?),
-            Call::ProjectConfig(a) => {
-                plain(blocking(move || runs::commands::project_config(a.project)).await?)
-            }
-            Call::TargetBranches(a) => {
-                plain(blocking(move || runs::commands::target_branches(a.project)).await?)
-            }
-            Call::RunState(a) => answer(runs::commands::state(&self.runs, a.project).await),
-            Call::RunReports(a) => plain(runs::commands::run_reports(a.project).await),
-            Call::RunStart(a) => answer(runs::commands::start(&self.runs, a.project, a.settings).await),
-            Call::RunStop(a) => answer(runs::commands::stop(&self.runs, a.token).await),
-            Call::SessionStart(a) => {
-                confine_new_task(&self.attachments_root, &a.intent)?;
-                answer(session::commands::plain::start(&self.sessions, a.project, a.intent).await)
-            }
-            Call::AttachmentWrite(a) => {
-                let root = self.attachments_root.clone().map_err(|_| BridgeError::Forbidden)?;
-                let project = crate::attachments::current_project(&self.tracker).await;
-                answer(crate::attachments::plain::write(&root, project.as_deref(), a.name, a.data))
-            }
-            Call::SessionAttach(a) => answer(session::commands::plain::attach(&self.sessions, a.id).await),
-            Call::SessionSince(a) => {
-                answer(session::commands::plain::since(&self.sessions, a.id, a.seq).await)
-            }
-            Call::SessionSend(a) => answer(
-                session::commands::plain::send(&self.sessions, a.id, a.text, a.attachments).await,
-            ),
-            Call::SessionAnswer(a) => answer(
-                session::commands::plain::answer(&self.sessions, a.id, a.question, a.decision, a.answers)
-                    .await,
-            ),
-            Call::SessionStop(a) => answer(session::commands::plain::stop(&self.sessions, a.id).await),
-            Call::CrewTree(a) => answer(session::commands::plain::crew_tree(&self.sessions, a.root).await),
-            Call::CrewAttach(a) => {
-                answer(session::commands::plain::crew_attach(&self.sessions, a.root, a.node).await)
-            }
-            Call::CrewSend(a) => answer(
-                session::commands::plain::crew_send(&self.sessions, a.root, a.node, a.text).await,
-            ),
-            Call::CrewStop(a) => answer(session::commands::plain::crew_stop(&self.sessions, a.root).await),
-            Call::TerminalList(a) => answer(terminal::commands::plain::list(&self.terminal, a.project).await),
-            // A peek and not an attach: the phone must not take the window's seat.
-            Call::TerminalAttach(a) => answer(terminal::commands::plain::peek(&self.terminal, a.id).await),
         }
+
+        impl Services {
+            #[allow(unused_variables)]
+            pub(crate) async fn run(&self, caller: &Caller, call: Call) -> Result<Value, BridgeError> {
+                match call {
+                    $(Call::$variant($a) => {
+                        let $svc = self;
+                        let $caller = caller;
+                        $body
+                    })*
+                }
+            }
+        }
+    };
+}
+
+impl Services {
+    fn ctx(&self) -> Result<&Context, BridgeError> {
+        self.ctx.as_ref().ok_or_else(|| BridgeError::Internal("the server has no context".into()))
+    }
+
+    fn remote(&self) -> Result<std::sync::Arc<super::Remote>, BridgeError> {
+        self.remote
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or_else(|| BridgeError::Handler(json!("the companion is not available on this machine")))
     }
 }
 
+calls! {
+    // --- the tracker
+    TrackerHealth = "tracker_health" {} => |s, c, a| answer(crate::tracker::commands::health(&s.tracker).await);
+    TrackerSnapshot = "tracker_snapshot" {} => |s, c, a| answer(crate::tracker::commands::snapshot(&s.tracker).await);
+    TrackerResync = "tracker_resync" {} => |s, c, a| answer(crate::tracker::commands::tracker_resync(&s.tracker).await);
+    TrackerUpdate = "tracker_update" { id: String, patch: IssuePatch }
+        => |s, c, a| answer(crate::tracker::commands::tracker_update(&s.tracker, a.id, a.patch).await);
+    TrackerClose = "tracker_close" { id: String, reason: Option<String> }
+        => |s, c, a| answer(crate::tracker::commands::tracker_close(&s.tracker, a.id, a.reason).await);
+    TrackerReopen = "tracker_reopen" { id: String }
+        => |s, c, a| answer(crate::tracker::commands::tracker_reopen(&s.tracker, a.id).await);
+    TrackerDelete = "tracker_delete" { id: String }
+        => |s, c, a| answer(crate::tracker::commands::tracker_delete(&s.tracker, a.id).await);
+    TrackerSetProject = "tracker_set_project" { path: Option<String> } => |s, c, a| {
+        let path = a.path.clone();
+        let result = crate::tracker::commands::set_project(&s.tracker, a.path).await;
+        if result.is_ok() {
+            if let Some(announce) = &s.project_switched {
+                announce(path);
+            }
+        }
+        answer(result)
+    };
+    TrackerInit = "tracker_init" {} => |s, c, a| answer(crate::tracker::commands::tracker_init(&s.tracker).await);
+    TrackerRepair = "tracker_repair" {} => |s, c, a| answer(crate::tracker::commands::tracker_repair(&s.tracker).await);
+    TrackerFailure = "tracker_failure" {} => |s, c, a| answer(crate::tracker::commands::tracker_failure(&s.tracker).await);
+    TrackerAccessRepair = "tracker_access_repair" {}
+        => |s, c, a| answer(crate::tracker::commands::tracker_access_repair(&s.tracker).await);
+    TrackerProbe = "tracker_probe" { paths: Vec<String> }
+        => |s, c, a| plain(crate::tracker::commands::tracker_probe(a.paths).await);
+    TrackerSearchSemantic = "tracker_search_semantic" { query: String, project: Option<String> }
+        => |s, c, a| answer(crate::tracker::commands::tracker_search_semantic(s.ctx()?, &s.tracker, a.query, a.project).await);
+    ProjectRoot = "project_root" { path: String }
+        => |s, c, a| plain(crate::tracker::commands::project_root(a.path).await);
+    HomeDir = "home_dir" {}
+        => |s, c, a| plain(crate::tracker::access::home().map(|home| home.to_string_lossy().into_owned()));
+
+    // --- settings, agents, projects
+    SettingsLoad = "settings_load" { project: Option<String> } => |s, c, a| match &s.settings_path {
+        Ok(path) => answer(crate::settings::commands::load_from(path, a.project)),
+        Err(message) => answer(Err::<(), _>(crate::settings::commands::SettingsError::Dir(message.clone()))),
+    };
+    SettingsSave = "settings_save" { settings: crate::settings::model::ResolvedSettings }
+        => |s, c, a| answer(crate::settings::commands::settings_save(s.ctx()?, a.settings).await);
+    AgentsCatalog = "agents_catalog" {} => |s, c, a| plain(blocking(crate::agents::catalogue).await?);
+    AgentsInstalled = "agents_installed" {}
+        => |s, c, a| plain(blocking(crate::agents::commands::agents_installed).await?);
+    CodexModels = "codex_models" {} => |s, c, a| answer(crate::agents::commands::codex_models().await);
+    ProjectConfig = "project_config" { project: String }
+        => |s, c, a| plain(blocking(move || crate::runs::commands::project_config(a.project)).await?);
+    ProjectConfigSaveDefaults = "project_config_save_defaults" { project: String, defaults: config::Defaults }
+        => |s, c, a| answer(blocking(move || crate::runs::commands::project_config_save_defaults(a.project, a.defaults)).await?);
+    TargetBranches = "target_branches" { project: String }
+        => |s, c, a| plain(blocking(move || crate::runs::commands::target_branches(a.project)).await?);
+    GitHead = "git_head" { project: String }
+        => |s, c, a| plain(blocking(move || smetana_core::git::commands::git_head(a.project)).await?);
+
+    // --- runs
+    RunState = "run_state" { project: String } => |s, c, a| answer(crate::runs::commands::state(&s.runs, a.project).await);
+    RunReports = "run_reports" { project: String } => |s, c, a| plain(crate::runs::commands::run_reports(a.project).await);
+    RunStart = "run_start" { project: String, settings: RunSettings }
+        => |s, c, a| answer(crate::runs::commands::start(&s.runs, a.project, a.settings).await);
+    RunStop = "run_stop" { token: u64 } => |s, c, a| answer(crate::runs::commands::stop(&s.runs, a.token).await);
+    RunRelease = "run_release" {} => |s, c, a| answer(crate::runs::commands::run_release(&s.runs).await);
+    BrowserTools = "browser_tools" { project: String }
+        => |s, c, a| plain(crate::runs::commands::browser_tools(Some(&s.runs), a.project).await);
+    AgentUsage = "agent_usage" { agent: Option<String>, project: Option<String> }
+        => |s, c, a| plain(crate::runs::commands::agent_usage(s.ctx()?.clone(), a.agent, a.project).await);
+
+    // --- driven sessions and crews
+    SessionStart = "session_start" { project: String, intent: Intent } => |s, c, a| {
+        // A phone's new task may name only what is already in the attachment store; a desktop
+        // is the owner's own machine and names what it likes.
+        if c.kind == DeviceKind::Phone {
+            confine_new_task(&s.attachments_root, &a.intent)?;
+        }
+        answer(crate::session::commands::plain::start(&s.sessions, a.project, a.intent).await)
+    };
+    SessionAttach = "session_attach" { id: u64 }
+        => |s, c, a| answer(crate::session::commands::plain::attach(&s.sessions, a.id).await);
+    SessionSince = "session_since" { id: u64, seq: u64 }
+        => |s, c, a| answer(crate::session::commands::plain::since(&s.sessions, a.id, a.seq).await);
+    SessionSend = "session_send" { id: u64, text: String, attachments: Vec<String> } => |s, c, a| {
+        // The spec keeps "attachments from disk" off the phone: these are paths on the
+        // desktop, and a phone has no business naming them.
+        if c.kind == DeviceKind::Phone && !a.attachments.is_empty() {
+            return Err(BridgeError::Forbidden);
+        }
+        answer(crate::session::commands::plain::send(&s.sessions, a.id, a.text, a.attachments).await)
+    };
+    SessionAnswer = "session_answer" {
+        id: u64, question: String, decision: Decision, answers: Option<BTreeMap<String, String>>
+    } => |s, c, a| answer(
+        crate::session::commands::plain::answer(&s.sessions, a.id, a.question, a.decision, a.answers).await
+    );
+    SessionStop = "session_stop" { id: u64 }
+        => |s, c, a| answer(crate::session::commands::plain::stop(&s.sessions, a.id).await);
+    SessionClose = "session_close" { id: u64 }
+        => |s, c, a| answer(crate::session::commands::session_close(&s.sessions, a.id).await);
+    CrewTree = "crew_tree" { root: u64 }
+        => |s, c, a| answer(crate::session::commands::plain::crew_tree(&s.sessions, a.root).await);
+    CrewAttach = "crew_attach" { root: u64, node: u64 }
+        => |s, c, a| answer(crate::session::commands::plain::crew_attach(&s.sessions, a.root, a.node).await);
+    CrewSend = "crew_send" { root: u64, node: u64, text: String }
+        => |s, c, a| answer(crate::session::commands::plain::crew_send(&s.sessions, a.root, a.node, a.text).await);
+    CrewStop = "crew_stop" { root: u64 }
+        => |s, c, a| answer(crate::session::commands::plain::crew_stop(&s.sessions, a.root).await);
+    CrewClear = "crew_clear" { root: u64 }
+        => |s, c, a| answer(crate::session::commands::crew_clear(&s.sessions, a.root).await);
+    SessionsList = "sessions_list" { project: String }
+        => |s, c, a| plain(smetana_core::sessions::commands::sessions_list(a.project).await);
+    SessionsDelete = "sessions_delete" { path: String }
+        => |s, c, a| answer(smetana_core::sessions::commands::sessions_delete(a.path).await);
+
+    // --- terminals
+    TerminalList = "terminal_list" { project: String }
+        => |s, c, a| answer(crate::terminal::commands::plain::list(&s.terminal, a.project).await);
+    // A peek and not an attach: a client over a connection must not take the window's seat. The
+    // bridge registers the client for the session's output around this call.
+    TerminalAttach = "terminal_attach" { id: u64, after: Option<u64> }
+        => |s, c, a| answer(crate::terminal::commands::plain::peek(&s.terminal, a.id, a.after).await);
+    TerminalDetach = "terminal_detach" { id: u64 } => |s, c, a| {
+        // The bridge has already stopped sending this client the session's output; the
+        // worker's own detach is about the window's seat, which is not this client's.
+        plain(())
+    };
+    TerminalMarks = "terminal_marks" {} => |s, c, a| answer(crate::terminal::commands::terminal_marks(&s.terminal).await);
+    TerminalCreate = "terminal_create" { project: String, intent: Intent }
+        => |s, c, a| answer(crate::terminal::commands::terminal_create(&s.terminal, a.project, a.intent).await);
+    TerminalShell = "terminal_shell" { project: String, cwd: Option<String> }
+        => |s, c, a| answer(crate::terminal::commands::terminal_shell(&s.terminal, a.project, a.cwd).await);
+    TerminalRemove = "terminal_remove" { id: u64 }
+        => |s, c, a| answer(crate::terminal::commands::terminal_remove(&s.terminal, a.id).await);
+    TerminalResize = "terminal_resize" { id: u64, cols: u16, rows: u16 }
+        => |s, c, a| answer(crate::terminal::commands::plain::resize_as(&s.terminal, c.id, a.id, a.cols, a.rows).await);
+    TerminalWrite = "terminal_write" { id: u64, data: String }
+        => |s, c, a| answer(crate::terminal::commands::plain::write_as(&s.terminal, c.id, a.id, a.data).await);
+    TerminalClear = "terminal_clear" { id: u64 }
+        => |s, c, a| answer(crate::terminal::commands::terminal_clear(&s.terminal, a.id).await);
+    TerminalRunCapture = "terminal_run_capture" { id: u64, input: String, settle_ms: u64, timeout_ms: u64 }
+        => |s, c, a| answer(crate::terminal::commands::terminal_run_capture(&s.terminal, a.id, a.input, a.settle_ms, a.timeout_ms).await);
+    TerminalRestorable = "terminal_restorable" { project: String }
+        => |s, c, a| answer(crate::terminal::commands::terminal_restorable(a.project).await);
+    TerminalForget = "terminal_forget" { project: String, session_id: String }
+        => |s, c, a| answer(crate::terminal::commands::terminal_forget(a.project, a.session_id).await);
+
+    // --- files
+    FilesList = "files_list" { root: String, dir: String }
+        => |s, c, a| answer(smetana_core::files::commands::files_list(a.root, a.dir).await);
+    FilesRead = "files_read" { root: String, path: String }
+        => |s, c, a| answer(smetana_core::files::commands::files_read(a.root, a.path).await);
+    FilesWrite = "files_write" { root: String, path: String, text: String, expected_mtime: i64 }
+        => |s, c, a| answer(smetana_core::files::commands::files_write(a.root, a.path, a.text, a.expected_mtime).await);
+    FilesStat = "files_stat" { root: String, paths: Vec<String> }
+        => |s, c, a| plain(smetana_core::files::commands::files_stat(a.root, a.paths).await);
+    FilesCreate = "files_create" { root: String, dir: String, name: String }
+        => |s, c, a| answer(smetana_core::files::commands::files_create(a.root, a.dir, a.name).await);
+    FilesMkdir = "files_mkdir" { root: String, dir: String, name: String }
+        => |s, c, a| answer(smetana_core::files::commands::files_mkdir(a.root, a.dir, a.name).await);
+    FilesTrash = "files_trash" { root: String, path: String }
+        => |s, c, a| answer(smetana_core::files::commands::files_trash(a.root, a.path).await);
+    FilesCopy = "files_copy" { root: String, src: String, dst_dir: String }
+        => |s, c, a| answer(smetana_core::files::commands::files_copy(a.root, a.src, a.dst_dir).await);
+    FilesCopyExternal = "files_copy_external" { root: String, src: String, dst_dir: String }
+        => |s, c, a| answer(smetana_core::files::commands::files_copy_external(a.root, a.src, a.dst_dir).await);
+    FilesMove = "files_move" { root: String, src: String, dst_dir: String }
+        => |s, c, a| answer(smetana_core::files::commands::files_move(a.root, a.src, a.dst_dir).await);
+    FilesRename = "files_rename" { root: String, path: String, name: String }
+        => |s, c, a| answer(smetana_core::files::commands::files_rename(a.root, a.path, a.name).await);
+
+    // --- attachments
+    AttachmentWrite = "attachment_write" { name: Option<String>, data: String } => |s, c, a| {
+        let root = s.attachments_root.clone().map_err(|_| BridgeError::Forbidden)?;
+        let project = crate::attachments::current_project(&s.tracker).await;
+        answer(crate::attachments::plain::write(&root, project.as_deref(), a.name, a.data))
+    };
+    AttachmentImport = "attachment_import" { path: String }
+        => |s, c, a| answer(crate::attachments::import_file(s.ctx()?, Some(&s.tracker), a.path).await);
+    AttachmentReopen = "attachment_reopen" { path: String }
+        => |s, c, a| answer(crate::attachments::reopen_stored(s.ctx()?, a.path).await);
+    AttachmentsSurvey = "attachments_survey" {}
+        => |s, c, a| answer(crate::attachments::survey_store(s.ctx()?, Some(&s.tracker)).await);
+    AttachmentsClean = "attachments_clean" {}
+        => |s, c, a| answer(crate::attachments::clean_store(s.ctx()?, Some(&s.tracker)).await);
+    ImageRead = "image_read" { base: String, src: String }
+        => |s, c, a| answer(crate::attachments::figure::image_read(a.base, a.src).await);
+
+    // --- git
+    VcsRepos = "vcs_repos" { project: String } => |s, c, a| plain(smetana_core::vcs::commands::vcs_repos(a.project).await);
+    VcsStatus = "vcs_status" { repo: String } => |s, c, a| answer(smetana_core::vcs::commands::vcs_status(a.repo).await);
+    VcsInProgress = "vcs_in_progress" { repo: String }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_in_progress(a.repo).await);
+    VcsBranches = "vcs_branches" { repo: String } => |s, c, a| plain(smetana_core::vcs::commands::vcs_branches(a.repo).await);
+    VcsRemoteBranches = "vcs_remote_branches" { repo: String }
+        => |s, c, a| plain(smetana_core::vcs::commands::vcs_remote_branches(a.repo).await);
+    VcsLastFetch = "vcs_last_fetch" { repo: String }
+        => |s, c, a| plain(smetana_core::vcs::commands::vcs_last_fetch(a.repo).await);
+    VcsTracking = "vcs_tracking" { repo: String } => |s, c, a| plain(smetana_core::vcs::commands::vcs_tracking(a.repo).await);
+    VcsFetch = "vcs_fetch" { repo: String } => |s, c, a| answer(smetana_core::vcs::commands::vcs_fetch(a.repo).await);
+    VcsPull = "vcs_pull" { repo: String } => |s, c, a| answer(smetana_core::vcs::commands::vcs_pull(a.repo).await);
+    VcsPush = "vcs_push" { repo: String, set_upstream: bool }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_push(a.repo, a.set_upstream).await);
+    VcsCheckout = "vcs_checkout" { repo: String, branch: String }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_checkout(a.repo, a.branch).await);
+    VcsCheckoutRemote = "vcs_checkout_remote" { repo: String, branch: String }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_checkout_remote(a.repo, a.branch).await);
+    VcsCreateBranch = "vcs_create_branch" { repo: String, name: String, start: String, switch: bool }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_create_branch(a.repo, a.name, a.start, a.switch).await);
+    VcsRenameBranch = "vcs_rename_branch" { repo: String, from: String, to: String }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_rename_branch(a.repo, a.from, a.to).await);
+    VcsDeleteBranch = "vcs_delete_branch" { repo: String, branch: String, force: bool }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_delete_branch(a.repo, a.branch, a.force).await);
+    VcsMerge = "vcs_merge" { repo: String, branch: String }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_merge(a.repo, a.branch).await);
+    VcsRebase = "vcs_rebase" { repo: String, onto: String }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_rebase(a.repo, a.onto).await);
+    VcsAbort = "vcs_abort" { repo: String, op: OpKind }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_abort(a.repo, a.op).await);
+    VcsCommit = "vcs_commit" { repo: String, message: String }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_commit(a.repo, a.message).await);
+    VcsDiscard = "vcs_discard" { repo: String, path: String, orig_path: Option<String> }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_discard(a.repo, a.path, a.orig_path).await);
+    VcsSuggestMessage = "vcs_suggest_message" { repo: String, project: Option<String> }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_suggest_message(s.ctx()?, a.repo, a.project).await);
+    VcsFileAtHead = "vcs_file_at_head" { repo: String, path: String }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_file_at_head(a.repo, a.path).await);
+    VcsFileAtRev = "vcs_file_at_rev" { repo: String, rev: String, path: String }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_file_at_rev(a.repo, a.rev, a.path).await);
+    VcsCompare = "vcs_compare" { repo: String, branch: String, mode: String }
+        => |s, c, a| answer(smetana_core::vcs::commands::vcs_compare(a.repo, a.branch, a.mode).await);
+
+    // --- the server's own devices
+    RemotePairBegin = "remote_pair_begin" { relay_url: String, kind: Option<DeviceKind> }
+        => |s, c, a| answer(super::commands::plain::pair_begin(&s.remote()?, &a.relay_url, a.kind.unwrap_or_default()).await);
+    RemotePairCancel = "remote_pair_cancel" {} => |s, c, a| answer(super::commands::plain::pair_cancel(&s.remote()?));
+    RemotePairDecide = "remote_pair_decide" { accept: bool }
+        => |s, c, a| answer(super::commands::plain::pair_decide(&s.remote()?, a.accept));
+    RemoteDevices = "remote_devices" {} => |s, c, a| answer(super::commands::plain::devices(&s.remote()?));
+    RemoteDeviceRevoke = "remote_device_revoke" { key: String }
+        => |s, c, a| answer(super::commands::plain::revoke(&s.remote()?, &a.key));
+}
+
 impl Dispatch for Services {
-    fn call<'a>(&'a self, cmd: &'a str, args: Value) -> BoxFuture<'a, Result<Value, BridgeError>> {
-        Box::pin(async move { self.run(Call::parse(cmd, args)?).await })
+    fn call<'a>(
+        &'a self,
+        caller: &'a Caller,
+        cmd: &'a str,
+        args: Value,
+    ) -> BoxFuture<'a, Result<Value, BridgeError>> {
+        Box::pin(async move { self.run(caller, Call::parse(cmd, args)?).await })
+    }
+
+    fn terminal_ring<'a>(&'a self, session: u64) -> BoxFuture<'a, Option<(u64, String)>> {
+        Box::pin(async move {
+            let attached = crate::terminal::commands::plain::peek(&self.terminal, session, None).await.ok()?;
+            Some((attached.seq, attached.data))
+        })
+    }
+
+    fn client_gone<'a>(&'a self, caller: &'a Caller) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            let _ = crate::terminal::commands::plain::forget_client(&self.terminal, caller.id).await;
+        })
     }
 }
 

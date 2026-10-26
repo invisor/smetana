@@ -28,7 +28,7 @@ mod tests;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use remote_protocol::{Platform, PublicKey};
+use remote_protocol::{DeviceKind, Platform, PublicKey};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -40,7 +40,7 @@ pub use smetana_core::remote::DEFAULT_RELAY_URL;
 /// The protocol this desktop speaks. A phone on another major is answered with
 /// this and disconnected.
 pub const PROTOCOL_MAJOR: u16 = 1;
-pub const PROTOCOL_MINOR: u16 = 7;
+pub const PROTOCOL_MINOR: u16 = 8;
 
 /// Below this the phone shows one screen, "Update the app", and calls nothing.
 pub const MIN_MOBILE_VERSION: &str = "0.1.0";
@@ -103,7 +103,16 @@ impl Remote {
         })
     }
 
+    /// Tells the window (through the sink) and every desktop device listening for it.
     pub(crate) fn emit(&self, event: Event) {
+        match &event {
+            Event::PairRequest { device_name, platform } => self.hub.publish(
+                PAIR_REQUEST_EVENT,
+                &PairRequestPayload { device_name: device_name.clone(), platform: *platform },
+            ),
+            Event::DevicesChanged(list) => self.hub.publish(DEVICES_EVENT, &device_views(list)),
+            Event::PairEnded => self.hub.publish(PAIR_ENDED_EVENT, &()),
+        }
         (self.events)(event);
     }
 
@@ -162,13 +171,13 @@ impl Remote {
     /// the field showed the new one. What the person sees is what is used. An
     /// address `valid_relay_url` refuses is an error rather than a fallback, for
     /// the same reason.
-    pub async fn pair_begin(self: &Arc<Self>, relay: &str) -> Result<PairBegin, String> {
+    pub async fn pair_begin(self: &Arc<Self>, relay: &str, kind: DeviceKind) -> Result<PairBegin, String> {
         if !crate::settings::model::valid_relay_url(relay.trim()) {
             return Err("That is not a usable relay address.".into());
         }
         let relay = self.ensure_running(Some(relay)).await?;
-        let ticket = self.pairing.begin(self.public_key(), &relay);
-        Ok(PairBegin { ticket: ticket.encode(), expires_at: ticket.expires_at })
+        let ticket = self.pairing.begin_for(self.public_key(), &relay, kind);
+        Ok(PairBegin { ticket: ticket.encode_for(kind), expires_at: ticket.expires_at })
     }
 
     /// Stops the endpoint, closing every connection with it.
@@ -220,6 +229,8 @@ pub struct DeviceView {
     pub platform: Platform,
     pub paired_at: u64,
     pub last_contact: Option<u64>,
+    /// What the device may do; fixed at pairing. Added in protocol 1.8.
+    pub kind: DeviceKind,
 }
 
 impl From<&Device> for DeviceView {
@@ -230,6 +241,7 @@ impl From<&Device> for DeviceView {
             platform: device.platform,
             paired_at: device.paired_at,
             last_contact: device.last_contact,
+            kind: device.kind,
         }
     }
 }
@@ -285,7 +297,7 @@ pub fn start(app: AppHandle) {
         events,
         relay,
     );
-    match dispatch::Services::from_app(&app) {
+    match dispatch::Services::from_app(&app, Some(Arc::downgrade(&remote))) {
         Some(services) => remote.hub.set_dispatch(Arc::new(services)),
         None => log::warn!("remote: the workers are not all managed, phones can call nothing"),
     }
