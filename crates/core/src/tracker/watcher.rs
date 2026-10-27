@@ -21,19 +21,18 @@ pub fn is_relevant(path: &Path) -> bool {
 /// bd opens the embedded Dolt on every call, and even a purely reading
 /// `bd list` rewrites both files. Measured on bd 1.1.2 (2026-10-28, a
 /// throwaway database; three `bd list -n 1 --json` and one
-/// `bd list --all -n 0 --updated-after … --json`): every read moved the
-/// mtime of `manifest` and `journal.idx` and left their bytes identical
-/// (same size, same hash), and left `last-touched` completely alone. One
-/// `bd create` then changed the content of all three (manifest hash,
-/// journal.idx grew, last-touched got a new timestamp). Taking the mtime as
-/// the signal therefore made every sync trigger the next one, about once a
-/// second, at 40-50 % CPU per bd launch.
+/// `bd list --all -n 0 --updated-after ... --json`): every read moved the
+/// mtime of `manifest` and `journal.idx` and left their bytes identical, and
+/// left `last-touched` alone. One `bd create` then changed the content of
+/// `manifest` (about 150 bytes) and `last-touched` (a few bytes), and grew
+/// `journal.idx`. Taking the mtime as the signal made every sync trigger the
+/// next one, about once a second, at 40-50 % CPU per bd launch.
 ///
-/// So the event is compared by content: a file counts as changed only when
-/// its bytes differ from the last ones seen at that path. This loses nothing
-/// to a suppression window (no external write can hide inside one); the one
-/// cost is that the first sight of a path always counts as a change, which is
-/// a single harmless extra sync after start.
+/// So only the two small files are compared by content: `manifest` and
+/// `last-touched`. `journal.idx` is megabytes and growing, so it is never
+/// read; an event naming it is answered by re-reading its sibling `manifest`
+/// instead, which every write changes. This loses nothing to a suppression
+/// window (no outside write can hide inside one).
 #[derive(Default)]
 pub struct Fingerprints {
     seen: HashMap<PathBuf, u64>,
@@ -54,10 +53,53 @@ impl Fingerprints {
         self.seen.insert(path.to_path_buf(), digest) != Some(digest)
     }
 
+    /// Remembers the current content of `path` without reporting anything.
+    pub fn seed(&mut self, path: &Path) {
+        let _ = self.changed_on_disk(path);
+    }
+
     /// Reads the file and asks [`Self::changed`] about it.
     pub fn changed_on_disk(&mut self, path: &Path) -> bool {
         let bytes = std::fs::read(path).ok();
         self.changed(path, bytes.as_deref())
+    }
+}
+
+/// The file whose bytes stand for `path`: `journal.idx` is too big to read on
+/// every event, so its sibling `manifest` speaks for it.
+fn witness(path: &Path) -> PathBuf {
+    if path.file_name().and_then(|n| n.to_str()) == Some("journal.idx") {
+        path.with_file_name("manifest")
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// The decision of the watcher callback: does this event mean an outside
+/// change? Every relevant path's witness is fingerprinted (no short-circuit),
+/// so each baseline stays current.
+pub fn should_wake(seen: &mut Fingerprints, paths: &[PathBuf]) -> bool {
+    let mut wake = false;
+    let mut done: Vec<PathBuf> = Vec::new();
+    for p in paths.iter().filter(|p| is_relevant(p)) {
+        let w = witness(p);
+        if done.contains(&w) {
+            continue;
+        }
+        wake |= seen.changed_on_disk(&w);
+        done.push(w);
+    }
+    wake
+}
+
+/// Baseline from what is on disk before the watch is registered, so the
+/// first full sweep is not followed by a redundant incremental one.
+fn seed_baseline(seen: &mut Fingerprints, beads_dir: &Path) {
+    seen.seed(&beads_dir.join("last-touched"));
+    if let Ok(dbs) = std::fs::read_dir(beads_dir.join("embeddeddolt")) {
+        for db in dbs.flatten() {
+            seen.seed(&db.path().join(".dolt/noms/manifest"));
+        }
     }
 }
 
@@ -74,15 +116,11 @@ pub enum WatchEvent {
 /// silently.
 pub fn spawn(beads_dir: PathBuf, tx: Sender<WatchEvent>) -> notify::Result<RecommendedWatcher> {
     let mut seen = Fingerprints::default();
+    seed_baseline(&mut seen, &beads_dir);
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         match res {
             Ok(event) => {
-                // Not `any(..)` over a short-circuit: every relevant path has to
-                // be fingerprinted so that its baseline stays current.
-                let mut changed = false;
-                for p in event.paths.iter().filter(|p| is_relevant(p)) {
-                    changed |= seen.changed_on_disk(p);
-                }
+                let changed = should_wake(&mut seen, &event.paths);
                 if changed {
                     // The worker collapses frequent events; all that matters
                     // here is not to block when the queue is already full.
@@ -159,6 +197,38 @@ mod tests {
         assert!(f.changed_on_disk(&p));
         std::fs::remove_file(&p).unwrap();
         assert!(f.changed_on_disk(&p));
+    }
+
+    #[test]
+    fn should_wake_follows_content_not_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let noms = dir.path().join("embeddeddolt/t/.dolt/noms");
+        std::fs::create_dir_all(&noms).unwrap();
+        let manifest = noms.join("manifest");
+        let journal = noms.join("journal.idx");
+        let touched = dir.path().join("last-touched");
+        std::fs::write(&manifest, "m1").unwrap();
+        std::fs::write(&touched, "t1").unwrap();
+        std::fs::write(&journal, "big").unwrap();
+
+        let mut seen = Fingerprints::default();
+        seed_baseline(&mut seen, dir.path());
+        let both = vec![manifest.clone(), touched.clone()];
+        // Our own read: files rewritten with the same bytes.
+        std::fs::write(&manifest, "m1").unwrap();
+        std::fs::write(&journal, "big").unwrap();
+        assert!(!should_wake(&mut seen, &both));
+        assert!(!should_wake(&mut seen, &[journal.clone()]));
+        // An outside write: both baselines move in one event.
+        std::fs::write(&manifest, "m2").unwrap();
+        std::fs::write(&touched, "t2").unwrap();
+        assert!(should_wake(&mut seen, &both));
+        assert!(!should_wake(&mut seen, &both));
+        // journal.idx alone is answered by the manifest.
+        std::fs::write(&manifest, "m3").unwrap();
+        assert!(should_wake(&mut seen, &[journal]));
+        // Noise never wakes.
+        assert!(!should_wake(&mut seen, &[dir.path().join("config.yaml")]));
     }
 
     #[test]
