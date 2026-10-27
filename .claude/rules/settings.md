@@ -325,7 +325,11 @@ last folder away. The list is cleaned in place rather than forgotten as a whole 
 anything past 200 entries), because one junk path is no reason to refold the rest. The rule that
 reads it is `components/git/branchTree.js` (`.claude/rules/vcs-panel.md`).
 
-`kanban` is the one that is **global rather than per project**, and deliberately: `columns` (`all` or
+`kanban` is the one that is **global rather than per project**, and deliberately - and since protocol 1.14 it is
+the **server's** (with `appearance.theme`, `appearance.density` and each project's `columnOrder`), because the paired
+phone draws the same board; `uiFontSize` stays on the device (`.claude/rules/remote.md`, "Settings: the server's half and
+the device's"). The settings window and the board edit them exactly as before; the store sends them as a patch, not in
+the device file. `columns` (`all` or
 `some`) with `alwaysShow`, and `interval` (`all`, `day`, `week`, `month`) with `unlimited`, are a
 person's way of reading a board rather than a fact about one repository, and the defaults are today's
 behaviour exactly — every column, every task. The rule it feeds is `components/kanban/boardView.js`,
