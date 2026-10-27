@@ -14,6 +14,15 @@ describe('moving between screens', () => {
     expect(back(opened)).toEqual(START)
   })
 
+  it('opens the run form and the follow-up form over the board and goes back to it', () => {
+    const run = open(START, { screen: 'run', scope: { kind: 'epic', id: 'bd-1' }, title: 'An epic' })
+    expect(current(run)).toEqual({ screen: 'run', scope: { kind: 'epic', id: 'bd-1' }, title: 'An epic' })
+    expect(back(run)).toEqual(START)
+    const followUp = open(START, { screen: 'new-task', parent: { id: 'bd-1', title: 'A task' } })
+    expect(current(followUp).parent).toEqual({ id: 'bd-1', title: 'A task' })
+    expect(selectTab(run, 'runs')).toEqual({ tab: 'runs', project: null, stack: [] })
+  })
+
   it('goes back one screen at a time', () => {
     const two = open(open(START, { screen: 'task', id: 'bd-1' }), { screen: 'task', id: 'bd-2' })
     expect(current(back(two))).toEqual({ screen: 'task', id: 'bd-1' })

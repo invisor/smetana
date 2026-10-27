@@ -19,8 +19,8 @@
    What is chosen on the phone is remembered nowhere: `settings_save` is not on the bridge's
    list, so the form is filled from the desktop's memory and never writes to it.
 
-   The scope is the queue. A task or an epic is started from the desktop's board, where the
-   card is. */
+   The scope is the queue unless a card's sheet asked for a task or an epic (`runPayload`'s third
+   argument), in which case the form is the same and only the scope differs. */
 import { needsCutting, pickBranch } from '../../src/components/run/branchChoice.js'
 import { pauseFrom, pausePayload, validatePause } from '../../src/components/run/batchPause.js'
 import { DEFAULTS_FALLBACK } from '../../src/components/run/projectDefaults.js'
@@ -118,12 +118,13 @@ export const pauseErrors = (form) => (hasPause(form) ? validatePause(form.pauseM
 export const canRun = (form) => Boolean(form?.branch) && Object.keys(pauseErrors(form)).length === 0
 
 /* The payload of `run_start` for what the form holds, or `null` while Run may not be pressed.
-   A `Select` hands back text, so the two numbers are made numbers here. */
-export function runPayload(form, { config, branches }) {
+   A `Select` hands back text, so the two numbers are made numbers here. `scope` is the queue
+   unless a card asked for itself. */
+export function runPayload(form, { config, branches }, scope = { kind: 'queue' }) {
   if (!canRun(form)) return null
   const pause = hasPause(form) ? pausePayload(form.pauseMin, form.pauseMax) : null
   return {
-    scope: { kind: 'queue' },
+    scope,
     mode: form.mode,
     target_branch: form.branch,
     create_target: needsCutting(branches, form.branch),

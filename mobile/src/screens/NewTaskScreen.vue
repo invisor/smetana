@@ -25,6 +25,8 @@ import { agentLabel } from '@src/stores/agents.js'
 import { bridge } from '../bridge/status.js'
 import { PRIORITIES, STAGE_DEFAULT, TYPES, canAttach, canStart, newTaskIntent } from '../newTask.js'
 
+/* The card this task follows up, `{ id, title }`, when the form was opened from a card's sheet. */
+const props = defineProps({ parent: { type: Object, default: null } })
 const emit = defineEmits(['started'])
 
 const text = ref('')
@@ -89,7 +91,8 @@ async function start() {
       brainstorm: brainstorm.value,
       spec: spec.value,
       plan: plan.value,
-      attachments: attachable.value ? attachmentsState.items : []
+      attachments: attachable.value ? attachmentsState.items : [],
+      parent: props.parent?.id ?? null
     })
     const id = await startConversation(settings.activeProject, intent)
     if (id != null) {
@@ -117,6 +120,17 @@ const label = {
   textTransform: 'uppercase',
   color: 'var(--text-muted)'
 }
+const parentLine = { display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }
+const parentId = {
+  font: 'var(--weight-regular) var(--text-sm)/var(--leading-snug) var(--font-mono)',
+  color: 'var(--text-primary)',
+  overflowWrap: 'anywhere'
+}
+const parentTitle = {
+  font: 'var(--weight-regular) var(--text-sm)/var(--leading-snug) var(--font-sans)',
+  color: 'var(--text-secondary)',
+  overflowWrap: 'anywhere'
+}
 const field = { display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }
 const images = { display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }
 const attachRow = { display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }
@@ -134,6 +148,11 @@ const hidden = { display: 'none' }
       panel on in the desktop's settings, or choose an agent it can drive.
     </p>
     <template v-else>
+      <div v-if="parent" :style="parentLine">
+        <div :style="label">Follow-up to</div>
+        <span :style="parentId">{{ parent.id }}</span>
+        <span v-if="parent.title" :style="parentTitle">{{ parent.title }}</span>
+      </div>
       <div :style="field">
         <div :style="label">Task</div>
         <Textarea v-model="text" :rows="8" placeholder="What should the task say?" />

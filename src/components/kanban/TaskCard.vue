@@ -66,10 +66,10 @@ const props = defineProps({
      itself belongs to the view: exactly one file under `src/components/`
      imports a store, and it is not this one. */
   copyState: { type: String, default: '' },
-  /* Whether the card offers its action menu. On unless a surface says otherwise, and the
-     one that does is the phone's board: every verb in the menu is a write the phone's
-     bridge does not carry, so a menu button there would be a control with nothing behind
-     it. */
+  /* Whether the card draws its three-dot menu button. On unless a surface says otherwise, and
+     the one that does is the phone's board: there the tap on the card is the way into the
+     menu (a bottom sheet with the same rows, `mobile/src/screens/TaskSheet.vue`), so a button
+     beside it would be a second door to the same place. */
   actionable: { type: Boolean, default: true }
 })
 

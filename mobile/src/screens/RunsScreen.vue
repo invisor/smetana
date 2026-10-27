@@ -9,7 +9,12 @@
    own reason. Stopping is the desktop's bar button: cooperative, after the batch in flight.
 
    `project` is the one a notification named, else the one in front. The run stores hold one
-   project at a time, so it is loaded again whenever it changes. */
+   project at a time, so it is loaded again whenever it changes.
+
+   `scope` is set when a card's sheet sent the person here to run that card (`{ kind: 'task' | 'epic',
+   id }`, the desktop's `cardScope`): the form opens by itself, says which task or epic it is about
+   instead of "everything ready", and the `run_start` it sends carries that scope. `started` is
+   said once a run has begun, so the screen that opened this one can move on. */
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import Button from '@src/components/core/Button.vue'
 import EmptyState from '@src/components/core/EmptyState.vue'
@@ -49,7 +54,13 @@ import {
 } from '../runStart.js'
 import { loadRunsFor, unpinRuns } from '../workspace.js'
 
-const props = defineProps({ project: { type: String, default: null } })
+const props = defineProps({
+  project: { type: String, default: null },
+  scope: { type: Object, default: null },
+  /* The card's title, drawn beside the scope. */
+  title: { type: String, default: '' }
+})
+const emit = defineEmits(['started'])
 
 const path = computed(() => props.project ?? settings.activeProject)
 
@@ -75,7 +86,7 @@ const live = computed(() => runsState.project === path.value)
 const runs = computed(() => (live.value ? [...runsState.runs].reverse() : []))
 
 const block = computed(() => (live.value ? startBlock(runsState.config) : 'Reading the run configuration.'))
-const busyReason = computed(() => (live.value ? scopeBusyReason({ kind: 'queue' }, runsState.runs) : ''))
+const busyReason = computed(() => (live.value ? scopeBusyReason(props.scope ?? { kind: 'queue' }, runsState.runs) : ''))
 
 /* The form: `null` while folded, else the values of its fields (see ./runStart.js). */
 const form = ref(null)
@@ -99,7 +110,9 @@ watch(
 const hint = computed(() => (form.value ? branchHint(gitState.branches, form.value.branch) : ''))
 const errors = computed(() => (form.value ? pauseErrors(form.value) : {}))
 const noLiveCheck = computed(() => !liveCheckAvailable(runsState.config))
-const payload = computed(() => (form.value && live.value ? runPayload(form.value, sources()) : null))
+const payload = computed(() =>
+  form.value && live.value ? runPayload(form.value, sources(), props.scope ?? undefined) : null
+)
 const canPress = computed(() => Boolean(form.value) && canRun(form.value) && !busyReason.value && !starting.value)
 
 /* How many tasks the queue would take, when the board on the page is this project's. */
@@ -119,6 +132,20 @@ function openIt() {
   form.value = openForm(sources())
 }
 
+/* A run for one card has nothing to choose before the form, so it opens as soon as the project's
+   configuration is read; once, so that Cancel leaves it folded. */
+let opened = false
+watch(
+  [live, block],
+  () => {
+    if (props.scope && !opened && live.value && !block.value) {
+      opened = true
+      openIt()
+    }
+  },
+  { immediate: true }
+)
+
 async function start() {
   if (!live.value || !payload.value || busyReason.value || starting.value) return
   starting.value = true
@@ -126,6 +153,7 @@ async function start() {
   try {
     await startRun(path.value, payload.value)
     form.value = null
+    emit('started')
   } catch (err) {
     startFailure.value = typeof err === 'string' ? err : err?.message || 'The run did not start.'
   } finally {
@@ -175,7 +203,8 @@ const card = {
   border: 'var(--border-w) solid var(--border)',
   borderRadius: 'var(--radius-3)'
 }
-const scope = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }
+const scopeStyle = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }
+const cardTitle = { ...text, color: 'var(--text-primary)', overflowWrap: 'anywhere' }
 const actions = { display: 'flex', gap: 'var(--space-3)', justifyContent: 'flex-end' }
 const body = { display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }
 const row = { display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }
@@ -198,18 +227,22 @@ const full = { width: '100%' }
         <div v-for="run in runs" :key="run.token" :style="card">
           <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', minWidth: 0 }">
             <RunBar :run="run" :can-release="false" :busy="stopping === run.token" @stop="stop(run)" />
-            <span :style="scope">{{ scopeLabel(run.settings?.scope) }}</span>
+            <span :style="scopeStyle">{{ scopeLabel(run.settings?.scope) }}</span>
           </div>
         </div>
         <p v-if="failure" :style="failed">{{ failure }}</p>
       </section>
 
       <section :style="section">
-        <h2 :style="heading">{{ form ? 'Run the queue' : 'Start a run' }}</h2>
+        <h2 :style="heading">{{ form ? (scope ? `Run ${scopeLabel(scope)}` : 'Run the queue') : 'Start a run' }}</h2>
         <p v-if="block" :style="text">{{ block }}</p>
         <Button v-else-if="!form" variant="secondary" icon="play" @click="openIt">Start a run</Button>
         <div v-else :style="body">
-          <span :style="takesStyle">{{ QUEUE_DESCRIPTION }}</span>
+          <template v-if="scope">
+            <span :style="takesStyle">{{ scopeLabel(scope) }}</span>
+            <span v-if="title" :style="cardTitle">{{ title }}</span>
+          </template>
+          <span v-else :style="takesStyle">{{ QUEUE_DESCRIPTION }}</span>
 
           <div :style="row">
             <span :style="labelStyle">Merge into</span>
@@ -271,7 +304,7 @@ const full = { width: '100%' }
             <span :style="noteStyle">{{ NOTES_NOTE }}</span>
           </div>
 
-          <span v-if="typeof ready === 'number'" :style="takesStyle">
+          <span v-if="!scope && typeof ready === 'number'" :style="takesStyle">
             {{ ready === 1 ? 'One task is ready.' : `${ready} tasks are ready.` }}
           </span>
           <span v-if="busyReason" :style="takesStyle">{{ busyReason[0].toUpperCase() + busyReason.slice(1) }}.</span>

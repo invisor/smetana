@@ -46,6 +46,15 @@ describe('whether a run can be started', () => {
 const sources = (over = {}) => ({ config, branches, remembered: null, ...over })
 const payloadOf = (form, over = {}) => runPayload(form, { config, branches, ...over })
 
+describe('the scope a run is started over', () => {
+  it('is the queue unless a card asked for itself', () => {
+    const form = openForm(sources())
+    expect(payloadOf(form).scope).toEqual({ kind: 'queue' })
+    expect(runPayload(form, { config, branches }, { kind: 'task', id: 'x-1' }).scope).toEqual({ kind: 'task', id: 'x-1' })
+    expect(runPayload(form, { config, branches }, { kind: 'epic', id: 'x-2' }).scope).toEqual({ kind: 'epic', id: 'x-2' })
+  })
+})
+
 describe('the form when it opens', () => {
   it('holds the dialog\'s own opening values for a project nobody has run before', () => {
     expect(openForm(sources())).toEqual({
