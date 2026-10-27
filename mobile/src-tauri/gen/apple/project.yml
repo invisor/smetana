@@ -12,6 +12,10 @@ settingGroups:
     base:
       PRODUCT_NAME: Smetana Companion
       PRODUCT_BUNDLE_IDENTIFIER: com.invisor.smetana.companion
+      # The team is not a secret: it is in every binary it signs. tauri writes it
+      # onto this target from bundle.iOS.developmentTeam, and nothing writes it onto
+      # the extension, so both carry it here.
+      DEVELOPMENT_TEAM: 56SJ78XQU7
 targetTemplates:
   app:
     type: application
@@ -131,6 +135,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.invisor.smetana.companion.NotificationService
         PRODUCT_NAME: NotificationService
+        DEVELOPMENT_TEAM: 56SJ78XQU7
         SWIFT_VERSION: 5.0
         IPHONEOS_DEPLOYMENT_TARGET: 15.0
         TARGETED_DEVICE_FAMILY: "1,2"
