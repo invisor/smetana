@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { TRACKER_WRITES_MINOR, canWriteTracker, cardScope, runnable, sheetRows } from '../src/taskSheet.js'
+import { TRACKER_WRITES_MINOR, canWriteTracker, sheetRows } from '../src/taskSheet.js'
 
 const online = (minor) => ({ state: 'online', protocol_minor: minor })
 const card = (extra = {}) => ({ id: 'x-1', status: 'ready', bdStatus: 'open', blockedBy: 0, ...extra })
@@ -54,36 +54,13 @@ describe('the sheet rows', () => {
     expect(rows({ runs: [] }).find((row) => row.kind === 'run').disabled).toBe(false)
   })
 
+  it('offers no Run row that works while the run configuration is missing', () => {
+    expect(rows({ configState: 'missing' }).find((row) => row.kind === 'run').disabled).toBe(true)
+    expect(rows({ configState: 'broken' }).find((row) => row.kind === 'run').disabled).toBe(false)
+  })
+
   it('greys every row while a write is in flight', () => {
     const list = rows({ busy: true }).filter((row) => row.kind && row.kind !== 'view')
     expect(list.every((row) => row.disabled)).toBe(true)
-  })
-})
-
-describe('cardScope', () => {
-  it('is an epic when a child is not finished, a task otherwise', () => {
-    const issues = new Map([
-      ['x-1', issue('x-1')],
-      ['x-2', issue('x-2', { parent: 'x-1' })],
-    ])
-    expect(cardScope(issues, 'x-1')).toEqual({ kind: 'epic', id: 'x-1' })
-    expect(cardScope(issues, 'x-2')).toEqual({ kind: 'task', id: 'x-2' })
-    expect(cardScope([issue('x-1'), issue('x-2', { status: 'closed', parent: 'x-1' })], 'x-1').kind).toBe('task')
-  })
-})
-
-describe('runnable', () => {
-  it('refuses a run on done, blocked, parked and unconfigured', () => {
-    expect(runnable(card(), 'ok')).toBe(true)
-    expect(runnable(card(), 'broken')).toBe(true)
-    expect(runnable(card({ status: 'done', bdStatus: 'closed' }), 'ok')).toBe(false)
-    expect(runnable(card({ status: 'blocked', bdStatus: 'blocked' }), 'ok')).toBe(false)
-    expect(runnable(card({ status: 'parked', bdStatus: 'parked' }), 'ok')).toBe(false)
-    expect(runnable(card(), 'missing')).toBe(false)
-  })
-
-  it('refuses a card that waits on a blocker and would have to be moved', () => {
-    expect(runnable(card({ status: 'blocked', bdStatus: 'open', blockedBy: 1 }), 'ok')).toBe(false)
-    expect(runnable(card({ status: 'running', bdStatus: 'in_progress', blockedBy: 1 }), 'ok')).toBe(true)
   })
 })

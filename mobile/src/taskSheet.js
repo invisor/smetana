@@ -4,14 +4,13 @@
    top, "View task". The menu's own rule is not copied: `taskMenuItems` is called with the same
    five inputs `DesktopApp.vue` feeds it, so a card in a given column offers on the phone exactly
    what it offers there. What this file adds is the inputs the desktop works out inside a
-   component (`runnableTask`, `cardScope`), pure so that a test can reach them, and the one thing
+   component (`runnable`, `cardScope`, now shared from `kanban/runScope.js`), and the one thing
    that is the phone's own: a desktop too old to carry tracker writes.
 
    Pure, no Vue and no Tauri, like the rest of this family. */
 import { taskMenuItems } from '@src/components/kanban/taskMenu.js'
-import { isParked } from '@src/components/kanban/parked.js'
+import { cardScope, runOffered, runnable } from '@src/components/kanban/runScope.js'
 import { parentBlocked } from '@src/components/kanban/lockCascade.js'
-import { needsReady } from '@src/components/run/readyPromote.js'
 import { scopeBusyReason } from '@src/components/run/runScopes.js'
 import { desktopMinor } from './bridge/states.js'
 
@@ -24,35 +23,13 @@ export const canWriteTracker = (status) => desktopMinor(status) >= TRACKER_WRITE
 
 const list = (issues) => (issues instanceof Map ? [...issues.values()] : [...(issues ?? [])])
 
-/* The scope a card's play would start: an issue with children is run as its children, and the
-   parent itself is never the work. A finished child does not make an epic, exactly as on the
-   desktop (`cardScope` in `DesktopApp.vue`), because the row's grey has to be about the very
-   scope the tap would send. */
-export function cardScope(issues, id) {
-  const open = list(issues).some((issue) => issue.parent === id && issue.status !== 'closed' && issue.status !== 'done')
-  return { kind: open ? 'epic' : 'task', id }
-}
-
-/* The run configuration states in which a play is offered at all: a damaged one is let through
-   on purpose, since the run form is the surface wide enough to quote the parser. `ok` is the
-   word the run store keeps; `configured` is the name the desktop computes from it. */
-const OFFERED = ['ok', 'configured', 'broken']
-
-/* `runnableTask` in `DesktopApp.vue`: whether the card's Run row is live. */
-export const runnable = (card, configState) =>
-  OFFERED.includes(configState) &&
-  card.status !== 'done' &&
-  card.status !== 'blocked' &&
-  !(card.blockedBy && needsReady(card.bdStatus)) &&
-  !isParked(card.bdStatus)
-
 /* The rows of the sheet for one card: View task, then what the desktop's menu returns. On a
    desktop that cannot carry tracker writes the rows that are writes (lock, move, delete) and the
    separator that sets Delete apart are absent rather than grey: a row nothing can ever turn on
    is the one a person learns to read past, the same trade the paperclip makes (`canAttach`). */
 export function sheetRows({ card, issues, runs, configState, status, busy }) {
   const all = list(issues)
-  const live = runnable(card, configState)
+  const live = runnable(card, runOffered(configState))
   const menu = taskMenuItems({
     bdStatus: card.bdStatus,
     runnable: live,

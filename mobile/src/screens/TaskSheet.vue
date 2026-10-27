@@ -101,6 +101,8 @@ const rowStyle = (row) => ({
   alignItems: 'center',
   gap: 'var(--space-5)',
   width: '100%',
+  /* A touch target: the desktop's row height is for a pointer, and a thumb wants about half as
+     much again. */
   minHeight: 'calc(var(--row-h) * 1.6)',
   padding: '0 var(--space-4)',
   border: 0,

@@ -60,7 +60,7 @@ import {
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
-import { isParked, needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
+import { needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
 import { lockIds, parentBlocked as parentBlockedOf, unlockIds } from '../components/kanban/lockCascade.js'
 /* The whole of what happens on screen after a copy — the board's id and a
@@ -361,9 +361,15 @@ import { appendText } from '../components/conversation/draftSegments.js'
 import { linkAbsolutePath } from '../components/conversation/linkMenu.js'
 import { resolveLocalLinkPath } from '../components/conversation/localLinkTarget.js'
 import { workingKey } from '../components/run/configFreshness.js'
-import { needsReady, promotesToReady } from '../components/run/readyPromote.js'
+import { promotesToReady } from '../components/run/readyPromote.js'
 import { promotedNote } from '../components/run/promotedNote.js'
 import { statusPatch } from '../components/kanban/statusPatch.js'
+import {
+  cardScope as cardScopeOf,
+  openChildren,
+  runOffered as runOfferedBy,
+  runnable as runnableCard
+} from '../components/kanban/runScope.js'
 import { runTitle, scopeBusyReason } from '../components/run/runScopes.js'
 import { limitVoice } from '../components/run/limitVoice.js'
 import { warmingUp } from '../components/run/runWarmup.js'
@@ -1011,7 +1017,7 @@ const runConfig = computed(() => (configured.value ? runsState.config.config : n
    arriving after the form is filled in and confirmed, and this one arrives
    before anything is answered, next to the way out. */
 const configBroken = computed(() => runsState.config.state === 'broken')
-const runOffered = computed(() => configured.value || configBroken.value)
+const runOffered = computed(() => runOfferedBy(runsState.config.state))
 
 /* The message the dialog quotes, and '' when there is nothing wrong — which is
    the same thing the dialog reads as "runnable". Derived from the state and not
@@ -1074,12 +1080,7 @@ const configErrorText = computed(() =>
    at all, since the blocked refusal is deliberately silent (`taskMenu.js`) and
    neither the Ready-to-merge column nor Running says anything about a
    dependency. */
-const runnableTask = (task) =>
-  runOffered.value &&
-  task.status !== 'done' &&
-  task.status !== 'blocked' &&
-  !(task.blockedBy && needsReady(task.bdStatus)) &&
-  !isParked(task.bdStatus)
+const runnableTask = (task) => runnableCard(task, runOffered.value)
 
 /* Why the queue's own play is inactive, or '' when it is not. A project holds
    several runs now, so a run going is no longer a reason to grey every play —
@@ -2337,10 +2338,7 @@ const liveCheckBlocked = computed(() =>
 
    Done children are left out because a run would not take them, which is what
    makes this the number worth showing and worth deciding from. */
-const childrenOf = (id) =>
-  [...trackerState.issues.values()].filter(
-    (issue) => issue.parent === id && toUiStatus(issue.status) !== 'done'
-  )
+const childrenOf = (id) => openChildren(trackerState.issues, id)
 
 /* The scope a card's play would start: an issue with children is run as its
    children — that is what the epic scope means, and the parent issue itself is
@@ -2348,7 +2346,7 @@ const childrenOf = (id) =>
    grey (the per-card reason in `orderedColumns`) has to be about the very
    scope the click would send, or a card would grey over one run and start
    another. */
-const cardScope = (id) => ({ kind: childrenOf(id).length ? 'epic' : 'task', id })
+const cardScope = (id) => cardScopeOf(trackerState.issues, id)
 
 const runTask = (id) => {
   const issue = issueById(id)

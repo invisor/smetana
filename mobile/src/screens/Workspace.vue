@@ -14,7 +14,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import DeleteTaskModal from '@src/components/kanban/DeleteTaskModal.vue'
 import ReadyTaskModal from '@src/components/kanban/ReadyTaskModal.vue'
-import { needsReadyWarning, openQuestions } from '@src/components/kanban/parked.js'
+import { READY, needsReadyWarning, openQuestions } from '@src/components/kanban/parked.js'
 import Button from '@src/components/core/Button.vue'
 import { settings } from '@src/stores/settings.js'
 import { boardColumns, issueById, trackerState } from '@src/stores/tracker.js'
@@ -25,7 +25,8 @@ import { back, canGoBack, current, open, routeForTarget, selectTab, START } from
 import { clearPushTarget, pushTarget } from '../pushTarget.js'
 import { dismissRecommended } from '../bridge/index.js'
 import { bridge } from '../bridge/status.js'
-import { cardScope, sheetRows } from '../taskSheet.js'
+import { cardScope } from '@src/components/kanban/runScope.js'
+import { sheetRows } from '../taskSheet.js'
 import { refusal, remove, setStatus, startOn, toggleLock, writingIds } from '../taskActions.js'
 import { openStore } from '../open.js'
 import { refreshFromDesktop } from '../workspace.js'
@@ -223,7 +224,7 @@ async function confirmDelete() {
 async function confirmReady() {
   const id = confirming.value?.id
   confirming.value = null
-  if (id) afterConfirmed(id, await setStatus(id, 'open'))
+  if (id) afterConfirmed(id, await setStatus(id, READY))
 }
 async function resolveInstead() {
   const id = confirming.value?.id
