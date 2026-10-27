@@ -188,14 +188,14 @@ mod tests {
         let sink = std::sync::Arc::new(Recorder(Default::default()));
         let ctx = Context::new(Err("x".into()), Ok(dir.path().to_path_buf()), Err("x".into()), None, sink.clone());
         let answer = settings_patch(&ctx, serde_json::json!({"agent": "codex"})).await.unwrap();
-        settings_patch(&ctx, serde_json::json!({"agentPrompt": "brief", "appearance": {"theme": "light"}})).await.unwrap();
+        settings_patch(&ctx, serde_json::json!({"agentPrompt": "brief", "editor": {"wordWrap": true}})).await.unwrap();
         let heard = sink.0.lock().unwrap();
         assert_eq!(heard.len(), 2);
         assert!(heard.iter().all(|(name, _)| name == "settings:changed"));
         assert_eq!(heard[0].1, answer);
         assert_eq!(heard[1].1["agent"], "codex", "the second announcement still holds the first change");
         assert_eq!(heard[1].1["agentPrompt"], "brief");
-        assert!(heard[1].1.get("appearance").is_none(), "the device's fields are never broadcast");
+        assert!(heard[1].1.get("editor").is_none(), "the device's fields are never broadcast");
     }
 
     #[tokio::test]
