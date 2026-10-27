@@ -27,10 +27,12 @@ beforeEach(async () => {
     openProjects: ['/work/a'],
     activeProject: '/work/a',
     git: { autoFetch: true, removeWorktrees: false },
-    project: { runSettings: { mode: 'solo' } }
+    appearance: { theme: 'light', density: 'compact', uiFontSize: 13 },
+    kanban: { columns: 'non-empty', alwaysShow: [], interval: 'all', unlimited: [] },
+    project: { runSettings: { mode: 'solo' }, columnOrder: ['done', 'open'] }
   })
   ipc.on('device_settings_load', {
-    appearance: { theme: 'light', density: 'compact', uiFontSize: 15 },
+    appearance: { theme: 'dark', density: 'comfortable', uiFontSize: 15 },
     project: { selectedTask: 'a-1' }
   })
   ipc.on('settings_patch', null)
@@ -52,6 +54,9 @@ describe('loading on the desktop client', () => {
     expect(s.project.runSettings).toEqual({ mode: 'solo' })
     expect(s.appearance.theme).toBe('light')
     expect(s.appearance.density).toBe('compact')
+    expect(s.appearance.uiFontSize).toBe(15)
+    expect(s.kanban.columns).toBe('non-empty')
+    expect(s.project.columnOrder).toEqual(['done', 'open'])
     expect(s.project.selectedTask).toBe('a-1')
     expect(ipc.calls('device_settings_load')).toEqual([{ project: '/work/a' }])
   })
@@ -77,16 +82,15 @@ describe('saving on the desktop client', () => {
     expect(ipc.calls('device_settings_save')).toHaveLength(1)
   })
 
-  it('keeps theme and density on the device: nothing goes to the server', async () => {
+  it('keeps the font size and the layout on the device: nothing goes to the server', async () => {
     await settings.loadSettings()
-    settings.settings.appearance.theme = 'dark'
-    settings.settings.appearance.density = 'comfortable'
+    settings.settings.appearance.uiFontSize = 18
     settings.settings.layout.leftWidth = 300
     await wait()
     expect(ipc.calls('settings_patch')).toEqual([])
     const saved = ipc.calls('device_settings_save')
     expect(saved).toHaveLength(1)
-    expect(saved[0].settings.appearance.theme).toBe('dark')
+    expect(saved[0].settings.appearance.uiFontSize).toBe(18)
     expect(saved[0].settings.layout.leftWidth).toBe(300)
   })
 
@@ -176,6 +180,20 @@ describe('saving on the desktop client', () => {
   })
 })
 
+describe('the look and the board of the server', () => {
+  it('sends a theme change, a hidden column and a column order to the server, and no font size', async () => {
+    await settings.loadSettings()
+    settings.settings.appearance.theme = 'dark'
+    settings.settings.appearance.uiFontSize = 18
+    settings.settings.kanban.columns = 'all'
+    settings.settings.project.columnOrder = ['open']
+    await wait()
+    expect(ipc.calls('settings_patch')).toEqual([
+      { patch: { appearance: { theme: 'dark' }, kanban: { columns: 'all' }, projects: { '/work/a': { columnOrder: ['open'] } } } }
+    ])
+  })
+})
+
 describe('following the other clients', () => {
   it('shows a change another client made, with no restart', async () => {
     await settings.loadSettings()
@@ -193,13 +211,14 @@ describe('following the other clients', () => {
     expect(ipc.calls('settings_patch'), 'what arrived is not sent back').toEqual([])
   })
 
-  it('keeps the other client\'s theme out of this window and this window\'s edit alongside theirs', async () => {
+  it('takes the other client\'s theme and keeps this window\'s unsent edit alongside it', async () => {
     await settings.loadSettings()
     settings.settings.agentPrompt = 'mine'
-    await emit('settings:changed', { agent: 'claude', appearance: { theme: 'dark' } })
+    await emit('settings:changed', { agent: 'claude', appearance: { theme: 'dark', density: 'compact', uiFontSize: 30 } })
     expect(settings.settings.agent).toBe('claude')
     expect(settings.settings.agentPrompt).toBe('mine')
-    expect(settings.settings.appearance.theme).toBe('light')
+    expect(settings.settings.appearance.theme).toBe('dark')
+    expect(settings.settings.appearance.uiFontSize).toBe(15)
     await wait()
     expect(ipc.calls('settings_patch')).toEqual([{ patch: { agentPrompt: 'mine' } }])
   })
