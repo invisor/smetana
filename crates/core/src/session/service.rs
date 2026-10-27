@@ -472,6 +472,10 @@ struct Live {
     /// Every `ai-title` record of a transcript carries the same text, so one
     /// read is the whole read.
     title_settled: bool,
+    /// A Crew lead: an ordinary `Live` to this worker, but not a conversation of the driven list.
+    /// Crew panels are drawn from `crew:tree` under `crew:<root>:<node>`, so `session_list` leaves
+    /// it out and it announces no `session:state`.
+    crew_lead: bool,
 }
 
 /// A Codex addressed turn remains pending until its JSON-RPC response confirms
@@ -875,6 +879,7 @@ fn spawn_session(
     permission: Option<&PermissionServer>,
     chunks: &mpsc::UnboundedSender<Chunk>,
     pinned_agent: Option<&str>,
+    crew_lead: bool,
 ) -> Result<Live, SessionError> {
     // The one resolver, read here for the reason `terminal::service` reads it
     // in its own `Create` arm: this is where a driven session is built, so what
@@ -1074,6 +1079,7 @@ fn spawn_session(
         // words it opened with for good.
         title: resume_title.or_else(|| opening_text.as_deref().and_then(super::model::first_words)),
         title_settled: profile.id() != "claude",
+        crew_lead,
     };
 
     // The brief, as the session's first turn. Into the journal before the
@@ -2125,7 +2131,7 @@ fn handle(
                 }
                 return;
             }
-            match spawn_session(ctx, id, &project, intent, permission, chunks, Some(agent)) {
+            match spawn_session(ctx, id, &project, intent, permission, chunks, Some(agent), true) {
                 Ok(live) => {
                     let waits = live.talking.as_ref().is_some_and(|talking| talking.driver.awaits_startup());
                     let mut package = CrewPackage::new(project, id, "Crew lead");
@@ -2351,7 +2357,7 @@ fn handle(
             // spawn and the same startup wait as `Start` otherwise.
             let id = *next_id;
             *next_id += 1;
-            match spawn_session(ctx, id, &project, intent, permission, chunks, Some(&pinned)) {
+            match spawn_session(ctx, id, &project, intent, permission, chunks, Some(&pinned), false) {
                 Ok(mut live) => {
                     live.run_started = true;
                     sessions.insert(id, live);
@@ -2385,7 +2391,7 @@ fn handle(
             }
             let id = *next_id;
             *next_id += 1;
-            let started = spawn_session(ctx, id, &project, intent, permission, chunks, None);
+            let started = spawn_session(ctx, id, &project, intent, permission, chunks, None, false);
             match started {
                 Ok(live) => {
                     sessions.insert(id, live);
@@ -3024,7 +3030,7 @@ fn mark_removed(ctx: &Context, id: SessionId, live: &mut Live) {
 fn records(sessions: &HashMap<SessionId, Live>) -> Vec<SessionRecord> {
     let mut list: Vec<SessionRecord> = sessions
         .iter()
-        .filter(|(_, live)| !live.removed)
+        .filter(|(_, live)| !live.removed && !live.crew_lead)
         .map(|(id, live)| SessionRecord {
             id: *id,
             project: live.project.clone(),
@@ -3053,7 +3059,7 @@ fn announce_new(ctx: &Context, id: SessionId, live: &Live) {
 fn emit_state(ctx: &Context, id: SessionId, live: &Live) {
     // A closed session has told everybody it is gone; the state its child reaps with afterwards
     // would only contradict that.
-    if live.removed {
+    if live.removed || live.crew_lead {
         return;
     }
     ctx.emit(
@@ -3136,6 +3142,10 @@ fn note_conversation(ctx: &Context, id: SessionId, live: &mut Live, conversation
         return;
     }
     live.conversation = Some(conversation);
+    // A session the cross has already closed must not write the registry nor offer itself back.
+    if live.removed {
+        return;
+    }
     // Emitted unconditionally, unlike `refresh_state`'s own emit above: the
     // state word may not have moved at all — a fresh thread's own
     // `thread/start` reply carries no event of its own — but the id on the
@@ -3237,6 +3247,7 @@ mod tests {
             started_at: "2026-10-27T10:00:00+00:00".into(),
             title: Some("A title".into()),
             title_settled: true,
+            crew_lead: false,
         }
     }
 
@@ -3305,6 +3316,19 @@ mod tests {
         assert_eq!(events[0].1["startedAt"], "2026-10-27T10:00:00+00:00");
         assert_eq!(events[1].1["records"][0]["sessionId"], "c");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_crew_lead_is_not_in_the_list_and_announces_no_state() {
+        let (ctx, tap) = tapped();
+        let mut sessions = HashMap::new();
+        let mut lead = idle_live("/p", SessionState::Running);
+        lead.crew_lead = true;
+        emit_state(&ctx, 1, &lead);
+        sessions.insert(1, lead);
+        sessions.insert(2, idle_live("/p", SessionState::Running));
+        assert_eq!(records(&sessions).iter().map(|r| r.id).collect::<Vec<_>>(), vec![2]);
+        assert!(tap.0.lock().unwrap().is_empty());
     }
 
     #[test]

@@ -1188,6 +1188,23 @@ describe('the conversation store', () => {
       expect(stores.conversation.drivenSessions.value[0].work).toEqual({ kind: 'run' })
     })
 
+    it('adopts a run again when a restarted server reuses its id', async () => {
+      const { ipc, emit, stores } = await ready()
+      stores.conversation.adoptRunSession('/p', 7)
+      expect(stores.conversation.lastDrivenRunStart.value).toEqual({ id: 7, project: '/p' })
+      stores.conversation.lastDrivenRunStart.value = null
+
+      ipc.on('session_list', [])
+      ipc.on('connection_state', { mode: 'client', state: 'connected', epoch: 1, attempt: 0, reason: null, local: true, server: { version: '0.1.0', protocolMajor: 1, protocolMinor: 12 }, outdated: null })
+      await stores.connection.initConnection()
+      await emit('connection:state', { mode: 'client', state: 'connected', epoch: 2, attempt: 0, reason: null, local: true, server: { version: '0.1.0', protocolMajor: 1, protocolMinor: 12 }, outdated: null })
+      await vi.waitFor(() => expect(ipc.calls('session_list').length).toBeGreaterThan(1))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      stores.conversation.adoptRunSession('/p', 7)
+      expect(stores.conversation.lastDrivenRunStart.value).toEqual({ id: 7, project: '/p' })
+    })
+
     it('adopting the same run session twice keeps one record', async () => {
       const { stores } = await ready()
       stores.conversation.adoptRunSession('/p', 7)

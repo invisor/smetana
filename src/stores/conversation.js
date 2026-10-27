@@ -825,6 +825,11 @@ async function loadSessionList() {
     return
   }
   if (!Array.isArray(list)) return
+  /* Ids restart at 1 on every launch of the server, so an adoption remembered for an id the
+     server no longer holds would swallow the next run that reuses it. Pruned and not cleared:
+     a reconnect's `run:state` names every live run again and must not pull them all forward. */
+  const present = new Set(list.map((wire) => wire.id))
+  for (const id of [...adopted]) if (!present.has(id)) adopted.delete(id)
   const wired = list.filter((wire) => !gone.has(wire.id)).map(recordOfWire)
   const heard = new Set(wired.map((session) => session.id))
   const newer = started.filter((session) => !heard.has(session.id) && (session.startedAt >= asked || announced.has(session.id)))

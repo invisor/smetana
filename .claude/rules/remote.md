@@ -262,6 +262,8 @@ Additions only. **The list of driven conversations and of offline rows is the se
 `started` in `stores/conversation.js` was the memory of the window that called `session_start`, so a phone saw only what
 it began itself and the desktop drew a conversation the server still led as a dim offline row after the app restarted.
 
+- **"Every session" below means every non-Crew driven session.** A Crew lead is an ordinary `Live` (`crew_lead`) and is
+  left out of `session_list` and of `session:state`; Crew panels come from `crew:tree`.
 - **`session_list {}`** answers `[{ id, project, agent, state, conversation, title, work, startedAt, cwd }]` across all
   projects, sorted by id, for every session the worker holds that no cross has closed (`removed`), ended or not. It is
   `Request::List`, not a widening of `Request::Live`: that one keeps only a running child, for the restart gateway.
