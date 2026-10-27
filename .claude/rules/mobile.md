@@ -70,6 +70,39 @@ notification service extension target is in `gen/apple/project.yml` (re-run `xco
 sit beside `MainActivity.kt`. Push on Android needs a Firebase project: `google-services.json` in
 `gen/android/app/` (not committed); without it the build works and push is off.
 
+**A TestFlight build is one command: `cd mobile && npm run testflight`** (`scripts/ios-testflight.sh`). It builds,
+signs for distribution and uploads to TestFlight's internal testing. The App Store Connect API key is outside the
+repository, in `~/Desktop/Projects/smetana-secrets/` (or `$SMETANA_SECRETS`): `asc-api.p8`, and `asc-api.txt` with the
+Key ID on line 1 and the Issuer ID on line 2; a missing file stops the script by name. **The key's role must be
+Admin**: an App Manager key is refused cloud-managed distribution certificates (403 at export), and there is no local
+Apple Distribution certificate - the cloud one is the whole of the signing, and nobody signs in to Xcode. **Both App IDs
+must already exist** in the developer portal (`com.invisor.smetana.companion` and `...companion.NotificationService`,
+the second with no capabilities): the export creates profiles but cannot register a bundle identifier. The team is not a
+secret and is committed: `bundle.iOS.developmentTeam` in `tauri.conf.json`, and `DEVELOPMENT_TEAM` on both targets in
+`project.yml`, because tauri writes it onto the app target only and the extension needs it as well.
+
+tauri builds the archive (`tauri ios build --archive-only`, with `APPLE_API_KEY`, `APPLE_API_ISSUER` and
+`APPLE_API_KEY_PATH` set, which makes it archive unsigned) and the script does the export itself. tauri's own export
+puts the entitlements back on the app's binary alone before handing over, and the export takes each bundle's
+distribution entitlements from what it finds in the archive, so the extension came out without its keychain group and
+could not have read the app's secrets. The script signs both bundles ad hoc with their own entitlements files
+(extension first), then runs `xcodebuild -exportArchive` (`app-store-connect`, `-allowProvisioningUpdates` with the key)
+into `gen/apple/build/testflight/`. That export is what turns `aps-environment` into `production`; the committed
+entitlements stay `development` for a device build. The upload is `xcrun altool --upload-app`. Check a build with
+`codesign -d --entitlements - <app>` on both the app and `PlugIns/NotificationService.appex`.
+
+The build number (`CFBundleVersion`) is the UTC minute, `YYYYMMDDHHMM`, set per run through `bundle.iOS.bundleVersion`
+in a `--config` override: App Store Connect wants each upload above the last, and a clock needs no file to remember it.
+Two uploads in the same minute collide, so wait a minute. Not `--build-number`: tauri appends it to the version as a
+fourth component and parses it as `u32`, which a date does not fit. The short version is `tauri.conf.json`'s, and the
+script copies it into the extension's `Info.plist` too, since App Store Connect refuses an extension whose version
+differs from its app's. The build rewrites tracked files under `gen/apple` (tauri merges `Info.plist` and the signing
+settings into the project; `agvtool new-version -all` stamps the build number into both `Info.plist`s), so the script
+snapshots every tracked file there first and puts it back on exit, success or not. The script finds Xcode itself when
+`xcode-select` points at the Command Line Tools, and puts an `xcodebuild` wrapper first on `PATH`, because tauri runs
+xcodebuild with an explicit environment that drops `DEVELOPER_DIR`. Export compliance (`ITSAppUsesNonExemptEncryption`)
+is deliberately not in `Info.plist`: it is a legal statement a person answers in App Store Connect.
+
 The app icon is the desktop's artwork, built for a phone. `mobile/app-icon.png` is the master: 1024 px, opaque, the
 bowl filling the whole square on the artwork's own ground (7, 10, 13), made by `scripts/make-app-icon.py --square`. It is
 not the desktop master (`app-icon.png` at the root), which carries transparent margins and a squircle because macOS does

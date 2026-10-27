@@ -2,9 +2,10 @@
 # Builds the iOS companion, signs it for distribution and uploads it to
 # TestFlight's internal testing. `npm run testflight` from mobile/.
 #
-# Signing is automatic: tauri hands the App Store Connect API key to xcodebuild
-# with -allowProvisioningUpdates, which creates the certificate and profiles
-# itself. Nobody signs in to Xcode and nothing is made by hand.
+# Signing is automatic: xcodebuild gets the App Store Connect API key with
+# -allowProvisioningUpdates and signs with a cloud-managed distribution
+# certificate, making the profiles itself. Nobody signs in to Xcode. The key
+# must have the Admin role, and both App IDs must already be registered.
 #
 # The key lives outside the repository, in $SMETANA_SECRETS (by default
 # ~/Desktop/Projects/smetana-secrets): asc-api.p8, and asc-api.txt with the Key
@@ -68,12 +69,44 @@ build="$(date -u +%Y%m%d%H%M)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" \
   "$apple/NotificationService/Info.plist"
 
-rm -f "$apple"/build/arm64/*.ipa
+archive="$apple/build/smetana-companion_iOS.xcarchive"
+export_dir="$apple/build/testflight"
+rm -rf "$archive" "$export_dir"
 APPLE_API_KEY="$key_id" APPLE_API_ISSUER="$issuer" APPLE_API_KEY_PATH="$key_path" \
-  npm run tauri -- ios build --ci --export-method app-store-connect \
+  npm run tauri -- ios build --ci --archive-only \
   --config "{\"bundle\":{\"iOS\":{\"bundleVersion\":\"$build\"}}}"
 
-ipa="$(ls "$apple"/build/arm64/*.ipa)"
+# With an API key tauri archives unsigned, and its own export step puts the
+# entitlements back on the app's binary only. The export derives each bundle's
+# distribution entitlements from the ones it finds in the archive, so the
+# extension would lose its keychain group and stop reading the app's secrets.
+# Sign both ad hoc with their own entitlements, the extension first, and export here.
+team="$(node -p "require('./src-tauri/tauri.conf.json').bundle.iOS.developmentTeam")"
+app="$archive/Products/Applications/Smetana Companion.app"
+sign() {
+  sed "s/\$(AppIdentifierPrefix)/$team./g" "$2" >"$scratch/signing.entitlements"
+  codesign --force --sign - --entitlements "$scratch/signing.entitlements" "$1"
+}
+sign "$app/PlugIns/NotificationService.appex" "$apple/NotificationService/NotificationService.entitlements"
+sign "$app" "$apple/smetana-companion_iOS/smetana-companion_iOS.entitlements"
+
+cat >"$scratch/ExportOptions.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>method</key><string>app-store-connect</string>
+  <key>teamID</key><string>$team</string>
+  <key>signingStyle</key><string>automatic</string>
+</dict>
+</plist>
+EOF
+xcodebuild -exportArchive -archivePath "$archive" \
+  -exportOptionsPlist "$scratch/ExportOptions.plist" -exportPath "$export_dir" \
+  -allowProvisioningUpdates -authenticationKeyPath "$key_path" \
+  -authenticationKeyID "$key_id" -authenticationKeyIssuerID "$issuer"
+
+ipa="$(ls "$export_dir"/*.ipa)"
 echo "ios-testflight: uploading $ipa ($version, build $build)"
 xcrun altool --upload-app -t ios -f "$ipa" \
   --api-key "$key_id" --api-issuer "$issuer" --p8-file-path "$key_path"
