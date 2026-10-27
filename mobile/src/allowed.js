@@ -37,7 +37,9 @@ export const ALLOWED_COMMANDS = [
   'session_close',
   'terminal_restorable',
   'terminal_forget',
-  'terminal_remove'
+  'terminal_remove',
+  'tracker_update',
+  'tracker_delete'
 ]
 
 export const ALLOWED_EVENTS = [

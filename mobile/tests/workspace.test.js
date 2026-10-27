@@ -48,6 +48,9 @@ const desktop = (extra = {}) => ({
   run_start: { ...RUN, token: 2, session: null },
   run_stop: { ...RUN, stopping: true },
   terminal_attach: { data: 'aGk=', seq: 1 },
+  // The updated issue, and nothing for a delete (an empty answer, since the recorder reads a falsy one as not offered).
+  tracker_update: (args) => ({ id: args.id, title: 'Fix the board', ...args.patch }),
+  tracker_delete: {},
   bridge_listen: null,
   bridge_unlisten: null,
   ...extra
@@ -62,7 +65,8 @@ const start = async (extra) => {
     attachments: await import('../../src/stores/attachments.js'),
     conversation: await import('../../src/stores/conversation.js'),
     runs: await import('../../src/stores/runs.js'),
-    terminals: await import('../../src/stores/terminals.js')
+    terminals: await import('../../src/stores/terminals.js'),
+    tracker: await import('../../src/stores/tracker.js')
   }
   await shell.tracker.initTracker()
   return { core, ...shell, workspace, settings: settings.settings, stores }
@@ -86,6 +90,8 @@ describe('what the working screens ask the desktop for', () => {
     await stores.runs.stopRun(2)
     const { invoke } = await import('../src/bridge/core.js')
     await invoke('terminal_attach', { id: 2 })
+    await stores.tracker.updateIssue('smetana-1', { status: 'open' })
+    await stores.tracker.deleteIssue('smetana-2')
 
     const asked = new Set(names(core))
     expect([...asked].filter((name) => !ALLOWED_COMMANDS.includes(name))).toEqual([])
@@ -95,7 +101,7 @@ describe('what the working screens ask the desktop for', () => {
     expect(listened.filter((event) => !ALLOWED_EVENTS.includes(event))).toEqual([])
 
     // The audit is only worth something if the screens really did reach for these.
-    for (const name of ['settings_load', 'tracker_set_project', 'agents_catalog', 'project_config', 'run_state', 'target_branches', 'terminal_list', 'session_start', 'session_attach', 'session_send', 'session_answer', 'session_stop', 'run_start', 'run_stop', 'terminal_attach']) {
+    for (const name of ['settings_load', 'tracker_set_project', 'agents_catalog', 'project_config', 'run_state', 'target_branches', 'terminal_list', 'session_start', 'session_attach', 'session_send', 'session_answer', 'session_stop', 'run_start', 'run_stop', 'terminal_attach', 'tracker_update', 'tracker_delete']) {
       expect(asked.has(name), name).toBe(true)
     }
     expect(listened).toEqual(expect.arrayContaining(['tracker:delta', 'tracker:health', 'run:state', 'session:events', 'terminal:state', 'terminal:removed']))
