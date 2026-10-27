@@ -27,7 +27,9 @@ export function selectTab(route, tab) {
   return { tab, project: tab === 'runs' ? route.project : null, stack: [] }
 }
 
-/* One screen on top of the current one. */
+/* One screen on top of the current one. An entry is `{ screen, ... }` and the rest is that
+   screen's own: a task's `id`, a conversation's `id` and `driven`, a follow-up's `parent`
+   (`{ id, title }`), a run's `scope` (`{ kind, id }`) and `title`. */
 export function open(route, entry) {
   return { ...route, stack: [...route.stack, entry] }
 }

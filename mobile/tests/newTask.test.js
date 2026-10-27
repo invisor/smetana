@@ -57,8 +57,10 @@ describe('filing a task from the phone', () => {
     expect(draft.files).toEqual(['/s/b.heic'])
   })
 
-  it('names no parent, which a phone cannot', () => {
+  it('names the parent it was given and null otherwise', () => {
+    expect(newTaskIntent({ text: 'x', parent: 'smetana-7' }).draft.parent).toBe('smetana-7')
     expect(newTaskIntent({ text: 'x' }).draft.parent).toBeNull()
+    expect(newTaskIntent({ text: 'x', parent: '' }).draft.parent).toBeNull()
   })
 
   it('offers pictures only to a desktop at protocol 1.3 or later', () => {

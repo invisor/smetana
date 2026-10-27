@@ -5,7 +5,7 @@
    `Intent::NewTask` in crates/core/src/agents/mod.rs is what reads it. The phone offers the
    window's fields: what the person wants, pictures, a type, a priority and the three stages.
    Type and priority on Auto arrive as absence, and the stages on Auto are the agent's own
-   judgement about whether the task wants a discussion, a design and a plan. There is no parent.
+   judgement about whether the task wants a discussion, a design and a plan. A follow-up to a card carries that card's id as the draft's `parent`; any other task has none.
 
    Because the agent is what files the task, the session that starts is a conversation, and
    the person lands in it: the agent may well ask something before it runs `bd create`. */
@@ -61,7 +61,8 @@ export function newTaskIntent({
   brainstorm = STAGE_DEFAULT,
   spec = STAGE_DEFAULT,
   plan = STAGE_DEFAULT,
-  attachments = []
+  attachments = [],
+  parent = null
 }) {
   const stages = cascade(brainstorm, spec, plan)
   const level = chosen(priority)
@@ -75,7 +76,7 @@ export function newTaskIntent({
       issue_type: chosen(issueType),
       priority: level === null ? null : Number(level),
       ...split(attachments),
-      parent: null
+      parent: parent || null
     }
   }
 }

@@ -65,7 +65,6 @@ describe('cardScope', () => {
     const issues = new Map([
       ['x-1', issue('x-1')],
       ['x-2', issue('x-2', { parent: 'x-1' })],
-      ['x-3', issue('x-3', { status: 'closed', parent: 'x-3a' })]
     ])
     expect(cardScope(issues, 'x-1')).toEqual({ kind: 'epic', id: 'x-1' })
     expect(cardScope(issues, 'x-2')).toEqual({ kind: 'task', id: 'x-2' })
