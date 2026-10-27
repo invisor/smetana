@@ -81,6 +81,19 @@ async fn remote_bridge_refuses_every_command_off_the_allowlist_and_runs_no_handl
 }
 
 #[tokio::test]
+async fn remote_bridge_lets_a_phone_update_and_delete_issues_but_not_close_or_reopen_them() {
+    let recorder = Arc::new(Recorder::default());
+    let dispatch: Arc<dyn Dispatch> = recorder.clone();
+    for cmd in ["tracker_update", "tracker_delete"] {
+        assert_eq!(invoke(Some(&dispatch), &PHONE, cmd, json!({})).await, Ok(json!({ "ran": cmd })), "{cmd}");
+    }
+    for cmd in ["tracker_close", "tracker_reopen"] {
+        assert_eq!(invoke(Some(&dispatch), &PHONE, cmd, json!({})).await, Err(BridgeError::Forbidden), "{cmd}");
+    }
+    assert_eq!(recorder.calls.lock().unwrap().as_slice(), ["tracker_update", "tracker_delete"]);
+}
+
+#[tokio::test]
 async fn remote_bridge_answers_unknown_command_for_a_name_the_desktop_does_not_have() {
     let recorder = Arc::new(Recorder::default());
     let dispatch: Arc<dyn Dispatch> = recorder.clone();

@@ -48,6 +48,9 @@ const desktop = (extra = {}) => ({
   run_start: { ...RUN, token: 2, session: null },
   run_stop: { ...RUN, stopping: true },
   terminal_attach: { data: 'aGk=', seq: 1 },
+  // The updated issue, and nothing for a delete (an empty answer, since the recorder reads a falsy one as not offered).
+  tracker_update: (args) => ({ id: args.id, title: 'Fix the board', ...args.patch }),
+  tracker_delete: {},
   bridge_listen: null,
   bridge_unlisten: null,
   ...extra
@@ -63,7 +66,8 @@ const start = async (extra, minor = 14) => {
     attachments: await import('../../src/stores/attachments.js'),
     conversation: await import('../../src/stores/conversation.js'),
     runs: await import('../../src/stores/runs.js'),
-    terminals: await import('../../src/stores/terminals.js')
+    terminals: await import('../../src/stores/terminals.js'),
+    tracker: await import('../../src/stores/tracker.js')
   }
   await shell.tracker.initTracker()
   return { core, ...shell, workspace, settings: settings.settings, stores }
@@ -87,6 +91,8 @@ describe('what the working screens ask the desktop for', () => {
     await stores.runs.stopRun(2)
     const { invoke } = await import('../src/bridge/core.js')
     await invoke('terminal_attach', { id: 2 })
+    await stores.tracker.updateIssue('smetana-1', { status: 'open' })
+    await stores.tracker.deleteIssue('smetana-2')
 
     const asked = new Set(names(core))
     expect([...asked].filter((name) => !ALLOWED_COMMANDS.includes(name))).toEqual([])
@@ -96,10 +102,40 @@ describe('what the working screens ask the desktop for', () => {
     expect(listened.filter((event) => !ALLOWED_EVENTS.includes(event))).toEqual([])
 
     // The audit is only worth something if the screens really did reach for these.
-    for (const name of ['settings_load', 'tracker_set_project', 'agents_catalog', 'project_config', 'run_state', 'target_branches', 'terminal_list', 'session_start', 'session_attach', 'session_send', 'session_answer', 'session_stop', 'run_start', 'run_stop', 'terminal_attach']) {
+    for (const name of ['settings_load', 'tracker_set_project', 'agents_catalog', 'project_config', 'run_state', 'target_branches', 'terminal_list', 'session_start', 'session_attach', 'session_send', 'session_answer', 'session_stop', 'run_start', 'run_stop', 'terminal_attach', 'tracker_update', 'tracker_delete']) {
       expect(asked.has(name), name).toBe(true)
     }
     expect(listened).toEqual(expect.arrayContaining(['tracker:delta', 'tracker:health', 'run:state', 'session:events', 'terminal:state', 'terminal:removed', 'settings:changed']))
+  })
+
+  it('sends a resume intent with every field the server requires', async () => {
+    const { core, workspace, stores } = await start()
+    await workspace.startWorkspace()
+    const { resumeIntentFor } = await import('../src/agentList.js')
+    await stores.conversation.startConversation('/work/a', resumeIntentFor({ conversation: 'old', cwd: '/work/a', title: null }))
+    expect(core.bridged('session_start')[0].intent).toEqual({ kind: 'resumeSession', id: 'old', cwd: '/work/a', title: null, fork: false })
+  })
+
+  it('closes from the phone with only the commands the phone may send', async () => {
+    const { core, workspace, stores } = await start({
+      session_list: [{ id: 5, project: '/work/a', state: 'running', startedAt: '2026-10-15T10:00:00Z', work: { kind: 'bare' }, conversation: 'c-5' }],
+      terminal_restorable: [{ sessionId: 'old', agent: 'claude', cwd: '/work/a', project: '/work/a', work: { kind: 'bare' }, startedAt: '2026-10-14T10:00:00Z' }],
+      session_close: {},
+      terminal_forget: {},
+      terminal_remove: {}
+    })
+    await workspace.startWorkspace()
+    const { closeActsFor } = await import('../../src/components/agent/closeRow.js')
+    const rows = stores.terminals.agentRows.value
+    expect(closeActsFor(rows.find((row) => row.restored))).toEqual({ kind: 'offered', conversation: 'old' })
+    await stores.terminals.forgetRestored('old')
+    await stores.conversation.closeConversation(5)
+    await stores.terminals.removeSession(2)
+    for (const name of ['session_close', 'terminal_forget', 'terminal_remove']) {
+      expect(names(core), name).toContain(name)
+      expect(ALLOWED_COMMANDS).toContain(name)
+    }
+    expect(names(core).filter((name) => !ALLOWED_COMMANDS.includes(name))).toEqual([])
   })
 
   it('never writes the desktop\'s settings or touches its files, git or terminals', async () => {
@@ -155,11 +191,23 @@ describe('reading the desktop', () => {
     expect(workspace.workspace.ready).toBe(true)
   })
 
-  it('adopts the session a run is driving, so it is in the agents list', async () => {
-    const { workspace, stores } = await start()
+  it('does not adopt the session a run is driving: the server\'s list brings it', async () => {
+    const { core, workspace, stores } = await start({
+      session_list: [{ id: 5, project: '/work/a', state: 'running', startedAt: '2026-10-15T10:00:00Z', work: { kind: 'bare' } }]
+    })
     await workspace.startWorkspace()
     expect(stores.conversation.drivenSessions.value.map((session) => session.id)).toEqual([5])
-    expect(stores.conversation.drivenSessions.value[0].project).toBe('/work/a')
+    expect(names(core)).toContain('session_list')
+  })
+
+  it('drops a conversation another device closed, on session:removed', async () => {
+    const { emit, workspace, stores, nextTick } = await start({
+      session_list: [{ id: 5, project: '/work/a', state: 'running', startedAt: '2026-10-15T10:00:00Z', work: { kind: 'bare' } }]
+    })
+    await workspace.startWorkspace()
+    await emit('bridge:event', { name: 'session:removed', payload: { id: 5 } })
+    await nextTick()
+    expect(stores.conversation.drivenSessions.value).toEqual([])
   })
 
   it('starts the stores\' listeners once however often the link comes back', async () => {

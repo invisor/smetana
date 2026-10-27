@@ -16,8 +16,8 @@
 import { reactive } from 'vue'
 import { settings } from '../../src/stores/settings.js'
 import { initAgents } from '../../src/stores/agents.js'
-import { initRuns, loadConfig, loadRun, runsState } from '../../src/stores/runs.js'
-import { initConversation, adoptRunSession } from '../../src/stores/conversation.js'
+import { initRuns, loadConfig, loadRun } from '../../src/stores/runs.js'
+import { initConversation } from '../../src/stores/conversation.js'
 import { initTerminals, loadSessions } from '../../src/stores/terminals.js'
 import { loadBranches } from '../../src/stores/git.js'
 import { resync, setProject, trackerState } from '../../src/stores/tracker.js'
@@ -64,8 +64,8 @@ function hearSettings() {
 }
 
 /* What belongs to one project and is read for it: the sessions, the configuration, the runs.
-   A run that is being driven as a conversation is adopted, as the desktop does on `run:state`,
-   so that its session is in the Agents list. */
+   The conversation a run drives reaches the Agents list through `session_list` and
+   `session:state`, not through anything read here. */
 export async function loadProject(project) {
   if (!project) return
   /* The run stores hold one project at a time. While the Runs screen is showing another one
@@ -75,13 +75,7 @@ export async function loadProject(project) {
   await Promise.all([
     loadSessions(project),
     runsElsewhere ? null : loadConfig(project),
-    runsElsewhere
-      ? null
-      : loadRun(project).then(() => {
-          for (const run of runsState.runs) {
-            if (run.transport === 'driven' && run.session != null) adoptRunSession(run.project, run.session)
-          }
-        })
+    runsElsewhere ? null : loadRun(project)
   ])
 }
 

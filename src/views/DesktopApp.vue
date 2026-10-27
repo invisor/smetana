@@ -95,6 +95,7 @@ import AgentList from '../components/agent/AgentList.vue'
 import { agentKey, conversationsOf, orderAgents } from '../components/agent/agentOrder.js'
 import { turnEnded } from '../components/agent/turnEnded.js'
 import { closableOthers } from '../components/agent/agentMenu.js'
+import { closeActsFor } from '../components/agent/closeRow.js'
 import { nameAgentRows, withAgentName } from '../components/agent/agentName.js'
 /* What a driven conversation is in the three places this file counts agents:
    the panel's rows, the footer's numbers and the rail's map. The rule is pure
@@ -3304,37 +3305,32 @@ const renameAgent = ({ conversation, name }) => {
    the trace. This is the one place in the front end that ends a session
    outright; the composer's own Stop button stays on `stopConversation`. */
 function removeAgentRow(id) {
-  if (typeof id === 'string' && id.startsWith('crew:')) {
-    const [, root, node] = id.split(':')
-    if (root !== node) return
-    closeConversation(id)
-    return
+  /* The rule is `components/agent/closeRow.js`'s, shared with the phone; this
+     only hands each answer to the stores. The record a driven row carries is
+     read from the ordered rows, where the merge has put it. */
+  const row =
+    orderedAgentRows.value.find((candidate) => candidate.id === id) ??
+    agentRows.value.find((candidate) => candidate.id === id) ?? { id }
+  const act = closeActsFor(row)
+  switch (act.kind) {
+    case 'crew-root':
+      closeConversation(act.root)
+      return
+    case 'crew-child':
+      return
+    case 'driven':
+      /* Three acts, and the third is the one that is easy to miss — see the
+         account above. */
+      closeConversation(act.session)
+      forget(act.session)
+      if (act.recorded) forgetRestored(act.recorded)
+      return
+    case 'offered':
+      forgetRestored(act.conversation)
+      return
+    default:
+      removeSession(act.id)
   }
-  const conversation = drivenSessionOf(id)
-  if (conversation !== null) {
-    /* Three acts for this one, and the third is the one that is easy to miss.
-       A driven session has a record in the project's registry from the moment
-       it spawned, and while the row was on screen the merge was hiding it; the
-       worker takes it off disk when the child goes, but `terminalState.restored`
-       was read when the project was opened and does not know that. Leave it and
-       the same conversation is back a tick later as a dim `offline` row
-       offering to resume what somebody has just closed — smetana-q7sq exactly,
-       one road over, and `dropSession` in stores/terminals.js is its answer
-       there. `forgetRestored` is that store's own verb for a row with no
-       session behind it, and asking the worker to forget a record it has
-       already dropped writes nothing. */
-    const recorded = orderedAgentRows.value.find((row) => row.id === id)?.conversation
-    closeConversation(conversation)
-    forget(conversation)
-    if (recorded) forgetRestored(recorded)
-    return
-  }
-  const offered = agentRows.value.find((row) => row.id === id && row.restored)
-  if (offered) {
-    forgetRestored(id)
-    return
-  }
-  removeSession(id)
 }
 
 /* `Close other agents`, applied. `id` is the row the menu was open on —

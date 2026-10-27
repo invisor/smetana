@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agentRowsFor, drivenRecords, entryFor, loud } from '../src/agentList.js'
+import { agentRowsFor, drivenRecords, entryFor, loud, resumeIntentFor } from '../src/agentList.js'
 
 const terminalRow = (id, over = {}) => ({
   id,
@@ -41,12 +41,16 @@ describe('the rows of the agents list', () => {
     expect(rows[0].id).toBe('conversation:1')
   })
 
-  it('does not draw a start that has no session yet, nor an offer to resume a closed one', () => {
-    const rows = agentRowsFor(
-      [terminalRow('start-1', { starting: true }), terminalRow(5, { restored: true }), terminalRow(2)],
-      []
-    )
+  it('does not draw a start that has no session yet', () => {
+    const rows = agentRowsFor([terminalRow('start-1', { starting: true }), terminalRow(2)], [])
     expect(rows.map((row) => row.id)).toEqual([2])
+  })
+
+  it('keeps an offline row, after the live ones', () => {
+    const offline = terminalRow('abc', { restored: true, conversation: 'abc', state: 'done', elapsed: 'offline', startedAt: 1, cwd: '/w' })
+    const rows = agentRowsFor([offline, terminalRow(2, { startedAt: 5000 })], drivenRecords([driven(1)], '/p', clocks))
+    expect(rows.map((row) => row.id)).toEqual(['conversation:1', 2, 'abc'])
+    expect(rows[2].state).toBe('done')
   })
 
   it('has no rows for nothing', () => {
@@ -69,6 +73,19 @@ describe('how a row opens', () => {
     const entries = rows.map(entryFor)
     expect(entries).toContainEqual({ screen: 'conversation', id: 7, driven: true })
     expect(entries).toContainEqual({ screen: 'conversation', id: 7, driven: false })
+  })
+})
+
+describe('an offline row', () => {
+  const offline = terminalRow('abc', { restored: true, conversation: 'abc', cwd: '/w', title: 'Earlier' })
+
+  it('is resumed rather than opened', () => {
+    expect(entryFor(offline)).toEqual({ resume: true })
+  })
+
+  it('resumes by the desktop\'s own intent', () => {
+    expect(resumeIntentFor(offline)).toEqual({ kind: 'resumeSession', id: 'abc', cwd: '/w', title: 'Earlier', fork: false })
+    expect(resumeIntentFor({ ...offline, title: undefined }).title).toBeNull()
   })
 })
 
