@@ -39,7 +39,7 @@ export function installDevBackend() {
   internals.invoke = (cmd, args, options) => {
     switch (cmd) {
       case 'bridge_state':
-        return Promise.resolve({ paired: true, version: 'dev', status: { state: 'online', protocol_minor: 3 } })
+        return Promise.resolve({ paired: true, version: 'dev', status: { state: 'online', protocol_minor: 14 } })
       case 'bridge_listen':
       case 'bridge_unlisten':
         return Promise.resolve(null)

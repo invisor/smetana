@@ -4,7 +4,8 @@
    Pure: the storage is handed in, so a test needs no DOM. The copy is the last
    thing the phone read — a project's name and how many tasks it has — and it is
    shown read-only under "Workstation unreachable", which is the only reason it
-   is kept at all. */
+   is kept at all. It also holds the desktop's look (theme and density), so that a
+   launch with the desktop out of reach opens in the last look it had. */
 import { basename } from '@src/paths.js'
 
 const KEY = 'smetana.companion.summary'
@@ -36,6 +37,15 @@ export function loadSummary(storage) {
     if (parsed && typeof parsed.tasks === 'number') return parsed
   } catch {
     // Damaged: as if there were none.
+  }
+  return null
+}
+
+/* The look kept in the summary, or null when there is none or it is damaged. */
+export function savedLook(summary) {
+  const look = summary?.look
+  if (look && typeof look.theme === 'string' && typeof look.density === 'string') {
+    return { theme: look.theme, density: look.density }
   }
   return null
 }

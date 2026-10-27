@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyDesktopSettings, projectRows } from '../src/desktopSettings.js'
+import { LOOK_MINOR, applyDesktopSettings, projectRows } from '../src/desktopSettings.js'
 
 const target = () => ({
   openProjects: [],
@@ -11,7 +11,7 @@ const target = () => ({
   model: '',
   agentRoles: { tasks: { agent: '', model: '' }, code: { agent: '', model: '' } },
   notifications: { runFinished: 'sound-1', needsAttention: 'sound-2', onlyWhenUnfocused: true },
-  appearance: { theme: 'dark' }
+  appearance: { theme: 'system', density: 'comfortable', uiFontSize: 13 }
 })
 
 describe('what the phone takes from the desktop\'s settings', () => {
@@ -67,9 +67,29 @@ describe('what the phone takes from the desktop\'s settings', () => {
     expect(settings.notifications).toMatchObject({ runFinished: 'off', needsAttention: 'off' })
   })
 
-  it('takes nothing else: the appearance stays the phone\'s own', () => {
-    const settings = applyDesktopSettings(target(), { appearance: { theme: 'light' } })
-    expect(settings.appearance.theme).toBe('dark')
+  it('takes the theme and the density from a desktop at the look minor, never the font size', () => {
+    const settings = applyDesktopSettings(
+      target(),
+      { appearance: { theme: 'light', density: 'compact', uiFontSize: 18 } },
+      { minor: LOOK_MINOR }
+    )
+    expect(settings.appearance).toEqual({ theme: 'light', density: 'compact', uiFontSize: 13 })
+  })
+
+  it('keeps the phone\'s own look from a desktop below the minor', () => {
+    const settings = applyDesktopSettings(
+      target(),
+      { appearance: { theme: 'light', density: 'compact' } },
+      { minor: LOOK_MINOR - 1 }
+    )
+    expect(settings.appearance).toMatchObject({ theme: 'system', density: 'comfortable' })
+    expect(applyDesktopSettings(target(), { appearance: { theme: 'light' } }).appearance.theme).toBe('system')
+  })
+
+  it('takes the board\'s view whatever the minor', () => {
+    const settings = applyDesktopSettings(target(), { kanban: { columns: 'non-empty' }, project: { columnOrder: ['done'] } }, { minor: 3 })
+    expect(settings.kanban.columns).toBe('non-empty')
+    expect(settings.project.columnOrder).toEqual(['done'])
   })
 })
 

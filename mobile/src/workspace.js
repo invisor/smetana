@@ -22,7 +22,10 @@ import { initTerminals, loadSessions } from '../../src/stores/terminals.js'
 import { loadBranches } from '../../src/stores/git.js'
 import { resync, setProject, trackerState } from '../../src/stores/tracker.js'
 import { invoke } from './bridge/core.js'
-import { applyDesktopSettings } from './desktopSettings.js'
+import { listen } from './bridge/event.js'
+import { bridge } from './bridge/status.js'
+import { desktopMinor } from './bridge/states.js'
+import { LOOK_MINOR, applyDesktopSettings } from './desktopSettings.js'
 
 export const workspace = reactive({
   /* The first read has landed: the screens can stop saying "reading". */
@@ -38,8 +41,26 @@ let started = false
    open). */
 export async function readDesktop(project = null) {
   const stored = await invoke('settings_load', { project })
-  applyDesktopSettings(settings, stored)
+  applyDesktopSettings(settings, stored, { minor: desktopMinor(bridge.status) })
   return stored
+}
+
+/* Whether the phone has asked to hear `settings:changed`. Asked once, and only of a desktop that
+   announces it: below `LOOK_MINOR` the core would refuse the subscription, and nothing is sent
+   there. The core subscribes again after a reconnect, so once is enough. */
+let hearingSettings = false
+
+function hearSettings() {
+  if (hearingSettings || desktopMinor(bridge.status) < LOOK_MINOR) return
+  hearingSettings = true
+  /* The payload is not folded in: the phone reads `settings_load` again, the same read a
+     reconnect does, which is what keeps one way of getting the desktop's settings in. */
+  listen('settings:changed', () => {
+    refreshFromDesktop().catch((err) => console.warn('[companion] the settings could not be read again:', err))
+  }).catch((err) => {
+    hearingSettings = false
+    console.warn('[companion] could not listen for settings changes:', err)
+  })
 }
 
 /* What belongs to one project and is read for it: the sessions, the configuration, the runs.
@@ -81,6 +102,7 @@ export function unpinRuns() {
    caller (session.js); this reads the rest. */
 export async function startWorkspace() {
   await readDesktop()
+  hearSettings()
   if (!started) {
     started = true
     await Promise.all([initAgents(), initRuns(), initConversation(), initTerminals()])
