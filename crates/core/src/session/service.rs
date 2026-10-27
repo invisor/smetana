@@ -1119,7 +1119,7 @@ fn spawn_session(
     // started would be a row offering a conversation the harness never opened.
     // After the opening turn too, so the record's own title — when the
     // person's first words gave one — is not a second, separate write.
-    record_live(ctx, &live);
+    announce_new(ctx, id, &live);
     Ok(live)
 }
 
@@ -3041,7 +3041,21 @@ fn records(sessions: &HashMap<SessionId, Live>) -> Vec<SessionRecord> {
     list
 }
 
+/// A session just spawned, told to every client: the state first, so the row is known as a live
+/// one, and then the registry that offers the same conversation back as an offline row. In the
+/// other order a device that never started the session would draw it as an offer to resume what is
+/// already being driven.
+fn announce_new(ctx: &Context, id: SessionId, live: &Live) {
+    emit_state(ctx, id, live);
+    record_live(ctx, live);
+}
+
 fn emit_state(ctx: &Context, id: SessionId, live: &Live) {
+    // A closed session has told everybody it is gone; the state its child reaps with afterwards
+    // would only contradict that.
+    if live.removed {
+        return;
+    }
     ctx.emit(
         "session:state",
         &StateChange {
@@ -3275,6 +3289,31 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].0, "session:removed");
         assert_eq!(events[0].1, serde_json::json!({ "id": 5 }));
+    }
+
+    #[test]
+    fn a_new_session_is_announced_live_before_the_registry_offers_it_back() {
+        let root = std::env::temp_dir().join(format!("smetana-announce-new-{}", std::process::id()));
+        std::fs::create_dir_all(root.join(".smetana")).unwrap();
+        let (ctx, tap) = tapped();
+        let live = idle_live(&root.to_string_lossy(), SessionState::Ready);
+        announce_new(&ctx, 3, &live);
+        let events = tap.0.lock().unwrap();
+        assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["session:state", "terminal:restorable"]);
+        assert_eq!(events[0].1["project"], root.to_string_lossy().as_ref());
+        assert_eq!(events[0].1["agent"], "claude");
+        assert_eq!(events[0].1["startedAt"], "2026-10-27T10:00:00+00:00");
+        assert_eq!(events[1].1["records"][0]["sessionId"], "c");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_removed_session_says_no_more_state() {
+        let (ctx, tap) = tapped();
+        let mut live = idle_live("/p", SessionState::Exited);
+        live.removed = true;
+        emit_state(&ctx, 4, &live);
+        assert!(tap.0.lock().unwrap().is_empty());
     }
 
     #[test]

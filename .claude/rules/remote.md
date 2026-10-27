@@ -282,7 +282,8 @@ it began itself and the desktop drew a conversation the server still led as a di
   desktop-only tail.
 - An older server answers `Forbidden` to `session_list`; the store keeps its list and logs to the console. After a
   server restart the list is shorter on purpose: a session the server no longer holds is offered by the registry.
-- Not here: a stranger learns of a session at its next state change or from the next list, not at the spawn.
+- A spawn announces `session:state` and then `terminal:restorable` (`announce_new`), so another device never sees a driven
+  conversation as an offline offer; a closed session emits no further state.
 
 ## A server on another machine (step 7, protocol 1.11)
 

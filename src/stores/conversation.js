@@ -842,17 +842,30 @@ async function loadSessionList() {
    bringing the agent forward is the view's business, not a store's. */
 export const lastDrivenRunStart = ref(null)
 
+/* The run ids adopted so far. Adoption happens once per id even when the row is
+   already there: the server announces a run's session (`session:state`) before
+   `run:state` names it, so the row usually exists first, and an early return on
+   "already listed" would never bring the run's agent forward nor caption the
+   row as a run. */
+const adopted = new Set()
+
 export function adoptRunSession(project, id) {
-  if (started.some((session) => session.id === id)) return
-  started.push({
-    id,
-    project,
-    state: 'starting',
-    startedAt: Date.now(),
-    conversation: null,
-    work: { kind: 'run' },
-    title: null
-  })
+  if (adopted.has(id)) return
+  adopted.add(id)
+  const row = started.find((session) => session.id === id)
+  if (row) {
+    row.work = { kind: 'run' }
+  } else {
+    started.push({
+      id,
+      project,
+      state: 'starting',
+      startedAt: Date.now(),
+      conversation: null,
+      work: { kind: 'run' },
+      title: null
+    })
+  }
   /* The project travels with the id: adoption is for every project, but
      bringing the agent forward is for the one this window is looking at, and
      only the view knows which that is. A fresh object each time so the
@@ -970,6 +983,7 @@ function noteTitle(id, title) {
    corner rather than a reason to keep a row somebody has just dismissed. */
 export function forget(id) {
   gone.add(id)
+  adopted.delete(id)
   const at = started.findIndex((session) => session.id === id)
   if (at !== -1) started.splice(at, 1)
   detach(id)

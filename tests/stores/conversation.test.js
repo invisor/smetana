@@ -1175,6 +1175,19 @@ describe('the conversation store', () => {
       expect(ipc.calls('session_attach')).toEqual([{ id: 7 }])
     })
 
+    it('adopts a run whose session:state arrived before run:state', async () => {
+      const { emit, stores } = await ready()
+      await emit('session:state', { id: 7, state: 'running', conversation: 'c7', title: null, project: '/p', agent: 'claude', work: { kind: 'bare' }, startedAt: '2026-10-27T10:00:00+00:00' })
+      expect(stores.conversation.lastDrivenRunStart.value).toBe(null)
+
+      stores.conversation.adoptRunSession('/p', 7)
+      stores.conversation.adoptRunSession('/p', 7)
+
+      expect(stores.conversation.lastDrivenRunStart.value).toEqual({ id: 7, project: '/p' })
+      expect(stores.conversation.drivenSessions.value).toHaveLength(1)
+      expect(stores.conversation.drivenSessions.value[0].work).toEqual({ kind: 'run' })
+    })
+
     it('adopting the same run session twice keeps one record', async () => {
       const { stores } = await ready()
       stores.conversation.adoptRunSession('/p', 7)
