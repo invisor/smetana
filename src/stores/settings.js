@@ -458,6 +458,11 @@ let watching = false
    (`settings_patch`), the server applies it under a lock and tells every client what it now holds
    (`settings:changed`), and a change another client made arrives here the same way. A browser, with
    no shell, takes none of these branches and writes one document to the mock. */
+/* True from a startup read that was rejected until the server's truth has been taken in. The window
+   then holds defaults, which are no opinion of its own, so the server's list and open project are
+   adopted when a connection exists (`projects.js` watches this beside the connection). */
+export const startup = reactive({ failed: false })
+
 let split = false
 /* The server's half as the server last confirmed it to this window, in `serverView` shape. */
 let baseline = null
@@ -706,6 +711,14 @@ export async function adoptServerProjects() {
   if (!split) return settings.activeProject
   inflight = []
   lastRev = 0
+  if (startup.failed) {
+    /* The first read never landed, so this window holds the defaults of every section, not only the
+       project list: the whole read is made again. */
+    applyStored(await readStored(null))
+    baseline = serverView(settings)
+    startup.failed = false
+    return settings.activeProject
+  }
   const server = await invoke('settings_load', { project: null })
   settings.openProjects = []
   settings.activeProject = server.activeProject ?? null
@@ -713,6 +726,25 @@ export async function adoptServerProjects() {
   writeView(settings, view)
   baseline = view
   return settings.activeProject
+}
+
+/* The project the server has open when it is not the one open here, or null. Asked after a
+   reconnect: the server is the truth about which project is open, and a window that was away may find
+   it moved. A window with an opinion of its own not yet sent (the open project changed here since the
+   last send) is not overruled by a server that has not heard it. */
+export async function serverOpenProject() {
+  if (!split) return null
+  let server
+  try {
+    server = await invoke('settings_load', { project: null })
+  } catch (err) {
+    console.error('[settings] asking the server which project is open failed:', err)
+    return null
+  }
+  const theirs = server.activeProject ?? null
+  if (!theirs || theirs === settings.activeProject) return null
+  if (baseline && serverView(settings).lastProject !== baseline.lastProject) return null
+  return theirs
 }
 
 async function resyncServer({ drop } = {}) {
@@ -749,6 +781,44 @@ async function startSplitSync() {
   })
 }
 
+/* Puts what `readStored` answered into the store: every section, the project list and the active
+   project. The one place that does it, for the read at startup and for the read that makes up for a
+   startup whose first read failed. */
+function applyStored(stored) {
+  const base = defaults()
+  applySection(settings.appearance, base.appearance, stored.appearance)
+  applySection(settings.editor, base.editor, stored.editor)
+  applySection(settings.git, base.git, stored.git)
+  applySection(settings.remote, base.remote, stored.remote)
+  applySection(settings.subscription, base.subscription, stored.subscription)
+  applySection(settings.runFailover, base.runFailover, stored.runFailover)
+  settings.runFailover.priority = priorityOrder(settings.runFailover.priority, base.runFailover.priority)
+  applySection(settings.window, base.window, stored.window)
+  applySection(settings.updates, base.updates, stored.updates)
+  applySection(settings.kanban, base.kanban, stored.kanban)
+  applySection(settings.reports, base.reports, stored.reports)
+  applySection(settings.notifications, base.notifications, stored.notifications)
+  applySection(settings.layout, base.layout, stored.layout)
+  applySection(settings.project, base.project, stored.project)
+  settings.openProjects = stored.openProjects ?? []
+  settings.activeProject = stored.activeProject ?? null
+  settings.agent = stored.agent ?? base.agent
+  settings.agentLanguage = stored.agentLanguage ?? base.agentLanguage
+  settings.taskLanguage = stored.taskLanguage ?? base.taskLanguage
+  settings.commitLanguage = stored.commitLanguage ?? base.commitLanguage
+  settings.reportLanguage = stored.reportLanguage ?? base.reportLanguage
+  settings.agentPrompt = stored.agentPrompt ?? base.agentPrompt
+  settings.model = stored.model ?? base.model
+  settings.conversationPanel = stored.conversationPanel ?? base.conversationPanel
+  /* Section by section rather than in one assignment, the shape
+     `applySection` uses above and for its reason: a file written before this
+     object existed carries none of the four roles, and one that carries two
+     of them must not lose the other two to `undefined`. */
+  for (const role of ROLES) {
+    applySection(settings.agentRoles[role], base.agentRoles[role], stored.agentRoles?.[role])
+  }
+}
+
 /* The read at startup: it applies everything — appearance, layout, the project
    list and the active project. Called once; switching projects goes for the
    layout through loadProjectLayout, because the front end knows the list's
@@ -759,42 +829,13 @@ export async function loadSettings() {
      `early` and folded in after it. */
   if (split) await startSplitSync()
   try {
-    const stored = await readStored(null)
-    const base = defaults()
-    applySection(settings.appearance, base.appearance, stored.appearance)
-    applySection(settings.editor, base.editor, stored.editor)
-    applySection(settings.git, base.git, stored.git)
-    applySection(settings.remote, base.remote, stored.remote)
-    applySection(settings.subscription, base.subscription, stored.subscription)
-    applySection(settings.runFailover, base.runFailover, stored.runFailover)
-    settings.runFailover.priority = priorityOrder(settings.runFailover.priority, base.runFailover.priority)
-    applySection(settings.window, base.window, stored.window)
-    applySection(settings.updates, base.updates, stored.updates)
-    applySection(settings.kanban, base.kanban, stored.kanban)
-    applySection(settings.reports, base.reports, stored.reports)
-    applySection(settings.notifications, base.notifications, stored.notifications)
-    applySection(settings.layout, base.layout, stored.layout)
-    applySection(settings.project, base.project, stored.project)
-    settings.openProjects = stored.openProjects ?? []
-    settings.activeProject = stored.activeProject ?? null
-    settings.agent = stored.agent ?? base.agent
-    settings.agentLanguage = stored.agentLanguage ?? base.agentLanguage
-    settings.taskLanguage = stored.taskLanguage ?? base.taskLanguage
-    settings.commitLanguage = stored.commitLanguage ?? base.commitLanguage
-    settings.reportLanguage = stored.reportLanguage ?? base.reportLanguage
-    settings.agentPrompt = stored.agentPrompt ?? base.agentPrompt
-    settings.model = stored.model ?? base.model
-    settings.conversationPanel = stored.conversationPanel ?? base.conversationPanel
-    /* Section by section rather than in one assignment, the shape
-       `applySection` uses above and for its reason: a file written before this
-       object existed carries none of the four roles, and one that carries two
-       of them must not lose the other two to `undefined`. */
-    for (const role of ROLES) {
-      applySection(settings.agentRoles[role], base.agentRoles[role], stored.agentRoles?.[role])
-    }
+    applyStored(await readStored(null))
     if (split) baseline = serverView(settings)
   } catch (err) {
     console.error('[settings] the read failed, taking the defaults:', err)
+    /* The defaults are not this window's opinion, they are the lack of one; the server's truth is
+       taken once a connection exists (`adoptServerProjects`). */
+    if (split) startup.failed = true
   }
   if (split && baseline && early) {
     const held = early
