@@ -468,7 +468,9 @@ jobs:
           # `bd` beside itself.
           bd="$(ls src-tauri/binaries/bd-* | head -n 1)"
           cp "$bd" "$dir/bd${exe}"
-          cp -R src-tauri/resources "$dir/resources"
+          # -L: resources hold a symlink (superpowers/AGENTS.md -> CLAUDE.md), and Git Bash on Windows
+          # cannot create one without developer mode; the archive carries the file itself instead.
+          cp -RL src-tauri/resources "$dir/resources"
           cp LICENSE "$dir/LICENSE"
           cp server/smetanad/README.md "$dir/README.md"
           case "$TARGET" in *linux*) cp server/smetanad/smetanad.service "$dir/smetanad.service" ;; esac
