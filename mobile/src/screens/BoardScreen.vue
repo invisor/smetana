@@ -10,8 +10,9 @@
    ones under it.
 
    Which columns exist, their order and which are drawn are the desktop's rules (./board.js).
-   The cards are the desktop's `TaskCard`, without its action menu: every verb in it is a write
-   the bridge does not carry. */
+   The cards are the desktop's `TaskCard`, without its three-dot button: the tap on a card is the
+   way into its menu, so the card says `sheet` and `Workspace.vue` opens `TaskSheet.vue` over it
+   (the desktop's rows, plus View task). A button would be a second door to the same place. */
 import { computed, reactive } from 'vue'
 import ColumnHeader from '@src/components/kanban/ColumnHeader.vue'
 import TaskCard from '@src/components/kanban/TaskCard.vue'
@@ -22,7 +23,7 @@ import { boardColumns, trackerState } from '@src/stores/tracker.js'
 import { settings } from '@src/stores/settings.js'
 import { phoneColumns, shownCards } from '../board.js'
 
-const emit = defineEmits(['open'])
+const emit = defineEmits(['sheet'])
 
 const columns = computed(() =>
   phoneColumns(boardColumns.value, settings.project.columnOrder, settings.kanban, Date.now())
@@ -101,7 +102,7 @@ const more = { alignSelf: 'flex-start' }
           :key="task.id"
           v-bind="task"
           :actionable="false"
-          @click="emit('open', task.id)"
+          @click="emit('sheet', task.id)"
         />
         <Button
           v-if="shownCards(col.tasks, whole.has(col.status)).hidden"
