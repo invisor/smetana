@@ -7,9 +7,8 @@
    drags and pins nothing. What this adds is the phone's two small questions: how a row opens
    (a conversation or a read-only terminal) and which row shouts.
 
-   Which sessions the phone can see is a fact about the bridge, not about this rule: there is
-   no command that lists the driven sessions of the desktop. The phone sees the ones it started,
-   the ones a run is driving, and every PTY session of the project (`terminal_list`). */
+   The phone sees what the server lists (`session_list`, `terminal_list`), offline rows
+   included: they are drawn dim and offered for resuming, as on the desktop. */
 import { mergeAgentRows, drivenSessionOf } from '../../src/components/agent/drivenRows.js'
 import { orderAgents } from '../../src/components/agent/agentOrder.js'
 import { attentionLevel } from '../../src/components/status/status.js'
@@ -33,7 +32,7 @@ export function drivenRecords(sessions, project, { statusOf, elapsed }) {
 
 export function agentRowsFor(terminalRows, driven) {
   const rows = mergeAgentRows(
-    (terminalRows ?? []).filter((row) => !row.starting && !row.restored),
+    (terminalRows ?? []).filter((row) => !row.starting),
     driven
   )
   return orderAgents(rows, null, [])
@@ -42,11 +41,21 @@ export function agentRowsFor(terminalRows, driven) {
 /* How a row opens: the entry the navigation pushes. A driven row names its session; a PTY row is
    read-only, and its id is the terminal worker's. */
 export function entryFor(row) {
+  if (row.restored) return { resume: true }
   const driven = drivenSessionOf(row.id)
   return driven === null
     ? { screen: 'conversation', id: row.id, driven: false }
     : { screen: 'conversation', id: driven, driven: true }
 }
+
+/* The intent that reopens an offline row: the desktop's own `resumeSession`, word for word
+   (`resumeSession` in views/DesktopApp.vue), without `fork`. */
+export const resumeIntentFor = (row) => ({
+  kind: 'resumeSession',
+  id: row.conversation,
+  cwd: row.cwd,
+  title: row.title ?? null
+})
 
 /* A row waiting on a person is the one the screen is for. */
 export const loud = (row) => attentionLevel(row.state) === 'loud'
