@@ -256,6 +256,34 @@ move**, so an older release reinstalled still finds its data:
 A person who moves to a remote server pairs the phone with that server (`smetanad pair --kind phone`); the local server's
 pairing is untouched (`server/smetanad/README.md`).
 
+## Protocol 1.12: the agents list (smetana-ahp9)
+
+Additions only. **The list of driven conversations and of offline rows is the server's; every client mirrors it.** Before,
+`started` in `stores/conversation.js` was the memory of the window that called `session_start`, so a phone saw only what
+it began itself and the desktop drew a conversation the server still led as a dim offline row after the app restarted.
+
+- **`session_list {}`** answers `[{ id, project, agent, state, conversation, title, work, startedAt, cwd }]` across all
+  projects, sorted by id, for every session the worker holds that no cross has closed (`removed`), ended or not. It is
+  `Request::List`, not a widening of `Request::Live`: that one keeps only a running child, for the restart gateway.
+  It is in `forward.rs` `READS` (the store reads at mount, before the local server answers; a refused read would leave
+  the list empty on every cold start).
+- **`session:state`** also carries `project`, `agent`, `work`, `startedAt`, so a client that never started the session
+  draws its row from one event. **`session:removed { id }`** goes out once from `Request::Close` (the second cross says
+  nothing) and where a startup that never became a conversation leaves the map. A closed session stays in the map with
+  its flag and still emits a last state as its child is reaped; the client keeps a set of ids it was told are gone, or
+  that event would draw the row again.
+- **`terminal:restorable { project, records }`** is the whole `.smetana/agents.json` of a project after every write to it
+  (`restore::announce`, beside each `record`/`drop_record`, and `terminal_forget`, which takes the `Context` for it). A
+  list and not a nudge: the file is written several times around a spawn. Where a branch also sends `session:state`, that
+  goes first.
+- The phone may now call `session_list`, `session_close`, `terminal_restorable`, `terminal_forget` and `terminal_remove`
+  and hear the three events; a terminal still cannot be written to from a phone, but any row may be closed from any
+  device (the author's answer). The phone's lists stay a prefix of the server's, so those four commands moved out of the
+  desktop-only tail.
+- An older server answers `Forbidden` to `session_list`; the store keeps its list and logs to the console. After a
+  server restart the list is shorter on purpose: a session the server no longer holds is offered by the registry.
+- Not here: a stranger learns of a session at its next state change or from the next list, not at the spawn.
+
 ## A server on another machine (step 7, protocol 1.11)
 
 `docs/superpowers/specs/2026-10-25-headless-server-design.md`, "Things that name a path on the client" and "Remote placement".

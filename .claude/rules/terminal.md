@@ -488,8 +488,12 @@ right column while the person was already watching a conversation.
 
 **A row's state cannot come from the journal.** `conversations` is emptied by `detach` the moment the
 panel leaves the screen, so the record in `started` carries the state and the moment the session began,
-and the `session:state` listener writes it for every session this window started rather than only the
-ones it is drawing. The elapsed time is measured against a second thirty-second clock, in the view:
+and the `session:state` listener writes it for every session in the list rather than only the ones it
+is drawing. **`started` is a mirror of the server's list** (protocol 1.12): `session_list` on start and
+on reconnect, a `session:state` for an id it has not met adds a row, `session:removed` takes one out. A
+session this window starts while the list is in flight is kept; a refusal leaves the list alone. The
+cross's three acts stay local and idempotent, and the server's `terminal:restorable` confirms the third.
+The elapsed time is measured against a second thirty-second clock, in the view:
 `terminals.js` keeps its own and does not export it.
 
 Counting is by the same rules as the terminal's, which is what "on a par" means here: the footer's counter
