@@ -142,7 +142,32 @@ What the phone must not call is kept out of the stores' reach rather than hoped 
 - **`vite.config.js` `phoneStores`** answers `stores/app.js` and `stores/windowDrops.js` with `src/phone/` files (the
   conversation panel imports three names from the first; the second would ask `drag_drop_space`). `Composer` and
   `ConversationView` take `attachable`, `TaskCard` takes `actionable`, `RunBar` takes `canRelease`; all default on, and
-  the phone turns them off because paperclip, card menu and "Run anyway" are writes the bridge does not carry.
+  the phone turns them off: paperclip and "Run anyway" are writes the bridge does not carry, and the card's
+  three-dot button is off because the tap on the card is the way into its menu (the sheet below), so a button would be
+  a second door to the same place.
+
+**A tap on a board card opens a bottom sheet, not the task** (smetana-wi7h). `BoardScreen` emits `sheet`,
+`Workspace.vue` draws `screens/TaskSheet.vue` (inline styles, tokens only, `--z-modal`, bottom padding under
+`safeArea.js`; it closes on the backdrop, Escape and the system back, which is a history entry it pushes while it is
+up) and carries out its `act` events. The sheet decides nothing about its rows. **`taskSheet.js`** (pure, tested) is
+the rule: `sheetRows` is "View task" and then the desktop's own `taskMenuItems` called with the same five inputs
+`DesktopApp.vue` computes (`runnable` is `runnableTask`, `cardScope` the desktop's, `runBlockedReason` is
+`scopeBusyReason` over that scope, `parentBlocked` comes from `lockCascade.js`), so a card offers on the phone what it
+offers on the desktop and a change to the menu reaches both. **`taskActions.js`** is the writes over the real stores:
+`setStatus` (the patch is `kanban/statusPatch.js`, shared with the desktop's `setTaskStatus`, so the `promoted:` note
+cannot differ), `toggleLock` (the `lockIds`/`unlockIds` cascade, one `updateIssue` per id, every id in `writingIds`
+before the first write), `remove`, `startOn` (`editTask`, `resolveTask`, `fixTask`). Each answers whether it landed;
+a refusal is the tracker's own sentence (`refusal()`), shown under the rows because a phone has no toasts, and the
+sheet stays open. An issue that has gone (`issueById` null) makes every action a no-op and closes the sheet. Move to...
+is a second step in the same sheet, with Back on top; Delete and a parked task's move to Ready go through the
+desktop's `DeleteTaskModal` and `ReadyTaskModal`; Run this opens the Runs form as a stack screen (`{ screen: 'run',
+scope, title }`) with `RunsScreen`'s `scope` prop, and `runPayload` carries that scope; Follow-up task opens New task
+with a `parent` (`{ id, title }`) and `newTaskIntent` puts its id in `draft.parent`.
+
+**The three write rows are gated on the desktop's protocol minor.** `TRACKER_WRITES_MINOR = 13` in `taskSheet.js`
+(`canWriteTracker`, read from `bridge.status` as `canAttach` is): a desktop older than 1.13 does not carry
+`tracker_update` and `tracker_delete`, so Block/Unblock, Move to..., Delete and the separator are absent from the
+sheet, not grey; View task, Run, Edit and Follow-up stay. The number moves with the protocol crate, not on its own.
 
 **`session:state` and the Agents list come from the server** (protocol 1.12, smetana-ahp9). The bridge carries
 `session_list`, `session:state`, `session:removed` and `terminal:restorable`, and the shared stores mirror them, so the
