@@ -6,19 +6,19 @@
    writes them), the truth about the board lives in bd. Hence a switch has two
    halves: settings_load brings the layout, tracker_set_project brings the
    issues. */
-import { computed, reactive } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listDir, setRoot } from './files.js'
 import { measureStorage } from './notifications.js'
 import { loadRepos } from './vcs.js'
-import { adoptServerProjects, flushPending, loadProjectLayout, settings } from './settings.js'
+import { adoptServerProjects, flushPending, loadProjectLayout, serverOpenProject, settings, startup } from './settings.js'
 import { confirmUnsaved, dirtyPaths, resetTabs, restoreTabs } from './tabs.js'
 import { loadSessions } from './terminals.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
 import { basename, dirname } from '../paths.js'
-import { onServerChange, refusalOf, useLocalServer, useRemoteServer } from './connection.js'
+import { connection, onReconnect, onServerChange, refusalOf, useLocalServer, useRemoteServer } from './connection.js'
 
 /* Path → whether it holds a .beads. health says the same thing about the
    active project, but there is nowhere else to learn it about the other rows. */
@@ -482,3 +482,31 @@ export function adoptInitialProject() {
 /* Registered with the connection store at load, so the move happens before the stores read their
    snapshots from the server they have just been moved to. */
 onServerChange(followServerChange)
+
+/* Which project is open is the server's truth: the window shows what the server has open. Two moments
+   find the window without an opinion of its own or with a stale one.
+
+   A startup whose first read was rejected (the server was still being built, and the shell's wait
+   ran out) left defaults - an empty rail and no active project - under a board the tracker store
+   drew from the server once it came up. Once a connection is there, the whole read is made again and
+   the window moves to the project it brings, the way a change of server does (`followServerChange`).
+   Watched here, not hooked on `onReconnect`: the connection store counts a connection that was
+   already up when it was first asked as one whose loads were answered, and these were not.
+
+   After a reconnect, the server may have opened another project while the window was away; the
+   window follows it as it follows the phone (`followRemoteProject`), asking about unsaved edits. */
+watch(
+  () => [startup.failed, connection.ready, connection.mode, connection.state, connection.epoch],
+  ([failed, ready, mode, state]) => {
+    if (!failed || !ready || mode !== 'client' || state !== 'connected') return
+    followServerChange().catch((err) => console.error('[projects] could not take the server\'s project in:', err))
+  },
+  { immediate: true }
+)
+
+onReconnect(async () => {
+  /* A failed startup is settled above, with the whole read. */
+  if (startup.failed || moving) return
+  const path = await serverOpenProject()
+  if (path) await followRemoteProject(path)
+})

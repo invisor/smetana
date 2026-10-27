@@ -774,15 +774,94 @@ describe('moving to another server', () => {
     expect(ipc.calls('settings_patch')).toEqual([])
   })
 
-  it('does nothing of the kind when the same server reconnects', async () => {
+  it('does nothing of the kind when the same server reconnects with the same project open', async () => {
     const loaded = await onLocalServer()
     const { ipc, emit, stores } = loaded
-    ipc.on('settings_load', () => ({ ...stores.settings.defaults(), openProjects: ['/elsewhere'], activeProject: '/elsewhere' }))
     await emit('connection:state', state({ epoch: 2 }))
     await settled(loaded)
 
     expect(ipc.calls('tracker_set_project')).toEqual([])
     expect(stores.settings.settings.activeProject).toBe('/Users/me/work')
+  })
+
+  it('follows the project the server opened while the connection was down', async () => {
+    const loaded = await onLocalServer()
+    const { ipc, emit, stores } = loaded
+    ipc.on('settings_load', () => ({
+      ...stores.settings.defaults(),
+      openProjects: ['/Users/me/work', '/elsewhere'],
+      activeProject: '/elsewhere',
+      lastProject: '/elsewhere'
+    }))
+    await emit('connection:state', state({ state: 'disconnected', epoch: 1 }))
+    await emit('connection:state', state({ epoch: 2 }))
+    await settled(loaded)
+
+    expect(stores.settings.settings.activeProject).toBe('/elsewhere')
+    expect(stores.settings.settings.openProjects).toEqual(['/Users/me/work', '/elsewhere'])
+    expect(ipc.calls('tracker_set_project')).toEqual([{ path: '/elsewhere' }])
+  })
+})
+
+describe('a startup whose first read was rejected', () => {
+  const refusal = 'The server did not answer in time. Nothing was changed.'
+
+  async function startedBeforeTheServer(connected) {
+    const loaded = await loadStores()
+    const { ipc, stores } = loaded
+    ipc.on('connection_state', connected)
+    ipc.fail('settings_load', refusal)
+    ipc.on('device_settings_load', {})
+    ipc.on('device_settings_save', null)
+    ipc.on('settings_patch', null)
+    ipc.on('project_root', (args) => args.path)
+    ipc.on('files_list', (args) => listing({ dir: args.dir }))
+    ipc.on('tracker_set_project', snapshot())
+    ipc.on('tracker_snapshot', snapshot())
+    ipc.on('tracker_probe', (args) => args.paths.map((path) => ({ path, tracked: true })))
+    ipc.on('terminal_list', [])
+    ipc.on('terminal_restorable', [])
+    // The window opens on the defaults: the rail is empty and nothing is active.
+    await stores.settings.loadSettings()
+    expect(stores.settings.settings.openProjects).toEqual([])
+    expect(stores.settings.settings.activeProject).toBeNull()
+    ipc.on('settings_load', () => ({
+      ...stores.settings.defaults(),
+      openProjects: ['/Users/me/work'],
+      activeProject: '/Users/me/work',
+      lastProject: '/Users/me/work'
+    }))
+    return loaded
+  }
+
+  const settled = async (loaded) => {
+    for (let i = 0; i < 20; i++) await loaded.nextTick()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+
+  it('takes the server\'s list and open project when the connection is already up at mount', async () => {
+    // The connection store takes that as "its loads were answered", which these were not.
+    const loaded = await startedBeforeTheServer({ mode: 'client', state: 'connected', epoch: 1, local: true, target: 'local' })
+    await loaded.stores.connection.initConnection()
+    await settled(loaded)
+
+    expect(loaded.stores.settings.settings.openProjects).toEqual(['/Users/me/work'])
+    expect(loaded.stores.settings.settings.activeProject).toBe('/Users/me/work')
+    expect(loaded.ipc.calls('tracker_set_project')).toEqual([{ path: '/Users/me/work' }])
+  })
+
+  it('takes them when the server comes up after the window is mounted', async () => {
+    const loaded = await startedBeforeTheServer({ mode: 'client', state: 'connecting', epoch: 0, local: true, target: 'local' })
+    await loaded.stores.connection.initConnection()
+    await settled(loaded)
+    expect(loaded.stores.settings.settings.activeProject).toBeNull()
+
+    await loaded.emit('connection:state', { mode: 'client', state: 'connected', epoch: 1, local: true, target: 'local' })
+    await settled(loaded)
+
+    expect(loaded.stores.settings.settings.openProjects).toEqual(['/Users/me/work'])
+    expect(loaded.stores.settings.settings.activeProject).toBe('/Users/me/work')
+    expect(loaded.ipc.calls('tracker_set_project')).toEqual([{ path: '/Users/me/work' }])
   })
 })
 
