@@ -49,12 +49,14 @@ export function entryFor(row) {
 }
 
 /* The intent that reopens an offline row: the desktop's own `resumeSession`, word for word
-   (`resumeSession` in views/DesktopApp.vue), without `fork`. */
+   (`resumeSession` in views/DesktopApp.vue). `fork` is always sent: the server's
+   `Intent::ResumeSession` has no default for it and refuses the intent without. */
 export const resumeIntentFor = (row) => ({
   kind: 'resumeSession',
   id: row.conversation,
   cwd: row.cwd,
-  title: row.title ?? null
+  title: row.title ?? null,
+  fork: false
 })
 
 /* A row waiting on a person is the one the screen is for. */

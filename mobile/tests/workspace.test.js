@@ -107,6 +107,14 @@ describe('what the working screens ask the desktop for', () => {
     expect(listened).toEqual(expect.arrayContaining(['tracker:delta', 'tracker:health', 'run:state', 'session:events', 'terminal:state', 'terminal:removed']))
   })
 
+  it('sends a resume intent with every field the server requires', async () => {
+    const { core, workspace, stores } = await start()
+    await workspace.startWorkspace()
+    const { resumeIntentFor } = await import('../src/agentList.js')
+    await stores.conversation.startConversation('/work/a', resumeIntentFor({ conversation: 'old', cwd: '/work/a', title: null }))
+    expect(core.bridged('session_start')[0].intent).toEqual({ kind: 'resumeSession', id: 'old', cwd: '/work/a', title: null, fork: false })
+  })
+
   it('closes from the phone with only the commands the phone may send', async () => {
     const { core, workspace, stores } = await start({
       session_list: [{ id: 5, project: '/work/a', state: 'running', startedAt: '2026-10-15T10:00:00Z', work: { kind: 'bare' }, conversation: 'c-5' }],

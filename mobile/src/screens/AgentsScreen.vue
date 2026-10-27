@@ -53,6 +53,7 @@ const busy = ref(false)
 async function startAgent() {
   if (busy.value || !settings.activeProject) return
   busy.value = true
+  resumeNote.value = ''
   conversationState.lastError = null
   try {
     const id = await startConversation(settings.activeProject, { kind: 'bare' })

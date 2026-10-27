@@ -84,7 +84,7 @@ describe('an offline row', () => {
   })
 
   it('resumes by the desktop\'s own intent', () => {
-    expect(resumeIntentFor(offline)).toEqual({ kind: 'resumeSession', id: 'abc', cwd: '/w', title: 'Earlier' })
+    expect(resumeIntentFor(offline)).toEqual({ kind: 'resumeSession', id: 'abc', cwd: '/w', title: 'Earlier', fork: false })
     expect(resumeIntentFor({ ...offline, title: undefined }).title).toBeNull()
   })
 })
