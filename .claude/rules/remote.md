@@ -431,14 +431,16 @@ one server share a theme and a board, and the last to migrate wins.
      to `settings.pre-seed.json`. The server's file is left whole (the device keys there are dead data), so nothing is lost and a
      rerun does nothing. A marked file is never seeded again.
   3. (1.14) The device file is not marked `lookShared`: an already split desktop holds its theme, density, `kanban` and
-     column orders in its own file, and they are the server's now. After sources one and two, `split::look_patch` builds a
-     merge patch of what differs from the defaults (`None` when nothing does), the client sends it with `settings_patch`
-     and `mark_look_shared` sets the mark; a failure leaves the file as it is and the next connection tries again. The order
-     is fixed: `settings_adopt` takes only a server with no settings and a look patch would give it some. A pre-split
-     release file carries its look inside the adopted half (`legacy_server_patch` uses the server lists, minus the look
-     itself when deciding whether there is anything to hand over, or a split desktop would retire its look before sending
-     it) and `retire_server_half` clears it from the device file, so source three sends nothing and only marks. A desktop
-     meeting a server that has a look overwrites it with its own.
+     column orders in its own file, and they are the server's now. After sources one and two, `split::look_patch` builds the
+     **whole** look (theme, density, `kanban`, every project's `columnOrder`, defaults and empty orders included, since a
+     person who went back to dark chose it), the client sends it with `settings_patch` and `mark_look_shared` sets the
+     mark; a failure leaves the file as it is and the next connection tries again. The order is fixed: `settings_adopt`
+     takes only a server with no settings and a look patch would give it some. A pre-split release file carries its look
+     inside the adopted half (`legacy_server_patch` ignores the look when deciding whether there is anything to hand over,
+     or a split desktop would retire its look before sending it); if the server **refuses** the adoption the look is sent
+     with `settings_patch` before the retire. `retire_server_half` and the seeding from the server leave the device with no
+     look and set `lookShared` in the same write, as does a fresh install (no file), so source three sends nothing for them.
+     A desktop meeting a server that has a look overwrites it with its own.
   A server that already had settings keeps them; a second desktop's old server half, or a second one on the same desktop, survives only in its `.pre-split` copy.
   Known edge: source two seeds from the server's file whenever the device file is unmarked and source one did not fire, so a
   device file with a customised device half but no server half, meeting a server file that already holds device keys, takes

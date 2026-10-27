@@ -353,6 +353,8 @@ pub fn seed_device(path: &Path, from_server: Option<&Value>) -> Result<bool, Str
                 doc["dialogs"] = merged;
             }
             doc["deviceSeeded"] = Value::Bool(true);
+            // The look it held is the server's now, and this file keeps none of its own to send.
+            doc["lookShared"] = Value::Bool(true);
             // The server-owned keys this file may still hold go back to the defaults: the migration
             // has offered them already and the device keeps none.
             let fresh = server_half(&Settings::default());
@@ -362,7 +364,9 @@ pub fn seed_device(path: &Path, from_server: Option<&Value>) -> Result<bool, Str
                 _ => return Err("the seeded settings did not read back".to_owned()),
             }
         }
-        None => Settings { device_seeded: true, ..local },
+        // A file that did not exist is a fresh install: it has chosen no look, so it sends none. A file
+        // that did exist keeps its own, and the look patch sends it.
+        None => Settings { device_seeded: true, look_shared: local.look_shared || !path.exists(), ..local },
     };
     file::save(path, &seeded)?;
     Ok(true)
@@ -436,40 +440,32 @@ pub fn retire_server_half(path: &Path) -> Result<bool, String> {
     // would leave a retired but unmarked file, and the next launch would seed the device half from the
     // server over the device's own.
     settings.device_seeded = true;
+    // The look left with the half and the device holds none of its own to send.
+    settings.look_shared = true;
     file::save(path, &settings)?;
     Ok(true)
 }
 
-/// The look this device holds in its own file, as a patch for the server: the theme and density when
-/// they are not the defaults, the board's rules whole when they are not, and the column order of every
-/// project that has one. `None` when nothing differs, which is a file that never chose a look and a file
-/// `retire_server_half` has already emptied of it.
-pub fn look_patch(settings: &Settings) -> Option<Value> {
-    let fresh = Settings::default();
-    let mut patch = Map::new();
-    let mut appearance = Map::new();
-    if settings.appearance.theme != fresh.appearance.theme {
-        appearance.insert("theme".to_owned(), Value::from(settings.appearance.theme.clone()));
-    }
-    if settings.appearance.density != fresh.appearance.density {
-        appearance.insert("density".to_owned(), Value::from(settings.appearance.density.clone()));
-    }
-    if !appearance.is_empty() {
-        patch.insert("appearance".to_owned(), Value::Object(appearance));
-    }
-    if settings.kanban != fresh.kanban {
-        patch.insert("kanban".to_owned(), serde_json::to_value(&settings.kanban).unwrap_or(Value::Null));
-    }
-    let orders: Map<String, Value> = settings
+/// The look this device holds in its own file, as a patch for the server, **in full**: the theme and
+/// density, the board's rules whole, and the column order of every project in the file, an empty one
+/// included. A value equal to the default is sent too, because a person who went back to dark or to
+/// every column has chosen that, and a server holding a stale copy must not win. It is called only on a
+/// file that is not marked `lookShared`; the places that leave the device with no look of its own
+/// (`retire_server_half`, the seeding from the server, a fresh install) set the mark instead.
+pub fn look_patch(settings: &Settings) -> Value {
+    let projects: Map<String, Value> = settings
         .projects
         .iter()
-        .filter(|(_, state)| !state.column_order.is_empty())
         .map(|(path, state)| (path.clone(), serde_json::json!({ "columnOrder": state.column_order })))
         .collect();
-    if !orders.is_empty() {
-        patch.insert("projects".to_owned(), Value::Object(orders));
+    let mut patch = serde_json::json!({
+        "appearance": { "theme": settings.appearance.theme, "density": settings.appearance.density },
+        "kanban": serde_json::to_value(&settings.kanban).unwrap_or(Value::Null),
+    });
+    if !projects.is_empty() {
+        patch["projects"] = Value::Object(projects);
     }
-    (!patch.is_empty()).then_some(Value::Object(patch))
+    patch
 }
 
 /// Sets the `lookShared` mark in the device file: the look has been offered to the server. A plain
@@ -823,6 +819,7 @@ mod tests {
         assert_eq!(server_half(&server_file), server_half(&original));
         let mut marked = device_half(&original);
         marked["deviceSeeded"] = json!(true);
+        marked["lookShared"] = json!(true);
         assert_eq!(device_half(&device_file), marked);
         assert_eq!(server_file.agent, "codex");
         assert_eq!(server_file.agent_roles, original.agent_roles);
@@ -837,7 +834,7 @@ mod tests {
         assert_eq!(server_file.appearance.density, "compact");
         assert_eq!(server_file.kanban, original.kanban);
         assert_eq!(server_file.projects["/work/a"].column_order, ["open", "done"]);
-        assert!(look_patch(&device_file).is_none(), "a retired file has no look left to send");
+        assert!(device_file.look_shared, "a retired file has no look left to send and is marked");
         assert_eq!(device_file.layout, original.layout);
         assert_eq!(device_file.projects["/work/a"].selected_task.as_deref(), Some("a-1"));
         assert_eq!(device_file.projects["/work/a"].agent_names, original.projects["/work/a"].agent_names);
@@ -850,6 +847,7 @@ mod tests {
         // The only difference from the old file is the mark the retiring write set.
         let mut expected = original.clone();
         expected.device_seeded = true;
+        expected.look_shared = true;
         assert_eq!(parse(&together.to_string()), Outcome::Ok(expected));
         // The device no longer carries the server's fields, and the old file is kept beside it.
         assert_eq!(device_file.agent, Settings::default().agent);
@@ -929,7 +927,7 @@ mod tests {
 
         assert!(seeded.device_seeded);
         let mut expected = device_half(&original);
-        merge_patch(&mut expected, &json!({"dialogs": {"commit": {"width": 500, "height": 400}}, "deviceSeeded": true}));
+        merge_patch(&mut expected, &json!({"dialogs": {"commit": {"width": 500, "height": 400}}, "deviceSeeded": true, "lookShared": true}));
         assert_eq!(device_half(&seeded), expected, "every device field is on the device");
         assert_eq!(seeded.appearance.ui_font_size, original.appearance.ui_font_size);
         assert_eq!(seeded.appearance.theme, Settings::default().appearance.theme, "the theme is the server's, not seeded");
@@ -1027,23 +1025,55 @@ mod tests {
         let kanban = serde_json::to_value(&settings.kanban).unwrap();
         assert_eq!(
             look_patch(&settings),
-            Some(json!({
+            json!({
                 "appearance": {"theme": "light", "density": "compact"},
                 "kanban": kanban,
-                "projects": {"/work/a": {"columnOrder": ["done", "open"]}}
-            }))
+                "projects": {"/work/a": {"columnOrder": ["done", "open"]}, "/work/b": {"columnOrder": []}}
+            })
         );
     }
 
+    /// The person went back to dark, every column and no order: those are choices, and a server that
+    /// holds a stale copy of the opposite must be overwritten by them.
     #[test]
-    fn the_look_patch_of_a_file_holding_only_defaults_is_none() {
-        assert_eq!(look_patch(&Settings::default()), None);
+    fn a_look_reverted_to_the_defaults_is_still_sent() {
+        let mut settings = Settings::default();
+        settings.projects.insert("/work/a".into(), model::ProjectState::default());
+        let patch = look_patch(&settings);
+        assert_eq!(patch["appearance"], json!({"theme": "dark", "density": "comfortable"}));
+        assert_eq!(patch["kanban"]["columns"], "all");
+        assert_eq!(patch["projects"]["/work/a"]["columnOrder"], json!([]));
         let tmp = dir();
+        let server = tmp.path().join("settings.json");
+        apply_patch(&server, &json!({"appearance": {"theme": "light"}, "kanban": {"columns": "non-empty"},
+                                      "projects": {"/work/a": {"columnOrder": ["done"]}}}), "now", false, &nothing).unwrap();
+        apply_patch(&server, &patch, "now", false, &nothing).unwrap();
+        let after = file::load(&server).0;
+        assert_eq!(after.appearance.theme, "dark");
+        assert_eq!(after.kanban.columns, "all");
+        assert!(after.projects["/work/a"].column_order.is_empty());
+    }
+
+    #[test]
+    fn a_file_with_no_look_of_its_own_is_marked_and_sends_nothing() {
+        let tmp = dir();
+        // Retired: the look left with the half.
         let device = tmp.path().join("settings.json");
         std::fs::write(&device, old_file()).unwrap();
-        assert!(look_patch(&file::load(&device).0).is_some());
         assert!(retire_server_half(&device).unwrap());
-        assert_eq!(look_patch(&file::load(&device).0), None);
+        assert!(file::load(&device).0.look_shared);
+        // Seeded from the server: the server's copy is the look.
+        let seeded = tmp.path().join("seeded.json");
+        assert!(seed_device(&seeded, Some(&device_half(&old_settings()))).unwrap());
+        assert!(file::load(&seeded).0.look_shared);
+        // A fresh install chose none; a file that existed keeps its own and is not marked.
+        let fresh = tmp.path().join("fresh.json");
+        assert!(seed_device(&fresh, None).unwrap());
+        assert!(file::load(&fresh).0.look_shared);
+        let existing = tmp.path().join("existing.json");
+        file::save(&existing, &Settings::default()).unwrap();
+        assert!(seed_device(&existing, None).unwrap());
+        assert!(!file::load(&existing).0.look_shared);
     }
 
     #[test]
