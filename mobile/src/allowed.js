@@ -50,7 +50,8 @@ export const ALLOWED_EVENTS = [
   'terminal:removed',
   'session:state',
   'session:removed',
-  'terminal:restorable'
+  'terminal:restorable',
+  'settings:changed'
 ]
 
 export const isAllowedCommand = (name) => ALLOWED_COMMANDS.includes(name)

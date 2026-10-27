@@ -149,6 +149,8 @@ pub const ALLOWED_EVENTS: &[&str] = &[
     "session:state",
     "session:removed",
     "terminal:restorable",
+    // Added in protocol 1.14: the look and the board follow the desktop.
+    "settings:changed",
 ];
 
 /// Every command a desktop device may call: everything the desktop's own front end calls that
@@ -337,6 +339,8 @@ pub const SERVER_EVENTS: &[&str] = &[
     "session:state",
     "session:removed",
     "terminal:restorable",
+    // Added in protocol 1.14 to the phone's list too (it was the desktop's alone from 1.10).
+    "settings:changed",
     "crew:tree",
     "terminal:output",
     "terminal:log",
@@ -346,8 +350,6 @@ pub const SERVER_EVENTS: &[&str] = &[
     "remote:pair-ended",
     // Added in protocol 1.9: a restart that was announced is put off because work appeared.
     "server:restart-deferred",
-    // Added in protocol 1.10: the server half of the settings after a patch, whole.
-    "settings:changed",
 ];
 
 /// Whether a phone may call `cmd`.
@@ -535,7 +537,7 @@ mod tests {
         let caps = capabilities();
         assert_eq!(caps.len(), ALLOWED_COMMANDS.len() + ALLOWED_EVENTS.len());
         assert_eq!(caps.first().map(String::as_str), Some("tracker_health"));
-        assert_eq!(caps.last().map(String::as_str), Some("terminal:restorable"));
+        assert_eq!(caps.last().map(String::as_str), Some("settings:changed"));
     }
 
     #[test]
