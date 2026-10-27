@@ -363,6 +363,7 @@ import { resolveLocalLinkPath } from '../components/conversation/localLinkTarget
 import { workingKey } from '../components/run/configFreshness.js'
 import { needsReady, promotesToReady } from '../components/run/readyPromote.js'
 import { promotedNote } from '../components/run/promotedNote.js'
+import { statusPatch } from '../components/kanban/statusPatch.js'
 import { runTitle, scopeBusyReason } from '../components/run/runScopes.js'
 import { limitVoice } from '../components/run/limitVoice.js'
 import { warmingUp } from '../components/run/runWarmup.js'
@@ -4960,9 +4961,7 @@ const setTaskStatus = async (id, status) => {
        custom one, or ready written over a task already there — gets no note,
        since nothing was promoted. */
     const before = issueById(id)?.status
-    const patch =
-      status === READY && needsReady(before) ? { status, append_notes: promotedNote('status') } : { status }
-    await updateIssue(id, patch)
+    await updateIssue(id, statusPatch(before, status))
   } catch {
     // the message already sits in trackerState.lastError
   } finally {
