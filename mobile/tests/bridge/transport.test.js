@@ -147,12 +147,18 @@ describe('what never leaves the phone', () => {
     expect(core.bridged('tracker_access_repair')).toEqual([])
   })
 
-  it('the rail\'s dots and the offers to resume are answered here as empty', async () => {
+  it('the rail\'s dots are answered here as empty', async () => {
     const { core } = await start()
     const { invoke } = await import('../../src/bridge/core.js')
     expect(await invoke('terminal_marks')).toEqual([])
-    expect(await invoke('terminal_restorable', { project: '/p' })).toEqual([])
     expect(core.calls.filter((call) => call.cmd === 'bridge_invoke')).toEqual([])
+  })
+
+  it('the offers to resume an agent are the server\'s and are asked, not answered here', async () => {
+    const { core } = await start({ terminal_restorable: [] })
+    const { invoke } = await import('../../src/bridge/core.js')
+    expect(await invoke('terminal_restorable', { project: '/p' })).toEqual([])
+    expect(core.bridged('terminal_restorable')).toEqual([{ project: '/p' }])
   })
 
   it('an answer given here is a copy, so a store that writes into it changes nobody else\'s', async () => {
@@ -165,44 +171,25 @@ describe('what never leaves the phone', () => {
   it('an event off the list is local and the core is not asked to subscribe', async () => {
     const { core } = await start()
     const { listen } = await import('../../src/bridge/event.js')
-    await listen('session:state', () => {})
+    await listen('crew:tree', () => {})
     await listen('terminal:output', () => {})
     await listen('tracker:delta', () => {})
     expect(core.core('bridge_listen').map((args) => args.event)).toEqual(['tracker:delta'])
   })
 })
 
-describe('a driven session\'s state, which the desktop does not send', () => {
-  const journal = (events) => ({ events, seq: events.length, state: 'ready', cwd: '/p', agent: 'claude' })
-  const batch = (id, events) => ({ name: 'session:events', payload: { id, events } })
+describe('a driven session\'s state, which the desktop sends now', () => {
+  it('is subscribed through the core and reaches the store, with nothing made up locally', async () => {
+    const { core, emit } = await start()
+    const { listen } = await import('../../src/bridge/event.js')
+    const heard = []
+    await listen('session:state', (event) => heard.push(event.payload))
+    expect(core.core('bridge_listen').map((args) => args.event)).toEqual(['session:state'])
 
-  it('is said to the store after each batch that moves it, from the snapshot onwards', async () => {
-    const { tracker, emit, nextTick } = await start({
-      session_attach: () => journal([{ seq: 1, kind: 'turn-start' }, { seq: 2, kind: 'result' }])
-    })
-    await tracker.initTracker()
-    const conversation = await import('../../../src/stores/conversation.js')
-    await conversation.attach(7)
-    expect(conversation.conversationFor(7).state).toBe('ready')
-
-    await emit('bridge:event', batch(7, [{ seq: 3, kind: 'turn-start' }]))
-    await nextTick()
-    expect(conversation.conversationFor(7).state).toBe('running')
-
-    await emit('bridge:event', batch(7, [{ seq: 4, kind: 'permission', id: 'q1', tool: 'Bash', detail: '', options: [], input: {} }]))
-    await nextTick()
-    expect(conversation.conversationFor(7).state).toBe('needs-you')
-    expect(conversation.conversationFor(7).question.id).toBe('q1')
-  })
-
-  it('is not guessed for a session nobody has read', async () => {
-    const { tracker, emit, nextTick } = await start({ session_attach: () => journal([]) })
-    await tracker.initTracker()
-    const conversation = await import('../../../src/stores/conversation.js')
-    await conversation.initConversation()
-    const held = conversation.conversationFor(9)
-    await emit('bridge:event', batch(9, [{ seq: 1, kind: 'turn-start' }]))
-    await nextTick()
-    expect(held.state).toBe('starting')
+    const state = { id: 7, state: 'running', conversation: 'c', title: null, project: '/p', agent: 'claude', work: { kind: 'bare' }, startedAt: '2026-10-27T10:00:00+00:00' }
+    await emit('bridge:event', { name: 'session:state', payload: state })
+    // A batch of session:events moves nothing on this side: the server says the state itself.
+    await emit('bridge:event', { name: 'session:events', payload: { id: 7, events: [{ seq: 1, kind: 'turn-start' }] } })
+    expect(heard).toEqual([state])
   })
 })

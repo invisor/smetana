@@ -175,6 +175,40 @@ describe('a session removed by the worker', () => {
   })
 })
 
+/* The server sends a project's whole registry after each write to it, so the
+   offline rows follow what any device did. */
+describe('the registry the server announces', () => {
+  const record = (over = {}) => ({
+    sessionId: 'conv-1',
+    agent: 'claude',
+    cwd: '/p',
+    project: '/p',
+    work: { kind: 'bare' },
+    startedAt: '2026-10-27T10:00:00Z',
+    title: 'Fix the board',
+    ...over
+  })
+
+  it('replaces the offered records when terminal:restorable names the project it holds', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:restorable', { project: '/p', records: [record()] })
+    await nextTick()
+    expect(stores.terminals.terminalState.restored).toEqual([record()])
+    expect(stores.terminals.agentRows.value.filter((row) => row.restored)).toHaveLength(1)
+
+    await emit('terminal:restorable', { project: '/p', records: [] })
+    await nextTick()
+    expect(stores.terminals.terminalState.restored).toEqual([])
+  })
+
+  it('ignores terminal:restorable about another project', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:restorable', { project: '/other', records: [record({ project: '/other' })] })
+    await nextTick()
+    expect(stores.terminals.terminalState.restored).toEqual([])
+  })
+})
+
 /* A run's sessions are not started from this window: the run worker asks the
    terminal worker directly, and the only thing the front end ever sees is a
    state event. Without this the row appeared in the panel unselected, the

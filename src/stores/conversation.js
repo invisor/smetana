@@ -516,6 +516,7 @@ async function register() {
   try {
     made.push(await listenToEvents())
     made.push(await listenToState())
+    made.push(await listenToRemoved())
     made.push(await listenToCrew())
     made.push(await listenToCrewEvents())
   } catch (err) {
@@ -533,6 +534,14 @@ async function register() {
     throw err
   }
   conversationState.ready = true
+  /* After the subscriptions and not before them: an event that lands while the
+     list is on its way is applied on top of it rather than lost between the
+     two. **Not awaited**, which is not a taste: `attach` waits for this
+     function, and a start made while the list is still being read - the read is
+     held for the first connection of a cold launch - would wait on a list that
+     in turn waits on nothing of its own, for as long as the server takes. It
+     never rejects - see `loadSessionList`. */
+  void loadSessionList()
 }
 
 function listenToEvents() {
@@ -557,6 +566,15 @@ function listenToEvents() {
 function listenToState() {
   return listen('session:state', (event) => {
     const { id, state, conversation, title } = event.payload
+    /* A session this window never started, heard of for the first time: the
+       event carries what the row needs (`project`, `agent`, `work`,
+       `startedAt`), so the row is drawn from this one message rather than from
+       a second round trip for an id nobody has met. Not attached - a journal is
+       read when somebody opens the panel, as for any other row. */
+    if (!started.some((session) => session.id === id) && !gone.has(id) && typeof event.payload.project === 'string') {
+      started.push(recordOfWire(event.payload))
+      announced.add(id)
+    }
     /* The state this session was last known to be in, read before `noteState`
        overwrites it below — the same shape `before` takes in `terminals.js`'s
        own `terminal:state` listener, and for the same reason: the transition
@@ -615,6 +633,17 @@ function listenToState() {
     const held = conversations.get(id)
     if (!held) return
     held.state = state
+  })
+}
+
+/* The server closed a session, from this device or another: the cross on its
+   row, or a startup that never became a conversation. The same two steps the
+   cross takes here, so a session this window already forgot is a no-op. */
+function listenToRemoved() {
+  return listen('session:removed', (event) => {
+    const id = event.payload?.id
+    if (id == null) return
+    forget(id)
   })
 }
 
@@ -744,6 +773,63 @@ export const canDrive = (agent) => settings.conversationPanel && DRIVEN.includes
    string the terminal store keys its own sessions by: the project's own
    folder. */
 const started = reactive([])
+
+/* **`started` mirrors the server's list.** The worker holds every driven session
+   until the cross removes it, and says so: `session_list` on start and on
+   reconnect, `session:state` for a session this window has not heard of and
+   `session:removed` for one taken away. The window that called `session_start`
+   no longer owns the list, which is how a phone sees what the desktop began and
+   the other way round.
+
+   The ids the cross or the server took away. A closed session still emits a
+   last `session:state` as its child is reaped, and without this that event
+   would draw the row again. Ids count from 1 on every launch of the server, so
+   the set is emptied whenever the list is read afresh. */
+const gone = new Set()
+
+/* The ids a `session:state` introduced since the list was last asked for. An
+   answer built before such an event does not have the session in it, and must
+   not take the row away again. */
+const announced = new Set()
+
+/* A record in `started` from what the wire says about a session: a
+   `session_list` entry or a `session:state` payload. `startedAt` is RFC 3339
+   on the wire and epoch milliseconds in here, as `terminals.js` reads it. */
+function recordOfWire(wire) {
+  const at = Date.parse(wire.startedAt)
+  return {
+    id: wire.id,
+    project: wire.project,
+    state: wire.state,
+    startedAt: Number.isNaN(at) ? Date.now() : at,
+    conversation: wire.conversation ?? null,
+    work: wire.work ?? { kind: 'bare' },
+    title: typeof wire.title === 'string' && wire.title.trim() ? wire.title : null
+  }
+}
+
+/* Replace `started` with the server's list. A session this window started while
+   the request was in flight is not in an answer that was built before it, and
+   is kept - it is newer than the question. A refusal (an older server answers
+   `Forbidden`, as does any error) leaves the list as it was, and says so in the
+   console rather than in a toast: nothing a person did failed. */
+async function loadSessionList() {
+  const asked = Date.now()
+  gone.clear()
+  announced.clear()
+  let list
+  try {
+    list = await invoke('session_list', {})
+  } catch (err) {
+    console.error('[conversation] reading the session list failed:', err)
+    return
+  }
+  if (!Array.isArray(list)) return
+  const wired = list.filter((wire) => !gone.has(wire.id)).map(recordOfWire)
+  const heard = new Set(wired.map((session) => session.id))
+  const newer = started.filter((session) => !heard.has(session.id) && (session.startedAt >= asked || announced.has(session.id)))
+  started.splice(0, started.length, ...wired, ...newer)
+}
 
 /* A run's own driven session, which the run worker started and this window
    therefore never put in `started` through `startConversation`. The record is
@@ -883,6 +969,7 @@ function noteTitle(id, title) {
    end a session at all), and a refusal of it is a sentence for the toast
    corner rather than a reason to keep a row somebody has just dismissed. */
 export function forget(id) {
+  gone.add(id)
   const at = started.findIndex((session) => session.id === id)
   if (at !== -1) started.splice(at, 1)
   detach(id)
@@ -911,7 +998,9 @@ export async function startConversation(project, intent = { kind: 'bare' }) {
        moment the start answered is within one spawn of the truth. The state is
        the word `hold` starts a conversation on, for the same reason it does: a
        session that has produced nothing yet has not failed to. */
-    started.push({
+    /* Unless a `session:state` got here first: the worker can announce a session
+       before its start has answered, and that event already made the row. */
+    if (!started.some((session) => session.id === id)) started.push({
       id,
       project,
       state: 'starting',
@@ -1045,4 +1134,4 @@ export async function closeConversation(id) {
 
 /* A conversation open in this window was last fed by the previous connection; its snapshot is read
    again, replacing the journal whole as every attach does. */
-onReconnect(() => Promise.all([...conversations.keys()].map((id) => attach(id))))
+onReconnect(() => Promise.all([loadSessionList(), ...[...conversations.keys()].map((id) => attach(id))]))

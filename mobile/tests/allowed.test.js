@@ -28,11 +28,11 @@ describe('the phone\'s copy of the allowlist', () => {
   })
 
   it('refuses what is not on it, writes and files and git among them', () => {
-    for (const name of ['tracker_update', 'tracker_close', 'files_write', 'vcs_status', 'settings_save', 'terminal_write', 'terminal_create', 'session_close', 'run_release', 'attachment_reopen']) {
+    for (const name of ['tracker_update', 'tracker_close', 'files_write', 'vcs_status', 'settings_save', 'terminal_write', 'terminal_create', 'run_release', 'attachment_reopen']) {
       expect(isAllowedCommand(name), name).toBe(false)
     }
     expect(isAllowedEvent('terminal:output')).toBe(false)
-    expect(isAllowedEvent('session:state')).toBe(false)
+    expect(isAllowedEvent('crew:tree')).toBe(false)
     expect(isAllowedCommand('run_start')).toBe(true)
     expect(isAllowedEvent('run:state')).toBe(true)
   })
