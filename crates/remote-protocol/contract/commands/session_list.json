@@ -1,0 +1,7 @@
+{
+  "args": [{}],
+  "reply": [
+    [{"agent":"claude","conversation":"conv-1","cwd":"/work/smetana","id":1,"project":"/work/smetana","startedAt":"2026-10-27T10:00:00+00:00","state":"ready","title":"Fix the board","work":{"issueType":null,"kind":"newTask","parent":null,"priority":null,"text":"Fix the board"}},{"agent":"codex","conversation":null,"cwd":"/work/other/.worktrees/x","id":2,"project":"/work/other","startedAt":"2026-10-27T11:30:00+00:00","state":"exited","title":null,"work":{"kind":"bare"}}],
+    []
+  ]
+}

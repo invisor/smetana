@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use tokio::sync::oneshot;
 
-use super::model::{Decision, Event, SessionError, SessionId};
+use super::model::{Decision, Event, SessionError, SessionId, SessionRecord};
 use super::crew::CrewNode;
 use super::service::{Attached, CrewAttached, Request, SessionHandle};
 use crate::agents::Intent;
@@ -58,6 +58,12 @@ pub mod plain {
     /// gateway asks, to list what a restart would end.
     pub async fn live(handle: &SessionHandle) -> Result<Vec<super::super::service::LiveSession>, SessionError> {
         ask(handle, Request::Live).await
+    }
+
+    /// Every driven session the worker holds that no cross has closed, across all projects; the
+    /// client filters by project. Not `live`, which answers only the ones with a running child.
+    pub async fn list(handle: &SessionHandle) -> Result<Vec<SessionRecord>, SessionError> {
+        ask(handle, Request::List).await
     }
 
     pub async fn start(

@@ -226,6 +226,29 @@ pub fn drop_record(root: &Path, session_id: &str) {
     }
 }
 
+/// The payload of `terminal:restorable`: a project's whole registry as it stands now.
+///
+/// **The list and not a "read it again" nudge.** The file is written several times around a spawn,
+/// and a client that went to read it on every nudge would race those writes and could draw a
+/// registry that was already stale. What travels is the state, and the latest event wins.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestorableList {
+    /// The project folder, as the clients name the project.
+    pub project: String,
+    pub records: Vec<Restorable>,
+}
+
+/// Tell every client what this project's registry holds now. Called after each write to the file
+/// (`record`, `drop_record`), and after the `session:state` of the same branch when there is one, so
+/// that a client learns the live row before the registry offers the same id as an offline one.
+pub fn announce(ctx: &crate::context::Context, root: &Path) {
+    ctx.emit(
+        "terminal:restorable",
+        &RestorableList { project: root.to_string_lossy().into_owned(), records: read(root).sessions },
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,6 +491,60 @@ mod tests {
         let _ = std::fs::remove_dir_all(root.join(".smetana"));
         record(&root, record_for("a"));
         assert_eq!(read(&root).sessions.len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A sink that keeps what is emitted.
+    #[derive(Default)]
+    struct Tap(std::sync::Mutex<Vec<(String, serde_json::Value)>>);
+
+    impl crate::context::Sink for Tap {
+        fn emit(&self, name: &str, payload: serde_json::Value) {
+            self.0.lock().unwrap().push((name.to_owned(), payload));
+        }
+        fn push(&self, _message: crate::remote::push::Message) {}
+    }
+
+    fn tapped() -> (crate::context::Context, std::sync::Arc<Tap>) {
+        let tap = std::sync::Arc::new(Tap::default());
+        let ctx = crate::context::Context::new(
+            Err("x".into()),
+            Err("x".into()),
+            Err("x".into()),
+            None,
+            tap.clone(),
+        );
+        (ctx, tap)
+    }
+
+    #[test]
+    fn announce_sends_the_whole_registry_of_the_project() {
+        let root = scratch("announce");
+        record(&root, record_for("a"));
+        record(&root, record_for("b"));
+        let (ctx, tap) = tapped();
+        announce(&ctx, &root);
+        let events = tap.0.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "terminal:restorable");
+        assert_eq!(events[0].1["project"], root.to_string_lossy().as_ref());
+        assert_eq!(events[0].1["records"].as_array().unwrap().len(), 2);
+        assert_eq!(events[0].1["records"][0]["sessionId"], "a");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn announce_after_a_drop_sends_the_list_without_the_dropped_one() {
+        let root = scratch("announce-drop");
+        record(&root, record_for("a"));
+        record(&root, record_for("b"));
+        drop_record(&root, "a");
+        let (ctx, tap) = tapped();
+        announce(&ctx, &root);
+        let events = tap.0.lock().unwrap();
+        let records = events[0].1["records"].as_array().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["sessionId"], "b");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

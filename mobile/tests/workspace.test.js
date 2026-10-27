@@ -38,6 +38,8 @@ const desktop = (extra = {}) => ({
   run_state: [RUN],
   target_branches: [{ name: 'main', missing_in: [] }, { name: 'develop', missing_in: [] }],
   session_attach: { events: [{ seq: 1, kind: 'turn-start' }], seq: 1, state: 'running', cwd: '/work/a', agent: 'claude' },
+  session_list: [],
+  terminal_restorable: [],
   session_start: 7,
   // The desktop answers these with nothing; the recorder reads a falsy answer as "not offered".
   session_send: {},
@@ -104,7 +106,7 @@ describe('what the working screens ask the desktop for', () => {
     await workspace.startWorkspace()
     await workspace.chooseProject('/work/b')
     const asked = names(core)
-    for (const name of ['settings_save', 'terminal_marks', 'terminal_restorable', 'terminal_create', 'terminal_write', 'tracker_access_repair', 'git_head', 'files_list', 'vcs_status', 'drag_drop_space', 'browser_tools']) {
+    for (const name of ['settings_save', 'terminal_marks', 'terminal_create', 'terminal_write', 'tracker_access_repair', 'git_head', 'files_list', 'vcs_status', 'drag_drop_space', 'browser_tools']) {
       expect(asked, name).not.toContain(name)
     }
   })

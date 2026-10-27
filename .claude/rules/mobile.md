@@ -144,14 +144,12 @@ What the phone must not call is kept out of the stores' reach rather than hoped 
   `ConversationView` take `attachable`, `TaskCard` takes `actionable`, `RunBar` takes `canRelease`; all default on, and
   the phone turns them off because paperclip, card menu and "Run anyway" are writes the bridge does not carry.
 
-**There is no `session:state` on the bridge**, and a conversation's state decides Send versus Stop and the Agents
-list's needs-you. `bridge/sessionState.js` folds the journal exactly as `session::model::state_of` does (except it
-cannot see the child die: a session read as ended stays ended, one that dies later reads as before until the next
-snapshot) and `bridge/event.js` dispatches the result locally as `session:state` after each `session:events` batch;
-`bridge/core.js` seeds it from every `session_attach` reply. **Known gaps, all of the bridge's shape and not the
-screens'**: no command lists the desktop's driven sessions, so the Agents list holds the PTY sessions
-(`terminal_list`), the sessions the phone started and the ones a run drives (adopted from `run_state`); a conversation
-started on the desktop is reachable from a `session:<id>` notification and not from the list. There is no event for
+**`session:state` and the Agents list come from the server** (protocol 1.12, smetana-ahp9). The bridge carries
+`session_list`, `session:state`, `session:removed` and `terminal:restorable`, and the shared stores mirror them, so the
+list holds what the desktop started and offline rows arrive too; the phone's own synthesis of the state
+(`bridge/sessionState.js`, and the local `terminal_restorable` answer) is gone. **Known gaps, all of the bridge's shape
+and not the screens'**: the Agents screen does not draw offline rows yet, resume them or close a row (the commands are
+allowed; the screen is a separate task), and a conversation screen open on a session another device closed stays open. There is no event for
 the desktop switching project, so the phone reads `settings_load` again on reconnect and when the page becomes visible.
 A terminal session's output is the one `terminal_attach` snapshot (`terminalText.js`), refreshed on `terminal:state`
 and by a button; `terminal:output` is not on the list.

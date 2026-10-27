@@ -2114,6 +2114,11 @@ export function installMockBackend() {
     if (command === 'session_since') {
       return []
     }
+    /* A browser has no server holding sessions, so the list the store mirrors is
+       empty - the store reads that as "nothing running", not as a refusal. */
+    if (command === 'session_list') {
+      return []
+    }
     /* The session row's four verbs that leave this window — `sessions_open_log`,
        `sessions_open_cwd`, `sessions_reveal` and `sessions_delete` — are
        deliberately not answered here either, and for a plainer reason than the

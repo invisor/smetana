@@ -1,10 +1,10 @@
 {
   "payload": [
-    {"conversation":"conv-1","id":1,"state":"starting","title":"Fix the board"},
-    {"conversation":null,"id":2,"state":"running","title":null},
-    {"conversation":null,"id":3,"state":"ready","title":null},
-    {"conversation":null,"id":4,"state":"needs-you","title":null},
-    {"conversation":null,"id":5,"state":"exited","title":null},
-    {"conversation":null,"id":6,"state":"failed","title":null}
+    {"agent":"claude","conversation":"conv-1","id":1,"project":"/work/smetana","startedAt":"2026-10-27T10:00:00+00:00","state":"starting","title":"Fix the board","work":{"issueType":null,"kind":"newTask","parent":null,"priority":null,"text":"Fix the board"}},
+    {"agent":"claude","conversation":null,"id":2,"project":"/work/smetana","startedAt":"2026-10-27T10:00:00+00:00","state":"running","title":null,"work":{"kind":"bare"}},
+    {"agent":"claude","conversation":null,"id":3,"project":"/work/smetana","startedAt":"2026-10-27T10:00:00+00:00","state":"ready","title":null,"work":{"kind":"bare"}},
+    {"agent":"claude","conversation":null,"id":4,"project":"/work/smetana","startedAt":"2026-10-27T10:00:00+00:00","state":"needs-you","title":null,"work":{"kind":"bare"}},
+    {"agent":"claude","conversation":null,"id":5,"project":"/work/smetana","startedAt":"2026-10-27T10:00:00+00:00","state":"exited","title":null,"work":{"kind":"bare"}},
+    {"agent":"claude","conversation":null,"id":6,"project":"/work/smetana","startedAt":"2026-10-27T10:00:00+00:00","state":"failed","title":null,"work":{"kind":"bare"}}
   ]
 }

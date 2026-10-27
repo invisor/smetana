@@ -1,0 +1,6 @@
+{
+  "payload": [
+    {"project":"/work/smetana","records":[{"agent":"claude","cwd":"/work/smetana","project":"/work/smetana","sessionId":"conv-1","startedAt":"2026-10-15T10:00:00Z","title":"Add a thing","work":{"issueType":null,"kind":"newTask","parent":null,"priority":null,"text":"Add a thing"}}]},
+    {"project":"/work/smetana","records":[]}
+  ]
+}

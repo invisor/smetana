@@ -188,7 +188,12 @@ pub enum SessionState {
 /// session and repeating it costs a UUID per change; the alternative is a
 /// window that missed one message and never learns the name of the row it is
 /// drawing.
+///
+/// **It also says what the session is** (`project`, `agent`, `work`, `started_at`), so that a client
+/// which never started the session — a phone, or a second window — can draw its row from this one
+/// event instead of asking the server again for an id it has not heard of.
 #[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StateChange {
     pub id: SessionId,
     pub state: SessionState,
@@ -202,6 +207,36 @@ pub struct StateChange {
     /// reason `conversation` does: a window that missed one event must still
     /// learn the name of the row it is drawing.
     pub title: Option<String>,
+    /// The project folder the session was started in, as the clients name the project.
+    pub project: String,
+    /// The harness's profile id.
+    pub agent: String,
+    pub work: crate::terminal::model::SessionWork,
+    /// RFC 3339, minted once at the spawn.
+    pub started_at: String,
+}
+
+/// One entry of `session_list`: a driven session the worker still holds that nobody has closed,
+/// running or ended. The `session:state` fields plus the directory it runs in.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRecord {
+    pub id: SessionId,
+    pub project: String,
+    pub agent: String,
+    pub state: SessionState,
+    pub conversation: Option<String>,
+    pub title: Option<String>,
+    pub work: crate::terminal::model::SessionWork,
+    pub started_at: String,
+    pub cwd: String,
+}
+
+/// The payload of `session:removed`: the cross ended this session, or its startup never became a
+/// conversation, and every client should forget the row.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub struct Removed {
+    pub id: SessionId,
 }
 
 #[derive(Clone, Debug, thiserror::Error, serde::Serialize)]
@@ -381,86 +416,6 @@ pub fn is_open_question(events: &[Event], question: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    const SESSION_STATE_VECTOR: &str = include_str!("../../../../mobile/test-vectors/session-state.json");
-
-    fn vector_event(seq: u64, raw: &serde_json::Value) -> Event {
-        let id = || raw["id"].as_str().unwrap_or("").to_string();
-        let text = || String::new();
-        let kind = match raw["kind"].as_str().unwrap() {
-            "turn-start" => EventKind::TurnStart { by: Actor::Person },
-            "opening" => EventKind::Opening { text: None, attachments: vec![] },
-            "user-message" => EventKind::UserMessage { text: text(), attachments: vec![] },
-            "text" => EventKind::Text { text: text() },
-            "text-delta" => EventKind::TextDelta { text: text() },
-            "text-question" => EventKind::TextQuestion,
-            "reasoning" => EventKind::Reasoning { text: text() },
-            "tool-use" => EventKind::ToolUse { id: id(), name: text(), detail: text() },
-            "tool-result" => EventKind::ToolResult { id: id(), ok: true, summary: text(), denial: None },
-            "permission" => EventKind::Permission {
-                id: id(),
-                tool: text(),
-                detail: text(),
-                options: vec![],
-                input: serde_json::Value::Null,
-            },
-            "permission-answered" => {
-                EventKind::PermissionAnswered { id: id(), decision: Decision::Allow, answers: None }
-            }
-            "result" => EventKind::Result { tokens_in: 0, tokens_out: 0, cost_usd: None, ms: 0 },
-            "turn-failed" => EventKind::TurnFailed { text: text() },
-            "error" => EventKind::Error { text: text() },
-            other => panic!("the shared vector names a kind this adapter does not know: {other}"),
-        };
-        Event { seq, at: String::new(), kind }
-    }
-
-    fn state_name(state: SessionState) -> &'static str {
-        match state {
-            SessionState::Starting => "starting",
-            SessionState::Running => "running",
-            SessionState::Ready => "ready",
-            SessionState::NeedsYou => "needs-you",
-            SessionState::Exited => "exited",
-            SessionState::Failed => "failed",
-        }
-    }
-
-    /// The phone folds the same journals in `mobile/src/bridge/sessionState.js`
-    /// against this same file; changing the rule on one side only fails there
-    /// or here.
-    #[test]
-    fn state_of_agrees_with_the_shared_session_state_vector() {
-        let vector: serde_json::Value = serde_json::from_str(SESSION_STATE_VECTOR).unwrap();
-        let sequences = vector["sequences"].as_array().unwrap();
-        assert!(!sequences.is_empty(), "the vector holds no sequences");
-        for seq in sequences {
-            let name = seq["name"].as_str().unwrap();
-            let events: Vec<Event> = seq["events"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .enumerate()
-                .map(|(i, raw)| vector_event(i as u64 + 1, raw))
-                .collect();
-            if seq["alive"] == serde_json::Value::Bool(false) {
-                let got = state_name(state_of(&events, false));
-                assert_eq!(got, seq["final"].as_str().unwrap(), "{name}: dead child");
-                continue;
-            }
-            assert_eq!(
-                state_name(state_of(&[], true)),
-                seq["initial"].as_str().unwrap_or("starting"),
-                "{name}: empty journal"
-            );
-            let after = seq["after"].as_array().unwrap();
-            assert_eq!(after.len(), events.len(), "{name}: one expected state per event");
-            for (n, want) in after.iter().enumerate() {
-                let got = state_name(state_of(&events[..=n], true));
-                assert_eq!(got, want.as_str().unwrap(), "{name}: after event {}", n + 1);
-            }
-        }
-    }
-
     use super::*;
 
     #[test]

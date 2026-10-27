@@ -35,9 +35,20 @@ const permission = (seq, id = 'q1') =>
    worker's reply means: a fresh object every time. No assertion below rests on
    the copying; what it removes is a test able to change another one's
    arrangement out from under it. */
-async function ready(snapshot = { events: [], seq: 0, state: 'ready' }) {
+async function ready(snapshot = { events: [], seq: 0, state: 'ready' }, { listed = true } = {}) {
   const loaded = await loadStores()
   loaded.ipc.on('session_attach', () => ({ ...snapshot, events: [...snapshot.events] }))
+  /* The server holds nothing unless a test says so. */
+  loaded.ipc.on('session_list', [])
+  /* Registered and the empty list read, as the app does before anything starts a
+     session: a list asked for after a start would otherwise be answered, empty,
+     over a row the start had just made. The tests of the list itself ask for the
+     store to be left alone (`listed: false`) and register their own answer. */
+  if (listed) {
+    await loaded.stores.conversation.initConversation()
+    await vi.waitFor(() => expect(loaded.ipc.calls('session_list')).toHaveLength(1))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
   return loaded
 }
 
@@ -567,7 +578,7 @@ describe('the conversation store', () => {
      journal per batch for the life of the window with the panel looking
      perfectly right throughout. */
   it('undoes half a subscription rather than retrying on top of it', async () => {
-    const { stores, emit, nextTick } = await ready()
+    const { stores, emit, nextTick } = await ready(undefined, { listed: false })
     const dropped = []
     mockIPC((cmd, args) => {
       if (cmd === 'plugin:event|listen') {
@@ -1164,6 +1175,36 @@ describe('the conversation store', () => {
       expect(ipc.calls('session_attach')).toEqual([{ id: 7 }])
     })
 
+    it('adopts a run whose session:state arrived before run:state', async () => {
+      const { emit, stores } = await ready()
+      await emit('session:state', { id: 7, state: 'running', conversation: 'c7', title: null, project: '/p', agent: 'claude', work: { kind: 'bare' }, startedAt: '2026-10-27T10:00:00+00:00' })
+      expect(stores.conversation.lastDrivenRunStart.value).toBe(null)
+
+      stores.conversation.adoptRunSession('/p', 7)
+      stores.conversation.adoptRunSession('/p', 7)
+
+      expect(stores.conversation.lastDrivenRunStart.value).toEqual({ id: 7, project: '/p' })
+      expect(stores.conversation.drivenSessions.value).toHaveLength(1)
+      expect(stores.conversation.drivenSessions.value[0].work).toEqual({ kind: 'run' })
+    })
+
+    it('adopts a run again when a restarted server reuses its id', async () => {
+      const { ipc, emit, stores } = await ready()
+      stores.conversation.adoptRunSession('/p', 7)
+      expect(stores.conversation.lastDrivenRunStart.value).toEqual({ id: 7, project: '/p' })
+      stores.conversation.lastDrivenRunStart.value = null
+
+      ipc.on('session_list', [])
+      ipc.on('connection_state', { mode: 'client', state: 'connected', epoch: 1, attempt: 0, reason: null, local: true, server: { version: '0.1.0', protocolMajor: 1, protocolMinor: 12 }, outdated: null })
+      await stores.connection.initConnection()
+      await emit('connection:state', { mode: 'client', state: 'connected', epoch: 2, attempt: 0, reason: null, local: true, server: { version: '0.1.0', protocolMajor: 1, protocolMinor: 12 }, outdated: null })
+      await vi.waitFor(() => expect(ipc.calls('session_list').length).toBeGreaterThan(1))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      stores.conversation.adoptRunSession('/p', 7)
+      expect(stores.conversation.lastDrivenRunStart.value).toEqual({ id: 7, project: '/p' })
+    })
+
     it('adopting the same run session twice keeps one record', async () => {
       const { stores } = await ready()
       stores.conversation.adoptRunSession('/p', 7)
@@ -1182,6 +1223,145 @@ describe('the conversation store', () => {
       await emit('session:state', { id: 7, state: 'needs-you', conversation: null, title: null })
 
       expect(stores.conversation.drivenSessions.value[0].state).toBe('needs-you')
+    })
+  })
+  /* The server owns the list of driven sessions and this window mirrors it, so a
+     session another device began is a row here and one another device closed is
+     gone. */
+  describe('the list the server holds', () => {
+    const wire = (over = {}) => ({
+      id: 4,
+      project: '/p',
+      agent: 'claude',
+      state: 'running',
+      conversation: 'conv-4',
+      title: 'Fix the board',
+      work: { kind: 'bare' },
+      startedAt: '2026-10-27T10:00:00+00:00',
+      cwd: '/p',
+      ...over
+    })
+
+    const split = (over = {}) => ({
+      mode: 'client',
+      state: 'connected',
+      epoch: 1,
+      attempt: 0,
+      reason: null,
+      local: true,
+      server: { version: '0.1.0', protocolMajor: 1, protocolMinor: 12 },
+      outdated: null,
+      ...over
+    })
+
+    it('fills the driven list from session_list when the store starts', async () => {
+      const { ipc, stores } = await ready(undefined, { listed: false })
+      ipc.on('session_list', [wire(), wire({ id: 5, project: '/q', state: 'exited', conversation: null, title: null })])
+      await stores.conversation.initConversation()
+      await vi.waitFor(() => expect(stores.conversation.drivenSessions.value).toHaveLength(2))
+
+      const rows = stores.conversation.drivenSessions.value
+      expect(rows.map((row) => [row.id, row.project, row.state])).toEqual([
+        [4, '/p', 'running'],
+        [5, '/q', 'exited']
+      ])
+      expect(rows[0]).toMatchObject({ conversation: 'conv-4', title: 'Fix the board', work: { kind: 'bare' } })
+      expect(rows[0].startedAt).toBe(Date.parse('2026-10-27T10:00:00+00:00'))
+      expect(rows[1].title).toBe(null)
+    })
+
+    it('reads the list again on reconnect and replaces what it held', async () => {
+      const { ipc, emit, stores } = await ready(undefined, { listed: false })
+      ipc.on('connection_state', split())
+      await stores.connection.initConnection()
+      ipc.on('session_list', [wire()])
+      await stores.conversation.initConversation()
+      await vi.waitFor(() => expect(stores.conversation.drivenSessions.value.map((row) => row.id)).toEqual([4]))
+
+      ipc.on('session_list', [wire({ id: 6 })])
+      await emit('connection:state', split({ epoch: 2 }))
+      await vi.waitFor(() => expect(stores.conversation.drivenSessions.value.map((row) => row.id)).toEqual([6]))
+    })
+
+    it('keeps a session this window started while the list was on its way', async () => {
+      const { ipc, stores } = await ready(undefined, { listed: false })
+      ipc.on('session_start', 9)
+      let answer
+      ipc.on('session_list', () => new Promise((resolve) => (answer = resolve)))
+      await stores.conversation.initConversation()
+      await vi.waitFor(() => expect(answer).toBeTypeOf('function'))
+
+      await stores.conversation.startConversation('/p')
+      answer([wire()])
+
+      await vi.waitFor(() =>
+        expect(stores.conversation.drivenSessions.value.map((row) => row.id).sort()).toEqual([4, 9])
+      )
+    })
+
+    it('leaves the list alone when session_list is refused', async () => {
+      const { ipc, stores } = await ready(undefined, { listed: false })
+      stores.conversation.adoptRunSession('/p', 3)
+      ipc.fail('session_list', 'forbidden')
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      await expect(stores.conversation.initConversation()).resolves.not.toThrow()
+      await vi.waitFor(() => expect(error).toHaveBeenCalledTimes(1))
+
+      expect(stores.conversation.drivenSessions.value.map((row) => row.id)).toEqual([3])
+      expect(error).toHaveBeenCalledTimes(1)
+      error.mockRestore()
+    })
+
+    it('adds a session it never started from session:state, without attaching to it', async () => {
+      const { ipc, emit, stores } = await ready(undefined, { listed: false })
+      await stores.conversation.initConversation()
+      await emit('session:state', {
+        id: 9,
+        state: 'running',
+        conversation: 'c9',
+        title: null,
+        project: '/p',
+        agent: 'claude',
+        work: { kind: 'editTask', id: 'smetana-1' },
+        startedAt: '2026-10-27T10:00:00+00:00'
+      })
+
+      const [row] = stores.conversation.drivenSessions.value
+      expect(row).toMatchObject({ id: 9, project: '/p', state: 'running', conversation: 'c9', work: { kind: 'editTask', id: 'smetana-1' } })
+      expect(ipc.calls('session_attach')).toEqual([])
+
+      await emit('session:state', { ...row, id: 9, state: 'ready', project: '/p', startedAt: '2026-10-27T10:00:00+00:00' })
+      expect(stores.conversation.drivenSessions.value).toHaveLength(1)
+      expect(stores.conversation.drivenSessions.value[0].state).toBe('ready')
+    })
+
+    it('drops a session on session:removed and detaches its journal, once', async () => {
+      const { ipc, emit, stores } = await ready({ events: [text(1, 'hi')], seq: 1, state: 'ready' }, { listed: false })
+      ipc.on('session_list', [wire({ id: 9 })])
+      await stores.conversation.initConversation()
+      await vi.waitFor(() => expect(stores.conversation.drivenSessions.value).toHaveLength(1))
+      await stores.conversation.attach(9)
+      expect(stores.conversation.conversationFor(9).events).toHaveLength(1)
+
+      await emit('session:removed', { id: 9 })
+      expect(stores.conversation.drivenSessions.value).toEqual([])
+      expect(stores.conversation.conversationFor(9).events).toHaveLength(0)
+
+      await emit('session:removed', { id: 9 })
+      await emit('session:removed', { id: 77 })
+      expect(stores.conversation.drivenSessions.value).toEqual([])
+    })
+
+    it('does not draw a closed session again for the last state its child sends', async () => {
+      const { ipc, emit, stores } = await ready(undefined, { listed: false })
+      ipc.on('session_list', [wire({ id: 9 })])
+      await stores.conversation.initConversation()
+      await vi.waitFor(() => expect(stores.conversation.drivenSessions.value).toHaveLength(1))
+      await emit('session:removed', { id: 9 })
+      await emit('session:state', { id: 9, state: 'exited', conversation: 'c', title: null, project: '/p', agent: 'claude', work: { kind: 'bare' }, startedAt: '2026-10-27T10:00:00+00:00' })
+
+      expect(stores.conversation.drivenSessions.value).toEqual([])
     })
   })
 })

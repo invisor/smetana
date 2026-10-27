@@ -32,7 +32,12 @@ export const ALLOWED_COMMANDS = [
   'crew_stop',
   'terminal_list',
   'terminal_attach',
-  'attachment_write'
+  'attachment_write',
+  'session_list',
+  'session_close',
+  'terminal_restorable',
+  'terminal_forget',
+  'terminal_remove'
 ]
 
 export const ALLOWED_EVENTS = [
@@ -42,7 +47,10 @@ export const ALLOWED_EVENTS = [
   'session:events',
   'crew:events',
   'terminal:state',
-  'terminal:removed'
+  'terminal:removed',
+  'session:state',
+  'session:removed',
+  'terminal:restorable'
 ]
 
 export const isAllowedCommand = (name) => ALLOWED_COMMANDS.includes(name)

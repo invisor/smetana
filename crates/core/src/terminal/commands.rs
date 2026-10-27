@@ -157,8 +157,15 @@ pub async fn terminal_restorable(project: String) -> Result<Vec<super::restore::
 /// A person took a restored row away. The registry alone, and deliberately not
 /// `terminal_remove`: there is no session behind the row, so asking the worker
 /// to end one would be the wrong verb and would answer `noSession`.
-pub async fn terminal_forget(project: String, session_id: String) -> Result<(), TerminalError> {
-    super::restore::drop_record(std::path::Path::new(&project), &session_id);
+pub async fn terminal_forget(
+    ctx: &crate::context::Context,
+    project: String,
+    session_id: String,
+) -> Result<(), TerminalError> {
+    let root = std::path::Path::new(&project);
+    super::restore::drop_record(root, &session_id);
+    // Every client mirrors the registry, so a row taken away on one device goes from the others.
+    super::restore::announce(ctx, root);
     Ok(())
 }
 

@@ -6,7 +6,6 @@
    in the Vite config is limited to importers under src/stores/, which is what
    keeps this import from resolving to itself. */
 import { invoke as tauriInvoke } from '@tauri-apps/api/core'
-import { sessions } from './sessionState.js'
 
 /* A few commands a store calls that are not on the bridge's allowlist, by the
    allowlisted command that answers the same question.
@@ -24,26 +23,17 @@ const ALIASES = { tracker_resync: 'tracker_snapshot' }
    Each is a question about the desktop's own machine or about what a window of the
    desktop remembers, and none is on the allowlist: `tracker_access_repair` asks what a
    refused folder needs (the answer is a button in the desktop's window), and
-   `terminal_marks` and `terminal_restorable` are the rail's dots and the offers to
-   resume an agent that was open when the desktop closed. The values are what the stores
-   already treat as "nothing to say" - 'unavailable' is the form that offers nothing, an
-   empty list draws no rows. */
+   `terminal_marks` is the rail's dots. The values are what the stores already treat as
+   "nothing to say" - 'unavailable' is the form that offers nothing, an empty list draws
+   no rows. (`terminal_restorable`, the offers to resume an agent, is the server's now.) */
 const LOCAL = {
   tracker_access_repair: 'unavailable',
-  terminal_marks: [],
-  terminal_restorable: []
+  terminal_marks: []
 }
 
 export function invoke(cmd, args = {}) {
   if (cmd in LOCAL) return Promise.resolve(structuredCloneOf(LOCAL[cmd]))
-  const call = tauriInvoke('bridge_invoke', { cmd: ALIASES[cmd] ?? cmd, args })
-  /* A snapshot of a driven session is where the phone learns its state; see ./sessionState.js
-     for why the phone has to work it out and ./event.js for what it does with it after. */
-  if (cmd !== 'session_attach') return call
-  return call.then((reply) => {
-    sessions.seed(args?.id, reply?.events, reply?.state)
-    return reply
-  })
+  return tauriInvoke('bridge_invoke', { cmd: ALIASES[cmd] ?? cmd, args })
 }
 
 /* A copy, so a store that pushes onto what it was given does not change the answer the

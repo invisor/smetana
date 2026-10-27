@@ -315,6 +315,8 @@ calls! {
         }
         answer(crate::session::commands::plain::start(&s.sessions, a.project, a.intent).await)
     };
+    SessionList = "session_list" {}
+        => |s, c, a| answer(crate::session::commands::plain::list(&s.sessions).await);
     SessionAttach = "session_attach" { id: u64 }
         => |s, c, a| answer(crate::session::commands::plain::attach(&s.sessions, a.id).await);
     SessionSince = "session_since" { id: u64, seq: u64 }
@@ -381,7 +383,7 @@ calls! {
     TerminalRestorable = "terminal_restorable" { project: String }
         => |s, c, a| answer(crate::terminal::commands::terminal_restorable(a.project).await);
     TerminalForget = "terminal_forget" { project: String, session_id: String }
-        => |s, c, a| answer(crate::terminal::commands::terminal_forget(a.project, a.session_id).await);
+        => |s, c, a| answer(crate::terminal::commands::terminal_forget(s.ctx()?, a.project, a.session_id).await);
 
     // --- files
     FilesList = "files_list" { root: String, dir: String }

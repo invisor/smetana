@@ -47,7 +47,7 @@ use super::crew::{CrewNode, CrewPackage, CrewState};
 use super::journal::Journal;
 use super::model::{
     is_open_question, state_of, Decision, Event, EventKind, SessionError, SessionId, SessionState,
-    StateChange,
+    Removed, SessionRecord, StateChange,
 };
 use super::permission::{Asked, PermissionServer};
 use crate::agents::claude_driver::ClaudeDriver;
@@ -289,6 +289,9 @@ fn retain_crew_exit(admitted: bool, waiter_count: usize) -> bool {
 }
 
 pub enum Request {
+    /// Every session this worker holds that no cross has closed, for `session_list`. Not
+    /// `Live`, which keeps only the ones with a running child for the restart gateway.
+    List(oneshot::Sender<Vec<SessionRecord>>),
     Start(String, Intent, oneshot::Sender<Result<SessionId, SessionError>>),
     /// Start a driven lead and register its Smetana-owned root in one worker
     /// pass. It intentionally bypasses `Request::Start`'s ordinary Run
@@ -469,6 +472,10 @@ struct Live {
     /// Every `ai-title` record of a transcript carries the same text, so one
     /// read is the whole read.
     title_settled: bool,
+    /// A Crew lead: an ordinary `Live` to this worker, but not a conversation of the driven list.
+    /// Crew panels are drawn from `crew:tree` under `crew:<root>:<node>`, so `session_list` leaves
+    /// it out and it announces no `session:state`.
+    crew_lead: bool,
 }
 
 /// A Codex addressed turn remains pending until its JSON-RPC response confirms
@@ -872,6 +879,7 @@ fn spawn_session(
     permission: Option<&PermissionServer>,
     chunks: &mpsc::UnboundedSender<Chunk>,
     pinned_agent: Option<&str>,
+    crew_lead: bool,
 ) -> Result<Live, SessionError> {
     // The one resolver, read here for the reason `terminal::service` reads it
     // in its own `Create` arm: this is where a driven session is built, so what
@@ -1071,6 +1079,7 @@ fn spawn_session(
         // words it opened with for good.
         title: resume_title.or_else(|| opening_text.as_deref().and_then(super::model::first_words)),
         title_settled: profile.id() != "claude",
+        crew_lead,
     };
 
     // The brief, as the session's first turn. Into the journal before the
@@ -1116,15 +1125,15 @@ fn spawn_session(
     // started would be a row offering a conversation the harness never opened.
     // After the opening turn too, so the record's own title — when the
     // person's first words gave one — is not a second, separate write.
-    record_live(&live);
+    announce_new(ctx, id, &live);
     Ok(live)
 }
 
 /// The record `.smetana/agents.json` holds for this session, built from `Live`
 /// so the spawn, `note_conversation` and a title change cannot disagree about
 /// a field. A session with no conversation id has no record to write.
-fn record_live(live: &Live) {
-    let Some(session_id) = live.conversation.clone() else { return };
+fn write_record(live: &Live) -> bool {
+    let Some(session_id) = live.conversation.clone() else { return false };
     crate::terminal::restore::record(
         Path::new(&live.project),
         crate::terminal::restore::Restorable {
@@ -1137,6 +1146,16 @@ fn record_live(live: &Live) {
             title: live.title.clone(),
         },
     );
+    true
+}
+
+/// `write_record`, and the new registry told to every client. A branch that also emits
+/// `session:state` calls this after the emit, so the live row is known before the registry offers
+/// the same id as an offline one.
+fn record_live(ctx: &Context, live: &Live) {
+    if write_record(live) {
+        crate::terminal::restore::announce(ctx, Path::new(&live.project));
+    }
 }
 
 fn write_stdin(
@@ -2112,7 +2131,7 @@ fn handle(
                 }
                 return;
             }
-            match spawn_session(ctx, id, &project, intent, permission, chunks, Some(agent)) {
+            match spawn_session(ctx, id, &project, intent, permission, chunks, Some(agent), true) {
                 Ok(live) => {
                     let waits = live.talking.as_ref().is_some_and(|talking| talking.driver.awaits_startup());
                     let mut package = CrewPackage::new(project, id, "Crew lead");
@@ -2338,7 +2357,7 @@ fn handle(
             // spawn and the same startup wait as `Start` otherwise.
             let id = *next_id;
             *next_id += 1;
-            match spawn_session(ctx, id, &project, intent, permission, chunks, Some(&pinned)) {
+            match spawn_session(ctx, id, &project, intent, permission, chunks, Some(&pinned), false) {
                 Ok(mut live) => {
                     live.run_started = true;
                     sessions.insert(id, live);
@@ -2372,7 +2391,7 @@ fn handle(
             }
             let id = *next_id;
             *next_id += 1;
-            let started = spawn_session(ctx, id, &project, intent, permission, chunks, None);
+            let started = spawn_session(ctx, id, &project, intent, permission, chunks, None, false);
             match started {
                 Ok(live) => {
                     sessions.insert(id, live);
@@ -2414,6 +2433,9 @@ fn handle(
                 }
                 None => Err(SessionError::NoSuchSession(id)),
             });
+        }
+        Request::List(tx) => {
+            let _ = tx.send(records(sessions));
         }
         Request::Live(tx) => {
             let mut list: Vec<LiveSession> = sessions
@@ -2477,7 +2499,7 @@ fn handle(
                 if let Some(title) = super::model::first_words(&text) {
                     live.title = Some(title);
                     emit_state(ctx, id, live);
-                    record_live(live);
+                    record_live(ctx, live);
                 }
             }
             let delivered = match live.talking.as_mut() {
@@ -2589,7 +2611,7 @@ fn handle(
             // deletes the `--mcp-config` file (`McpConfig::drop`, by dropping
             // `Talking`) — so this reaches all of that by the same road it
             // always has, rather than repeating it here.
-            live.removed = true;
+            mark_removed(ctx, id, live);
             if let Some(child) = live.child.as_mut() {
                 let _ = child.start_kill();
             }
@@ -2785,6 +2807,7 @@ fn absorb(
             if !never_became_a_conversation(failed_startup, live.discard_on_eof) {
                 if let Some(conversation) = live.conversation.as_deref() {
                     crate::terminal::restore::drop_record(Path::new(&live.project), conversation);
+                    crate::terminal::restore::announce(ctx, Path::new(&live.project));
                 }
             }
             // Reaped on a task of its own: end of stream arrives before the
@@ -2854,7 +2877,12 @@ fn absorb(
             // A failed pre-creation startup was never a conversation. Its
             // child has been handed to the reaper above; remove the temporary
             // entry so attach cannot paint a failed empty transcript.
-            if never_became_a_conversation(failed_startup, live.discard_on_eof) { sessions.remove(&id); }
+            if never_became_a_conversation(failed_startup, live.discard_on_eof) {
+                sessions.remove(&id);
+                // A client may have heard of it already (`session:state`), and this is the one
+                // place a session leaves the map.
+                ctx.emit("session:removed", &Removed { id });
+            }
         }
     }
 }
@@ -2989,7 +3017,51 @@ fn wants_first_words_title(title: &Option<String>, work: &crate::terminal::model
     title.is_none() && matches!(work, crate::terminal::model::SessionWork::Bare)
 }
 
+/// The cross on a row: the flag `session_list` filters by, and `session:removed` to every client.
+/// Told once — a second cross on a row already closed has nothing to add.
+fn mark_removed(ctx: &Context, id: SessionId, live: &mut Live) {
+    if !live.removed {
+        live.removed = true;
+        ctx.emit("session:removed", &Removed { id });
+    }
+}
+
+/// What `session_list` answers: every session the cross has not closed, ended or not, by id.
+fn records(sessions: &HashMap<SessionId, Live>) -> Vec<SessionRecord> {
+    let mut list: Vec<SessionRecord> = sessions
+        .iter()
+        .filter(|(_, live)| !live.removed && !live.crew_lead)
+        .map(|(id, live)| SessionRecord {
+            id: *id,
+            project: live.project.clone(),
+            agent: live.agent.clone(),
+            state: live.state,
+            conversation: live.conversation.clone(),
+            title: live.title.clone(),
+            work: live.work.clone(),
+            started_at: live.started_at.clone(),
+            cwd: live.cwd.clone(),
+        })
+        .collect();
+    list.sort_by_key(|record| record.id);
+    list
+}
+
+/// A session just spawned, told to every client: the state first, so the row is known as a live
+/// one, and then the registry that offers the same conversation back as an offline row. In the
+/// other order a device that never started the session would draw it as an offer to resume what is
+/// already being driven.
+fn announce_new(ctx: &Context, id: SessionId, live: &Live) {
+    emit_state(ctx, id, live);
+    record_live(ctx, live);
+}
+
 fn emit_state(ctx: &Context, id: SessionId, live: &Live) {
+    // A closed session has told everybody it is gone; the state its child reaps with afterwards
+    // would only contradict that.
+    if live.removed || live.crew_lead {
+        return;
+    }
     ctx.emit(
         "session:state",
         &StateChange {
@@ -2997,6 +3069,10 @@ fn emit_state(ctx: &Context, id: SessionId, live: &Live) {
             state: live.state,
             conversation: live.conversation.clone(),
             title: live.title.clone(),
+            project: live.project.clone(),
+            agent: live.agent.clone(),
+            work: live.work.clone(),
+            started_at: live.started_at.clone(),
         },
     );
 }
@@ -3027,6 +3103,7 @@ fn refresh_state(ctx: &Context, id: SessionId, live: &mut Live) {
     // `title_settled` rather than on the agent directly: a Codex session (or
     // any other harness) starts settled at the spawn and this branch never
     // runs for it, which is the whole of why Codex keeps the person's words.
+    let mut recorded = false;
     if !live.title_settled && matches!(state, SessionState::Ready | SessionState::NeedsYou) {
         if let Some(conversation) = live.conversation.as_deref() {
             let found = crate::sessions::read::transcript(Path::new(&live.cwd), conversation)
@@ -3034,11 +3111,15 @@ fn refresh_state(ctx: &Context, id: SessionId, live: &mut Live) {
             if let Some(title) = found {
                 live.title = Some(title);
                 live.title_settled = true;
-                record_live(live);
+                recorded = write_record(live);
             }
         }
     }
     emit_state(ctx, id, live);
+    // After the state, for the reason `record_live` gives.
+    if recorded {
+        crate::terminal::restore::announce(ctx, Path::new(&live.project));
+    }
 }
 
 /// The id a harness picked for itself, the moment its own protocol confirms
@@ -3061,6 +3142,10 @@ fn note_conversation(ctx: &Context, id: SessionId, live: &mut Live, conversation
         return;
     }
     live.conversation = Some(conversation);
+    // A session the cross has already closed must not write the registry nor offer itself back.
+    if live.removed {
+        return;
+    }
     // Emitted unconditionally, unlike `refresh_state`'s own emit above: the
     // state word may not have moved at all — a fresh thread's own
     // `thread/start` reply carries no event of its own — but the id on the
@@ -3084,7 +3169,7 @@ fn note_conversation(ctx: &Context, id: SessionId, live: &mut Live, conversation
     // to key it by — through `record_live`, so this write and the spawn's own
     // cannot disagree about a field, including a title already known before
     // the id was.
-    record_live(live);
+    record_live(ctx, live);
 }
 
 #[cfg(test)]
@@ -3139,6 +3224,137 @@ mod tests {
             model: None,
         };
         assert!(serde_json::to_value(&attached).unwrap().get("model").is_none());
+    }
+
+    /// A session with nothing behind it: no child, no codec, an empty journal.
+    fn idle_live(project: &str, state: SessionState) -> Live {
+        Live {
+            discard_on_eof: false,
+            talking: None,
+            journal: Journal::new(),
+            child: None,
+            child_alive: false,
+            removed: false,
+            reaped: false,
+            run_started: false,
+            state,
+            conversation: Some("c".into()),
+            project: project.into(),
+            cwd: project.into(),
+            agent: "claude".into(),
+            model: None,
+            work: crate::terminal::model::SessionWork::Bare,
+            started_at: "2026-10-27T10:00:00+00:00".into(),
+            title: Some("A title".into()),
+            title_settled: true,
+            crew_lead: false,
+        }
+    }
+
+    #[derive(Default)]
+    struct Tap(std::sync::Mutex<Vec<(String, serde_json::Value)>>);
+
+    impl crate::context::Sink for Tap {
+        fn emit(&self, name: &str, payload: serde_json::Value) {
+            self.0.lock().unwrap().push((name.to_owned(), payload));
+        }
+        fn push(&self, _message: crate::remote::push::Message) {}
+    }
+
+    fn tapped() -> (Context, std::sync::Arc<Tap>) {
+        let tap = std::sync::Arc::new(Tap::default());
+        let ctx = Context::new(Err("x".into()), Err("x".into()), Err("x".into()), None, tap.clone());
+        (ctx, tap)
+    }
+
+    #[test]
+    fn list_holds_every_session_that_is_not_removed_and_says_what_each_is() {
+        let (ctx, _tap) = tapped();
+        let mut sessions = HashMap::new();
+        sessions.insert(7, idle_live("/p", SessionState::Exited));
+        let mut running = idle_live("/q", SessionState::Running);
+        running.child_alive = true;
+        running.agent = "codex".into();
+        sessions.insert(3, running);
+
+        let list = records(&sessions);
+        assert_eq!(list.iter().map(|record| record.id).collect::<Vec<_>>(), vec![3, 7], "sorted by id");
+        assert_eq!(list[0].project, "/q");
+        assert_eq!(list[0].agent, "codex");
+        assert_eq!(list[0].state, SessionState::Running);
+        assert_eq!(list[0].started_at, "2026-10-27T10:00:00+00:00");
+        assert_eq!(list[0].cwd, "/q");
+        assert_eq!(list[1].state, SessionState::Exited, "an ended session that was not closed stays");
+
+        mark_removed(&ctx, 7, sessions.get_mut(&7).unwrap());
+        assert_eq!(records(&sessions).iter().map(|record| record.id).collect::<Vec<_>>(), vec![3]);
+    }
+
+    #[test]
+    fn closing_a_session_announces_session_removed_once() {
+        let (ctx, tap) = tapped();
+        let mut live = idle_live("/p", SessionState::Ready);
+        mark_removed(&ctx, 5, &mut live);
+        mark_removed(&ctx, 5, &mut live);
+        let events = tap.0.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "session:removed");
+        assert_eq!(events[0].1, serde_json::json!({ "id": 5 }));
+    }
+
+    #[test]
+    fn a_new_session_is_announced_live_before_the_registry_offers_it_back() {
+        let root = std::env::temp_dir().join(format!("smetana-announce-new-{}", std::process::id()));
+        std::fs::create_dir_all(root.join(".smetana")).unwrap();
+        let (ctx, tap) = tapped();
+        let live = idle_live(&root.to_string_lossy(), SessionState::Ready);
+        announce_new(&ctx, 3, &live);
+        let events = tap.0.lock().unwrap();
+        assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["session:state", "terminal:restorable"]);
+        assert_eq!(events[0].1["project"], root.to_string_lossy().as_ref());
+        assert_eq!(events[0].1["agent"], "claude");
+        assert_eq!(events[0].1["startedAt"], "2026-10-27T10:00:00+00:00");
+        assert_eq!(events[1].1["records"][0]["sessionId"], "c");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_crew_lead_is_not_in_the_list_and_announces_no_state() {
+        let (ctx, tap) = tapped();
+        let mut sessions = HashMap::new();
+        let mut lead = idle_live("/p", SessionState::Running);
+        lead.crew_lead = true;
+        emit_state(&ctx, 1, &lead);
+        sessions.insert(1, lead);
+        sessions.insert(2, idle_live("/p", SessionState::Running));
+        assert_eq!(records(&sessions).iter().map(|r| r.id).collect::<Vec<_>>(), vec![2]);
+        assert!(tap.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_removed_session_says_no_more_state() {
+        let (ctx, tap) = tapped();
+        let mut live = idle_live("/p", SessionState::Exited);
+        live.removed = true;
+        emit_state(&ctx, 4, &live);
+        assert!(tap.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn state_change_carries_the_four_fields_a_stranger_needs() {
+        let (ctx, tap) = tapped();
+        emit_state(&ctx, 4, &idle_live("/p", SessionState::Ready));
+        let events = tap.0.lock().unwrap();
+        let wire = &events[0].1;
+        assert_eq!(events[0].0, "session:state");
+        assert_eq!(wire["id"], 4);
+        assert_eq!(wire["state"], "ready");
+        assert_eq!(wire["conversation"], "c");
+        assert_eq!(wire["title"], "A title");
+        assert_eq!(wire["project"], "/p");
+        assert_eq!(wire["agent"], "claude");
+        assert_eq!(wire["work"]["kind"], "bare");
+        assert_eq!(wire["startedAt"], "2026-10-27T10:00:00+00:00");
     }
 
     #[test]

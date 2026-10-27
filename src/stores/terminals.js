@@ -898,6 +898,17 @@ export async function initTerminals() {
     marks.delete(id)
     dropSession(id)
   })
+  await listen('terminal:restorable', (event) => {
+    /* The server's whole registry for one project, sent after each write to it:
+       the offline rows follow what any device did - a session ended, a row taken
+       away - without anybody reading the file again. The list replaces
+       `restored` outright (a list and not a nudge, so there is no read to race
+       the writes around a spawn), and another project's list is not this
+       panel's to draw. */
+    const { project, records } = event.payload ?? {}
+    if (!project || project !== terminalState.project || !Array.isArray(records)) return
+    terminalState.restored = records
+  })
   await listen('terminal:output', (event) => {
     const { id } = event.payload
     /* The session this window attached to, and not the selected agent: the two

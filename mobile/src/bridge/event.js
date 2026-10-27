@@ -11,7 +11,6 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 import { listen as tauriListen } from '@tauri-apps/api/event'
 import { isAllowedEvent } from '../allowed.js'
-import { sessions } from './sessionState.js'
 
 export const BRIDGE_EVENT = 'bridge:event'
 
@@ -25,21 +24,11 @@ function dispatch(name, payload) {
   }
 }
 
-/* The event the desktop would have sent and the allowlist does not carry. A batch of
-   `session:events` moves the session's state; the store listens to `session:state` for it, and
-   it is said here, locally, after the batch itself - the same order the desktop emits them in.
-   See ./sessionState.js. */
-function sayState(payload) {
-  const state = sessions.absorb(payload?.id, payload?.events)
-  if (state !== null) dispatch('session:state', { id: payload.id, state, conversation: null, title: null })
-}
-
 function ensurePump() {
   pump ??= tauriListen(BRIDGE_EVENT, (event) => {
     const message = event.payload
     if (message && typeof message.name === 'string') {
       dispatch(message.name, message.payload)
-      if (message.name === 'session:events') sayState(message.payload)
     }
   })
   return pump
