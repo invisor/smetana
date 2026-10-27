@@ -67,6 +67,13 @@ const outDir = join(root, 'src-tauri', 'binaries')
 const hostTriple = () =>
   execFileSync('rustc', ['--print', 'host-tuple'], { encoding: 'utf8' }).trim()
 
+// The bsdtar Windows ships since 10 1803, or null off Windows and where it is missing.
+const windowsTar = () => {
+  if (process.platform !== 'win32') return null
+  const tar = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
+  return existsSync(tar) ? tar : null
+}
+
 const targetPath = (triple) =>
   join(outDir, triple.includes('windows') ? `bd-${triple}.exe` : `bd-${triple}`)
 
@@ -116,7 +123,10 @@ async function install(triple, sums) {
       )
     }
 
-    execFileSync('tar', ['-xf', archive, '-C', work])
+    // On Windows the `tar` on PATH is often Git's GNU tar (any bash step in CI puts it first), which
+    // reads `C:\…` as a remote `host:path` and cannot open a zip at all. The system's own bsdtar
+    // takes both.
+    execFileSync(windowsTar() ?? 'tar', ['-xf', archive, '-C', work])
     await mkdir(outDir, { recursive: true })
     await copyFile(join(work, windows ? 'bd.exe' : 'bd'), target)
     await chmod(target, 0o755)
