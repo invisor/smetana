@@ -133,6 +133,9 @@ pub const ALLOWED_COMMANDS: &[&str] = &[
     "terminal_restorable",
     "terminal_forget",
     "terminal_remove",
+    // Added in protocol 1.13: the card menu on a phone writes the tracker.
+    "tracker_update",
+    "tracker_delete",
 ];
 
 /// The events a phone may listen to. Every name contains a colon and no command
@@ -191,12 +194,13 @@ pub const SERVER_COMMANDS: &[&str] = &[
     "terminal_restorable",
     "terminal_forget",
     "terminal_remove",
+    // Added in protocol 1.13: the card menu on a phone writes the tracker.
+    "tracker_update",
+    "tracker_delete",
     // The tracker.
     "tracker_resync",
-    "tracker_update",
     "tracker_close",
     "tracker_reopen",
-    "tracker_delete",
     "tracker_init",
     "tracker_repair",
     "tracker_failure",

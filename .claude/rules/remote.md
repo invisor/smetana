@@ -579,6 +579,22 @@ unchanged. A phone sends it when its push token appears or changes after pairing
 would read the variant as a broken frame, so a phone sends it only when `HelloReply.protocol_minor >= 1`. The contract
 files did not change, so `versions.json` has `1.1` with the same digest as `1.0`.
 
+## Protocol 1.13: tracker writes
+
+Additions only. `tracker_update { id, patch }` and `tracker_delete { id }` join the phone's allowlist as its last two
+entries (after the 1.12 names), in `ALLOWED_COMMANDS` and in `mobile/src/allowed.js`, in that order. They were already
+`SERVER_COMMANDS` with handlers in `dispatch.rs` and contract examples, so no contract file changed and `versions.json`
+has `1.13` with the digest the contract test reports. The server's list moved the two names out of the tracker group
+into the phone's prefix, since the phone's lists must stay the front of the server's.
+
+- **Why:** the phone's tap-a-card sheet carries the desktop card menu in full: Block/Unblock and Move to... are a status
+  written through `tracker_update`, and Delete is `tracker_delete`.
+- **Still forbidden to a phone:** `tracker_close`, `tracker_reopen` and everything else not on the list. The desktop menu
+  writes a status through `tracker_update`, so closing and reopening need no door of their own.
+- **Gating:** the phone hides these actions on a desktop whose `protocol_minor` (`desktopMinor` of the bridge status) is
+  below 13, because an older desktop answers `Forbidden`. It reads the minor, not the `capabilities` list, which the
+  phone's front end never sees.
+
 ## Protocol 1.3: `attachment_write`
 
 `attachment_write { name, data }` (base64 bytes, `name` may be `null`) joins the allowlist as its last entry and
