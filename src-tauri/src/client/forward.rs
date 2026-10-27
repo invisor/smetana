@@ -105,6 +105,7 @@ const READS: &[&str] = &[
     "terminal_marks",
     "terminal_restorable",
     "terminal_attach",
+    "session_list",
     "session_attach",
     "session_since",
     "crew_tree",
@@ -216,7 +217,7 @@ mod tests {
 
     #[test]
     fn only_reads_wait_for_the_first_connection() {
-        for cmd in ["tracker_snapshot", "files_read", "terminal_list", "settings_load"] {
+        for cmd in ["tracker_snapshot", "files_read", "terminal_list", "settings_load", "session_list"] {
             assert!(is_read(cmd), "{cmd}");
         }
         for cmd in [

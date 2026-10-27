@@ -188,7 +188,12 @@ pub enum SessionState {
 /// session and repeating it costs a UUID per change; the alternative is a
 /// window that missed one message and never learns the name of the row it is
 /// drawing.
+///
+/// **It also says what the session is** (`project`, `agent`, `work`, `started_at`), so that a client
+/// which never started the session — a phone, or a second window — can draw its row from this one
+/// event instead of asking the server again for an id it has not heard of.
 #[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StateChange {
     pub id: SessionId,
     pub state: SessionState,
@@ -202,6 +207,36 @@ pub struct StateChange {
     /// reason `conversation` does: a window that missed one event must still
     /// learn the name of the row it is drawing.
     pub title: Option<String>,
+    /// The project folder the session was started in, as the clients name the project.
+    pub project: String,
+    /// The harness's profile id.
+    pub agent: String,
+    pub work: crate::terminal::model::SessionWork,
+    /// RFC 3339, minted once at the spawn.
+    pub started_at: String,
+}
+
+/// One entry of `session_list`: a driven session the worker still holds that nobody has closed,
+/// running or ended. The `session:state` fields plus the directory it runs in.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRecord {
+    pub id: SessionId,
+    pub project: String,
+    pub agent: String,
+    pub state: SessionState,
+    pub conversation: Option<String>,
+    pub title: Option<String>,
+    pub work: crate::terminal::model::SessionWork,
+    pub started_at: String,
+    pub cwd: String,
+}
+
+/// The payload of `session:removed`: the cross ended this session, or its startup never became a
+/// conversation, and every client should forget the row.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub struct Removed {
+    pub id: SessionId,
 }
 
 #[derive(Clone, Debug, thiserror::Error, serde::Serialize)]

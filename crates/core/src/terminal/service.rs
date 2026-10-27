@@ -801,6 +801,14 @@ fn forget_session(live: &Live) {
     super::restore::drop_record(Path::new(&live.session.project), id);
 }
 
+/// Tell the clients the registry changed, when `forget_session` had a record to take: a session with
+/// no conversation id never touched the file, and a shell ending is not news about it.
+fn announce_forgotten(ctx: &Context, live: &Live) {
+    if live.session.conversation.is_some() {
+        super::restore::announce(ctx, Path::new(&live.session.project));
+    }
+}
+
 /// The payload of `terminal:output`: the chunk `seq` of session `id`, in base64. A client over a
 /// connection that was sent the ring afresh (see `remote::bridge`) gets the same keys and one
 /// more, `reset: true`, which says the data replaces the terminal's contents.
@@ -885,6 +893,9 @@ fn absorb(ctx: &Context, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk) 
             // the session has exited. The driven road does the same call.
             crate::runs::review_report::on_session_end(&live.session.work, &live.session.project);
             emit_state(ctx, &live.session);
+            // After the state, so a client learns the row ended before the registry
+            // stops offering it.
+            announce_forgotten(ctx, &live);
             // Whatever this session left running under a group its own exit
             // could never reach — `setsid yes &`, the case this exists for.
             // A task of its own: the worker has other sessions to keep
@@ -1622,6 +1633,7 @@ fn handle(
                                 title,
                             },
                         );
+                        super::restore::announce(ctx, Path::new(&session.project));
                     }
                     // A harness that names its own conversation is asked
                     // what it chose, on a thread of its own: the file does not
@@ -1697,6 +1709,7 @@ fn handle(
                     title,
                 },
             );
+            super::restore::announce(ctx, Path::new(&session.project));
         }
         Request::CreateShell(project, cwd, tx) => {
             // Everything the agent branch above does about *which* agent — the
@@ -1783,6 +1796,7 @@ fn handle(
                 // it — `terminal_forget` — and this is the same act one session
                 // earlier.
                 forget_session(&live);
+                announce_forgotten(ctx, &live);
                 // Announced, because not every removal is the front end's own
                 // doing any more: a run kills the session of a batch that
                 // stopped on a question (`runs/service.rs`), and without an

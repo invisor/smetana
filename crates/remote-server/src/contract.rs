@@ -60,7 +60,7 @@ use smetana_core::attachments::{Cleaned, Survey};
 use smetana_core::files::model::{Entry, EntryKind, FileText, Listing, Stat};
 use smetana_core::runs::browser::BrowserTools;
 use smetana_core::runs::usage::{AgentUsage, Band, Unavailable, Usage};
-use smetana_core::session::model::StateChange;
+use smetana_core::session::model::{Removed, SessionRecord, StateChange};
 use smetana_core::session::service::CrewTreeChange;
 use smetana_core::sessions::model::SessionSummary;
 use smetana_core::terminal::model::{SessionMark, WorkKind};
@@ -629,6 +629,33 @@ fn restorable() -> Vec<Restorable> {
     }]
 }
 
+fn session_records() -> Vec<SessionRecord> {
+    vec![
+        SessionRecord {
+            id: 1,
+            project: "/work/smetana".into(),
+            agent: "claude".into(),
+            state: DrivenState::Ready,
+            conversation: Some("conv-1".into()),
+            title: Some("Fix the board".into()),
+            work: SessionWork::NewTask { text: "Fix the board".into(), issue_type: None, priority: None, parent: None },
+            started_at: "2026-10-27T10:00:00+00:00".into(),
+            cwd: "/work/smetana".into(),
+        },
+        SessionRecord {
+            id: 2,
+            project: "/work/other".into(),
+            agent: "codex".into(),
+            state: DrivenState::Exited,
+            conversation: None,
+            title: None,
+            work: SessionWork::Bare,
+            started_at: "2026-10-27T11:30:00+00:00".into(),
+            cwd: "/work/other/.worktrees/x".into(),
+        },
+    ]
+}
+
 fn agent_usages() -> Vec<AgentUsage> {
     vec![
         AgentUsage::Unsupported { agent: Some("codex".into()) },
@@ -1091,9 +1118,28 @@ fn server_payloads(map: &mut BTreeMap<&'static str, Vec<Value>>) {
                     state,
                     conversation: (i == 0).then(|| "conv-1".to_string()),
                     title: (i == 0).then(|| "Fix the board".to_string()),
+                    project: "/work/smetana".into(),
+                    agent: "claude".into(),
+                    work: if i == 0 {
+                        SessionWork::NewTask { text: "Fix the board".into(), issue_type: None, priority: None, parent: None }
+                    } else {
+                        SessionWork::Bare
+                    },
+                    started_at: "2026-10-27T10:00:00+00:00".into(),
                 })
             })
             .collect(),
+    );
+    map.insert("session:removed", vec![json_of(&Removed { id: 3 })]);
+    map.insert(
+        "terminal:restorable",
+        vec![
+            json_of(&smetana_core::terminal::restore::RestorableList {
+                project: "/work/smetana".into(),
+                records: restorable(),
+            }),
+            json_of(&smetana_core::terminal::restore::RestorableList { project: "/work/smetana".into(), records: Vec::new() }),
+        ],
     );
     map.insert(
         "crew:tree",
@@ -1137,6 +1183,7 @@ fn replies() -> BTreeMap<&'static str, Vec<Value>> {
     map.insert("run_start", all(&runs_basic()));
     map.insert("run_stop", vec![json_of(&runs_basic()[0]), Value::Null]);
     map.insert("session_start", vec![json!(7)]);
+    map.insert("session_list", vec![json_of(&session_records()), json!([])]);
     map.insert("session_attach", all(&driven_attached()));
     map.insert("session_since", vec![json_of(&conversation()), Value::Null]);
     map.insert(

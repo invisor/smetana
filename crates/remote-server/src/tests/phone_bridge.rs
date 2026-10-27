@@ -259,6 +259,9 @@ pub(super) fn services() -> (Services, Snapshot) {
                 SessionRequest::Attach(id, tx) => {
                     let _ = tx.send(Err(SessionError::NoSuchSession(id)));
                 }
+                SessionRequest::List(tx) => {
+                    let _ = tx.send(Vec::new());
+                }
                 SessionRequest::Send(..) => panic!("a send with attachments must never reach the worker"),
                 _ => {}
             }
@@ -388,12 +391,12 @@ async fn remote_bridge_an_event_off_the_list_cannot_be_listened_to() {
     let h = harness().await;
     h.remote.hub.set_dispatch(Arc::new(Recorder::default()));
     let (_phone, mut client) = paired(&h).await;
-    for event in ["terminal:output", "remote:devices", "session:state"] {
+    for event in ["terminal:output", "remote:devices", "crew:tree"] {
         client.send_msg(ClientMsg::Listen { event: event.into() }).await;
     }
     // Messages are handled in order: once this answer is back, the Listens were seen.
     client.call("tracker_health", json!({})).await.unwrap();
-    for event in ["terminal:output", "remote:devices", "session:state"] {
+    for event in ["terminal:output", "remote:devices", "crew:tree"] {
         assert_eq!(h.remote.hub.listeners(event), 0, "{event}");
         h.remote.hub.publish(event, &json!({}));
     }
@@ -472,4 +475,58 @@ async fn remote_bridge_a_phone_reports_a_new_push_token_and_the_device_keeps_it(
     client.call("tracker_health", json!({})).await.unwrap();
     let device = h.remote.devices.all().into_iter().find(|d| d.key == key).unwrap();
     assert_eq!(device.push_token.as_deref(), Some("fresh-token"));
+}
+
+#[tokio::test]
+async fn remote_bridge_a_phone_lists_the_sessions_and_hears_state_and_removal() {
+    let h = harness().await;
+    let (services, _) = services();
+    h.remote.hub.set_dispatch(Arc::new(services));
+    let (_phone, mut client) = paired(&h).await;
+
+    // The list is the server's, and an empty one is an answer, not a refusal.
+    assert_eq!(client.call("session_list", json!({})).await, Ok(json!([])));
+
+    for event in ["session:state", "session:removed", "terminal:restorable"] {
+        client.send_msg(ClientMsg::Listen { event: event.into() }).await;
+    }
+    wait_until("the listeners", || {
+        ["session:state", "session:removed", "terminal:restorable"].iter().all(|e| h.remote.hub.listeners(e) == 1)
+    })
+    .await;
+
+    let state = json!({
+        "id": 9, "state": "running", "conversation": "c9", "title": null,
+        "project": "/p", "agent": "claude", "work": { "kind": "bare" },
+        "startedAt": "2026-10-27T10:00:00+00:00",
+    });
+    h.remote.hub.publish("session:state", &state);
+    h.remote.hub.publish("session:removed", &json!({ "id": 9 }));
+    h.remote.hub.publish("terminal:restorable", &json!({ "project": "/p", "records": [] }));
+    let mut names = Vec::new();
+    for _ in 0..3 {
+        let (name, payload) = client.event(Duration::from_secs(5)).await.expect("the event arrives");
+        if name == "session:state" {
+            assert_eq!(payload, state);
+        }
+        names.push(name);
+    }
+    assert_eq!(names, ["session:state", "session:removed", "terminal:restorable"]);
+}
+
+#[tokio::test]
+async fn remote_bridge_a_phone_reads_and_forgets_the_restorable_registry() {
+    let h = harness().await;
+    let recorder = Arc::new(Recorder::default());
+    h.remote.hub.set_dispatch(recorder.clone());
+    let (_phone, mut client) = paired(&h).await;
+    for cmd in ["session_close", "terminal_restorable", "terminal_forget", "terminal_remove"] {
+        assert_eq!(client.call(cmd, json!({})).await, Ok(json!({ "ran": cmd })), "{cmd}");
+    }
+    // A terminal still cannot be written to from a phone.
+    assert_eq!(client.call("terminal_write", json!({})).await, Err(BridgeError::Forbidden));
+    assert_eq!(
+        recorder.calls.lock().unwrap().as_slice(),
+        ["session_close", "terminal_restorable", "terminal_forget", "terminal_remove"]
+    );
 }

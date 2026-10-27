@@ -94,7 +94,9 @@ impl std::error::Error for BridgeError {}
 /// one is a major change.
 ///
 /// There is deliberately no `terminal_write`, `terminal_resize`, `terminal_shell`
-/// or `terminal_create`: a terminal is read-only on a phone. `session_send` is
+/// or `terminal_create`: a terminal cannot be written to from a phone. It can be closed
+/// (`terminal_remove`, and `terminal_forget` for an offline row), on purpose: the person's answer
+/// was that any agent may be closed from any device. `session_send` is
 /// allowlisted, but its `attachments` must be empty (the desktop refuses a
 /// phone's paths — see `remote::bridge`). `attachment_write` is how a picture
 /// taken on a phone reaches the desktop's attachment store, and the pictures a
@@ -125,6 +127,12 @@ pub const ALLOWED_COMMANDS: &[&str] = &[
     "terminal_list",
     "terminal_attach",
     "attachment_write",
+    // Added in protocol 1.12: the agents list is the server's, and a phone closes any row.
+    "session_list",
+    "session_close",
+    "terminal_restorable",
+    "terminal_forget",
+    "terminal_remove",
 ];
 
 /// The events a phone may listen to. Every name contains a colon and no command
@@ -137,6 +145,10 @@ pub const ALLOWED_EVENTS: &[&str] = &[
     "crew:events",
     "terminal:state",
     "terminal:removed",
+    // Added in protocol 1.12: the agents list, and the registry of offline rows.
+    "session:state",
+    "session:removed",
+    "terminal:restorable",
 ];
 
 /// Every command a desktop device may call: everything the desktop's own front end calls that
@@ -173,6 +185,12 @@ pub const SERVER_COMMANDS: &[&str] = &[
     "terminal_list",
     "terminal_attach",
     "attachment_write",
+    // Added in protocol 1.12: the agents list is the server's, and a phone closes any row.
+    "session_list",
+    "session_close",
+    "terminal_restorable",
+    "terminal_forget",
+    "terminal_remove",
     // The tracker.
     "tracker_resync",
     "tracker_update",
@@ -244,16 +262,12 @@ pub const SERVER_COMMANDS: &[&str] = &[
     "terminal_marks",
     "terminal_create",
     "terminal_shell",
-    "terminal_remove",
     "terminal_detach",
     "terminal_resize",
     "terminal_write",
     "terminal_clear",
     "terminal_run_capture",
-    "terminal_restorable",
-    "terminal_forget",
     "crew_clear",
-    "session_close",
     // The server's own devices.
     "remote_pair_begin",
     "remote_pair_cancel",
@@ -319,7 +333,10 @@ pub const SERVER_EVENTS: &[&str] = &[
     "crew:events",
     "terminal:state",
     "terminal:removed",
+    // Added in protocol 1.12: the agents list, and the registry of offline rows.
     "session:state",
+    "session:removed",
+    "terminal:restorable",
     "crew:tree",
     "terminal:output",
     "terminal:log",
@@ -518,7 +535,7 @@ mod tests {
         let caps = capabilities();
         assert_eq!(caps.len(), ALLOWED_COMMANDS.len() + ALLOWED_EVENTS.len());
         assert_eq!(caps.first().map(String::as_str), Some("tracker_health"));
-        assert_eq!(caps.last().map(String::as_str), Some("terminal:removed"));
+        assert_eq!(caps.last().map(String::as_str), Some("terminal:restorable"));
     }
 
     #[test]
