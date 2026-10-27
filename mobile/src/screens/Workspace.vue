@@ -278,7 +278,7 @@ const bannerStyle = {
       @started="intoConversation"
     />
     <AgentsScreen v-else-if="screen.screen === 'agents'" @open="go" />
-    <ConversationScreen v-else-if="screen.screen === 'conversation'" :id="screen.id" :driven="screen.driven" />
+    <ConversationScreen v-else-if="screen.screen === 'conversation'" :key="`${screen.driven}:${screen.id}`" :id="screen.id" :driven="screen.driven" @close="route = back(route)" />
     <RunsScreen v-else-if="screen.screen === 'runs'" :project="route.project" />
     <RunsScreen
       v-else-if="screen.screen === 'run'"

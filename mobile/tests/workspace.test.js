@@ -107,6 +107,36 @@ describe('what the working screens ask the desktop for', () => {
     expect(listened).toEqual(expect.arrayContaining(['tracker:delta', 'tracker:health', 'run:state', 'session:events', 'terminal:state', 'terminal:removed']))
   })
 
+  it('sends a resume intent with every field the server requires', async () => {
+    const { core, workspace, stores } = await start()
+    await workspace.startWorkspace()
+    const { resumeIntentFor } = await import('../src/agentList.js')
+    await stores.conversation.startConversation('/work/a', resumeIntentFor({ conversation: 'old', cwd: '/work/a', title: null }))
+    expect(core.bridged('session_start')[0].intent).toEqual({ kind: 'resumeSession', id: 'old', cwd: '/work/a', title: null, fork: false })
+  })
+
+  it('closes from the phone with only the commands the phone may send', async () => {
+    const { core, workspace, stores } = await start({
+      session_list: [{ id: 5, project: '/work/a', state: 'running', startedAt: '2026-10-15T10:00:00Z', work: { kind: 'bare' }, conversation: 'c-5' }],
+      terminal_restorable: [{ sessionId: 'old', agent: 'claude', cwd: '/work/a', project: '/work/a', work: { kind: 'bare' }, startedAt: '2026-10-14T10:00:00Z' }],
+      session_close: {},
+      terminal_forget: {},
+      terminal_remove: {}
+    })
+    await workspace.startWorkspace()
+    const { closeActsFor } = await import('../../src/components/agent/closeRow.js')
+    const rows = stores.terminals.agentRows.value
+    expect(closeActsFor(rows.find((row) => row.restored))).toEqual({ kind: 'offered', conversation: 'old' })
+    await stores.terminals.forgetRestored('old')
+    await stores.conversation.closeConversation(5)
+    await stores.terminals.removeSession(2)
+    for (const name of ['session_close', 'terminal_forget', 'terminal_remove']) {
+      expect(names(core), name).toContain(name)
+      expect(ALLOWED_COMMANDS).toContain(name)
+    }
+    expect(names(core).filter((name) => !ALLOWED_COMMANDS.includes(name))).toEqual([])
+  })
+
   it('never writes the desktop\'s settings or touches its files, git or terminals', async () => {
     const { core, workspace } = await start()
     await workspace.startWorkspace()
@@ -130,11 +160,23 @@ describe('reading the desktop', () => {
     expect(workspace.workspace.ready).toBe(true)
   })
 
-  it('adopts the session a run is driving, so it is in the agents list', async () => {
-    const { workspace, stores } = await start()
+  it('does not adopt the session a run is driving: the server\'s list brings it', async () => {
+    const { core, workspace, stores } = await start({
+      session_list: [{ id: 5, project: '/work/a', state: 'running', startedAt: '2026-10-15T10:00:00Z', work: { kind: 'bare' } }]
+    })
     await workspace.startWorkspace()
     expect(stores.conversation.drivenSessions.value.map((session) => session.id)).toEqual([5])
-    expect(stores.conversation.drivenSessions.value[0].project).toBe('/work/a')
+    expect(names(core)).toContain('session_list')
+  })
+
+  it('drops a conversation another device closed, on session:removed', async () => {
+    const { emit, workspace, stores, nextTick } = await start({
+      session_list: [{ id: 5, project: '/work/a', state: 'running', startedAt: '2026-10-15T10:00:00Z', work: { kind: 'bare' } }]
+    })
+    await workspace.startWorkspace()
+    await emit('bridge:event', { name: 'session:removed', payload: { id: 5 } })
+    await nextTick()
+    expect(stores.conversation.drivenSessions.value).toEqual([])
   })
 
   it('starts the stores\' listeners once however often the link comes back', async () => {
