@@ -1440,6 +1440,11 @@ pub struct Settings {
     /// server's file if an earlier build kept it there, or found already in place. It is the marker
     /// the seeding runs by (`split::seed_device`); a server's own file leaves it as it finds it.
     pub device_seeded: bool,
+    /// Set once, by the desktop client, when this device's look (theme, density, the board's rules and
+    /// every project's column order) has been offered to the server, which now keeps it for the phones
+    /// to draw (`split::look_patch`, `split::mark_look_shared`). Until it is set the device file's own
+    /// values are the only copy of a split desktop's look.
+    pub look_shared: bool,
 }
 
 impl Default for Settings {
@@ -1472,6 +1477,7 @@ impl Default for Settings {
             projects: BTreeMap::new(),
             dialogs: BTreeMap::new(),
             device_seeded: false,
+            look_shared: false,
         }
     }
 }
@@ -1636,6 +1642,7 @@ pub fn parse(text: &str) -> Outcome {
         projects: projects(&object),
         dialogs: dialogs(&object),
         device_seeded: object.get("deviceSeeded").and_then(Value::as_bool).unwrap_or(false),
+        look_shared: object.get("lookShared").and_then(Value::as_bool).unwrap_or(false),
     };
     adopt_last_project(&mut settings);
     settings.validate();

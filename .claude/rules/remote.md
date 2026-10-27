@@ -256,6 +256,27 @@ move**, so an older release reinstalled still finds its data:
 A person who moves to a remote server pairs the phone with that server (`smetanad pair --kind phone`); the local server's
 pairing is untouched (`server/smetanad/README.md`).
 
+## Protocol 1.14: the phone hears settings:changed
+
+Two changes under one minor (smetana-x9r9; 1.13 is smetana-jdw5's). **The phone draws the desktop's theme, density,
+kanban rules and column order**, so those moved to the server half of the settings (see the second clause of the rule under
+"Settings"): the examples of `settings_patch`, `settings:changed` and `settings_device_half` in `contract/` changed shape
+(`appearance { theme, density }`, `kanban`, a project's `columnOrder`), which is what the digest in `versions.json` pins.
+
+- **`settings:changed` joined the phone's `ALLOWED_EVENTS`** (and `mobile/src/allowed.js`), at the end, so the phone's
+  list stays the front of the server's and `terminal:restorable` is no longer the last capability. A desktop older than
+  1.14 refuses the subscription, which `bridge/event.js` reads as a local name: no live updates, and the re-read on
+  reconnect and on showing the page stays.
+- **The phone does not fold the payload.** On the event it calls `refreshFromDesktop()` (the same `settings_load` with
+  `project: null` a reconnect makes, so a project pinned on the Runs screen stays pinned). `applyDesktopSettings` copies
+  `appearance.theme` and `density` only at `minor >= LOOK_MINOR` (14): an older server answers `dark` and `comfortable`
+  from its defaults, which the phone cannot tell from a choice. `kanban` and `columnOrder` are copied whatever the
+  minor. `uiFontSize` is never copied, by the person's decision. The phone subscribes only when the desktop is at 14.
+- **Keep in step:** `PROTOCOL_MINOR`, the `versions.json` entry, `LOOK_MINOR` in `mobile/src/desktopSettings.js` and
+  `protocol_minor` in `mobile/src/devBackend.js` all say 14; `SERVER_ROOT`/`SERVER_APPEARANCE`/`SERVER_PROJECT` in
+  `split.rs` and `ROOT`/`SERVER_APPEARANCE`/`PROJECT_FIELDS` in `settingsSplit.js`; `ALLOWED_EVENTS` in `bridge.rs` and
+  `allowed.js`.
+
 ## Protocol 1.12: the agents list (smetana-ahp9)
 
 Additions only. **The list of driven conversations and of offline rows is the server's; every client mirrors it.** Before,
@@ -357,12 +378,17 @@ release the app job published. `tests/docs/smetanadInstall.test.js` holds the un
 
 ## Settings: the server's half and the device's (protocol 1.10)
 
-`crates/core/src/settings/split.rs` draws the line by one question: does a worker on the server read it? The server's:
-`agent`, `model`, `agentRoles`, the four languages, `agentPrompt`, `conversationPanel`, `subscription`, `runFailover`,
-`remote.relayUrl`, `git.removeWorktrees`, `openProjects`, `lastProject`, and per project `runSettings`, `agents` and `usedAt`.
-Everything else is the device's (appearance, layout, `editor`, `kanban`, `reports`, `git.autoFetch`, `window`, `updates`,
-`notifications`, `dialogs`, and a project's tabs, folds, selected task, orders, names and `storageWarnedMib`); a field in
-neither list is the device's, and a test pins the server list. `usedAt` is kept on both sides for each file's own project limit.
+`crates/core/src/settings/split.rs` draws the line by a rule of two clauses: a field is the server's if a worker on the
+server reads it, **or if a paired phone draws it** (added in 1.14). The server's: `agent`, `model`, `agentRoles`, the
+four languages, `agentPrompt`, `conversationPanel`, `subscription`, `runFailover`, `remote.relayUrl`,
+`git.removeWorktrees`, `openProjects`, `lastProject`, the whole `kanban` section, `appearance.theme` and
+`appearance.density`, and per project `runSettings`, `agents`, `usedAt` and `columnOrder`. Everything else is the device's
+(`appearance.uiFontSize`, layout, `editor`, `reports`, `git.autoFetch`, `window`, `updates`, `notifications`, `dialogs`,
+`deviceSeeded`, `lookShared`, and a project's tabs, folds, selected task, other orders, names and `storageWarnedMib`);
+a field in neither list is the device's, and a test pins the server list. `appearance` and `git` are split by field
+(`SERVER_APPEARANCE`, `SERVER_GIT`), and `src/stores/settingsSplit.js` writes the same lists a second time. `usedAt` is
+kept on both sides for each file's own project limit. The cost, taken knowingly: one server, one look, so two desktops on
+one server share a theme and a board, and the last to migrate wins.
 
 - **Server half: a patch.** `settings_patch { patch }` (server-only command) is a JSON merge patch over the server's keys:
   the server drops anything else, applies it to its `settings.json` under one process-wide lock, validates it as a read does,
@@ -392,7 +418,7 @@ neither list is the device's, and a test pins the server list. `usedAt` is kept 
 - **`openProjects`.** The store keeps the project open in this window in the list whatever another client did to it; that
   re-append is this window's bookkeeping and is not sent back (`diffViews`), so a client that closed a project does not see it
   return. Two clients editing the list at the same moment still lose one edit (the list is replaced whole).
-- **Migration** (`src-tauri/src/client/migrate.rs`), on every connection before `connected`, two sources:
+- **Migration** (`src-tauri/src/client/migrate.rs`), on every connection before `connected`, three sources:
   1. The device's `settings.json` still holds a server half (what every install of a release from before the switch-over
      has on its first start after it): `settings_adopt` offers it (taken only by a server with no `settings.json`), then `retire_server_half` (which sets `deviceSeeded` in the same write as it resets the server's keys, so no crash between two writes can lead to a seeding over the device's own half) keeps a copy of
      the file (`settings.pre-split.json`, never overwritten; a later retire whose file differs writes
@@ -404,6 +430,17 @@ neither list is the device's, and a test pins the server list. `usedAt` is kept 
      into the device file with this machine's dialog sizes laid over it and sets `deviceSeeded` in the same write, after a copy
      to `settings.pre-seed.json`. The server's file is left whole (the device keys there are dead data), so nothing is lost and a
      rerun does nothing. A marked file is never seeded again.
+  3. (1.14) The device file is not marked `lookShared`: an already split desktop holds its theme, density, `kanban` and
+     column orders in its own file, and they are the server's now. After sources one and two, `split::look_patch` builds the
+     **whole** look (theme, density, `kanban`, every project's `columnOrder`, defaults and empty orders included, since a
+     person who went back to dark chose it), the client sends it with `settings_patch` and `mark_look_shared` sets the
+     mark; a failure leaves the file as it is and the next connection tries again. The order is fixed: `settings_adopt`
+     takes only a server with no settings and a look patch would give it some. A pre-split release file carries its look
+     inside the adopted half (`legacy_server_patch` ignores the look when deciding whether there is anything to hand over,
+     or a split desktop would retire its look before sending it); if the server **refuses** the adoption the look is sent
+     with `settings_patch` before the retire. `retire_server_half` and the seeding from the server leave the device with no
+     look and set `lookShared` in the same write, as does a fresh install (no file), so source three sends nothing for them.
+     A desktop meeting a server that has a look overwrites it with its own.
   A server that already had settings keeps them; a second desktop's old server half, or a second one on the same desktop, survives only in its `.pre-split` copy.
   Known edge: source two seeds from the server's file whenever the device file is unmarked and source one did not fire, so a
   device file with a customised device half but no server half, meeting a server file that already holds device keys, takes

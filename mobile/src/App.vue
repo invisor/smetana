@@ -4,7 +4,8 @@ import { bridge, initStatus, screenFor } from './bridge/index.js'
 import { wireStores, home, refreshSummary } from './session.js'
 import { initPushTarget } from './pushTarget.js'
 import { trackerState } from '@src/stores/tracker.js'
-import { effectiveTheme } from '@src/appearance.js'
+import { settings } from '@src/stores/settings.js'
+import { phoneLook } from './look.js'
 import { usePrefersDark } from '@src/views/useAppearance.js'
 import PairScreen from './screens/PairScreen.vue'
 import Workspace from './screens/Workspace.vue'
@@ -13,20 +14,18 @@ import UpdateScreen from './screens/UpdateScreen.vue'
 import RevokedScreen from './screens/RevokedScreen.vue'
 import StatusScreen from './screens/StatusScreen.vue'
 
-/* The phone follows the system theme and has no settings of its own yet; the desktop's
-   density and font choices are not read. `?theme=` and `?density=` are for the browser, where
-   the four looks have to be checked by eye (CLAUDE.md, Commands). */
+/* The phone draws the desktop's theme and density, which `desktopSettings.js` copies into the
+   settings store (`look.js` is the rule: the desktop's `system` is the phone's own system theme).
+   `?theme=` and `?density=` are for the browser, where the four looks have to be checked by eye
+   (CLAUDE.md, Commands). The font size is not the desktop's to set. */
 const params = new URLSearchParams(window.location.search)
 const prefersDark = usePrefersDark()
-const density = ['comfortable', 'compact'].includes(params.get('density')) ? params.get('density') : 'comfortable'
-const theme = computed(() =>
-  ['dark', 'light'].includes(params.get('theme')) ? params.get('theme') : effectiveTheme('system', prefersDark.value)
-)
+const look = computed(() => phoneLook(settings.appearance, prefersDark.value, params))
 
 watchEffect(() => {
   const root = document.documentElement
-  root.setAttribute('data-theme', theme.value)
-  root.setAttribute('data-density', density)
+  root.setAttribute('data-theme', look.value.theme)
+  root.setAttribute('data-density', look.value.density)
   root.setAttribute('data-window-chrome', 'none')
 })
 

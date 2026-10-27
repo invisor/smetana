@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { forgetSummary, loadSummary, projectName, saveSummary, taskCount } from '../src/summary.js'
+import { forgetSummary, loadSummary, projectName, saveSummary, savedLook, taskCount } from '../src/summary.js'
 
 const memory = () => {
   const map = new Map()
@@ -22,6 +22,18 @@ describe('the home summary', () => {
     expect(loadSummary(store)).toMatchObject({ project: 'smetana', tasks: 4 })
     forgetSummary(store)
     expect(loadSummary(store)).toBeNull()
+  })
+  it('keeps the desktop\'s look, and forgets it with the rest', () => {
+    const store = memory()
+    saveSummary(store, { project: 'smetana', tasks: 4, look: { theme: 'light', density: 'compact' } })
+    expect(savedLook(loadSummary(store))).toEqual({ theme: 'light', density: 'compact' })
+    forgetSummary(store)
+    expect(savedLook(loadSummary(store))).toBeNull()
+  })
+  it('reads a copy with no look, or a damaged one, as no look', () => {
+    expect(savedLook({ tasks: 1 })).toBeNull()
+    expect(savedLook({ tasks: 1, look: { theme: 3 } })).toBeNull()
+    expect(savedLook(null)).toBeNull()
   })
   it('treats a damaged copy as none', () => {
     const store = memory()

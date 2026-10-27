@@ -847,7 +847,8 @@ mod tests {
             assert_eq!(loaded["openProjects"], json!(["/work/a"]));
             // The device keeps its own half and has given the other up.
             let kept = file::load(&device).0;
-            assert_eq!(kept.appearance.theme, "light");
+            assert_eq!(kept.appearance.theme, "dark", "the look went to the server inside the adopted half");
+            assert_eq!(loaded["appearance"]["theme"], "light");
             assert!(split::legacy_server_patch(&kept).is_none());
             assert!(device.with_file_name("settings.pre-split.json").exists());
 
@@ -858,9 +859,9 @@ mod tests {
             })
             .await;
             // And the device half is refused on the server's road.
-            link.call("settings_patch", json!({ "patch": { "appearance": { "theme": "light" } } })).await.unwrap();
+            link.call("settings_patch", json!({ "patch": { "editor": { "wordWrap": true } } })).await.unwrap();
             let after = link.call("settings_load", json!({ "project": null })).await.unwrap();
-            assert_eq!(after["appearance"]["theme"], "dark", "the server keeps no copy of the device's fields");
+            assert_eq!(after["editor"]["wordWrap"], false, "the server keeps no copy of the device's fields");
 
             supervisor.abort();
             server.shutdown().await;
@@ -904,8 +905,8 @@ mod tests {
 
             let seeded = file::load(&device).0;
             assert!(seeded.device_seeded);
-            assert_eq!(seeded.appearance.theme, "light");
             assert_eq!(seeded.appearance.ui_font_size, 15);
+            assert_eq!(loaded["appearance"]["theme"], "light", "the theme stays the server's");
             assert_eq!(seeded.layout.left_width, 300);
             assert_eq!(seeded.projects["/work/a"].selected_task.as_deref(), Some("a-1"));
             assert_eq!(seeded.projects["/work/a"].side_tab, "git");

@@ -19,14 +19,16 @@ describe('the server view', () => {
     const view = serverView(store())
     expect(Object.keys(view).sort()).toEqual(
       [
-        'agent', 'agentLanguage', 'agentPrompt', 'agentRoles', 'commitLanguage', 'conversationPanel', 'git',
-        'lastProject', 'model', 'openProjects', 'projects', 'remote', 'reportLanguage', 'runFailover',
+        'agent', 'agentLanguage', 'agentPrompt', 'agentRoles', 'appearance', 'commitLanguage', 'conversationPanel', 'git',
+        'kanban', 'lastProject', 'model', 'openProjects', 'projects', 'remote', 'reportLanguage', 'runFailover',
         'subscription', 'taskLanguage'
       ].sort()
     )
     expect(view.git).toEqual({ removeWorktrees: true })
-    expect(view.projects).toEqual({ '/a': { runSettings: null, agents: null } })
-    expect(JSON.stringify(view)).not.toContain('theme')
+    expect(view.projects).toEqual({ '/a': { runSettings: null, agents: null, columnOrder: [] } })
+    expect(view.appearance).toEqual({ theme: 'dark', density: 'comfortable' })
+    expect(JSON.stringify(view)).not.toContain('uiFontSize')
+    expect(view.kanban).toEqual(store().kanban)
   })
 
   it('is the same for the store and for a snapshot of it', () => {
@@ -60,6 +62,18 @@ describe('a patch between two views', () => {
       openProjects: ['/a'],
       projects: { '/a': { runSettings: { minPriority: null } } }
     })
+  })
+
+  it('names a theme change and a column order change and nothing of the font size', () => {
+    const before = serverView(store())
+    const changed = store({ appearance: { theme: 'light', density: 'comfortable', uiFontSize: 18 } })
+    changed.project.columnOrder = ['done', 'open']
+    expect(diffViews(before, serverView(changed))).toEqual({
+      appearance: { theme: 'light' },
+      projects: { '/a': { columnOrder: ['done', 'open'] } }
+    })
+    const fontOnly = store({ appearance: { theme: 'dark', density: 'comfortable', uiFontSize: 18 } })
+    expect(diffViews(before, serverView(fontOnly))).toBeUndefined()
   })
 
   it('never reads a switch of the open project as the removal of the old one', () => {
@@ -150,6 +164,19 @@ describe('folding in what the server holds', () => {
   })
 })
 
+describe('a theme from another client', () => {
+  it('takes another client\'s theme while keeping this window\'s unsent language', () => {
+    const baseline = serverView(store())
+    const current = serverView(store({ agentLanguage: 'ru' }))
+    const incoming = serverView(store())
+    incoming.appearance.theme = 'light'
+    const { next, pending } = fold(baseline, current, incoming)
+    expect(next.appearance.theme).toBe('light')
+    expect(next.agentLanguage).toBe('ru')
+    expect(pending).toEqual({ agentLanguage: 'ru' })
+  })
+})
+
 describe('a broadcast half', () => {
   it('becomes the view for the project open here, and keeps what it lacks', () => {
     const fallback = serverView(store())
@@ -165,14 +192,27 @@ describe('a broadcast half', () => {
     expect(view.subscription).toEqual({ pauseAt: 70, reducedAt: 75 })
     expect(view.agentPrompt).toBe('')
     expect(view.openProjects).toEqual(['/a'])
-    expect(view.projects).toEqual({ '/a': { runSettings: { mode: 'solo' }, agents: null } })
+    expect(view.projects).toEqual({ '/a': { runSettings: { mode: 'solo' }, agents: null, columnOrder: null } })
+  })
+
+  it('carries the look and the column order, and not the font size', () => {
+    const half = {
+      appearance: { theme: 'light', density: 'compact', uiFontSize: 30 },
+      kanban: { columns: 'non-empty' },
+      projects: { '/a': { columnOrder: ['done'] } }
+    }
+    const view = viewFromHalf(half, '/a', serverView(store()))
+    expect(view.appearance).toEqual({ theme: 'light', density: 'compact' })
+    expect(view.kanban.columns).toBe('non-empty')
+    expect(view.kanban.interval).toBe(store().kanban.interval)
+    expect(view.projects['/a'].columnOrder).toEqual(['done'])
   })
 })
 
 describe('writing a view into the store', () => {
   it('assigns in place, keeps the open project in the list and leaves the device alone', () => {
     const target = store()
-    target.appearance.theme = 'light'
+    target.appearance.uiFontSize = 17
     const roles = target.agentRoles
     const view = serverView(store({ agent: 'codex', openProjects: ['/b'] }))
     view.agentRoles.tasks.agent = 'codex'
@@ -185,28 +225,47 @@ describe('writing a view into the store', () => {
     expect(target.openProjects).toEqual(['/b', '/a'])
     expect(target.activeProject).toBe('/a')
     expect(target.project.runSettings).toEqual({ mode: 'solo' })
-    expect(target.appearance.theme).toBe('light')
+    expect(target.appearance.uiFontSize).toBe(17)
+  })
+
+  it('writes the theme, the density, the board rules and the column order from the view', () => {
+    const target = store()
+    const view = serverView(store())
+    view.appearance = { theme: 'light', density: 'compact' }
+    view.kanban.columns = 'non-empty'
+    view.projects['/a'].columnOrder = ['done']
+    writeView(target, view)
+    expect(target.appearance).toMatchObject({ theme: 'light', density: 'compact', uiFontSize: 13 })
+    expect(target.kanban.columns).toBe('non-empty')
+    expect(target.project.columnOrder).toEqual(['done'])
   })
 })
 
 describe('putting the halves together', () => {
   it('takes the device from its file and the server from its answer', () => {
-    const device = { ...defaults(), appearance: { theme: 'light', density: 'compact', uiFontSize: 15 }, git: { autoFetch: false, removeWorktrees: true }, agent: 'stale' }
+    const device = { ...defaults(), appearance: { theme: 'dark', density: 'comfortable', uiFontSize: 15 }, git: { autoFetch: false, removeWorktrees: true }, agent: 'stale' }
     device.project = { ...defaults().project, selectedTask: 'a-1' }
     const server = {
       ...defaults(),
       agent: 'codex',
       git: { removeWorktrees: false },
+      appearance: { theme: 'light', density: 'compact', uiFontSize: 13 },
       openProjects: ['/a'],
       activeProject: '/a',
       project: { ...defaults().project, runSettings: { mode: 'solo' }, selectedTask: 'not mine' }
     }
     const out = combine(device, server)
-    expect(out.appearance.theme).toBe('light')
+    expect(out.appearance).toEqual({ theme: 'light', density: 'compact', uiFontSize: 15 })
     expect(out.git).toEqual({ autoFetch: false, removeWorktrees: false })
     expect(out.agent).toBe('codex')
     expect(out.activeProject).toBe('/a')
     expect(out.project.selectedTask).toBe('a-1')
     expect(out.project.runSettings).toEqual({ mode: 'solo' })
+  })
+
+  it('lays the server\'s theme and density over the device\'s font size', () => {
+    const device = { ...defaults(), appearance: { theme: 'dark', density: 'comfortable', uiFontSize: 15 } }
+    const server = { ...defaults(), appearance: { theme: 'light', density: 'compact', uiFontSize: 13 } }
+    expect(combine(device, server).appearance).toEqual({ theme: 'light', density: 'compact', uiFontSize: 15 })
   })
 })

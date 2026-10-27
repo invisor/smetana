@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { installCore, loadShell, snapshot } from './support/bridge.js'
 import { ALLOWED_COMMANDS, ALLOWED_EVENTS } from '../src/allowed.js'
 import { newTaskIntent } from '../src/newTask.js'
@@ -56,9 +56,10 @@ const desktop = (extra = {}) => ({
   ...extra
 })
 
-const start = async (extra) => {
+const start = async (extra, minor = 14) => {
   const core = installCore(desktop(extra))
   const shell = await loadShell()
+  shell.status.applyStatus({ state: 'online', protocol_minor: minor })
   const workspace = await import('../src/workspace.js')
   const settings = await import('../../src/stores/settings.js')
   const stores = {
@@ -104,7 +105,7 @@ describe('what the working screens ask the desktop for', () => {
     for (const name of ['settings_load', 'tracker_set_project', 'agents_catalog', 'project_config', 'run_state', 'target_branches', 'terminal_list', 'session_start', 'session_attach', 'session_send', 'session_answer', 'session_stop', 'run_start', 'run_stop', 'terminal_attach', 'tracker_update', 'tracker_delete']) {
       expect(asked.has(name), name).toBe(true)
     }
-    expect(listened).toEqual(expect.arrayContaining(['tracker:delta', 'tracker:health', 'run:state', 'session:events', 'terminal:state', 'terminal:removed']))
+    expect(listened).toEqual(expect.arrayContaining(['tracker:delta', 'tracker:health', 'run:state', 'session:events', 'terminal:state', 'terminal:removed', 'settings:changed']))
   })
 
   it('sends a resume intent with every field the server requires', async () => {
@@ -145,6 +146,36 @@ describe('what the working screens ask the desktop for', () => {
     for (const name of ['settings_save', 'terminal_marks', 'terminal_create', 'terminal_write', 'tracker_access_repair', 'git_head', 'files_list', 'vcs_status', 'drag_drop_space', 'browser_tools']) {
       expect(asked, name).not.toContain(name)
     }
+  })
+})
+
+describe('hearing the desktop\'s settings change', () => {
+  it('reads the settings again when the server announces a change, and leaves the Runs pin alone', async () => {
+    const { core, workspace, emit, settings } = await start({
+      settings_load: (args) => ({
+        openProjects: ['/work/a', '/work/b'],
+        activeProject: args?.project ?? '/work/a',
+        appearance: { theme: 'light', density: 'compact', uiFontSize: 20 }
+      })
+    })
+    await workspace.startWorkspace()
+    await workspace.loadRunsFor('/work/b')
+    const before = core.bridged('settings_load').length
+    await emit('bridge:event', { name: 'settings:changed', payload: { rev: 2 } })
+    await vi.waitFor(() => expect(core.bridged('settings_load').length).toBeGreaterThan(before))
+    expect(core.bridged('settings_load').at(-1)).toEqual({ project: null })
+    expect(settings.appearance).toMatchObject({ theme: 'light', density: 'compact' })
+    expect(settings.appearance.uiFontSize).toBe(13)
+    // The Runs screen is still on the project it was pinned to: its configuration is read again for it.
+    await vi.waitFor(() => expect(core.bridged('project_config').at(-1)).toEqual({ project: '/work/b' }))
+  })
+
+  it('does not ask a desktop below the look minor to announce anything', async () => {
+    const { core, workspace } = await start(undefined, 13)
+    await workspace.startWorkspace()
+    const listened = core.core('bridge_listen').map((args) => args.event)
+    expect(listened).not.toContain('settings:changed')
+    expect(listened).toContain('run:state')
   })
 })
 

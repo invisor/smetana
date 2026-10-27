@@ -4,10 +4,11 @@
 //! `smetanad` and keeps the device's half; the server keeps the other. Only a browser, with no shell
 //! and no server, still reads and writes one document whole (the mock back end).
 //!
-//! **The rule is one question: does the server read it?** If a worker on the server reads the field —
-//! an agent's profile, a run's policy, the relay it pairs through, the project list it starts from —
-//! it is the server's, and every client sees the same value. Everything else is about a screen or a
-//! person and stays on the device: the look, the layout, which task is open, how the board is drawn.
+//! **The rule has two clauses.** A field is the server's if a worker on the server reads it — an
+//! agent's profile, a run's policy, the relay it pairs through, the project list it starts from — or
+//! if a paired phone draws it: the theme, the density, the board's rules and every project's column
+//! order. Every client sees the same value of those. Everything else is about a screen or a person and
+//! stays on the device: the font size, the layout, which task is open. One server, one look.
 //! Both halves keep the **same shape as the file**, so a half is a `Settings` document with the other
 //! half's keys missing, and nothing here needs a second schema to keep in step with `model.rs`.
 //!
@@ -56,22 +57,28 @@ const SERVER_ROOT: &[&str] = &[
     "remote",
     "openProjects",
     "lastProject",
+    "kanban",
 ];
 
 /// The server's fields of `git`: `removeWorktrees` is a line of the run prompt, while `autoFetch` is
 /// the window asking for a fetch when it gains focus, which the server only ever obeys.
 const SERVER_GIT: &[&str] = &["removeWorktrees"];
 
+/// The server's fields of `appearance`: what a phone draws. `uiFontSize` stays on the device, because
+/// a phone's type is its own and the person chose not to copy the desktop's.
+const SERVER_APPEARANCE: &[&str] = &["theme", "density"];
+
 /// The server's fields of one project: the run dialog's last settings (the target branch is read when
 /// a run starts), the project's own agent table, and the stamp the least recently used project is
 /// dropped by. `usedAt` is also kept on the device, for the device file's own limit.
-const SERVER_PROJECT: &[&str] = &["runSettings", "agents", "usedAt"];
+const SERVER_PROJECT: &[&str] = &["runSettings", "agents", "usedAt", "columnOrder"];
 
 /// The server's fields, in the order a person reads them, as paths. Held to the schema by a test.
 #[cfg(test)]
 pub(crate) fn server_paths() -> Vec<String> {
     let mut out: Vec<String> = SERVER_ROOT.iter().map(|key| (*key).to_owned()).collect();
     out.extend(SERVER_GIT.iter().map(|key| format!("git.{key}")));
+    out.extend(SERVER_APPEARANCE.iter().map(|key| format!("appearance.{key}")));
     out.extend(SERVER_PROJECT.iter().map(|key| format!("projects.*.{key}")));
     out
 }
@@ -89,6 +96,15 @@ fn keep_server(value: &Value) -> Value {
             if let Some(git) = inner.as_object() {
                 let kept: Map<String, Value> =
                     git.iter().filter(|(name, _)| SERVER_GIT.contains(&name.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+                out.insert(key.clone(), Value::Object(kept));
+            }
+        } else if key == "appearance" {
+            if let Some(appearance) = inner.as_object() {
+                let kept: Map<String, Value> = appearance
+                    .iter()
+                    .filter(|(name, _)| SERVER_APPEARANCE.contains(&name.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
                 out.insert(key.clone(), Value::Object(kept));
             }
         } else if key == "projects" {
@@ -132,6 +148,15 @@ fn keep_device(value: &Value) -> Value {
             if let Some(git) = inner.as_object() {
                 let kept: Map<String, Value> =
                     git.iter().filter(|(name, _)| !SERVER_GIT.contains(&name.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+                out.insert(key.clone(), Value::Object(kept));
+            }
+        } else if key == "appearance" {
+            if let Some(appearance) = inner.as_object() {
+                let kept: Map<String, Value> = appearance
+                    .iter()
+                    .filter(|(name, _)| !SERVER_APPEARANCE.contains(&name.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
                 out.insert(key.clone(), Value::Object(kept));
             }
         } else if key == "projects" {
@@ -328,6 +353,8 @@ pub fn seed_device(path: &Path, from_server: Option<&Value>) -> Result<bool, Str
                 doc["dialogs"] = merged;
             }
             doc["deviceSeeded"] = Value::Bool(true);
+            // The look it held is the server's now, and this file keeps none of its own to send.
+            doc["lookShared"] = Value::Bool(true);
             // The server-owned keys this file may still hold go back to the defaults: the migration
             // has offered them already and the device keeps none.
             let fresh = server_half(&Settings::default());
@@ -337,16 +364,25 @@ pub fn seed_device(path: &Path, from_server: Option<&Value>) -> Result<bool, Str
                 _ => return Err("the seeded settings did not read back".to_owned()),
             }
         }
-        None => Settings { device_seeded: true, ..local },
+        // A file that did not exist is a fresh install: it has chosen no look, so it sends none. A file
+        // that did exist keeps its own, and the look patch sends it.
+        None => Settings { device_seeded: true, look_shared: local.look_shared || !path.exists(), ..local },
     };
     file::save(path, &seeded)?;
     Ok(true)
 }
 
 /// The server half of a document with the entries that say nothing taken out: a project with no
-/// run settings and no agent table of its own is only the device's state, `usedAt` aside.
+/// run settings and no agent table of its own is only the device's state, `usedAt` aside. The look
+/// (theme, density, the board's rules) is left out too: a split device holds it in its own file until
+/// `look_patch` has sent it, and it must not read as an old file's server half, which would retire it
+/// before it was sent.
 fn substance(settings: &Settings) -> Value {
     let mut half = server_half(settings);
+    if let Some(root) = half.as_object_mut() {
+        root.remove("appearance");
+        root.remove("kanban");
+    }
     if let Some(Value::Object(projects)) = half.get_mut("projects") {
         projects.retain(|_, state| {
             state.get("runSettings").is_some_and(|v| !v.is_null()) || state.get("agents").is_some_and(|v| !v.is_null())
@@ -391,14 +427,59 @@ pub fn retire_server_half(path: &Path) -> Result<bool, String> {
     settings.conversation_panel = fresh.conversation_panel;
     settings.open_projects = fresh.open_projects;
     settings.last_project = fresh.last_project;
+    // The look went with the adopted half; the device keeps only the font size.
+    settings.appearance.theme = fresh.appearance.theme;
+    settings.appearance.density = fresh.appearance.density;
+    settings.kanban = fresh.kanban;
     for state in settings.projects.values_mut() {
         state.run_settings = None;
         state.agents = None;
+        state.column_order = Vec::new();
     }
     // The same write marks the device half settled. Were the mark a second write, a quit between the two
     // would leave a retired but unmarked file, and the next launch would seed the device half from the
     // server over the device's own.
     settings.device_seeded = true;
+    // The look left with the half and the device holds none of its own to send.
+    settings.look_shared = true;
+    file::save(path, &settings)?;
+    Ok(true)
+}
+
+/// The look this device holds in its own file, as a patch for the server, **in full**: the theme and
+/// density, the board's rules whole, and the column order of every project in the file, an empty one
+/// included. A value equal to the default is sent too, because a person who went back to dark or to
+/// every column has chosen that, and a server holding a stale copy must not win. It is called only on a
+/// file that is not marked `lookShared`; the places that leave the device with no look of its own
+/// (`retire_server_half`, the seeding from the server, a fresh install) set the mark instead.
+pub fn look_patch(settings: &Settings) -> Value {
+    let projects: Map<String, Value> = settings
+        .projects
+        .iter()
+        .map(|(path, state)| (path.clone(), serde_json::json!({ "columnOrder": state.column_order })))
+        .collect();
+    let mut patch = serde_json::json!({
+        "appearance": { "theme": settings.appearance.theme, "density": settings.appearance.density },
+        "kanban": serde_json::to_value(&settings.kanban).unwrap_or(Value::Null),
+    });
+    if !projects.is_empty() {
+        patch["projects"] = Value::Object(projects);
+    }
+    patch
+}
+
+/// Sets the `lookShared` mark in the device file: the look has been offered to the server. A plain
+/// read-modify-write with no copy of the file, because the write loses nothing. Answers whether it
+/// wrote; a file already marked answers `Ok(false)`.
+pub fn mark_look_shared(path: &Path) -> Result<bool, String> {
+    let (mut settings, problem) = file::load(path);
+    if problem.is_some() {
+        return Err(format!("{}: the device settings could not be read", path.display()));
+    }
+    if settings.look_shared {
+        return Ok(false);
+    }
+    settings.look_shared = true;
     file::save(path, &settings)?;
     Ok(true)
 }
@@ -523,8 +604,9 @@ mod tests {
             server_paths(),
             [
                 "agent", "agentLanguage", "taskLanguage", "commitLanguage", "reportLanguage", "agentPrompt", "model", "agentRoles",
-                "conversationPanel", "subscription", "runFailover", "remote", "openProjects", "lastProject", "git.removeWorktrees",
-                "projects.*.runSettings", "projects.*.agents", "projects.*.usedAt",
+                "conversationPanel", "subscription", "runFailover", "remote", "openProjects", "lastProject", "kanban",
+                "git.removeWorktrees", "appearance.theme", "appearance.density", "projects.*.runSettings", "projects.*.agents",
+                "projects.*.usedAt", "projects.*.columnOrder",
             ]
         );
         // Every root key of the schema is classified, and the device's are the ones below. A key
@@ -535,14 +617,14 @@ mod tests {
         device_sorted.sort();
         assert_eq!(
             device_sorted,
-            ["appearance", "deviceSeeded", "dialogs", "editor", "git", "kanban", "layout", "notifications", "projects", "reports", "updates", "version", "window"]
+            ["appearance", "deviceSeeded", "dialogs", "editor", "git", "layout", "lookShared", "notifications", "projects", "reports", "updates", "version", "window"]
         );
         let server: Vec<String> = keep_server(&whole).as_object().unwrap().keys().cloned().collect();
         for key in whole.as_object().unwrap().keys() {
             let in_server = server.contains(key);
             let in_device = device.contains(key);
             assert!(in_server || in_device, "`{key}` belongs to no half");
-            assert!(!(in_server && in_device) || key == "git" || key == "projects", "`{key}` belongs to both halves");
+            assert!(!(in_server && in_device) || key == "git" || key == "appearance" || key == "projects", "`{key}` belongs to both halves");
         }
     }
 
@@ -640,7 +722,7 @@ mod tests {
         let tmp = dir();
         let path = tmp.path().join("settings.json");
         let patch = json!({
-            "appearance": {"theme": "light"}, "layout": {"leftWidth": 999}, "editor": {"fontSize": 20},
+            "appearance": {"uiFontSize": 20}, "layout": {"leftWidth": 999}, "editor": {"fontSize": 20},
             "window": {"restoreGeometry": false}, "git": {"autoFetch": false, "removeWorktrees": false},
             "dialogs": {"run": {"width": 1, "height": 1}},
             "projects": {"/work/a": {"selectedTask": "a-1", "sideTab": "git", "runSettings": {"mode": "solo"}}}
@@ -703,12 +785,13 @@ mod tests {
     fn the_device_save_leaves_the_servers_fields_as_the_file_has_them() {
         let mut file = old_settings();
         let mut resolved = model::resolve(&file, Some("/work/a"));
-        resolved.appearance.theme = "dark".into();
+        resolved.appearance.ui_font_size = 17;
         resolved.agent = "claude".into(); // a server field: not the device save's to write
         resolved.project.selected_task = Some("a-2".into());
         resolved.project.agents = None;
         merge_device(&mut file, resolved, "now".into());
-        assert_eq!(file.appearance.theme, "dark");
+        assert_eq!(file.appearance.ui_font_size, 17);
+        assert_eq!(file.appearance.theme, "light", "the theme is the server's: the device save leaves it");
         assert_eq!(file.projects["/work/a"].selected_task.as_deref(), Some("a-2"));
         assert_eq!(file.agent, "codex");
         assert!(file.projects["/work/a"].agents.is_some());
@@ -736,6 +819,7 @@ mod tests {
         assert_eq!(server_half(&server_file), server_half(&original));
         let mut marked = device_half(&original);
         marked["deviceSeeded"] = json!(true);
+        marked["lookShared"] = json!(true);
         assert_eq!(device_half(&device_file), marked);
         assert_eq!(server_file.agent, "codex");
         assert_eq!(server_file.agent_roles, original.agent_roles);
@@ -743,7 +827,14 @@ mod tests {
         assert_eq!(server_file.projects["/work/a"].agents, original.projects["/work/a"].agents);
         assert_eq!(server_file.open_projects, ["/work/a", "/work/b"]);
         assert_eq!(server_file.last_project.as_deref(), Some("/work/a"));
-        assert_eq!(device_file.appearance, original.appearance);
+        assert_eq!(device_file.appearance.ui_font_size, original.appearance.ui_font_size);
+        assert_eq!(device_file.appearance.theme, Settings::default().appearance.theme, "the look went with the adopted half");
+        assert_eq!(device_file.kanban, Settings::default().kanban);
+        assert_eq!(server_file.appearance.theme, "light");
+        assert_eq!(server_file.appearance.density, "compact");
+        assert_eq!(server_file.kanban, original.kanban);
+        assert_eq!(server_file.projects["/work/a"].column_order, ["open", "done"]);
+        assert!(device_file.look_shared, "a retired file has no look left to send and is marked");
         assert_eq!(device_file.layout, original.layout);
         assert_eq!(device_file.projects["/work/a"].selected_task.as_deref(), Some("a-1"));
         assert_eq!(device_file.projects["/work/a"].agent_names, original.projects["/work/a"].agent_names);
@@ -756,6 +847,7 @@ mod tests {
         // The only difference from the old file is the mark the retiring write set.
         let mut expected = original.clone();
         expected.device_seeded = true;
+        expected.look_shared = true;
         assert_eq!(parse(&together.to_string()), Outcome::Ok(expected));
         // The device no longer carries the server's fields, and the old file is kept beside it.
         assert_eq!(device_file.agent, Settings::default().agent);
@@ -835,11 +927,12 @@ mod tests {
 
         assert!(seeded.device_seeded);
         let mut expected = device_half(&original);
-        merge_patch(&mut expected, &json!({"dialogs": {"commit": {"width": 500, "height": 400}}, "deviceSeeded": true}));
+        merge_patch(&mut expected, &json!({"dialogs": {"commit": {"width": 500, "height": 400}}, "deviceSeeded": true, "lookShared": true}));
         assert_eq!(device_half(&seeded), expected, "every device field is on the device");
-        assert_eq!(seeded.appearance, original.appearance);
+        assert_eq!(seeded.appearance.ui_font_size, original.appearance.ui_font_size);
+        assert_eq!(seeded.appearance.theme, Settings::default().appearance.theme, "the theme is the server's, not seeded");
+        assert_eq!(seeded.kanban, Settings::default().kanban);
         assert_eq!(seeded.layout, original.layout);
-        assert_eq!(seeded.kanban, original.kanban);
         assert_eq!(seeded.notifications, original.notifications);
         assert_eq!(seeded.projects["/work/a"].selected_task.as_deref(), Some("a-1"));
         assert_eq!(seeded.projects["/work/a"].agent_names, original.projects["/work/a"].agent_names);
@@ -895,6 +988,113 @@ mod tests {
         stale["appearance"] = json!({"theme": "dark", "density": "comfortable", "uiFontSize": 13});
         assert!(!seed_device(&device, Some(&stale)).unwrap());
         assert_eq!(file::load(&device).0, retired);
-        assert_eq!(file::load(&device).0.appearance.theme, "light");
+        assert_eq!(file::load(&device).0.appearance.ui_font_size, 15);
+    }
+
+    #[test]
+    fn a_patch_sets_the_theme_and_the_column_order_and_leaves_the_font_size_to_the_device() {
+        let tmp = dir();
+        let path = tmp.path().join("settings.json");
+        let patch = json!({
+            "appearance": {"theme": "light", "uiFontSize": 20},
+            "kanban": {"columns": "non-empty"},
+            "projects": {"/work/a": {"columnOrder": ["done", "open"]}}
+        });
+        apply_patch(&path, &patch, "now", false, &nothing).unwrap();
+        let after = file::load(&path).0;
+        let server = server_half(&after);
+        assert_eq!(server["appearance"]["theme"], "light");
+        assert_eq!(server["kanban"]["columns"], "non-empty");
+        assert_eq!(server["projects"]["/work/a"]["columnOrder"], json!(["done", "open"]));
+        assert_eq!(after.appearance.ui_font_size, Settings::default().appearance.ui_font_size, "the font size is the device's");
+        let device = device_half(&after);
+        assert_eq!(device["appearance"]["uiFontSize"], 13);
+        assert!(device["appearance"].get("theme").is_none());
+        assert!(server["appearance"].get("uiFontSize").is_none());
+        assert!(device.get("kanban").is_none());
+    }
+
+    #[test]
+    fn the_look_patch_carries_the_devices_theme_density_kanban_and_every_column_order() {
+        let mut settings = Settings::default();
+        settings.appearance.theme = "light".into();
+        settings.appearance.density = "compact".into();
+        settings.kanban.columns = "non-empty".into();
+        settings.projects.insert("/work/a".into(), model::ProjectState { column_order: vec!["done".into(), "open".into()], ..Default::default() });
+        settings.projects.insert("/work/b".into(), model::ProjectState::default());
+        let kanban = serde_json::to_value(&settings.kanban).unwrap();
+        assert_eq!(
+            look_patch(&settings),
+            json!({
+                "appearance": {"theme": "light", "density": "compact"},
+                "kanban": kanban,
+                "projects": {"/work/a": {"columnOrder": ["done", "open"]}, "/work/b": {"columnOrder": []}}
+            })
+        );
+    }
+
+    /// The person went back to dark, every column and no order: those are choices, and a server that
+    /// holds a stale copy of the opposite must be overwritten by them.
+    #[test]
+    fn a_look_reverted_to_the_defaults_is_still_sent() {
+        let mut settings = Settings::default();
+        settings.projects.insert("/work/a".into(), model::ProjectState::default());
+        let patch = look_patch(&settings);
+        assert_eq!(patch["appearance"], json!({"theme": "dark", "density": "comfortable"}));
+        assert_eq!(patch["kanban"]["columns"], "all");
+        assert_eq!(patch["projects"]["/work/a"]["columnOrder"], json!([]));
+        let tmp = dir();
+        let server = tmp.path().join("settings.json");
+        apply_patch(&server, &json!({"appearance": {"theme": "light"}, "kanban": {"columns": "non-empty"},
+                                      "projects": {"/work/a": {"columnOrder": ["done"]}}}), "now", false, &nothing).unwrap();
+        apply_patch(&server, &patch, "now", false, &nothing).unwrap();
+        let after = file::load(&server).0;
+        assert_eq!(after.appearance.theme, "dark");
+        assert_eq!(after.kanban.columns, "all");
+        assert!(after.projects["/work/a"].column_order.is_empty());
+    }
+
+    #[test]
+    fn a_file_with_no_look_of_its_own_is_marked_and_sends_nothing() {
+        let tmp = dir();
+        // Retired: the look left with the half.
+        let device = tmp.path().join("settings.json");
+        std::fs::write(&device, old_file()).unwrap();
+        assert!(retire_server_half(&device).unwrap());
+        assert!(file::load(&device).0.look_shared);
+        // Seeded from the server: the server's copy is the look.
+        let seeded = tmp.path().join("seeded.json");
+        assert!(seed_device(&seeded, Some(&device_half(&old_settings()))).unwrap());
+        assert!(file::load(&seeded).0.look_shared);
+        // A fresh install chose none; a file that existed keeps its own and is not marked.
+        let fresh = tmp.path().join("fresh.json");
+        assert!(seed_device(&fresh, None).unwrap());
+        assert!(file::load(&fresh).0.look_shared);
+        let existing = tmp.path().join("existing.json");
+        file::save(&existing, &Settings::default()).unwrap();
+        assert!(seed_device(&existing, None).unwrap());
+        assert!(!file::load(&existing).0.look_shared);
+    }
+
+    #[test]
+    fn a_split_devices_look_is_not_taken_for_an_old_files_server_half() {
+        let mut settings = Settings { device_seeded: true, ..Settings::default() };
+        settings.appearance.theme = "light".into();
+        settings.kanban.columns = "non-empty".into();
+        assert!(legacy_server_patch(&settings).is_none(), "retiring it would lose the look before it is sent");
+    }
+
+    #[test]
+    fn marking_the_look_shared_writes_the_mark_once_and_keeps_the_rest() {
+        let tmp = dir();
+        let device = tmp.path().join("settings.json");
+        std::fs::write(&device, old_file()).unwrap();
+        let before = file::load(&device).0;
+        assert!(!before.look_shared);
+        assert_eq!(mark_look_shared(&device), Ok(true));
+        let after = file::load(&device).0;
+        assert!(after.look_shared);
+        assert_eq!(after.dialogs, before.dialogs);
+        assert_eq!(mark_look_shared(&device), Ok(false));
     }
 }

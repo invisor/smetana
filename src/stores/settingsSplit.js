@@ -3,7 +3,8 @@
    still waiting here. Pure: no Vue, no Tauri, no DOM. `stores/settings.js` is the one caller.
 
    The rule is the server's (`crates/core/src/settings/split.rs`): a field is the server's when a
-   worker on the server reads it, and the device's otherwise. The lists below are that file's, written
+   worker on the server reads it or a paired phone draws it (the theme, the density, the board's rules
+   and every project's column order), and the device's otherwise. The lists below are that file's, written
    out a second time because the two ends are different languages; `tests/stores/settingsSplit.test.js`
    holds this end to the shape the store has, and the Rust test pins the other.
 
@@ -17,7 +18,15 @@ const plain = (value) => value !== null && typeof value === 'object' && !Array.i
 
 /* The server's per-project fields the view carries. `usedAt` is the server's too, but it stamps it
    itself, so it never travels in a patch. */
-const PROJECT_FIELDS = ['runSettings', 'agents']
+const PROJECT_FIELDS = ['runSettings', 'agents', 'columnOrder']
+
+/* The server's fields of `appearance`: what a phone draws. `uiFontSize` stays on the device. */
+export const SERVER_APPEARANCE = ['theme', 'density']
+const appearanceOf = (source) => {
+  const out = {}
+  for (const key of SERVER_APPEARANCE) if (source?.[key] !== undefined) out[key] = source[key]
+  return out
+}
 
 /* Root fields that are the server's whole. */
 const ROOT = [
@@ -32,7 +41,8 @@ const ROOT = [
   'conversationPanel',
   'subscription',
   'runFailover',
-  'remote'
+  'remote',
+  'kanban'
 ]
 
 /* The server's half of a settings object, in the file's shape. Takes the store's `settings`, a
@@ -41,6 +51,7 @@ export function serverView(s) {
   const active = s.activeProject ?? null
   const view = {
     git: { removeWorktrees: s.git?.removeWorktrees },
+    appearance: appearanceOf(s.appearance),
     openProjects: [...(s.openProjects ?? [])],
     lastProject: active,
     projects: {}
@@ -65,6 +76,7 @@ export function viewFromHalf(half, active, fallback) {
     view[key] = plain(half[key]) && plain(view[key]) ? { ...view[key], ...clone(half[key]) } : clone(half[key])
   }
   if (plain(half.git) && half.git.removeWorktrees !== undefined) view.git = { removeWorktrees: half.git.removeWorktrees }
+  if (plain(half.appearance)) view.appearance = { ...view.appearance, ...appearanceOf(half.appearance) }
   if (Array.isArray(half.openProjects)) view.openProjects = [...half.openProjects]
   view.lastProject = half.lastProject ?? null
   view.projects = {}
@@ -178,6 +190,7 @@ export function writeView(target, view) {
     else set(target, key, view[key])
   }
   if (view.git) set(target.git, 'removeWorktrees', view.git.removeWorktrees)
+  for (const [key, value] of Object.entries(appearanceOf(view.appearance))) set(target.appearance, key, value)
   if (Array.isArray(view.openProjects)) {
     /* The project open here stays in the list, whatever another client did to it. */
     const list = [...view.openProjects]
@@ -215,6 +228,7 @@ export function combine(device, server) {
   const defined = (object) => Object.fromEntries(Object.entries(object ?? {}).filter(([, value]) => value !== undefined))
   const out = { ...device }
   out.git = { ...device.git, ...defined({ removeWorktrees: server.git?.removeWorktrees }) }
+  out.appearance = { ...device.appearance, ...appearanceOf(server.appearance) }
   for (const key of ROOT) {
     if (server[key] === undefined) continue
     out[key] = plain(server[key]) && plain(device[key]) ? { ...device[key], ...server[key] } : server[key]
@@ -227,6 +241,7 @@ export function combine(device, server) {
     ...defined({
       runSettings: server.project?.runSettings,
       agents: server.project?.agents,
+      columnOrder: server.project?.columnOrder,
       usedAt: server.project?.usedAt
     })
   }

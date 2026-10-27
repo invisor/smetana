@@ -138,7 +138,14 @@ What the phone must not call is kept out of the stores' reach rather than hoped 
 - **`bridge/core.js` `LOCAL`** answers three questions a store asks about the desktop's machine without sending them
   (`tracker_access_repair`, `terminal_marks`, `terminal_restorable`); **`bridge/event.js`** does not ask the core to
   subscribe to a name off the list. Do not use `loadSettings` (it starts the write-back watch): `desktopSettings.js`
-  copies the few fields the screens read into the same `settings` object, and silences the stores' `chime`.
+  copies the few fields the screens read into the same `settings` object, and silences the stores' `chime`. It copies
+  the desktop's `appearance.theme` and `density` too, but only from a desktop at protocol 1.14 (`LOOK_MINOR`; below it
+  the server answers its defaults and the phone keeps `system` and `comfortable`), and never `uiFontSize`. **`look.js`**
+  is the pure rule `App.vue` binds `data-theme`/`data-density` to: `system` means the phone's own system theme,
+  unknown values read as `system`/`comfortable`, and `?theme=`/`?density=` win (browser only). Until the first
+  `settings_load` the theme is `system` (`wireStores()` sets it; the store's default is `dark`), and the last look is
+  cached with the summary (`look` in `summary.js`, dropped by `forgetSummary`) so a launch with the desktop away opens in it.
+  The phone listens to `settings:changed` (1.14+) and answers by calling `refreshFromDesktop()`, never by folding the payload.
 - **`vite.config.js` `phoneStores`** answers `stores/app.js` and `stores/windowDrops.js` with `src/phone/` files (the
   conversation panel imports three names from the first; the second would ask `drag_drop_space`). `Composer` and
   `ConversationView` take `attachable`, `TaskCard` takes `actionable`, `RunBar` takes `canRelease`; all default on, and
