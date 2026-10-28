@@ -135,8 +135,16 @@ goes back; a started run lands on Agents. There the project's runs sit above "Ne
 The run stores simply follow the active project through `loadProject`; nothing pins them to another one.
 **`SettingsScreen`** is the fourth tab: for now the About group on `SettingsGroup`/`SettingsRow` (the companion's version,
 the desktop's protocol minor or "Not connected", and Unpair). Unpairing is two taps, `unpairStep.js` being the rule
-(confirm only from the asked step); Confirm calls `unpairAndForget()` and `App.vue` then shows the pairing screen. The
-phone's own overrides of the desktop's settings are a later task.
+(confirm only from the asked step); Confirm calls `unpairAndForget()` and `App.vue` then shows the pairing screen. Above
+About sit Appearance (Theme, Density, Font size) and Kanban (Columns, Show tasks from): the phone's own overrides of the
+desktop's settings. **`phoneSettings.js`** (pure, tested) is the shape and the rule: every choice but the font size
+defaults to `'desktop'` ("Same as desktop") and a phone's choice wins over the desktop's, decided in one place,
+`applyDesktopSettings(target, stored, { minor, phone })`. The choices live in `localStorage` under
+`smetana.companion.settings`, are held reactive as `phone` in `workspace.js`, and `setPhoneSetting` saves and applies
+again over the last `settings_load` answer, so going back to "Same as desktop" needs no read. Nothing is sent to the
+desktop (`settings_save` stays off the list), and `unpairAndForget` keeps them, since they are about this phone. `uiFontSize`
+is the phone's alone: the desktop's is never read, and `App.vue` paints it with `paintRoot` (`--ui-scale`). Agent and model
+are not offered (a phone's `session_start` carries neither), nor the `alwaysShow`/`unlimited` column lists.
 **The board is
 one column under another, not a swipe**: every column's name and count is on screen at once, the gesture is the
 thumb's own, and a header folds its column (`board.js` is `orderColumns` then `visibleColumns`, the desktop's rules, plus

@@ -25,6 +25,7 @@ import { listen } from './bridge/event.js'
 import { bridge } from './bridge/status.js'
 import { desktopMinor } from './bridge/states.js'
 import { LOOK_MINOR, applyDesktopSettings } from './desktopSettings.js'
+import { loadPhoneSettings, savePhoneSettings } from './phoneSettings.js'
 
 export const workspace = reactive({
   /* The first read has landed: the screens can stop saying "reading". */
@@ -36,12 +37,31 @@ export const workspace = reactive({
 
 let started = false
 
+/* This phone's own choices (`phoneSettings.js`), over the desktop's. Kept in `localStorage`
+   and never sent anywhere; unpairing does not clear them, since they are about this phone and
+   not about the desktop it forgot. */
+export const phone = reactive(loadPhoneSettings(localStorage))
+
+/* The last `settings_load` answer, so that a change of the phone's own choice can be applied
+   again over it without asking the desktop. */
+let lastStored = null
+
 /* The settings the desktop holds, for the project asked about (`null` for the one it has
    open). */
 export async function readDesktop(project = null) {
   const stored = await invoke('settings_load', { project })
-  applyDesktopSettings(settings, stored, { minor: desktopMinor(bridge.status) })
+  lastStored = stored
+  applyDesktopSettings(settings, stored, { minor: desktopMinor(bridge.status), phone })
   return stored
+}
+
+/* The person changed one of the phone's own settings: keep it, and apply it at once. Going
+   back to `desktop` takes the desktop's value from the last answer, with no read. */
+export function setPhoneSetting(key, value) {
+  if (!(key in phone)) return
+  phone[key] = value
+  savePhoneSettings(localStorage, phone)
+  applyDesktopSettings(settings, lastStored, { minor: desktopMinor(bridge.status), phone })
 }
 
 /* Whether the phone has asked to hear `settings:changed`. Asked once, and only of a desktop that
