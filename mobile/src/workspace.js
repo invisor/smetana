@@ -19,7 +19,6 @@ import { initAgents } from '../../src/stores/agents.js'
 import { initRuns, loadConfig, loadRun } from '../../src/stores/runs.js'
 import { initConversation } from '../../src/stores/conversation.js'
 import { initTerminals, loadSessions } from '../../src/stores/terminals.js'
-import { loadBranches } from '../../src/stores/git.js'
 import { resync, setProject, trackerState } from '../../src/stores/tracker.js'
 import { invoke } from './bridge/core.js'
 import { listen } from './bridge/event.js'
@@ -68,28 +67,7 @@ function hearSettings() {
    `session:state`, not through anything read here. */
 export async function loadProject(project) {
   if (!project) return
-  /* The run stores hold one project at a time. While the Runs screen is showing another one
-     (a run notification named it), moving them back to this project would leave the screen
-     naming one project over the other's runs and configuration, so they are left alone. */
-  const runsElsewhere = runsPin !== null && runsPin !== project
-  await Promise.all([
-    loadSessions(project),
-    runsElsewhere ? null : loadConfig(project),
-    runsElsewhere ? null : loadRun(project)
-  ])
-}
-
-/* The project the Runs screen is showing, while it is showing one; `null` otherwise. */
-let runsPin = null
-
-/* The Runs screen is gone: the run stores follow the active project again, and are brought to
-   it now if they were left on another. */
-export function unpinRuns() {
-  const was = runsPin
-  runsPin = null
-  if (was !== null && was !== settings.activeProject) {
-    loadProject(settings.activeProject).catch((err) => console.warn('[companion] could not read the project:', err))
-  }
+  await Promise.all([loadSessions(project), loadConfig(project), loadRun(project)])
 }
 
 /* The link is up: the first time, and after every reconnect. The tracker has been read by the
@@ -112,9 +90,6 @@ export async function refreshFromDesktop() {
   await readDesktop()
   if (settings.activeProject !== before) await resync()
   await loadProject(settings.activeProject)
-  /* A Runs screen on another project is read again too, or it would be stale after the
-     phone was in the background. */
-  if (runsPin !== null && runsPin !== settings.activeProject) await loadRunsFor(runsPin)
 }
 
 /* Switching the project here switches the desktop's too: `tracker_set_project` is the one
@@ -133,11 +108,4 @@ export async function chooseProject(path) {
   } finally {
     workspace.switching = null
   }
-}
-
-/* The runs screen for a project that is not the one in front (a notification named it). The
-   run stores keep one project at a time, so this is the same load the active project gets. */
-export async function loadRunsFor(project) {
-  runsPin = project
-  await Promise.all([loadConfig(project), loadRun(project), loadBranches(project)])
 }

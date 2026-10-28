@@ -119,12 +119,25 @@ that did not change the artwork.
 
 ## The working screens (stage 6, smetana-xvbo)
 
-`screens/Workspace.vue` is what the app is once the desktop answers: four tabs (Kanban, Agents, Runs, Projects) in
-`Shell.vue`, and screens opened over them (`TaskScreen`, `ConversationScreen`, `NewTaskScreen`). Where the person is
-is one route, `nav.js` (pure; `routeForTarget` is what a tapped notification becomes: `run:<project path>` -> Runs of
-that project, `session:<id>` -> the driven conversation, `terminal:<id>` -> the read-only terminal; the two id spaces
+`screens/Workspace.vue` is what the app is once the desktop answers: four tabs (Kanban, Agents, Projects, Settings) in
+`Shell.vue`, and screens opened over them (`TaskScreen`, `ConversationScreen`, `NewTaskScreen`, `RunScreen`). Where the
+person is is one route, `nav.js` (pure; `route.project` is always null; `routeForTarget` is what a tapped notification
+becomes: `run:<project path>` -> the Agents tab, where the run's row is, `session:<id>` -> the driven conversation, `terminal:<id>` -> the read-only terminal; the two id spaces
 are separate counters, so the kind travels with the id; anything else leaves the app where it is). The glue that
-starts the stores and reads a project is `workspace.js`, called from `session.js` on every (re)connect. **The board is
+starts the stores and reads a project is `workspace.js`, called from `session.js` on every (re)connect. **A run is started from the board, as on the
+desktop, and stopped from Agents.** The Ready column's header carries a play (`BoardScreen`, `click.stop` so it does not
+fold the column), shown only when `runOffered` of the run configuration and grey with `scopeBusyReason` while a run over
+the queue is going; `boardRun.js` (pure, tested) is that rule. It opens `RunScreen` with `{ kind: 'queue' }`, the
+desktop's "Run the queue" form open at once (it carries by hand the opening values and wording of `RunModal.vue`, with
+`runStart.js`), and the screen reads the project's branches itself, the one thing `loadProject` does not load. Cancel
+goes back; a started run lands on Agents. There the project's runs sit above "New agent", one `RunBar` each without
+"Run anyway" (the bridge has no `run_release`); Stop calls `stopRun(token)` and a failure is one phrase under the bars.
+The run stores simply follow the active project through `loadProject`; nothing pins them to another one.
+**`SettingsScreen`** is the fourth tab: for now the About group on `SettingsGroup`/`SettingsRow` (the companion's version,
+the desktop's protocol minor or "Not connected", and Unpair). Unpairing is two taps, `unpairStep.js` being the rule
+(confirm only from the asked step); Confirm calls `unpairAndForget()` and `App.vue` then shows the pairing screen. The
+phone's own overrides of the desktop's settings are a later task.
+**The board is
 one column under another, not a swipe**: every column's name and count is on screen at once, the gesture is the
 thumb's own, and a header folds its column (`board.js` is `orderColumns` then `visibleColumns`, the desktop's rules, plus
 a 20-card preview). `NewTaskScreen` folds its Type, Priority and three stage selects under an "Advanced settings" `Disclosure`, the same `core/Disclosure.vue` the desktop's New task window uses, closed on every open and after every successful start. `env(safe-area-inset-*)` is in `screens/safeArea.js` only.
@@ -167,8 +180,8 @@ before the first write), `remove`, `startOn` (`editTask`, `resolveTask`, `fixTas
 a refusal is the tracker's own sentence (`refusal()`), shown under the rows because a phone has no toasts, and the
 sheet stays open. An issue that has gone (`issueById` null) makes every action a no-op and closes the sheet. Move to...
 is a second step in the same sheet, with Back on top; Delete and a parked task's move to Ready go through the
-desktop's `DeleteTaskModal` and `ReadyTaskModal`; Run this opens the Runs form as a stack screen (`{ screen: 'run',
-scope, title }`) with `RunsScreen`'s `scope` prop, and `runPayload` carries that scope; Follow-up task opens New task
+desktop's `DeleteTaskModal` and `ReadyTaskModal`; Run this opens the run form as a stack screen (`{ screen: 'run',
+scope, title }`) with `RunScreen`'s `scope` prop, and `runPayload` carries that scope; Follow-up task opens New task
 with a `parent` (`{ id, title }`) and `newTaskIntent` puts its id in `draft.parent`.
 
 **The three write rows are gated on the desktop's protocol minor.** `TRACKER_WRITES_MINOR = 13` in `taskSheet.js`
