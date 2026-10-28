@@ -1,5 +1,5 @@
 <script setup>
-import { connectionNotice } from '../components/shell/connectionNotice.js'
+import { connectionNotice, serverIndicator } from '../components/shell/connectionNotice.js'
 /* Dev harness: renders every component in the library once, so a broken port
    shows up here rather than in the product. Not part of the shipped app —
    reachable at ?view=gallery. */
@@ -46,6 +46,7 @@ import {
   ColumnHeader,
   CommandPalette,
   ConnectionBanner,
+  ServerRestartPanel,
   Composer,
   ConflictModal,
   ConversationToolCall,
@@ -964,12 +965,29 @@ const galleryConnection = [
       ]
     }
   },
+].map((view) => connectionNotice({ mode: 'client', ...view }))
+
+/* The same two outdated-server states as the scope bar's panel says them: waiting to be chosen, and
+   scheduled (where the banner says nothing and the mark carries it). */
+const galleryServerNotices = [
+  {
+    state: 'connected',
+    outdated: {
+      running: '0.0.9',
+      bundled: '0.1.0',
+      canRestart: true,
+      work: [
+        { kind: 'run', label: 'smetana' },
+        { kind: 'agent', label: 'claude in smetana' }
+      ]
+    }
+  },
   {
     state: 'connected',
     restartScheduled: true,
     outdated: { running: '0.0.9', bundled: '0.1.0', canRestart: true, work: [] }
   }
-].map((view) => connectionNotice({ mode: 'client', ...view }))
+].map((view) => serverIndicator({ mode: 'client', ...view }))
 
 const galleryUsage = [
   {
@@ -4595,6 +4613,19 @@ const menuTargetStyle = {
            person; the first three buttons are the only ones each state offers. -->
       <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }">
         <ConnectionBanner v-for="(notice, index) in galleryConnection" :key="index" :notice="notice" />
+      </div>
+
+      <!-- The scope bar's mark for an older server (pulsing, amber, left of the search) and the panel it
+           opens, in both of its states. -->
+      <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
+        <ScopeIndicator repo="smetana" branch="main" server-restart>
+          <template #search>
+            <TaskSearchButton />
+          </template>
+        </ScopeIndicator>
+        <div :style="{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-5)' }">
+          <ServerRestartPanel v-for="(notice, index) in galleryServerNotices" :key="index" :notice="notice" />
+        </div>
       </div>
 
       <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }">

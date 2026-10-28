@@ -206,6 +206,17 @@ src-tauri/Cargo.toml` is empty, and `smetanad` is an ordinary dependency (for it
   without `confirmed`: nothing alive restarts it (once per running version, so a binary that did not change cannot loop);
   otherwise `connected` carries `outdated` with the list, and the banner offers *Restart now* (confirmed with exactly that
   list) or *Restart when finished*.
+  **Two places say it, from one function.** `components/shell/connectionNotice.js` owns the words: `connectionNotice()` is the
+  banner above the footer and `serverIndicator()` is the scope bar's mark. The banner is drawn for `outdated` until a restart is
+  *scheduled*; from then on it returns `null` and the indicator carries it. The indicator is a pulsing `--attn-loud` triangle
+  (`IconButton pulse`) left of the search, shown while client + connected + `outdated`, **not dismissable**: it goes only when the
+  server is replaced. Pressing it opens `ServerRestartPanel` (title, versions, the same three buttons as the banner), closed by a
+  press outside the bar or Escape through the bell's own handler in `DesktopApp.vue`. Spending `loud` here is deliberate: an
+  outdated server makes every row stale. Since idle agents stopped counting as live work, a restart ends them too and they are
+  offered back afterwards (`IDLE_NOTE`); "nothing is ended" is no longer true. A `now` that found work started meanwhile turns
+  into `when-idle` and the desktop hears `server:restart-deferred { work }`; `stores/connection.js` listens, sets
+  `restartScheduled` and replaces `outdated.work`, so the banner stops offering *Restart now*. The remote server gets no indicator
+  (no version gate).
   The server's `app_version` is `smetanad::VERSION`, baked in by `crates/smetanad/build.rs` from `version` in `src-tauri/tauri.conf.json`
   (the one field a release bumps); the crate manifests stay 0.1.0 and the release does not bump them.
 - **Updates replace the client only.** The release feed updates the app as before (`updates.md`); there is no run gate any

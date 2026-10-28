@@ -90,7 +90,7 @@ import StatusFooter from '../components/shell/StatusFooter.vue'
 import Icon from '../components/core/Icon.vue'
 import Tooltip from '../components/core/Tooltip.vue'
 import IconButton from '../components/core/IconButton.vue'
-import { BatchTimeline, CommandPalette, ConnectionBanner, ConversationView, TaskSearchButton, TerminalView } from '../components/index.js'
+import { BatchTimeline, CommandPalette, ConnectionBanner, ConversationView, ServerRestartPanel, TaskSearchButton, TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import { agentKey, conversationsOf, orderAgents } from '../components/agent/agentOrder.js'
 import { turnEnded } from '../components/agent/turnEnded.js'
@@ -325,7 +325,7 @@ import {
   watchServerSwitch,
   stale as connectionStale
 } from '../stores/connection.js'
-import { connectionNotice } from '../components/shell/connectionNotice.js'
+import { connectionNotice, serverIndicator } from '../components/shell/connectionNotice.js'
 import { liveCheckBlock } from '../components/run/browserTools.js'
 import { folderOf, parentOf, relativePath } from '../components/files/fileMenu.js'
 import {
@@ -7060,6 +7060,13 @@ const refreshTree = () => refreshDirs(['', ...project.expanded])
    would be the fixture bell's other failure said differently. */
 const notificationsOpen = ref(false)
 const notificationsBox = ref(null)
+/* The outdated-server panel shares this handler: both hang from the same bar and only one is open. */
+const serverPanelOpen = ref(false)
+/* The scope bar's mark for an older local server and the panel it opens: the same rule as the banner,
+   said where it cannot be dismissed. `serverPanelOpen` is closed by `closeNotifications` below, which
+   is the one handler for both overlays that hang from the bar. */
+const serverNotice = computed(() => serverIndicator(connection))
+const serverPanelBox = ref(null)
 const scopeBar = ref(null)
 
 /* Anything outside closes it, with the whole scope bar excluded rather than the
@@ -7071,6 +7078,7 @@ const scopeBar = ref(null)
    not moved. */
 const onNotificationsPointerdown = (event) => {
   if (notificationsBox.value?.contains(event.target)) return
+  if (serverPanelBox.value?.contains(event.target)) return
   if (scopeBar.value?.$el?.contains(event.target)) return
   closeNotifications()
 }
@@ -7078,8 +7086,9 @@ const onNotificationsKeydown = (event) => {
   if (event.key === 'Escape') closeNotifications()
 }
 function closeNotifications() {
-  if (!notificationsOpen.value) return
+  if (!notificationsOpen.value && !serverPanelOpen.value) return
   notificationsOpen.value = false
+  serverPanelOpen.value = false
   document.removeEventListener('pointerdown', onNotificationsPointerdown, true)
   window.removeEventListener('keydown', onNotificationsKeydown)
 }
@@ -7088,10 +7097,25 @@ const toggleNotifications = () => {
     closeNotifications()
     return
   }
+  serverPanelOpen.value = false
   notificationsOpen.value = true
   document.addEventListener('pointerdown', onNotificationsPointerdown, true)
   window.addEventListener('keydown', onNotificationsKeydown)
 }
+const toggleServerPanel = () => {
+  if (serverPanelOpen.value) {
+    closeNotifications()
+    return
+  }
+  notificationsOpen.value = false
+  serverPanelOpen.value = true
+  document.addEventListener('pointerdown', onNotificationsPointerdown, true)
+  window.addEventListener('keydown', onNotificationsKeydown)
+}
+/* The mark goes only when the server is replaced; the panel goes with it. */
+watch(serverNotice, (notice) => {
+  if (!notice && serverPanelOpen.value) closeNotifications()
+})
 onUnmounted(closeNotifications)
 
 /* A card's own button. The switch is on the source rather than on the card's
@@ -7503,6 +7527,8 @@ const toastStackStyle = {
       :maximized="maximized"
       @reports="openReportsTab()"
       @notifications="toggleNotifications"
+      :server-restart="!!serverNotice"
+      @server-restart="toggleServerPanel"
       @settings="openSettingsWindow()"
       @minimize="minimizeWindow"
       @toggle-maximize="toggleMaximizeWindow"
@@ -7547,6 +7573,16 @@ const toastStackStyle = {
         :items="notificationsState.items"
         @action="actOnNotification"
         @dismiss="dismissNotification($event.id)"
+      />
+    </div>
+
+    <!-- The outdated-server panel, hung the way the bell's is. -->
+    <div v-if="serverPanelOpen && serverNotice" ref="serverPanelBox" :style="notificationsBoxStyle">
+      <ServerRestartPanel
+        :notice="serverNotice"
+        @restart-now="restartNow"
+        @restart-idle="restartWhenIdle"
+        @restart-cancel="restartCancel"
       />
     </div>
 
