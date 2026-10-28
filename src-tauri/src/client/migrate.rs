@@ -176,8 +176,7 @@ mod tests {
 
     #[test]
     fn a_split_devices_look_is_sent_once_and_the_file_is_marked() {
-        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("a runtime");
-        runtime.block_on(async {
+        crate::client::block_on(async {
             let dir = tempfile::tempdir().unwrap();
             let server_dir = dir.path().join("server");
             let mut options = Options::new(server_dir.clone());
@@ -232,8 +231,7 @@ mod tests {
 
     #[test]
     fn an_old_files_look_survives_a_server_that_refuses_to_adopt_its_half() {
-        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("a runtime");
-        runtime.block_on(async {
+        crate::client::block_on(async {
             let (client, device, server, _dir) = meet(
                 r#"{"version":1,"appearance":{"theme":"light","density":"compact"},"kanban":{"columns":"non-empty"},
                     "agent":"codex","agentPrompt":"mine","projects":{"/work/a":{"columnOrder":["done"]}}}"#,
@@ -256,8 +254,7 @@ mod tests {
 
     #[test]
     fn a_look_gone_back_to_the_defaults_overwrites_a_stale_copy_on_the_server() {
-        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("a runtime");
-        runtime.block_on(async {
+        crate::client::block_on(async {
             let (client, device, server, _dir) = meet(
                 r#"{"version":1,"deviceSeeded":true}"#,
                 json!({ "appearance": { "theme": "light" }, "kanban": { "columns": "non-empty" } }),

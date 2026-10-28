@@ -19,6 +19,18 @@ mod spawn;
 mod state;
 mod target;
 
+/// One runtime for every test in the process that starts a server. The workers spawn onto the
+/// handle the first `Server::start` installs in a process-wide `OnceLock`, so a test with a runtime
+/// of its own, if it happens to start first, takes every worker of every later server down with it
+/// when it ends (smetana-9ywc).
+#[cfg(test)]
+pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RUNTIME
+        .get_or_init(|| tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("a runtime"))
+        .block_on(future)
+}
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
