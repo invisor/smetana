@@ -673,7 +673,11 @@ lets the retry through, and only one of them turned out to matter.
   `stopConversation` (`session_stop`, the driver's `interrupt`), then wait for `state` to leave busy, then
   `sendMessage`. **Interrupt, wait, send** and not send-then-interrupt: both orders ended in a `user` record and a retry
   that ran, but the second leaves a window between the line being queued and the interrupt landing in which a finishing
-  tool call drains the queue as a `queued_command` again. The wait is a watch on the session's state, never a timer. A
+  tool call drains the queue as a `queued_command` again. The wait is a watch on the session's state, never a timer, and
+  it is bound to the session that was pressed: its id and record are captured at the press, and when the wait ends
+  `replyTarget` sends only if the panel still shows that session and the block is still open, otherwise the press is
+  dropped (the panel is one instance re-pointed by `open()`). A permission question taking the state to `needs-you`
+  also drops it, so the buttons come back; `open()` and unmount cancel a wait in flight. A
   refused interrupt (a Crew member cannot be stopped on its own) still sends, as the old queued line. Refuse is not
   changed: a queued line is enough for the model to read it.
 - **Wording.** In the local reproduction the old, clipped wording also cleared once it was delivered as a user turn, so
@@ -684,7 +688,8 @@ lets the retry through, and only one of them turned out to matter.
   with the result and at the end of the turn), and **only on a result with `denial`**, so ordinary results do not grow
   and the journal keeps its budget. On the wire it is `blocked_input` (the fields keep their snake case); `journal.js`
   folds it as `result.blockedInput`, `null` when absent, and `approvalText` quotes it, falling back to the clipped
-  `detail` for a journal from before the field. The measurement used a stand-in for the original case: a force-push
+  `detail` for a journal from before the field; a denial replayed from a resumed transcript (the `history.rs` path)
+  carries no `blocked_input` either and falls back the same way. The measurement used a stand-in for the original case: a force-push
   into a local bare repository is not blocked at all, so `ssh prod-db.invalid` ("Production Reads"), requested by a
   checklist file rather than by the prompt, was refused and retried instead. The four cases are in
   `.smetana/docs/superpowers/specs/2026-10-29-auto-mode-approval-reaches-classifier-design.md`, "Measured".

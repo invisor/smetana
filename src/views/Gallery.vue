@@ -6927,9 +6927,10 @@ const menuTargetStyle = {
             :result="{ ok: false, summary: 'exit 101' }"
           />
           <!-- An auto-mode block, open: the card under the row with its two
-               buttons. The detail is the full 140-character clip, with the whole command in blockedInput, and the
-               reason has no bracketed category, so it is drawn whole over
-               several lines, and a card that overflows the column shows here. -->
+               buttons. The detail is the full 140-character clip (the whole
+               command is in blockedInput) and the reason has no bracketed
+               category, so it is drawn whole over several lines, and a card
+               that overflows the column shows here. -->
           <ConversationToolCall
             name="Bash"
             detail="psql -h db-primary.internal.example.invalid -U deploy -c &quot;UPDATE accounts SET plan = 'free' WHERE trial_ends_at < now() AND plan <> 'free' RETURNING id&quot;"

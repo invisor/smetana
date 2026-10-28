@@ -26,10 +26,25 @@ export function allowPlan(state) {
   return isBusy(state) ? 'interrupt-then-send' : 'send'
 }
 
-/* After the interrupt: whether the turn has closed and the approval may go.
-   Anything but a busy state counts, `failed` and `exited` included: sending is
-   then the call that reports why it cannot, which is better than waiting for a
-   state that will not come. */
-export function turnClosed(state) {
-  return !isBusy(state)
+/* While waiting for the interrupted turn to close: 'wait' while it is still
+   running, 'ready' once it has closed (`failed` and `exited` included: sending
+   is then the call that reports why it cannot, better than waiting for a state
+   that will not come), and 'abort' when a permission question has taken over
+   (`needs-you`). That question is a card the person has to answer, it can keep
+   the state there indefinitely, and the buttons must come back rather than
+   stay hidden behind a wait that has no end. */
+export function waitVerdict(state) {
+  if (state === 'running') return 'wait'
+  if (state === 'needs-you') return 'abort'
+  return 'ready'
+}
+
+/* Whether the approval may go once the wait is over. It goes to the session
+   that was pressed, captured when the press happened, and only while the panel
+   still shows that session and its block is still open. The panel is one
+   instance re-pointed at another agent when the person clicks one, so a
+   decision read off the current props after a wait of seconds would send an
+   approval of one agent's action to another. */
+export function replyTarget({ capturedId, currentId, blockOpen }) {
+  return capturedId !== null && capturedId !== undefined && capturedId === currentId && blockOpen ? 'send' : 'abort'
 }
