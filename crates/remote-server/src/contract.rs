@@ -428,6 +428,8 @@ fn crew_nodes() -> Vec<CrewNode> {
             state,
             label: "worker".into(),
             can_message: i % 2 == 0,
+            // Only the root carries the lead's conversation; the others leave the key off.
+            conversation: (i == 0).then(|| "019a-lead-thread".to_owned()),
         })
         .collect()
 }

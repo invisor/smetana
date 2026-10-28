@@ -91,6 +91,22 @@ const conversations = reactive(new Map())
    the package root in the identity all the way to Vue. */
 const crews = reactive(new Map())
 
+/* The conversation ids of the leads of every live Crew package, read off the root of each
+   `crew:tree`. A lead is not a driven session with a row of its own, but its thread is in the
+   registry (`.smetana/agents.json`) like any other, so `offeredRecords` in `stores/terminals.js`
+   hides a record whose id is in here: the live tree already drives it. The key is absent until
+   the lead has a thread id, and from a server older than protocol 1.15 for good, which both read
+   as "nothing to shadow". Gone with the tree, so the record is offered again once no Crew holds
+   the thread (smetana-u0c9). */
+export const crewLeadConversations = computed(
+  () =>
+    new Set(
+      [...crews.values()]
+        .map((crew) => crew.nodes.find((node) => node.id === crew.root)?.conversation)
+        .filter((id) => typeof id === 'string' && id !== '')
+    )
+)
+
 const crewAddress = (id) => {
   if (typeof id !== 'string') return null
   const match = /^crew:(\d+):(\d+)$/.exec(id)

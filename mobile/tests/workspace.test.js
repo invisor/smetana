@@ -138,6 +138,24 @@ describe('what the working screens ask the desktop for', () => {
     expect(names(core).filter((name) => !ALLOWED_COMMANDS.includes(name))).toEqual([])
   })
 
+  it('draws no offline row for the thread a live Crew lead drives, and draws it again once the tree is gone', async () => {
+    const lead = { sessionId: 'thread-lead', agent: 'codex', cwd: '/work/a', project: '/work/a', work: { kind: 'bare' }, startedAt: '2026-10-14T10:00:00Z' }
+    const { emit, workspace, stores, nextTick } = await start({ terminal_restorable: [lead] })
+    await workspace.startWorkspace()
+    const root = { id: 7, parent: null, root: 7, state: 'running', label: 'Crew lead', canMessage: true }
+    const tree = (nodes) => ({ name: 'crew:tree', payload: { project: '/work/a', root: 7, nodes } })
+    const offered = () => stores.terminals.agentRows.value.filter((row) => row.restored).map((row) => row.conversation)
+    expect(offered()).toEqual(['thread-lead'])
+
+    await emit('bridge:event', tree([{ ...root, conversation: 'thread-lead' }]))
+    await nextTick()
+    expect(offered()).toEqual([])
+
+    await emit('bridge:event', tree([]))
+    await nextTick()
+    expect(offered()).toEqual(['thread-lead'])
+  })
+
   it('never writes the desktop\'s settings or touches its files, git or terminals', async () => {
     const { core, workspace } = await start()
     await workspace.startWorkspace()

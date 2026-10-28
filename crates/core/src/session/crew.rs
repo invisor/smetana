@@ -114,6 +114,14 @@ pub struct CrewNode {
     pub state: CrewState,
     pub label: String,
     pub can_message: bool,
+    /// The conversation id of a root's lead, once the harness has named one.
+    /// Only a root ever carries it, and the key is left off the wire until it is
+    /// known (an older desktop never sends it, and a device reads a missing key
+    /// as "nothing to shadow"). It exists so a client can hide the lead's
+    /// `.smetana/agents.json` record, which a live Crew already drives
+    /// (smetana-u0c9).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -173,8 +181,21 @@ impl CrewTree {
                 state: CrewState::Starting,
                 label: label.into(),
                 can_message: true,
+                conversation: None,
             },
         );
+    }
+
+    /// Record the lead's conversation id on its root. `true` when the tree
+    /// changed, so the caller knows `crew:tree` has to be told again.
+    pub fn set_root_conversation(&mut self, root: CrewNodeId, conversation: &str) -> bool {
+        match self.nodes.get_mut(&root) {
+            Some(node) if node.conversation.as_deref() != Some(conversation) => {
+                node.conversation = Some(conversation.to_owned());
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Bind a provider lead identity only after its structured runtime has
@@ -222,6 +243,9 @@ impl CrewTree {
             (incoming, _) => CrewState::from(incoming),
         };
         let label = incoming.label.unwrap_or_else(|| "Background agent".into());
+        // A provider record naming the lead's own thread lands on the root's id; the lead's
+        // conversation, set by the session worker, has to survive it.
+        let conversation = self.nodes.get(&id).and_then(|node| node.conversation.clone());
         self.nodes.insert(
             id,
             CrewNode {
@@ -232,6 +256,7 @@ impl CrewTree {
                 label,
                 can_message: incoming.can_message
                     && !matches!(state, CrewState::Done | CrewState::Failed),
+                conversation,
             },
         );
         self.reparent_known(root);

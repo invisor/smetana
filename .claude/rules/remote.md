@@ -256,6 +256,13 @@ move**, so an older release reinstalled still finds its data:
 A person who moves to a remote server pairs the phone with that server (`smetanad pair --kind phone`); the local server's
 pairing is untouched (`server/smetanad/README.md`).
 
+## Protocol 1.15: the root of `crew:tree` names the lead's conversation (smetana-u0c9)
+
+Additions only. `CrewNode.conversation` (optional, absent until known, only ever on a root) and `crew:tree` joins the
+phone's event allowlist, which a phone needs in order to hide the Crew lead's registry record
+(see "A Crew lead stays in the registry" in `terminal.md`). A phone on an older desktop is refused the subscription and
+reads it as a local name: nothing is shadowed. The mobile build's own `PROTOCOL_MINOR` stays 3.
+
 ## Protocol 1.14: the phone hears settings:changed
 
 Two changes under one minor (smetana-x9r9; 1.13 is smetana-jdw5's). **The phone draws the desktop's theme, density,

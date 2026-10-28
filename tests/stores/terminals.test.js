@@ -1710,6 +1710,41 @@ describe('the sessions a project offers back after a restart', () => {
     expect(rows[0].restored).toBeUndefined()
   })
 
+  /* smetana-u0c9: a Crew lead stays in the registry (a restart offers its thread back) and has no
+     row of its own, so what hides its record is the root of its live `crew:tree`, which carries
+     the lead's conversation id. The tree goes first, as the server sends it. */
+  it('draws no offer under the thread a live Crew lead drives, and offers it again without the tree', async () => {
+    const loaded = await ready()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('session_list', [])
+    await loaded.stores.conversation.initConversation()
+    await loaded.stores.terminals.loadSessions('/p')
+    const lead = offered({ agent: 'codex', sessionId: 'thread-lead' })
+    const tree = (nodes) => ({ project: '/p', root: 7, nodes })
+    const root = { id: 7, parent: null, root: 7, state: 'running', label: 'Crew lead', canMessage: true }
+
+    await loaded.emit('crew:tree', tree([{ ...root, conversation: 'thread-lead' }]))
+    await loaded.emit('terminal:restorable', { project: '/p', records: [lead] })
+    await loaded.nextTick()
+    expect(loaded.stores.terminals.terminalState.restored).toEqual([lead])
+    expect(loaded.stores.terminals.agentRows.value).toEqual([])
+
+    // A tree without the id (an older server, or a lead with no thread yet) shadows nothing.
+    await loaded.emit('crew:tree', tree([root]))
+    await loaded.nextTick()
+    expect(loaded.stores.terminals.agentRows.value.map((row) => row.conversation)).toEqual(['thread-lead'])
+
+    await loaded.emit('crew:tree', tree([{ ...root, conversation: 'thread-lead' }]))
+    await loaded.nextTick()
+    expect(loaded.stores.terminals.agentRows.value).toEqual([])
+
+    // The package is gone: the thread is offered again as an ordinary offline row.
+    await loaded.emit('crew:tree', tree([]))
+    await loaded.nextTick()
+    const rows = loaded.stores.terminals.agentRows.value
+    expect(rows.map((row) => [row.conversation, row.restored])).toEqual([['thread-lead', true]])
+  })
+
   /* The other end of that hiding, and the bug it produced. The filter above
      covers the record only while a live session carries its conversation, so
      closing the row uncovered it: the same conversation came straight back as

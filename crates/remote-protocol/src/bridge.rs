@@ -154,6 +154,9 @@ pub const ALLOWED_EVENTS: &[&str] = &[
     "terminal:restorable",
     // Added in protocol 1.14: the look and the board follow the desktop.
     "settings:changed",
+    // Added in protocol 1.15: the root of a live Crew tree names its lead's conversation, which is
+    // what keeps the lead's registry record from being drawn as an offline row (smetana-u0c9).
+    "crew:tree",
 ];
 
 /// Every command a desktop device may call: everything the desktop's own front end calls that
@@ -541,7 +544,7 @@ mod tests {
         let caps = capabilities();
         assert_eq!(caps.len(), ALLOWED_COMMANDS.len() + ALLOWED_EVENTS.len());
         assert_eq!(caps.first().map(String::as_str), Some("tracker_health"));
-        assert_eq!(caps.last().map(String::as_str), Some("settings:changed"));
+        assert_eq!(caps.last().map(String::as_str), Some("crew:tree"));
     }
 
     #[test]

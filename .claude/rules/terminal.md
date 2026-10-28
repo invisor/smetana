@@ -503,6 +503,28 @@ project's tile in the rail goes `loud` for a session waiting on somebody and `li
 session that is `ready` — it has spoken and waits on nobody — counts for the footer and not for the tile,
 exactly as an `idle` PTY session does.
 
+### A Crew lead stays in the registry, and the live tree hides it (smetana-u0c9)
+
+**The lead of a Codex Crew is recorded in `.smetana/agents.json` like any driven session, and a client hides that record
+while the lead's tree is live.** `write_record` makes no exception for `crew_lead`: a restart of the app or the server in
+the middle of a run must offer the lead's thread back, since it holds the whole context of the task. The rejected
+alternative, `write_record` returning false for a lead, was one line and left that thread reachable only by hand.
+
+- **The id rides on the tree.** The root node of `crew:tree` carries `conversation`, the lead's thread id, as soon as the
+  harness names one (the key is left off before that, and from a server older than protocol 1.15). `absorb` sets it and
+  emits the tree **before** `note_conversation`, whose `terminal:restorable` broadcast carries the same record: the order
+  rule of `announce_new`, because a device can only hide a record behind something it already knows.
+- **The clients.** `offeredRecords` in `stores/terminals.js` also drops a record whose id is in
+  `crewLeadConversations` (`stores/conversation.js`), the root ids of every live tree. The phone draws the same store's
+  rows, so it follows; it hears `crew:tree` since 1.15. With no tree (an empty `nodes` snapshot when the lead ends, or a
+  restart that brought none back) the record is offered again as an ordinary offline row.
+- **Resuming it is an ordinary conversation.** The row's intent is `ResumeSession`, which `start_crew` never sees: a
+  driven Codex conversation on the same thread, no Crew package, no workers, no tree. Bringing a Crew back is a separate
+  piece of work.
+- **The record's lifetime is the general rule, with no case for the lead.** Written when the thread id arrives, dropped on
+  the session's `Eof` (the person's `crew_clear`, or the lead's own exit) and nowhere else. A restart gives no `Eof`, so the
+  record stays. The `Eof` arm reads `never_became_a_conversation`, which takes no `crew_lead`; keep it that way.
+
 ## Dropping a file on the panel
 
 Dropping a file on the terminal panel types its absolute path into the session's input and stops

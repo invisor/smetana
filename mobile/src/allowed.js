@@ -53,7 +53,8 @@ export const ALLOWED_EVENTS = [
   'session:state',
   'session:removed',
   'terminal:restorable',
-  'settings:changed'
+  'settings:changed',
+  'crew:tree'
 ]
 
 export const isAllowedCommand = (name) => ALLOWED_COMMANDS.includes(name)

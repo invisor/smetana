@@ -37,6 +37,7 @@ import { runsState } from './runs.js'
 import { effectiveAgents, settings } from './settings.js'
 import { isLockIssue, trackerState } from './tracker.js'
 import { onReconnect } from './connection.js'
+import { crewLeadConversations } from './conversation.js'
 
 /* The one word that tells a person's own shell from an agent, as `SessionWork`
    and `WorkKind` in `crates/core/src/terminal/model.rs` spell it on the wire.
@@ -263,7 +264,11 @@ const offeredRecords = () => {
       .map((s) => s.conversation)
       .filter((id) => id != null)
   )
-  return terminalState.restored.filter((record) => !live.has(record.sessionId))
+  /* A Crew lead's thread is in the registry too and has no row of its own, so what hides its
+     record is the root of its live `crew:tree`, which carries the id (smetana-u0c9). The server
+     sends the tree before the registry that holds the record, so no frame offers the resume. */
+  const led = crewLeadConversations.value
+  return terminalState.restored.filter((record) => !live.has(record.sessionId) && !led.has(record.sessionId))
 }
 
 /* Where the selection goes when what it named is gone: the newest agent, or
