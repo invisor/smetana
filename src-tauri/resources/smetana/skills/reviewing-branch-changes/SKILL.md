@@ -135,125 +135,69 @@ rather than leaving the number to be interpreted:
   through
 - **below 70%** — at least one blocking finding; it goes back for work
 
-## 8. The report: Markdown for reading, JSON for the page
+## 8. The report: two files, and the HTML stands alone
 
-The prompt gives you a path with no extension. Write two files:
+The prompt gives you a path with no extension. Write both files:
 
-- `<report>.md` — the review in Markdown, for a person who reads it as text
-- `<report>.json` — the same review as data, in the shape below
+- `<report>.md` — the review in Markdown
+- `<report>.html` — the same review, same structure, same findings
 
-Same content in both: the same findings, the same score, the same pairs. The Markdown is
-yours to lay out; the JSON is not, and **you do not write a page.** Smetana draws the
-review from the JSON when you finish, in one design for every review, so there is no HTML
-to produce, no stylesheet to write and nothing to escape. Write plain text in every
-string and let the app do the rest.
+Same content in both. They are two renderings of one document, not a summary and a
+long form.
 
-The JSON file holds that object and nothing else: no comment, no code fence, no text
-before or after it. It is parsed strictly enough that a missing required field gives a
-page saying the report could not be built, and loosely enough that a field the schema does
-not know is ignored.
+**The HTML is opened inside an application, in a sandboxed frame.** These are
+requirements, not preferences:
 
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "smetana/code-review-report.schema.json",
-  "title": "Code review report input",
-  "type": "object",
-  "required": ["score", "pairs", "findings", "reviewer", "date"],
-  "additionalProperties": false,
-  "properties": {
-    "score": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Readiness, percent. Range is derived: >=90 high, 70–89 mid, <70 low." },
-    "pairs": {
-      "type": "array", "minItems": 1,
-      "items": {
-        "type": "object",
-        "required": ["repo", "base", "head", "files", "added", "removed", "hazards"],
-        "additionalProperties": false,
-        "properties": {
-          "repo": { "type": "string" },
-          "base": { "type": "string", "examples": ["main"] },
-          "head": { "type": "string", "examples": ["feature/smetana-6tev-worktree-gc-skip-live-agents"] },
-          "files": { "type": "integer", "minimum": 0 },
-          "added": { "type": "integer", "minimum": 0 },
-          "removed": { "type": "integer", "minimum": 0 },
-          "hazards": { "type": "boolean", "description": "Reviewer had [merge].hazards project rules for this repo." },
-          "rulesSource": { "type": "string", "description": "Optional path the rules were loaded from, e.g. .smetana/review.toml" },
-          "reviewedFiles": {
-            "type": "array",
-            "description": "Used only by the zero-findings state.",
-            "items": {
-              "type": "object", "required": ["path", "added", "removed"], "additionalProperties": false,
-              "properties": { "path": { "type": "string" }, "added": { "type": "integer" }, "removed": { "type": "integer" } }
-            }
-          }
-        }
-      }
-    },
-    "findings": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["level", "title", "repo", "path", "line", "defect", "scenario", "fix"],
-        "additionalProperties": false,
-        "properties": {
-          "level": { "enum": ["blocking", "serious", "minor"] },
-          "title": { "type": "string", "description": "Short, sentence case, no trailing period." },
-          "repo": { "type": "string", "description": "Must match a pairs[].repo." },
-          "path": { "type": "string" },
-          "line": { "type": "integer", "minimum": 1 },
-          "defect": { "type": "string", "description": "One sentence. Inline `code` allowed." },
-          "scenario": { "type": "string", "description": "input → result. Inline `code` allowed; rendered with .io for literals." },
-          "fix": { "type": "string" },
-          "code": {
-            "type": "object",
-            "required": ["startLine", "lines"],
-            "additionalProperties": false,
-            "properties": {
-              "path": { "type": "string", "description": "Caption; defaults to finding.path." },
-              "language": { "type": "string", "examples": ["rust", "ts"] },
-              "startLine": { "type": "integer", "minimum": 1 },
-              "lines": { "type": "array", "items": { "type": "string" }, "maxItems": 12 },
-              "highlight": { "type": "array", "items": { "type": "integer" }, "description": "Absolute line numbers to mark with .hl" }
-            }
-          }
-        }
-      }
-    },
-    "reviewer": { "type": "string", "examples": ["claude-2"] },
-    "date": { "type": "string", "description": "Local time, rendered as YYYY-MM-DD HH:mm." }
-  }
+- no external stylesheet — every style is in a `<style>` block in the document
+- no font from a network — system font stacks only
+- no `<script>`, of any kind, inline or otherwise
+- no `<img>`, no external icon, nothing fetched from anywhere
+
+The document reaches nowhere at all. Anything it needs, it carries.
+
+**It has to be a whole page — `<!doctype html>` and an explicit `<html>` tag — not a
+fragment.** Smetana draws it in a frame whose DOM it cannot reach, so it hands the document
+its theme by writing a `data-theme` attribute onto that tag, and a document with no root
+tag is never handed one.
+
+Declare the palette four times over, in this order:
+
+```css
+:root { color-scheme: light; /* the light one */ }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { color-scheme: dark; /* the dark one */ }
 }
+:root[data-theme="dark"] { color-scheme: dark; /* the dark one */ }
+:root[data-theme="light"] { color-scheme: light; /* the light one */ }
 ```
 
-How to fill it:
+Each block also sets `color-scheme` beside the colours, light or dark to match: the frame's
+scrollbar and every default the user agent paints, selection among them, follow that rather
+than your rules, so without it a dark report comes with a light scrollbar down its side.
 
-- **`score`** is the readiness percentage from §7, an integer. The page derives the range
-  from it (90 and up, 70 to 89, below 70) and draws the scale, so do not describe the
-  scale in a field. A score that contradicts the findings — 70 or more with a blocking
-  finding — is drawn as written, but it tells the reader you did not mean one of the two.
-- **`pairs`** has one entry per pair you were given, with the refs exactly as given. `files`,
-  `added` and `removed` come from `--stat`. `hazards` is whether you had `[merge].hazards` to
-  work from (§2), and `rulesSource` names the file you read them from. `reviewedFiles`
-  lists every changed file with its line counts, and is drawn only when there are no
-  findings; leave it out otherwise.
-- **`findings`** is the list from §6, one object per finding, with `level` one of
-  `blocking`, `serious`, `minor` as defined in §7. `repo` is a `pairs[].repo` and `path`
-  is relative to that repository. `title` is short, in sentence case, with no trailing
-  period. `defect` is one sentence. `scenario` is the failure from §6 written as
-  *input → result*. `fix` says what to change. An empty list is a clean review, and it is
-  drawn as one.
-- **`code`** is the quote from §6: up to 12 lines, `startLine` the number of the first,
-  `highlight` the absolute number of the line the finding is about. Give lines as they are
-  in the file, without line numbers and without escaping anything.
-- **Backticks** are the one piece of formatting there is. Put an identifier, a path, a
-  literal or a snippet between a pair of backticks in `title`, `defect`, `scenario` and
-  `fix` and it is drawn as code. There is no Markdown beyond that: no bold, no lists, no
-  links.
-- **`reviewer`** is your own name or model. **`date`** is the local time as
-  `YYYY-MM-DD HH:mm`.
+The first pair is for a browser, which has nothing of ours loaded and only the machine's
+answer to go on; the second is for a tab of this app, and it has to win in both directions
+— so guard the media query with `:not([data-theme="light"])` and write the two attribute
+blocks after it. Either of those two carries the hard case on its own — a light app on a
+dark machine — and both are here because they fail differently: the guard says which
+reader the query is for and survives being moved, while source order says nothing and does
+not.
 
-Say in the Markdown which pairs you reviewed, ref for ref, and whether you had
-`[merge].hazards` to work from; the JSON's `pairs` carries the same two facts for the page.
+Write the colours as custom properties and refer to them everywhere else, so that a block
+is a list of names redefined rather than the whole stylesheet written out four times.
+**The bare `:root` block is the complete one**, and the three below it only redefine names
+it already declares: a colour whose sole definition sat inside a media query or an
+attribute block would simply be absent for the reader that block does not match, and
+nothing on screen would say a colour had gone missing.
+
+**Escape everything that came out of the repository.** Every code fragment, every file
+name, every branch name, every quoted diff line goes through HTML escaping: `&` first,
+then `<`, `>` and `"`. A single unescaped `<` in a quoted line of code silently eats the
+rest of your report in the frame, and a review that reads as if it stopped halfway is
+worse than no review.
+
+Say in both files which pairs you reviewed, ref for ref, and whether you had
+`[merge].hazards` to work from.
 
 ## 9. You never file what you find
 

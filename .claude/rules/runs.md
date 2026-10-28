@@ -720,8 +720,7 @@ whole entry.
 **The document's look is the design handoff's, and the stylesheet is not ours to edit.** The handoff
 lives whole in `docs/design/reports/` (README, `reports.css`, reference markup, schemas and fixtures,
 the code-review half included). `reports.css` is compiled in from `src/runs/reports.css` as
-`report::REPORTS_CSS` — one public constant, so the code-review renderer takes it rather than copying
-it — and a test holds that file byte-equal to the one under `docs/`. The old `LIGHT`/`DARK`/`RULES`
+`report::REPORTS_CSS` — one public constant — and a test holds that file byte-equal to the one under `docs/`. The old `LIGHT`/`DARK`/`RULES`
 constants and `style()` are gone, along with the tests that pinned their text. The palette keeps the
 four-block shape `reportTheme.js` depends on, inside that file. Durations follow the handoff's rule
 (`report::duration`: `<1m`, `{m}m`, `{h}h {m}m`), not the old seconds-bearing `human`. The Batches
@@ -729,22 +728,14 @@ cell and the group head both count logical batches, so a second attempt is not a
 The handoff's five outcome kinds are `BatchOutcome`'s first five; `Unanswered` has no kind of its
 own there and is drawn in the `needs-you` tone with its old sentence.
 
-**The branch review's page is drawn the same way, from data.** An agent used to lay out its own
-`{report}.html`, and every review looked different. It now writes `{report}.md` (text, as before) and
-`{report}.json` (`docs/design/reports/code-review/schema.json`, pasted whole into the
-`reviewing-branch-changes` skill, since the skill also travels inline into projects with no `docs/`).
-`runs/review_report.rs` is the renderer: pure `render`/`render_fallback`, the same `REPORTS_CSS`
-constant (never a copy; a test holds the `<style>` byte-equal to the run report's), `escape` on every
-field and `prose` for backticks (`<span class="io">` in "Fails when"). `write_html` is the file half and
-`review_report::on_session_end(&SessionWork, project)` calls it for a `SessionWork::ReviewBranch`, and it
-is called from both session roads — `terminal/service.rs`'s `Chunk::Gone` arm and the driven worker's
-`session/service.rs` `Chunk::Eof` arm — **before** the exited state is emitted, because `reviewReportPath` opens `{report}.html` the moment the front end hears
-of the exit. It always leaves a file: a missing, unparsable or incomplete JSON becomes a "Report could
-not be built" page naming the reason and both paths, since an empty tab is worse. Parsing ignores
-unknown fields and fails on a missing required one; a score of 70 or more beside a blocking finding is
-a `log::warn!`, not a refusal. The tab is the same sandboxed frame the run report uses, so the
-document carries the same four palette blocks through `REPORTS_CSS` and `reportTheme.js` needs nothing
-new.
+**The branch review's page is written by the agent, not drawn by the app.** The agent writes
+`{report}.md` and `{report}.html` itself, no JSON, and the prompt (`review_branch`) and the
+`reviewing-branch-changes` skill carry the document contract between them (smetana-81fk). For a
+while (`44268235`) the agent wrote `.md` and `.json` and the app drew the `.html` from the JSON when the
+session exited. That never fired for a review sitting at its prompt in the conversation panel, so no
+page appeared (smetana-xzjt), and a renderer left in place would have overwritten an agent's own page
+with a stub on exit. The renderer and its three `on_session_end` calls are gone; `escape`, `prose`
+and `REPORTS_CSS` stay in `report.rs`, which the run report uses.
 
 **`reports.rs` reads this markup back, so the two move together.** The title is peeled out of
 `Run report · {title} · smetana`, the meta line is split on ` · `, strip cells are found by the
