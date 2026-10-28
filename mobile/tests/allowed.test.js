@@ -32,7 +32,8 @@ describe('the phone\'s copy of the allowlist', () => {
       expect(isAllowedCommand(name), name).toBe(false)
     }
     expect(isAllowedEvent('terminal:output')).toBe(false)
-    expect(isAllowedEvent('crew:tree')).toBe(false)
+    expect(isAllowedEvent('crew:tree')).toBe(true)
+    expect(isAllowedEvent('remote:devices')).toBe(false)
     expect(isAllowedCommand('run_start')).toBe(true)
     expect(isAllowedEvent('run:state')).toBe(true)
   })

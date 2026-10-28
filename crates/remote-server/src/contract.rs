@@ -428,6 +428,8 @@ fn crew_nodes() -> Vec<CrewNode> {
             state,
             label: "worker".into(),
             can_message: i % 2 == 0,
+            // Only the root carries the lead's conversation; the others leave the key off.
+            conversation: (i == 0).then(|| "019a-lead-thread".to_owned()),
         })
         .collect()
 }
@@ -1209,6 +1211,7 @@ fn replies() -> BTreeMap<&'static str, Vec<Value>> {
     map.insert("session_send", vec![Value::Null]);
     map.insert("session_answer", vec![Value::Null]);
     map.insert("session_stop", vec![Value::Null]);
+    map.insert("crew_list", vec![json!([{ "project": "/work/smetana", "root": 1, "nodes": crew_nodes() }]), json!([])]);
     map.insert("crew_tree", vec![json_of(&crew_nodes()), Value::Null]);
     map.insert("crew_attach", all(&crew_attached()));
     map.insert("crew_send", vec![Value::Null]);

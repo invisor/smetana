@@ -404,12 +404,12 @@ async fn remote_bridge_an_event_off_the_list_cannot_be_listened_to() {
     let h = harness().await;
     h.remote.hub.set_dispatch(Arc::new(Recorder::default()));
     let (_phone, mut client) = paired(&h).await;
-    for event in ["terminal:output", "remote:devices", "crew:tree"] {
+    for event in ["terminal:output", "remote:devices", "server:restart-deferred"] {
         client.send_msg(ClientMsg::Listen { event: event.into() }).await;
     }
     // Messages are handled in order: once this answer is back, the Listens were seen.
     client.call("tracker_health", json!({})).await.unwrap();
-    for event in ["terminal:output", "remote:devices", "crew:tree"] {
+    for event in ["terminal:output", "remote:devices", "server:restart-deferred"] {
         assert_eq!(h.remote.hub.listeners(event), 0, "{event}");
         h.remote.hub.publish(event, &json!({}));
     }

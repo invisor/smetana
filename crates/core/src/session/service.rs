@@ -292,6 +292,9 @@ pub enum Request {
     /// Every session this worker holds that no cross has closed, for `session_list`. Not
     /// `Live`, which keeps only the ones with a running child for the restart gateway.
     List(oneshot::Sender<Vec<SessionRecord>>),
+    /// Every live Crew tree, for `crew_list`: what a client that connected mid-run missed of
+    /// `crew:tree` (smetana-u0c9).
+    CrewList(oneshot::Sender<Vec<CrewTreeChange>>),
     Start(String, Intent, oneshot::Sender<Result<SessionId, SessionError>>),
     /// Start a driven lead and register its Smetana-owned root in one worker
     /// pass. It intentionally bypasses `Request::Start`'s ordinary Run
@@ -1309,6 +1312,24 @@ fn emit_crew(ctx: &Context, package: &CrewPackage) {
     );
 }
 
+/// Tell every client which conversation a live Crew's lead is, on the root of `crew:tree`. The
+/// lead stays in `.smetana/agents.json` (a restart offers its thread back as an ordinary driven
+/// conversation), so what keeps a device from drawing it as an offline row beside the live tree is
+/// this id, and it has to arrive before the registry that carries the same record.
+fn shadow_crew_lead(
+    ctx: &Context,
+    crews: &mut HashMap<u64, CrewPackage>,
+    root: u64,
+    conversation: &str,
+) -> bool {
+    let Some(package) = crews.get_mut(&root) else { return false };
+    if !package.tree.set_root_conversation(package.root, conversation) {
+        return false;
+    }
+    emit_crew(ctx, package);
+    true
+}
+
 /// The payload of `session:events`.
 pub fn events_payload(id: SessionId, events: &[Event]) -> serde_json::Value {
     serde_json::json!({ "id": id, "events": events })
@@ -2017,6 +2038,10 @@ fn clear_crew(
     if let Some(mut pty) = crew_ptys.remove(&root) {
         pty.kill();
     }
+    // A lead with a child still to die keeps its tree, and so its shadow over the lead's registry
+    // record, until the `Eof` that drops that record: the empty tree goes out from the `Eof` arm,
+    // or every device would offer to resume a thread the lead still holds (smetana-u0c9).
+    let lead_dying = sessions.get(&root).is_some_and(|live| live.crew_lead && live.child.is_some());
     crew_leads.retain(|_, lead_root| *lead_root != root);
     let waiters = crew_waiters.remove(&root).unwrap_or_default();
     let keep_exit = retain_crew_exit(admitted, waiters.len());
@@ -2030,6 +2055,9 @@ fn clear_crew(
     }
     for (_, waiter) in crew_send_waiters.extract_if(|(crew, _), _| *crew == root) {
         let _ = waiter.reply.send(Err(SessionError::Spawn(ENDED.into())));
+    }
+    if lead_dying {
+        return;
     }
     if let Some(mut package) = crews.remove(&root) {
         package.tree.clear();
@@ -2163,6 +2191,18 @@ fn handle(
                     let _ = tx.send(Err(error));
                 }
             }
+        }
+        Request::CrewList(tx) => {
+            let mut trees: Vec<CrewTreeChange> = crews
+                .values()
+                .map(|package| CrewTreeChange {
+                    project: package.project.clone(),
+                    root: package.root,
+                    nodes: package.tree.nodes(),
+                })
+                .collect();
+            trees.sort_by_key(|tree| tree.root);
+            let _ = tx.send(trees);
         }
         Request::CrewTree(root, tx) => {
             let _ = tx.send(crews.get(&root).map(|package| package.tree.nodes()));
@@ -2675,6 +2715,13 @@ fn absorb(
             let lead_kinds = kinds.clone();
             append(ctx, id, live, kinds);
             if let Some(conversation) = discovered.as_ref() {
+                // Before `note_conversation`, whose registry broadcast would otherwise reach a
+                // device ahead of the tree that tells it this record is a Crew lead's (smetana-u0c9).
+                if live.conversation.is_none() && !live.removed {
+                    if let Some(root) = crew_leads.get(&id).copied() {
+                        shadow_crew_lead(ctx, crews, root, conversation);
+                    }
+                }
                 note_conversation(ctx, id, live, conversation.clone());
             }
             if let Some(root) = crew_leads.get(&id).copied() {
@@ -2808,6 +2855,14 @@ fn absorb(
                 if let Some(conversation) = live.conversation.as_deref() {
                     crate::terminal::restore::drop_record(Path::new(&live.project), conversation);
                     crate::terminal::restore::announce(ctx, Path::new(&live.project));
+                }
+            }
+            // A lead's tree outlives `clear_crew` until here, so that the registry never offers a
+            // thread whose lead is still dying; with the record gone it can be told empty.
+            if live.crew_lead {
+                if let Some(mut package) = crews.remove(&id) {
+                    package.tree.clear();
+                    emit_crew(ctx, &package);
                 }
             }
             // Reaped on a task of its own: end of stream arrives before the
@@ -3329,6 +3384,43 @@ mod tests {
         sessions.insert(2, idle_live("/p", SessionState::Running));
         assert_eq!(records(&sessions).iter().map(|r| r.id).collect::<Vec<_>>(), vec![2]);
         assert!(tap.0.lock().unwrap().is_empty());
+    }
+
+    /// smetana-u0c9: the lead's record is written and broadcast, and the tree naming its
+    /// conversation reaches every client first.
+    #[test]
+    fn a_crew_lead_names_its_conversation_on_the_tree_before_the_registry_offers_it() {
+        let root = std::env::temp_dir().join(format!("smetana-crew-lead-shadow-{}", std::process::id()));
+        std::fs::create_dir_all(root.join(".smetana")).unwrap();
+        let project = root.to_string_lossy().into_owned();
+        let (ctx, tap) = tapped();
+        let mut crews = HashMap::new();
+        crews.insert(9, CrewPackage::new(project.clone(), 9, "Crew lead"));
+        let mut lead = idle_live(&project, SessionState::Running);
+        lead.crew_lead = true;
+        lead.conversation = None;
+
+        assert!(shadow_crew_lead(&ctx, &mut crews, 9, "thread-1"));
+        note_conversation(&ctx, 9, &mut lead, "thread-1".into());
+        assert!(!shadow_crew_lead(&ctx, &mut crews, 9, "thread-1"), "an unchanged id re-emits nothing");
+
+        let events = tap.0.lock().unwrap();
+        assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["crew:tree", "terminal:restorable"]);
+        assert_eq!(events[0].1["nodes"][0]["conversation"], "thread-1");
+        assert_eq!(events[0].1["nodes"][0]["id"], 9);
+        assert_eq!(events[1].1["records"][0]["sessionId"], "thread-1");
+        assert!(
+            std::fs::read_to_string(root.join(".smetana/agents.json")).unwrap().contains("thread-1"),
+            "the lead stays in the registry"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_crew_root_leaves_the_conversation_key_off_until_it_is_known() {
+        let package = CrewPackage::new("/p".into(), 3, "Crew lead");
+        let wire = serde_json::to_value(package.tree.nodes()).unwrap();
+        assert!(wire[0].get("conversation").is_none());
     }
 
     #[test]

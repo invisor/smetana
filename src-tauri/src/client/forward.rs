@@ -108,6 +108,7 @@ const READS: &[&str] = &[
     "session_list",
     "session_attach",
     "session_since",
+    "crew_list",
     "crew_tree",
     "crew_attach",
     "sessions_list",

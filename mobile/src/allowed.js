@@ -26,6 +26,7 @@ export const ALLOWED_COMMANDS = [
   'session_send',
   'session_answer',
   'session_stop',
+  'crew_list',
   'crew_tree',
   'crew_attach',
   'crew_send',
@@ -53,7 +54,8 @@ export const ALLOWED_EVENTS = [
   'session:state',
   'session:removed',
   'terminal:restorable',
-  'settings:changed'
+  'settings:changed',
+  'crew:tree'
 ]
 
 export const isAllowedCommand = (name) => ALLOWED_COMMANDS.includes(name)

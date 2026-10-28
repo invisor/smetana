@@ -91,6 +91,22 @@ const conversations = reactive(new Map())
    the package root in the identity all the way to Vue. */
 const crews = reactive(new Map())
 
+/* The conversation ids of the leads of every live Crew package, read off the root of each
+   `crew:tree`. A lead is not a driven session with a row of its own, but its thread is in the
+   registry (`.smetana/agents.json`) like any other, so `offeredRecords` in `stores/terminals.js`
+   hides a record whose id is in here: the live tree already drives it. The key is absent until
+   the lead has a thread id, and from a server older than protocol 1.15 for good, which both read
+   as "nothing to shadow". Gone with the tree, so the record is offered again once no Crew holds
+   the thread (smetana-u0c9). */
+export const crewLeadConversations = computed(
+  () =>
+    new Set(
+      [...crews.values()]
+        .map((crew) => crew.nodes.find((node) => node.id === crew.root)?.conversation)
+        .filter((id) => typeof id === 'string' && id !== '')
+    )
+)
+
 const crewAddress = (id) => {
   if (typeof id !== 'string') return null
   const match = /^crew:(\d+):(\d+)$/.exec(id)
@@ -542,6 +558,7 @@ async function register() {
      in turn waits on nothing of its own, for as long as the server takes. It
      never rejects - see `loadSessionList`. */
   void loadSessionList()
+  void loadCrews()
 }
 
 function listenToEvents() {
@@ -659,20 +676,62 @@ function listenToRemoved() {
    very same node's row in the agents panel (`crewAgentsIn`, above) went on
    moving with every tree update. Read through the identical `crewStatusOf`
    that row already uses, so the badge and the row can never disagree. */
+const wellFormedTree = ({ project, root, nodes } = {}) =>
+  typeof project === 'string' && Number.isFinite(root) && Array.isArray(nodes)
+
+function applyTree({ project, root, nodes }) {
+  if (!nodes.length) {
+    crews.delete(root)
+    return
+  }
+  crews.set(root, { project, root, nodes })
+  for (const node of nodes) {
+    const held = conversations.get(`crew:${root}:${node.id}`)
+    if (held) held.state = crewStatusOf(node.state)
+  }
+}
+
+/* The trees that arrived while a snapshot (`loadCrews`) was on its way, by root: they are newer
+   than the snapshot, so they are laid over it rather than lost under it. */
+const treesDuringLoad = new Set()
+
 function listenToCrew() {
   return listen('crew:tree', (event) => {
-    const { project, root, nodes } = event.payload ?? {}
-    if (typeof project !== 'string' || !Number.isFinite(root) || !Array.isArray(nodes)) return
-    if (!nodes.length) {
-      crews.delete(root)
-      return
-    }
-    crews.set(root, { project, root, nodes })
-    for (const node of nodes) {
-      const held = conversations.get(`crew:${root}:${node.id}`)
-      if (held) held.state = crewStatusOf(node.state)
-    }
+    const tree = event.payload
+    if (!wellFormedTree(tree)) return
+    for (const seen of treesDuringLoad) seen.set(tree.root, tree)
+    applyTree(tree)
   })
+}
+
+/* Every live Crew tree the server holds, read once and replacing `crews` whole.
+
+   A device that connects in the middle of a run has missed the `crew:tree` events that built
+   them, and a server that restarted never said its trees were gone; both leave `crews` wrong in
+   the one place that matters, since the lead's registry record is hidden behind it
+   (`crewLeadConversations`). Read on start, on every reconnect and ahead of every registry read
+   (`loadRestorable` in `stores/terminals.js`), so the shadow is in place before the record is
+   drawn. A server older than protocol 1.15 refuses `crew_list`; `crews` is then left as the
+   events made it, which is all such a server ever offered (smetana-u0c9). Never rejects. */
+export async function loadCrews() {
+  const during = new Map()
+  treesDuringLoad.add(during)
+  try {
+    const trees = await invoke('crew_list', {})
+    if (!Array.isArray(trees)) return
+    const next = new Map()
+    for (const tree of trees) if (wellFormedTree(tree) && tree.nodes.length) next.set(tree.root, tree)
+    for (const [root, tree] of during) {
+      if (tree.nodes.length) next.set(root, tree)
+      else next.delete(root)
+    }
+    for (const root of [...crews.keys()]) if (!next.has(root)) crews.delete(root)
+    for (const tree of next.values()) applyTree(tree)
+  } catch {
+    // An older server, or one that is not answering: the events already heard stand.
+  } finally {
+    treesDuringLoad.delete(during)
+  }
 }
 
 function listenToCrewEvents() {
@@ -1153,4 +1212,4 @@ export async function closeConversation(id) {
 
 /* A conversation open in this window was last fed by the previous connection; its snapshot is read
    again, replacing the journal whole as every attach does. */
-onReconnect(() => Promise.all([loadSessionList(), ...[...conversations.keys()].map((id) => attach(id))]))
+onReconnect(() => Promise.all([loadSessionList(), loadCrews(), ...[...conversations.keys()].map((id) => attach(id))]))
