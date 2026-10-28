@@ -898,6 +898,57 @@ pub fn own_coalition() -> Coalition {
     coalition(std::process::id() as i32)
 }
 
+/// Whether this process may sweep by resource coalition at all, which is a
+/// fact about *what kind of process it is* and so is fixed once, when the
+/// terminal worker starts (`terminal::service::start`), never inferred.
+///
+/// `smetanad` is started with `Off`. A server does not own the coalition it
+/// lives in: the shell launches it, so it sits in the app's coalition, and
+/// after an update the new shell is a child of the old one and ends up with
+/// `ppid == 1` beside the server. Sweeping that coalition at exit killed the
+/// freshly started shell on "Restart now" (smetana-qy49), and the start-up
+/// sweep reads a coalition id the previous server wrote, which is the app's
+/// own and would take a live shell with it. `Off` makes every reader of
+/// `own_dedicated_coalition` answer `Unknown` and makes
+/// `recovery::dead_writer_coalitions` answer nothing, whatever an old
+/// `runs.json` still says. Per-session `Descendants` reaping is not affected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoalitionSweep {
+    /// The process owns its coalition (the in-process worker of the past).
+    Own,
+    /// The process is a server and never sweeps by coalition.
+    Off,
+}
+
+static COALITION_SWEEP_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Set by `terminal::service::start`, before anything reads the answer.
+pub fn set_coalition_sweep(mode: CoalitionSweep) {
+    COALITION_SWEEP_OFF.store(mode == CoalitionSweep::Off, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn coalition_sweep() -> CoalitionSweep {
+    if COALITION_SWEEP_OFF.load(std::sync::atomic::Ordering::SeqCst) {
+        CoalitionSweep::Off
+    } else {
+        CoalitionSweep::Own
+    }
+}
+
+/// The pure half of `own_dedicated_coalition`: `Off` answers `Unknown`
+/// whatever the two coalitions are, otherwise it is "mine differs from my
+/// parent's".
+#[cfg(target_os = "macos")]
+fn dedicated_coalition(sweep: CoalitionSweep, mine: Coalition, theirs: Coalition) -> Coalition {
+    if sweep == CoalitionSweep::Off {
+        return Coalition::Unknown;
+    }
+    match (mine, theirs) {
+        (Coalition::Known(a), Coalition::Known(b)) if a != b => Coalition::Known(a),
+        _ => Coalition::Unknown,
+    }
+}
+
 /// The one further check points 3 and 4 need beyond `own_coalition`,
 /// layered on top of it rather than folded into it: whether this app's own
 /// coalition is actually its own, and not merely inherited from whatever
@@ -957,6 +1008,11 @@ pub fn own_coalition() -> Coalition {
 /// to act on it.
 #[cfg(target_os = "macos")]
 pub fn own_dedicated_coalition() -> Coalition {
+    // Checked before the cache, and never cached: the server's answer must
+    // not depend on whether something asked before the switch was set.
+    if coalition_sweep() == CoalitionSweep::Off {
+        return Coalition::Unknown;
+    }
     static DEDICATED: std::sync::OnceLock<Coalition> = std::sync::OnceLock::new();
     *DEDICATED.get_or_init(|| {
         let mine = own_coalition();
@@ -965,10 +1021,7 @@ pub fn own_dedicated_coalition() -> Coalition {
         // the process is not sharing a coalition, so it is read the same
         // permissive-to-the-stranger way as if it plainly were.
         let theirs = coalition(unsafe { libc::getppid() });
-        match (mine, theirs) {
-            (Coalition::Known(a), Coalition::Known(b)) if a != b => Coalition::Known(a),
-            _ => Coalition::Unknown,
-        }
+        dedicated_coalition(CoalitionSweep::Own, mine, theirs)
     })
 }
 
@@ -1185,6 +1238,19 @@ mod tests {
         assert_eq!(mine.pid, std::process::id() as i32);
         assert!(!mine.command.is_empty(), "a process has a name");
         assert_eq!(look(mine.pid), Seen::Running { started: mine.started });
+    }
+
+    /// The server's mode (smetana-qy49): `Off` answers `Unknown` for the exit
+    /// sweep and for what `note_run` writes (both go through
+    /// `own_dedicated_coalition`) even where the app's coalition differs from
+    /// its parent's, which is exactly the server's situation. The start-up
+    /// half is pinned beside `dead_writer_coalitions_under` in `recovery.rs`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_server_never_answers_a_known_coalition() {
+        let (mine, parent) = (Coalition::Known(7), Coalition::Known(1));
+        assert_eq!(dedicated_coalition(CoalitionSweep::Own, mine, parent), Coalition::Known(7));
+        assert_eq!(dedicated_coalition(CoalitionSweep::Off, mine, parent), Coalition::Unknown);
     }
 
     #[test]

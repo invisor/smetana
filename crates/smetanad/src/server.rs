@@ -57,6 +57,10 @@ impl Options {
     }
 }
 
+/// The server never sweeps by macOS resource coalition, at exit or at start
+/// (smetana-qy49): it lives in the app's coalition, which is not its own.
+pub const COALITION_SWEEP: runs::procs::CoalitionSweep = runs::procs::CoalitionSweep::Off;
+
 /// The server is not to run as root: it starts agents that run arbitrary commands, with the account's
 /// credentials, on a machine the person may share with other things. `euid` is the effective user id.
 pub fn refuse_root(euid: u32) -> Result<(), String> {
@@ -397,7 +401,7 @@ impl Server {
             .collect();
 
         let tracker = tracker::service::start(ctx.clone(), initial);
-        let terminal = terminal::service::start(ctx.clone(), known.clone());
+        let terminal = terminal::service::start(ctx.clone(), known.clone(), COALITION_SWEEP);
         let sessions = session::service::start(ctx.clone());
         let runs = runs::service::start(ctx.clone(), tracker.clone(), terminal.clone(), sessions.clone(), known);
 
@@ -565,6 +569,11 @@ mod tests {
         for state in [Driven::Ready, Driven::NeedsYou, Driven::Exited, Driven::Failed] {
             assert!(!driven_counts(&state), "{state:?}");
         }
+    }
+
+    #[test]
+    fn the_server_starts_its_terminal_worker_with_coalition_sweeping_off() {
+        assert_eq!(COALITION_SWEEP, runs::procs::CoalitionSweep::Off);
     }
 
     #[test]

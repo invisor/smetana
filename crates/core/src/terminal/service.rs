@@ -333,7 +333,15 @@ struct Capture {
 /// time here would be a second place that could disagree with the first.
 /// Point 4 is Linux's and macOS's alone: Windows costs it nothing at all —
 /// see the module note on `runs::procs`.
-pub fn start(ctx: Context, known_projects: Vec<PathBuf>) -> TerminalHandle {
+///
+/// `coalition_sweep` says whether this process may sweep by macOS resource
+/// coalition at points 3 and 4 and write its id into `runs.json`. `smetanad`
+/// passes `Off`: the server lives in the app's coalition rather than its own,
+/// and sweeping it killed the new shell on "Restart now" (smetana-qy49). It
+/// is process-wide because `recovery::note_run` reads the same answer.
+pub fn start(ctx: Context, known_projects: Vec<PathBuf>, coalition_sweep: crate::runs::procs::CoalitionSweep) -> TerminalHandle {
+    // First of all: nothing below may read the coalition before this is set.
+    crate::runs::procs::set_coalition_sweep(coalition_sweep);
     // Fixes `procs::own_dedicated_coalition`'s answer for the whole of this
     // launch, before either of its two callers (`mac_app_exit_candidates`
     // below, `recovery::note_run` whenever a run first starts) can possibly
@@ -381,7 +389,7 @@ pub fn start(ctx: Context, known_projects: Vec<PathBuf>) -> TerminalHandle {
         // caller: a project's `runs.json` is small and this runs once, at
         // start, well before the first session exists to race it.
         let coalitions = crate::runs::recovery::dead_writer_coalitions(&known_projects);
-        crate::context::spawn(sweep_coalitions(coalitions));
+        crate::context::spawn(sweep_coalitions(coalitions, coalition_sweep));
     }
     // Linux reads its own answer off the live process table and Windows
     // needs nothing here at all, so neither one touches the argument.
@@ -576,6 +584,9 @@ fn mac_app_exit_candidates(sessions: &HashMap<SessionId, Live>) -> Vec<i32> {
         "[terminal] app exit sweep: coalition {}, {} candidate(s) found",
         match coalition {
             procs::Coalition::Known(id) => format!("answered ({id})"),
+            procs::Coalition::Unknown if procs::coalition_sweep() == procs::CoalitionSweep::Off => {
+                "unknown (coalition sweeping is off in the server), per-session snapshot only".to_string()
+            }
             procs::Coalition::Unknown => "unknown, per-session snapshot only".to_string(),
         },
         pids.len()
@@ -644,7 +655,14 @@ async fn sweep_strays() {
 /// reaches (a project a run has touched), and `pub fn start` above for why
 /// this is a task of its own.
 #[cfg(target_os = "macos")]
-async fn sweep_coalitions(coalitions: Vec<u64>) {
+async fn sweep_coalitions(coalitions: Vec<u64>, sweep: procs::CoalitionSweep) {
+    // The server never sweeps by coalition (smetana-qy49); said in the log
+    // because this line is the only thing that tells "sweep off" from
+    // "nothing to sweep" on a real build.
+    if sweep == procs::CoalitionSweep::Off {
+        log::info!("[terminal] start-up coalition sweep: off in the server, coalition unknown, nothing swept");
+        return;
+    }
     // Named for the identical reason `mac_app_exit_candidates` names its own
     // answer, though this one line cannot tell every case apart on its own:
     // "no dead writer's coalition id on disk" covers both no project having
