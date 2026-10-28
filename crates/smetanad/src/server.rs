@@ -381,7 +381,7 @@ impl Server {
             key,
             Devices::load(data_dir.join(devices::FILE_NAME)),
             Pairing::new(pairing::system_clock()),
-            env!("CARGO_PKG_VERSION").to_owned(),
+            crate::VERSION.to_owned(),
             // A pairing prompt reaches the terminal that asked through the hub, as an event; there is
             // no window to tell.
             Arc::new(|event| {

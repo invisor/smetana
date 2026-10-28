@@ -47,3 +47,6 @@ tokio = { version = "1", features = ["test-util"] }
 [target.'cfg(unix)'.dev-dependencies]
 # SIGTERM to the child the binary test started.
 libc = "0.2"
+
+[build-dependencies]
+serde_json = "1"
