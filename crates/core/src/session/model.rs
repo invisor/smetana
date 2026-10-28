@@ -113,6 +113,16 @@ pub enum EventKind {
         summary: String,
         #[serde(default)]
         denial: Option<String>,
+        /// The whole input of the refused call (`tool_detail_full`, clipped
+        /// at `MAX_BLOCKED_INPUT`), set **only when `denial` is**. The
+        /// `ToolUse` row carries `detail` clipped to 140 characters, which is
+        /// all a row needs and too little for an approval that has to name
+        /// the exact action; carrying the full input on every call would
+        /// break the journal's promise of small events, so it rides the one
+        /// result that needs it. Left out of the wire when absent, so an
+        /// ordinary result is byte for byte what it was.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        blocked_input: Option<String>,
     },
     /// The tool call's own arguments, untouched, **for the short list of
     /// tools that need them structured** — today just `AskUserQuestion`,

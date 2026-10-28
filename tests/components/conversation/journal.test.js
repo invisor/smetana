@@ -230,7 +230,7 @@ describe('the journal as rows', () => {
     it('folds onto its row and stays open until the person replies', () => {
       const rows = journalRows([...blocked, event(3, 'text', { text: 'I need your permission.' })])
 
-      expect(rows[0].result).toEqual({ ok: false, summary: '1 line', denial: 'denied by auto mode' })
+      expect(rows[0].result).toEqual({ ok: false, summary: '1 line', denial: 'denied by auto mode', blockedInput: null })
       expect(rows[0].blockOpen).toBe(true)
     })
 
@@ -239,6 +239,19 @@ describe('the journal as rows', () => {
 
       expect(rows[0].blockOpen).toBe(false)
       expect(rows[0].result.denial).toBe('denied by auto mode')
+    })
+
+    it('puts the wire\'s blocked_input on the row as blockedInput, and null when the event has none', () => {
+      const command = "ssh prod-db.invalid 'docker compose ps' ".repeat(8)
+      const rows = journalRows([
+        event(1, 'tool-use', { id: 't1', name: 'Bash', detail: command.slice(0, 140) }),
+        event(2, 'tool-result', { id: 't1', ok: false, summary: '1 line', denial: 'denied by auto mode', blocked_input: command }),
+        event(3, 'tool-use', { id: 't2', name: 'Bash', detail: 'ls' }),
+        event(4, 'tool-result', { id: 't2', ok: true, summary: '1 line' })
+      ])
+
+      expect(rows[0].result.blockedInput).toBe(command)
+      expect(rows[1].result.blockedInput).toBeNull()
     })
 
     it('is closed only for the blocks the reply came after', () => {
@@ -578,7 +591,7 @@ describe('a streamed reply', () => {
 
     expect(rows).toEqual([
       { key: 2, kind: 'agent', text: 'Reading the file first.', streaming: false },
-      { key: 4, kind: 'tool', name: 'Read', detail: 'src/main.js', result: { ok: true, summary: '10 lines', denial: null }, blockOpen: false },
+      { key: 4, kind: 'tool', name: 'Read', detail: 'src/main.js', result: { ok: true, summary: '10 lines', denial: null, blockedInput: null }, blockOpen: false },
       { key: 6, kind: 'agent', text: 'Found it', streaming: true },
       { key: 1, kind: 'activity', state: 'streaming', startedAt: '2026-09-10T12:00:00Z' }
     ])

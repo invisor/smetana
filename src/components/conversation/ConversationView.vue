@@ -69,6 +69,7 @@ import StatusBadge from '../status/StatusBadge.vue'
 import { isAskUserQuestion } from './askUserQuestion.js'
 import { attachmentAction } from './attachmentAction.js'
 import { approvalText, blockButtonsShown, refusalText } from './autoModeBlock.js'
+import { allowPlan, turnClosed } from './blockReply.js'
 import { appendQuote, quoteFromSelection } from './draftSegments.js'
 import { isBusy, journalRows } from './journal.js'
 import { SELECTION_MENU_W, selectionMenuItems } from './selectionMenu.js'
@@ -615,7 +616,7 @@ const stop = () => stopConversation(props.sessionId)
    journal as a `user-message` and in the agent's transcript as their words.
    Re-sticks first, for the reason `send()` does. The draft in the composer is
    untouched: this is not that message. */
-async function replyToBlock(text) {
+async function replyToBlock(text, { interruptFirst = false } = {}) {
   if (replying.value) return
   /* Set before the first await: the block only closes when the person's turn
      comes back through the journal, and a second press in that gap would send
@@ -625,11 +626,31 @@ async function replyToBlock(text) {
   try {
     await nextTick()
     toEnd()
+    if (interruptFirst && allowPlan(state.value) === 'interrupt-then-send') await interruptTurn()
     await sendMessage(props.sessionId, text, [])
     if (conversationState.lastError) replying.value = false
   } catch {
     replying.value = false
   }
+}
+
+/* Ends the open turn and resolves once the session's own state says it has
+   closed, never after a delay. Allow needs this because a line sent into a
+   running turn is queued for the model and never reaches the classifier as the
+   person's word (`blockReply.js` has the measurement). A refused interrupt
+   (a Crew member cannot be stopped on its own) is not a reason to drop the
+   approval: it goes anyway, as a queued line, which is what it was before. */
+async function interruptTurn() {
+  await stopConversation(props.sessionId)
+  if (conversationState.lastError) return
+  if (turnClosed(state.value)) return
+  await new Promise((resolve) => {
+    const unwatch = watch(state, (next) => {
+      if (!turnClosed(next)) return
+      unwatch()
+      resolve()
+    })
+  })
 }
 
 /* True from a press on a block card until the journal closes that block. */
@@ -968,7 +989,7 @@ const refusal = computed(() => ({
             :result="row.result"
             :block-open="row.blockOpen"
             :can-message="blockButtonsShown({ blockOpen: row.blockOpen, composerShown, replying })"
-            @allow-block="replyToBlock(approvalText(row.name, row.detail, row.result.denial))"
+            @allow-block="replyToBlock(approvalText(row.name, row.detail, row.result.denial, row.result.blockedInput), { interruptFirst: true })"
             @refuse-block="replyToBlock(refusalText(row.name, row.detail))"
           />
           <TurnResult

@@ -309,6 +309,7 @@ fn completed(item: &Value) -> Vec<EventKind> {
                 ok,
                 summary: kind.into(),
                 denial: None,
+                blocked_input: None,
             }]
         }
         _ => Vec::new(),

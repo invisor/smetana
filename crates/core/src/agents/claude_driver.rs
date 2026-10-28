@@ -151,7 +151,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::claude::{clip, one_line, tool_detail, Claude, MAX_DETAIL};
+use super::claude::{clip, one_line, tool_detail, tool_detail_full, Claude, MAX_DETAIL};
 use crate::agents::{Intent, Launch};
 use crate::session::driver::{Driver, Input, LineBuffer};
 use crate::session::model::{Actor, Decision, EventKind};
@@ -173,6 +173,12 @@ pub struct ClaudeDriver {
     /// them because the statistics file wants the raw text whole, and an event
     /// is deliberately small.
     sightings: Vec<(String, String, bool)>,
+    /// The full detail of every call still waiting for its result, by id, each
+    /// clipped at `MAX_BLOCKED_INPUT` when it is stored. Read once, when a
+    /// result turns out to be a refusal (`EventKind::ToolResult::blocked_input`),
+    /// and dropped with the result of the call or the end of the turn, so a
+    /// call that never answers cannot make it grow for the life of a session.
+    open_calls: std::collections::HashMap<String, String>,
 }
 
 /// The config file handed to the child, alive for as long as the driver is.
@@ -253,6 +259,45 @@ impl ClaudeDriver {
             permission: permission.as_ref().and_then(write_mcp_config),
             interrupts: 0,
             sightings: Vec::new(),
+            open_calls: std::collections::HashMap::new(),
+        }
+    }
+}
+
+impl ClaudeDriver {
+    /// Remember each `tool_use` of this line by id, and forget them all when
+    /// the turn's `result` line closes it.
+    fn note_open_calls(&mut self, event: &Value) {
+        match str_at(event, "type") {
+            "assistant" => {
+                for block in event
+                    .pointer("/message/content")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter(|block| str_at(block, "type") == "tool_use")
+                {
+                    let full =
+                        tool_detail_full(str_at(block, "name"), block.get("input").unwrap_or(&Value::Null));
+                    self.open_calls
+                        .insert(str_at(block, "id").to_string(), clip(&full, MAX_BLOCKED_INPUT));
+                }
+            }
+            "result" => self.open_calls.clear(),
+            _ => {}
+        }
+    }
+
+    /// Settle every result among `events`: its call is no longer open, and if
+    /// it was refused the call's full input goes on the event.
+    fn attach_blocked_input(&mut self, events: &mut [EventKind]) {
+        for event in events {
+            if let EventKind::ToolResult { id, denial, blocked_input, .. } = event {
+                let full = self.open_calls.remove(id.as_str());
+                if denial.is_some() {
+                    *blocked_input = full;
+                }
+            }
         }
     }
 }
@@ -356,6 +401,12 @@ pub(crate) const AUTO_MODE_PHRASE: &str = "denied by the Claude Code auto mode c
 
 /// The longest reason a `ToolResult` carries. The journal promises small events.
 pub(crate) const MAX_DENIAL: usize = 400;
+
+/// The longest input a refused call's result carries (`blocked_input`). Generous
+/// beside `MAX_DETAIL`, because the approval has to quote the whole command, yet
+/// bounded: a block on something longer is still named by its first 2 000
+/// characters, and the field rides refusals only.
+pub(crate) const MAX_BLOCKED_INPUT: usize = 2000;
 
 /// A `tool_result`'s prose, whichever of `string | ContentBlock[]` it is.
 pub(crate) fn result_text(block: &Value) -> String {
@@ -508,6 +559,7 @@ pub(crate) fn one_event(event: &Value) -> Vec<EventKind> {
                         ok: !block.get("is_error").and_then(Value::as_bool).unwrap_or(false),
                         summary: result_summary(block.get("content")),
                         denial: auto_mode_denial(block),
+                        blocked_input: None,
                     })
                     .collect()
             })
@@ -668,7 +720,10 @@ impl Driver for ClaudeDriver {
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         {
             self.sightings.extend(block_sightings(&event));
-            out.extend(one_event(&event));
+            self.note_open_calls(&event);
+            let mut events = one_event(&event);
+            self.attach_blocked_input(&mut events);
+            out.extend(events);
         }
         out
     }
@@ -805,6 +860,67 @@ mod tests {
         assert!(denial.contains("Reason: [Modify Shared Resources]"), "{denial}");
         assert!(denial.chars().count() <= MAX_DENIAL);
         assert!(!denial.contains("IMPORTANT"), "the model's instructions are not the reason: {denial}");
+    }
+
+    #[test]
+    fn a_refused_call_carries_its_whole_input_and_an_ordinary_result_carries_none() {
+        let refused = denial_events()
+            .into_iter()
+            .find(|kind| matches!(kind, EventKind::ToolResult { .. }))
+            .expect("the fixture holds one tool result");
+        let EventKind::ToolResult { blocked_input, .. } = refused else { unreachable!() };
+        assert_eq!(
+            blocked_input.as_deref(),
+            Some("psql -h db.example.invalid -c \"UPDATE accounts SET plan = 'free'\""),
+        );
+
+        let mut driver = ClaudeDriver::new(None);
+        let mut lines = format!("{TOOL}\n{TOOL_RESULT}\n");
+        lines.push('\n');
+        let events = driver.feed(lines.as_bytes());
+        let result = events.last().expect("the result is decoded");
+        assert!(
+            matches!(result, EventKind::ToolResult { blocked_input: None, .. }),
+            "an ordinary result must not grow: {result:?}"
+        );
+        assert!(
+            !serde_json::to_string(result).unwrap().contains("blocked_input"),
+            "an absent field is not on the wire"
+        );
+    }
+
+    #[test]
+    fn a_refused_inputs_length_is_capped_on_a_character_boundary() {
+        let command = "ж".repeat(MAX_BLOCKED_INPUT + 500);
+        let tool = serde_json::json!({
+            "type": "assistant",
+            "message": { "content": [{ "type": "tool_use", "id": "t9", "name": "Bash", "input": { "command": command } }] },
+        });
+        let refusal = serde_json::json!({
+            "type": "user",
+            "message": { "content": [{
+                "type": "tool_result", "tool_use_id": "t9", "is_error": true,
+                "content": "Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Production Reads]. Carry on.",
+            }] },
+        });
+        let mut driver = ClaudeDriver::new(None);
+        let events = driver.feed(format!("{tool}\n{refusal}\n").as_bytes());
+        let Some(EventKind::ToolResult { blocked_input: Some(input), .. }) = events.last() else {
+            panic!("{events:?}")
+        };
+        assert_eq!(input.chars().count(), MAX_BLOCKED_INPUT);
+        assert!(input.ends_with("..."));
+    }
+
+    #[test]
+    fn a_calls_input_is_forgotten_with_its_result_and_with_the_turn() {
+        let mut driver = ClaudeDriver::new(None);
+        driver.feed(format!("{TOOL}\n").as_bytes());
+        assert_eq!(driver.open_calls.len(), 1);
+        driver.feed(format!("{TOOL_RESULT}\n").as_bytes());
+        assert!(driver.open_calls.is_empty());
+        driver.feed(format!("{TOOL}\n{RESULT}\n").as_bytes());
+        assert!(driver.open_calls.is_empty(), "a call that never answered dies with its turn");
     }
 
     #[test]
@@ -1053,7 +1169,7 @@ mod tests {
         let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, TOOL_RESULT),
-            vec![EventKind::ToolResult { id: "t1".into(), ok: true, summary: "3 lines".into(), denial: None }]
+            vec![EventKind::ToolResult { id: "t1".into(), ok: true, summary: "3 lines".into(), denial: None, blocked_input: None }]
         );
     }
 
@@ -1065,7 +1181,7 @@ mod tests {
         let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, TOOL_RESULT_BLOCKS),
-            vec![EventKind::ToolResult { id: "t2".into(), ok: true, summary: "2 lines".into(), denial: None }]
+            vec![EventKind::ToolResult { id: "t2".into(), ok: true, summary: "2 lines".into(), denial: None, blocked_input: None }]
         );
     }
 
@@ -1077,7 +1193,7 @@ mod tests {
         let mut driver = ClaudeDriver::new(None);
         assert_eq!(
             events(&mut driver, TOOL_RESULT_IMAGE),
-            vec![EventKind::ToolResult { id: "t3".into(), ok: true, summary: "1 image".into(), denial: None }]
+            vec![EventKind::ToolResult { id: "t3".into(), ok: true, summary: "1 image".into(), denial: None, blocked_input: None }]
         );
     }
 
@@ -1091,7 +1207,7 @@ mod tests {
             vec![EventKind::ToolResult {
                 id: "t4".into(),
                 ok: true,
-                summary: "2 lines, 1 image".into(), denial: None
+                summary: "2 lines, 1 image".into(), denial: None, blocked_input: None
             }]
         );
     }

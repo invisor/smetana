@@ -95,7 +95,9 @@ import { isAskUserQuestion, parseQuestions } from './askUserQuestion.js'
    **An auto-mode block rides on its tool row.** A `tool-result` whose `denial`
    is set is Claude Code's classifier refusing the call, and the row carries it
    as `result.denial` with `blockOpen`: true while no `user` row follows it in
-   the journal. The person's reply, from a button or typed, is what closes it;
+   the journal, with the refused call's whole input beside it as
+   `result.blockedInput` (`null` when the event has none). The person's reply,
+   from a button or typed, is what closes it;
    nothing is stored for that, so the rule cannot drift from the journal.
 
    A tool call and its result are **one row**, folded by the id they share:
@@ -463,7 +465,15 @@ export function journalRows(events = [], state) {
            existed (or a phone-era replay) has no `denial` at all, and an
            `undefined` reaching the template would read as a different state
            from the `null` every other result carries. */
-        row.result = { ok: event.ok, summary: event.summary, denial: event.denial ?? null }
+        row.result = {
+          ok: event.ok,
+          summary: event.summary,
+          denial: event.denial ?? null,
+          /* The wire's own `blocked_input` (no `rename_all` on the fields, as
+             with `tokens_in`): the refused call's whole input, present on a
+             denial only and absent from every other result. */
+          blockedInput: event.blocked_input ?? null
+        }
       }
     } else if (event.kind === 'permission') {
       // No row of its own — `held.question` at the foot of the panel already
