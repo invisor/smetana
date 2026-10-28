@@ -171,6 +171,42 @@ describe('what the working screens ask the desktop for', () => {
   })
 })
 
+describe('the phone\'s own settings', () => {
+  const KEY = 'smetana.companion.settings'
+
+  it('overrides the desktop at once, keeps the choice, and sends nothing', async () => {
+    localStorage.clear()
+    const { core, workspace, settings } = await start({
+      settings_load: { openProjects: [], activeProject: null, appearance: { theme: 'dark', density: 'comfortable' } }
+    })
+    await workspace.startWorkspace()
+    expect(settings.appearance.theme).toBe('dark')
+    const before = core.bridged('settings_load').length
+    const asked = names(core).length
+    workspace.setPhoneSetting('theme', 'light')
+    expect(settings.appearance.theme).toBe('light')
+    expect(JSON.parse(localStorage.getItem(KEY)).theme).toBe('light')
+    workspace.setPhoneSetting('uiFontSize', 18)
+    expect(settings.appearance.uiFontSize).toBe(18)
+    workspace.setPhoneSetting('theme', 'desktop')
+    expect(settings.appearance.theme).toBe('dark')
+    expect(core.bridged('settings_load')).toHaveLength(before)
+    expect(names(core)).toHaveLength(asked)
+    expect(names(core)).not.toContain('settings_save')
+  })
+
+  it('survives unpairing, which is about the desktop and not about this phone', async () => {
+    localStorage.clear()
+    const { workspace } = await start()
+    await workspace.startWorkspace()
+    workspace.setPhoneSetting('density', 'compact')
+    const session = await import('../src/session.js')
+    await session.unpairAndForget()
+    expect(JSON.parse(localStorage.getItem(KEY)).density).toBe('compact')
+    expect(workspace.phone.density).toBe('compact')
+  })
+})
+
 describe('hearing the desktop\'s settings change', () => {
   it('reads the settings again when the server announces a change', async () => {
     const { core, workspace, emit, settings } = await start({

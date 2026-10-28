@@ -93,6 +93,22 @@ describe('what the phone takes from the desktop\'s settings', () => {
   })
 })
 
+describe('the phone\'s own choices over the desktop\'s', () => {
+  const phone = { theme: 'light', density: 'desktop', uiFontSize: 16, columns: 'non-empty', interval: 'desktop' }
+  const stored = { appearance: { theme: 'dark', density: 'compact' }, kanban: { interval: 'week' } }
+
+  it('wins where it chose, follows the desktop where it did not, and owns the font size', () => {
+    const settings = applyDesktopSettings(target(), stored, { minor: LOOK_MINOR, phone })
+    expect(settings.appearance).toEqual({ theme: 'light', density: 'compact', uiFontSize: 16 })
+    expect(settings.kanban).toMatchObject({ columns: 'non-empty', interval: 'week' })
+  })
+
+  it('keeps the target\'s own density below the look minor', () => {
+    const settings = applyDesktopSettings(target(), stored, { minor: LOOK_MINOR - 1, phone })
+    expect(settings.appearance).toMatchObject({ theme: 'light', density: 'comfortable' })
+  })
+})
+
 describe('the projects on offer', () => {
   it('names each by its folder, keeps its path, and marks the one open on the desktop', () => {
     const rows = projectRows(['/work/a', '/work/b'], '/work/b', (path) => path.split('/').pop())

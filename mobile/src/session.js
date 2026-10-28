@@ -9,7 +9,8 @@ import { reactive, watch } from 'vue'
 import { initTracker, resync, trackerState, isLockIssue } from '@src/stores/tracker.js'
 import { settings } from '@src/stores/settings.js'
 import { bridge, isOnline, whenOnline } from './bridge/index.js'
-import { startWorkspace } from './workspace.js'
+import { phone, startWorkspace } from './workspace.js'
+import { resolveLook } from './phoneSettings.js'
 import { projectName, taskCount, saveSummary, loadSummary, forgetSummary, savedLook } from './summary.js'
 import { unpair } from './bridge/index.js'
 
@@ -46,6 +47,11 @@ export function wireStores() {
       settings.appearance.density = look.density
     }
   }
+  /* The phone's own choices come before any cached look and before the desktop has answered. */
+  settings.appearance.uiFontSize = phone.uiFontSize
+  const own = resolveLook(phone, settings.appearance.theme, settings.appearance.density)
+  settings.appearance.theme = own.theme
+  settings.appearance.density = own.density
   /* A look that changed while online is kept for the next launch. Offline nothing is saved: the
      copy would be stamped as read just now. */
   watch(
