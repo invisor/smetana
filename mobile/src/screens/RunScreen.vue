@@ -64,6 +64,11 @@ watch(
   { immediate: true }
 )
 
+/* The form is about the project it was opened on: its branch and a card's id mean nothing in
+   another one. When the project in front changes under an open form (the desktop switched, or
+   the person did), the form is closed rather than left to start a run over the wrong project. */
+watch(path, () => emit('cancel'))
+
 const isQueue = computed(() => props.scope.kind === 'queue')
 
 const live = computed(() => runsState.project === path.value)
