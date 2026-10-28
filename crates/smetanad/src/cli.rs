@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
-#[command(name = "smetanad", version, about = "The headless Smetana server")]
+#[command(name = "smetanad", version = crate::VERSION, about = "The headless Smetana server")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

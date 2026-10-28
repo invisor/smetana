@@ -206,6 +206,8 @@ src-tauri/Cargo.toml` is empty, and `smetanad` is an ordinary dependency (for it
   without `confirmed`: nothing alive restarts it (once per running version, so a binary that did not change cannot loop);
   otherwise `connected` carries `outdated` with the list, and the banner offers *Restart now* (confirmed with exactly that
   list) or *Restart when finished*.
+  The server's `app_version` is `smetanad::VERSION`, baked in by `crates/smetanad/build.rs` from `version` in `src-tauri/tauri.conf.json`
+  (the one field a release bumps); the crate manifests stay 0.1.0 and the release does not bump them.
 - **Updates replace the client only.** The release feed updates the app as before (`updates.md`); there is no run gate any
   more, because the runs and sessions are the detached server's and outlive the app's restart. The new bundle's `smetanad`
   takes over through the version lock-step above.

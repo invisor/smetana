@@ -99,7 +99,7 @@ fn hello() -> Hello {
     Hello {
         protocol_major: remote_server::PROTOCOL_MAJOR,
         protocol_minor: remote_server::PROTOCOL_MINOR,
-        app_version: env!("CARGO_PKG_VERSION").to_owned(),
+        app_version: crate::VERSION.to_owned(),
         capabilities: Vec::new(),
     }
 }
@@ -133,7 +133,7 @@ async fn pair_within(
         platform: Platform::Desktop,
         push_token: None,
         push_key: [0; 32],
-        app_version: env!("CARGO_PKG_VERSION").to_owned(),
+        app_version: crate::VERSION.to_owned(),
     };
     write_frame(&mut send, &request).await.map_err(setup)?;
     let reply = tokio::time::timeout(answer_within, read_frame::<PairReply>(&mut recv, MAX_FRAME))
