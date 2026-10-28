@@ -1,7 +1,7 @@
 <script setup>
 /* The working screens and the way between them: what the app is once the desktop is reachable.
 
-   Four tabs - the board, the agents, the runs, the projects - and screens opened over them (a
+   Four tabs - the board, the agents, the projects, the settings - and screens opened over them (a
    task, a conversation, the form for a new task). Where the person is, is one route
    (../nav.js, pure and tested); this component only draws it and moves it. A tapped
    notification moves it too: the target the core holds is turned into a route and spent.
@@ -36,7 +36,8 @@ import TaskScreen from './TaskScreen.vue'
 import NewTaskScreen from './NewTaskScreen.vue'
 import AgentsScreen from './AgentsScreen.vue'
 import ConversationScreen from './ConversationScreen.vue'
-import RunsScreen from './RunsScreen.vue'
+import RunScreen from './RunScreen.vue'
+import SettingsScreen from './SettingsScreen.vue'
 import ProjectsScreen from './ProjectsScreen.vue'
 import TaskSheet from './TaskSheet.vue'
 
@@ -71,7 +72,7 @@ const onVisible = () => {
 onMounted(() => document.addEventListener('visibilitychange', onVisible))
 onBeforeUnmount(() => document.removeEventListener('visibilitychange', onVisible))
 
-const TITLES = { board: 'Kanban', agents: 'Agents', runs: 'Runs', projects: 'Projects' }
+const TITLES = { board: 'Kanban', agents: 'Agents', projects: 'Projects', settings: 'Settings' }
 const project = computed(() => (settings.activeProject ? basename(settings.activeProject) : ''))
 
 const header = computed(() => {
@@ -82,13 +83,13 @@ const header = computed(() => {
     case 'new-task':
       return { title: s.parent ? 'Follow-up task' : 'New task', subtitle: project.value }
     case 'run':
-      return { title: 'Run', subtitle: s.scope.id }
+      return s.scope.kind === 'queue'
+        ? { title: 'Run the queue', subtitle: project.value }
+        : { title: 'Run', subtitle: s.scope.id }
     case 'conversation':
       return { title: s.driven ? 'Conversation' : 'Terminal session', subtitle: project.value }
-    case 'runs':
-      return { title: 'Runs', subtitle: route.value.project ? basename(route.value.project) : project.value }
     default:
-      return { title: TITLES[s.screen] ?? 'Smetana', subtitle: s.screen === 'projects' ? '' : project.value }
+      return { title: TITLES[s.screen] ?? 'Smetana', subtitle: s.screen === 'projects' || s.screen === 'settings' ? '' : project.value }
   }
 })
 
@@ -112,8 +113,8 @@ watch(sheetCard, (card) => {
   if (sheetId.value && !card) closeSheet()
 })
 
-/* The run stores hold one project at a time, and the Runs screen may have pointed them at
-   another one: the sheet answers about the project in front or about nothing. */
+/* The run stores hold one project at a time; the sheet answers about the project in front or
+   about nothing, for the moment they are reading another. */
 const runsHere = computed(() => runsState.project === settings.activeProject)
 const rows = computed(() =>
   sheetCard.value
@@ -270,7 +271,11 @@ const bannerStyle = {
         <Button size="sm" variant="ghost" @click="dismissRecommended">Dismiss</Button>
       </span>
     </div>
-    <BoardScreen v-if="screen.screen === 'board'" @sheet="openSheet" />
+    <BoardScreen
+      v-if="screen.screen === 'board'"
+      @sheet="openSheet"
+      @run="go({ screen: 'run', scope: { kind: 'queue' }, title: '' })"
+    />
     <TaskScreen v-else-if="screen.screen === 'task'" :id="screen.id" @open="(id) => go({ screen: 'task', id })" />
     <NewTaskScreen
       v-else-if="screen.screen === 'new-task'"
@@ -279,15 +284,15 @@ const bannerStyle = {
     />
     <AgentsScreen v-else-if="screen.screen === 'agents'" @open="go" />
     <ConversationScreen v-else-if="screen.screen === 'conversation'" :key="`${screen.driven}:${screen.id}`" :id="screen.id" :driven="screen.driven" @close="route = back(route)" />
-    <RunsScreen v-else-if="screen.screen === 'runs'" :project="route.project" />
-    <RunsScreen
+    <RunScreen
       v-else-if="screen.screen === 'run'"
-      :project="settings.activeProject"
       :scope="screen.scope"
       :title="screen.title"
-      @started="route = selectTab(route, 'runs')"
+      @cancel="route = back(route)"
+      @started="route = selectTab(route, 'agents')"
     />
     <ProjectsScreen v-else-if="screen.screen === 'projects'" @switched="route = selectTab(route, 'board')" />
+    <SettingsScreen v-else-if="screen.screen === 'settings'" />
     <TaskSheet
       v-if="sheetCard"
       :card="sheetCard"

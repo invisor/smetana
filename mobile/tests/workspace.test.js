@@ -79,7 +79,8 @@ describe('what the working screens ask the desktop for', () => {
   it('is only the allowed commands and events, across every screen\'s reads and writes', async () => {
     const { core, workspace, stores } = await start()
     await workspace.startWorkspace()
-    await workspace.loadRunsFor('/work/b')
+    // The run form reads the branches when it opens.
+    await (await import('../../src/stores/git.js')).loadBranches('/work/a')
     await workspace.chooseProject('/work/b')
     await workspace.refreshFromDesktop()
 
@@ -160,6 +161,9 @@ describe('what the working screens ask the desktop for', () => {
     const { core, workspace } = await start()
     await workspace.startWorkspace()
     await workspace.chooseProject('/work/b')
+    const session = await import('../src/session.js')
+    await session.unpairAndForget()
+    expect(core.core('unpair')).toHaveLength(1)
     const asked = names(core)
     for (const name of ['settings_save', 'terminal_marks', 'terminal_create', 'terminal_write', 'tracker_access_repair', 'git_head', 'files_list', 'vcs_status', 'drag_drop_space', 'browser_tools']) {
       expect(asked, name).not.toContain(name)
@@ -168,7 +172,7 @@ describe('what the working screens ask the desktop for', () => {
 })
 
 describe('hearing the desktop\'s settings change', () => {
-  it('reads the settings again when the server announces a change, and leaves the Runs pin alone', async () => {
+  it('reads the settings again when the server announces a change', async () => {
     const { core, workspace, emit, settings } = await start({
       settings_load: (args) => ({
         openProjects: ['/work/a', '/work/b'],
@@ -177,15 +181,12 @@ describe('hearing the desktop\'s settings change', () => {
       })
     })
     await workspace.startWorkspace()
-    await workspace.loadRunsFor('/work/b')
     const before = core.bridged('settings_load').length
     await emit('bridge:event', { name: 'settings:changed', payload: { rev: 2 } })
     await vi.waitFor(() => expect(core.bridged('settings_load').length).toBeGreaterThan(before))
     expect(core.bridged('settings_load').at(-1)).toEqual({ project: null })
     expect(settings.appearance).toMatchObject({ theme: 'light', density: 'compact' })
     expect(settings.appearance.uiFontSize).toBe(13)
-    // The Runs screen is still on the project it was pinned to: its configuration is read again for it.
-    await vi.waitFor(() => expect(core.bridged('project_config').at(-1)).toEqual({ project: '/work/b' }))
   })
 
   it('does not ask a desktop below the look minor to announce anything', async () => {
@@ -351,12 +352,12 @@ describe('talking to an agent', () => {
   })
 })
 
-describe('runs', () => {
+describe('starting and stopping runs', () => {
   it('starts the queue with the settings the desktop\'s window opens on, and stops by token', async () => {
     const { core, workspace, stores } = await start()
     await workspace.startWorkspace()
-    await workspace.loadRunsFor('/work/a')
-    const { gitState } = await import('../../src/stores/git.js')
+    const { gitState, loadBranches } = await import('../../src/stores/git.js')
+    await loadBranches('/work/a')
     const sent = runSettings({
       config: stores.runs.runsState.config,
       branches: gitState.branches,
@@ -382,48 +383,5 @@ describe('runs', () => {
     await workspace.startWorkspace()
     expect(settings.notifications.runFinished).toBe('off')
     expect(settings.notifications.needsAttention).toBe('off')
-  })
-})
-
-describe('the Runs screen on a project that is not the active one', () => {
-  const byProject = (args) => (args?.project === '/work/b' ? { state: 'ok', defaults: { target_branch: 'b-main' } } : { state: 'ok', defaults: { target_branch: 'a-main' } })
-
-  it('keeps the run stores on that project through a cold start and a return from the background', async () => {
-    const { core, workspace, stores } = await start({ project_config: byProject })
-    await workspace.loadRunsFor('/work/b')
-    expect(stores.runs.runsState.project).toBe('/work/b')
-
-    await workspace.startWorkspace()
-    expect(stores.runs.runsState.project).toBe('/work/b')
-    await workspace.refreshFromDesktop()
-    expect(stores.runs.runsState.project).toBe('/work/b')
-    expect(stores.runs.runsState.config.defaults.target_branch).toBe('b-main')
-    expect(core.bridged('project_config').filter((a) => a.project === '/work/a')).toEqual([])
-  })
-
-  it('follows the active project again once the screen is gone', async () => {
-    const { workspace, stores } = await start({ project_config: byProject })
-    await workspace.loadRunsFor('/work/b')
-    workspace.unpinRuns()
-    await workspace.startWorkspace()
-    expect(stores.runs.runsState.project).toBe('/work/a')
-  })
-
-  it('brings the stores back to the active project the moment the screen is gone', async () => {
-    const { workspace, stores } = await start({ project_config: byProject })
-    await workspace.startWorkspace()
-    await workspace.loadRunsFor('/work/b')
-    workspace.unpinRuns()
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(stores.runs.runsState.project).toBe('/work/a')
-    expect(stores.runs.runsState.config.defaults.target_branch).toBe('a-main')
-  })
-
-  it('reads the pinned project again on a return from the background', async () => {
-    const { core, workspace } = await start({ project_config: byProject })
-    await workspace.loadRunsFor('/work/b')
-    const before = core.bridged('run_state').filter((a) => a.project === '/work/b').length
-    await workspace.refreshFromDesktop()
-    expect(core.bridged('run_state').filter((a) => a.project === '/work/b').length).toBe(before + 1)
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { START, back, canGoBack, current, open, parseTarget, routeForTarget, selectTab } from '../src/nav.js'
+import { TABS, START, back, canGoBack, current, open, parseTarget, routeForTarget, selectTab } from '../src/nav.js'
 
 describe('moving between screens', () => {
   it('starts on the board with nothing opened over it', () => {
@@ -20,7 +20,7 @@ describe('moving between screens', () => {
     expect(back(run)).toEqual(START)
     const followUp = open(START, { screen: 'new-task', parent: { id: 'bd-1', title: 'A task' } })
     expect(current(followUp).parent).toEqual({ id: 'bd-1', title: 'A task' })
-    expect(selectTab(run, 'runs')).toEqual({ tab: 'runs', project: null, stack: [] })
+    expect(selectTab(run, 'agents')).toEqual({ tab: 'agents', project: null, stack: [] })
   })
 
   it('goes back one screen at a time', () => {
@@ -37,21 +37,19 @@ describe('moving between screens', () => {
     expect(current(selectTab(opened, 'agents'))).toEqual({ screen: 'agents' })
   })
 
+  it('has four tabs, with settings last and no runs', () => {
+    expect(TABS.map((tab) => tab.id)).toEqual(['board', 'agents', 'projects', 'settings'])
+  })
+
   it('an unknown tab changes nothing', () => {
-    expect(selectTab(START, 'settings')).toBe(START)
+    expect(selectTab(START, 'nowhere')).toBe(START)
   })
 
   it('never changes the route it was given', () => {
     const before = JSON.stringify(START)
     open(START, { screen: 'task', id: 'x' })
-    selectTab(START, 'runs')
+    selectTab(START, 'settings')
     expect(JSON.stringify(START)).toBe(before)
-  })
-
-  it('the project a notification named does not outlive the Runs tab', () => {
-    const runs = { tab: 'runs', project: '/work/a', stack: [] }
-    expect(selectTab(runs, 'runs').project).toBe('/work/a')
-    expect(selectTab(runs, 'board').project).toBeNull()
   })
 })
 
@@ -87,8 +85,8 @@ describe('what a push notification names', () => {
     expect(routeForTarget(target)).toBeNull()
   })
 
-  it('opens the Runs tab on the project a run notification names', () => {
-    expect(routeForTarget('run:/work/smetana')).toEqual({ tab: 'runs', project: '/work/smetana', stack: [] })
+  it('opens the Agents tab for a run notification, where the run\'s row is', () => {
+    expect(routeForTarget('run:/work/a')).toEqual({ tab: 'agents', project: null, stack: [] })
   })
 
   it('opens the conversation of a session over the Agents tab', () => {

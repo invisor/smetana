@@ -21,9 +21,12 @@ import Icon from '@src/components/core/Icon.vue'
 import Button from '@src/components/core/Button.vue'
 import { boardColumns, trackerState } from '@src/stores/tracker.js'
 import { settings } from '@src/stores/settings.js'
+import IconButton from '@src/components/core/IconButton.vue'
+import { runsState } from '@src/stores/runs.js'
+import { RUN_FROM, queueRun } from '../boardRun.js'
 import { phoneColumns, shownCards } from '../board.js'
 
-const emit = defineEmits(['sheet'])
+const emit = defineEmits(['sheet', 'run'])
 
 const columns = computed(() =>
   phoneColumns(boardColumns.value, settings.project.columnOrder, settings.kanban, Date.now())
@@ -34,6 +37,13 @@ const columns = computed(() =>
 const folded = reactive(new Set())
 const whole = reactive(new Set())
 const toggle = (set, status) => (set.has(status) ? set.delete(status) : set.add(status))
+
+/* The play in the Ready column's header, as on the desktop: only while the run configuration lets
+   a run be offered, and grey with the desktop's reason while one over the queue is going. The run
+   stores hold one project at a time, so while they read another the play is not offered. */
+const queue = computed(() =>
+  runsState.project === settings.activeProject ? queueRun(runsState.config.state, runsState.runs) : { runnable: false, blockedReason: '' }
+)
 
 const unhealthy = computed(() => trackerState.health.state !== 'ok')
 
@@ -92,6 +102,15 @@ const more = { alignSelf: 'flex-start' }
       >
         <ColumnHeader :status="col.status" :count="col.tasks.length" :addable="false" :accent="false">
           <template #actions>
+            <IconButton
+              v-if="col.status === RUN_FROM && queue.runnable"
+              icon="play"
+              :label="queue.blockedReason ? `Run the queue — ${queue.blockedReason}` : 'Run the queue'"
+              size="sm"
+              :disabled="!!queue.blockedReason"
+              @click.stop="emit('run')"
+              @keydown.stop
+            />
             <Icon :name="folded.has(col.status) ? 'chevron-right' : 'chevron-down'" :size="14" />
           </template>
         </ColumnHeader>

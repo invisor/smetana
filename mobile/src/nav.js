@@ -4,16 +4,16 @@
 
    A route is `{ tab, project, stack }`. The four tabs are the roots; `stack` is what has been
    opened on top of the tab (a task, a conversation, the form for a new task) and its last
-   entry is what is drawn. `project` is set only by a run notification: the Runs tab shows the
-   project the desktop has open unless a notification named another one. Routes are never
+   entry is what is drawn. `project` is always null: it was the Runs tab's, and is kept so that a
+   route keeps the shape it had. Routes are never
    mutated: every function answers a new one, which is what lets a screen hold the route in
    one `ref` and be sure that a change is a change. */
 
 export const TABS = [
   { id: 'board', label: 'Kanban', icon: 'columns-3' },
   { id: 'agents', label: 'Agents', icon: 'bot' },
-  { id: 'runs', label: 'Runs', icon: 'play' },
-  { id: 'projects', label: 'Projects', icon: 'folder' }
+  { id: 'projects', label: 'Projects', icon: 'folder' },
+  { id: 'settings', label: 'Settings', icon: 'settings' }
 ]
 
 export const START = Object.freeze({ tab: 'board', project: null, stack: [] })
@@ -24,7 +24,7 @@ const isTab = (id) => TABS.some((tab) => tab.id === id)
    is already in front goes back to its root, which is what a bottom bar does everywhere. */
 export function selectTab(route, tab) {
   if (!isTab(tab)) return route
-  return { tab, project: tab === 'runs' ? route.project : null, stack: [] }
+  return { tab, project: null, stack: [] }
 }
 
 /* One screen on top of the current one. An entry is `{ screen, ... }` and the rest is that
@@ -64,13 +64,13 @@ export function parseTarget(target) {
   return null
 }
 
-/* The route a notification opens. A run opens the Runs tab on that project; an agent waiting
+/* The route a notification opens. A run opens the Agents tab, where its row is; an agent waiting
    opens its conversation (`driven: true`) or its read-only terminal (`driven: false`) over the
    Agents tab, so that going back lands on the list. */
 export function routeForTarget(target) {
   const parsed = parseTarget(target)
   if (!parsed) return null
-  if (parsed.kind === 'run') return { tab: 'runs', project: parsed.project, stack: [] }
+  if (parsed.kind === 'run') return { tab: 'agents', project: null, stack: [] }
   return {
     tab: 'agents',
     project: null,

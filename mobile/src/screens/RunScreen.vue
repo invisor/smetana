@@ -1,34 +1,27 @@
 <script setup>
-/* The runs of a project: the ones going now with the way to stop them, and the one thing the
-   phone starts.
+/* The form that starts a run: the desktop's "Run the queue" window, open as soon as the screen is.
 
-   Starting is the desktop's "Run the queue" window, folded away behind a button: pressing it
-   fills the fields in again (from the project's configuration, its branches and what the desktop
-   remembered - ./runStart.js has the rule), Cancel folds it and drops the edits, and Run sends
-   the one `run_start`. A run that is already going over the queue greys Run with the desktop's
-   own reason. Stopping is the desktop's bar button: cooperative, after the batch in flight.
+   It is opened from the Ready column's play (the whole queue) or from a card's sheet (`scope`,
+   `{ kind: 'task' | 'epic', id }`, the desktop's `cardScope`). The fields are filled in from the
+   project's configuration, its branches and what the desktop remembered (./runStart.js has the
+   rule), Cancel drops the edits, and Run sends the one `run_start`. A run that is already going
+   over the queue greys Run with the desktop's own reason. `started` is said once a run has
+   begun, so the screen that opened this one can move on to the Agents list, where its row is.
 
-   `project` is the one a notification named, else the one in front. The run stores hold one
-   project at a time, so it is loaded again whenever it changes.
-
-   `scope` is set when a card's sheet sent the person here to run that card (`{ kind: 'task' | 'epic',
-   id }`, the desktop's `cardScope`): the form opens by itself, says which task or epic it is about
-   instead of "everything ready", and the `run_start` it sends carries that scope. `started` is
-   said once a run has begun, so the screen that opened this one can move on. */
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+   The project is the one in front. The run stores follow it through `loadProject`, so the only
+   thing read here is its branches, which `loadProject` does not load. */
+import { computed, ref, watch } from 'vue'
 import Button from '@src/components/core/Button.vue'
 import EmptyState from '@src/components/core/EmptyState.vue'
 import Input from '@src/components/core/Input.vue'
 import Select from '@src/components/core/Select.vue'
 import Switch from '@src/components/core/Switch.vue'
 import Textarea from '@src/components/core/Textarea.vue'
-import RunBar from '@src/components/run/RunBar.vue'
 import { scopeBusyReason, scopeLabel } from '@src/components/run/runScopes.js'
-import { runsState, startRun, stopRun } from '@src/stores/runs.js'
-import { gitState } from '@src/stores/git.js'
+import { runsState, startRun } from '@src/stores/runs.js'
+import { gitState, loadBranches } from '@src/stores/git.js'
 import { boardColumns } from '@src/stores/tracker.js'
 import { settings } from '@src/stores/settings.js'
-import { basename } from '@src/paths.js'
 import { branchHint, branchOptions } from '@src/components/run/branchChoice.js'
 import { NOTES_MAX } from '@src/components/run/runNotes.js'
 import {
@@ -52,46 +45,35 @@ import {
   runPayload,
   startBlock
 } from '../runStart.js'
-import { loadRunsFor, unpinRuns } from '../workspace.js'
 
 const props = defineProps({
-  project: { type: String, default: null },
-  scope: { type: Object, default: null },
+  /* What the run is about: `{ kind: 'queue' }` or a card's scope. */
+  scope: { type: Object, required: true },
   /* The card's title, drawn beside the scope. */
   title: { type: String, default: '' }
 })
-const emit = defineEmits(['started'])
+const emit = defineEmits(['started', 'cancel'])
 
-const path = computed(() => props.project ?? settings.activeProject)
+const path = computed(() => settings.activeProject)
 
 watch(
   path,
   (project) => {
-    if (project) loadRunsFor(project).catch((err) => console.warn('[companion] runs not read:', err))
+    if (project) loadBranches(project).catch((err) => console.warn('[companion] branches not read:', err))
   },
   { immediate: true }
 )
 
-/* The run stores can only be trusted for the project they hold. If they drift from this
-   screen's, read them again. */
-watch(
-  () => runsState.project,
-  (held) => {
-    if (path.value && held !== path.value) loadRunsFor(path.value).catch((err) => console.warn('[companion] runs not read:', err))
-  }
-)
-onBeforeUnmount(unpinRuns)
+const isQueue = computed(() => props.scope.kind === 'queue')
 
 const live = computed(() => runsState.project === path.value)
-const runs = computed(() => (live.value ? [...runsState.runs].reverse() : []))
 
 const block = computed(() => (live.value ? startBlock(runsState.config) : 'Reading the run configuration.'))
-const busyReason = computed(() => (live.value ? scopeBusyReason(props.scope ?? { kind: 'queue' }, runsState.runs) : ''))
+const busyReason = computed(() => (live.value ? scopeBusyReason(props.scope, runsState.runs) : ''))
 
-/* The form: `null` while folded, else the values of its fields (see ./runStart.js). */
+/* The form: its fields' values (see ./runStart.js), `null` until the configuration is read. */
 const form = ref(null)
-watch(path, () => (form.value = null))
-const remembered = computed(() => (path.value === settings.activeProject ? settings.project.runSettings : null))
+const remembered = computed(() => settings.project.runSettings)
 const sources = () => ({ config: runsState.config, branches: gitState.branches, remembered: remembered.value })
 
 /* A native select has no groups of the desktop's kind, so a partial branch carries its note in the row. */
@@ -111,36 +93,24 @@ const hint = computed(() => (form.value ? branchHint(gitState.branches, form.val
 const errors = computed(() => (form.value ? pauseErrors(form.value) : {}))
 const noLiveCheck = computed(() => !liveCheckAvailable(runsState.config))
 const payload = computed(() =>
-  form.value && live.value ? runPayload(form.value, sources(), props.scope ?? undefined) : null
+  form.value && live.value ? runPayload(form.value, sources(), isQueue.value ? undefined : props.scope) : null
 )
 const canPress = computed(() => Boolean(form.value) && canRun(form.value) && !busyReason.value && !starting.value)
 
-/* How many tasks the queue would take, when the board on the page is this project's. */
-const ready = computed(() =>
-  path.value === settings.activeProject
-    ? boardColumns.value.find((c) => c.status === 'ready')?.tasks.length
-    : undefined
-)
+/* How many tasks the queue would take. */
+const ready = computed(() => boardColumns.value.find((c) => c.status === 'ready')?.tasks.length)
 
 const starting = ref(false)
-const stopping = ref(null)
-const failure = ref('')
 const startFailure = ref('')
 
-function openIt() {
-  startFailure.value = ''
-  form.value = openForm(sources())
-}
-
-/* A run for one card has nothing to choose before the form, so it opens as soon as the project's
-   configuration is read; once, so that Cancel leaves it folded. */
-let opened = false
+/* The form opens as soon as the project's configuration is read, once, so that nothing the
+   person typed is dropped when the configuration changes under them. */
 watch(
   [live, block],
   () => {
-    if (props.scope && !opened && live.value && !block.value) {
-      opened = true
-      openIt()
+    if (!form.value && live.value && !block.value) {
+      startFailure.value = ''
+      form.value = openForm(sources())
     }
   },
   { immediate: true }
@@ -152,7 +122,6 @@ async function start() {
   startFailure.value = ''
   try {
     await startRun(path.value, payload.value)
-    form.value = null
     emit('started')
   } catch (err) {
     startFailure.value = typeof err === 'string' ? err : err?.message || 'The run did not start.'
@@ -161,47 +130,16 @@ async function start() {
   }
 }
 
-async function stop(run) {
-  stopping.value = run.token
-  failure.value = ''
-  try {
-    await stopRun(run.token)
-  } catch (err) {
-    failure.value = typeof err === 'string' ? err : err?.message || 'The run could not be stopped.'
-  } finally {
-    stopping.value = null
-  }
-}
-
 const section = {
   display: 'flex',
   flexDirection: 'column',
   gap: 'var(--space-4)',
-  padding: 'var(--space-5)',
-  borderBottom: 'var(--border-w) solid var(--border-subtle)'
-}
-const heading = {
-  margin: 0,
-  font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-mono)',
-  letterSpacing: 'var(--tracking-caps)',
-  textTransform: 'uppercase',
-  color: 'var(--text-muted)'
+  padding: 'var(--space-5)'
 }
 const text = {
   margin: 0,
   font: 'var(--weight-regular) var(--text-sm)/var(--leading-normal) var(--font-sans)',
   color: 'var(--text-secondary)'
-}
-const failed = { ...text, color: 'var(--status-failed-fg)' }
-const card = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 'var(--space-4)',
-  padding: 'var(--space-4)',
-  background: 'var(--surface-raised)',
-  border: 'var(--border-w) solid var(--border)',
-  borderRadius: 'var(--radius-3)'
 }
 const scopeStyle = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }
 const cardTitle = { ...text, color: 'var(--text-primary)', overflowWrap: 'anywhere' }
@@ -222,23 +160,9 @@ const full = { width: '100%' }
     <EmptyState v-if="!path" icon="folder" title="No project is open" description="Open a project on the desktop." />
     <template v-else>
       <section :style="section">
-        <h2 :style="heading">{{ basename(path) }} - running now</h2>
-        <p v-if="!runs.length" :style="text">No run is going.</p>
-        <div v-for="run in runs" :key="run.token" :style="card">
-          <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', minWidth: 0 }">
-            <RunBar :run="run" :can-release="false" :busy="stopping === run.token" @stop="stop(run)" />
-            <span :style="scopeStyle">{{ scopeLabel(run.settings?.scope) }}</span>
-          </div>
-        </div>
-        <p v-if="failure" :style="failed">{{ failure }}</p>
-      </section>
-
-      <section :style="section">
-        <h2 :style="heading">{{ form ? (scope ? `Run ${scopeLabel(scope)}` : 'Run the queue') : 'Start a run' }}</h2>
-        <p v-if="block" :style="text">{{ block }}</p>
-        <Button v-else-if="!form" variant="secondary" icon="play" @click="openIt">Start a run</Button>
+        <p v-if="block || !form" :style="text">{{ block || 'Reading the run configuration.' }}</p>
         <div v-else :style="body">
-          <template v-if="scope">
+          <template v-if="!isQueue">
             <span :style="takesStyle">{{ scopeLabel(scope) }}</span>
             <span v-if="title" :style="cardTitle">{{ title }}</span>
           </template>
@@ -304,14 +228,14 @@ const full = { width: '100%' }
             <span :style="noteStyle">{{ NOTES_NOTE }}</span>
           </div>
 
-          <span v-if="!scope && typeof ready === 'number'" :style="takesStyle">
+          <span v-if="isQueue && typeof ready === 'number'" :style="takesStyle">
             {{ ready === 1 ? 'One task is ready.' : `${ready} tasks are ready.` }}
           </span>
           <span v-if="busyReason" :style="takesStyle">{{ busyReason[0].toUpperCase() + busyReason.slice(1) }}.</span>
           <span v-if="startFailure" :style="errorStyle">{{ startFailure }}</span>
 
           <div :style="actions">
-            <Button variant="ghost" :disabled="starting" @click="form = null">Cancel</Button>
+            <Button variant="ghost" :disabled="starting" @click="emit('cancel')">Cancel</Button>
             <Button variant="primary" :disabled="!canPress" @click="start">{{ starting ? 'Starting…' : 'Run' }}</Button>
           </div>
         </div>

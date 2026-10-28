@@ -8,6 +8,11 @@
    phone read its output and nothing else, and a screen-drawing programme is not usable on a
    phone anyway.
 
+   The runs of the project sit above "New agent", one `RunBar` each, as in the desktop's footer: a
+   run is a row in the list above and its Stop is here. The bridge carries no `run_release`, so
+   "Run anyway" is not offered, and the subscription sentence is written by one bar only
+   (`limitVoice.js`, the desktop's pick).
+
    "New agent" starts a bare conversation, which is the desktop's button of the same name. */
 import { computed, onBeforeUnmount, ref } from 'vue'
 import Button from '@src/components/core/Button.vue'
@@ -26,6 +31,9 @@ import {
   statusOf
 } from '@src/stores/conversation.js'
 import { effectiveAgents, settings } from '@src/stores/settings.js'
+import RunBar from '@src/components/run/RunBar.vue'
+import { limitVoice } from '@src/components/run/limitVoice.js'
+import { runsState, stopRun } from '@src/stores/runs.js'
 import IconButton from '@src/components/core/IconButton.vue'
 import { closeActsFor } from '@src/components/agent/closeRow.js'
 import { agentRowsFor, drivenRecords, entryFor, loud, resumeIntentFor } from '../agentList.js'
@@ -46,6 +54,24 @@ const rows = computed(() =>
     })
   )
 )
+
+const runs = computed(() => (runsState.project === settings.activeProject ? runsState.runs : []))
+const speaker = computed(() => limitVoice(runs.value))
+const stopping = ref(null)
+const stopFailure = ref('')
+
+async function stop(run) {
+  stopping.value = run.token
+  stopFailure.value = ''
+  try {
+    await stopRun(run.token)
+  } catch (err) {
+    stopFailure.value = 'The run could not be stopped.'
+    console.warn('[companion] the run could not be stopped:', err)
+  } finally {
+    stopping.value = null
+  }
+}
 
 const drivable = computed(() => canDrive(effectiveAgents.value.agent))
 const busy = ref(false)
@@ -129,6 +155,13 @@ const barText = {
   font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-sans)',
   color: 'var(--text-muted)'
 }
+const runsStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-3)',
+  padding: 'var(--space-4) var(--space-5)',
+  borderBottom: 'var(--border-w) solid var(--border-subtle)'
+}
 const failure = { ...barText, color: 'var(--status-failed-fg)', padding: 'var(--space-4) var(--space-5) 0' }
 const wrap = (item) => ({
   display: 'flex',
@@ -175,6 +208,18 @@ const elapsed = (state) => ({
 
 <template>
   <div>
+    <div v-if="runs.length" :style="runsStyle">
+      <RunBar
+        v-for="run in runs"
+        :key="run.token"
+        :run="run"
+        :can-release="false"
+        :speaks="run.token === speaker"
+        :busy="stopping === run.token"
+        @stop="stop(run)"
+      />
+      <p v-if="stopFailure" :style="{ ...barText, color: 'var(--status-failed-fg)' }">{{ stopFailure }}</p>
+    </div>
     <div :style="bar">
       <p :style="barText">
         {{ drivable ? 'Conversations and terminal sessions of this project.' : 'Conversations cannot be started from here with the desktop\'s current settings.' }}
