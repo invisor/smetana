@@ -236,7 +236,13 @@ fn create_data_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The live work a restart would end: runs, agent sessions (PTY), driven sessions and shells.
+/// The live work a restart would end that is worth waiting for: runs, agent sessions (PTY) that are
+/// working, driven sessions that are working and shells.
+///
+/// A restart ends every child the server owns, but only some of them are work. An agent waiting for
+/// a person (idle, asking, finished) loses nothing it cannot resume, so it is not listed and a
+/// restart that waits for the list to empty does not wait for it; `terminal_counts` and
+/// `driven_counts` say which is which.
 ///
 /// A run is named by its token, and its current batch (the session the run records, in whichever
 /// worker its transport says) carries that token as its `owner`, so that confirming a run covers the
@@ -274,7 +280,7 @@ pub async fn live_work(
     let (tx, rx) = oneshot::channel();
     if terminal.0.send(TerminalRequest::Marks(tx)).await.is_ok() {
         for mark in rx.await.unwrap_or_default() {
-            if mark.state == SessionState::Exited {
+            if !terminal_counts(&mark.kind, &mark.state) {
                 continue;
             }
             let (kind, label) = match mark.kind {
@@ -291,7 +297,7 @@ pub async fn live_work(
         }
     }
     if let Ok(live) = session::commands::plain::live(sessions).await {
-        for found in live {
+        for found in live.into_iter().filter(|found| driven_counts(&found.state)) {
             work.push(LiveWork {
                 kind: LiveKind::Session,
                 id: Some(found.id),
@@ -302,6 +308,26 @@ pub async fn live_work(
         }
     }
     work
+}
+
+/// Does a terminal session count as live work? An agent counts only while it is starting or running:
+/// the screen of a working agent's harness keeps redrawing, so a still one (`Idle`, per
+/// `terminal::detect`) means it is waiting, and `NeedsYou` and `Exited` are waiting too. A plain
+/// shell counts until it exits, because a quiet screen says nothing about it: `npm run dev` or a
+/// silent build reads as `Idle` exactly as a prompt does, and a restart has no right to end a
+/// person's dev server.
+pub fn terminal_counts(kind: &WorkKind, state: &SessionState) -> bool {
+    match kind {
+        WorkKind::Shell => *state != SessionState::Exited,
+        _ => matches!(state, SessionState::Starting | SessionState::Running),
+    }
+}
+
+/// Does a driven session count as live work? Only while it is starting or running; `Ready` and
+/// `NeedsYou` are a session waiting for a person, and `Exited` and `Failed` are over.
+pub fn driven_counts(state: &session::model::SessionState) -> bool {
+    use session::model::SessionState as Driven;
+    matches!(state, Driven::Starting | Driven::Running)
 }
 
 /// The relay the public endpoint binds: the server's own setting when it has a settings file, else the
@@ -509,6 +535,36 @@ mod tests {
         // Once the settings are the server's, they decide, whatever was inherited.
         std::fs::write(&file, r#"{"version":1,"remote":{"relayUrl":"https://relay.mine.org"}}"#).unwrap();
         assert_eq!(relay_url(Some(&file), Some(theirs)), "https://relay.mine.org");
+    }
+
+    #[test]
+    fn an_agent_counts_as_live_work_only_while_it_is_starting_or_running() {
+        for kind in [WorkKind::Bare, WorkKind::NewTask, WorkKind::ResumeSession] {
+            assert!(terminal_counts(&kind, &SessionState::Starting));
+            assert!(terminal_counts(&kind, &SessionState::Running));
+            assert!(!terminal_counts(&kind, &SessionState::Idle), "a still screen is an agent waiting");
+            assert!(!terminal_counts(&kind, &SessionState::NeedsYou));
+            assert!(!terminal_counts(&kind, &SessionState::Exited));
+        }
+    }
+
+    #[test]
+    fn a_shell_counts_as_live_work_until_it_exits() {
+        assert!(terminal_counts(&WorkKind::Shell, &SessionState::Starting));
+        assert!(terminal_counts(&WorkKind::Shell, &SessionState::Running));
+        assert!(terminal_counts(&WorkKind::Shell, &SessionState::Idle), "a quiet shell may be a dev server");
+        assert!(terminal_counts(&WorkKind::Shell, &SessionState::NeedsYou));
+        assert!(!terminal_counts(&WorkKind::Shell, &SessionState::Exited));
+    }
+
+    #[test]
+    fn a_driven_session_counts_as_live_work_only_while_it_is_starting_or_running() {
+        use session::model::SessionState as Driven;
+        assert!(driven_counts(&Driven::Starting));
+        assert!(driven_counts(&Driven::Running));
+        for state in [Driven::Ready, Driven::NeedsYou, Driven::Exited, Driven::Failed] {
+            assert!(!driven_counts(&state), "{state:?}");
+        }
     }
 
     #[test]

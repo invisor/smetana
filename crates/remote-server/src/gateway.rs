@@ -2,8 +2,9 @@
 //! nothing is killed silently.
 //!
 //! A restart of the server ends every child it owns — runs, agent sessions, driven sessions, plain
-//! shells — so the gate is not "no run" but **no live work of any kind**. A client therefore never
-//! says "restart" and gets one. It says *when*:
+//! shells — so the gate is not "no run" but **no *running* work of any kind**: what counts is the
+//! host's list (`smetanad`'s `live_work`), which leaves out agents that are waiting for a person.
+//! A client therefore never says "restart" and gets one. It says *when*:
 //!
 //! - **`now`** restarts at once if nothing is alive. If something is, it answers
 //!   [`Outcome::NeedsConfirmation`] with the list and does nothing. The person's answer is the same
