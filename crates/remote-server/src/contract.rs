@@ -371,7 +371,15 @@ fn conversation() -> Vec<Event> {
         EventKind::TextDelta { text: "H".into() },
         EventKind::Reasoning { text: "Thinking".into() },
         EventKind::ToolUse { id: "t1".into(), name: "Bash".into(), detail: "ls".into() },
-        EventKind::ToolResult { id: "t1".into(), ok: true, summary: "3 files".into(), denial: None },
+        EventKind::ToolResult { id: "t1".into(), ok: true, summary: "3 files".into(), denial: None, blocked_input: None },
+        // A refusal: the only result that carries `blocked_input` (protocol 1.16).
+        EventKind::ToolResult {
+            id: "t2".into(),
+            ok: false,
+            summary: "1 line".into(),
+            denial: Some("Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Production Reads].".into()),
+            blocked_input: Some("ssh prod-db.invalid 'docker compose ps'".into()),
+        },
         EventKind::Permission {
             id: "p1".into(),
             tool: "Bash".into(),

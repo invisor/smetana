@@ -273,6 +273,17 @@ move**, so an older release reinstalled still finds its data:
 A person who moves to a remote server pairs the phone with that server (`smetanad pair --kind phone`); the local server's
 pairing is untouched (`server/smetanad/README.md`).
 
+## Protocol 1.16: a refusal carries the call's whole input (smetana-io57)
+
+`EventKind::ToolResult` gained `blocked_input`: the full input of the call Claude Code's auto-mode classifier refused,
+clipped at 2 000 characters, present **only on a result that has `denial`** and left out of the wire everywhere else
+(`skip_serializing_if`), so an ordinary result is byte for byte what it was. It rides `session:events`, `crew:events` and
+the replies that replay a journal. Additions only: `contract/` pins it on a second `tool-result` example that is a
+refusal, and `versions.json` has `1.16`. The block card is drawn by `ConversationView` on the phone too, so a phone built
+from this tree words Allow with the whole command and, mid-turn, interrupts first (`session_stop` is already on its
+allowlist); an older phone ignores the field and quotes the clipped detail. The mobile build's own `PROTOCOL_MINOR` stays
+where it was.
+
 ## Protocol 1.15: the root of `crew:tree` names the lead's conversation (smetana-u0c9)
 
 Additions only. `CrewNode.conversation` (optional, absent until known, only ever on a root) and `crew:tree` joins the

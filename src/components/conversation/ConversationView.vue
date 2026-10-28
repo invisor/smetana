@@ -69,6 +69,7 @@ import StatusBadge from '../status/StatusBadge.vue'
 import { isAskUserQuestion } from './askUserQuestion.js'
 import { attachmentAction } from './attachmentAction.js'
 import { approvalText, blockButtonsShown, refusalText } from './autoModeBlock.js'
+import { allowPlan, replyTarget, waitVerdict } from './blockReply.js'
 import { appendQuote, quoteFromSelection } from './draftSegments.js'
 import { isBusy, journalRows } from './journal.js'
 import { SELECTION_MENU_W, selectionMenuItems } from './selectionMenu.js'
@@ -194,6 +195,8 @@ const held = shallowRef(null)
 let attached = null
 
 function open(id) {
+  endReplies()
+  replying.value = false
   if (attached !== null) {
     detach(attached)
     attached = null
@@ -615,8 +618,15 @@ const stop = () => stopConversation(props.sessionId)
    journal as a `user-message` and in the agent's transcript as their words.
    Re-sticks first, for the reason `send()` does. The draft in the composer is
    untouched: this is not that message. */
-async function replyToBlock(text) {
+async function replyToBlock(text, { interruptFirst = false } = {}) {
   if (replying.value) return
+  /* Everything below talks to the session that was pressed, captured here:
+     this instance is re-pointed at another agent by `open()` while a wait of
+     seconds is under way, and `props.sessionId` read afterwards would be that
+     other agent's. */
+  const id = props.sessionId
+  const record = held.value
+  const mine = generation
   /* Set before the first await: the block only closes when the person's turn
      comes back through the journal, and a second press in that gap would send
      a second turn. */
@@ -625,12 +635,74 @@ async function replyToBlock(text) {
   try {
     await nextTick()
     toEnd()
-    await sendMessage(props.sessionId, text, [])
+    if (interruptFirst && record && allowPlan(record.state) === 'interrupt-then-send') {
+      if ((await interruptTurn(id, record, mine)) === 'abort') {
+        replying.value = false
+        return
+      }
+    }
+    const target = replyTarget({
+      capturedId: id,
+      currentId: mine === generation ? props.sessionId : null,
+      blockOpen: anyBlockOpen.value
+    })
+    if (target === 'abort') {
+      replying.value = false
+      return
+    }
+    await sendMessage(id, text, [])
     if (conversationState.lastError) replying.value = false
   } catch {
     replying.value = false
   }
 }
+
+/* Bumped whenever the panel is re-pointed or goes away; a press that began
+   under an older number must not send. `cancelWait` ends a wait in flight. */
+let generation = 0
+let cancelWait = null
+
+/* Ends the open turn of session `id` and resolves 'send' once that session's
+   own state (`record.state`, not the panel's) says the turn has closed, never
+   after a delay, or 'abort' when the wait cannot or should not end in a send:
+   the panel moved on, or a permission question took the state to `needs-you`.
+   Allow needs this because a line sent into a running turn is queued for the
+   model and never reaches the classifier as the person's word
+   (`blockReply.js` has the measurement). A refused interrupt (a Crew member
+   cannot be stopped on its own) is not a reason to drop the approval: it goes
+   anyway, as a queued line, which is what it was before. */
+async function interruptTurn(id, record, mine) {
+  await stopConversation(id)
+  if (mine !== generation) return 'abort'
+  if (conversationState.lastError) return 'send'
+  const now = waitVerdict(record.state)
+  if (now !== 'wait') return now === 'ready' ? 'send' : 'abort'
+  return new Promise((resolve) => {
+    /* Made after an await, so it belongs to no component scope: it is stopped
+       by hand, by the verdict below or by `cancelWait` (a re-point, an unmount). */
+    const unwatch = watch(
+      () => record.state,
+      (next) => {
+        const verdict = waitVerdict(next)
+        if (verdict === 'wait') return
+        unwatch()
+        cancelWait = null
+        resolve(verdict === 'ready' ? 'send' : 'abort')
+      }
+    )
+    cancelWait = () => {
+      unwatch()
+      cancelWait = null
+      resolve('abort')
+    }
+  })
+}
+
+function endReplies() {
+  generation++
+  cancelWait?.()
+}
+onBeforeUnmount(endReplies)
 
 /* True from a press on a block card until the journal closes that block. */
 const replying = ref(false)
@@ -968,7 +1040,7 @@ const refusal = computed(() => ({
             :result="row.result"
             :block-open="row.blockOpen"
             :can-message="blockButtonsShown({ blockOpen: row.blockOpen, composerShown, replying })"
-            @allow-block="replyToBlock(approvalText(row.name, row.detail, row.result.denial))"
+            @allow-block="replyToBlock(approvalText(row.name, row.detail, row.result.denial, row.result.blockedInput), { interruptFirst: true })"
             @refuse-block="replyToBlock(refusalText(row.name, row.detail))"
           />
           <TurnResult

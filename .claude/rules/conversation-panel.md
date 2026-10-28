@@ -659,10 +659,41 @@ is set when `is_error` is true and the text contains `AUTO_MODE_PHRASE`, trimmed
 `user` row follows. `ToolCall.vue` draws `Blocked by auto mode`, the bracketed category as the reason, and Allow and
 Refuse while `blockOpen && canMessage`. The card is deliberately **not** loud: the session holds nobody, so it uses the
 failed idiom and never `--status-needs-you-*`. The buttons send an ordinary person's turn through `sendMessage`;
-`autoModeBlock.js` words them (an approval has to name the action and the reason, which is how Claude Code's
-documentation says the classifier reads one). An approval is a heuristic, not a guarantee, and `agents/claude.rs`
-`autonomy` is untouched.
+`autoModeBlock.js` words them, and `agents/claude.rs` `autonomy` is untouched.
+
+**What an Allow has to be, measured (smetana-io57, CLI 2.1.310, 2026-10-29).** Two things decide whether the classifier
+lets the retry through, and only one of them turned out to matter.
+
+- **Delivery.** A line written to stdin while a turn runs is not a user message to the harness: the transcript records
+  `queue-operation enqueue`, `attachment: queued_command`, `queue-operation remove`, and no `user` record. The model reads
+  it between two tool calls; the classifier refused the retry again, with the old wording and with the new. The same text
+  sent after the turn had ended is a `user` record, and the retry ran. The card is drawn under a result the agent has
+  already moved past, so the press nearly always lands mid-turn. `blockReply.js` is the rule (`allowPlan`: `running` or
+  `needs-you` means interrupt first, anything else sends at once), and `ConversationView.vue`'s `interruptTurn` does it:
+  `stopConversation` (`session_stop`, the driver's `interrupt`), then wait for `state` to leave busy, then
+  `sendMessage`. **Interrupt, wait, send** and not send-then-interrupt: both orders ended in a `user` record and a retry
+  that ran, but the second leaves a window between the line being queued and the interrupt landing in which a finishing
+  tool call drains the queue as a `queued_command` again. The wait is a watch on the session's state, never a timer, and
+  it is bound to the session that was pressed: its id and record are captured at the press, and when the wait ends
+  `replyTarget` sends only if the panel still shows that session and the block is still open, otherwise the press is
+  dropped (the panel is one instance re-pointed by `open()`). A permission question taking the state to `needs-you`
+  also drops it, so the buttons come back; `open()` and unmount cancel a wait in flight. A
+  refused interrupt (a Crew member cannot be stopped on its own) still sends, as the old queued line. Refuse is not
+  changed: a queued line is enough for the model to read it.
+- **Wording.** In the local reproduction the old, clipped wording also cleared once it was delivered as a user turn, so
+  the wording is not what failed on 2026-10-28. It is changed anyway, because the rule's bar is documented ("directly and
+  specifically describes the exact action", with a `must name` clause per rule) and a 140-character clip cannot meet it
+  for a command whose specific lies further in. `EventKind::ToolResult.blocked_input` carries the refused call's whole
+  `tool_detail_full`, clipped at `MAX_BLOCKED_INPUT` (2 000) when the driver stores it (`open_calls`, by tool id, dropped
+  with the result and at the end of the turn), and **only on a result with `denial`**, so ordinary results do not grow
+  and the journal keeps its budget. On the wire it is `blocked_input` (the fields keep their snake case); `journal.js`
+  folds it as `result.blockedInput`, `null` when absent, and `approvalText` quotes it, falling back to the clipped
+  `detail` for a journal from before the field; a denial replayed from a resumed transcript (the `history.rs` path)
+  carries no `blocked_input` either and falls back the same way. The measurement used a stand-in for the original case: a force-push
+  into a local bare repository is not blocked at all, so `ssh prod-db.invalid` ("Production Reads"), requested by a
+  checklist file rather than by the prompt, was refused and retried instead. The four cases are in
+  `.smetana/docs/superpowers/specs/2026-10-29-auto-mode-approval-reaches-classifier-design.md`, "Measured".
 
 Every failed result that mentions auto mode or the classifier is appended whole to `auto-mode-blocks.jsonl` beside
 `settings.json` (`session/blocks.rs`), with `matched` saying whether the exact phrase hit: the material for tuning the
-detector. Adding `denial` raised the remote protocol to 1.7 (`remote.md`).
+detector. Adding `denial` raised the remote protocol to 1.7 and `blocked_input` to 1.16 (`remote.md`).

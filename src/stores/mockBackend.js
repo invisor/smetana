@@ -663,7 +663,7 @@ const MOCK_CONVERSATION = [
   journalEvent(22, 'tool-use', {
     id: 't-blocked',
     name: 'Bash',
-    detail: "psql -h db.example.invalid -c \"UPDATE accounts SET plan = 'free'\"",
+    detail: "psql -h db.example.invalid -U deploy -c \"UPDATE accounts SET plan = 'free' WHERE trial_ends_at < now() AND plan <> 'free' RETURNING id, e...",
     at: recentAt(7000)
   }),
   journalEvent(23, 'tool-result', {
@@ -672,6 +672,9 @@ const MOCK_CONVERSATION = [
     summary: '1 line',
     denial:
       'Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Modify Shared Resources].',
+    /* Present on a denial only, whole where the row's `detail` is clipped. */
+    blocked_input:
+      "psql -h db.example.invalid -U deploy -c \"UPDATE accounts SET plan = 'free' WHERE trial_ends_at < now() AND plan <> 'free' RETURNING id, email, trial_ends_at\"",
     at: recentAt(6800)
   }),
   journalEvent(24, 'tool-use', { id: 't3', name: 'Grep', detail: 'fn worktree_path', at: recentAt(6000) }),

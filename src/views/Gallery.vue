@@ -6927,16 +6927,18 @@ const menuTargetStyle = {
             :result="{ ok: false, summary: 'exit 101' }"
           />
           <!-- An auto-mode block, open: the card under the row with its two
-               buttons. The detail is the full 140-character clip and the
-               reason has no bracketed category, so it is drawn whole over
-               several lines, and a card that overflows the column shows here. -->
+               buttons. The detail is the full 140-character clip (the whole
+               command is in blockedInput) and the reason has no bracketed
+               category, so it is drawn whole over several lines, and a card
+               that overflows the column shows here. -->
           <ConversationToolCall
             name="Bash"
             detail="psql -h db-primary.internal.example.invalid -U deploy -c &quot;UPDATE accounts SET plan = 'free' WHERE trial_ends_at < now() AND plan <> 'free' RETURNING id&quot;"
             :result="{
               ok: false,
               summary: '1 line',
-              denial: 'Permission for this action was denied by the Claude Code auto mode classifier.\nA second line of reasoning that is long enough to wrap inside the narrow column without widening it: aVeryLongUnbrokenTokenThatHasNowhereToBreakExceptAnywhere.'
+              denial: 'Permission for this action was denied by the Claude Code auto mode classifier.\nA second line of reasoning that is long enough to wrap inside the narrow column without widening it: aVeryLongUnbrokenTokenThatHasNowhereToBreakExceptAnywhere.',
+              blockedInput: 'psql -h db-primary.internal.example.invalid -U deploy -c &quot;UPDATE accounts SET plan = \'free\' WHERE trial_ends_at < now() AND plan <> \'free\' RETURNING id, email, trial_ends_at&quot;'
             }"
             block-open
             can-message
@@ -6946,7 +6948,7 @@ const menuTargetStyle = {
           <ConversationToolCall
             name="Write"
             detail="/etc/hosts"
-            :result="{ ok: false, summary: '1 line', denial: 'Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Irreversible Local Destruction].' }"
+            :result="{ ok: false, summary: '1 line', denial: 'Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Irreversible Local Destruction].', blockedInput: '/etc/hosts' }"
           />
           <!-- A folded block and an open one. Both are dimmed by colour and
                size, not by opacity — `sm-prose.css`'s own reasoning rule — and
