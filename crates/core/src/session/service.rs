@@ -292,6 +292,9 @@ pub enum Request {
     /// Every session this worker holds that no cross has closed, for `session_list`. Not
     /// `Live`, which keeps only the ones with a running child for the restart gateway.
     List(oneshot::Sender<Vec<SessionRecord>>),
+    /// Every live Crew tree, for `crew_list`: what a client that connected mid-run missed of
+    /// `crew:tree` (smetana-u0c9).
+    CrewList(oneshot::Sender<Vec<CrewTreeChange>>),
     Start(String, Intent, oneshot::Sender<Result<SessionId, SessionError>>),
     /// Start a driven lead and register its Smetana-owned root in one worker
     /// pass. It intentionally bypasses `Request::Start`'s ordinary Run
@@ -2035,6 +2038,10 @@ fn clear_crew(
     if let Some(mut pty) = crew_ptys.remove(&root) {
         pty.kill();
     }
+    // A lead with a child still to die keeps its tree, and so its shadow over the lead's registry
+    // record, until the `Eof` that drops that record: the empty tree goes out from the `Eof` arm,
+    // or every device would offer to resume a thread the lead still holds (smetana-u0c9).
+    let lead_dying = sessions.get(&root).is_some_and(|live| live.crew_lead && live.child.is_some());
     crew_leads.retain(|_, lead_root| *lead_root != root);
     let waiters = crew_waiters.remove(&root).unwrap_or_default();
     let keep_exit = retain_crew_exit(admitted, waiters.len());
@@ -2048,6 +2055,9 @@ fn clear_crew(
     }
     for (_, waiter) in crew_send_waiters.extract_if(|(crew, _), _| *crew == root) {
         let _ = waiter.reply.send(Err(SessionError::Spawn(ENDED.into())));
+    }
+    if lead_dying {
+        return;
     }
     if let Some(mut package) = crews.remove(&root) {
         package.tree.clear();
@@ -2181,6 +2191,18 @@ fn handle(
                     let _ = tx.send(Err(error));
                 }
             }
+        }
+        Request::CrewList(tx) => {
+            let mut trees: Vec<CrewTreeChange> = crews
+                .values()
+                .map(|package| CrewTreeChange {
+                    project: package.project.clone(),
+                    root: package.root,
+                    nodes: package.tree.nodes(),
+                })
+                .collect();
+            trees.sort_by_key(|tree| tree.root);
+            let _ = tx.send(trees);
         }
         Request::CrewTree(root, tx) => {
             let _ = tx.send(crews.get(&root).map(|package| package.tree.nodes()));
@@ -2833,6 +2855,14 @@ fn absorb(
                 if let Some(conversation) = live.conversation.as_deref() {
                     crate::terminal::restore::drop_record(Path::new(&live.project), conversation);
                     crate::terminal::restore::announce(ctx, Path::new(&live.project));
+                }
+            }
+            // A lead's tree outlives `clear_crew` until here, so that the registry never offers a
+            // thread whose lead is still dying; with the record gone it can be told empty.
+            if live.crew_lead {
+                if let Some(mut package) = crews.remove(&id) {
+                    package.tree.clear();
+                    emit_crew(ctx, &package);
                 }
             }
             // Reaped on a task of its own: end of stream arrives before the

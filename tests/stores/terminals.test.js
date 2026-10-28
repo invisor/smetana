@@ -1745,6 +1745,30 @@ describe('the sessions a project offers back after a restart', () => {
     expect(rows.map((row) => [row.conversation, row.restored])).toEqual([['thread-lead', true]])
   })
 
+  /* A device that connects mid-run heard none of the `crew:tree` events, so the trees are read
+     whole (`crew_list`) ahead of the registry, and again on every reconnect: a server that
+     restarted never said its trees were gone. */
+  it('shadows the lead of a Crew it never heard start, and offers the thread again once the server holds none', async () => {
+    const loaded = await ready()
+    const lead = offered({ agent: 'codex', sessionId: 'thread-lead' })
+    const tree = { project: '/p', root: 7, nodes: [{ id: 7, parent: null, root: 7, state: 'running', label: 'Crew lead', canMessage: true, conversation: 'thread-lead' }] }
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('session_list', [])
+    loaded.ipc.on('terminal_restorable', [lead])
+    loaded.ipc.on('crew_list', [tree])
+    await loaded.stores.conversation.initConversation()
+    await loaded.stores.terminals.loadSessions('/p')
+    await loaded.nextTick()
+    expect(loaded.stores.terminals.terminalState.restored).toEqual([lead])
+    expect(loaded.stores.terminals.agentRows.value).toEqual([])
+
+    // The server restarted: no Eof, so the record is still there, and no tree.
+    loaded.ipc.on('crew_list', [])
+    await loaded.stores.terminals.loadSessions('/p')
+    await loaded.nextTick()
+    expect(loaded.stores.terminals.agentRows.value.map((row) => [row.conversation, row.restored])).toEqual([['thread-lead', true]])
+  })
+
   /* The other end of that hiding, and the bug it produced. The filter above
      covers the record only while a live session carries its conversation, so
      closing the row uncovered it: the same conversation came straight back as

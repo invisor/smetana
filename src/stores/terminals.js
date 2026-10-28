@@ -37,7 +37,7 @@ import { runsState } from './runs.js'
 import { effectiveAgents, settings } from './settings.js'
 import { isLockIssue, trackerState } from './tracker.js'
 import { onReconnect } from './connection.js'
-import { crewLeadConversations } from './conversation.js'
+import { crewLeadConversations, loadCrews } from './conversation.js'
 
 /* The one word that tells a person's own shell from an agent, as `SessionWork`
    and `WorkKind` in `crates/core/src/terminal/model.rs` spell it on the wire.
@@ -1013,6 +1013,9 @@ export async function loadSessions(project) {
    reason: two project switches in flight at once answer in no fixed order. */
 async function loadRestorable(project) {
   try {
+    /* The live Crew trees first: a record is hidden behind the tree of the lead that drives it,
+       so a device that missed the events has to know the trees before it draws the registry. */
+    if (project) await loadCrews()
     const records = project ? await invoke('terminal_restorable', { project }) : []
     if (terminalState.project !== project) return
     terminalState.restored = records

@@ -338,6 +338,8 @@ calls! {
         => |s, c, a| answer(crate::session::commands::plain::stop(&s.sessions, a.id).await);
     SessionClose = "session_close" { id: u64 }
         => |s, c, a| answer(crate::session::commands::session_close(&s.sessions, a.id).await);
+    CrewList = "crew_list" {}
+        => |s, c, a| answer(crate::session::commands::plain::crew_list(&s.sessions).await);
     CrewTree = "crew_tree" { root: u64 }
         => |s, c, a| answer(crate::session::commands::plain::crew_tree(&s.sessions, a.root).await);
     CrewAttach = "crew_attach" { root: u64, node: u64 }

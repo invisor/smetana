@@ -26,6 +26,7 @@ export const ALLOWED_COMMANDS = [
   'session_send',
   'session_answer',
   'session_stop',
+  'crew_list',
   'crew_tree',
   'crew_attach',
   'crew_send',

@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 
 use super::model::{Decision, Event, SessionError, SessionId, SessionRecord};
 use super::crew::CrewNode;
-use super::service::{Attached, CrewAttached, Request, SessionHandle};
+use super::service::{Attached, CrewAttached, CrewTreeChange, Request, SessionHandle};
 use crate::agents::Intent;
 
 async fn ask<T>(
@@ -72,6 +72,12 @@ pub mod plain {
         intent: Intent,
     ) -> Result<SessionId, SessionError> {
         ask(handle, |tx| Request::Start(project, intent, tx)).await?
+    }
+
+    /// Every live Crew tree across all projects, by root. A client that connects mid-run
+    /// reads this once, because it missed the `crew:tree` events that built them.
+    pub async fn crew_list(handle: &SessionHandle) -> Result<Vec<CrewTreeChange>, SessionError> {
+        ask(handle, Request::CrewList).await
     }
 
     pub async fn crew_tree(

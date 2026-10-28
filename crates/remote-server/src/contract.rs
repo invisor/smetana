@@ -1211,6 +1211,7 @@ fn replies() -> BTreeMap<&'static str, Vec<Value>> {
     map.insert("session_send", vec![Value::Null]);
     map.insert("session_answer", vec![Value::Null]);
     map.insert("session_stop", vec![Value::Null]);
+    map.insert("crew_list", vec![json!([{ "project": "/work/smetana", "root": 1, "nodes": crew_nodes() }]), json!([])]);
     map.insert("crew_tree", vec![json_of(&crew_nodes()), Value::Null]);
     map.insert("crew_attach", all(&crew_attached()));
     map.insert("crew_send", vec![Value::Null]);

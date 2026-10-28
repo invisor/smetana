@@ -261,7 +261,9 @@ pairing is untouched (`server/smetanad/README.md`).
 Additions only. `CrewNode.conversation` (optional, absent until known, only ever on a root) and `crew:tree` joins the
 phone's event allowlist, which a phone needs in order to hide the Crew lead's registry record
 (see "A Crew lead stays in the registry" in `terminal.md`). A phone on an older desktop is refused the subscription and
-reads it as a local name: nothing is shadowed. The mobile build's own `PROTOCOL_MINOR` stays 3.
+reads it as a local name: nothing is shadowed. `crew_list {}` answers `[{ project, root, nodes }]`, every live tree, for a
+client that connected mid-run or after a server restart; it replaces the client's trees whole. The mobile build's own
+`PROTOCOL_MINOR` stays 3.
 
 ## Protocol 1.14: the phone hears settings:changed
 

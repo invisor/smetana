@@ -219,6 +219,7 @@ pub const DESKTOP_COMMANDS: &[&str] = &[
     "terminal_forget",
     "session_list",
     "session_start",
+    "crew_list",
     "crew_tree",
     "crew_attach",
     "crew_send",

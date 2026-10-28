@@ -518,6 +518,15 @@ alternative, `write_record` returning false for a lead, was one line and left th
   `crewLeadConversations` (`stores/conversation.js`), the root ids of every live tree. The phone draws the same store's
   rows, so it follows; it hears `crew:tree` since 1.15. With no tree (an empty `nodes` snapshot when the lead ends, or a
   restart that brought none back) the record is offered again as an ordinary offline row.
+- **Late and reconnecting clients.** A device that connects mid-run heard none of the `crew:tree` events, and a server that
+  restarted never said its trees were gone, so the store reads `crew_list` (every live tree, the event's payload shape,
+  1.15) and **replaces `crews` whole**: on start, on every reconnect, and ahead of every `terminal_restorable` read
+  (`loadRestorable` awaits `loadCrews`), so the shadow is in place before the registry is drawn. Trees that arrive while
+  the snapshot is in flight are laid over it. An older server refuses the command and the events heard stand.
+- **Stop and Clear keep the shadow until the record is gone.** `clear_crew` kills the lead's child but leaves its tree
+  in `crews`; the empty `crew:tree` goes out from the `Eof` arm right after `drop_record`. Telling clients earlier would
+  offer to resume a thread the dying lead still holds. A lead with no child to die (never spawned, already reaped) is
+  cleared at once.
 - **Resuming it is an ordinary conversation.** The row's intent is `ResumeSession`, which `start_crew` never sees: a
   driven Codex conversation on the same thread, no Crew package, no workers, no tree. Bringing a Crew back is a separate
   piece of work.
