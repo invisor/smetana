@@ -661,13 +661,7 @@ mod tests {
             .unwrap_or_else(|| panic!("no bd sidecar in {}: run `npm run fetch-bd`", dir.display()))
     }
 
-    /// One runtime for the whole process: the workers spawn onto the handle the first server installs.
-    fn block_on<F: std::future::Future>(future: F) -> F::Output {
-        static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-        RUNTIME
-            .get_or_init(|| tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("a runtime"))
-            .block_on(future)
-    }
+    use crate::client::block_on;
 
     async fn start_server(dir: &std::path::Path) -> Server {
         let mut options = Options::new(dir.join("server"));
@@ -685,6 +679,12 @@ mod tests {
         panic!("timed out waiting for {what}");
     }
 
+    // Flaky until the runtime was shared by every test that starts a server (smetana-9ywc): the
+    // first `Server::start` in the process installs its runtime handle in a process-wide `OnceLock`
+    // (`context::install_runtime`) and every worker of every later server is spawned onto it. The
+    // migrate tests used to build a runtime each, so whenever one of them won the race to start
+    // first its runtime was dropped at the end of that test, the workers died with it, and this
+    // test's second server answered "the terminal worker is not running".
     #[test]
     fn the_link_connects_forwards_reemits_loses_the_server_refuses_and_comes_back() {
         block_on(async {
