@@ -40,13 +40,27 @@
 //! tick rather than once, which is what makes the switch take effect without a
 //! restart — see [`schedule`].
 //!
-//! # No run gate, since the server is not the app
+//! # No run gate; one confirmation covers the server too
 //!
-//! Installing restarts the app, and in the build that held the workers in-process a restart killed the
-//! PTY children a run's sessions started, so the install was refused while any run was live. The
-//! desktop is a client now: the runs and sessions belong to `smetanad`, which is detached and goes on
-//! running while the app is replaced. Replacing the *server* is its own gate (no live work of any kind,
-//! `smetanad`'s restart), not this one.
+//! Installing used to restart the app alone, and in the build that held the workers in-process that
+//! killed a run's PTY children, so the install was refused while any run was live. The desktop is a
+//! client now: the runs and sessions belong to `smetanad`, which is detached and outlives the app, so
+//! nothing in this module refuses an install because of a run (`UpdateError` has no `RunLive` or `Runs`).
+//!
+//! What an install does reach is the **local server**. The new bundle carries a new `smetanad`, and a
+//! new shell meeting the old one used to raise the version lock-step banner, a second decision after the
+//! first. One press now updates both: About asks the server for its live work (`server_local_work`),
+//! shows the list and takes a yes when it is not empty, and passes the list it showed as `confirmed` to
+//! [`updates_install`]. After the bundle is replaced that command asks the local server for
+//! `server_restart` `now` with exactly that list, then restarts the app. Order matters: the server
+//! re-executes `current_exe()`, which is the new binary only once the bundle is in place. `now` and not
+//! a mode of its own, because the server answering is the old one and knows only its own release's
+//! modes. A server on another machine is left alone.
+//!
+//! Nothing is ended without the person's yes: the gateway covers only the work `confirmed` names. If it
+//! answers `needs-confirmation` (work began after the yes), or refuses or cannot be reached, the reason
+//! is a log line, the app restarts anyway (the bundle is already replaced) and the older server is left
+//! to the version lock-step banner, which stays as the fallback.
 //!
 //! # No ACL grant, deliberately
 //!
@@ -610,7 +624,10 @@ pub fn updates_check(app: AppHandle, updates: State<'_, Updates>) -> UpdateState
     request_check(&app, &updates)
 }
 
-/// Replace the bundle and come back on the new one.
+/// Replace the bundle, restart the local server onto it, and come back on the new one.
+///
+/// `confirmed` is the live work of the local server that the person saw and agreed to end, passed back
+/// to `server_restart` untouched; see the module header.
 ///
 /// Every way this can decline is a refusal with a reason rather than a press
 /// that did nothing — a development build, nothing downloaded, an install that
@@ -623,7 +640,11 @@ pub fn updates_check(app: AppHandle, updates: State<'_, Updates>) -> UpdateState
 /// direct `restart` skips both when it happens to be called on the main thread,
 /// which would leave the app's own child processes orphaned.
 #[tauri::command]
-pub async fn updates_install(app: AppHandle, updates: State<'_, Updates>) -> Result<(), UpdateError> {
+pub async fn updates_install(
+    app: AppHandle,
+    updates: State<'_, Updates>,
+    confirmed: Option<Vec<serde_json::Value>>,
+) -> Result<(), UpdateError> {
     if development() {
         return Err(UpdateError::DevelopmentBuild);
     }
@@ -681,6 +702,12 @@ pub async fn updates_install(app: AppHandle, updates: State<'_, Updates>) -> Res
     };
     if let Err(err) = outcome {
         return Err(refused_install(&app, &updates, Some(staged), err));
+    }
+    // Only now, with the new bundle in place: the server re-executes the binary at its own path.
+    // `confirmed` is the list About showed (absent means none was shown, and the server's own gate
+    // then refuses if anything is alive). A failure here never holds the app back.
+    if let Err(reason) = crate::client::restart_local_for_update(&app, &confirmed.unwrap_or_default()).await {
+        log::warn!("updates: the local server was not restarted with the install: {reason}");
     }
     app.request_restart();
     Ok(())

@@ -11,7 +11,15 @@ import { useInteractive } from '../core/interactive.js'
 /* The whole of what this tab says about updating, out here where a test can
    reach it. This component decides where the row sits and what it is made of,
    and nothing about which of the six states the app is in. */
-import { installRefusal, updateAction, updateLine, updatesKnown } from './update.js'
+import {
+  CANCEL_INSTALL,
+  CONFIRM_INSTALL,
+  installAskSentence,
+  installRefusal,
+  updateAction,
+  updateLine,
+  updatesKnown
+} from './update.js'
 /* The one raster in the interface, and the one place the constraint against
    images is lifted: this is the app icon itself, the same artwork the Dock and
    the installer draw, so anything redrawn from tokens here would be a second
@@ -37,18 +45,24 @@ const props = defineProps({
      machine at `ready` through a refusal, since what was downloaded is still
      downloaded. It is never a newer-version answer (`shownRefusal` drops it):
      that one moves the machine to `downloading`, which the state line says. */
-  updateRefusal: { type: [Object, String], default: null }
+  updateRefusal: { type: [Object, String], default: null },
+  /* The local server's live work when Install was pressed and it has some, else
+     `null`. Held by the window, like the refusal: it is the answer to a press.
+     Drawn only while the state still offers Install, so a list left over from a
+     state that has since moved on is never shown. */
+  installAsk: { type: Array, default: null }
 })
 
 /* `check` and `install` carry nothing: there is one update machine and the
    window knows how to reach it. The verb is the pure rule's (`updateAction`),
    so the label — which is prose — is never what the window switches on. */
-const emit = defineEmits(['open', 'check', 'install'])
+const emit = defineEmits(['open', 'check', 'install', 'confirm-install', 'cancel-install'])
 
 const showsUpdate = computed(() => updatesKnown(props.updateState))
 const updateSentence = computed(() => updateLine(props.updateState))
 const updateControl = computed(() => updateAction(props.updateState))
 const refusal = computed(() => installRefusal(props.updateRefusal))
+const asking = computed(() => props.installAsk !== null && updateControl.value?.verb === 'install')
 
 const { hover, handlers } = useInteractive()
 
@@ -108,6 +122,20 @@ const addressStyle = computed(() => ({
 /* Under the row rather than in its description, and the same shape the Storage
    tab gives its own refusals: a row's description says what a control does,
    while this says what happened when somebody pressed it. */
+const panelStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-4)',
+  padding: 'var(--space-5)',
+  background: 'var(--surface-raised)',
+  border: 'var(--border-w) solid var(--border)',
+  borderRadius: 'var(--radius-4)'
+}
+const buttonsStyle = { display: 'flex', gap: 'var(--space-4)', flexWrap: 'wrap' }
+const askTextStyle = {
+  color: 'var(--text-secondary)',
+  font: 'var(--weight-regular) var(--text-label-size)/var(--leading-normal) var(--font-sans)'
+}
 const refusalStyle = {
   color: 'var(--status-failed-fg)',
   font: 'var(--weight-regular) var(--text-label-size)/var(--leading-normal) var(--font-sans)'
@@ -133,7 +161,7 @@ const refusalStyle = {
     <template v-if="showsUpdate">
       <SettingsRow label="Updates" :description="updateSentence" control-width="22ch">
         <Button
-          v-if="updateControl"
+          v-if="updateControl && !asking"
           :variant="updateControl.verb === 'install' ? 'primary' : 'secondary'"
           :disabled="updateControl.disabled"
           @click="emit(updateControl.verb)"
@@ -141,6 +169,15 @@ const refusalStyle = {
           {{ updateControl.label }}
         </Button>
       </SettingsRow>
+      <!-- Only when the server on this machine has work in it: installing
+           restarts it. Cancel changes nothing. -->
+      <div v-if="asking" :style="panelStyle" role="alertdialog" aria-label="The server on this machine is busy">
+        <span :style="askTextStyle">{{ installAskSentence(props.installAsk) }}</span>
+        <div :style="buttonsStyle">
+          <Button variant="primary" @click="emit('confirm-install')">{{ CONFIRM_INSTALL }}</Button>
+          <Button variant="ghost" @click="emit('cancel-install')">{{ CANCEL_INSTALL }}</Button>
+        </div>
+      </div>
       <p v-if="refusal" :style="refusalStyle">{{ refusal }}</p>
     </template>
 

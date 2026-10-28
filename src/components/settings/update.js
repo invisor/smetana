@@ -20,6 +20,7 @@
    all rather than as `idle` — an "up to date" said by a window that never asked
    anybody would be the app claiming to know something it does not. */
 import { formatBytes } from './storage.js'
+import { IDLE_NOTE, workSentence } from '../shell/connectionNotice.js'
 
 /* Nowhere to ask, or an answer in a shape this build does not know. */
 export const UNAVAILABLE = 'unavailable'
@@ -151,10 +152,10 @@ export function updateLine(state) {
    button disabled rather than nothing at all, so the row does not lose a
    control for the length of a network round trip and then grow one back.
 
-   `ready` offers Install unconditionally. Installing replaces the client and
-   nothing else: the runs and sessions belong to `smetanad`, which is detached and
-   goes on running, so no run refuses it. A refusal that still comes back is
-   Rust's to make, and it arrives in words. */
+   `ready` offers Install unconditionally. No run refuses it: the runs and sessions
+   belong to `smetanad`, which is detached. Installing does restart the local
+   server, though, so the window asks first when it has work (`installStep`). A
+   refusal that still comes back is Rust's to make, and it arrives in words. */
 export function updateAction(state) {
   const kind = updateKind(state)
   if (kind === 'idle' || kind === 'failed') {
@@ -201,4 +202,33 @@ export function installRefusal(err) {
   if (typeof detail === 'string' && detail) return detail
   if (typeof err.message === 'string' && err.message) return err.message
   return 'The update could not be installed.'
+}
+
+/* What pressing Install does first, and what it will hand to the shell.
+
+   Installing now restarts the local server as well (`updates_install` in Rust asks it for
+   `server_restart` `now`), and that ends whatever it is running. So the person is asked first, and the
+   list they are shown is the list that travels back as `confirmed`: the server's own gate covers only
+   the work that list names.
+
+   - `remote`: this device uses a server on another machine. The install leaves it alone, so there is
+     nothing to ask and nothing to confirm.
+   - `work`: the local server's live work (`localServerWork()`), or anything that is not a list when it
+     could not be asked, which reads as none; the server's gate still refuses to end work unseen.
+
+   Answers `{ kind: 'ask', work }` when the person has to decide, else `{ kind: 'install', confirmed }`,
+   where `confirmed` is `[]` for no list at all. */
+export function installStep({ remote, work }) {
+  if (remote) return { kind: 'install', confirmed: [] }
+  const list = Array.isArray(work) ? work : []
+  if (list.length === 0) return { kind: 'install', confirmed: [] }
+  return { kind: 'ask', work: list }
+}
+
+export const CONFIRM_INSTALL = 'End it and install'
+export const CANCEL_INSTALL = 'Cancel'
+
+/* The words over the choice. `workSentence` lists the work by kind, label and count. */
+export function installAskSentence(work) {
+  return `The server on this machine has work in it. ${workSentence(work)} Installing restarts the server, which ends it. ${IDLE_NOTE}`
 }

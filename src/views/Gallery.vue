@@ -2675,6 +2675,11 @@ const galleryUpdateStates = [
 /* An install that would not go through, as `updates_install` refuses it —
    `UpdateError`'s `{kind, detail}` exactly, since that is what a rejected
    `invoke` hands the window, with the plugin's own words as the detail. */
+const galleryInstallAsk = [
+  { kind: 'run', id: 7, project: '/work/notes', label: 'notes run', owner: null },
+  { kind: 'agent', id: 3, project: '/work/notes', label: 'claude', owner: 7 },
+  { kind: 'shell', id: 4, project: '/work/api', label: 'shell', owner: null }
+]
 const galleryUpdateRefusal = { kind: 'install', detail: 'permission denied writing to /Applications/Smetana.app' }
 
 /* The conversation panel's fixtures — a driven session's journal as the worker
@@ -7530,6 +7535,15 @@ const menuTargetStyle = {
             version="0.1.0"
             :update-state="{ kind: 'ready', version: '0.2.0' }"
             :update-refusal="galleryUpdateRefusal"
+          />
+        </div>
+        <!-- Install pressed with live work on the local server: the list of
+             what ends, and the two answers. Cancel changes nothing. -->
+        <div :style="{ width: '380px' }">
+          <AboutSettings
+            version="0.1.0"
+            :update-state="{ kind: 'ready', version: '0.2.0' }"
+            :install-ask="galleryInstallAsk"
           />
         </div>
         <div :style="{ width: '380px' }">

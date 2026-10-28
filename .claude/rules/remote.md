@@ -219,9 +219,13 @@ src-tauri/Cargo.toml` is empty, and `smetanad` is an ordinary dependency (for it
   (no version gate).
   The server's `app_version` is `smetanad::VERSION`, baked in by `crates/smetanad/build.rs` from `version` in `src-tauri/tauri.conf.json`
   (the one field a release bumps); the crate manifests stay 0.1.0 and the release does not bump them.
-- **Updates replace the client only.** The release feed updates the app as before (`updates.md`); there is no run gate any
-  more, because the runs and sessions are the detached server's and outlive the app's restart. The new bundle's `smetanad`
-  takes over through the version lock-step above.
+- **An update replaces the client and restarts the local server.** The release feed updates the app as before
+  (`updates.md`); there is no run gate, because runs and sessions are the detached server's. Pressing *Install and
+  restart* asks the local server for its live work first and, when there is some, takes one confirmation in About;
+  after the bundle is replaced `updates_install` sends `server_restart` `now` with that list as `confirmed` and then
+  restarts the app, so the new shell meets a server of its own version and the lock-step banner stays quiet. A server
+  that answers anything but `restarting` is left as it is and logged, and the banner remains the fallback. A remote
+  server is not touched.
 - **The bundle.** `tauri.conf.json` lists `binaries/smetanad` beside `binaries/bd` in `externalBin`, and its
   `beforeDevCommand` / `beforeBuildCommand` run `npm run build-smetanad [-- --release]`, which builds it into
   `src-tauri/binaries/smetanad-<triple>` (ignored by git). The release workflow builds it per target before `tauri build`.
