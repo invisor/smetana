@@ -169,6 +169,19 @@ describe('the commands the strip presses', () => {
   })
 })
 
+describe('a restart that was deferred by the server', () => {
+  it('is waiting from then on, for the work the server lists', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    ipc.on('connection_state', split({ outdated: { running: '0.0.9', bundled: '0.1.0', work: [], canRestart: true } }))
+    await stores.connection.initConnection()
+    expect(stores.connection.connection.restartScheduled).toBe(false)
+    const work = [{ kind: 'run', label: 'smetana' }]
+    await emit('server:restart-deferred', { work })
+    expect(stores.connection.connection.restartScheduled).toBe(true)
+    expect(stores.connection.connection.outdated.work).toEqual(work)
+  })
+})
+
 describe('which server this device uses', () => {
   it('reads a server on another machine as remote and everything else as local', async () => {
     const { ipc, emit, stores } = await loadStores()

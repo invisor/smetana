@@ -46,7 +46,7 @@ describe('what pressing the button does first', () => {
     const work = [{ kind: 'run', label: 'run' }, { kind: 'shell', label: 'shell' }]
     const step = nextStep({ ticket: code, usingLocal: true, work })
     expect(step).toEqual({ kind: 'ask', work })
-    expect(askSentence(work)).toMatch(/Switching does not end it/)
+    expect(askSentence(work)).toMatch(/Idle agents are ended when it stops/)
     expect(askSentence(work)).toMatch(/Run: run/)
   })
 

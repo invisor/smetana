@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { connectionNotice, isStale, workSentence } from '../../../src/components/shell/connectionNotice.js'
+import {
+  IDLE_NOTE,
+  SCHEDULED_IDLE_NOTE,
+  connectionNotice,
+  isStale,
+  serverIndicator,
+  workSentence
+} from '../../../src/components/shell/connectionNotice.js'
 
 const base = { mode: 'client', state: 'connected', reason: null, outdated: null }
 
@@ -34,10 +41,11 @@ describe('what the strip says about the connection', () => {
     expect(connectionNotice({ ...base, outdated: { ...outdated, canRestart: false } }).restart).toBe(null)
   })
 
-  it('offers to withdraw a restart that is waiting', () => {
+  it('leaves a restart that is waiting to the indicator, and offers to withdraw it there', () => {
     const outdated = { running: '0.0.9', bundled: '0.1.0', work: [], canRestart: true }
-    const notice = connectionNotice({ ...base, outdated, restartScheduled: true })
-    expect(notice.restart).toEqual({ canNow: false, canWhenIdle: false, canCancel: true })
+    const connection = { ...base, outdated, restartScheduled: true }
+    expect(connectionNotice(connection)).toBe(null)
+    expect(serverIndicator(connection).restart).toEqual({ canNow: false, canWhenIdle: false, canCancel: true })
   })
 
   it('counts the work a restart would end', () => {
@@ -65,5 +73,42 @@ describe('the notice for a server on another machine', () => {
   it('sends a device the server forgot to the place a new code is typed', () => {
     expect(connectionNotice(remote('unpaired')).detail).toMatch(/Settings, Server/)
     expect(connectionNotice({ ...remote('unpaired'), local: true }).detail).not.toMatch(/Settings, Server/)
+  })
+})
+
+describe('the scope bar indicator for an older server', () => {
+  const outdated = { running: '0.1.0', bundled: '0.3.3', work: [{ kind: 'run', label: 'smetana' }], canRestart: true }
+
+  it('says the server needs a restart and offers both choices, in the banner\'s words', () => {
+    const indicator = serverIndicator({ ...base, outdated })
+    expect(indicator.label).toBe('Server needs a restart')
+    expect(indicator.title).toBe('The server is older than this app')
+    expect(indicator.restart).toEqual({ canNow: true, canWhenIdle: true, canCancel: false })
+    for (const text of [indicator.detail, connectionNotice({ ...base, outdated }).detail]) {
+      expect(text).toContain('The server is 0.1.0, this app ships 0.3.3.')
+      expect(text).toContain('Run: smetana')
+      expect(text).toContain(IDLE_NOTE)
+      expect(text).not.toContain('Nothing is ended')
+    }
+  })
+
+  it('offers no restart when the server cannot be restarted from here', () => {
+    expect(serverIndicator({ ...base, outdated: { ...outdated, canRestart: false } }).restart).toBe(null)
+  })
+
+  it('says nothing when current, while reconnecting, or without a server of its own', () => {
+    expect(serverIndicator(base)).toBe(null)
+    expect(serverIndicator(null)).toBe(null)
+    expect(serverIndicator({ ...base, outdated, state: 'reconnecting' })).toBe(null)
+    expect(serverIndicator({ ...base, outdated, mode: 'browser' })).toBe(null)
+  })
+
+  it('carries a waiting restart that the banner no longer draws', () => {
+    const connection = { ...base, outdated, restartScheduled: true }
+    expect(connectionNotice(connection)).toBe(null)
+    const indicator = serverIndicator(connection)
+    expect(indicator.title).toBe('The server will restart when its work is done')
+    expect(indicator.detail).toContain(SCHEDULED_IDLE_NOTE)
+    expect(indicator.restart).toEqual({ canNow: false, canWhenIdle: false, canCancel: true })
   })
 })

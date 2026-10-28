@@ -168,6 +168,22 @@ export async function initConnection() {
     console.debug('[connection] nobody to hear from (a browser, there is no Tauri):', err)
   }
   try {
+    const stopDeferred = await listen(DEFERRED_EVENT, (event) => {
+      connection.restartScheduled = true
+      if (connection.outdated) {
+        const work = event.payload?.work
+        connection.outdated = { ...connection.outdated, work: Array.isArray(work) ? work : [] }
+      }
+    })
+    const stopState = stop
+    stop = () => {
+      stopState?.()
+      stopDeferred()
+    }
+  } catch (err) {
+    console.debug('[connection] nobody to hear a deferred restart from (a browser):', err)
+  }
+  try {
     const view = await invoke('connection_state')
     if (!heard) adopt(view, { first: true })
   } catch (err) {
@@ -176,6 +192,11 @@ export async function initConnection() {
   connection.ready = true
   return stop
 }
+
+/* `crates/remote-server/src/gateway.rs`'s `DEFERRED_EVENT`: a restart asked for now found work that
+   had started meanwhile and turned into a `when-idle` one. The reply the person got said `restarting`,
+   and this is how that is taken back: the restart is waiting, and the list is what it waits for. */
+export const DEFERRED_EVENT = 'server:restart-deferred'
 
 /* Try now, instead of at the end of the shell's wait. */
 export async function retryConnection() {
@@ -188,7 +209,8 @@ export async function retryConnection() {
 
 /* Replace an older local server through the restart gateway. `now` carries the list the person was
    shown, which is the only thing that lets the server end live work, and it covers exactly that
-   list; `when-idle` ends nothing and waits; `cancel` withdraws a wait. Answers the server's reply,
+   list; `when-idle` waits for the live work to finish (idle agents are not live work, so they are ended
+   when it fires and offered back afterwards); `cancel` withdraws a wait. Answers the server's reply,
    or throws what it refused with. */
 export async function restartServer(mode) {
   const confirmed = mode === 'now' ? (connection.outdated?.work ?? []) : null
@@ -237,8 +259,8 @@ export async function useLocalServer() {
 }
 
 /* Pairs with the server a desktop ticket names and moves this device to it. `stopLocal` asks the
-   local server to stop once its work is done (it ends nothing); without it the local server is left
-   running. Answers `{ target, localStop }`; rejects with the shell's words, and a rejection means the
+   local server to stop once its live work is done (idle agents are ended then and offered back
+   afterwards); without it the local server is left running. Answers `{ target, localStop }`; rejects with the shell's words, and a rejection means the
    device is where it was. The pairing waits for the person to confirm at the server, so this can
    take a minute or two. */
 export async function useRemoteServer(ticket, stopLocal) {

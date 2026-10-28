@@ -30,10 +30,13 @@ const props = defineProps({
   },
   /* Only ever read while `windowChrome` is `buttons`: which of the two the
      middle button is. */
-  maximized: { type: Boolean, default: false }
+  maximized: { type: Boolean, default: false },
+  /* Whether the mark for an outdated server is drawn, left of the search. The bar knows nothing
+     about servers: the window decides, and hears `server-restart` when the mark is pressed. */
+  serverRestart: { type: Boolean, default: false }
 })
 
-defineEmits(['reports', 'notifications', 'settings', 'minimize', 'toggle-maximize', 'close'])
+defineEmits(['reports', 'notifications', 'server-restart', 'settings', 'minimize', 'toggle-maximize', 'close'])
 
 /* Still a plain object, and deliberately: the left inset varies, but it varies
    through a token the document root redefines, not through a prop. A computed
@@ -112,6 +115,14 @@ const badgeStyle = {
          repository and a branch, and giving it the tracker as well would make
          the one component on screen that is deliberately ignorant of what it is
          describing know the most of anything. -->
+    <IconButton
+      v-if="serverRestart"
+      icon="triangle-alert"
+      size="sm"
+      pulse
+      label="Server needs a restart"
+      @click="$emit('server-restart')"
+    />
     <slot name="search" />
 
     <!-- Left of the bell: the Reports tab's own door. A press opens the tab if

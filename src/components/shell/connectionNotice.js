@@ -33,6 +33,11 @@ export function workSentence(list) {
   return `${items.length} ${noun} running and would end: ${lines.join('; ')}${more}.`
 }
 
+/* What a restart does to agents that are only waiting: since the restart gateway stopped counting an
+   idle agent as live work, a restart ends it too and the person is offered it back afterwards. */
+export const IDLE_NOTE = 'Idle agents are ended too and offered back afterwards.'
+export const SCHEDULED_IDLE_NOTE = 'Idle agents will be ended then and offered back.'
+
 const STALE_NOTE = 'The last data stays on screen, marked stale. Changes are refused and not kept for later.'
 
 function withReason(base, reason) {
@@ -100,23 +105,16 @@ export function connectionNotice(connection) {
     case 'connected': {
       const outdated = connection.outdated
       if (!outdated) return null
+      /* A restart that is waiting is the indicator's to carry (`serverIndicator`); the banner was the
+         first notice and has said its piece. */
+      if (connection.restartScheduled) return null
       const versions = `The server is ${outdated.running}, this app ships ${outdated.bundled}.`
-      if (connection.restartScheduled) {
-        return {
-          tone: 'wait',
-          icon: 'refresh-cw',
-          title: 'The server will restart when its work is done',
-          detail: `${versions} Nothing is ended in the meantime.`,
-          canRetry: false,
-          restart: { canNow: false, canWhenIdle: false, canCancel: true }
-        }
-      }
       return {
         tone: 'wait',
         icon: 'refresh-cw',
         title: 'The server is older than this app',
         detail: outdated.canRestart
-          ? `${versions} ${workSentence(outdated.work)} It keeps working as it is until you choose.`
+          ? `${versions} ${workSentence(outdated.work)} ${IDLE_NOTE} It keeps working as it is until you choose.`
           : `${versions} It keeps working as it is, but it cannot be restarted from here.`,
         canRetry: false,
         restart: outdated.canRestart ? { canNow: true, canWhenIdle: true, canCancel: false } : null
@@ -124,6 +122,31 @@ export function connectionNotice(connection) {
     }
     default:
       return null
+  }
+}
+
+/* The scope bar's indicator for an older local server, and the panel it opens. The same rule as the
+   banner above, said again where it cannot be dismissed: the words come from here, so the two cannot
+   disagree. `null` unless the app is a client, connected, and the server is older than it. */
+export function serverIndicator(connection) {
+  if (!connection || connection.mode !== 'client' || connection.state !== 'connected') return null
+  const outdated = connection.outdated
+  if (!outdated) return null
+  const versions = `The server is ${outdated.running}, this app ships ${outdated.bundled}.`
+  const label = 'Server needs a restart'
+  if (connection.restartScheduled) {
+    return {
+      label,
+      title: 'The server will restart when its work is done',
+      detail: `${versions} ${SCHEDULED_IDLE_NOTE}`,
+      restart: { canNow: false, canWhenIdle: false, canCancel: true }
+    }
+  }
+  return {
+    label,
+    title: 'The server is older than this app',
+    detail: `${versions} ${workSentence(outdated.work)} ${IDLE_NOTE}`,
+    restart: outdated.canRestart ? { canNow: true, canWhenIdle: true, canCancel: false } : null
   }
 }
 

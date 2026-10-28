@@ -115,7 +115,11 @@ const props = defineProps({
      already one glyph size, and this is the one property `Icon` has no slot to
      reach on its own (`core/Icon.vue`'s header — a `.vue` file cannot forward
      extra style into a child it renders without a prop of its own for it). */
-  spin: { type: Boolean, default: false }
+  spin: { type: Boolean, default: false },
+  /* Whether the glyph pulses in `--attn-loud`: a standing notice that must not be missed and cannot
+     be dismissed (the scope bar's outdated-server mark). Same mechanism as `spin`, on the glyph; unlike
+     it, the button stays pressable. Reduced motion zeroes `--dur-pulse` in `tokens/motion.css`. */
+  pulse: { type: Boolean, default: false }
 })
 
 const { hover, active, handlers } = useInteractive(toRef(props, 'disabled'))
@@ -196,9 +200,11 @@ const style = computed(() => ({
    still — an empty style object is still a style, and `Icon`'s own root
    already carries one of its own that a caller's binding merges onto rather
    than replaces. */
-const iconStyle = computed(() =>
-  props.spin ? { color: 'var(--attn-live)', animation: 'sm-spin var(--dur-pulse) linear infinite' } : undefined
-)
+const iconStyle = computed(() => {
+  if (props.spin) return { color: 'var(--attn-live)', animation: 'sm-spin var(--dur-pulse) linear infinite' }
+  if (props.pulse) return { color: 'var(--attn-loud)', animation: 'sm-pulse var(--dur-pulse) var(--ease-in-out) infinite' }
+  return undefined
+})
 </script>
 
 <template>

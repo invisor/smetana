@@ -90,7 +90,7 @@ export function nextStep({ ticket, usingLocal, work }) {
 
 /* The words over the choice when the local server has work in it. */
 export function askSentence(work) {
-  return `The server on this machine has work in it. ${workSentence(work)} Switching does not end it.`
+  return `The server on this machine has work in it. ${workSentence(work)} Idle agents are ended when it stops and offered back afterwards; everything else finishes first.`
 }
 
 export const LEAVE_RUNNING = 'Leave it running'
