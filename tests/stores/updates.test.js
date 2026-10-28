@@ -70,4 +70,19 @@ describe('the update machine, mirrored', () => {
     expect(stores.updates.updatesState.state).toEqual({ kind: 'ready', version: '0.2.0' })
     expect(stores.notifications.notificationsState.items).toHaveLength(1)
   })
+
+  it('hands the confirmed list to the install exactly as it was shown, and an empty one by default', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('updates_state', { kind: 'ready', version: '0.2.0' })
+    ipc.on('updates_install', null)
+    await stores.updates.initUpdates()
+    const seen = [{ kind: 'run', id: 7, project: '/p', label: 'notes run', owner: null }]
+
+    await stores.updates.installUpdate(seen)
+    await stores.updates.installUpdate()
+
+    const calls = ipc.calls('updates_install')
+    expect(calls[0]).toEqual({ confirmed: seen })
+    expect(calls[1]).toEqual({ confirmed: [] })
+  })
 })

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CANCEL_INSTALL,
+  CONFIRM_INSTALL,
   UNAVAILABLE,
+  installAskSentence,
   installRefusal,
+  installStep,
   shownRefusal,
   readyVersion,
   updateAction,
@@ -299,5 +303,43 @@ describe('why an install did not happen', () => {
   it('says nothing when nothing was refused', () => {
     expect(installRefusal(null)).toBe(null)
     expect(installRefusal(undefined)).toBe(null)
+  })
+})
+
+describe('what pressing Install asks first, and what it sends', () => {
+  const run = { kind: 'run', id: 7, project: '/work/notes', label: 'notes run', owner: null }
+  const shell = { kind: 'shell', id: 4, project: '/work/api', label: 'shell', owner: null }
+
+  it('asks, with the very list it was given, when the local server has work', () => {
+    const work = [run, shell]
+    const step = installStep({ remote: false, work })
+    expect(step).toEqual({ kind: 'ask', work: [run, shell] })
+    expect(step.work).toBe(work)
+  })
+
+  it('installs at once and confirms an empty list when there is no work', () => {
+    expect(installStep({ remote: false, work: [] })).toEqual({ kind: 'install', confirmed: [] })
+  })
+
+  it('reads a server that could not be asked as having no work, and leaves the refusal to its gate', () => {
+    expect(installStep({ remote: false, work: null })).toEqual({ kind: 'install', confirmed: [] })
+    expect(installStep({ remote: false, work: undefined })).toEqual({ kind: 'install', confirmed: [] })
+  })
+
+  it('never asks about a server on another machine, whatever list it was handed', () => {
+    expect(installStep({ remote: true, work: [run] })).toEqual({ kind: 'install', confirmed: [] })
+    expect(installStep({ remote: true, work: null })).toEqual({ kind: 'install', confirmed: [] })
+  })
+
+  it('lists what ends by kind and label, and says the server is restarted', () => {
+    const sentence = installAskSentence([run, shell])
+    expect(sentence).toContain('2 things are running and would end: Run: notes run; Shell: shell.')
+    expect(sentence).toContain('Installing restarts the server, which ends it.')
+    expect(sentence).toContain('Idle agents are ended too')
+  })
+
+  it('words the two answers in sentence case', () => {
+    expect(CONFIRM_INSTALL).toBe('End it and install')
+    expect(CANCEL_INSTALL).toBe('Cancel')
   })
 })
