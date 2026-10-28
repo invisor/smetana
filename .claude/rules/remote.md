@@ -205,7 +205,7 @@ src-tauri/Cargo.toml` is empty, and `smetanad` is an ordinary dependency (for it
   the old server cannot be asked). A server with a *newer* `app_version` is `incompatible` (update the app) and is never restarted. A different, older `app_version` with the same major makes the shell ask `server_restart now`
   without `confirmed`: nothing alive restarts it (once per running version, so a binary that did not change cannot loop);
   otherwise `connected` carries `outdated` with the list, and the banner offers *Restart now* (confirmed with exactly that
-  list) or *Restart when finished*.
+  list) or *Restart later*.
   **Two places say it, from one function.** `components/shell/connectionNotice.js` owns the words: `connectionNotice()` is the
   banner above the footer and `serverIndicator()` is the scope bar's mark. The banner is drawn for `outdated` until a restart is
   *scheduled*; from then on it returns `null` and the indicator carries it. The indicator is a pulsing `--attn-loud` triangle
