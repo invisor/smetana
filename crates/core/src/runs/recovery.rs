@@ -183,6 +183,20 @@ pub fn note_run(root: &Path, token: u64, target_branch: &str) {
 /// through, and only as wide as this project's own run history reaches.
 #[cfg(target_os = "macos")]
 pub fn dead_writer_coalitions(projects: &[PathBuf]) -> Vec<u64> {
+    dead_writer_coalitions_under(procs::coalition_sweep(), projects)
+}
+
+/// `dead_writer_coalitions` with the mode given rather than read from the
+/// process-wide switch, so a test can state both answers. In the server's
+/// `Off` mode it answers nothing without opening a file: an old `runs.json`
+/// may still carry a coalition id written before the server stopped sweeping
+/// by coalition, and that id is the app's own, not the server's to sweep
+/// (smetana-qy49).
+#[cfg(target_os = "macos")]
+fn dead_writer_coalitions_under(sweep: procs::CoalitionSweep, projects: &[PathBuf]) -> Vec<u64> {
+    if sweep == procs::CoalitionSweep::Off {
+        return Vec::new();
+    }
     let mut seen: Vec<&Path> = Vec::new();
     let mut ids: Vec<u64> = Vec::new();
     for project in projects {
@@ -830,8 +844,13 @@ mod tests {
             },
         );
 
-        let found = dead_writer_coalitions(&[root_a.clone(), root_b.clone()]);
+        let found = dead_writer_coalitions_under(procs::CoalitionSweep::Own, &[root_a.clone(), root_b.clone()]);
         assert_eq!(found, vec![222], "the live writer's 111 is withheld and 222 appears once");
+
+        // The server's mode (smetana-qy49): the same files, with a dead writer
+        // naming a coalition, produce nothing to sweep at start-up.
+        let off = dead_writer_coalitions_under(procs::CoalitionSweep::Off, &[root_a.clone(), root_b.clone()]);
+        assert!(off.is_empty(), "the server never sweeps a coalition read from runs.json, got {off:?}");
 
         let _ = std::fs::remove_dir_all(&root_a);
         let _ = std::fs::remove_dir_all(&root_b);

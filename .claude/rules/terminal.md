@@ -1026,6 +1026,26 @@ closes every other gap in this module: if this process's own coalition is identi
 sweeping a coalition that is not this app's alone to sweep. It costs nothing on a `launchd`-started
 build, where the two coalitions are never equal to begin with.
 
+**None of this is done by the server (smetana-qy49).** Everything above describes an app that held its own
+workers. The workers now live in `smetanad`, which the shell starts, so the server sits in the *app's*
+coalition and does not own it. After an update the new shell is a child of the old one, and once the old
+one exits both it and the server have `ppid == 1`: `own_dedicated_coalition` then answered `Known(app's
+coalition)`, and "Restart now" made point 3 hang up and kill the freshly started shell as an orphan of
+the app. Point 4 had the same shape, reading back the app's coalition from `runs.json` and sweeping a
+live shell if the old server's pid was dead. So `smetanad` starts the worker with
+`runs::procs::CoalitionSweep::Off` (`terminal::service::start`'s third argument, `server::COALITION_SWEEP`),
+and that single switch makes every reader agree: `own_dedicated_coalition` answers `Unknown` (point 3 falls
+back to the sessions' `Descendants`, and logs `coalition unknown (coalition sweeping is off in the
+server)`), `recovery::note_run` writes no `coalition` into `runs.json`, and `dead_writer_coalitions`
+answers nothing even for an old file that still carries an id, logged as `start-up coalition sweep: off in
+the server`. Points 1 and 2 (per-session `Descendants` and process groups) are unchanged and are tied to
+the server's own sessions. The price is accepted: a `setsid`/`nohup` orphan that left its session's group
+between two `MAC_DESCENDANT_POLL` polls is not caught at server stop, nor after a `kill -9` at the next
+start. Rejected: running `smetanad` in a coalition of its own (launchd or disclaim), because the TCC folder
+grants hang on attribution to the app bundle (`access_reset` in `src-tauri/src/client/mod.rs`); and
+excluding the shell's pid or bundle path, a patch that still sweeps everything else the shell started and a
+person's own `nohup` jobs.
+
 **Windows carries neither a mark nor a coalition, and needs neither.** A *Job Object*
 (`runs::procs::SessionJob`) is created and assigned to every agent session's own child right after
 `spawn_command` returns, with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` set — never for a person's own shell.
