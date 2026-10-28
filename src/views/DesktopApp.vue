@@ -7062,6 +7062,10 @@ const notificationsOpen = ref(false)
 const notificationsBox = ref(null)
 /* The outdated-server panel shares this handler: both hang from the same bar and only one is open. */
 const serverPanelOpen = ref(false)
+/* The scope bar's mark for an older local server and the panel it opens: the same rule as the banner,
+   said where it cannot be dismissed. `serverPanelOpen` is closed by `closeNotifications` below, which
+   is the one handler for both overlays that hang from the bar. */
+const serverNotice = computed(() => serverIndicator(connection))
 const serverPanelBox = ref(null)
 const scopeBar = ref(null)
 
@@ -7367,10 +7371,6 @@ const rootStyle = {
   overflow: 'hidden'
 }
 const connectionBanner = computed(() => connectionNotice(connection))
-/* The scope bar's mark for an older local server and the panel it opens: the same rule as the banner,
-   said where it cannot be dismissed. `serverPanelOpen` is closed by `closeNotifications` below, which
-   is the one handler for both overlays that hang from the bar. */
-const serverNotice = computed(() => serverIndicator(connection))
 /* What is on screen while the connection is down is the last thing the server sent, and it is drawn
    as the quiet rows are: dimmed, with the strip below saying why. */
 const bodyStyle = computed(() => ({
