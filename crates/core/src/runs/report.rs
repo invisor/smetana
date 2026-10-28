@@ -9,8 +9,7 @@
 //! `terminal/theme.js`: there are no tokens around this document at all,
 //! because its whole purpose is to be readable in a browser with no app in the
 //! picture. The stylesheet is not written here any more — it is the design
-//! handoff's own `reports.css`, carried whole as `REPORTS_CSS`, shared with the
-//! code-review report, and pinned to `docs/design/reports/reports.css` by a
+//! handoff's own `reports.css`, carried whole as `REPORTS_CSS`, and pinned to `docs/design/reports/reports.css` by a
 //! byte-equality test. What replaces the rule is narrower than "anything
 //! goes": no external stylesheet, no font off a network, no script, no image.
 //! The document reaches nowhere at all.
@@ -303,14 +302,14 @@ pub fn prose(text: &str) -> String {
     }
 }
 
-/// The shared stylesheet of the report family — the run report here and the
-/// code-review report after it — exactly as the design handoff ships it.
+/// The run report's stylesheet, exactly as the design handoff ships it. The
+/// handoff's code-review half is unused by the app: a branch review's agent
+/// writes its own page.
 ///
 /// **One file, and it is never edited here.** `docs/design/reports/reports.css`
 /// is the handoff's own copy and this is the same bytes; the test
 /// `the_stylesheet_is_the_handoffs_own_bytes` is what keeps the two from
-/// drifting. A renderer for another report takes this constant rather than a
-/// copy of it, and a change to the look is made in the design source first and
+/// drifting. A change to the look is made in the design source first and
 /// carried over whole.
 ///
 /// The file carries the full token set itself, in the four-block shape the
