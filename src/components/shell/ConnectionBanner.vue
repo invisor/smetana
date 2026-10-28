@@ -48,7 +48,7 @@ const actionsStyle = { display: 'flex', gap: 'var(--space-3)', flex: '0 0 auto' 
       <Button v-if="notice.canRetry" size="sm" @click="$emit('retry')">Try now</Button>
       <Button v-if="notice.restart?.canNow" size="sm" @click="$emit('restart-now')">Restart now</Button>
       <Button v-if="notice.restart?.canWhenIdle" size="sm" @click="$emit('restart-idle')">
-        Restart when finished
+        Restart later
       </Button>
       <Button v-if="notice.restart?.canCancel" size="sm" @click="$emit('restart-cancel')">
         Cancel restart

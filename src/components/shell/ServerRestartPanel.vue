@@ -53,7 +53,7 @@ const actionsStyle = { display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)' 
     <div v-if="notice.restart" :style="actionsStyle">
       <Button v-if="notice.restart.canNow" size="sm" @click="$emit('restart-now')">Restart now</Button>
       <Button v-if="notice.restart.canWhenIdle" size="sm" @click="$emit('restart-idle')">
-        Restart when finished
+        Restart later
       </Button>
       <Button v-if="notice.restart.canCancel" size="sm" @click="$emit('restart-cancel')">
         Cancel restart
