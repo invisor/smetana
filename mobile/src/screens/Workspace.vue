@@ -26,7 +26,7 @@ import { clearPushTarget, pushTarget } from '../pushTarget.js'
 import { dismissRecommended } from '../bridge/index.js'
 import { bridge } from '../bridge/status.js'
 import { cardScope } from '@src/components/kanban/runScope.js'
-import { sheetRows } from '../taskSheet.js'
+import { sheetNote, sheetRows } from '../taskSheet.js'
 import { refusal, remove, setStatus, startOn, toggleLock, writingIds } from '../taskActions.js'
 import { openStore } from '../open.js'
 import { refreshFromDesktop } from '../workspace.js'
@@ -292,6 +292,7 @@ const bannerStyle = {
       v-if="sheetCard"
       :card="sheetCard"
       :rows="rows"
+      :note="sheetNote(bridge.status)"
       :error="sheetError"
       @close="closeSheet"
       @act="onAct"

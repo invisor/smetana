@@ -23,10 +23,20 @@ export const canWriteTracker = (status) => desktopMinor(status) >= TRACKER_WRITE
 
 const list = (issues) => (issues instanceof Map ? [...issues.values()] : [...(issues ?? [])])
 
+/* The caption under the rows when the desktop cannot carry tracker writes: three grey rows with
+   one reason are one sentence, not three. */
+export const OLD_SERVER_NOTE =
+  "Block, Move to... and Delete need the desktop's server restarted: it is older than the desktop app."
+
+/* '' when there is nothing to explain. */
+export const sheetNote = (status) => (canWriteTracker(status) ? '' : OLD_SERVER_NOTE)
+
 /* The rows of the sheet for one card: View task, then what the desktop's menu returns. On a
-   desktop that cannot carry tracker writes the rows that are writes (lock, move, delete) and the
-   separator that sets Delete apart are absent rather than grey: a row nothing can ever turn on
-   is the one a person learns to read past, the same trade the paperclip makes (`canAttach`). */
+   desktop that cannot carry tracker writes the rows that are writes (lock, move, delete) stay,
+   grey, and the separator that sets Delete apart stays with them: absent rows made a person
+   conclude the feature did not exist, and the reason is told once by `sheetNote` instead. A grey
+   Move to... keeps its children as they are, and a grey row does not open. The paperclip is the
+   other trade (`canAttach`): there the control is absent. */
 export function sheetRows({ card, issues, runs, configState, status, busy }) {
   const all = list(issues)
   const live = runnable(card, runOffered(configState))
@@ -37,8 +47,9 @@ export function sheetRows({ card, issues, runs, configState, status, busy }) {
     busy,
     parentBlocked: parentBlocked(all, card.id)
   })
-  const rows = canWriteTracker(status)
+  const writable = canWriteTracker(status)
+  const rows = writable
     ? menu
-    : menu.filter((row) => row.type !== 'separator' && !['lock', 'move', 'delete'].includes(row.kind))
+    : menu.map((row) => (['lock', 'move', 'delete'].includes(row.kind) ? { ...row, disabled: true } : row))
   return [{ kind: 'view', label: 'View task', icon: 'eye' }, ...rows]
 }
