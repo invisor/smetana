@@ -14,6 +14,7 @@ pub mod logger;
 pub mod ops;
 pub mod server;
 
-/// The version of this build of the server. A desktop that ships one compares it with what a running
+/// The version of this build of the server, which is the app's: `build.rs` reads it from `tauri.conf.json`,
+/// the one place a release bumps (the crate manifests stay 0.1.0). A desktop that ships one compares it with what a running
 /// server says in its `HelloReply` and replaces an older one through the restart gateway.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const VERSION: &str = env!("SMETANA_APP_VERSION");
